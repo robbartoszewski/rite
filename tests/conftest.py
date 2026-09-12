@@ -1,7 +1,7 @@
 """Session-wide test isolation from this machine's real state.
 
-Two independent couplings to the developer's own machine, both of which
-made tests pass or fail for reasons no test controls.
+Three independent couplings to the developer's own machine, all of which
+made tests pass, fail, or HANG for reasons no test controls.
 
 `rite_ai.budget.read_usage_since` scans `~/.claude/projects/**/*.jsonl` by
 default — real, and potentially huge (tens of thousands of lines) on any
@@ -29,6 +29,26 @@ git still defaults to `master`, and `rite prepare` clones module repos at
 `main`, so `test_prepare_worker_workspace` was passing only because this
 developer's `~/.gitconfig` happened to set `main`. Pinning it here keeps the
 suite honest about which branch name it is actually testing.
+
+Credentials are the third, and the only one that could hang rather than
+fail. A module fixture named `https://github.com/acme/widgets.git` and
+`rite add worker` cloned it for real; `acme/widgets` does not exist, so git
+asked `Username for 'https://github.com':` and the suite stopped dead
+waiting for a human. It surfaced mid-release, on the maintainer's own
+machine, on the step before an irreversible one — and it is worse on a
+stranger's clone, where running the tests is the first thing they do.
+
+The fixture below removes the ability to ask. Every git subprocess this
+suite spawns gets `GIT_TERMINAL_PROMPT=0` and askpass helpers that refuse,
+so a test that reaches the network FAILS, quickly, naming itself — instead
+of blocking on a prompt or, worse, succeeding on whatever credentials the
+person running it happens to have. That last case is why this is not just
+about hangs: a suite that passes because the maintainer is authenticated is
+a suite that fails for everyone else.
+
+This is a backstop, not a licence. A test that needs a remote builds a
+local one (see `test_add_worker_with_sandbox_enabled_provisions_a_token`,
+which serves a real bare repo out of `tmp_path`).
 """
 
 import os
@@ -64,3 +84,20 @@ def _isolated_git_config(monkeypatch, _suite_gitconfig):
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", _suite_gitconfig)
     monkeypatch.setenv("GIT_CONFIG_SYSTEM", os.devnull)
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+
+
+@pytest.fixture(autouse=True)
+def _no_network_credentials(monkeypatch):
+    """No git subprocess may ask a human for credentials. See the module
+    docstring — this converts a hang into a named failure."""
+    # `0` makes git fail instead of prompting on a terminal.
+    monkeypatch.setenv("GIT_TERMINAL_PROMPT", "0")
+    # And these stop it routing around that via a helper — a configured
+    # credential helper or an SSH agent would otherwise let the suite
+    # succeed on the credentials of whoever happens to be running it.
+    monkeypatch.setenv("GIT_ASKPASS", "/usr/bin/false")
+    monkeypatch.setenv("SSH_ASKPASS", "/usr/bin/false")
+    monkeypatch.setenv("SSH_ASKPASS_REQUIRE", "never")
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "credential.helper")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "")

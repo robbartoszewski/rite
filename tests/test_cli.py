@@ -1,3 +1,4 @@
+import subprocess
 from unittest.mock import MagicMock, patch
 
 from click.testing import CliRunner
@@ -439,14 +440,42 @@ def test_add_worker_with_sandbox_enabled_provisions_a_token(tmp_path, monkeypatc
     write(project_root, "app.py", "print('v1')\n")
     commit_all(project_root, "v1")
 
+    # A REAL remote, on this machine. It used to read
+    # `https://github.com/acme/widgets.git`, which `add worker` then tried to
+    # clone for real: `acme/widgets` does not exist, so git asked for a
+    # GitHub username and the suite BLOCKED on an interactive prompt. On a
+    # machine with no credential helper that is a hang; on a stranger's
+    # clone it is the first thing rite ever does.
+    #
+    # A bare repo under `acme/widgets.git` keeps every assertion below
+    # meaningful — the clone genuinely runs and genuinely succeeds, and the
+    # path still ends in `acme/widgets`, which is what the token-scope line
+    # names. Not a mock: mocking the clone would have asserted nothing about
+    # the step this test exists to cover.
+    remote = tmp_path / "remotes" / "acme" / "widgets.git"
+    remote.parent.mkdir(parents=True)
+    subprocess.run(
+        ["git", "init", "-q", "--bare", "-b", "main", str(remote)], check=True
+    )
+    seed = tmp_path / "seed"
+    subprocess.run(["git", "clone", "-q", str(remote), str(seed)], check=True)
+    (seed / "f.txt").write_text("x\n")
+    subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A"],
+        cwd=seed,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "seed"],
+        cwd=seed,
+        check=True,
+    )
+    subprocess.run(["git", "push", "-q", "origin", "main"], cwd=seed, check=True)
+
     rite_dir = project_root / ".rite"
     rite_dir.mkdir()
     (rite_dir / "modules.yaml").write_text(
-        "modules:\n"
-        "  backend:\n"
-        "    path: .\n"
-        "    url: https://github.com/acme/widgets.git\n"
-        "    description: ''\n"
+        f"modules:\n  backend:\n    path: .\n    url: {remote}\n    description: ''\n"
     )
     (rite_dir / "config.yaml").write_text(
         "ticket_backend:\n  type: none\nsandbox:\n  enabled: true\n"
@@ -466,6 +495,24 @@ def test_add_worker_with_sandbox_enabled_provisions_a_token(tmp_path, monkeypatc
         )
     assert result.exit_code == 0, result.output
     assert "acme/widgets" in result.output
+
+    # The clone actually happened, and from the REMOTE rather than by the
+    # local-path fallback `add_worker` drops to when a clone fails. This is
+    # what makes the local bare repo load-bearing: with the old
+    # `github.com/acme/widgets.git` URL the clone failed, the fallback ran,
+    # and every other assertion here still passed — so the step this test
+    # names was never actually covered, and the only visible symptom was a
+    # credential prompt.
+    cloned = project_root / "workers" / "alpha" / "backend"
+    origin_url = subprocess.run(
+        ["git", "-C", str(cloned), "remote", "get-url", "origin"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    assert origin_url == str(remote), (
+        f"workspace was not cloned from the module's remote: {origin_url!r}"
+    )
     # Namespaced per §10.2 — the account carries the project's namespace,
     # while the KEY the user types stays `sandbox_token_alpha`.
     assert "/sandbox_token_alpha'" in result.output
