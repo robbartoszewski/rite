@@ -1,0 +1,269 @@
+"""Detection: existing repos, language markers, platform, per-module commands.
+
+Everything here is best-effort and additive-only — it pre-fills questionnaire
+defaults and derives generated commands. Nothing here invents an answer; when
+detection finds nothing, callers must fall back to an explicit placeholder.
+"""
+
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
+
+_SKIP_DIRS = {
+    ".git",
+    ".rite",
+    ".claude",
+    "workers",
+    "node_modules",
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".pytest_cache",
+    ".ruff_cache",
+    "dist",
+    "build",
+    ".mypy_cache",
+    ".tox",
+}
+
+_LANGUAGE_MARKERS: dict[str, str] = {
+    "pyproject.toml": "python",
+    "setup.py": "python",
+    "requirements.txt": "python",
+    "Cargo.toml": "rust",
+    "pubspec.yaml": "dart",
+    "go.mod": "go",
+}
+
+
+@dataclass
+class DetectedRepo:
+    name: str
+    path: str  # relative, trailing slash, e.g. "backend/"
+    url: str | None
+    branch: str
+    local_only: bool
+
+
+@dataclass
+class ModuleCommands:
+    """Build/test/lint commands derived from a module's own manifest files.
+
+    `detected` is False when no known marker file was found — callers must
+    render an explicit placeholder rather than guessing.
+    """
+
+    install: str | None = None
+    build: str | None = None
+    test: str | None = None
+    lint: str | None = None
+    detected: bool = False
+    source: str = ""  # which marker triggered detection, for humans
+
+
+def iter_candidate_dirs(root: Path) -> list[Path]:
+    if not root.is_dir():
+        return []
+    out = []
+    for child in sorted(root.iterdir()):
+        if not child.is_dir():
+            continue
+        if child.name in _SKIP_DIRS or child.name.startswith("."):
+            continue
+        out.append(child)
+    return out
+
+
+def detect_repos(root: Path) -> list[DetectedRepo]:
+    """Scan immediate subdirectories of root for git repositories."""
+    repos: list[DetectedRepo] = []
+    for child in iter_candidate_dirs(root):
+        if (child / ".git").exists():
+            repos.append(_describe_repo(child))
+    return repos
+
+
+def _describe_repo(path: Path) -> DetectedRepo:
+    url = _git(path, ["remote", "get-url", "origin"])
+    branch = _git(path, ["branch", "--show-current"]) or "main"
+    return DetectedRepo(
+        name=path.name,
+        path=f"{path.name}/",
+        url=url or None,
+        branch=branch,
+        local_only=url is None,
+    )
+
+
+def _git(path: Path, args: list[str]) -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(path), *args],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    out = result.stdout.strip()
+    return out or None
+
+
+def detect_platform() -> str:
+    mapping = {"darwin": "macos", "win32": "windows", "cygwin": "windows"}
+    return mapping.get(sys.platform, "linux")
+
+
+def detect_languages(root: Path) -> list[str]:
+    """Aggregate language markers across root and its immediate subdirectories."""
+    found: list[str] = []
+    seen: set[str] = set()
+
+    def scan(dir_path: Path) -> None:
+        for marker, lang in _LANGUAGE_MARKERS.items():
+            if (dir_path / marker).exists() and lang not in seen:
+                seen.add(lang)
+                found.append(lang)
+        pkg = dir_path / "package.json"
+        if pkg.exists():
+            lang = _js_or_ts(dir_path)
+            if lang not in seen:
+                seen.add(lang)
+                found.append(lang)
+        for sln in dir_path.glob("*.sln"):
+            if "csharp" not in seen:
+                seen.add("csharp")
+                found.append("csharp")
+            break
+
+    scan(root)
+    for child in iter_candidate_dirs(root):
+        scan(child)
+
+    return found
+
+
+def _js_or_ts(dir_path: Path) -> str:
+    if (dir_path / "tsconfig.json").exists():
+        return "typescript"
+    try:
+        raw = json.loads((dir_path / "package.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        return "javascript"
+    deps = {**raw.get("dependencies", {}), **raw.get("devDependencies", {})}
+    if isinstance(deps, dict) and "typescript" in deps:
+        return "typescript"
+    return "javascript"
+
+
+def _package_manager(dir_path: Path) -> str:
+    if (dir_path / "pnpm-lock.yaml").exists():
+        return "pnpm"
+    if (dir_path / "yarn.lock").exists():
+        return "yarn"
+    return "npm"
+
+
+def detect_module_commands(module_path: Path) -> ModuleCommands:
+    """Best-effort build/test/lint commands for a single module directory."""
+    if (module_path / "package.json").exists():
+        return _detect_node_commands(module_path)
+    if (module_path / "pyproject.toml").exists():
+        return _detect_python_commands(module_path)
+    if (module_path / "Cargo.toml").exists():
+        return ModuleCommands(
+            install=None,
+            build="cargo build",
+            test="cargo test",
+            lint="cargo clippy",
+            detected=True,
+            source="Cargo.toml",
+        )
+    if (module_path / "pubspec.yaml").exists():
+        return ModuleCommands(
+            install="flutter pub get",
+            build="flutter build",
+            test="flutter test",
+            lint="flutter analyze",
+            detected=True,
+            source="pubspec.yaml",
+        )
+    if (module_path / "go.mod").exists():
+        return ModuleCommands(
+            install=None,
+            build="go build ./...",
+            test="go test ./...",
+            lint="go vet ./...",
+            detected=True,
+            source="go.mod",
+        )
+    return ModuleCommands(detected=False)
+
+
+def _detect_node_commands(module_path: Path) -> ModuleCommands:
+    pm = _package_manager(module_path)
+    try:
+        raw = json.loads((module_path / "package.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        return ModuleCommands(detected=False)
+    scripts = raw.get("scripts", {})
+    if not isinstance(scripts, dict):
+        scripts = {}
+
+    def cmd(key: str) -> str | None:
+        return f"{pm} run {key}" if key in scripts else None
+
+    return ModuleCommands(
+        install=f"{pm} install",
+        build=cmd("build"),
+        test=cmd("test"),
+        lint=cmd("lint"),
+        detected=True,
+        source="package.json",
+    )
+
+
+def _detect_python_commands(module_path: Path) -> ModuleCommands:
+    text = ""
+    try:
+        text = (module_path / "pyproject.toml").read_text()
+    except OSError:
+        pass
+
+    has_pytest = "pytest" in text
+    has_ruff = "ruff" in text
+
+    return ModuleCommands(
+        install="uv sync",
+        build=None,
+        test="uv run pytest" if has_pytest else None,
+        lint="uv run ruff check ." if has_ruff else None,
+        detected=True,
+        source="pyproject.toml",
+    )
+
+
+@dataclass
+class DetectionSummary:
+    repos: list[DetectedRepo] = field(default_factory=list)
+    languages: list[str] = field(default_factory=list)
+    platform: str = "linux"
+    has_language_markers: bool = False
+
+
+def run_detection(root: Path) -> DetectionSummary:
+    repos = detect_repos(root)
+    languages = detect_languages(root)
+    return DetectionSummary(
+        repos=repos,
+        languages=languages,
+        platform=detect_platform(),
+        has_language_markers=bool(languages) or bool(repos),
+    )

@@ -1,0 +1,46 @@
+.docs/
+.venv/
+*.pyc
+__pycache__/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+.env
+.DS_Store
+
+# This checkout is rite's own source. RUNTIME state under `.rite/` here is
+# residue from manually running a command (`rite watchdog`,
+# `rite scheduler-tick`, ...) against this repo, and is ignored.
+#
+# Authored config is not residue, and three files are:
+#
+#   - `.rite/gitleaksignore` — the publish gate reads its suppressions from
+#     here (gate.suppression.DEFAULT_SUPPRESSION_PATH), so ignoring it
+#     wholesale means this repo can never suppress a false positive and the
+#     publish-gate workflow can never go green.
+#   - `.rite/config.yaml` — this project's own rite config, and since
+#     §10.2 it also records the credential NAMES this project uses (never
+#     values). That file is what makes an auto-generated credential scope
+#     survive a fresh clone: the secret is in the keychain, the name is
+#     here, and a clone that cannot read the name cannot find the
+#     credential. `.rite/*` swallowed it — measured with `git check-ignore
+#     -v .rite/config.yaml`, which named this file's `.rite/*` line — so
+#     the negation below is load-bearing, not tidiness.
+#   - `.rite/review-checklist.md` — the checklist `rite review` merges and
+#     every reviewer of this repo is supposed to work. Ignoring it is why
+#     `rite review` printed "No checklist items found." in the project that
+#     ships the checklist, and why rite's own review rounds were worked
+#     against `templates/review-checklist.md` instead: nobody here had ever
+#     experienced the thing a user gets.
+#
+# This mirrors `scaffold.AUTHORED_CONFIG`, which is the same split for a
+# project rite manages: ignore the directory's contents, re-include the
+# short, stable set of shared files. Note `.rite/*` rather than `.rite/` —
+# git does not descend into an excluded directory, so the negations below
+# only work if the directory itself is not excluded.
+.rite/*
+!.rite/config.yaml
+!.rite/gitleaksignore
+!.rite/review-checklist.md

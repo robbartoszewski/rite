@@ -1,0 +1,385 @@
+"""The seven-section `rite init` questionnaire (SPEC.md §9.3).
+
+Produces an `InitAnswers` bundle. Every question resolves in this order:
+
+1. A value from the `--config` preset file, if present — never prompted.
+2. If `--yes`: a stated, documented default — never prompted, never invented.
+3. Otherwise: an interactive prompt (SPEC.md §9.2 conventions), pre-filled
+   with the same default shown in brackets.
+
+This ordering is what makes `rite init --config <file> --yes` fully
+deterministic and what makes the interactive path testable through
+`click.testing.CliRunner` (see tests/test_init_questionnaire.py).
+"""
+
+from __future__ import annotations
+
+import tempfile
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import click
+
+from rite_ai.config.models import (
+    CredentialsConfig,
+    Module,
+    ProjectBrief,
+    ProjectConfig,
+    TicketBackendConfig,
+)
+from rite_ai.credentials.store import make_namespace
+
+from . import ui
+from .config_file import Preset
+from .detect import DetectedRepo, DetectionSummary
+
+_KIND_OPTIONS = [
+    ("full-stack", "Full-stack"),
+    ("backend", "Backend"),
+    ("frontend", "Frontend"),
+    ("mobile", "Mobile"),
+    ("library", "Library"),
+    ("other", "Other"),
+]
+
+_TICKET_OPTIONS = [
+    ("jira", "JIRA"),
+    ("github", "GitHub Issues"),
+    ("none", "None for now"),
+]
+
+
+@dataclass
+class KbAnswers:
+    links: list[str] = field(default_factory=list)
+    files: list[str] = field(default_factory=list)
+    commit: bool = True
+
+
+@dataclass
+class InitAnswers:
+    role: str
+    brief: ProjectBrief
+    modules: list[Module]
+    config: ProjectConfig
+    kb: KbAnswers
+
+
+def run_questionnaire(
+    root: Path, preset: Preset, detected: DetectionSummary, yes: bool
+) -> InitAnswers:
+    interactive = not yes
+
+    def resolve_text(
+        key: str, question: str, default: str = "", required: bool = False
+    ) -> str:
+        val = preset.get(key)
+        if val is not None:
+            return str(val)
+        if not interactive:
+            return default
+        return ui.text(question, default=default, required=required)
+
+    def resolve_list(
+        key: str, question: str, default: list[str] | None = None
+    ) -> list[str]:
+        default = default or []
+        val = preset.get(key)
+        if val is not None:
+            if isinstance(val, list):
+                return [str(v) for v in val]
+            return [s.strip() for s in str(val).split(",") if s.strip()]
+        if not interactive:
+            return default
+        return ui.text_list(question, default=default)
+
+    def resolve_select(
+        key: str,
+        question: str,
+        options: list[tuple[str, str]],
+        default_index: int = 0,
+        fallback: str | None = None,
+    ) -> str:
+        val = preset.get(key)
+        valid = {v for v, _ in options}
+        if val is not None and val in valid:
+            return val
+        if not interactive:
+            return fallback if fallback is not None else options[default_index][0]
+        return ui.select(question, options, default=default_index)
+
+    def resolve_bool(key: str, question: str, default: bool = True) -> bool:
+        val = preset.get(key)
+        if val is not None:
+            return bool(val)
+        if not interactive:
+            return default
+        return ui.confirm(question, default=default)
+
+    # --- Section 1: Role ---
+    ui.section("Role", 1, 7)
+    role = resolve_select(
+        "project.role",
+        "Is this the Owner machine or a Manager machine?",
+        [
+            ("owner", "Owner    — owns the board, assigns work, one per project"),
+            ("manager", "Manager  — receives work from an Owner, runs its own workers"),
+        ],
+        default_index=0,
+    )
+    borrowed_config: ProjectConfig | None = None
+    if role == "manager":
+        owner_ref = resolve_text(
+            "project.owner_ref", "Owner's project URL or config path?", default=""
+        )
+        if owner_ref:
+            borrowed_config = _borrow_owner_config(owner_ref)
+
+    # --- Section 2: Project ---
+    ui.section("Project", 2, 7)
+    default_name = root.name or "my-project"
+    name = resolve_text("project.name", "Project name?", default=default_name)
+    root_branch = resolve_text("project.root_branch", "Root branch?", default="main")
+
+    # --- Section 3: Modules ---
+    ui.section("Modules", 3, 7)
+    modules = _resolve_modules(preset, interactive, detected.repos)
+
+    # --- Section 4: What's being built ---
+    title = (
+        "What is this?"
+        if detected.has_language_markers or modules
+        else "What will this be?"
+    )
+    ui.section(title, 4, 7)
+    kind = resolve_select(
+        "what.kind", "What kind of project is this?", _KIND_OPTIONS, default_index=0
+    )
+    features = resolve_text(
+        "what.features", "Describe what this project does:", default=""
+    )
+
+    # --- Section 5: Technology ---
+    ui.section("Technology", 5, 7)
+    platform = resolve_text(
+        "technology.platform", "Platform?", default=detected.platform
+    )
+    languages = resolve_list(
+        "technology.languages", "Languages?", default=list(detected.languages)
+    )
+    frameworks = resolve_list("technology.frameworks", "Frameworks?", default=[])
+    architecture = resolve_text("technology.architecture", "Architecture?", default="")
+
+    # --- Section 6: Operations ---
+    ui.section("Operations", 6, 7)
+    ticket_type = resolve_select(
+        "operations.ticket_backend",
+        "Ticket backend?",
+        _TICKET_OPTIONS,
+        default_index=0,
+        fallback="none",
+    )
+    jira_site = ""
+    if ticket_type == "jira":
+        jira_site = resolve_text(
+            "operations.jira_site", "JIRA site? (e.g. myteam.atlassian.net)", default=""
+        )
+
+    # --- Section 7: Knowledge ---
+    ui.section("Knowledge", 7, 7)
+    click.echo(
+        "Reference material to include? Links, documents, coding standards,\n"
+        "or domain knowledge. You can add more later with 'rite kb add'."
+    )
+    click.echo()
+    kb_links = _resolve_kb_list(
+        preset,
+        interactive,
+        "knowledge.links",
+        "Add a link?  (URL — will be fetched and cached)",
+    )
+    kb_files = _resolve_kb_list(
+        preset,
+        interactive,
+        "knowledge.files",
+        "Add a file?  (path — will be copied into .rite/kb/)",
+    )
+    ui.note(
+        "Authored knowledge (principles, patterns, notes) is a team asset — "
+        "versioned, reviewable, new members inherit it. Fetched link caches "
+        "are always gitignored regardless."
+    )
+    kb_commit = resolve_bool(
+        "knowledge.commit", "Commit the knowledge base to git?", default=True
+    )
+    notes = resolve_text(
+        "what.notes", "Anything else the team should know?", default=""
+    )
+
+    ticket_backend = TicketBackendConfig(
+        type=ticket_type,
+        site=jira_site,
+        projects={},
+        credential="jira_token" if ticket_type == "jira" else "",
+    )
+    # Generated HERE, once, and committed with the rest of config.yaml
+    # (§10.2). Doing it at init rather than lazily on the first
+    # `rite credential set` is what lets a fresh clone run
+    # `rite credential list` and be told the real account names straight
+    # away, instead of "(none yet)" until somebody stores something.
+    #
+    # Deliberately NOT borrowed below, however much else is: a borrowed
+    # namespace would mean two projects silently sharing one set of
+    # credentials, which is the defect this exists to remove.
+    config = ProjectConfig(
+        ticket_backend=ticket_backend,
+        credentials=CredentialsConfig(namespace=make_namespace(name)),
+    )
+    if borrowed_config is not None:
+        config.expertise = borrowed_config.expertise
+        if ticket_type == "none" and borrowed_config.ticket_backend.type != "none":
+            config.ticket_backend = borrowed_config.ticket_backend
+
+    brief = ProjectBrief(
+        name=name,
+        role=role,
+        root_branch=root_branch,
+        kind=kind,
+        features=features,
+        notes=notes,
+        platform=platform,
+        languages=languages,
+        frameworks=frameworks,
+        architecture=architecture,
+    )
+
+    return InitAnswers(
+        role=role,
+        brief=brief,
+        modules=modules,
+        config=config,
+        kb=KbAnswers(links=kb_links, files=kb_files, commit=kb_commit),
+    )
+
+
+def _resolve_kb_list(
+    preset: Preset, interactive: bool, key: str, question: str
+) -> list[str]:
+    val = preset.get(key)
+    if val is not None:
+        if isinstance(val, list):
+            return [str(v) for v in val]
+        return [s.strip() for s in str(val).split(",") if s.strip()]
+    if not interactive:
+        return []
+    return ui.repeat_until_blank(question)
+
+
+def _resolve_modules(
+    preset: Preset, interactive: bool, detected_repos: list[DetectedRepo]
+) -> list[Module]:
+    if preset.has_modules():
+        result: list[Module] = []
+        for mod_name, entry in preset.raw_modules().items():
+            if not isinstance(entry, dict):
+                continue
+            result.append(
+                Module(
+                    name=mod_name,
+                    path=entry.get("path", f"{mod_name}/"),
+                    url=entry.get("url"),
+                    branch=entry.get("branch", "main"),
+                    description=entry.get("description", ""),
+                )
+            )
+        return result
+
+    if detected_repos:
+        plural = "y" if len(detected_repos) == 1 else "ies"
+        click.echo(f"Found {len(detected_repos)} repositor{plural}:")
+        click.echo()
+        for r in detected_repos:
+            origin = r.url if r.url else "local only"
+            click.echo(f"  ✓ {r.path:<14} ({origin})")
+        click.echo()
+
+        add_all = True
+        if interactive:
+            add_all = ui.confirm("Add all as modules?", default=True)
+
+        selected = detected_repos
+        if not add_all:
+            selected = [
+                r
+                for r in detected_repos
+                if ui.confirm(f"  Add {r.path}?", default=True)
+            ]
+
+        return [
+            Module(name=r.name, path=r.path, url=r.url, branch=r.branch, description="")
+            for r in selected
+        ]
+
+    if not interactive:
+        return []
+
+    click.echo("No repositories found. Add a module?")
+    modules: list[Module] = []
+    while True:
+        mname = ui.text("Module name?", default="")
+        if not mname:
+            break
+        murl = ui.text("Git URL?", default="")
+        modules.append(
+            Module(
+                name=mname,
+                path=f"{mname}/",
+                url=murl or None,
+                branch="main",
+                description="",
+            )
+        )
+    return modules
+
+
+def _borrow_owner_config(ref: str) -> ProjectConfig | None:
+    """Best-effort fetch of an Owner's config.yaml to align ticket backend
+    and expertise tags. Never blocks or invents — a failure is silently
+    skipped and reported as a note, not an error."""
+    from rite_ai.config.parse import ParseError, parse_config
+
+    text: str | None = None
+    candidate = Path(ref)
+    if candidate.exists():
+        try:
+            text = candidate.read_text()
+        except OSError:
+            text = None
+    elif ref.startswith(("http://", "https://")):
+        try:
+            import urllib.request
+
+            with urllib.request.urlopen(ref, timeout=5) as resp:  # noqa: S310
+                text = resp.read().decode("utf-8", errors="replace")
+        except Exception:
+            text = None
+
+    if not text:
+        ui.note(f"Could not read '{ref}' — continuing without borrowed config.")
+        return None
+
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False)
+    try:
+        tmp.write(text)
+        tmp.close()
+        parsed = parse_config(Path(tmp.name))
+    finally:
+        Path(tmp.name).unlink(missing_ok=True)
+
+    if isinstance(parsed, ParseError):
+        ui.note(f"Could not parse config from '{ref}' — continuing without it.")
+        return None
+    return parsed
+
+
+__all__ = ["InitAnswers", "KbAnswers", "run_questionnaire"]

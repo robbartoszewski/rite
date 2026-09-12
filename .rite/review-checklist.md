@@ -1,0 +1,208 @@
+# Review checklist
+
+Project-wide checklist for the review convention (see `CLAUDE.md`). A repo can
+add its own `.rite/review-checklist.md`, which **appends** to this one rather
+than replacing it.
+
+The point is incremental quality: a known issue gets a line here and is
+eliminated permanently. A line that keeps firing should become a lint rule or
+a gate instead; a line that never fires should be removed.
+
+**Three verdicts, not two.** Measured by handing this checklist to three
+independent reviewers against one real change: five of these lines could not
+fire on that diff at all (no dependency added, no serialiser touched, no
+external tool named), and every reviewer recorded them as PASS. A PASS that
+means "does not apply here" is indistinguishable in a tally from a PASS that
+means "I checked and it holds", and a column of them manufactures the
+appearance of coverage. So:
+
+- **PASS** — you applied the line and it holds. If you did not check, it is
+  not a PASS.
+- **N/A** — the line cannot fire on this diff. Say in four words why not.
+- **CANNOT-EVALUATE** — the line *should* fire here and you could not apply
+  it. This is a finding about the LINE, not about the change: report it, and
+  say which part of the wording defeated you. A line nobody can apply is
+  worse than a missing one.
+
+**Verification is first because it is what fires.** The other four sections
+are one-liners you can check in a minute and most of them cannot fire on most
+diffs; these are the ones that earned their place by shipping. Read them
+against the diff before the habit of skimming sets in.
+
+## Verification
+
+Each of these cost a real, shipped defect somewhere before it earned a line
+here — see rite's own publish-gate module for a fresh example of the first
+one.
+
+- [ ] A failure path exits non-zero and says why. Nothing fails silently to
+      stderr while stdout — or the exit code — reports success; a broken
+      check that reports "clean" is worse than no check at all.
+- [ ] The check observes the property it claims, not a proxy for it — that
+      the thing works, not that its bytes are unchanged; that the tool runs,
+      not that it is on PATH. This is not only about tests: a gate, a health
+      check and a test assertion all fail the same way. Delete the code under
+      test, or break the property itself, and confirm the check goes red; one
+      that stays green either way is not checking anything.
+- [ ] Exercised from the state a new user starts in — empty database, fresh
+      clone, no config — not only from the state already on the developer's
+      machine. A migration chain that has only ever been run forward from
+      today's schema has been run from step 0 exactly zero times, and the
+      steps fail in order the first time someone starts clean.
+- [ ] A missing or undefined input fails loudly; nothing falls back to a
+      plausible default where the failure would render as **content rather
+      than an error**. An absent plural form that quietly renders the
+      singular, an undefined token that resolves to a valid-looking value —
+      output like that passes every check made by eye, which is why this
+      defect ships in bulk rather than one at a time.
+- [ ] Every seam this change touches — a call from one module into another,
+      a schema both sides read, a contract a generated file depends on — has
+      a ticket or a test that owns it, not left implicit because "it's
+      obviously fine."
+- [ ] Generated or templated content (a report, a summary, a register entry,
+      a changelog line) states only what was actually measured. No line
+      asserts a fact nobody checked.
+- [ ] Something outside its own test suite actually calls this — and "this"
+      is every artifact the change adds, not only a module: a template, a
+      workflow file, a config key, a generated file. A test suite passing
+      against a module with zero callers proves the module works and nothing
+      else — this project built exactly that twice (`rite prepare`, `rite
+      status`) before either had a caller, and carried a CI workflow template
+      that no Python, no test and no doc referenced. Grep for the caller;
+      not finding one is the finding.
+## rite's own
+
+Everything above is the checklist `rite init` ships to every project, and every
+line of it is worked here too — `tests/test_rite_dogfoods_its_checklist.py`
+fails if one is added there and not applied here, because a checklist this
+project does not itself work is one nobody has used the way a user will.
+
+What follows is rite's, earned the same way: each line is here because this
+repository shipped the defect once. Two that used to be here have gone, which
+is the intended lifecycle — see the note at the end.
+
+- [ ] A claim this code makes in prose — `README.md`, `SPEC.md`, a docstring,
+      a generated file, a CLI message — is checked against the code that would
+      have to be true for it, in this diff. Prose and code drift in the
+      direction that flatters the tool: README promised a CI workflow
+      `rite init` did not write, a workflow header asserted a pre-push hook
+      that had just refused to install, and a `--help` string described a
+      measurement nobody in this repository had run.
+- [ ] A quotation from `SPEC.md` is the text that is in `SPEC.md`. Grep for
+      it. A fabricated citation is unfalsifiable until someone looks, and it
+      spreads — `merge.py`'s invented "repo checklist appends to project
+      checklist" reached two review templates and a test docstring, and
+      retracting it in the docstring alone left it standing in the test.
+      (The section NUMBERS are now a gate —
+      `tests/test_spec_citations.py` fails on a citation to a section that
+      does not exist. The quoted text still needs a human with grep.)
+- [ ] A claim about an external tool (`git`, `gitleaks`, `gh`, `yoloai`) was
+      measured against the installed binary, and a claim that came from
+      somewhere else says so. `--backend sandbox-exec` is not a value yoloAI
+      accepts; `sha256sum --ignore-missing` exits 0 on one macOS
+      implementation and 1 on two others. Second-hand measurements are worth
+      recording and are not worth restating as your own.
+- [ ] Anything that resolves a path, a template or a version **at runtime** is
+      exercised against a built wheel, not only the source tree. `rite init`
+      crashed with `FileNotFoundError` under `pipx install` while 560 tests
+      passed green from the checkout — and the defect was path *resolution*,
+      not a missing file, so a presence check would have gone green on a wheel
+      that was still broken.
+- [ ] A function that serialises a config object writes **every** field, not
+      the ones today's caller happens to set. Anything that round-trips config
+      through it silently deletes the sections it dropped.
+      (`tests/test_config_roundtrip_is_total.py` now walks
+      `dataclasses.fields()` and round-trips the result, so `config_to_yaml`
+      is covered by nobody having done anything — this line kept only for
+      serialisers the gate does not reach.)
+
+- [ ] A read-modify-write of a shared file takes the lock **and** writes
+      atomically. Measured on `modules.yaml`: six concurrent registrations
+      over five rounds, every round lost entries, the worst kept one of six.
+      This line was retired once, on the grounds that
+      `tests/test_shared_state_locking.py::test_no_durable_state_writer_is_left_using_write_text`
+      had become a gate for it. It has not: that test enumerates eleven named
+      files and checks only that they avoid `write_text` — a *new* module doing
+      an unlocked read-modify-write passes it, and nothing in it checks locking
+      at all. Restored, and the retirement is the cautionary tale: retiring a
+      checklist line in favour of a gate means reading the gate.
+
+- [ ] If this change alters a public interface — a command, a flag, an output
+      line, a generated file, a platform claim — or invalidates something
+      `README.md` states, the README is updated in the same change. Not every
+      task: the README is a landing page and per-task edits are churn. The
+      question a reviewer can answer that a release step cannot is the narrow
+      one — *does this change make a sentence in the README false?* Two have
+      shipped false already: that release tags are immutable (in the
+      distribution section of a secrets-gate tool), and that `rite init`
+      generated a CI workflow while it generated nothing. Both were caught
+      long after the change that made them false.
+
+      The third is the argument for this line. Rewriting the README to a
+      landing page, a round-2 pass caught a sentence the SAME rewrite had
+      just introduced — that cross-machine coordination "works the same way
+      but has had far less use", when the roadmap says it is designed and
+      not built. Written and caught within the hour, by asking this question
+      and nothing else. A release step cannot ask it, because by then nobody
+      remembers which sentence the change was supposed to touch.
+
+**On retiring a line.** The template's opening says a line that keeps firing
+should become a gate and a line that never fires should go. Three have moved:
+`config_to_yaml`'s totality is now
+`tests/test_config_roundtrip_is_total.py`, which walks the dataclasses rather
+than enumerating what someone remembered — written the first time anyone
+worked this checklist against rite's own code, which is the whole argument for
+a project using the checklist it ships;
+SPEC section numbers are now enforced by `tests/test_spec_citations.py`, so the
+citation line above keeps only the half a machine cannot do; and "a fix was
+checked for the defect it fixes" now lives in
+`templates/agents/reviewer-terminating.md`, which is the stage that reviews
+fixes — `reviewer-round1` is told fixes are out of its scope, so the one agent
+reading this file could not have acted on it.
+
+## Security
+
+- [ ] No secrets, tokens, or credentials in committed content (source, docs,
+      comments, test fixtures, commit messages).
+- [ ] User input is validated at the boundary, not trusted downstream.
+- [ ] No obvious injection surface (SQL, shell, template) left unparameterised.
+- [ ] Dependencies added this change have no known critical advisories.
+
+## Correctness
+
+- [ ] The change does what the ticket asked, not more and not less. Where
+      there is no ticket, the commit message is the ask — hold it to the same
+      standard, and a change that does more than its own message claims is
+      the finding. (Three reviewers marked this line unevaluable on the same
+      diff for the same reason: no ticket existed and the line named no
+      fallback.)
+- [ ] Edge cases the diff touches are covered by a test that fails without
+      the fix.
+- [ ] No behaviour silently reversed or removed without the ticket saying so.
+- [ ] Anything this change found and did not do is a ticket, not a sentence
+      in the PR or the handover. The test is not "was it in scope" — it is
+      **would this ticket's definition of done still be met without it?**
+      Yes, file it unlinked; no, file it and link this ticket as blocked by
+      it (`rite board link <this> <new>`). Filed for something observed,
+      never something imagined: a follow-up nobody can point at the evidence
+      for is sprawl, not coverage.
+
+## Style
+
+- [ ] Follows this project's existing conventions, not the reviewer's
+      preference — meaning the code next to it and the vocabulary already in
+      use, not a rule you would have chosen. Where a declared convention and
+      the practised baseline disagree, say so and stop: that disagreement is
+      the finding, and resolving it is not the reviewer's call. (Three
+      reviewers returned three different verdicts on this line — one read it
+      as the enforced formatter, one as the surrounding code, one as the
+      repo's shared vocabulary, and the third found a real divergence the
+      other two did not look for.)
+- [ ] No dead code, no commented-out blocks, no leftover debug output.
+
+## Dependencies
+
+- [ ] New dependencies are the right size for the job — no heavy framework
+      for something a few lines would do.
+- [ ] Licence is compatible with this project.
+

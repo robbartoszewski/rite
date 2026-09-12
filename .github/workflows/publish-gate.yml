@@ -1,0 +1,72 @@
+name: Publish gate
+
+# Dogfoods rite's own publish gate against the rite repo itself — SPEC §11.5:
+# "CI integration: a GitHub Action / JIRA automation that runs the same
+# gate. Belt and braces — the hook catches it at the developer's machine,
+# CI catches it if the hook is bypassed."
+#
+# Runs `python -m rite_ai.gate check` directly rather than `rite publish check`
+# — both exist and are equivalent now (`rite publish check` is wired), but
+# this workflow runs against the dev checkout via `uv run`, not an installed
+# `rite`, so the standalone module entry point is what's actually reachable
+# here without an extra install step (see src/rite_ai/gate/__main__.py's module
+# docstring for why the standalone path exists at all).
+
+# Deliberately UNFILTERED, matching the workflow `rite init` generates — and
+# for the reason that template's header gives at length: a Worker never pushes
+# to the root branch, so every push this gate exists to catch lands on a
+# feature branch that `branches: [main]` skips. A secret is published the
+# moment it reaches the remote, not the moment it merges.
+#
+# This file was filtered to `main` until the check in `rite_ai.gate.ci` was
+# taught to look at triggers and flagged it — rite not applying to itself the
+# fix it had just shipped to every generated project.
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  publish-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history — the gate scans all of it, not just HEAD
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: uv sync
+
+      # Pinned AND checksummed, the same way `templates/ci/publish-gate.yml`
+      # requires of every project rite generates — this file downloaded the
+      # binary unverified while the template it ships said, in as many words,
+      # that this binary "is not a build tool here — it IS the security
+      # control this job exists to run". A release asset can be replaced under
+      # an unchanged tag.
+      #
+      # The one line for our asset is grepped OUT of `checksums.txt` rather
+      # than checking the whole file with `--ignore-missing`, for the reason
+      # the template gives: if the asset name ever changes, grep exits 1 and
+      # the job stops, whereas `--ignore-missing` with nothing left to match
+      # is a no-op that exits 0 on some implementations.
+      - name: Install gitleaks
+        run: |
+          cd /tmp
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \
+            -o gitleaks_8.30.1_linux_x64.tar.gz
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_checksums.txt \
+            -o gitleaks_checksums.txt
+          grep ' gitleaks_8.30.1_linux_x64.tar.gz$' gitleaks_checksums.txt > expected.sha256
+          sha256sum --check expected.sha256
+          tar -xzf gitleaks_8.30.1_linux_x64.tar.gz -C /tmp gitleaks
+          sudo mv /tmp/gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      - name: Run publish gate
+        run: uv run python -m rite_ai.gate check

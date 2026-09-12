@@ -1,0 +1,4070 @@
+import os
+import time
+from pathlib import Path
+
+import click
+
+from rite_ai import __version__
+from rite_ai.cli.help import RiteGroup
+from rite_ai.state import exclusion_holds
+
+
+def _find_project_root() -> Path:
+    """Walk up from cwd to find a directory containing .rite/."""
+    cwd = Path.cwd()
+    for parent in [cwd, *cwd.parents]:
+        if (parent / ".rite").is_dir():
+            return parent
+    return cwd
+
+
+def _require_project_root() -> Path:
+    """The project root, or refuse — for every command that WRITES.
+
+    `_find_project_root` falls back to cwd when no `.rite/` exists
+    anywhere above, which is right for the read-only commands (`rite
+    status` aggregates, `rite budget` is machine-wide) and wrong for
+    anything that persists state: the writer then CREATES `.rite/`
+    wherever it was run, and reports success.
+
+    That is not cosmetic. `rite claim src/ --worker alpha` typed one
+    directory too high printed "claimed 1 path(s)" and exited 0 against a
+    ledger no other session reads — the exclusion guarantee this tool
+    exists to provide, silently absent, with the same output as a real
+    claim. The phantom `.rite/` then captures every directory BELOW it
+    through the walk-up, so unrelated later commands adopt it: measured
+    on the author's machine, a stray `/private/tmp/.rite` left by an
+    earlier session made `rite doctor` report `project: /private/tmp`
+    from a scratch directory six levels down.
+
+    Round 2 found the same shape in `rite pool status` and fixed it
+    there, in that one command. This is the general form, and the
+    message is `board`'s, which already had it right.
+    """
+    root = _find_project_root()
+    if (root / ".rite").is_dir():
+        return root
+    # `_find_project_root` returns the real root when it found one and
+    # cwd when it did not, and those two are told apart by exactly this:
+    # whether the thing it returned has a `.rite/` in it. Asking IT the
+    # question rather than re-walking here also means the commands stay
+    # testable the way the rest of them are — the suite patches
+    # `_find_project_root`, and a second private walk-up would quietly
+    # ignore that.
+    click.echo(
+        f"not a rite project ({root}) — no .rite/ directory here or in any "
+        "parent. Run `rite init` here first, or change to a project "
+        "directory.",
+        err=True,
+    )
+    raise SystemExit(1)
+
+
+def _tracked_runtime_state(root: Path) -> list[str]:
+    """Runtime state this repo is committing, if any.
+
+    `.rite/` holds two different kinds of file, and SPEC §8's own layout
+    draws the line: configuration `rite init` writes, and "runtime state
+    ... written by rite as it runs". The second kind is meaningful only
+    on the machine that wrote it — a claims ledger naming this machine's
+    workers, a heartbeat that is a local clock reading, an undelivered
+    outbox, one machine's cron log — so committing it puts one machine's
+    ephemera in a shared history and produces a conflict on every pull.
+
+    Checked against what git ACTUALLY tracks rather than against
+    `.gitignore`, because those answer different questions: adding an
+    ignore rule does not untrack a file that is already committed, so a
+    project that adopted the rule later still carries the old ephemera
+    and would otherwise read as fixed.
+
+    Reports; never removes. Untracking is `git rm --cached`, which
+    destroys no content but is still the user's call in their own repo —
+    the same reasoning that makes `rite init` refuse to write into a
+    shared hooks directory rather than surprise anyone.
+    """
+    import subprocess
+
+    from rite_ai.cli.init.scaffold import AUTHORED_CONFIG
+
+    if not (root / ".git").exists():
+        return []
+    try:
+        proc = subprocess.run(
+            # Ask for everything rite writes, then subtract what is meant to
+            # be shared. Asking for a list of runtime patterns instead meant
+            # the check could only find what someone had remembered to add
+            # to that list — it was already missing `.rite/handover/`.
+            ["git", "ls-files", "--", ".rite", "workers"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if proc.returncode != 0:
+        return []
+
+    def _is_shared(path: str) -> bool:
+        # Two AUTHORED_CONFIG entries are DIRECTORIES (`.rite/context/`,
+        # `.rite/kb/`), and a prefix match calls everything inside them
+        # shared. That is right for their contents and wrong for the one
+        # thing in them that is not content: the `<name>.lock` sidecar
+        # `rite_ai.state.locked()` flocks. Without this, a project that had
+        # already committed `.rite/context/INDEX.md.lock` read as clean —
+        # the exact "adding an ignore rule does not untrack" case this
+        # function exists to catch, missed because the file sat under a
+        # shared directory.
+        if path.endswith(".lock"):
+            return False
+        return any(path == entry or path.startswith(entry) for entry in AUTHORED_CONFIG)
+
+    tracked = sorted(
+        {
+            line.strip()
+            for line in proc.stdout.splitlines()
+            if line.strip() and not _is_shared(line.strip())
+        }
+    )
+    if not tracked:
+        return []
+    shown = ", ".join(tracked[:4]) + ("…" if len(tracked) > 4 else "")
+    return [
+        f"{len(tracked)} file(s) ({shown}) — one machine's ephemera in a "
+        "shared history, and a merge conflict on every pull. Stop tracking "
+        "them with `git rm --cached` and add them to .gitignore (`rite init` "
+        "does this for new projects)."
+    ]
+
+
+def _has_project_in_scope() -> bool:
+    """Unlike `_find_project_root`, which always returns SOMETHING (falls
+    back to cwd), this distinguishes "found a real .rite/" from "found
+    nothing" — the distinction `rite status`'s aggregation mode needs to
+    decide whether to show one project's detail or the cross-project
+    summary (SPEC §8.9)."""
+    cwd = Path.cwd()
+    return any((parent / ".rite").is_dir() for parent in [cwd, *cwd.parents])
+
+
+def _claims_path() -> Path:
+    root = _find_project_root()
+    return root / ".rite" / "claims.json"
+
+
+@click.group(cls=RiteGroup)
+@click.version_option(__version__, "-v", "--version", prog_name="rite")
+def cli() -> None:
+    """Multi-session Claude coordination for teams."""
+
+
+@cli.command()
+@click.argument("directory", default=".", type=click.Path(exists=True))
+@click.option(
+    "--config",
+    "config_file",
+    default=None,
+    type=click.Path(exists=True),
+    help="Preset file answering some or all questions (SPEC §9.3).",
+)
+@click.option(
+    "--yes",
+    "yes",
+    is_flag=True,
+    default=False,
+    help="Never prompt — use the preset where given, documented defaults "
+    "otherwise. Makes init fully non-interactive and scriptable.",
+)
+def init(directory: str, config_file: str | None, yes: bool) -> None:
+    """Initialise a rite project — interactive questionnaire.
+
+    Creates `.rite/` (brief, modules, config, the context and KB indexes,
+    and a review checklist) alongside a role-appropriate CLAUDE.md and
+    `.claude/` agents and commands. `--config` answers some or all of the
+    questions from a preset file; `--yes` takes documented defaults for
+    whatever the preset leaves open. Together they make init fully
+    non-interactive, so it can run from a script or a provisioning step.
+
+    Examples:
+      rite init
+      rite init --config team-defaults.yaml
+      rite init --config team-defaults.yaml --yes
+    """
+    from rite_ai.cli.init import run_init
+
+    result = run_init(
+        Path(directory).resolve(),
+        config_path=Path(config_file) if config_file else None,
+        yes=yes,
+    )
+    if result.status == "error":
+        click.echo(result.message, err=True)
+        raise SystemExit(1)
+    if result.status == "already_initialized":
+        # Nothing was created. Exiting 0 told every script that init had
+        # succeeded, and `rite init --yes` in particular has no other way
+        # to report the refusal — it never prompts.
+        click.echo(result.message, err=True)
+        raise SystemExit(1)
+
+
+def _tool_runs(binary: str, probe: list[str]) -> tuple[bool, str]:
+    """Whether an external tool actually executes, and what it reports.
+
+    A checksum proves a file has not changed; running it proves it works.
+    Bounded and non-fatal: a probe that times out or cannot be spawned is
+    reported as broken rather than raised, because `rite doctor` exists to
+    describe problems, not to become one."""
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            [binary, *probe],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=15,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "timed out after 15s"
+    except OSError as e:
+        return False, f"could not execute: {e}"
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout).strip().splitlines()
+        first = detail[0][:120] if detail else "no output"
+        return False, f"exited {proc.returncode}: {first}"
+    out = (proc.stdout or proc.stderr).strip().splitlines()
+    if not out:
+        return True, "runs"
+    # Elided visibly. A hard cut mid-word reads as part of the sentence
+    # that follows it rather than as a truncated version string.
+    first = out[0].strip()
+    return True, first if len(first) <= 48 else _elide(first, 47)
+
+
+# Brackets the elision below has to leave balanced.
+_BRACKETS = {"(": ")", "[": "]", "{": "}"}
+
+
+def _elide(text: str, keep: int) -> str:
+    """`text` cut to `keep` characters, marked, and left readable.
+
+    The mark alone is not enough when the cut falls INSIDE a bracket,
+    because the caller then puts its own parenthetical after it. Measured
+    against the installed yoloAI, whose version line is `yoloai version
+    0.11.0 (commit: 95a6b8ee…)`, in `rite doctor`:
+
+        tool yoloai: yoloai version 0.11.0 (commit: 95a6b8ee…
+            (sandbox.enabled is false — not required)      <- one line
+
+    Two opening brackets, one closing one, and the second parenthetical
+    reads as though it were still inside the first — so the line says the
+    commit is "sandbox.enabled is false". Closing what was opened costs
+    one character per bracket and the line reads as what it is: a
+    truncated version, then a note.
+    """
+    kept = text[:keep]
+    unclosed: list[str] = []
+    for char in kept:
+        if char in _BRACKETS:
+            unclosed.append(_BRACKETS[char])
+        elif unclosed and char == unclosed[-1]:
+            unclosed.pop()
+    return kept + "…" + "".join(reversed(unclosed))
+
+
+@cli.command()
+def doctor() -> None:
+    """Is this healthy? (SPEC §9.8) Token presence, external tool
+    availability, `.rite/` integrity, module sync state, git remote
+    reachability, and schedule validation — as distinct from `rite
+    status`'s "what's happening?"."""
+    import shutil
+
+    click.echo(f"rite {__version__}")
+
+    from rite_ai.config.parse import ParseError as ParseErrorType
+
+    root = _find_project_root()
+    rite_dir = root / ".rite"
+    if not rite_dir.is_dir():
+        # Non-zero, settling SPEC §9.11's open question. The case for 0 was
+        # that nothing was checked so nothing is unhealthy; the case for
+        # non-zero is that "not set up" is exactly what a guard wants to
+        # catch, and §9.11's own settled convention decides it — "a command
+        # that answers a question answers it in the exit code, not only in
+        # prose", the rule that came from `rite credential check` printing
+        # `not_found` and exiting 0. `rite doctor && rite claim ...`
+        # succeeded in a directory where rite was never set up.
+        #
+        # Exit 1 rather than 2: this is doctor's own "not healthy enough to
+        # proceed", not a Click usage error about the arguments given.
+        click.echo(
+            f"no .rite/ directory found under {root} — this is not a rite "
+            "project. Run `rite init` here, or run doctor from inside one.",
+            err=True,
+        )
+        raise SystemExit(1)
+
+    click.echo(f"project: {root}")
+    problems: list[str] = []
+
+    # PARSED, not stat'd. "found" answered whether a file was on disk,
+    # which is not the question — an unparseable brief.yaml, or one
+    # missing the required `project.name`, reported "found" and doctor
+    # went on to print "ok", while every command that calls
+    # `load_project` failed on that same file.
+    from rite_ai.config.parse import parse_brief
+
+    brief = rite_dir / "brief.yaml"
+    parsed_brief = parse_brief(brief)
+    if isinstance(parsed_brief, ParseErrorType):
+        if brief.exists():
+            click.echo(f"brief.yaml: UNUSABLE — {parsed_brief.message}")
+            problems.append(f"brief.yaml: {parsed_brief.message}")
+        else:
+            click.echo("brief.yaml: missing")
+            problems.append("brief.yaml missing")
+    else:
+        click.echo(f"brief.yaml: ok ({parsed_brief.name})")
+
+    from rite_ai.credentials.store import resolve as cred_resolve
+
+    creds = _project_credentials()
+    for name in ["jira_token", "jira_email", "github_token"]:
+        click.echo(f"credential {name}: {cred_resolve(name, creds).describe()}")
+
+    # RUN them. Being on PATH is not the same as working: a shim, a
+    # half-finished install or an incompatible build all answer
+    # `shutil.which` and then fail the moment anything depends on them.
+    # The publish gate depends on gitleaks, so a gitleaks that is present
+    # and broken degrades the gate silently.
+    for tool, probe in (("gitleaks", ["version"]), ("gh", ["--version"])):
+        found = shutil.which(tool)
+        if not found:
+            click.echo(f"tool {tool}: not found")
+            continue
+        ok, detail = _tool_runs(found, probe)
+        if ok:
+            click.echo(f"tool {tool}: {detail} ({found})")
+        else:
+            click.echo(f"tool {tool}: BROKEN at {found} — {detail}")
+            problems.append(f"tool {tool} is on PATH but does not run: {detail}")
+
+    from rite_ai.config.parse import ParseError, load_project, parse_modules
+    from rite_ai.context import check_integrity
+
+    for issue in check_integrity(root):
+        click.echo(f"context: {issue.kind} — {issue.detail}")
+        problems.append(f"context {issue.kind}: {issue.detail}")
+
+    modules = parse_modules(rite_dir / "modules.yaml")
+    if isinstance(modules, ParseError):
+        click.echo(f"modules.yaml: {modules.message}")
+        problems.append(f"modules.yaml: {modules.message}")
+        modules = []
+
+    from rite_ai.workspace import git_ops
+
+    for m in modules:
+        module_dir = root / m.path
+        if not git_ops.is_git_repo(module_dir):
+            click.echo(f"module {m.name}: not a git repository at {m.path}")
+            problems.append(f"module {m.name} is not a git repository")
+            continue
+        clean = git_ops.is_clean(module_dir)
+        if isinstance(clean, git_ops.GitError):
+            click.echo(f"module {m.name}: {clean.message}")
+            problems.append(f"module {m.name}: {clean.message}")
+        elif not clean:
+            click.echo(f"module {m.name}: uncommitted changes")
+        else:
+            click.echo(f"module {m.name}: clean")
+        if m.url:
+            fetch_err = git_ops.fetch(module_dir)
+            if isinstance(fetch_err, git_ops.GitError):
+                if fetch_err.kind == "network":
+                    click.echo(f"module {m.name}: remote unreachable (offline?)")
+                else:
+                    click.echo(f"module {m.name}: remote error — {fetch_err.message}")
+                    problems.append(
+                        f"module {m.name} remote error: {fetch_err.message}"
+                    )
+            else:
+                click.echo(f"module {m.name}: remote reachable")
+
+    # The WORKERS' checkouts, which the loop above never looked at. Every
+    # module line it prints is about `<root>/<module>` — the project's own
+    # copy, which nothing works in. The work happens in
+    # `workers/<name>/<module>`, and that is the one place in a rite
+    # project whose contents can be irreplaceable.
+    #
+    # Measured on a worker killed between claim and commit: `rite doctor`
+    # reported `module reviewer: clean` while `workers/w1/reviewer` held a
+    # modified README and a new file on the ticket branch, committed
+    # nowhere. Not one of `start`, `status`, `watchdog`, `doctor` or
+    # `handover show` mentioned it — so the most valuable thing the dead
+    # session left was the one thing the next session could not discover.
+    #
+    # Local git only: no fetch, no network, one `git status` and one `git
+    # rev-list` per checkout that exists.
+    from rite_ai.workspace import unsaved_work
+
+    workers_dir = root / "workers"
+    if workers_dir.is_dir():
+        for worker_dir in sorted(p for p in workers_dir.iterdir() if p.is_dir()):
+            for item in unsaved_work(worker_dir):
+                click.echo(
+                    f"worker {worker_dir.name}: unsaved work — {item.describe()}"
+                )
+                problems.append(
+                    f"worker {worker_dir.name} has unsaved work in "
+                    f"{item.module} — it exists only in "
+                    f"workers/{worker_dir.name}/{item.module}"
+                )
+
+    # The publish gate is only a guarantee while git will actually run it,
+    # and that stops being true without anyone touching the project —
+    # `core.hooksPath` can be set globally, long after `rite init` checked.
+    # `init` reports this once, at creation; nothing asked again until now.
+    from rite_ai.gate.hook import gate_hook_status
+
+    for label, repo_dir in [("project root", root)] + [
+        (f"module {m.name}", root / m.path) for m in modules
+    ]:
+        status = gate_hook_status(repo_dir)
+        if status.state == "not_a_repo":
+            continue
+        if status.active:
+            click.echo(f"publish gate hook ({label}): active")
+        else:
+            click.echo(f"publish gate hook ({label}): {status.detail}")
+            problems.append(f"publish gate does not run on push from {label}")
+
+    # The other half, and per §11.5.1 the load-bearing half: the hook above is
+    # disarmable by this machine's own git config with no signal, and CI is
+    # the only layer local configuration cannot switch off. Doctor checked the
+    # disarmable layer and not this one — the same asymmetry that let the hook
+    # defect exist, since nobody asked the question.
+    #
+    # Project root only, and said so: `rite init` writes the workflow there
+    # alone, because the gate reads its scan patterns and suppressions from
+    # `.rite/`, which lives there. A bare "active" would otherwise read as
+    # "every repo is covered".
+    from rite_ai.gate.ci import ci_workflow_status
+
+    ci_gate = ci_workflow_status(root)
+    if ci_gate.state != "not_a_repo":
+        if ci_gate.active:
+            click.echo("publish gate CI (project root): active — a job runs the gate")
+        else:
+            click.echo(f"publish gate CI (project root): {ci_gate.detail}")
+            problems.append("publish gate does not run in CI")
+
+    # The property every claim rests on, measured rather than assumed.
+    if not exclusion_holds(root / ".rite"):
+        click.echo(
+            f"file locking: DOES NOT WORK under {root / '.rite'} — two "
+            "workers can be granted the same path here and both told "
+            "'claimed'. A network mount or a VM shared folder looks like "
+            "this. Move the project to a local disk, or run one worker."
+        )
+        problems.append("file locking does not exclude in this project")
+    else:
+        click.echo("file locking: excludes (claims can be relied on)")
+
+    for tracked in _tracked_runtime_state(root):
+        click.echo(f"git tracks runtime state: {tracked}")
+        problems.append("git tracks .rite/ runtime state")
+
+    project = load_project(root)
+    if isinstance(project, list):
+        # Previously this branch did nothing at all: a project whose
+        # config would not load simply skipped the schedule and sandbox
+        # rows, so a broken config made doctor QUIETER rather than
+        # louder, and it still reached "ok".
+        for err in project:
+            # brief.yaml and modules.yaml each already have their own row
+            # above. Repeating them here counted one broken file as two
+            # problems and printed it twice.
+            if Path(err.file).name in ("brief.yaml", "modules.yaml"):
+                continue
+            click.echo(f"config: {err.file}: {err.message}")
+            problems.append(f"config {err.file}: {err.message}")
+    else:
+        from rite_ai.sandbox import is_available as sandbox_available
+        from rite_ai.schedule import validate_schedule
+
+        # Reported unconditionally (it is one `shutil.which`), but only a
+        # PROBLEM when `sandbox.enabled` is set — a project that never asked
+        # for sandboxing is not unhealthy for lacking yoloAI (SPEC §5.3:
+        # sandboxing is optional, default off).
+        yoloai_found = sandbox_available()
+        yoloai_broken = False
+        detail = "found"
+        # Probed, not merely located — same reason as gitleaks and gh.
+        # A yoloai that cannot run means `rite sandbox start` fails at the
+        # moment a Worker is being isolated, which is the worst moment to
+        # find out.
+        yoloai_path = shutil.which("yoloai")
+        if yoloai_found and yoloai_path:
+            # `yoloai version`, not `--version`: the flag does not exist
+            # and exits 1, which would report a working install as broken.
+            runs, detail = _tool_runs(yoloai_path, ["version"])
+            if not runs:
+                yoloai_broken = True
+                click.echo(f"tool yoloai: BROKEN at {yoloai_path} — {detail}")
+                if project.config.sandbox.enabled:
+                    problems.append(
+                        f"sandbox.enabled is true but yoloai does not run: {detail}"
+                    )
+        if yoloai_broken:
+            pass  # already reported above; do not describe it twice
+        elif not yoloai_found and project.config.sandbox.enabled:
+            click.echo(
+                "tool yoloai: NOT FOUND — sandbox.enabled is true, so "
+                "`rite sandbox start` and `rite add worker`'s token "
+                "provisioning will both fail"
+            )
+            problems.append("sandbox.enabled is true but yoloai is not on PATH")
+        elif project.config.sandbox.enabled:
+            click.echo(f"tool yoloai: {detail} (sandbox.enabled is true)")
+        elif yoloai_found:
+            click.echo(
+                f"tool yoloai: {detail} (sandbox.enabled is false — not required)"
+            )
+        else:
+            click.echo(
+                "tool yoloai: not found (sandbox.enabled is false — not required)"
+            )
+
+        schedule_problems = validate_schedule(
+            project.config.schedule, project.config.sandbox.max_concurrent_workers
+        )
+        for p in schedule_problems:
+            click.echo(f"schedule: {p}")
+        problems.extend(schedule_problems)
+
+    if problems:
+        click.echo(f"\n{len(problems)} problem(s) found")
+        raise SystemExit(1)
+    click.echo("\nok")
+
+
+def _warn_if_unregistered(worker: str) -> None:
+    """Say so, at the moment it happens, when state is being recorded for
+    a worker nothing will watch.
+
+    Every command here takes `--worker <anything>` and reports success.
+    But `rite watchdog` only watches workers with a
+    `workers/<name>/worker.yml` manifest, so on a project where nobody
+    ran `rite add worker`, a claim and a heartbeat are both accepted and
+    a dead session is never detected. The watchdog reports this too, but
+    only to whoever runs it — the person typing the wrong worker name is
+    here, now.
+
+    A warning, never a refusal: the claim and the beat are real records
+    and refusing them would lose information. Written to stderr so it
+    cannot corrupt anything parsing stdout."""
+    root = _find_project_root()
+    manifest = root / "workers" / worker / "worker.yml"
+    if manifest.is_file():
+        return
+    from rite_ai.watchdog import _pool_slot_workers
+
+    if worker in _pool_slot_workers(root):
+        # A pooled coordinator claims under its slot name and never has a
+        # manifest; `.rite/pool.json` is its register and `rite pool
+        # status` is what watches it.
+        return
+    click.echo(
+        f"warning: worker '{worker}' is not registered ({manifest} does not "
+        f"exist). `rite watchdog` only watches registered workers, so a "
+        f"stall by '{worker}' will never be reported. Register it with "
+        f"`rite add worker {worker}`.",
+        err=True,
+    )
+
+
+# --- Claims ---
+
+
+@cli.command()
+@click.argument("paths", nargs=-1, required=True)
+@click.option("--worker", "-w", required=True, help="Worker name")
+@click.option("--ticket", "-t", default="", help="Ticket ID")
+def claim(paths: tuple[str, ...], worker: str, ticket: str) -> None:
+    """Claim file/directory paths for a worker."""
+    from rite_ai.claims.ledger import ClaimsLedger
+
+    _require_project_root()
+    ledger = ClaimsLedger(_claims_path())
+    result = ledger.claim(list(paths), worker, ticket)
+    if result.ok:
+        click.echo(f"claimed {len(paths)} path(s) for {worker}")
+        _warn_if_unregistered(worker)
+    else:
+        click.echo(f"claim failed: {result.message}", err=True)
+        for overlap in result.overlaps:
+            click.echo(f"  {overlap}", err=True)
+        if result.overlaps:
+            # Real contention, not misuse (e.g. an empty path list) —
+            # SPEC §2.7.2/D-45: a count of discrete refusal events, the
+            # coordination-cost signal a user watches to find their
+            # project's own contention "knee."
+            from rite_ai.coordination_cost import record_refused_claim
+
+            record_refused_claim(_find_project_root())
+        raise SystemExit(4)
+
+
+@cli.command()
+@click.option(
+    "--worker", "-w", default=None, help="Worker name (not used with --force)"
+)
+@click.option(
+    "--force", "force_flag", is_flag=True, help="Force-release another session's paths"
+)
+@click.option("--by", default=None, help="Attribution — required with --force")
+@click.option("--reason", default=None, help="Why — required with --force (SPEC §5.2)")
+@click.option(
+    "--history",
+    "show_history",
+    is_flag=True,
+    help="Print the force-release audit trail and exit; releases nothing.",
+)
+@click.argument("paths", nargs=-1)
+def release(
+    worker: str | None,
+    force_flag: bool,
+    by: str | None,
+    reason: str | None,
+    show_history: bool,
+    paths: tuple[str, ...],
+) -> None:
+    """Release claimed paths (all if no paths given).
+
+    `--history` answers "why did my claim disappear?" — every
+    `--force` release ever made against this project, with who made it
+    and the reason they gave. Append-only; nothing prunes it.
+
+    Examples:
+      rite release --worker alpha
+      rite release --worker alpha src/a.ts
+      rite release --force src/a.ts --by ops --reason "stale, worker crashed"
+      rite release --history
+    """
+    from rite_ai.claims.ledger import ClaimsLedger
+
+    _require_project_root()
+    ledger = ClaimsLedger(_claims_path())
+
+    if show_history:
+        records = ledger.force_release_audit()
+        if not records:
+            click.echo("no force-releases recorded")
+            return
+        for record in records:
+            when = time.strftime(
+                "%Y-%m-%d %H:%M:%S", time.localtime(record.get("timestamp", 0))
+            )
+            click.echo(f"{when}  by {record.get('by', '(unknown)')}")
+            click.echo(f"  reason: {record.get('reason', '(none)')}")
+            for released_claim in record.get("released", []):
+                ticket = released_claim.get("ticket") or ""
+                suffix = f" [{ticket}]" if ticket else ""
+                paths_str = ", ".join(released_claim.get("paths", []))
+                worker_name = released_claim.get("worker", "(unknown)")
+                click.echo(f"  took from {worker_name}{suffix}: {paths_str}")
+        return
+
+    if force_flag:
+        if not paths:
+            click.echo("--force requires explicit paths", err=True)
+            raise SystemExit(2)
+        if not by or not reason:
+            click.echo("--force requires both --by and --reason (SPEC §5.2)", err=True)
+            raise SystemExit(2)
+        released = ledger.force_release(list(paths), by=by, reason=reason)
+        click.echo(f"force-released {released} claim(s), by {by}: {reason}")
+        return
+
+    if not worker:
+        click.echo("--worker is required (or use --force)", err=True)
+        raise SystemExit(2)
+    path_list = list(paths) if paths else None
+    released = ledger.release(worker, path_list)
+    click.echo(f"released {released} claim(s) for {worker}")
+
+
+@cli.command()
+@click.option(
+    "--no-board",
+    is_flag=True,
+    default=False,
+    help="Skip the live ticket-backend query (the only part that touches the network).",
+)
+def status(no_board: bool) -> None:
+    """What's happening? Workers, claims, the handover snapshot, and the
+    coordination-cost counters (SPEC §9.8) — as distinct from `rite
+    doctor`'s "is this healthy?". Run outside any project with a Dispatch
+    directory present, aggregates across all registered projects instead
+    (SPEC §8.9) — a new rendering path in the same command, not a second
+    command.
+
+    Queries the ticket backend for board state (§9.8's counts by column).
+    That is the one part of this command that leaves the machine; pass
+    --no-board to skip it. The aggregate view across registered projects
+    never queries, so it stays one round trip per machine rather than one
+    per project."""
+    click.echo(f"rite {__version__}")
+
+    if _has_project_in_scope():
+        from rite_ai.reporting.status import collect_status, format_status
+
+        root = _find_project_root()
+        click.echo(format_status(collect_status(root, board=not no_board)))
+        return
+
+    from rite_ai.dispatch import default_dispatch_dir, load_registry
+    from rite_ai.reporting.status import collect_status
+
+    registry = load_registry(default_dispatch_dir())
+    if not registry.projects:
+        click.echo(
+            "no Dispatch directory found — run `rite status` inside a "
+            "project, or `rite projects add` to register one"
+        )
+        return
+
+    click.echo(f"\n{len(registry.projects)} registered project(s):")
+    for alias, entry in registry.projects.items():
+        click.echo(f"  {alias} ({entry.role}): {_aggregate_line(entry)}")
+
+
+def _short_error(error: str) -> str:
+    """`"<absolute path>: <message>"` reduced to `"<filename>: <message>"`,
+    on one line, short enough to sit in a table row."""
+    text = " ".join(str(error).split())
+    head, sep, tail = text.partition(": ")
+    if sep and ("/" in head or head.endswith((".yaml", ".yml", ".json", ".md"))):
+        text = f"{Path(head).name}: {tail}"
+    # Marked when cut, so a sentence that stops mid-excerpt does not read
+    # as a whole one — a parser's error carries its own quoted snippet and
+    # lands somewhere arbitrary in it.
+    return text if len(text) <= 120 else text[:119] + "…"
+
+
+def _aggregate_line(entry) -> str:
+    """One registered project's line in the cross-project view (§8.9).
+
+    This was `"no .rite/ found" if s.errors else "ok"` followed by the
+    claim and stalled-worker counts, unconditionally. Three different
+    states therefore printed the same sentence, and one of them printed a
+    false one:
+
+      moved  (manager): no .rite/ found, 0 active claim(s), 0 stalled worker(s)
+      broken (manager): no .rite/ found, 0 active claim(s), 0 stalled worker(s)
+      bare   (manager): no .rite/ found, 0 active claim(s), 0 stalled worker(s)
+
+    — respectively a directory that no longer exists, a real project whose
+    `.rite/brief.yaml` will not parse (its `.rite/` is right there, so the
+    message is simply untrue and sends someone hunting a missing directory
+    that is not missing), and a path that was never a project at all.
+
+    The zeros are the worse half. `0 stalled worker(s)` from a project
+    nothing opened reads exactly like `0 stalled worker(s)` from one that
+    was read and is fine — and this view exists to be swept at a glance by
+    a Manager deciding where NOT to look. `CountUnavailable` in
+    `rite_ai.sandbox` is the same distinction already drawn elsewhere in
+    this codebase: a count nobody could take is not a count of zero.
+
+    The single-project view already diagnoses the broken case exactly
+    (`invalid YAML: while parsing a flow sequence ... line 1, column 10`);
+    this path had the same information and discarded it.
+    """
+    from rite_ai.reporting.status import collect_status
+
+    project_root = Path(entry.path)
+    if not project_root.is_dir():
+        return (
+            f"PATH GONE — {entry.path} no longer exists. Nothing was read; "
+            "re-add it, or `rite projects remove` this alias"
+        )
+    if not (project_root / ".rite").is_dir():
+        return (
+            f"NOT A RITE PROJECT — no .rite/ in {entry.path}. Nothing was "
+            "read; run `rite init` there, or remove this alias"
+        )
+    status = collect_status(project_root)
+    if status.errors:
+        # First line only, and whitespace collapsed: a YAML error runs to
+        # several lines with its own indented excerpt, and this is one row
+        # of a table. `rite status` inside the project prints it in full.
+        # `CollectedStatus.errors` is a list of preformatted strings
+        # (`"<absolute path>: <message>"`), not parse-error objects.
+        # Shortened to the FILENAME, because the diagnosis is the part
+        # worth the width: truncating the string as-is spent the whole
+        # budget on the project path — which this line has already named
+        # — and printed `UNREADABLE — /private/tmp/.../agg/.` with the
+        # reason cut off entirely.
+        detail = "; ".join(_short_error(e) for e in status.errors[:2])
+        return f"UNREADABLE — {detail}. Counts not read"
+
+    # The project loaded, but something INSIDE it may still have been
+    # unreadable. Round 6 keyed this line on `status.errors` alone and
+    # closed three doors of four: a corrupt `.rite/pool.json` is recorded
+    # in `pool_unreadable`, which `errors` never sees, so a project whose
+    # pool state could not be read rendered
+    #
+    #   bravo (manager): ok, 0 active claim(s), 0 stalled worker(s)
+    #
+    # — identical to the two healthy projects either side of it. Found by
+    # running this project's own review checklist against the commit that
+    # introduced the field.
+    #
+    # The counts stay: claims and workers really were read, and dropping
+    # them would lose true information to report a different failure. What
+    # goes is the word "ok".
+    notes = [
+        f"{label} unreadable ({_short_error(value)})"
+        for label, value in _partial_reads(status)
+    ]
+    counts = (
+        f"{len(status.claims)} active claim(s), "
+        f"{len(status.stalled_workers)} stalled worker(s)"
+    )
+    if notes:
+        return f"{counts}; " + "; ".join(notes)
+    return f"ok, {counts}"
+
+
+# Fields on `CollectedStatus` that mean "this part could not be read",
+# paired with what to call them in a one-line summary.
+#
+# `boards_unreached` is deliberately NOT here: the aggregate view never
+# queries a ticket backend (one round trip per machine, not one per
+# project), so "not reached" is the expected state for every project and
+# reporting it would be noise on every line.
+#
+# `tests/test_rehearsal_round7.py` fails if a new `*_unreadable` field
+# appears on the dataclass and is not listed here — the guard is on the
+# CLASS of defect, because this one recurred inside its own fix.
+UNREADABLE_FIELDS: tuple[tuple[str, str], ...] = (("pool_unreadable", "pool state"),)
+
+
+def _partial_reads(status) -> list[tuple[str, str]]:
+    """`(label, why)` for each part of a loaded project that could not be
+    read."""
+    out = []
+    for attribute, label in UNREADABLE_FIELDS:
+        value = getattr(status, attribute, "")
+        if value:
+            out.append((label, str(value)))
+    return out
+
+
+# --- Credentials ---
+
+
+@cli.group()
+def credential() -> None:
+    """Manage credentials."""
+
+
+def _project_credentials():
+    """This project's `CredentialsConfig`, or None outside a project.
+
+    Best-effort in the same sense `_configured_credential_names` is:
+    every `rite credential` subcommand has to keep working outside a
+    project and against a config that will not parse, so a failure here
+    narrows behaviour to the un-namespaced (machine-wide) layout rather
+    than failing the command."""
+    try:
+        from rite_ai.config.parse import ParseError, parse_config
+
+        root = _find_project_root()
+        if not (root / ".rite").is_dir():
+            return None
+        config = parse_config(root / ".rite" / "config.yaml")
+        if isinstance(config, ParseError):
+            return None
+        return config.credentials
+    except Exception:
+        return None
+
+
+def _project_label() -> str:
+    """The project's own name for display, falling back to the directory."""
+    try:
+        from rite_ai.config.parse import ParseError, parse_brief
+
+        root = _find_project_root()
+        brief = parse_brief(root / ".rite" / "brief.yaml")
+        if not isinstance(brief, ParseError) and brief.name:
+            return brief.name
+        return root.name
+    except Exception:
+        return _find_project_root().name
+
+
+def _keys_this_project_needs(config=None) -> list[str]:
+    """The credential keys THIS project actually uses — the question
+    `rite credential list` exists to answer.
+
+    Driven by what the project is configured to do, not by the full
+    catalogue: a project on the GitHub ticket backend is not missing a
+    JIRA token, and telling it so is how a "missing" column becomes
+    noise nobody reads.
+    """
+    from rite_ai.credentials.store import SANDBOX_TOKEN_PREFIX
+
+    if config is None:
+        from rite_ai.config.models import ProjectConfig
+        from rite_ai.config.parse import ParseError, parse_config
+
+        parsed = parse_config(_find_project_root() / ".rite" / "config.yaml")
+        config = parsed if not isinstance(parsed, ParseError) else ProjectConfig()
+
+    keys: list[str] = []
+    backend = getattr(config.ticket_backend, "type", "none")
+    if backend == "jira":
+        # `ticket_backend.credential` RENAMES the token key, and it is the
+        # name `create_backend` actually reads. Hardcoding `jira_token`
+        # here told a project that had renamed its token that it was
+        # missing a credential it holds, while saying nothing about the
+        # one it really uses — wrong in both directions at once, on the
+        # command whose whole job is answering "what does this project
+        # need?".
+        keys.append("jira_email")
+        keys.append(getattr(config.ticket_backend, "credential", "") or "jira_token")
+    elif backend == "github":
+        keys.append("github_token")
+
+    # A sandboxed worker is handed its token by `--env`, but the token
+    # still has to be PROVISIONED on the host, so it is a thing this
+    # project needs.
+    if getattr(config.sandbox, "enabled", False):
+        root = _find_project_root()
+        workers_dir = root / "workers"
+        if workers_dir.is_dir():
+            for worker_dir in sorted(workers_dir.iterdir()):
+                if (worker_dir / "worker.yml").exists():
+                    keys.append(f"{SANDBOX_TOKEN_PREFIX}{worker_dir.name}")
+    return keys
+
+
+def _configured_credential_names() -> tuple[str, ...]:
+    """Credential keys knowable only from the project's own config.
+
+    Best-effort: `rite credential set` is a machine-level command that
+    must keep working outside any project, so a missing or unparseable
+    config narrows validation rather than failing it."""
+    try:
+        from rite_ai.config.parse import ParseError, parse_config
+
+        config = parse_config(_find_project_root() / ".rite" / "config.yaml")
+        if isinstance(config, ParseError):
+            return ()
+        name = getattr(config.ticket_backend, "credential", "")
+        return (name,) if name else ()
+    except Exception:
+        return ()
+
+
+def _echo_known_credentials(extra: tuple[str, ...]) -> None:
+    from rite_ai.credentials.services import describe_services
+    from rite_ai.credentials.store import KNOWN_CREDENTIALS, SANDBOX_TOKEN_PREFIX
+
+    # SERVICES first, and keys second, because the service is what the
+    # user actually has and the key is rite's name for part of it. Leading
+    # with the key list is what sent someone looking for the name of their
+    # own email address in it.
+    click.echo("\nServices rite can set up for you:", err=True)
+    for line in describe_services():
+        click.echo(line, err=True)
+    click.echo(
+        "\n  e.g. `rite credential set jira` — asks for each field in turn", err=True
+    )
+
+    click.echo("\nOr one individual key:", err=True)
+    for key, description in KNOWN_CREDENTIALS.items():
+        click.echo(f"  {key:<22} {description}", err=True)
+    for key in extra:
+        click.echo(f"  {key:<22} this project's configured JIRA token key", err=True)
+    click.echo(
+        f"  {SANDBOX_TOKEN_PREFIX + '<worker>':<22} per-worker sandbox token", err=True
+    )
+
+
+def _how_to_set(key: str) -> str:
+    """The argument to suggest for a missing key: its service when one
+    owns it, otherwise the key itself (a per-worker sandbox token is not
+    a service and never will be)."""
+    from rite_ai.credentials.services import SERVICES, service_key
+
+    for svc in SERVICES.values():
+        if any(service_key(svc.name, f.name) == key for f in svc.fields):
+            return svc.name
+    return key
+
+
+def _echo_credential_status(extra: tuple[str, ...], just_set: str = "") -> None:
+    """Answer "am I done?" — the question a person actually has after
+    setting one credential of several. Reports the TIER each key
+    resolved at, because "set" alone hid the case this redesign is
+    about: a project silently using the machine-wide entry while its
+    owner believed it had its own.
+
+    Never empty. Narrowing to "what this project needs" is right for the
+    listing, but here it could print NOTHING at all — a project on no
+    ticket backend, having just stored a credential, was answered with
+    silence. The catalogue is the floor."""
+    from rite_ai.credentials.store import KNOWN_CREDENTIALS, resolve
+
+    creds = _project_credentials()
+    keys = list(
+        dict.fromkeys(
+            [
+                *([just_set] if just_set else []),
+                *_keys_this_project_needs(),
+                *KNOWN_CREDENTIALS,
+                *extra,
+            ]
+        )
+    )
+    click.echo("\ncredential status:")
+    for key in keys:
+        r = resolve(key, creds)
+        if r.found:
+            click.echo(f"  {key:<24} {r.describe()}")
+        else:
+            # Suggest the SERVICE where one owns this key. Telling someone
+            # to `set github_token` is telling them a key name when
+            # `set github` is the thing they can act on without knowing
+            # rite's vocabulary — which is the whole point of §10.5.
+            click.echo(f"  {key:<24} not set — rite credential set {_how_to_set(key)}")
+
+
+def _ensure_namespace(root, config) -> str:
+    """This project's credential namespace, generating and PERSISTING one
+    on first use.
+
+    Written back to `config.yaml` immediately, BEFORE any secret is
+    stored. A namespace held only in memory would name a keychain account
+    that the next command — regenerating a different random namespace —
+    never looks up again: a credential stored under a name nobody can
+    rederive. Persisting first is what makes the name survive, and
+    `config.yaml` is committed, so it survives a fresh clone too."""
+    from rite_ai.cli.init.scaffold import write_config
+    from rite_ai.credentials.store import is_valid_namespace, make_namespace
+
+    namespace = config.credentials.namespace
+    if namespace and is_valid_namespace(namespace):
+        return namespace
+
+    namespace = make_namespace(_project_label())
+    config.credentials.namespace = namespace
+    rite_dir = root / ".rite"
+    rite_dir.mkdir(parents=True, exist_ok=True)
+    write_config(rite_dir, config)
+    click.echo(f"recorded credential namespace '{namespace}' in .rite/config.yaml")
+    click.echo(
+        "  commit that file — it records the credential NAMESPACE (never a "
+        "value), so a fresh clone knows what to set"
+    )
+    return namespace
+
+
+def _store_one(name: str, value: str, global_: bool, root, config) -> str:
+    """Store one key, scoped unless `--global`. Returns the account it
+    landed under. Shared by the service flow and the single-key flow so
+    the two cannot drift on where a secret goes."""
+    from rite_ai.credentials.store import namespaced, store
+
+    account = name
+    if not global_ and config is not None:
+        account = namespaced(_ensure_namespace(root, config), name)
+    result = store(account, value)
+    if result != "keychain":
+        click.echo(f"failed to store '{name}' — keyring not available", err=True)
+        click.echo(f"set RITE_{name.upper()} as an environment variable instead")
+        raise SystemExit(1)
+    return account
+
+
+def _apply_config_field(config, dotted: str, value: str) -> None:
+    """Set one dotted path on a `ProjectConfig`. Two levels is all any
+    service needs (`ticket_backend.projects.workers` is the deepest), and
+    a general setter would be more machinery than the field list can
+    justify."""
+    parts = dotted.split(".")
+    target = config
+    for part in parts[:-1]:
+        nxt = getattr(target, part, None)
+        if isinstance(nxt, dict):
+            target = nxt
+        elif nxt is None:
+            raise KeyError(dotted)
+        else:
+            target = nxt
+    last = parts[-1]
+    if isinstance(target, dict):
+        target[last] = value
+    else:
+        setattr(target, last, value)
+
+
+def _set_service(service_name: str, global_: bool, root, config) -> None:
+    """Ask for every field a service has, in order, and store each.
+
+    The prompts are the service's own words. Nothing here asks the user
+    to know a key name — that is the whole point of taking a service
+    rather than a key."""
+    from rite_ai.credentials.services import SERVICES, service_key
+
+    svc = SERVICES[service_name]
+    click.echo(f"{svc.label}")
+    if svc.note:
+        click.echo(f"  note: {svc.note}")
+
+    stored: list[tuple[str, str]] = []
+    configured: list[tuple[str, str]] = []
+    for field in svc.fields:
+        value = click.prompt(
+            f"  {field.prompt}",
+            hide_input=field.secret,
+            confirmation_prompt=field.secret,
+            err=True,
+        )
+        if field.config_path:
+            # CONFIGURATION, not a credential. It is the same for everyone
+            # on the team, it is not a secret, and putting it in the
+            # committed config.yaml is what lets the next person clone the
+            # project and need only their own token.
+            if config is None:
+                click.echo(
+                    f"  (skipped {field.name}: not inside a rite project, so "
+                    f"there is no config.yaml to record it in)",
+                    err=True,
+                )
+                continue
+            _apply_config_field(config, field.config_path, value)
+            configured.append((field.config_path, value))
+            continue
+        key = service_key(svc.name, field.name)
+        stored.append((key, _store_one(key, value, global_, root, config)))
+
+    if configured:
+        from rite_ai.cli.init.scaffold import write_config
+
+        write_config(root / ".rite", config)
+
+    where = "machine-wide (global fallback)" if global_ else "for this project"
+    if stored:
+        click.echo(f"\nstored {len(stored)} secret(s) for '{svc.name}' {where}:")
+        for key, account in stored:
+            click.echo(f"  {key:<20} -> keychain '{account}'")
+    if configured:
+        click.echo(
+            "\nrecorded in .rite/config.yaml (commit it — not secret, "
+            "and it saves the next person finding it out):"
+        )
+        for path, value in configured:
+            click.echo(f"  {path:<32} {value}")
+
+
+@credential.command("set")
+@click.argument("name")
+@click.option(
+    "--value",
+    default=None,
+    help="Credential value. Omit it — you will be prompted, and it stays out of argv.",
+)
+@click.option(
+    "--allow-unknown",
+    is_flag=True,
+    default=False,
+    help="Store under a key rite does not recognise (deliberate, not a typo).",
+)
+@click.option(
+    "--global",
+    "global_",
+    is_flag=True,
+    default=False,
+    help=(
+        "Store machine-wide under the bare key, as the fallback every project "
+        "uses when it has no scoped entry of its own."
+    ),
+)
+def credential_set(
+    name: str, value: str | None, allow_unknown: bool, global_: bool
+) -> None:
+    """Store credentials for a SERVICE — `rite credential set jira` — or
+    for one individual key. Secrets are prompted for, never passed as an
+    argument.
+
+    NAME is normally a service (`jira`, `github`). rite validates it,
+    then asks for the fields that service actually has, in order and in
+    its own words: JIRA asks for an account email and then an API token;
+    GitHub asks for a token and no username, because a fine-grained PAT
+    does not have one.
+
+    NAME may also still be a single KEY (`jira_token`) when you want to
+    replace exactly one field. Anything that is neither is refused rather
+    than stored, because storing it silently succeeds while leaving the
+    credential you meant still unset.
+
+    Run inside a project, this stores THIS PROJECT's credential: the
+    secret goes to the keychain under a scoped name, and the name is
+    recorded in `.rite/config.yaml` (§10.2). That is the default because
+    the point of scoping is that a worker only ever gets a token you
+    gave for the project it is working on.
+
+    `--global` stores it machine-wide under the bare key instead, as the
+    fallback used by any project with no scoped entry of its own. That
+    is also what happens automatically outside a project.
+
+    \b
+    Examples:
+      rite credential set jira                    # email, then token
+      rite credential set github --global         # machine-wide fallback
+      rite credential set jira_token              # just the one field
+      rite credential set sandbox_token_alpha
+    """
+    from rite_ai.credentials.services import canonical_service, suggest_service
+    from rite_ai.credentials.store import (
+        is_known_name,
+        looks_like_email,
+        store,
+        suggest_name,
+    )
+
+    extra = _configured_credential_names()
+
+    # A SERVICE is the ordinary case, so it is checked first. Outside a
+    # project there is no namespace to scope to, which is exactly what
+    # `--global` means, so it is what happens rather than an error.
+    root_for_scope = _find_project_root()
+    config_for_scope = None
+    if not global_ and (root_for_scope / ".rite").is_dir():
+        from rite_ai.config.models import ProjectConfig
+        from rite_ai.config.parse import ParseError, parse_config
+
+        parsed = parse_config(root_for_scope / ".rite" / "config.yaml")
+        if isinstance(parsed, ParseError):
+            click.echo(f"config error: {parsed.message}", err=True)
+            click.echo(
+                "  fix .rite/config.yaml, or use --global to store "
+                "machine-wide without it",
+                err=True,
+            )
+            raise SystemExit(1)
+        config_for_scope = parsed if isinstance(parsed, ProjectConfig) else None
+
+    service = canonical_service(name)
+    if service is not None:
+        # Normalised: `JIRA`, `Jira` and `jira` are the same service, and
+        # the stored keys are always the lowercase form.
+        name = service
+        if value is not None:
+            click.echo(
+                f"'{name}' is a service with several fields — --value can "
+                f"only set one.\n  Run `rite credential set {name}` and answer "
+                f"the prompts, or name a single key.",
+                err=True,
+            )
+            raise SystemExit(2)
+        _set_service(service, global_, root_for_scope, config_for_scope)
+        _echo_credential_status(extra)
+        return
+
+    if not is_known_name(name, extra) and not allow_unknown:
+        if looks_like_email(name):
+            # The exact shape of the reported defect: an email address is
+            # what someone reaching for `jira_email` types, and it is a
+            # VALUE — no key rite reads could look like one.
+            click.echo(
+                f"'{name}' looks like a credential value, not a credential key.",
+                err=True,
+            )
+            click.echo(
+                "\n`rite credential set` takes the NAME of the credential to "
+                "store; the value is prompted for separately.",
+                err=True,
+            )
+            click.echo(
+                "\nTo set up JIRA, which will ask for that address "
+                "and then your API token:",
+                err=True,
+            )
+            click.echo("  rite credential set jira", err=True)
+        else:
+            svc_suggestion = suggest_service(name)
+            if svc_suggestion:
+                # A near-miss on a SERVICE is the likelier typo now that a
+                # service is what people type, and it is the more useful
+                # correction: it names one command that finishes the job.
+                click.echo(f"'{name}' is not a service rite knows.", err=True)
+                click.echo(
+                    f"\nDid you mean:\n  rite credential set {svc_suggestion}",
+                    err=True,
+                )
+            else:
+                click.echo(f"unknown credential key '{name}'.", err=True)
+                suggestion = suggest_name(name, extra)
+                if suggestion:
+                    click.echo(
+                        f"\nDid you mean:\n  rite credential set {suggestion}",
+                        err=True,
+                    )
+        _echo_known_credentials(extra)
+        click.echo(
+            f"\nTo store under '{name}' anyway:\n"
+            f"  rite credential set {name} --allow-unknown",
+            err=True,
+        )
+        raise SystemExit(2)
+
+    # Prompt only AFTER the key is known to be good. Validating second
+    # made the reporter type their secret twice and confirm it before
+    # being told the key was wrong — work thrown away, and it reads as
+    # though the store were the thing that failed.
+    if value is None:
+        value = click.prompt(
+            "Value", hide_input=True, confirmation_prompt=True, err=True
+        )
+
+    # Resolve the STORED NAME before storing. Outside a project there is
+    # no scope to apply and `--global` is the only meaningful behaviour,
+    # so it is what happens rather than an error.
+    account = name
+    scoped = False
+    root = _find_project_root()
+    if not global_ and (root / ".rite").is_dir():
+        from rite_ai.config.models import ProjectConfig
+        from rite_ai.config.parse import ParseError, parse_config
+        from rite_ai.credentials.store import namespaced
+
+        parsed = parse_config(root / ".rite" / "config.yaml")
+        if isinstance(parsed, ParseError):
+            click.echo(f"config error: {parsed.message}", err=True)
+            click.echo(
+                "  fix .rite/config.yaml, or use --global to store "
+                "machine-wide without it",
+                err=True,
+            )
+            raise SystemExit(1)
+        config = parsed if isinstance(parsed, ProjectConfig) else ProjectConfig()
+        account = namespaced(_ensure_namespace(root, config), name)
+        scoped = True
+
+    result = store(account, value)
+    if result != "keychain":
+        click.echo(f"failed to store '{name}' — keyring not available", err=True)
+        click.echo(f"set RITE_{name.upper()} as an environment variable instead")
+        raise SystemExit(1)
+
+    # Name the argument as the KEY explicitly. "stored 'X' in keychain"
+    # read equally well as "your secret X is stored", which is how a
+    # mistyped key went unnoticed. The stored name is printed alongside
+    # it because with scoping the two are no longer the same string, and
+    # the stored name is what `rite credential remove` takes.
+    where = "for this project" if scoped else "machine-wide (global fallback)"
+    click.echo(
+        f"stored credential under key '{name}' {where}, in keychain as '{account}'"
+    )
+    _echo_credential_status(extra, just_set=name)
+
+
+@credential.command("check")
+@click.argument("name")
+def credential_check(name: str) -> None:
+    """Check if a credential is available. Exits non-zero when it is not,
+    so `rite credential check X && ...` means what it looks like.
+
+    Examples:
+      rite credential check jira_token
+    """
+    from rite_ai.credentials.store import resolve
+
+    r = resolve(name, _project_credentials())
+    click.echo(f"{name}: {r.describe()}")
+    if not r.found:
+        # A check that reports failure through exit code 0 is not a check —
+        # every script guarding on it proceeds straight into the failure it
+        # was written to prevent.
+        from rite_ai.credentials.store import keychain_is_readable
+
+        if not keychain_is_readable():
+            # "not found" here means "could not look". Advising `credential
+            # set` would be wrong: this process cannot read the keychain
+            # back either way. Same distinction as `CountUnavailable`.
+            click.echo(
+                "  this process cannot read the keychain at all (sandboxed?) — "
+                f"that is\n  'cannot check', not 'missing'. Set RITE_"
+                f"{name.upper()} in the environment;\n  a sandboxed Worker "
+                "receives its token through --env (D-31).",
+                err=True,
+            )
+        else:
+            click.echo(
+                f"  run `rite credential set {name}`, "
+                f"or set RITE_{name.upper()} in the environment",
+                err=True,
+            )
+        raise SystemExit(1)
+
+
+@credential.command("list")
+def credential_list() -> None:
+    """What THIS PROJECT needs, what it resolves to, and what is missing.
+
+    This is the answer to "how do I give rite a GitHub token?" — a
+    question that had no discoverable answer, because the only place that
+    ever asked for one was a prompt buried inside `rite add worker`.
+
+    The ACCOUNT column is the keychain entry each key lives under,
+    composed from the namespace recorded in `.rite/config.yaml`. That
+    file is committed on purpose and holds a name, never a value: a fresh
+    clone runs this command and sees exactly what to set, without a
+    secret having been shared — the `.env.example` pattern.
+
+    The machine-wide listing follows it — every credential rite has
+    stored on this machine, project or not — because an entry that
+    belongs to no project is exactly what a value typed where a key
+    belongs looks like after the fact.
+
+    Read-only, and it prompts for nothing.
+
+    \b
+    Examples:
+      rite credential list
+    """
+    from rite_ai.credentials.store import (
+        ENV,
+        GLOBAL,
+        SCOPING_IS_NOT_A_SANDBOX_SHORT,
+        is_known_name,
+        keychain_is_readable,
+        list_for_rotation,
+        resolve,
+    )
+
+    root = _find_project_root()
+    in_project = (root / ".rite").is_dir()
+    creds = _project_credentials()
+    keys = _keys_this_project_needs() if in_project else []
+
+    missing: list[str] = []
+    fellback: list[str] = []
+    if in_project:
+        namespace = getattr(creds, "namespace", "") or ""
+        click.echo(f"project:   {_project_label()}")
+        click.echo(
+            f"namespace: {namespace or '(none yet — recorded on first scoped set)'}"
+        )
+        click.echo("recorded:  .rite/config.yaml  (commit it: a name, never a value)")
+
+        if not keys:
+            click.echo(
+                "\nthis project needs no credentials — ticket_backend.type is "
+                "'none' and sandbox.enabled is false"
+            )
+        else:
+            click.echo("")
+            click.echo(f"  {'KEY':<22} {'KEYCHAIN ACCOUNT':<38} STATUS")
+            for key in keys:
+                r = resolve(key, creds)
+                shown = r.account if r.tier == ENV else r.project_account
+                click.echo(f"  {key:<22} {shown:<38} {r.describe()}")
+                if not r.found:
+                    missing.append(key)
+                elif r.tier == GLOBAL:
+                    fellback.append(key)
+
+        if missing:
+            click.echo("\nmissing — set each with:")
+            for key in missing:
+                click.echo(f"  rite credential set {_how_to_set(key)}")
+            click.echo(
+                "\n  (add --global to store one machine-wide instead, as the "
+                "fallback\n   any project without its own entry will use)"
+            )
+        if fellback:
+            # Never silent. A machine-global entry used by a project that
+            # believes it has its own is the flat namespace surviving
+            # under a new name.
+            click.echo("\nusing machine-global credentials for: " + ", ".join(fellback))
+            click.echo(
+                "  those entries are shared with every other project on this "
+                "machine.\n  move one into this project with:"
+            )
+            for key in fellback:
+                click.echo(f"  rite credential migrate {key}")
+        if keys and not missing and not fellback:
+            click.echo("\nnothing missing.")
+    else:
+        click.echo("not inside a rite project — machine-wide credentials only")
+
+    if True:
+        entries = list_for_rotation()
+        click.echo("\nstored on this machine:")
+        if not entries:
+            click.echo("  no credentials stored by rite on this machine")
+        else:
+            extra = _configured_credential_names()
+            unknown = []
+            namespace = getattr(creds, "namespace", "") or ""
+            for entry in entries:
+                # THREE states, not two. `or "/" in entry.name` collapsed
+                # the last two and took the marker with it: every account
+                # `credential set` writes inside a project is namespaced,
+                # so every one of them contained a "/" and was waved
+                # through as recognised. The marker is the thing that
+                # tells someone a `robbartoszewski@gmail.com` entry is a
+                # VALUE typed where a key belongs — it exists because
+                # that exact mistake was made, and silencing it for
+                # everything the command now writes retires the feature
+                # while leaving it looking present.
+                #
+                #   1. this project's namespace, or un-namespaced -> we
+                #      know this project's keys, so validate the bare key
+                #      and mark it when it is not one.
+                #   2. ANOTHER project's namespace -> we cannot validate
+                #      it (we do not have that project's config) and must
+                #      not call it wrong. Say whose it is instead.
+                bare = entry.name
+                foreign = False
+                if namespace and entry.name.startswith(namespace + "/"):
+                    bare = entry.name[len(namespace) + 1 :]
+                elif "/" in entry.name:
+                    foreign = True
+
+                if foreign:
+                    other = entry.name.split("/", 1)[0]
+                    recognised = True
+                    mark = f"   <- another project ({other})"
+                else:
+                    recognised = is_known_name(bare, extra)
+                    mark = "" if recognised else "   <- not a credential key rite reads"
+                if entry.last_set is not None:
+                    when = time.strftime(
+                        "%Y-%m-%d %H:%M", time.localtime(entry.last_set)
+                    )
+                    click.echo(
+                        f"  {entry.name}  (last set {when}, {entry.source}){mark}"
+                    )
+                else:
+                    click.echo(f"  {entry.name}  ({entry.source}){mark}")
+                if not recognised:
+                    unknown.append(entry.name)
+
+            if unknown:
+                click.echo(
+                    "\nUnrecognised keys are usually a value typed where a key "
+                    "belongs.\nRemove one with:"
+                )
+                for name in unknown:
+                    click.echo(f"  rite credential remove {name}")
+
+    if not keychain_is_readable():
+        # The §5 defect: in here, "not set" means "cannot look", and
+        # telling someone to run `credential set` is wrong advice —
+        # setting it changes nothing, because this process cannot read it
+        # back either way.
+        click.echo("")
+        click.echo(
+            "NOTE: this process cannot read the keychain at all (sandboxed?), "
+            "so\n  every 'not set' above means 'cannot check', not 'missing'. "
+            "A sandboxed\n  Worker receives its token through --env; setting a "
+            "credential in here\n  would not change what it can read."
+        )
+
+    # Printed every time, not behind a flag. An operator reading a
+    # per-project listing will read isolation into it; saying plainly
+    # that this is a naming convention is cheaper than the belief that it
+    # is a boundary.
+    click.echo("")
+    click.echo(SCOPING_IS_NOT_A_SANDBOX_SHORT.rstrip())
+
+
+@credential.command("migrate")
+@click.argument("name")
+@click.option("--yes", is_flag=True, default=False, help="Skip the confirmation.")
+def credential_migrate(name: str, yes: bool) -> None:
+    """Copy a machine-global credential into THIS project's namespace.
+
+    The migration path for a setup that predates §10.2: `jira_token` set
+    globally keeps working through the fallback tier, and this moves it
+    under `<namespace>/jira_token` so the project stops depending on a
+    shared entry.
+
+    COPIES — the global entry is left alone, because other projects are
+    still resolving through it. Remove it yourself, once you have
+    checked nothing else needs it:
+    `rite credential remove <name>`.
+
+    \b
+    Examples:
+      rite credential migrate jira_token
+    """
+    from rite_ai.credentials.store import (
+        GLOBAL,
+        get_account,
+        is_valid_namespace,
+        namespaced,
+        resolve,
+        store,
+    )
+
+    root = _find_project_root()
+    if not (root / ".rite").is_dir():
+        click.echo("not inside a rite project — nothing to migrate into", err=True)
+        raise SystemExit(1)
+
+    root, config = _load_config_for_write()
+    r = resolve(name, config.credentials)
+    if r.tier != GLOBAL:
+        click.echo(f"{name}: {r.describe()}", err=True)
+        click.echo(
+            "  migrate moves a MACHINE-GLOBAL entry into this project; "
+            "this key is not resolving through that tier",
+            err=True,
+        )
+        raise SystemExit(1)
+
+    # Read the global account explicitly. `get_scoped` would work today,
+    # but only because the project entry is absent — which is the thing
+    # being changed.
+    value = get_account(r.global_account)
+    if not value:
+        click.echo(f"could not read '{r.global_account}' from the keychain", err=True)
+        raise SystemExit(1)
+
+    # ⚠ Nothing is WRITTEN before the confirm that authorises it. This
+    # read `_ensure_namespace(...)` inline in the prompt's own argument
+    # list, so a project with no namespace yet had one generated and
+    # PERSISTED to config.yaml while the question was still on screen —
+    # and answering "no" then printed "left unchanged" over a config file
+    # that had just changed. Declining has to leave the disk alone; that
+    # is the whole of what declining means.
+    existing = config.credentials.namespace
+    if existing and is_valid_namespace(existing):
+        target = namespaced(existing, name)
+        also = ""
+    else:
+        # No namespace yet, so the target cannot be named without
+        # inventing one. Say that the config write is part of what is
+        # being agreed to rather than performing it first and reporting
+        # it afterwards.
+        target = f"<new namespace>/{name}"
+        also = " (this also records a new credential namespace in .rite/config.yaml)"
+
+    if not yes and not click.confirm(
+        f"copy '{r.global_account}' -> '{target}'{also}?", default=False
+    ):
+        click.echo("left unchanged")
+        return
+
+    # Authorised — now the namespace may be created and persisted.
+    target = namespaced(_ensure_namespace(root, config), name)
+
+    if store(target, value) != "keychain":
+        click.echo("failed to store — keyring not available", err=True)
+        raise SystemExit(1)
+
+    click.echo(f"copied '{r.global_account}' -> '{target}'")
+    click.echo(
+        f"  the global entry is untouched; other projects still resolve "
+        f"through it.\n  once nothing else needs it: rite credential remove "
+        f"{r.global_account}"
+    )
+
+
+@credential.command("remove")
+@click.argument("name")
+@click.option("--yes", is_flag=True, default=False, help="Skip the confirmation.")
+def credential_remove(name: str, yes: bool) -> None:
+    """Delete a stored credential from the keychain and rite's registry.
+
+    The counterpart to `set`. Without it, a key stored by mistake — an
+    email address typed where `jira_email` belonged, say — stayed in the
+    keychain permanently, since `set` could create entries that no rite
+    command could remove.
+
+    Examples:
+      rite credential remove sandbox_token_alpha
+      rite credential remove someone@example.com --yes
+    """
+    from rite_ai.credentials.store import list_for_rotation, project_account, remove
+
+    stored = {e.name for e in list_for_rotation()}
+
+    # Accept the KEY as well as the full account: `rite credential set
+    # jira_token` stores `<namespace>/jira_token`, so a remove that only
+    # matched the literal argument could not delete what `set` had just
+    # created — the "set could create what nothing could remove" defect
+    # this command exists to fix, reintroduced by namespacing.
+    #
+    # ⚠ But when BOTH exist, this must REFUSE rather than choose. Measured,
+    # and the reason this branch is written the way it is: with a project
+    # entry and a machine-global entry both present, taking the literal
+    # argument deleted the MACHINE-GLOBAL one — the entry every other
+    # project on the machine resolves through — while reporting the key
+    # the user typed, which reads as though the project's own copy went.
+    # A keychain delete is unrecoverable, so the ambiguous case is the one
+    # case that must not be guessed.
+    scoped = project_account(name, _project_credentials())
+    candidates = [c for c in (scoped, name) if c in stored]
+    candidates = list(dict.fromkeys(candidates))
+
+    if len(candidates) > 1:
+        click.echo(f"'{name}' is ambiguous — both of these are stored:", err=True)
+        for c in candidates:
+            which = "this project" if c == scoped else "machine-global"
+            click.echo(f"  {c}   ({which})", err=True)
+        click.echo(
+            "\nName the one you mean in full:\n"
+            f"  rite credential remove {candidates[0]}\n"
+            f"  rite credential remove {candidates[1]}",
+            err=True,
+        )
+        raise SystemExit(2)
+
+    if candidates and candidates[0] != name:
+        click.echo(f"removing this project's '{name}' ({candidates[0]})")
+        name = candidates[0]
+
+    if name not in stored:
+        click.echo(f"no credential stored under key '{name}'", err=True)
+        # An env var is not rite's to delete, and saying "not stored"
+        # without that distinction sends someone hunting in the keychain
+        # for something that lives in their shell profile.
+        env_key = f"RITE_{name.upper()}"
+        if os.environ.get(env_key):
+            click.echo(
+                f"  ({env_key} is set in this environment — "
+                f"that is not stored by rite and has to be unset there)",
+                err=True,
+            )
+        raise SystemExit(1)
+
+    if not yes and not click.confirm(f"remove keychain entry '{name}'?", default=False):
+        click.echo("left unchanged")
+        return
+
+    result = remove(name)
+    if result == "failed":
+        click.echo(f"failed to remove '{name}'", err=True)
+        raise SystemExit(1)
+    click.echo(f"removed credential '{name}'")
+
+
+@credential.command("rotate")
+def credential_rotate() -> None:
+    """Guided rotation of every credential rite has ever stored (SPEC
+    §10): shows each one's age and current source, and prompts for a
+    replacement — or skip. Only covers credentials `rite credential set`
+    (or a provisioning flow that stored one the same way) has actually
+    written; a credential satisfied only by an env var was never
+    recorded and has nothing here to rotate.
+
+    Examples:
+      rite credential rotate
+    """
+    from rite_ai.credentials.store import list_for_rotation, store
+
+    entries = list_for_rotation()
+    if not entries:
+        click.echo("no credentials recorded — nothing to rotate")
+        return
+
+    for entry in entries:
+        if entry.last_set is not None:
+            age = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(entry.last_set))
+            click.echo(f"{entry.name}  (last set {age}, currently: {entry.source})")
+        else:
+            click.echo(f"{entry.name}  (currently: {entry.source})")
+        if not click.confirm("  replace it now?", default=False):
+            continue
+        value = click.prompt("  new value", hide_input=True, confirmation_prompt=True)
+        result = store(entry.name, value)
+        if result != "keychain":
+            click.echo("  failed to store — keyring not available", err=True)
+            continue
+        click.echo(f"  {entry.name} rotated")
+
+
+# --- Add / Remove ---
+
+
+@cli.group()
+def add() -> None:
+    """Add a module or worker."""
+
+
+@add.command("module")
+@click.argument("name")
+@click.argument("url", default="")
+@click.option(
+    "--branch",
+    "-b",
+    default=None,
+    help="Branch to track (default: the remote's own default branch).",
+)
+@click.option("--description", "-d", default="", help="One-line description")
+def add_module_cmd(name: str, url: str, branch: str, description: str) -> None:
+    """Register (and optionally clone) a module.
+
+    Examples:
+      rite add module backend
+      rite add module frontend git@github.com:org/frontend.git
+    """
+    from rite_ai.workspace import add_module
+
+    root = _find_project_root()
+    result = add_module(
+        root, name, url=url or None, branch=branch, description=description
+    )
+    if result.ok:
+        click.echo(result.message)
+    else:
+        click.echo(result.message, err=True)
+        raise SystemExit(1)
+
+
+@add.command("worker")
+@click.argument("name")
+@click.option("--manager", "-m", default="", help="Manager name")
+@click.option(
+    "--modules", default="", help="Comma-separated module subset (default: all)"
+)
+@click.option(
+    "--instructions",
+    default="",
+    help="Standing direction for this one Worker — stored as worker.yml's "
+    "`claude_instructions` (SPEC §8.4) and rendered into its CLAUDE.md.",
+)
+def add_worker_cmd(name: str, manager: str, modules: str, instructions: str) -> None:
+    """Create a new worker workspace. If `sandbox.enabled` is set, also
+    walks through provisioning that Worker's scoped sandbox token (§5.3.3,
+    §5.3.4) — never displayed in this project's chat, only typed directly
+    into this terminal prompt.
+
+    Examples:
+      rite add worker alpha
+      rite add worker beta --modules backend,shared
+      rite add worker gamma --instructions "Ship nothing without a migration plan."
+    """
+    from rite_ai.workspace import add_worker
+
+    root, config = _load_config_for_write()
+    module_subset = (
+        [m.strip() for m in modules.split(",") if m.strip()] if modules else None
+    )
+    result = add_worker(
+        root,
+        name,
+        manager=manager,
+        module_subset=module_subset,
+        instructions=instructions,
+    )
+    if not result.ok:
+        click.echo(result.message, err=True)
+        raise SystemExit(1)
+
+    click.echo(result.message)
+    if result.cloned_modules:
+        click.echo(f"  cloned: {', '.join(result.cloned_modules)}")
+    for module_name, why in result.failed_modules:
+        click.echo(f"  NOT cloned: {module_name} — {why}", err=True)
+
+    if config.sandbox.enabled and result.worker is not None:
+        _provision_worker_token(root, result.worker, config)
+
+    if result.failed_modules:
+        # The worker itself exists and is registered, so this is not a
+        # failure to create it — and the sandbox token above is still
+        # worth provisioning. But the worker is missing a checkout it was
+        # given, and a zero exit here is exactly what let `rite add
+        # worker` report a clone that never happened. Last, so nothing
+        # the command still had to do is skipped by the exit.
+        click.echo(
+            f"worker '{name}' is registered but "
+            f"{len(result.failed_modules)} module(s) have no checkout — "
+            f"fix the source above, then `rite prepare --worker {name}`.",
+            err=True,
+        )
+        raise SystemExit(1)
+
+
+# GitHub's own label for each permission rite knows how to name, so the
+# prompt reads like the page the user is about to fill in. An unrecognised
+# value is printed verbatim rather than dropped or guessed at — the config
+# key is the user's, and a permission rite has never heard of is still a
+# permission they meant to ask for.
+_TOKEN_PERMISSION_LABELS = {
+    "contents": "Contents (read/write)",
+    "pull_requests": "Pull requests (read/write)",
+    "issues": "Issues (read/write)",
+    "metadata": "Metadata (read)",
+    "workflows": "Workflows (read/write)",
+}
+
+
+def _token_permission_line(permissions: list[str]) -> str:
+    if not permissions:
+        # §5.3.3 is a MINIMUM, so an empty list is not "no permissions
+        # needed" — it is a config that forgot to say. Name the file rather
+        # than printing "permissions: — nothing else", which reads like an
+        # instruction to create a token that can do nothing.
+        return (
+            "  - permissions: none listed in .rite/config.yaml "
+            "(sandbox.token_permissions) — §5.3.3 requires contents and "
+            "pull requests at minimum"
+        )
+    labelled = ", ".join(_TOKEN_PERMISSION_LABELS.get(p, p) for p in permissions)
+    return f"  - permissions: {labelled} — nothing else"
+
+
+def _provision_worker_token(root, worker, config) -> None:
+    """Guided sandbox-token provisioning for one Worker (§5.3.3, §5.3.4).
+    Prints the exact repos and permissions the token should be scoped to,
+    then — only on explicit confirmation — prompts for the value directly
+    (never collected any other way) and stores it under the naming
+    convention `rite_ai.sandbox.token_credential_name` and `rite credential
+    rotate` both rely on.
+
+    The permissions come from `sandbox.token_permissions`, the project's
+    own config key. They used to be a hardcoded sentence one line below
+    the docstring promising "the exact ... permissions" — so the key was
+    parsed, serialised, round-trip-tested and documented in SPEC §8's
+    config listing while the one command §5.3.4 names as its consumer
+    ignored it, and a project that narrowed or widened the list was told
+    the default regardless."""
+    from rite_ai.config.parse import parse_modules
+    from rite_ai.credentials.store import get_scoped, namespaced, store
+    from rite_ai.sandbox import check_token_access, token_credential_name
+
+    key = token_credential_name(worker.name)
+    if get_scoped(key, config.credentials):
+        click.echo(f"  sandbox token already provisioned ({key})")
+        return
+    # Scoped like every other credential: this Worker's token belongs to
+    # THIS project, which is the whole reason the guided path exists.
+    cred_name = namespaced(_ensure_namespace(root, config), key)
+
+    # EVERY project module, not this Worker's subset (§5.3.4). Workers are
+    # fungible: any of them may take any ticket, so a token scoped to the
+    # subset one Worker happens to have cloned would make Workers differ in
+    # capability and force assignment to reason about which one CAN do a
+    # job. The bound that remains is the project's repos — narrower than
+    # the person's account, which is the limit that matters for an agent.
+    all_modules = parse_modules(root / ".rite" / "modules.yaml")
+    project_modules = all_modules if isinstance(all_modules, list) else []
+    repos = [m.url for m in project_modules if m.url]
+
+    click.echo("")
+    click.echo(
+        f"sandbox.enabled is true — worker '{worker.name}' needs a GitHub "
+        "token scoped to THIS PROJECT's repos (§5.3.3):"
+    )
+    click.echo("  - fine-grained personal access token")
+    click.echo(
+        "  - repository access: "
+        + (", ".join(repos) if repos else "(no module URLs registered — set none)")
+    )
+    click.echo(
+        "    (every project module, not just this worker's — any worker may "
+        "take any\n     ticket, so they all carry the same scope. §5.3.4)"
+    )
+    click.echo(_token_permission_line(config.sandbox.token_permissions))
+    click.echo("  create one at https://github.com/settings/personal-access-tokens/new")
+    if not click.confirm("  store the token now?", default=False):
+        click.echo(f"  skipped — run `rite credential set {key}` later")
+        return
+
+    value = click.prompt("  token", hide_input=True, confirmation_prompt=True)
+    result = store(cred_name, value)
+    if result != "keychain":
+        click.echo("  failed to store — keyring not available", err=True)
+        return
+    click.echo(f"  stored as '{cred_name}'")
+
+    problems = check_token_access(value, project_modules)
+    for problem in problems:
+        click.echo(f"  warning: {problem}")
+
+
+@cli.group()
+def remove() -> None:
+    """Remove a module or worker."""
+
+
+@remove.command("module")
+@click.argument("name")
+def remove_module_cmd(name: str) -> None:
+    """Deregister a module (does not delete the directory).
+
+    Examples:
+      rite remove module backend
+    """
+    from rite_ai.workspace import remove_module
+
+    root = _find_project_root()
+    result = remove_module(root, name)
+    if result.ok:
+        click.echo(result.message)
+    else:
+        click.echo(result.message, err=True)
+        raise SystemExit(1)
+
+
+@remove.command("worker")
+@click.argument("name")
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Delete the workspace even when it holds work that exists nowhere else.",
+)
+def remove_worker_cmd(name: str, force: bool) -> None:
+    """Remove a worker workspace and deregister.
+
+    This deletes that worker's checkouts, so it refuses while they hold
+    work that is not committed or not pushed anywhere. `--force` deletes
+    it anyway.
+
+    Examples:
+      rite remove worker alpha
+      rite remove worker alpha --force
+    """
+    from rite_ai.workspace import remove_worker
+
+    root = _find_project_root()
+    result = remove_worker(root, name, force=force)
+    if result.ok:
+        click.echo(result.message)
+        return
+    click.echo(result.message, err=True)
+    for item in result.unsaved:
+        click.echo(f"  {item.describe()}", err=True)
+    if result.unsaved:
+        click.echo(
+            f"  Commit and push it, or copy workers/{name}/ elsewhere, then "
+            "re-run. `--force` deletes it.",
+            err=True,
+        )
+    raise SystemExit(1)
+
+
+# --- Context directory (SPEC §8.6) ---
+
+
+@cli.group()
+def context() -> None:
+    """Manage the project context directory."""
+
+
+@context.command("add")
+@click.argument("filename")
+@click.argument("trigger")
+@click.argument("description")
+@click.option("--file", "source_path", default=None, help="Copy an existing file in")
+def context_add(
+    filename: str, trigger: str, description: str, source_path: str | None
+) -> None:
+    """Add a context entry — a file under `.rite/context/`, indexed with a
+    trigger (when to consult it) and a one-line description.
+
+    Examples:
+      rite context add database.md "Before writing migrations" "Postgres conventions"
+      rite context add notes.md "Before X" "Y" --file ./my-notes.md
+    """
+    from rite_ai.context import add_context
+
+    root = _require_project_root()
+    err = add_context(
+        root,
+        filename,
+        trigger,
+        description,
+        source_path=Path(source_path) if source_path else None,
+    )
+    if err:
+        click.echo(err, err=True)
+        raise SystemExit(1)
+    click.echo(f"added {filename}")
+
+
+@context.command("remove")
+@click.argument("filename")
+def context_remove(filename: str) -> None:
+    """Remove a context entry and its file.
+
+    Examples:
+      rite context remove database.md
+    """
+    from rite_ai.context import remove_context
+
+    root = _require_project_root()
+    err = remove_context(root, filename)
+    if err:
+        click.echo(err, err=True)
+        raise SystemExit(1)
+    click.echo(f"removed {filename}")
+
+
+@context.command("list")
+def context_list() -> None:
+    """List context entries.
+
+    Examples:
+      rite context list
+    """
+    from rite_ai.context import list_context
+
+    root = _find_project_root()
+    entries = list_context(root)
+    if not entries:
+        click.echo("no context entries")
+        return
+    for e in entries:
+        click.echo(f"  {e.file:20s} {e.trigger}")
+
+
+# --- Knowledge Base ---
+
+
+@cli.group()
+def kb() -> None:
+    """Manage the knowledge base."""
+
+
+@kb.command("add")
+@click.argument("source")
+@click.option("--full", is_flag=True, help="Store full content (licensing warning)")
+def kb_add(source: str, full: bool) -> None:
+    """Add a URL (snapshot) or file to the knowledge base.
+
+    Examples:
+      rite kb add https://example.com/guide
+      rite kb add coding-standards.md
+      rite kb add --full https://example.com/spec
+    """
+    from rite_ai.kb import add_file, add_link
+
+    root = _require_project_root()
+    source_path = Path(source)
+    if source_path.is_file():
+        err = add_file(root, source_path)
+    elif source.startswith("http://") or source.startswith("https://"):
+        if full:
+            click.echo("warning: --full stores complete content; check licensing")
+        err = add_link(root, source, full=full)
+    else:
+        click.echo(f"not a file or URL: {source}", err=True)
+        raise SystemExit(1)
+
+    if err:
+        click.echo(err, err=True)
+        raise SystemExit(1)
+    click.echo(f"added: {source}")
+
+
+@kb.command("refresh")
+def kb_refresh() -> None:
+    """Re-fetch all link snapshots."""
+    from rite_ai.kb import refresh
+
+    root = _require_project_root()
+    report = refresh(root)
+    if not report.messages:
+        click.echo("nothing to refresh")
+        return
+    for msg in report.messages:
+        click.echo(msg, err=msg.startswith("error:"))
+    if report.failures:
+        # Errors on stderr and a non-zero exit. Every line went to stdout
+        # and the command exited 0, so a refresh that failed on half the
+        # KB was indistinguishable — to a cron entry, a script, or a
+        # session routine — from a clean one.
+        click.echo(
+            f"{len(report.failures)} entr"
+            f"{'y' if len(report.failures) == 1 else 'ies'} failed to fetch "
+            "— see the error line(s) above.",
+            err=True,
+        )
+        raise SystemExit(1)
+
+
+@kb.command("list")
+def kb_list() -> None:
+    """List knowledge base entries."""
+    from rite_ai.kb import list_entries
+
+    root = _find_project_root()
+    entries = list_entries(root)
+    if not entries:
+        click.echo("no KB entries")
+        return
+    for e in entries:
+        click.echo(f"  {e.entry_type:10s} {e.name}")
+
+
+# --- Publish Gate ---
+
+
+@cli.group()
+def publish() -> None:
+    """Publish gate commands."""
+
+
+@publish.command("install-hook")
+@click.option(
+    "--force",
+    is_flag=True,
+    default=False,
+    help="Overwrite a pre-push hook this tool did not install.",
+)
+def publish_install_hook(force: bool) -> None:
+    """Install the pre-push hook that runs the gate on every push.
+
+    `rite init` does this already. This is for a project that is already
+    initialised and has no working hook — because `core.hooksPath` redirected
+    it, or someone removed it — where re-running `rite init` is no help: it
+    offers to wipe the project's config rather than touch the hook.
+
+    Examples:
+      rite publish install-hook
+      rite publish install-hook --force
+    """
+    from rite_ai.gate.hook import install_pre_push_hook
+
+    result = install_pre_push_hook(_find_project_root(), force=force)
+    # `install_pre_push_hook` already phrases both outcomes for a human
+    # ("installed <path>" / the full reason it refused) — don't re-prefix it.
+    click.echo(result.message, err=not result.ok)
+    raise SystemExit(0 if result.ok else 1)
+
+
+@publish.command("install-ci")
+@click.option(
+    "--force",
+    is_flag=True,
+    default=False,
+    help="Replace an existing workflow at that path, whoever wrote it.",
+)
+def publish_install_ci(force: bool) -> None:
+    """Install the GitHub Actions workflow that runs the gate in CI.
+
+    The exact analogue of `install-hook`, and it exists for the same reason
+    SPEC §11.5 gives for that one: `rite init` does this already, and
+    re-running `rite init` is not the remedy for a project that is already
+    initialised — it offers to wipe the project's config rather than touch
+    the workflow.
+
+    §11.5.1 is why it matters more than the hook: `core.hooksPath` can
+    disarm the local gate without the developer doing anything and with no
+    signal that it happened, "which makes [CI] the load-bearing one, not
+    the backup". A project with no workflow has no layer that a local git
+    config cannot switch off.
+
+    Refuses to replace a workflow already at that path — including one rite
+    itself wrote, because the first thing anyone does to a generated
+    workflow is edit it. `--force` is the deliberate way to say replace it.
+
+    Examples:
+      rite publish install-ci
+      rite publish install-ci --force
+    """
+    from rite_ai.cli.init.scaffold import (
+        CI_WORKFLOW_REL_PATH,
+        render_ci_workflow,
+        write_ci_workflow,
+    )
+
+    root = _find_project_root()
+    path = root / CI_WORKFLOW_REL_PATH
+
+    if force:
+        if not (root / ".git").exists():
+            click.echo(
+                f"{root} is not a git repository (no .git/) — there is no CI "
+                "to run a workflow.",
+                err=True,
+            )
+            raise SystemExit(1)
+        # Asked BEFORE writing: `--force` on a repo with no workflow at all
+        # replaces nothing, and saying "replaced what was there" would be
+        # generated output stating something nobody observed.
+        replaced = path.exists()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(render_ci_workflow())
+        except OSError as e:
+            click.echo(f"could not write {path}: {e}", err=True)
+            raise SystemExit(1) from None
+        click.echo(
+            f"installed {path}" + (" (replaced what was there)" if replaced else "")
+        )
+        raise SystemExit(0)
+
+    result = write_ci_workflow(root)
+    if result.status == "written":
+        click.echo(f"installed {path}")
+        raise SystemExit(0)
+
+    # Every refusal names what is true of the file AND whether the gate
+    # runs anyway — those are different questions, and a workflow someone
+    # else wrote that calls `rite publish check` covers this project just
+    # as well as one rite generated.
+    reasons = {
+        "already_ours": f"{path} already exists and was written by rite — "
+        "left exactly as it is, including any changes you made to it.",
+        "foreign": f"{path} already exists and carries no rite marker, so it "
+        "was left alone.",
+        "unreadable": f"{path} exists but could not be read "
+        f"({result.detail}), so it was left alone.",
+        "not_a_repo": f"{root} is not a git repository (no .git/) — there is "
+        "no CI to run a workflow.",
+        "write_failed": f"could not write {path}: {result.detail}",
+    }
+    fallback = f"unhandled state: {result.status}"
+    click.echo(reasons.get(result.status, fallback), err=True)
+    if result.status in ("already_ours", "foreign"):
+        click.echo(
+            "  the publish gate DOES run in CI from it — it calls `rite publish check`."
+            if result.runs_gate
+            else "  the publish gate does NOT run in CI from it — it does not "
+            "call `rite publish check`. Add that to it, or re-run with "
+            "--force to replace it with the generated workflow.",
+            err=True,
+        )
+    raise SystemExit(1)
+
+
+@publish.command("check")
+@click.option("--rev-range", default=None, help="Git revision range to scan")
+def publish_check(rev_range: str | None) -> None:
+    """Dry-run the publish gate — scan for secrets and local paths.
+
+    Examples:
+      rite publish check
+      rite publish check --rev-range origin/main..HEAD
+    """
+    from rite_ai.gate import EXIT_CLEAN, EXIT_FAIL, EXIT_WARN, run_gate
+
+    root = _find_project_root()
+    report = run_gate(root, rev_range=rev_range)
+
+    for finding in report.findings:
+        click.echo(
+            f"  [{finding.source}] {finding.file}:{finding.line} "
+            f"{finding.rule_id}: {finding.match_preview}"
+        )
+
+    if report.stale_suppressions:
+        click.echo(f"\n{len(report.stale_suppressions)} stale suppression(s):")
+        for fp in report.stale_suppressions:
+            click.echo(f"  {fp}")
+
+    if report.errors:
+        for err in report.errors:
+            click.echo(f"error: {err}", err=True)
+
+    if report.exit_code == EXIT_CLEAN:
+        click.echo("gate: clean")
+    elif report.exit_code == EXIT_WARN:
+        click.echo("gate: warnings (stale suppressions)")
+    elif report.exit_code == EXIT_FAIL:
+        click.echo(f"gate: FAIL ({len(report.findings)} finding(s))")
+    else:
+        click.echo("gate: ERROR (gate could not run)")
+
+    raise SystemExit(report.exit_code)
+
+
+@publish.command("pre-push")
+def publish_pre_push() -> None:
+    """Range-scoped scan for the `pre-push` git hook (reads stdin).
+
+    Not meant to be typed by a human — this is what the installed
+    `.git/hooks/pre-push` execs (Stage 2 #3). Reads git's pre-push protocol
+    from stdin, scans each pushed range (not full history — that's what
+    keeps this "seconds to run" per §11), and exits nonzero if any range
+    fails.
+    """
+    import sys
+
+    from rite_ai.gate import EXIT_CLEAN, run_gate
+    from rite_ai.gate.gate import format_report
+    from rite_ai.gate.hook import compute_pre_push_ranges
+
+    root = _find_project_root()
+    lines = sys.stdin.read().splitlines()
+
+    if not lines:
+        click.echo("rite publish gate: nothing to scan")
+        raise SystemExit(0)
+
+    worst = EXIT_CLEAN
+    for rev_range in compute_pre_push_ranges(lines):
+        report = run_gate(root, rev_range=rev_range)
+        click.echo(f"rite publish gate — {rev_range}")
+        click.echo(format_report(report))
+        worst = max(worst, report.exit_code)
+
+    raise SystemExit(worst)
+
+
+# --- Ticket backend (SPEC §6.1, D-40: NOT `rite ticket` — see main.py header) ---
+#
+# `rite board` is mechanical ticket-backend CRUD — create/move/list/query/
+# label/link — never the end-to-end "claim -> work -> PR -> review" workflow,
+# which is the Dispatch slash command per D-40. Built ahead of the
+# questionnaire/workspace work per the sequencing override in
+# .docs/IMPLEMENTATION_PLAN.md: the owner's own ticket queue was living in a
+# session's memory, which had already stalled work three times.
+
+
+def _ticket_backend(board_role: str = "workers"):
+    """Build a TicketBackend from this project's config.yaml (SPEC §8.3)."""
+    from rite_ai.config.parse import ParseError, parse_config
+    from rite_ai.tickets import BackendError, create_backend_from_config
+
+    root = _find_project_root()
+    config_path = root / ".rite" / "config.yaml"
+    config = parse_config(config_path)
+    if isinstance(config, ParseError):
+        return None, f"config error: {config.message}"
+
+    tb = config.ticket_backend
+    if tb.type == "none":
+        # Pointing at a key in a file is only useful once the file exists,
+        # and only actionable once the accepted values are named.
+        if not config_path.is_file():
+            return None, f"not a rite project ({root}) — run `rite init` first"
+        return (
+            None,
+            f"no ticket backend configured — set ticket_backend.type in "
+            f"{config_path} to 'jira' (with site + projects) or 'github' "
+            f"(with repo)",
+        )
+
+    backend = create_backend_from_config(
+        tb, board_role=board_role, credentials=config.credentials
+    )
+
+    if isinstance(backend, BackendError):
+        return None, backend.message
+    return backend, None
+
+
+def _render_tickets(result) -> None:
+    """Print a page of tickets, and say so when it IS only a page. A
+    hundred rows with nothing after them reads as "this is the board";
+    on a busy board it is the first hundred of several hundred, and the
+    difference is invisible unless the listing states it."""
+    for ticket in result:
+        click.echo(f"  {ticket.id}  [{ticket.status}]  {ticket.title}")
+    if getattr(result, "truncated", False):
+        click.echo(
+            f"  … showing the first {len(result)} — there are more. "
+            "Narrow with --status/--label/--assignee, or use `rite board "
+            "query` for a backend-native search."
+        )
+
+
+@cli.group()
+def board() -> None:
+    """Direct ticket operations — create/move/list/query/label/link.
+
+    One command per action against the configured ticket backend
+    (`ticket_backend` in .rite/config.yaml). For the end-to-end ticket
+    workflow — picking work up, doing it, handing it back — use the
+    Dispatch `/ticket` command instead.
+    """
+
+
+@board.command("create")
+@click.argument("title")
+@click.option("--description", "-d", default="", help="Ticket description")
+@click.option("--label", "-l", "labels", multiple=True, help="Label (repeatable)")
+@click.option(
+    "--role",
+    default="workers",
+    help="Which config.yaml project this creates on: board | workers | testing",
+)
+def board_create(
+    title: str, description: str, labels: tuple[str, ...], role: str
+) -> None:
+    """Create a ticket.
+
+    Examples:
+      rite board create "Fix the bug"
+      rite board create "New feature" --role board --label epic
+    """
+    backend, err = _ticket_backend(role)
+    if err:
+        click.echo(err, err=True)
+        raise SystemExit(1)
+    result = backend.create(title, description=description, labels=list(labels))
+    from rite_ai.tickets import BackendError
+
+    if isinstance(result, BackendError):
+        click.echo(result.message, err=True)
+        raise SystemExit(1)
+    click.echo(f"created {result.id}: {result.url or result.title}")
+
+
+@board.command("move")
+@click.argument("ticket_id")
+@click.argument("status")
+@click.option("--role", default="workers", help="board | workers | testing")
+def board_move(ticket_id: str, status: str, role: str) -> None:
+    """Move a ticket to a new status/column.
+
+    Says where the ticket ACTUALLY landed when that is not the column you
+    named — a backend whose board has no such column (GitHub has only
+    open and closed) still does something, and reporting the request back
+    as the outcome is how a move that never happened reads as success.
+
+    Examples:
+      rite board move RW-12 "In Progress"
+    """
+    backend, err = _ticket_backend(role)
+    if err:
+        click.echo(err, err=True)
+        raise SystemExit(1)
+    result = backend.move(ticket_id, status)
+    from rite_ai.tickets import BackendError
+
+    if isinstance(result, BackendError):
+        click.echo(result.message, err=True)
+        raise SystemExit(1)
+    if isinstance(result, str) and result:
+        click.echo(
+            f"{ticket_id} -> {result} — this board has no '{status}' column "
+            f"of its own; that is where '{status}' maps"
+        )
+        return
+    click.echo(f"{ticket_id} -> {status}")
+
+
+@board.command("list")
+@click.option("--status", default=None)
+@click.option("--assignee", default=None)
+@click.option("--label", default=None)
+@click.option("--role", default="workers", help="board | workers | testing")
+def board_list(
+    status: str | None, assignee: str | None, label: str | None, role: str
+) -> None:
+    """List tickets, optionally filtered.
+
+    Examples:
+      rite board list --status "In Progress"
+    """
+    from rite_ai.tickets import BackendError, TicketFilter
+
+    backend, err = _ticket_backend(role)
+    if err:
+        click.echo(err, err=True)
+        raise SystemExit(1)
+    filters = TicketFilter(status=status, assignee=assignee, label=label)
+    result = backend.list_tickets(filters)
+    if isinstance(result, BackendError):
+        click.echo(result.message, err=True)
+        raise SystemExit(1)
+    if not result:
+        click.echo("no tickets")
+        return
+    _render_tickets(result)
+
+
+@board.command("query")
+@click.argument("raw_query")
+@click.option("--role", default="workers", help="board | workers | testing")
+def board_query(raw_query: str, role: str) -> None:
+    """Backend-native query — JQL for JIRA, search qualifiers for GitHub.
+
+    Examples:
+      rite board query "labels = scheduled ORDER BY created DESC"
+    """
+    backend, err = _ticket_backend(role)
+    if err:
+        click.echo(err, err=True)
+        raise SystemExit(1)
+    result = backend.query(raw_query)
+    from rite_ai.tickets import BackendError
+
+    if isinstance(result, BackendError):
+        click.echo(result.message, err=True)
+        raise SystemExit(1)
+    if not result:
+        click.echo("no tickets")
+        return
+    _render_tickets(result)
+
+
+@board.command("label")
+@click.argument("ticket_id")
+@click.argument("labels", nargs=-1)
+@click.option(
+    "--remove",
+    "-r",
+    "remove",
+    multiple=True,
+    help="Label to take off (repeatable). Removing one the ticket does not "
+    "carry is not an error.",
+)
+@click.option("--role", default="workers", help="board | workers | testing")
+def board_label(
+    ticket_id: str, labels: tuple[str, ...], remove: tuple[str, ...], role: str
+) -> None:
+    """Add worker-name labels — the assignment mechanism (SPEC §9.10).
+
+    LABELS are ADDED to whatever the ticket already carries; nothing is
+    replaced. Reassigning therefore takes both halves — add the new
+    worker, `--remove` the old one — or the ticket answers a query for
+    each of them.
+
+    Examples:
+      rite board label RW-12 alpha scheduled
+      rite board label RW-12 beta --remove alpha
+      rite board label RW-12 --remove alpha
+    """
+    if not labels and not remove:
+        click.echo("nothing to do — give a label to add, or --remove", err=True)
+        raise SystemExit(1)
+    backend, err = _ticket_backend(role)
+    if err:
+        click.echo(err, err=True)
+        raise SystemExit(1)
+    result = backend.label(ticket_id, list(labels), remove=list(remove))
+    from rite_ai.tickets import BackendError
+
+    if isinstance(result, BackendError):
+        click.echo(result.message, err=True)
+        raise SystemExit(1)
+    parts = []
+    if labels:
+        parts.append(f"labelled {', '.join(labels)}")
+    if remove:
+        parts.append(f"removed {', '.join(remove)}")
+    click.echo(f"{ticket_id}: {'; '.join(parts)}")
+
+
+@board.command("assign")
+@click.argument("ticket_id")
+@click.argument("worker")
+@click.option("--role", default="workers", help="board | workers | testing")
+def board_assign(ticket_id: str, worker: str, role: str) -> None:
+    """Set the backend's own assignee field (SPEC §6.1's `assign`).
+
+    This is the backend's native assignee — a GitHub issue assignee, a
+    JIRA assignee — which is what a human sees on the board. It is NOT
+    how rite decides who owns a ticket: that is the worker-name label
+    (`rite board label`, SPEC §9.10), which is what every rite query
+    filters on. Set both if you want the board to read the way rite does.
+
+    Takes a person, not a rite worker name: a display name, an email
+    address, or an accountId on JIRA; a login on GitHub. `alpha` is a
+    worker, and no ticket backend has ever heard of it — use `rite board
+    label` for that.
+
+    Examples:
+      rite board assign RW-12 "Ada Lovelace"
+      rite board assign RW-12 ada@example.com
+    """
+    backend, err = _ticket_backend(role)
+    if err:
+        click.echo(err, err=True)
+        raise SystemExit(1)
+    result = backend.assign(ticket_id, worker)
+    from rite_ai.tickets import BackendError
+
+    if isinstance(result, BackendError):
+        click.echo(result.message, err=True)
+        raise SystemExit(1)
+    click.echo(f"{ticket_id}: assigned to {worker}")
+
+
+@board.command("link")
+@click.argument("ticket_id")
+@click.argument("target_id")
+@click.option("--type", "link_type", default="Blocks", help="Link type, e.g. Blocks")
+@click.option(
+    "--role",
+    default="workers",
+    help="Which project TICKET_ID lives on: board | workers | testing",
+)
+def board_link(ticket_id: str, target_id: str, link_type: str, role: str) -> None:
+    """Link TICKET_ID to TARGET_ID (default: TICKET_ID is blocked by TARGET_ID).
+
+    Examples:
+      rite board link RW-12 SCRUM-4
+    """
+    backend, err = _ticket_backend(role)
+    if err:
+        click.echo(err, err=True)
+        raise SystemExit(1)
+    result = backend.link(ticket_id, target_id, link_type)
+    from rite_ai.tickets import BackendError
+
+    if isinstance(result, BackendError):
+        click.echo(result.message, err=True)
+        raise SystemExit(1)
+    # Measured against a live JIRA, `POST /issueLink` reads as
+    # "inwardIssue <type.outward> outwardIssue" — the opposite of what the
+    # field names suggest. `link()` now sends target_id as the inward
+    # issue precisely so that this sentence is true; before that fix the
+    # API recorded "RW-12 blocks SCRUM-4" while this line printed "RW-12
+    # is blocked by SCRUM-4", inverting the one relationship SPEC §6.2
+    # says rite's dependency logic depends on.
+    #
+    # "is blocked by" is a property of the "Blocks" type alone, so only
+    # "Blocks" may claim it — asserting it for a `--type Relates` link
+    # states a relationship that was never created.
+    if link_type.lower() == "blocks":
+        click.echo(f"{ticket_id} is blocked by {target_id} (type: {link_type})")
+    else:
+        click.echo(
+            f"linked {ticket_id} to {target_id} — "
+            f"{target_id} is the inward issue of a '{link_type}' link, "
+            f"{ticket_id} the outward one"
+        )
+
+
+# --- Worker scheduling (SPEC §2.7, D-44–D-48) ---
+
+
+def _load_config_for_write():
+    """Read config.yaml, or a fresh default `ProjectConfig` if it doesn't
+    exist yet — `rite schedule` should work on a project that hasn't run
+    `rite init`'s full flow, same as other config-touching commands."""
+    from rite_ai.config.models import ProjectConfig
+    from rite_ai.config.parse import ParseError, parse_config
+
+    root = _find_project_root()
+    config_path = root / ".rite" / "config.yaml"
+    config = parse_config(config_path)
+    if isinstance(config, ParseError):
+        click.echo(f"config error: {config.message}", err=True)
+        raise SystemExit(1)
+    return root, config if isinstance(config, ProjectConfig) else ProjectConfig()
+
+
+@cli.group()
+def schedule() -> None:
+    """This project's worker schedule (SPEC §2.7)."""
+
+
+@schedule.command("show")
+def schedule_show() -> None:
+    """Print the current schedule and timezone.
+
+    Examples:
+      rite schedule show
+    """
+    _, config = _load_config_for_write()
+    sched = config.schedule
+    click.echo(f"timezone: {sched.timezone or '(not set)'}")
+    if not sched.windows:
+        click.echo("no windows configured")
+        return
+    for w in sched.windows:
+        click.echo(f"  {w.hours}  workers={w.workers}")
+
+
+@schedule.command("set")
+@click.argument("hours")
+@click.argument("workers", type=int)
+def schedule_set(hours: str, workers: int) -> None:
+    """Set the Worker count for an hour range — an upsert: splits or trims
+    any window it overlaps, leaves the rest untouched.
+
+    Examples:
+      rite schedule set 09:00-18:00 3
+      rite schedule set 18:00-09:00 0
+    """
+    from rite_ai.cli.init.scaffold import write_config
+    from rite_ai.config.models import ScheduleConfig
+    from rite_ai.schedule import ScheduleError, upsert_window, validate_schedule
+
+    _require_project_root()
+    root, config = _load_config_for_write()
+
+    result = upsert_window(config.schedule.windows, hours, workers)
+    if isinstance(result, ScheduleError):
+        click.echo(result.message, err=True)
+        raise SystemExit(1)
+
+    new_schedule = ScheduleConfig(timezone=config.schedule.timezone, windows=result)
+    problems = validate_schedule(new_schedule, config.sandbox.max_concurrent_workers)
+    cap_problems = [p for p in problems if "exceeding" in p]
+    if cap_problems:
+        for p in cap_problems:
+            click.echo(p, err=True)
+        raise SystemExit(1)
+
+    config.schedule = new_schedule
+    write_config(root / ".rite", config)
+    click.echo(f"{hours} -> {workers} workers")
+    for p in problems:
+        if p not in cap_problems:
+            click.echo(f"warning: {p}")
+
+
+@schedule.command("set-timezone")
+@click.argument("tz")
+def schedule_set_timezone(tz: str) -> None:
+    """Set the schedule's timezone — required before any window is
+    meaningful (D-48).
+
+    Examples:
+      rite schedule set-timezone Europe/Warsaw
+    """
+    from rite_ai.cli.init.scaffold import write_config
+
+    # `_load_config_for_write` deliberately tolerates a project whose
+    # config.yaml does not exist yet, and is also what the machine-wide
+    # readers (`rite budget`, `rite pool status`) go through — so the
+    # refusal belongs on the writers, not on the shared helper. Without
+    # it this command reached `write_config` with no `.rite/` to write
+    # into and died on a FileNotFoundError traceback out of pathlib.
+    _require_project_root()
+    root, config = _load_config_for_write()
+    config.schedule.timezone = tz
+    write_config(root / ".rite", config)
+    click.echo(f"timezone set to {tz}")
+
+
+# --- Workspace preparation (SPEC §2.1) ---
+
+
+@cli.command()
+@click.option("--worker", "-w", required=True, help="Worker name")
+@click.option(
+    "--branch", "-b", default=None, help="Ticket branch (default: worker's own)"
+)
+def prepare(worker: str, branch: str | None) -> None:
+    """Prepare a worker's workspace before a task — right repos, right
+    branches, no residue from the previous task (SPEC §2.1). Idempotent;
+    a dirty tree fails loudly rather than being discarded.
+
+    Examples:
+      rite prepare --worker alpha
+      rite prepare --worker alpha --branch feature/RW-12
+    """
+    from rite_ai.config.parse import ParseError, parse_modules, parse_worker
+    from rite_ai.workspace import prepare_workspace
+
+    root = _find_project_root()
+    all_modules = parse_modules(root / ".rite" / "modules.yaml")
+    if isinstance(all_modules, ParseError):
+        click.echo(f"cannot parse modules.yaml: {all_modules.message}", err=True)
+        raise SystemExit(1)
+
+    worker_dir = root / "workers" / worker
+    manifest_path = worker_dir / "worker.yml"
+    if not manifest_path.is_file():
+        click.echo(
+            f"no such worker: workers/{worker}/ (run `rite add worker` first)",
+            err=True,
+        )
+        raise SystemExit(1)
+
+    manifest = parse_worker(manifest_path)
+    if isinstance(manifest, ParseError):
+        click.echo(f"cannot parse worker.yml: {manifest.message}", err=True)
+        raise SystemExit(1)
+
+    # Scope to exactly the modules this worker was created with — not
+    # every module in the project, which a worker may never have cloned.
+    modules = [m for m in all_modules if m.name in manifest.modules]
+
+    result = prepare_workspace(worker_dir, modules, root, branch=branch)
+    click.echo(result.summary())
+    if not result.ok:
+        # Name the blockers on their own line: `summary()` lists every
+        # module, passing or not, so on a large worker the one that
+        # actually stopped the run is easy to miss in the scroll.
+        names = ", ".join(m.module for m in result.blocking)
+        click.echo(f"blocked on: {names}", err=True)
+        raise SystemExit(1)
+
+
+# --- Heartbeat (SPEC §9.8) ---
+
+
+@cli.command()
+@click.option("--worker", "-w", required=True, help="Worker name")
+@click.option("--ticket", "-t", default="", help="Ticket the worker is on")
+@click.option("--message", "-m", default="", help="One line on what it's doing")
+def heartbeat(worker: str, ticket: str, message: str) -> None:
+    """Record a Worker's "still alive" beat (SPEC §9.8).
+
+    Call it every `heartbeat.interval_minutes` (config.yaml, default 10)
+    for as long as a Worker is working. This is what `rite status` and
+    `rite watchdog` read: a Worker that misses `stall_threshold` beats in
+    a row reports STALLED, and one that has never beaten at all reports
+    "no heartbeat ever recorded".
+
+    Examples:
+      rite heartbeat --worker alpha
+      rite heartbeat --worker alpha --ticket RW-12 --message "running tests"
+    """
+    # The only writer of `.rite/heartbeats/` anywhere in the codebase.
+    # `detect_stalls` (and through it `rite status` and `rite watchdog`)
+    # was reading that directory before anything wrote to it, which made
+    # every registered Worker read as permanently stalled.
+    from rite_ai.reporting.heartbeat import write_heartbeat
+
+    root = _require_project_root()
+    write_heartbeat(root, worker, ticket=ticket, message=message)
+    click.echo(f"heartbeat recorded for '{worker}'")
+    _warn_if_unregistered(worker)
+
+
+# --- Watchdog ---
+
+
+@cli.command()
+def watchdog() -> None:
+    """Cheap liveness check — no LLM (SPEC §3.5). Meant to run every ~5
+    minutes from a scheduler (cron, launchd), and by a Manager on its own
+    polling cadence. Zero tokens.
+
+    \b
+    EXIT CODES — three, because two conditions need different responses:
+      0  nothing needs attention
+      2  every finding is an ANSWERABLE QUESTION — one or more workers are
+         alive, beating, and blocked on a decision. Go and reply.
+      1  something may be WRONG — a stalled (probably dead) worker, an
+         unregistered worker nothing is watching, a config error, or an
+         outbox blocker. Go and investigate. If a project has both, this
+         wins: 1 is the one you cannot resolve by typing an answer.
+
+    Anything non-zero still means "attention", so a caller that only tests
+    `|| notify` keeps working unchanged.
+
+    Examples:
+      rite watchdog
+      */5 * * * * cd /path/to/project && rite watchdog || notify-manager
+      rite watchdog; case $? in
+        2) echo "answer a question";;
+        1) echo "investigate";;
+      esac
+    """
+    from rite_ai.label import decorate
+    from rite_ai.watchdog import run_watchdog_check
+
+    root = _find_project_root()
+    result = run_watchdog_check(root)
+    if not result.needs_attention:
+        click.echo(decorate(root, "ok — nothing needs attention"))
+        return
+    for reason in result.reasons:
+        # `decorate`, not a prefix concatenation: a watchdog reason can run
+        # to several lines (a YAML parse error quotes the offending line),
+        # and a continuation line scrolling into view unattributed is the
+        # exact problem this labelling exists to fix.
+        click.echo(decorate(root, reason))
+    # A blocked worker is answerable; everything else is an investigation.
+    # `len(reasons) == len(blocked)` is the test for "answerable only" —
+    # counting rather than re-deriving, so a condition added to
+    # `run_watchdog_check` later cannot silently fall into the wrong
+    # bucket: a new reason nobody mapped makes this 1, which is the safe
+    # side.
+    only_questions = bool(result.blocked) and len(result.reasons) == len(result.blocked)
+    raise SystemExit(2 if only_questions else 1)
+
+
+# --- Continuous handover snapshot (SPEC §9.10.1) ---
+
+
+@cli.group()
+def handover() -> None:
+    """The continuous "what's the state right now" snapshot — distinct
+    from `rite stop`'s transition-triggered handover comment."""
+
+
+@handover.command("write")
+@click.option("--ticket", default="", help="Current ticket ID")
+@click.option("--progress", default="", help="Short progress summary")
+@click.option("--next-step", "next_step", default="", help="What happens next")
+@click.option("--blocker", "blockers", multiple=True, help="Open blocker (repeatable)")
+@click.option(
+    "--worker",
+    "-w",
+    default="",
+    help="Whose snapshot to write. Every worker keeps its own; omit for a "
+    "single-coordinator project.",
+)
+@click.option(
+    "--clear",
+    "clear",
+    is_flag=True,
+    help="Deliberately record an empty snapshot, discarding what this "
+    "session recorded before. Without it, a write carrying no content is "
+    "refused rather than silently erasing the previous one.",
+)
+def handover_write(
+    ticket: str,
+    progress: str,
+    next_step: str,
+    blockers: tuple[str, ...],
+    worker: str,
+    clear: bool,
+) -> None:
+    """Overwrite one worker's handover snapshot — call this on a schedule
+    (every few minutes), not only when stopping. Ephemeral state: each call
+    replaces that worker's previous snapshot entirely, and leaves every
+    other worker's alone.
+
+    A write with nothing in it is refused, because "replaces entirely"
+    means an empty write is a deletion. Pass `--clear` to mean it.
+
+    Examples:
+      rite handover write --ticket RW-12 --progress "wiring the CLI" \\
+        --next-step "add tests" --blocker "waiting on JIRA credentials"
+    """
+    from rite_ai.handover import has_content, write_snapshot
+
+    root = _require_project_root()
+    if not clear and not has_content(ticket, progress, next_step, list(blockers)):
+        # Refused, not accepted-as-empty. Every call replaces that
+        # session's snapshot entirely, so an argument-less call is a
+        # deletion that printed "handover snapshot written" and exited 0
+        # — measured against a snapshot holding an open blocker, from the
+        # command whose whole purpose is carrying that blocker across a
+        # session's death.
+        click.echo(
+            "nothing to record — pass at least one of --ticket, --progress, "
+            "--next-step or --blocker. Every write REPLACES this session's "
+            "previous snapshot, so an empty one would discard whatever it "
+            "was holding. Use --clear if discarding it is what you mean.",
+            err=True,
+        )
+        raise SystemExit(2)
+    write_snapshot(
+        root,
+        ticket=ticket,
+        progress=progress,
+        next_step=next_step,
+        blockers=list(blockers),
+        worker=worker,
+    )
+    click.echo(f"handover snapshot written for {worker or 'the coordinator'}")
+
+
+@handover.command("show")
+def handover_show() -> None:
+    """Print the current handover snapshot — read this at session
+    startup, before evaluating `rite start`'s orientation table.
+
+    Examples:
+      rite handover show
+    """
+    from rite_ai.handover import read_snapshots
+
+    root = _find_project_root()
+    snapshots = read_snapshots(root)
+    if not snapshots:
+        click.echo("no handover snapshot recorded yet")
+        return
+    # Every session's, not just the newest. A fresh session reads this to
+    # reconstruct where work stands (§9.10.1); showing one of three
+    # workers told it the other two never existed.
+    for i, snapshot in enumerate(snapshots):
+        if i:
+            click.echo("")
+        if len(snapshots) > 1 or snapshot.worker:
+            click.echo(f"worker:     {snapshot.worker or '(unnamed session)'}")
+        if snapshot.unreadable:
+            click.echo(f"UNREADABLE: {snapshot.unreadable}", err=True)
+            click.echo(
+                "            Whatever that session recorded is still in that "
+                "file. This is\n"
+                '            NOT "nothing recorded" — read or repair it '
+                "before assuming the\n"
+                "            work it describes is not in flight.",
+                err=True,
+            )
+            click.echo(f"written:    {snapshot.describe_age()}")
+            continue
+        click.echo(f"ticket:     {snapshot.ticket or '(none)'}")
+        click.echo(f"progress:   {snapshot.progress or '(none)'}")
+        click.echo(f"next step:  {snapshot.next_step or '(none)'}")
+        if snapshot.blockers:
+            click.echo("blockers:")
+            for b in snapshot.blockers:
+                click.echo(f"  - {b}")
+        else:
+            click.echo("blockers:   (none)")
+        # Relative age beside the clock time. This command's own help says
+        # "read this at session startup", so its whole audience is someone
+        # who does not know what time the previous session stopped.
+        click.echo(f"recorded:   {snapshot.describe_age()}")
+    if any(s.unreadable for s in snapshots):
+        raise SystemExit(1)
+
+
+# --- Scheduler (SPEC §3.5, §2.7.3, §9.10) ---
+#
+# `scheduler-tick` is a single top-level command name, not a group
+# subcommand — the cron line and launchd plist built by `rite_ai.scheduler`
+# invoke it literally as `rite scheduler-tick`, so the two must stay in
+# sync (there is no click machinery tying them together).
+
+
+@cli.command("scheduler-tick")
+def scheduler_tick() -> None:
+    """One scheduler cycle: the watchdog check, plus the schedule
+    window-boundary check that hands over any active Worker when the
+    schedule drops to zero (§2.7.3, D-46). No LLM call; safe to run
+    unattended from cron/launchd every few minutes. This is what
+    `rite scheduler install` wires up — running it directly is mostly for
+    testing that wiring.
+
+    Examples:
+      rite scheduler-tick
+    """
+    from datetime import datetime
+
+    from rite_ai.label import decorate
+    from rite_ai.scheduler import run_tick
+
+    root = _require_project_root()
+
+    # Local time with its offset: this log is read by a human the morning
+    # after, so it should show wall-clock, and the offset keeps it
+    # unambiguous across a DST change rather than silently shifting an
+    # hour mid-file. Sortable either way.
+    stamp = datetime.now().astimezone().strftime("%Y-%m-%dT%H:%M:%S%z")
+
+    def emit(message: str) -> None:
+        # Every line, not just the first of a tick: `.rite/scheduler.log`
+        # is append-only across runs, so a line without its own timestamp
+        # cannot be placed once anything else is interleaved.
+        for line in decorate(root, message).split("\n"):
+            click.echo(f"{stamp}  {line}")
+
+    # Every line this command prints is appended to `.rite/scheduler.log`
+    # by cron, or read hours later out of launchd's output — the two places
+    # a message is furthest from anything that would identify it.
+    result = run_tick(root)
+    for message in result.messages:
+        emit(message)
+    if not result.messages:
+        # A tick that finds nothing still has to SAY it found nothing. This
+        # is the command cron/launchd runs into `.rite/scheduler.log`, and
+        # an empty log is indistinguishable from a scheduler that never
+        # fired — the one thing the log exists to tell you.
+        emit("nothing to report — no stalled workers, no window transition")
+    if not result.ok:
+        raise SystemExit(1)
+
+
+@cli.group()
+def scheduler() -> None:
+    """Install, remove, or check the OS-level cron/launchd registration
+    that calls `rite scheduler-tick` unattended. This changes a standing,
+    persistent part of your machine's own crontab or launchd agents —
+    `install`/`uninstall` are not run by anything else in rite; a human
+    runs them, the same way they'd run `crontab -e` themselves."""
+
+
+@scheduler.command("install")
+@click.option(
+    "--interval-minutes",
+    default=None,
+    type=int,
+    help="How often the tick runs. Defaults to watchdog.interval_minutes.",
+)
+@click.option(
+    "--backend",
+    type=click.Choice(["cron", "launchd"]),
+    default=None,
+    help="Defaults to launchd on macOS, cron elsewhere.",
+)
+def scheduler_install(interval_minutes: int | None, backend: str | None) -> None:
+    """Register this project's scheduler tick with cron or launchd. The
+    cadence comes from `watchdog.interval_minutes` in config.yaml unless
+    `--interval-minutes` overrides it.
+
+    Examples:
+      rite scheduler install
+      rite scheduler install --interval-minutes 10 --backend cron
+    """
+    from rite_ai.scheduler import install
+
+    # config.yaml's `watchdog.interval_minutes` is the project's stated
+    # cadence and the one the watchdog's own stall threshold is reasoned
+    # about in — an installer that hardcoded its own 5 registered an agent
+    # that disagreed with the config the user had just edited, silently.
+    root, config = _load_config_for_write()
+    resolved_interval = (
+        interval_minutes
+        if interval_minutes is not None
+        else config.watchdog.interval_minutes
+    )
+    result = install(root, interval_minutes=resolved_interval, backend=backend)
+    click.echo(result.message)
+    if result.ok:
+        click.echo(f"  runs every {resolved_interval} minute(s)")
+    if not result.ok:
+        raise SystemExit(1)
+
+
+@scheduler.command("uninstall")
+@click.option(
+    "--backend",
+    type=click.Choice(["cron", "launchd"]),
+    default=None,
+    help="Defaults to launchd on macOS, cron elsewhere.",
+)
+def scheduler_uninstall(backend: str | None) -> None:
+    """Remove this project's scheduler tick registration.
+
+    Examples:
+      rite scheduler uninstall
+    """
+    from rite_ai.scheduler import uninstall
+
+    root = _find_project_root()
+    result = uninstall(root, backend=backend)
+    click.echo(result.message)
+    if not result.ok:
+        raise SystemExit(1)
+
+
+@scheduler.command("status")
+@click.option(
+    "--backend",
+    type=click.Choice(["cron", "launchd"]),
+    default=None,
+    help="Defaults to launchd on macOS, cron elsewhere.",
+)
+def scheduler_status(backend: str | None) -> None:
+    """Report whether this project's scheduler tick is actually running.
+
+    Not just whether it is registered: it reports the last tick that
+    really happened, whether launchd still holds the job, and whether the
+    last run exited non-zero. A registration that is correct and never
+    fires looks identical to a working one until you ask this.
+
+    Examples:
+      rite scheduler status
+    """
+    from rite_ai.scheduler import format_health, health
+
+    root = _find_project_root()
+    for line in format_health(health(root, backend=backend)):
+        click.echo(line)
+
+
+# --- Coordinator redundancy pool (SPEC §2.5, D-26–D-29) ---
+
+
+@cli.group()
+def pool() -> None:
+    """A small pool of standby coordinator (Manager/Owner) sessions, so a
+    dead one has a warm replacement ready (§2.5). Managers/Owner still
+    need a human to start — `rite pool fill` is that explicit action;
+    nothing spawns a session automatically."""
+
+
+@pool.command("fill")
+@click.option(
+    "--count",
+    default=None,
+    type=int,
+    help="Target depth (default: pool.coordinator_standby).",
+)
+@click.option(
+    "--command",
+    default="claude",
+    show_default=True,
+    help="Command each pooled session runs.",
+)
+def pool_fill(count: int | None, command: str) -> None:
+    """Top up the coordinator pool to its target depth. Existing live
+    sessions count toward the target — this starts only the gap.
+
+    Examples:
+      rite pool fill
+      rite pool fill --count 3
+    """
+    from rite_ai.pool import fill
+
+    # Before anything is started. `_load_config_for_write` resolves with
+    # `_find_project_root`, which falls back to cwd, so without this the
+    # command starts `coordinator_standby` real `claude` sessions in
+    # whatever directory it was run from and records them in a `.rite/` it
+    # creates there. Every sibling writer guards — `pool archive` below,
+    # `schedule set`, `add worker`. This one is the one where the damage
+    # does not wash out: deleting the phantom directory afterwards does
+    # not refund the quota the sessions already spent.
+    _require_project_root()
+    root, config = _load_config_for_write()
+    result = fill(
+        root,
+        config.pool,
+        count=count,
+        command=command,
+        max_slots=config.sandbox.max_concurrent_workers,
+    )
+    click.echo(result.message)
+    if not result.ok:
+        raise SystemExit(1)
+
+
+@pool.command("status")
+def pool_status() -> None:
+    """Live/stale split for the coordinator pool — the same read-only,
+    zero-token probe `rite status` runs (§2.5.2/§2.5.3): no session is
+    spawned by this command.
+
+    Examples:
+      rite pool status
+    """
+    from rite_ai.pool import probe
+
+    root, config = _load_config_for_write()
+    result = probe(root, config.pool)
+    click.echo(f"{len(result.live)}/{result.target} live")
+    # Name the live slots, not just count them: these are real sessions on
+    # this machine and their names are the only way to attach to one
+    # (§2.5.1's takeover path) or to shut one down.
+    for name in result.live:
+        click.echo(f"  {name}")
+    if result.stale:
+        click.echo(f"stale: {', '.join(result.stale)}")
+    if result.warn:
+        click.echo(result.message)
+
+
+@pool.command("archive")
+@click.option(
+    "--after",
+    "after_minutes",
+    default=None,
+    type=int,
+    help="Minutes a slot must be continuously unreachable before it is "
+    "archived (default: pool.archive_after_minutes).",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Show what would be archived and released; change nothing.",
+)
+def pool_archive(after_minutes: int | None, dry_run: bool) -> None:
+    """Retire pool slots whose sessions are provably gone, and release the
+    claims they died holding.
+
+    A session that ends without running its shutdown hook — killed,
+    crashed, machine restarted — never releases its claims, so its work
+    keeps reading as live in `rite status` and keeps refusing other
+    sessions' overlapping claims. This is the cleanup for that: it
+    retires the slot and releases those claims together, recording both
+    in `.rite/pool-archive.jsonl`.
+
+    Only slots that fail the OS-level liveness probe continuously for the
+    configured window are touched; a session that answers the probe is
+    never archived, and if the probe cannot run at all this refuses
+    rather than guessing.
+
+    Examples:
+      rite pool archive --dry-run
+      rite pool archive
+      rite pool archive --after 5
+    """
+    from rite_ai.pool import archive
+
+    # `_load_config_for_write` is shared with the machine-wide READERS
+    # (`rite budget`, `rite pool status`), so it cannot carry the guard
+    # itself — the refusal belongs on each writer. This one archives pool
+    # slots and releases the claims they died holding, writing
+    # `.rite/pool.json` and `.rite/pool-archive.jsonl`; outside a project
+    # it manufactured both. Round 3 guarded the ten writers it had
+    # measured and `pool archive` was not among them, which is what
+    # `TestNoCommandInventsAProjectWhereItStands` now derives rather than
+    # lists.
+    _require_project_root()
+    root, config = _load_config_for_write()
+    result = archive(root, config.pool, after_minutes=after_minutes, dry_run=dry_run)
+    click.echo(result.message)
+    for entry in result.archived:
+        minutes = int(entry.unreachable_seconds // 60)
+        click.echo(f"  {entry.name} — unreachable {minutes}m")
+        for path in entry.claim_paths:
+            click.echo(f"    released claim: {path}")
+    if not result.ok:
+        raise SystemExit(1)
+
+
+@pool.command("history")
+@click.option(
+    "--limit",
+    "-n",
+    default=10,
+    show_default=True,
+    help="How many of the most recent entries to show (0 for all).",
+)
+def pool_history(limit: int) -> None:
+    """What `rite pool archive` has retired, and which claims it released.
+
+    The archive log is the answer to "my claim was here yesterday and now
+    it's gone" — the slot that held it, when it stopped answering, and
+    why it was retired.
+
+    Examples:
+      rite pool history
+      rite pool history --limit 0
+    """
+    from rite_ai.pool import read_archive
+
+    root = _find_project_root()
+    records = read_archive(root)
+    if not records:
+        click.echo("nothing archived yet")
+        return
+
+    shown = records if limit <= 0 else records[-limit:]
+    if len(shown) < len(records):
+        click.echo(f"{len(records)} entries, showing the last {len(shown)}:")
+    for record in shown:
+        when = time.strftime(
+            "%Y-%m-%d %H:%M:%S", time.localtime(record.get("timestamp", 0))
+        )
+        click.echo(f"{when}  {record.get('slot', '(unnamed)')}")
+        reason = record.get("reason")
+        if reason:
+            click.echo(f"  {reason}")
+        for released in record.get("released_claims", []):
+            paths = ", ".join(released.get("paths", []))
+            ticket = released.get("ticket") or ""
+            suffix = f" [{ticket}]" if ticket else ""
+            click.echo(f"  released claim{suffix}: {paths}")
+
+
+# --- Burn-rate measurement (SPEC §2.6, D-38/D-39) ---
+
+
+@cli.command("budget")
+def budget_report() -> None:
+    """Current burn rate and week-end projection from real Claude Code
+    transcripts — reporting only (D-38): no Worker-count recommendation,
+    no path back into concurrency anywhere in this command. Also shown in
+    `rite status`.
+
+    This is your WHOLE MACHINE's usage across every project, not just
+    this one — Anthropic's weekly quota is account-wide, and there is no
+    local way to attribute usage back to one project (SPEC §2.6.1). For
+    the same reason it reports no percentage: `budget.weekly_token_budget`
+    is one project's target, and these figures are not one project's
+    usage, so the two cannot be compared.
+
+    Examples:
+      rite budget
+    """
+    from datetime import UTC, datetime
+
+    from rite_ai.budget import (
+        compute_burn_rate,
+        current_week_start,
+        format_burn_rate,
+        read_usage_since,
+    )
+
+    root, config = _load_config_for_write()
+    tz_name = config.schedule.timezone or "UTC"
+    now = datetime.now(UTC)
+    week_start = current_week_start(now, tz_name, config.budget.week_start_day)
+    if week_start is None:
+        click.echo(
+            f"cannot resolve week start — check schedule.timezone ({tz_name!r}) "
+            f"and budget.week_start_day ({config.budget.week_start_day!r})",
+            err=True,
+        )
+        raise SystemExit(1)
+
+    samples = read_usage_since(week_start)
+    report = compute_burn_rate(
+        samples, week_start, now, config.budget.weekly_token_budget
+    )
+    click.echo("scope: this MACHINE, all projects — not just this one")
+    click.echo(f"since: {report.week_start:%Y-%m-%d %H:%M %Z}")
+    for line in format_burn_rate(report):
+        click.echo(line)
+
+
+# --- Worker sandboxing (SPEC §5.3, D-26, D-30, D-31) ---
+
+
+@cli.group()
+def sandbox() -> None:
+    """Process-isolate a Worker's session with yoloAI (https://yoloai.dev,
+    installed separately). These commands drive a sandbox directly and
+    work whenever yoloai does.
+
+    `sandbox.enabled` in config.yaml is a separate statement — that this
+    project runs its Workers sandboxed as a matter of course. It governs
+    setup rather than these commands: `rite add worker` provisions a
+    scoped sandbox token, and `rite doctor` treats a missing `yoloai` as
+    a problem instead of a note. A project that leaves it false can still
+    run everything here."""
+
+
+@sandbox.command("start")
+@click.argument("worker")
+@click.option(
+    "--agent-arg",
+    "agent_args",
+    multiple=True,
+    help="Argument to pass to the agent inside the sandbox (repeatable).",
+)
+@click.option(
+    "--allow-dirty",
+    is_flag=True,
+    default=False,
+    help="Start even though the worker's workspace has uncommitted "
+    "changes (they become visible to the agent).",
+)
+def sandbox_start(worker: str, agent_args: tuple[str, ...], allow_dirty: bool) -> None:
+    """Launch WORKER's session inside a fresh sandbox. If a token was
+    provisioned for this Worker (`rite add worker`'s sandbox step, or
+    `rite credential set sandbox_token_<worker>`), delivers it via
+    `--env` (D-31) — never a file, never a CLI argument.
+
+    Examples:
+      rite sandbox start alpha
+      rite sandbox start alpha --agent-arg --print --agent-arg "fix RW-12"
+      rite sandbox start alpha --allow-dirty
+    """
+    from rite_ai.credentials.store import worker_environment
+    from rite_ai.sandbox import (
+        GLOBAL_TOKEN_CREDENTIAL,
+        resolve_worker_token,
+        start_worker,
+        token_credential_name,
+    )
+
+    root, config = _load_config_for_write()
+    token, tier = resolve_worker_token(worker, config.credentials)
+    # Every credential this project holds, not just the git token (§5.3.4).
+    env = worker_environment(config.credentials, worker_token=token)
+    if tier == "global":
+        # Loud, every time. See `resolve_worker_token` for why this must
+        # not become a silent fallback.
+        click.echo(
+            f"warning: no '{token_credential_name(worker)}' — falling back to "
+            f"the machine-global '{GLOBAL_TOKEN_CREDENTIAL}'. That token is "
+            f"not scoped to this worker's modules, and the sandbox does not "
+            f"bound what it can reach on GitHub (SPEC §5.3.2). Provision a "
+            f"scoped one with `rite credential set "
+            f"{token_credential_name(worker)}`.",
+            err=True,
+        )
+    result = start_worker(
+        root,
+        worker,
+        config.sandbox,
+        token=token,
+        agent_args=list(agent_args) or None,
+        env=env,
+        allow_dirty=allow_dirty,
+    )
+    click.echo(result.message)
+    if not result.ok:
+        raise SystemExit(1)
+
+
+@sandbox.command("stop")
+@click.argument("worker")
+def sandbox_stop(worker: str) -> None:
+    """Stop WORKER's sandbox, preserving its state (yoloAI's own
+    distinction from `destroy`).
+
+    \b
+    PRESERVED STATE CAN INCLUDE THE WORKER'S GITHUB TOKEN.
+    rite delivers it with `--env` and nothing else (SPEC §5.3.3, D-31), and
+    what the sandbox does with it afterwards is outside that guarantee — a
+    dogfood session reported yoloAI 0.11.0 persisting it inside the sandbox,
+    cleared by `destroy` and not by `stop`. That report is unverified here and
+    its exact locations did not reproduce, so take the general reading rather
+    than the specific one: `stop` keeps the sandbox's state, `destroy` removes
+    it. Prefer `rite sandbox destroy` once the token is no longer wanted on
+    this machine, and rotate it if a stopped sandbox has been sitting around.
+
+    \b
+    NOTE: `rite sandbox destroy` passes yoloAI's --abandon-unapplied, so it
+    discards any unapplied changes in the sandbox along with it. Land the
+    Worker's work before destroying.
+
+    Examples:
+      rite sandbox stop alpha
+    """
+    from rite_ai.sandbox import stop_worker
+
+    result = stop_worker(worker, _find_project_root())
+    click.echo(result.message)
+    if not result.ok:
+        raise SystemExit(1)
+
+
+@sandbox.command("destroy")
+@click.argument("worker")
+def sandbox_destroy(worker: str) -> None:
+    """Stop and remove WORKER's sandbox entirely.
+
+    Examples:
+      rite sandbox destroy alpha
+    """
+    from rite_ai.sandbox import destroy_worker
+
+    result = destroy_worker(worker, _find_project_root())
+    click.echo(result.message)
+    if not result.ok:
+        raise SystemExit(1)
+
+
+@sandbox.command("pane")
+@click.argument("worker")
+@click.option("--ansi", is_flag=True, default=False, help="Keep colour/escape codes.")
+def sandbox_pane(worker: str, ansi: bool) -> None:
+    """Show what WORKER's sandboxed session currently has on screen.
+
+    A sandboxed Worker does not appear in Claude Code's own session list,
+    so it cannot be listed or messaged the way an ordinary session can —
+    its screen is the only way to see what it is doing. Read-only; this
+    types nothing into the session.
+
+    Exits non-zero when the pane could not be captured, which is NOT the
+    same as an idle worker — a broken yoloAI must not read as a quiet one.
+
+    Examples:
+      rite sandbox pane w1
+      rite sandbox pane w1 --ansi | less -R
+      watch -n 30 rite sandbox pane w1
+    """
+    from rite_ai.sandbox import worker_pane
+
+    capture = worker_pane(worker, ansi=ansi, root=_find_project_root())
+    click.echo(capture.text, err=not capture.ok)
+    if not capture.ok:
+        raise SystemExit(1)
+
+
+@sandbox.command("status")
+@click.argument("worker")
+def sandbox_status(worker: str) -> None:
+    """Report WORKER's current sandbox status.
+
+    Examples:
+      rite sandbox status alpha
+    """
+    from rite_ai.sandbox import worker_sandbox_status
+
+    status = worker_sandbox_status(worker, _find_project_root())
+    click.echo(status.value)
+    if not status.known:
+        # The status could not be determined. Exiting 0 would report that
+        # as an answer, which is how "yoloai is broken" came to look
+        # exactly like "this worker has no sandbox".
+        raise SystemExit(1)
+
+
+# --- Multi-project registry (SPEC §8.9, D-34) ---
+
+
+@cli.group()
+def projects() -> None:
+    """The Dispatch hub's project registry — additive; a single-project
+    setup needs none of this."""
+
+
+@projects.command("list")
+def projects_list() -> None:
+    """Show registered aliases, paths, and roles.
+
+    Examples:
+      rite projects list
+    """
+    from rite_ai.dispatch import default_dispatch_dir, load_registry
+
+    registry = load_registry(default_dispatch_dir())
+    if not registry.projects:
+        click.echo("no projects registered — add one with `rite projects add`")
+        return
+    for alias, entry in registry.projects.items():
+        click.echo(f"  {alias}: {entry.path} ({entry.role})")
+
+
+@projects.command("add")
+@click.argument("alias")
+@click.argument("path", type=click.Path(exists=True))
+@click.option("--role", default="manager", help="This machine's role for this project")
+def projects_add(alias: str, path: str, role: str) -> None:
+    """Register a project under an alias — warns (does not refuse) if the
+    aggregate scheduled load across all registered projects looks high.
+
+    Examples:
+      rite projects add acme ~/work/acme
+    """
+    from rite_ai.dispatch import (
+        add_project,
+        aggregate_load_warning,
+        default_dispatch_dir,
+    )
+
+    result = add_project(default_dispatch_dir(), alias, Path(path), role=role)
+    if not result.ok:
+        click.echo(result.message, err=True)
+        raise SystemExit(1)
+    click.echo(result.message)
+
+    warning = aggregate_load_warning(default_dispatch_dir())
+    if warning:
+        click.echo(f"warning: {warning}")
+
+
+@projects.command("remove")
+@click.argument("alias")
+def projects_remove(alias: str) -> None:
+    """Deregister an alias — does not touch the project's own .rite/.
+
+    Examples:
+      rite projects remove acme
+    """
+    from rite_ai.dispatch import default_dispatch_dir, remove_project
+
+    result = remove_project(default_dispatch_dir(), alias)
+    if not result.ok:
+        click.echo(result.message, err=True)
+        raise SystemExit(1)
+    click.echo(result.message)
+
+
+def _resolve_directory_or_alias(directory: str) -> Path:
+    """`rite start <alias>` resolves via the registry first; a bare
+    directory argument (or none, defaulting to `.`) works exactly as
+    before, with no dependency on `~/.rite/dispatch/` existing at all.
+
+    An argument that is neither is refused HERE, naming both things it
+    could have been. It used to fall through to `Path(directory)`, so a
+    mistyped alias became a relative path and `rite stop schd` from any
+    directory answered "no .rite/ directory" — a message about a
+    directory the user never mentioned, for a registry the user was
+    plainly addressing."""
+    from rite_ai.dispatch import default_dispatch_dir, load_registry, resolve_alias
+
+    dispatch_dir = default_dispatch_dir()
+    resolved = resolve_alias(dispatch_dir, directory)
+    if resolved is not None:
+        return resolved
+
+    path = Path(directory)
+    if path.exists():
+        return path.resolve()
+
+    aliases = sorted(load_registry(dispatch_dir).projects)
+    known = (
+        f"registered aliases: {', '.join(aliases)}"
+        if aliases
+        else "no projects are registered (`rite projects add`)"
+    )
+    click.echo(
+        f"'{directory}' is neither an existing directory nor a registered "
+        f"alias — {known}",
+        err=True,
+    )
+    raise SystemExit(1)
+
+
+# --- Lifecycle ---
+
+
+@cli.command("start")
+@click.argument("directory", default=".")
+def start_cmd(directory: str) -> None:
+    """Bring rite up — assess state and act.
+
+    Examples:
+      rite start
+      rite start /path/to/project
+      rite start acme               # resolves a registered alias (§8.9)
+    """
+    from rite_ai.lifecycle import start
+
+    root = _resolve_directory_or_alias(directory)
+    result = start(root)
+    if not result.ok:
+        click.echo(result.message, err=True)
+        raise SystemExit(1)
+    for action in result.actions:
+        click.echo(f"  {action}")
+    click.echo(result.message)
+
+
+@cli.command("stop")
+@click.argument("directory", default=".")
+@click.option("--worker", "-w", default=None, help="Release claims for specific worker")
+@click.option("--reason", "-r", default="clean shutdown", help="Reason for stopping")
+@click.option(
+    "--ticket",
+    "-t",
+    default="",
+    help="Ticket ID to comment/label on handover (default: resolved from the "
+    "released claims' own ticket, per SPEC §9.10 step 1)",
+)
+def stop_cmd(directory: str, worker: str | None, reason: str, ticket: str) -> None:
+    """Shut down with handover — release claims, update board.
+
+    Examples:
+      rite stop
+      rite stop --worker alpha --reason "lunch break"
+      rite stop --worker alpha --ticket RW-12
+      rite stop acme                # resolves a registered alias (§8.9)
+    """
+    from rite_ai.lifecycle import stop
+
+    root = _resolve_directory_or_alias(directory)
+    result = stop(root, worker=worker, reason=reason, ticket=ticket)
+    if not result.ok:
+        click.echo(result.message, err=True)
+        raise SystemExit(1)
+    click.echo(result.message)
+
+
+# --- Review ---
+
+
+@cli.command()
+@click.option(
+    "--module", "-m", default=None, help="Module name — appends its own checklist"
+)
+def review(module: str | None) -> None:
+    """Load and print the merged review checklist (SPEC §7).
+
+    Prints the checklist a Dispatch session hands to review agents when
+    running the review convention — this command does not spawn agents
+    itself (that needs judgement; the CLI's charter is the non-AI surface,
+    §9).
+
+    `--module` takes a name from `.rite/modules.yaml`, or the exact path
+    registered there. Anything else is refused, not ignored.
+
+    Examples:
+      rite review
+      rite review --module backend
+    """
+    from rite_ai.config.parse import ParseError, parse_modules
+    from rite_ai.review.checklist import format_checklist_prompt
+    from rite_ai.review.merge import merge_checklists
+
+    root = _find_project_root()
+
+    module_path = None
+    if module is not None:
+        # Refuse an unregistered module rather than falling through to the
+        # project-wide list. `merge_checklists` takes a PATH and treats a
+        # missing file as "this repo has no checklist yet", which is right
+        # for a registered module and silently wrong for a typo: `rite
+        # review --module bakcend` printed the project-wide checklist,
+        # exit 0, no warning — a review agent then works a checklist
+        # missing every repo-level line and reports a clean pass against
+        # it. Both review templates now make this command mandatory, so a
+        # quiet wrong answer here is a quiet wrong answer in every review.
+        modules = parse_modules(root / ".rite" / "modules.yaml")
+        if isinstance(modules, ParseError):
+            click.echo(f"modules.yaml: {modules.message}", err=True)
+            raise SystemExit(1)
+        wanted = module.rstrip("/")
+        for m in modules:
+            if wanted in (m.name, m.path.rstrip("/")):
+                module_path = m.path
+                break
+        else:
+            known = ", ".join(m.name for m in modules)
+            click.echo(
+                f"no module '{module}' in .rite/modules.yaml — "
+                + (f"registered: {known}" if known else "none are registered")
+                + ". Register it with `rite add module`, or run `rite review` "
+                "with no --module for the project-wide checklist alone.",
+                err=True,
+            )
+            raise SystemExit(1)
+
+    items = merge_checklists(root, module_path)
+
+    # Say what was merged, before the checklist itself.
+    #
+    # `rite review --module x` on a module with no checklist of its own was
+    # byte-identical to `rite review` — so a reviewer told to work "the
+    # project checklist plus that repo's own, appended" (which is what both
+    # review templates now promise) had no way to tell the second half was
+    # absent rather than empty. Found by running the command rather than
+    # reading it.
+    from rite_ai.review.merge import project_checklist_path, repo_checklist_path
+
+    project_items = merge_checklists(root)
+    # A module registered at `path: .` resolves to the project's own
+    # checklist, so `merge_checklists` loads the same file twice and every
+    # item appears twice. Reported rather than silently doubled — the count
+    # in the provenance line would otherwise be the honest half of a
+    # dishonest listing.
+    same_file = (
+        module_path is not None
+        and repo_checklist_path(root, module_path).resolve()
+        == project_checklist_path(root).resolve()
+    )
+
+    def _source(path: Path, count: int, nothing_here: str) -> str:
+        # `relative_to` raises for a module registered with an ABSOLUTE
+        # `path:` in modules.yaml — which `parse_modules` does not forbid —
+        # so it is tried rather than assumed. The provenance line is a
+        # convenience; it must not be the thing that turns `rite review`
+        # into a traceback.
+        try:
+            shown = path.relative_to(root)
+        except ValueError:
+            shown = path
+        if not path.is_file():
+            return f"{shown} (absent)"
+        if not count:
+            # A file that exists and parses to nothing is NOT absent, and
+            # saying so told a user who typed `* [ ]` instead of `- [ ]`
+            # that their file did not exist.
+            return f"{shown} ({nothing_here})"
+        return f"{shown} ({count} item{'' if count == 1 else 's'})"
+
+    sources = [
+        _source(
+            project_checklist_path(root),
+            len(project_items),
+            "no `- [ ] ` items found — check the bullet syntax",
+        )
+    ]
+    if same_file:
+        sources.append(
+            "the same file again — that module is registered at the "
+            "project root, so every item below is listed twice"
+        )
+    elif module_path is not None:
+        sources.append(
+            _source(
+                repo_checklist_path(root, module_path),
+                len(items) - len(project_items),
+                "no `- [ ] ` items found — nothing appended",
+            )
+        )
+    click.echo(f"# checklist: {' + '.join(sources)}")
+    click.echo(format_checklist_prompt(items))
+
+
+# --- Update ---
+
+
+@cli.command()
+@click.option("--yes", is_flag=True, help="Skip the confirmation prompt")
+def update(yes: bool) -> None:
+    """Update rite itself and migrate `.rite/` config files (SPEC §9.9).
+
+    Examples:
+      rite update
+      rite update --yes
+    """
+    from rite_ai.update import detect_install_method, migrate_config, run_self_update
+
+    method = detect_install_method()
+    failed = False
+    if method == "dev":
+        click.echo(run_self_update(method).message)
+    else:
+        if not yes and not click.confirm(f"Update rite via {method}?", default=True):
+            click.echo("cancelled")
+            return
+        result = run_self_update(method)
+        click.echo(result.message, err=not result.ok)
+        failed = not result.ok
+
+    # Runs whether or not the self-update worked. `rite_ai.update`'s own
+    # docstring calls these "two independent halves ... because they have
+    # independent failure modes", and this code made the second depend on
+    # the first: a self-update that failed for any reason — no network, a
+    # package manager not on PATH, the misdetected-installer bug — exited
+    # here and the project's config was never even looked at. The config
+    # on disk has nothing to do with whether a download succeeded.
+    root = _find_project_root()
+    rite_dir = root / ".rite"
+    if rite_dir.is_dir():
+        applied = migrate_config(rite_dir)
+        if applied:
+            click.echo(f"migrated .rite/ config: {', '.join(applied)}")
+        else:
+            click.echo(".rite/ config already current")
+
+    if failed:
+        raise SystemExit(1)
+
+
+# --- Help ---
+
+
+_HELP_TEXT = """\
+rite — multi-session Claude coordination for teams.
+
+Getting started:
+  rite init                         Set up a new project (interactive)
+  rite add module backend <git-url> Register a repo as a module
+  rite add worker alpha             Create a worker workspace
+
+Day to day:
+  rite start                        Bring rite up: read handover, load state
+  rite status                       What's happening right now
+  rite claim src/ --worker alpha -t RW-12
+                                     Claim paths before touching them
+  rite prepare --worker alpha       Sync a worker's workspace before a task
+  rite release --worker alpha       Release claims after a merge
+  rite stop                         Shut down with handover
+
+Coordination surfaces:
+  rite doctor                       Health check — tools, credentials, schedule
+  rite schedule set 09:00-18:00 3   Set how many workers run, and when
+  rite handover write/show          The continuous "state right now" snapshot
+  rite heartbeat --worker alpha     "Still alive" beat — what watchdog reads
+  rite watchdog                     Cheap liveness check (no LLM call)
+  rite credential set/rotate        Store or rotate a credential
+
+Every command supports --help for its own options and examples:
+  rite <command> --help
+  rite <group> <subcommand> --help  (e.g. rite schedule --help)
+
+Full command reference: rite --help
+"""
+
+
+@cli.command()
+def help() -> None:  # noqa: A001 - deliberately shadows builtin, it's the command name
+    """Friendly command list with examples — distinct from `rite --help`,
+    which is click's own generated (accurate, but example-free) reference.
+
+    Examples:
+      rite help
+    """
+    click.echo(_HELP_TEXT)
+
+
+# `python -m rite_ai.cli.main` imported this module, found nothing to run, and
+# exited 0 printing nothing — indistinguishable from a command that succeeded,
+# which is the first line of this project's own review checklist ("a broken
+# check that reports 'clean' is worse than no check at all") in the CLI's own
+# entry point. The `-m` form is an idiom this codebase already uses
+# (`python -m rite_ai.gate`, see `rite_ai/gate/__main__.py`), so a reader will
+# reasonably try it here too.
+if __name__ == "__main__":  # pragma: no cover - see tests/test_module_entry_point.py
+    cli()

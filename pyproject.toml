@@ -1,0 +1,74 @@
+[project]
+name = "rite-ai"
+dynamic = ["version"]
+description = "Multi-session Claude coordination for teams"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [
+    { name = "Rob Bartoszewski", email = "robbartoszewski@gmail.com" },
+]
+dependencies = [
+    "click>=8.1",
+    "httpx>=0.28.1",
+    "pyyaml>=6.0.3",
+    "keyring>=25.0",
+]
+
+[project.scripts]
+# Two names, one entry point. The distribution is `rite-ai` because the PyPI
+# name `rite` belongs to an unrelated, actively-maintained package (Scape
+# Agency's "Rite - Python Utility Package"), whose wheel ALSO ships a `rite`
+# console script. `rite` stays the primary command because that is the
+# project's name and what every doc, hook script and error message says;
+# `rite-ai` is the collision-free fallback for anyone whose PATH already has
+# the other project's `rite` on it. Both are real console scripts generated
+# by the build backend - not a shim forwarding to the other - so neither
+# depends on the other still being installed.
+rite = "rite_ai.cli.main:cli"
+rite-ai = "rite_ai.cli.main:cli"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+# SPEC.md §8.5: VERSION is the single source of truth — pyproject.toml
+# reads it at build time rather than duplicating the string.
+path = "VERSION"
+pattern = "(?P<version>.+)"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rite_ai"]
+
+[tool.hatch.build.targets.wheel.force-include]
+# Ships VERSION inside the installed package so `rite --version` (SPEC
+# §8.5: "reads it at runtime") can read the same file at runtime that
+# pyproject.toml read at build time, in both an editable dev checkout and
+# a real pipx/wheel install — not just at build time.
+"VERSION" = "rite_ai/VERSION"
+# Ships the `templates/` tree inside the package for the same reason. Without
+# this, `templates_dir()` (rite_ai/cli/init/paths.py) only ever resolved via
+# its walk-up branch, which needs a `pyproject.toml` sitting next to
+# `templates/` — true in a dev checkout, false in every real wheel install.
+# That function's second branch already looks for `rite_ai/templates`; it had
+# just never been given anything to find, so `rite init` crashed with a
+# FileNotFoundError on review-checklist.md under `pipx install`/`uv tool
+# install` while passing every test from the source tree.
+"templates" = "rite_ai/templates"
+
+[tool.ruff]
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.16.6",
+]
