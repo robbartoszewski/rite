@@ -165,6 +165,28 @@ class CredentialsConfig:
 
 
 @dataclass
+class SpecConfig:
+    """Where this project's design already lives.
+
+    POINTERS, never copies. A spec is typically thousands of lines and it
+    changes; copying it into `.rite/` would duplicate it and go stale
+    silently the moment the original moved on. Workers are given the path
+    and the citation convention and read what their ticket needs.
+    """
+
+    # Repo-relative files and/or directories, in the order a reader should
+    # meet them. A directory is handed over whole — rite does not index it,
+    # because the shapes people keep specs in are not rite's to define.
+    paths: list[str] = field(default_factory=list)
+    # How tickets cite the spec, in the project's own words — e.g.
+    # "Decisions are cited as D-<number>; the register is in SPEC.md."
+    # Free text because the convention already exists in projects that
+    # have one, and inventing a rite-specific syntax would defeat the
+    # point of pointing at what is already there.
+    convention: str = ""
+
+
+@dataclass
 class ProjectConfig:
     ticket_backend: TicketBackendConfig = field(default_factory=TicketBackendConfig)
     credentials: CredentialsConfig = field(default_factory=CredentialsConfig)
@@ -176,6 +198,7 @@ class ProjectConfig:
     sandbox: SandboxConfig = field(default_factory=SandboxConfig)
     budget: BudgetConfig = field(default_factory=BudgetConfig)
     schedule: ScheduleConfig = field(default_factory=ScheduleConfig)
+    spec: SpecConfig = field(default_factory=SpecConfig)
 
 
 @dataclass

@@ -111,6 +111,10 @@ def config_to_yaml(config: ProjectConfig) -> str:
             "scan_patterns": [asdict(p) for p in config.publish_gate.scan_patterns],
             "gitleaks_config": config.publish_gate.gitleaks_config,
         },
+        "spec": {
+            "paths": config.spec.paths,
+            "convention": config.spec.convention,
+        },
         "heartbeat": {
             "interval_minutes": config.heartbeat.interval_minutes,
             "stall_threshold": config.heartbeat.stall_threshold,

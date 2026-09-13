@@ -535,6 +535,31 @@ def doctor() -> None:
                 "not required)"
             )
 
+        # Lists what is configured AND checks it resolves — which is why
+        # `rite spec` has no `list`. rite cannot tell whether a spec is
+        # CURRENT, and says so in the Worker's own CLAUDE.md; what it can
+        # tell is that a path has been renamed or deleted out from under
+        # the pointer, which turns "read the design here" into a dead end.
+        if project.config.spec.paths:
+            for rel in project.config.spec.paths:
+                target = root / rel
+                if target.exists():
+                    kind = "dir" if target.is_dir() else "file"
+                    click.echo(f"spec {rel}: found ({kind})")
+                else:
+                    click.echo(f"spec {rel}: MISSING — nothing at that path")
+                    problems.append(
+                        f"spec path '{rel}' does not exist — Workers are "
+                        f"pointed at it and will find nothing"
+                    )
+            if project.config.spec.convention:
+                click.echo(f"spec convention: {project.config.spec.convention}")
+        else:
+            click.echo(
+                "spec: none configured — `rite spec add <path>` points "
+                "Workers at your design"
+            )
+
         schedule_problems = validate_schedule(
             project.config.schedule, project.config.sandbox.max_concurrent_workers
         )
@@ -3515,6 +3540,83 @@ def budget_report() -> None:
     click.echo(f"since: {report.week_start:%Y-%m-%d %H:%M %Z}")
     for line in format_burn_rate(report):
         click.echo(line)
+
+
+# --- Project spec pointers (SPEC §9.13, D-52) ---
+
+
+@cli.group()
+def spec() -> None:
+    """Where this project's design already lives.
+
+    rite POINTS at a spec, it never copies one. Workers are given the paths
+    and the citation convention and read what their ticket needs — a spec
+    runs to thousands of lines, and inlining it into every Worker's context
+    on every job spends the quota this tool exists to make last overnight.
+
+    `rite init` proposes what it finds. These commands are for changing it
+    afterwards; `rite doctor` lists what is configured and checks the paths
+    still resolve."""
+
+
+@spec.command("add")
+@click.argument("path")
+def spec_add(path: str) -> None:
+    """Point Workers at PATH — a file or a directory, repo-relative.
+
+    Examples:
+      rite spec add SPEC.md
+      rite spec add docs/adr/
+    """
+    from rite_ai.cli.init.scaffold import write_config
+
+    root, config = _load_config_for_write()
+    cleaned = path.strip()
+    if not cleaned:
+        click.echo("give a path to add", err=True)
+        raise SystemExit(2)
+
+    target = root / cleaned
+    if not target.exists():
+        # Refused, not warned. A pointer to nothing is the one state this
+        # feature cannot survive: the Worker is told where the design is
+        # and finds nothing there.
+        click.echo(f"no such path in this project: {cleaned}", err=True)
+        raise SystemExit(1)
+    if target.is_dir() and not cleaned.endswith("/"):
+        cleaned += "/"
+
+    if cleaned in config.spec.paths:
+        click.echo(f"already pointed at {cleaned}")
+        return
+    config.spec.paths.append(cleaned)
+    write_config(root / ".rite", config)
+    click.echo(f"added {cleaned}")
+    click.echo("  new Workers pick this up; existing ones on `rite add worker`")
+
+
+@spec.command("remove")
+@click.argument("path")
+def spec_remove(path: str) -> None:
+    """Stop pointing Workers at PATH.
+
+    Examples:
+      rite spec remove docs/adr/
+    """
+    from rite_ai.cli.init.scaffold import write_config
+
+    root, config = _load_config_for_write()
+    cleaned = path.strip()
+    candidates = {cleaned, cleaned.rstrip("/"), cleaned.rstrip("/") + "/"}
+    match = next((p for p in config.spec.paths if p in candidates), None)
+    if match is None:
+        click.echo(f"not pointed at {cleaned}", err=True)
+        if config.spec.paths:
+            click.echo("  configured: " + ", ".join(config.spec.paths), err=True)
+        raise SystemExit(1)
+    config.spec.paths.remove(match)
+    write_config(root / ".rite", config)
+    click.echo(f"removed {match}")
 
 
 # --- Worker sandboxing (SPEC §5.3, D-26, D-30, D-31) ---

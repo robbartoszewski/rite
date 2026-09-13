@@ -22,6 +22,7 @@ from .models import (
     ScanPattern,
     ScheduleConfig,
     ScheduleWindow,
+    SpecConfig,
     TicketBackendConfig,
     WatchdogConfig,
     WorkerManifest,
@@ -212,6 +213,16 @@ def parse_config(path: Path) -> ProjectConfig | ParseError:
     )
 
     sb_raw = raw.get("sandbox", {})
+    spec_raw = raw.get("spec", {})
+    spec = (
+        SpecConfig(
+            paths=_str_list(spec_raw.get("paths", [])),
+            convention=str(spec_raw.get("convention", "") or ""),
+        )
+        if isinstance(spec_raw, dict)
+        else SpecConfig()
+    )
+
     sandbox = (
         SandboxConfig(
             enabled=sb_raw.get("enabled", True),
@@ -280,6 +291,7 @@ def parse_config(path: Path) -> ProjectConfig | ParseError:
         sandbox=sandbox,
         budget=budget,
         schedule=schedule,
+        spec=spec,
     )
 
 

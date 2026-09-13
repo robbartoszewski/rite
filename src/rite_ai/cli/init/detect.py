@@ -8,6 +8,7 @@ detection finds nothing, callers must fall back to an explicit placeholder.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -267,3 +268,72 @@ def run_detection(root: Path) -> DetectionSummary:
         platform=detect_platform(),
         has_language_markers=bool(languages) or bool(repos),
     )
+
+
+# The shapes a spec already comes in. Files first, then directories, so a
+# proposal reads in the order someone would meet them. Deliberately a fixed
+# list of conventional names rather than a content sniff: proposing the
+# wrong file confidently is worse than missing one, because a wrong
+# proposal gets accepted.
+SPEC_FILES = ("SPEC.md", "DESIGN.md", "ARCHITECTURE.md")
+SPEC_DIRS = ("docs", "adr", "rfcs", "design")
+
+
+def detect_spec_paths(root: Path, module_paths: list[str] | None = None) -> list[str]:
+    """Spec files and directories already in this project, repo-relative.
+
+    Looks in the project root and at the TOP LEVEL of each registered
+    module — not recursively. A monorepo genuinely keeps its spec in
+    `backend/docs/`, so root-only misses a real case; recursing finds the
+    docs directory of every vendored dependency and proposes it with the
+    same confidence as a real one, and a wrong proposal that gets accepted
+    is worse than a missed one.
+    """
+    found: list[str] = []
+
+    def _scan(base: Path, prefix: str) -> None:
+        for name in SPEC_FILES:
+            if (base / name).is_file():
+                found.append(f"{prefix}{name}")
+        for name in SPEC_DIRS:
+            candidate = base / name
+            if candidate.is_dir() and any(candidate.iterdir()):
+                found.append(f"{prefix}{name}/")
+
+    _scan(root, "")
+    for module_path in module_paths or []:
+        base = (root / module_path).resolve()
+        if base == root.resolve() or not base.is_dir():
+            continue
+        _scan(base, f"{module_path.rstrip('/')}/")
+    return found
+
+
+# A decision register worth citing — `| D-12 |` in a table, `## D-12`, or
+# `D-12:` in prose. Three or more is the bar: one or two stray matches are
+# as likely to be a version string as a convention.
+_DECISION_RE = re.compile(r"(?:^|[|\s#])D-\d+\b")
+_DECISION_MINIMUM = 3
+
+
+def detect_decision_convention(root: Path, paths: list[str]) -> str:
+    """A citation convention proposal, or "" if the project has none.
+
+    Read once, at init, purely to decide whether to PROPOSE a line — the
+    spec itself is never read again by rite. Only files are scanned; a
+    directory of specs is not walked, because the point is to notice an
+    existing convention cheaply, not to index anybody's documentation.
+    """
+    for rel in paths:
+        if rel.endswith("/"):
+            continue
+        candidate = root / rel
+        try:
+            text = candidate.read_text(errors="replace")
+        except OSError:
+            continue
+        if len(_DECISION_RE.findall(text)) >= _DECISION_MINIMUM:
+            return (
+                f"Decisions are cited as D-<number>; the register is in `{rel}`."
+            )
+    return ""

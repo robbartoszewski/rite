@@ -282,6 +282,7 @@ def test_config_yaml_key_order_matches_spec(tmp_path: Path):
         "credentials",
         "expertise",
         "publish_gate",
+        "spec",
         "heartbeat",
         "watchdog",
         "pool",

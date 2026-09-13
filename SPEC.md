@@ -1859,6 +1859,10 @@ publish_gate:
       description: "Hardcoded home directory path"
   gitleaks_config: .rite/gitleaks.toml
 
+spec:                              # where this project's design already lives (§9.13)
+  paths: [SPEC.md, docs/adr/]      # POINTERS, never copies — D-52
+  convention: "Decisions are cited as D-<number>; the register is in `SPEC.md`."
+
 heartbeat:
   interval_minutes: 10
   stall_threshold: 3             # missed heartbeats before marking stalled
@@ -3159,6 +3163,56 @@ not a one-off fix.
 
 ---
 
+### 9.13. Project spec
+
+Most projects that reach for rite already have a spec. A tool that ignores it
+makes the developer re-explain their own design to every Worker, so `rite
+init` looks for one and points Workers at what it finds.
+
+**Pointers, never copies.** `spec.paths` in `config.yaml` holds repo-relative
+files and directories. rite does not read them, index them, or copy them
+anywhere; the Worker's generated `CLAUDE.md` carries the paths and the
+citation convention, and the Worker reads what its ticket needs. See D-52.
+
+```yaml
+spec:
+  paths: [SPEC.md, docs/adr/]
+  convention: "Decisions are cited as D-<number>; the register is in `SPEC.md`."
+```
+
+**Detected and proposed, never asked blank.** §9.3 looks for `SPEC.md`,
+`DESIGN.md`, `ARCHITECTURE.md`, and non-empty `docs/`, `adr/`, `rfcs/`,
+`design/` — in the project root and at the **top level of each registered
+module**, not recursively. A monorepo genuinely keeps its spec under a
+module; recursing would find the docs directory of every vendored dependency
+and propose it with equal confidence, and a wrong proposal that gets accepted
+is worse than a missed one. Nothing found means one line naming what was
+looked for, not a prompt asking the user to type a path rite could not find.
+
+**No rite-specific format.** A file, several files, or a directory all work
+as they are. Requiring conversion would defeat the point, since the shapes
+people keep specs in already exist and are not rite's to define.
+
+**The citation convention is detected too.** A spec whose text carries three
+or more `D-<number>` references gets a proposed convention line, confirmed
+rather than assumed. This is what makes a ticket saying "implement per D-16"
+a live reference: the Worker has the path, knows the convention, and knows
+where the register is. Phase 2 tickets cite decisions instead of restating
+them, which is only sound if that chain holds.
+
+**rite cannot tell whether a spec is current**, and says so in the Worker's
+own `CLAUDE.md`: *"rite cannot tell whether this is current. If it
+contradicts the code, say so in the ticket rather than silently implementing
+either."* A stale spec handed over confidently is worse than none — the
+Worker implements it and nobody finds out until review. What rite **can**
+check is that the paths still resolve, which `rite doctor` does on every run,
+reporting a renamed or deleted spec as a problem.
+
+`rite spec add <path>` / `rite spec remove <path>` change it afterwards.
+There is deliberately no `rite spec list`: `rite doctor` already prints every
+configured path while checking it, and a second command doing the same read
+is CLI surface that has not earned its place.
+
 ## 10. Credentials
 
 **OS keychain via Python `keyring`** (macOS Keychain, Linux Secret Service, Windows
@@ -3622,6 +3676,7 @@ happened once already and left no trace until this review found it.
 | D-49 | Ticket-link interface method | **`link(id, target_id, link_type)` added to the abstract `TicketBackend` interface (§6.1), not left as a JIRA-only capability; returns `void \| BackendError`, and a backend with no real link mechanism must return the error rather than substitute a weaker one silently** | §6.2 already specified "blocked by" linking as backend behaviour; found during the Phase-1 implementation-plan rewrite that the interface itself had no method to carry it. A `void`-only return was reviewed and rejected in the same pass — it would let a real link and a silent no-op look identical to a caller that reasons about dependencies. §6.1. |
 | D-50 | `rite start`'s setup phase — what it performs vs. reports | **`start` performs anything idempotent, local and free; it REPORTS anything persistent, networked or quota-spending, naming the command that does it.** Three steps the spec had it perform are now reports: registering the scheduler (a standing cron/launchd entry), refreshing the KB cache (network fetches), and topping up the coordinator pool (spawns `claude`, spends quota). `start` gained the health check it genuinely owed — schedule validation, the config it is about to be governed by — without shelling out to `doctor`. | Measured: none of §9.10's four setup steps existed, and the spec had marked them "not built" without deciding whose defect it was. Mostly the spec's. A lifecycle command that installs cron entries and starts paid sessions as a side effect is the wrong default, and two of the three are irreversible in the direction that matters — spent quota is the one damage no cleanup reverses (§5.1.1). §9.10 also contradicted §8.7 outright on the KB cache; §8.7 wins. The outbox flush stays as the one deliberate exception, because §9.10's offline `stop` promises delivery "on next contact" and nothing else would ever deliver it. "Idempotent" is restated precisely: calling `start` twice does not do the work twice, rather than the old and false "is a no-op". §9.10, §2.5.1, §2.7.5, §2.7.4. |
 | D-51 | Sandbox default | **Opt-out: `sandbox.enabled: true`, and the §9.3 questionnaire defaults the answer to Yes** | Was opt-in, on the reasoning that "an added dependency should be opted into, not defaulted on" — yoloAI is a separate binary from yoloai.dev, so defaulting on would fail first run for everyone without it. That reasoning stopped holding once two things existed: §9.3 asks at the one moment a human is certainly at a terminal (`install.sh` cannot — piping it to a shell binds stdin to the pipe), and `rite doctor` verifies by starting a real sandbox and tearing it down rather than by finding a file on PATH. A machine without yoloAI now gets a question it can answer and a row naming what is missing, not a first-run failure. On a platform with no backend rite has verified, §9.3 does not ask at all and says why in one line. **Not a precedent for migrating defaults into this register:** numeric defaults keep their rationale in `config/models.py` beside the value, which is where someone changing one will read it. |
+| D-52 | Existing project specs | **Point at them, never inline them** | A spec is routinely thousands of lines — rite's own is ~3,800. Inlining one into every Worker's context on every job spends, on repetition, exactly the quota this tool exists to make last overnight. It is the same arithmetic that produced D-1: an MCP call costs an LLM turn, so the cheap-per-call-but-constant thing loses to the one-off. Workers get the path and the citation convention and read what the ticket needs. `.rite/context/` was considered and rejected as the mechanism: it copies (`shutil.copyfile`) and caps an entry at 4,096 bytes, so rite's own spec would be flagged `oversize` by `rite doctor` on every run, and a copy goes stale silently the moment the original is edited. §9.13. |
 
 
 ---

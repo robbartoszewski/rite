@@ -34,6 +34,7 @@ from rite_ai.config.models import (
     ScanPattern,
     ScheduleConfig,
     ScheduleWindow,
+    SpecConfig,
     TicketBackendConfig,
 )
 from rite_ai.config.parse import ParseError, parse_config
@@ -85,6 +86,10 @@ def _populated() -> ProjectConfig:
             credential="jira_token",
         ),
         expertise=[ExpertiseEntry(name="alice", tags=["billing", "auth"])],
+        spec=SpecConfig(
+            paths=["SPEC.md", "docs/adr/"],
+            convention="Decisions are cited as D-<number>.",
+        ),
         publish_gate=PublishGateConfig(
             scan_patterns=[
                 ScanPattern(

@@ -26,6 +26,7 @@ from rite_ai.config.models import (
     ProjectBrief,
     ProjectConfig,
     SandboxConfig,
+    SpecConfig,
     TicketBackendConfig,
 )
 from rite_ai.credentials.store import make_namespace
@@ -64,6 +65,70 @@ class InitAnswers:
     modules: list[Module]
     config: ProjectConfig
     kb: KbAnswers
+
+
+def _resolve_spec(
+    preset: dict, interactive: bool, ui, root: Path, modules: list[Module]
+) -> SpecConfig:
+    """Point Workers at the spec this project already has.
+
+    Detect and propose, never ask blank. "Where is your spec?" put to
+    someone who has one is a question they have to answer by typing a path
+    rite could have found, and put to someone who has none it is a question
+    with no good answer.
+
+    Nothing is copied and nothing is read beyond the one scan that decides
+    whether to propose a citation convention. A spec is thousands of lines
+    and it changes; the worker gets the path and reads what its ticket
+    needs.
+    """
+    from rite_ai.cli.init.detect import (
+        SPEC_DIRS,
+        SPEC_FILES,
+        detect_decision_convention,
+        detect_spec_paths,
+    )
+
+    preset_paths = preset.get("spec.paths")
+    if preset_paths is not None:
+        paths = (
+            [str(v) for v in preset_paths]
+            if isinstance(preset_paths, list)
+            else [s.strip() for s in str(preset_paths).split(",") if s.strip()]
+        )
+        return SpecConfig(
+            paths=paths,
+            convention=str(preset.get("spec.convention", ""))
+            or detect_decision_convention(root, paths),
+        )
+
+    found = detect_spec_paths(root, [m.path for m in modules])
+    if not found:
+        if interactive:
+            looked_for = ", ".join([*SPEC_FILES, *(d + "/" for d in SPEC_DIRS)])
+            ui.note(
+                f"No spec found (looked for {looked_for} in the project root "
+                "and each module). Add one later with `rite spec add <path>` "
+                "so Workers can read it."
+            )
+        return SpecConfig()
+
+    if not interactive:
+        return SpecConfig(
+            paths=found, convention=detect_decision_convention(root, found)
+        )
+
+    ui.note("Found a spec: " + ", ".join(f"`{p}`" for p in found))
+    if not ui.confirm("Point Workers at it?", default=True):
+        ui.note("Not recorded — add it later with `rite spec add <path>`.")
+        return SpecConfig()
+
+    convention = detect_decision_convention(root, found)
+    if convention:
+        ui.note(f"Tickets appear to cite decisions: {convention}")
+        if not ui.confirm("Tell Workers that convention?", default=True):
+            convention = ""
+    return SpecConfig(paths=found, convention=convention)
 
 
 def _resolve_sandbox(preset: dict, interactive: bool, ui) -> tuple[bool, str]:
@@ -314,6 +379,7 @@ def run_questionnaire(
         )
 
     sandbox_enabled, sandbox_backend = _resolve_sandbox(preset, interactive, ui)
+    spec = _resolve_spec(preset, interactive, ui, root, modules)
 
     # --- Section 7: Knowledge ---
     ui.section("Knowledge", 7, 7)
@@ -365,6 +431,7 @@ def run_questionnaire(
         ticket_backend=ticket_backend,
         credentials=CredentialsConfig(namespace=make_namespace(name)),
         sandbox=SandboxConfig(enabled=sandbox_enabled, backend=sandbox_backend),
+        spec=spec,
     )
     if borrowed_config is not None:
         config.expertise = borrowed_config.expertise

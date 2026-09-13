@@ -14,8 +14,13 @@ from pathlib import Path
 
 import yaml
 
-from rite_ai.config.models import Module, WorkerManifest
-from rite_ai.config.parse import parse_modules
+from rite_ai.config.models import (
+    Module,
+    ProjectConfig,
+    SpecConfig,
+    WorkerManifest,
+)
+from rite_ai.config.parse import parse_config, parse_modules
 from rite_ai.state import locked, write_atomic
 
 
@@ -315,7 +320,7 @@ def add_worker(
         claude_instructions=instructions,
     )
     _write_worker_manifest(worker_dir, manifest)
-    _write_worker_claude_config(worker_dir, manifest)
+    _write_worker_claude_config(worker_dir, manifest, _spec_config(root))
 
     return AddWorkerResult(
         True,
@@ -549,7 +554,46 @@ def _install_worker_review_convention(claude_dir: Path) -> None:
     shutil.copyfile(src / "commands" / "review.md", commands_dir / "review.md")
 
 
-def _write_worker_claude_config(worker_dir: Path, manifest: WorkerManifest) -> None:
+def _spec_config(root: Path) -> SpecConfig:
+    """This project's spec pointers, or an empty one if config is
+    unreadable — a Worker workspace is still worth creating when the spec
+    section is missing or malformed."""
+    config = parse_config(root / ".rite" / "config.yaml")
+    return config.spec if isinstance(config, ProjectConfig) else SpecConfig()
+
+
+def _spec_section(spec: SpecConfig) -> str:
+    """The pointer a Worker reads. Paths and the convention, never the
+    content: a spec runs to thousands of lines, and pasting it into every
+    Worker's context on every job spends the quota this tool exists to
+    make last overnight.
+
+    The closing line is the load-bearing one. rite has no way to tell
+    whether a spec still describes the code — and a stale spec handed over
+    confidently is worse than none, because the Worker implements it and
+    nobody finds out until review. Naming the limit turns that from a
+    silent defect into a reported one."""
+    if not spec.paths:
+        return ""
+    listed = "\n".join(f"- `{p}`" for p in spec.paths)
+    convention = f"\n{spec.convention}\n" if spec.convention else ""
+    return f"""
+## Project spec
+
+This project's design lives in:
+
+{listed}
+
+Read what your ticket needs; do not read it all.
+{convention}
+rite cannot tell whether this is current. If it contradicts the code, say so
+in the ticket rather than silently implementing either.
+"""
+
+
+def _write_worker_claude_config(
+    worker_dir: Path, manifest: WorkerManifest, spec: SpecConfig | None = None
+) -> None:
     claude_dir = worker_dir / ".claude"
     claude_dir.mkdir(exist_ok=True)
     _install_worker_review_convention(claude_dir)
@@ -571,6 +615,8 @@ def _write_worker_claude_config(worker_dir: Path, manifest: WorkerManifest) -> N
         else ""
     )
 
+    spec_section = _spec_section(spec or SpecConfig())
+
     md = f"""\
 # CLAUDE.md — Worker {manifest.name}
 
@@ -579,7 +625,7 @@ tickets, implement, open PRs, and hand back. You do not make project-wide
 decisions.
 
 {manager_line}
-{extra}
+{extra}{spec_section}
 ## Your modules
 
 {modules_lines or "_(none)_"}

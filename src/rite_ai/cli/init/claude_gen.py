@@ -123,6 +123,7 @@ def generate_claude_md(
         _header(brief),
         _startup_section(),
         _what_this_is(brief),
+        _spec_section(config),
         _modules_section(modules, project_root),
         _role_section(role, config),
         _ticket_workflow_section(),
@@ -133,6 +134,31 @@ def generate_claude_md(
         _commands_section(),
     ]
     return "\n\n".join(p.strip() for p in parts) + "\n"
+
+
+def _spec_section(config: ProjectConfig) -> str:
+    """Where the project's own design lives — paths, never content.
+
+    The same pointer a Worker gets, because a Manager writing tickets that
+    cite decisions needs to reach the register those numbers refer to.
+    Empty when no spec is configured, rather than a heading explaining
+    that there is nothing under it."""
+    spec = config.spec
+    if not spec.paths:
+        return ""
+    listed = "\n".join(f"- `{p}`" for p in spec.paths)
+    convention = f"\n{spec.convention}\n" if spec.convention else ""
+    return f"""## Project spec
+
+This project's design lives in:
+
+{listed}
+
+Point Workers at it in tickets rather than restating it; read what you need
+rather than all of it.
+{convention}
+rite cannot tell whether this is current. If it contradicts the code, say so
+in the ticket rather than silently implementing either."""
 
 
 def _header(brief: ProjectBrief) -> str:
