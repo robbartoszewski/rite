@@ -63,7 +63,11 @@ rite doctor                  # tools and credentials — non-zero on problems
 
 ## Install
 
-**Not on PyPI yet.** Needs `uv` or `pipx`, `git`, and Python 3.11+.
+**Not on PyPI yet.** Needs `uv` or `pipx`, `git`, Python 3.11+, and a
+signed-in Claude Code. rite hands sessions your environment, so an exported
+`ANTHROPIC_API_KEY` is inherited — which Claude Code [bills per token rather
+than to your subscription](https://support.claude.com/en/articles/11145838-use-claude-code-with-your-pro-or-max-plan).
+Unset it to run on your plan.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/robbartoszewski/rite/v0.1.0/install.sh | sh
@@ -75,6 +79,16 @@ slower paths — verify the checksum first, or clone and read it — are in
 phones home.*
 
 ## Why you might not want it
+
+**It runs on Pro; what it is *for* may not.** Starting a worker needs no more
+than a signed-in Claude Code. But rite neither meters nor throttles — workers
+spend your Claude Code quota in parallel, so N of them burn it at roughly N
+times one session's rate, against a quota [shared with Claude on a rolling
+window](https://support.claude.com/en/articles/14552983-models-usage-and-limits-in-claude-code).
+The plan you need scales with how many workers you run and for how long; Pro
+exhausts sooner than Max. Nor does it end gracefully: rite never reads a
+session's exit status, so a worker that runs out stops where it stands, claim
+still held until you `rite release` it.
 
 **Nothing starts a session for you.** rite sets up the workspace and the
 config; starting Claude is your explicit action.
