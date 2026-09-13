@@ -133,6 +133,23 @@ SERVICES: dict[str, Service] = {
             "`rite add worker` walks through it (§5.3.4)."
         ),
     ),
+    "claude": Service(
+        name="claude",
+        label="Claude Code — the login a sandboxed Worker uses",
+        # A sandboxed session cannot read the Claude login in the macOS
+        # keychain and reports that its login has expired. The token
+        # `claude setup-token` prints is yoloAI's documented answer; storing
+        # it here means every sandbox gets it, whichever terminal started it.
+        fields=(
+            Field(
+                "token",
+                "Claude Code OAuth token (from `claude setup-token`)",
+                secret=True,
+                env="CLAUDE_CODE_OAUTH_TOKEN",
+            ),
+        ),
+        note="Run `claude setup-token` first; it prints the token to paste here.",
+    ),
 }
 
 

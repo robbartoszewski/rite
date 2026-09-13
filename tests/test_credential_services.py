@@ -32,6 +32,15 @@ class TestEveryServiceCarriesItsOwnFields:
         github = SERVICES["github"]
         assert [f.name for f in github.fields] == ["token"]
 
+    def test_claude_is_one_secret_delivered_as_the_oauth_token(self):
+        """What `claude setup-token` prints, injected under the name yoloAI
+        reads for the claude agent."""
+        claude = SERVICES["claude"]
+        assert [(f.name, f.secret, f.env) for f in claude.fields] == [
+            ("token", True, "CLAUDE_CODE_OAUTH_TOKEN")
+        ]
+        assert service_key("claude", "token") == "claude_token"
+
     def test_jira_asks_for_the_address_before_the_secret(self):
         jira = SERVICES["jira"]
         assert [f.name for f in jira.fields] == ["site", "email", "token", "board"]

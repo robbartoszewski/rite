@@ -198,21 +198,36 @@ def _resolve_sandbox(preset: dict, interactive: bool, ui) -> tuple[bool, str]:
             # take. The setting can still be turned on; `rite doctor` then
             # reports the sandbox as not working until yoloAI is there,
             # which is the honest state rather than a silent No.
-            return _answer(default_backend)
+            return _with_login_note(ui, _answer(default_backend))
 
     # --- Branch 1 (or branch 3 discovered late, once yoloAI can answer) ---
     choice = choose_backend()
     if isinstance(choice, CountUnavailable):
         if interactive:
             ui.note(f"could not ask yoloAI which backends work here: {choice.reason}")
-        return _answer(default_backend)
+        return _with_login_note(ui, _answer(default_backend))
     if not choice.usable:
         ui.note(
             f"Workers will not be sandboxed: {choice.reason}. "
             "Everything else works normally."
         )
         return False, default_backend
-    return _answer(choice.name)
+    return _with_login_note(ui, _answer(choice.name))
+
+
+def _with_login_note(ui, answer: tuple[bool, str]) -> tuple[bool, str]:
+    """Say, at setup, what a sandboxed Worker needs that init does not ask.
+
+    The token is a secret, and init does not take secrets: the secret path
+    stays in `rite credential set`. Without it a sandboxed Worker starts and
+    does nothing, which is a bad thing to discover at 2am."""
+    if answer[0]:
+        ui.note(
+            "A sandboxed Worker cannot use your Claude login from the keychain. "
+            "Before starting one, run `claude setup-token`, then "
+            "`rite credential set claude` to store the token it prints."
+        )
+    return answer
 
 
 def _offer_yoloai_install(ui, prefs, install_yoloai, yoloai_install_command) -> None:

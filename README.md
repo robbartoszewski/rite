@@ -37,7 +37,8 @@ sessions on one machine only.
 ## How work moves through rite
 
 Spec, plan, tickets, implementation. The last step — a worker taking a ticket
-to a merged PR — works end to end today. The first three are wholly or partly
+to a merged PR — is built. In a sandbox, its parts have each been run, but not
+yet one worker taking a ticket all the way through. The first three are wholly or partly
 yours; each step's heading line says which.
 
 Commands starting with `/` are typed into a Claude Code session; `rite …`
@@ -54,7 +55,8 @@ below:
   `rite add worker <name>` creates. Its `CLAUDE.md` tells it how to work a
   ticket.
 
-You open both yourself.
+You open both yourself, or start a sandboxed worker with `rite sandbox start`
+(step 4).
 
 **1. Spec** — yours to write; rite points workers at it
 
@@ -64,7 +66,9 @@ You write the design, or you already have one. `rite init` looks for
 `rite spec add <path>` adds one later, for workers created after that.
 Worker sessions get the path, never a copy, and read what their ticket needs.
 Beyond one scan at init for how the spec cites decisions, rite does not read
-it, so it cannot tell you whether it is current.
+it, so it cannot tell you whether it is current. A sandboxed worker cannot read
+files at the project root, so it sees a spec only when the spec lives inside a
+module; keep one it should read in a module's repository.
 
 **2. Plan** — yours; rite has no planning step
 
@@ -104,6 +108,49 @@ checklist), a PR, and `rite release` after the merge. Several worker sessions
 can run at once: if one claims a path that overlaps a path another holds, rite
 refuses the claim, and each worker's instructions say not to touch paths
 another worker holds.
+
+If sandboxing is on (the default on macOS), start the worker from the project
+root instead of opening it yourself — a session you open yourself is not
+sandboxed, whatever the setting says. Before the first one, once per project
+(these need rite v0.2.0 or later):
+
+```bash
+claude setup-token            # prints a long-lived Claude login token
+rite credential set claude    # paste it: a sandbox cannot use your keychain login
+rite credential set github    # a token with Contents and Pull requests read/write
+```
+
+and install GitHub's `gh` CLI, which git inside the sandbox is set to
+authenticate through, using that token; `gh` needs no login of its own. A commit pushed from inside a sandbox this way has been
+measured reaching GitHub. Sandboxed pushes run the repository's own hooks,
+never your global ones, so a global pre-push hook such as a secret scan does
+not run there. `rite doctor`
+reports a missing Claude login as a problem. Then, per ticket:
+
+```bash
+rite sandbox start alpha --ticket RW-12     # GitHub Issues: --ticket 42
+                                            # no board: --prompt "<what to do>"
+```
+
+Start prepares the worker's workspace first and refuses one it cannot prepare,
+saying what to do. The ticket arrives as the session's opening prompt, so you
+don't need to attach. After the prepare summary, start prints the sandbox's
+name and a `yoloai attach <name>` command for watching the session or typing
+to it (detach with `Ctrl-b d`). That session's first screen shows the credentials
+passed in, in plain text, so don't share or record it; `rite sandbox pane`
+shows it with them redacted.
+
+The worker edits a copy of its workspace that is discarded with the sandbox,
+so its work survives only as a pushed branch. Its `CLAUDE.md` tells it to push
+after every commit; anything it has not pushed is gone with the sandbox, and
+`rite sandbox destroy` refuses while its copy holds such work. A module whose origin
+is a local directory rather than a URL cannot be pushed from a sandbox. Its
+`CLAUDE.md` takes it through the PR, the merge and `rite release`, so it has
+finished when `rite status` no longer lists its claims; then
+`rite sandbox destroy alpha`. If its session ends before that, merge the PR
+yourself and run `rite release --worker alpha`.
+[Starting a sandboxed worker](docs/guide.md#starting-a-sandboxed-worker) has
+the rest.
 
 When you come back, `rite status` lists each worker and the paths it has
 claimed; then read the PRs.
@@ -147,7 +194,12 @@ rite doctor                  # tools and credentials — non-zero on problems
 signed-in Claude Code. rite hands sessions your environment, so an exported
 `ANTHROPIC_API_KEY` is inherited — which Claude Code [bills per token rather
 than to your subscription](https://support.claude.com/en/articles/11145838-use-claude-code-with-your-pro-or-max-plan).
-Unset it to run on your plan.
+Unset it to run on your plan. Sandboxed workers need a little more: a Claude
+login token stored with `rite credential set claude` (step 4 above), a GitHub
+credential stored with `rite credential set github` and GitHub's `gh` CLI for
+pushing, and rite installed as below, under `~/.local`. A `rite`
+installed anywhere else in your home directory, such as a project virtualenv,
+cannot run inside a sandbox.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/robbartoszewski/rite/v0.1.0/install.sh | sh
@@ -176,7 +228,8 @@ Nothing in this section exists yet. Each item is designed, the design is in
 ## Why you might not want it
 
 **It runs on Pro; what it is *for* may not.** Starting a worker needs no more
-than a signed-in Claude Code. But rite neither meters nor throttles — workers
+than a signed-in Claude Code, plus a token from `claude setup-token` if it
+runs sandboxed. But rite neither meters nor throttles — workers
 spend your Claude Code quota in parallel, so N of them burn it at roughly N
 times one session's rate, against a quota [shared with Claude on a rolling
 window](https://support.claude.com/en/articles/14552983-models-usage-and-limits-in-claude-code).
@@ -186,7 +239,8 @@ session's exit status, so a worker that runs out stops where it stands, claim
 still held until you `rite release` it.
 
 **Nothing starts a session for you.** rite sets up the workspace and the
-config; starting Claude is your explicit action.
+config; starting Claude is your explicit action — opening a session, or typing
+`rite sandbox start`.
 
 **No gates on your code.** Your sessions run your tests and linters — that is
 what rite tells them to do — but rite does not read the results, so there is
@@ -204,7 +258,8 @@ is planned.
 worker holds the same project-scoped credentials, so assignment picks
 whichever is free rather than whichever *can*.
 
-**Tested on macOS 26.2**, where everything above has been run end to end.
+**Tested on macOS 26.2**, where everything above has been run end to end,
+except a sandboxed worker taking a ticket all the way through (step 4).
 Linux is implemented but unverified on real hardware. Windows is not
 attempted.
 

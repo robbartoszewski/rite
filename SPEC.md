@@ -1308,8 +1308,10 @@ backend, and what that backend actually restricts.
 ⚠ **And rite exposes no way to ask for network isolation on any backend.**
 `SandboxConfig` (`config/models.py`) has fields for `enabled`, `backend`,
 `token_permissions` and `max_concurrent_workers` — and nothing for the network.
-`start_worker` passes `new --backend <b> --agent claude [--env TOKEN=…] <name>
-<workdir>` and nothing else: never `--network-isolated`, never `--network-none`.
+`start_worker` passes `new --backend <b> --agent claude`, an `--env` per credential
+plus `RITE_PROJECT_ROOT` and git's `GIT_CONFIG_*` settings, its `-d` mounts, an
+optional `--prompt-file`, `<name>` and `<workdir>` — never `--network-isolated`,
+never `--network-none`.
 **Until such a field exists, every rite-managed sandbox has unrestricted outbound
 network, on every backend.** That is a statement about rite, and it is the one that
 matters here — the backend differences below decide only what rite *could* ask for.
@@ -1381,8 +1383,14 @@ allowlist at all.
   Prefer `rite sandbox destroy` over `rite sandbox stop` once a token is no longer
   wanted on a machine, and rotate it if a stopped sandbox has been sitting
   around** (§10 already requires rotation to be cheap for exactly this reason).
-  Note that `destroy` passes `--abandon-unapplied`, so it discards a Worker's
-  unapplied changes along with the sandbox — land the work first.
+  Note that `destroy` passes `--abandon-unapplied`, so it discards whatever is
+  in the sandbox's copy of the Worker's workspace. A Worker's work leaves by
+  pushing its branch; anything not pushed is gone. So `destroy` first reads
+  the copy with local git and refuses, without `--force`, while it holds
+  uncommitted changes or commits on no remote, naming module, branch and
+  count; `stop` reports the same and stops anyway. The copy's location is
+  yoloAI's layout as measured on 0.11.0, not an interface: a copy that
+  cannot be found is reported, not taken as safe.
 - **Short expiry, easy rotation** — the same principle §10 already states for every
   credential rite manages: a credential that's painful to rotate never gets rotated.
 - **GitHub App installation tokens** (short-lived, scoped to the app's installation)
@@ -2434,7 +2442,7 @@ rite release --force <paths...> --by <name> --reason <text>
                                     # force-release another session's paths, with
                                     # attribution and a recorded reason (§5.2)
 
-rite board create/move/list/query/label/link/assign
+rite board create/move/list/query/show/label/link/assign
                                     # mechanical ticket-backend CRUD (§6.1) — NOT
                                     #   `rite ticket`, which names the Dispatch
                                     #   end-to-end workflow instead (D-40).
@@ -2473,7 +2481,25 @@ rite scheduler status              # is it registered (cadence readback is not
                                     #   implemented — see §9.12)
 rite scheduler uninstall           # deregister it
 
-rite sandbox start <worker>        # process-isolate a Worker's session via yoloAI (§5.3).
+rite sandbox start <worker> [--ticket ID | --prompt TEXT]
+                                    # process-isolate a Worker's session via yoloAI (§5.3).
+                                    #   Prepares the workspace first (as `rite prepare`)
+                                    #   and refuses when it cannot. The opening prompt goes
+                                    #   in as a prompt file. The Worker works on yoloAI's
+                                    #   full copy (`:copy-all`, gitignored files included:
+                                    #   the default `:copy` omits them and nested repos
+                                    #   inside a git repository) of workers/<worker>/,
+                                    #   so its work leaves only
+                                    #   by being pushed; .rite/ is mounted writable and each
+                                    #   local repository its clones fetch from read-only,
+                                    #   which a module with such an origin cannot push to.
+                                    #   Git inside is set to authenticate github.com through
+                                    #   `gh`, not to sign, and to run only each repository's
+                                    #   own hooks (`core.hooksPath=.git/hooks`), never global ones. The Claude login stored by
+                                    #   `rite credential set claude` goes to yoloAI as
+                                    #   CLAUDE_CODE_OAUTH_TOKEN; without one start says the
+                                    #   session will do nothing, and `rite doctor` counts it
+                                    #   a problem. Start prints the name for `yoloai attach`.
                                     #   `sandbox.enabled` does NOT gate these commands —
                                     #   it governs SETUP: scoped-token provisioning in
                                     #   `rite add worker`, and whether `rite doctor`
@@ -2483,7 +2509,9 @@ rite sandbox status <worker>       # is that Worker's sandbox running — exit 1
                                     #   question could not be answered, which is not the
                                     #   same as "no sandbox"
 rite sandbox stop <worker>         # stop it, keep it
-rite sandbox destroy <worker>      # stop it and discard its state
+rite sandbox destroy <worker> [--force]
+                                    # stop it and discard its state; refuses while
+                                    #   its copy holds work on no remote (§5.3.3)
 
 rite review                        # run the review convention with checklists
 rite publish check                 # dry-run the publish gate (§11) — exit 0 clean,
@@ -3191,7 +3219,8 @@ Two rules behind the table:
   .git/hooks/pre-push` for a hook `core.hooksPath` guarantees git will never read
   is the same lie told at setup time rather than at run time.
 - **Read-only means read-only.** `rite status`, `rite doctor`, `rite pool status`,
-  `rite handover show`, `rite budget`, `rite schedule show`, `rite board list` and
+  `rite handover show`, `rite budget`, `rite schedule show`, `rite board list`,
+  `rite board show` and
   `rite publish check` create no directory, write no state, and spawn no session.
   A probe with a side effect is not a probe.
 
@@ -3406,8 +3435,12 @@ credentials exactly as much as to any other project's.
 Two consequences follow, and both are design, not accident:
 
 - **For a sandboxed Worker the boundary is real and total**, and it is *why*
-  `rite sandbox start` injects the token with `--env` (D-31): the Worker cannot
-  fetch it. The host process decides which single token to inject, and the
+  `rite sandbox start` injects the token with `--env` (D-31): the Worker cannot fetch it. Measured
+  on yoloAI 0.11.0 with Seatbelt, `--env` values do not stay out of sight
+  inside: yoloAI types them into the session's shell as `export NAME='value'`
+  in its launch command, so they are on the session's screen, which
+  `yoloai attach` shows. `rite sandbox pane`, which Claude sessions read,
+  redacts them. The host process decides which single token to inject, and the
   sandbox stops the Worker going around that decision. Namespacing determines
   *which* token the host picks — it is not what protects it.
 - **For an unsandboxed Worker the namespace is convention only.** `sandbox.enabled`
@@ -3463,6 +3496,9 @@ and rite then asks for the fields JIRA has, in order, in the user's words.
 ```
 rite credential set jira        # asks: account email, then API token
 rite credential set github      # asks: token. No username — see below
+rite credential set claude      # asks: the token `claude setup-token` prints, which
+                                #   `rite sandbox start` passes in (a sandbox cannot
+                                #   read the keychain's Claude login)
 ```
 
 **Each service carries its own field list** (`credentials/services.py`), and

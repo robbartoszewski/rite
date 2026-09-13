@@ -56,6 +56,20 @@ class TestBranchOneVerifiedBackend:
         assert (enabled, backend) == (True, "seatbelt")
         assert any("Run Workers in sandboxes?" in q for q in ui.questions)
 
+    def test_yes_says_how_a_sandboxed_worker_logs_in(self):
+        """init takes no secrets, so it names the two commands instead."""
+        ui = _Ui([True])
+        with (
+            patch.object(sb, "platform_can_sandbox", return_value=True),
+            patch.object(sb, "is_installed", return_value=True),
+            patch.object(
+                sb, "choose_backend", return_value=sb.BackendChoice("seatbelt")
+            ),
+        ):
+            _resolve(ui)
+        assert "claude setup-token" in ui.said()
+        assert "rite credential set claude" in ui.said()
+
     def test_no_is_respected(self):
         ui = _Ui([False])
         with (
@@ -67,6 +81,7 @@ class TestBranchOneVerifiedBackend:
         ):
             enabled, _ = _resolve(ui)
         assert enabled is False
+        assert "rite credential set claude" not in ui.said()
 
 
 class TestBranchThreeNoVerifiedBackend:

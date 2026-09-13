@@ -34,6 +34,9 @@ KNOWN_CREDENTIALS: dict[str, str] = {
     "jira_email": "JIRA account email — the address you log in with",
     "jira_token": "JIRA API token",
     "github_token": "GitHub personal access token",
+    "claude_token": (
+        "Claude Code OAuth token — from `claude setup-token`, for sandboxed Workers"
+    ),
 }
 
 # Per-worker sandbox tokens are a family, not a fixed name — see
@@ -262,6 +265,24 @@ def project_account(key: str, credentials: object | None) -> str:
     return namespaced(_namespace_of(credentials), key)
 
 
+def service_env_name(key: str) -> str:
+    """The variable a Worker's sandbox receives `key` as — `JIRA_API_TOKEN`
+    for `jira_token` — or "" when it has none.
+
+    `worker_environment` delivers each credential under this name, so the
+    reading side has to look for it too. Inside a sandbox the keychain
+    answers nothing and `RITE_<KEY>` is never set: a lookup that knew only
+    those two made `rite board` fail in every sandbox with the credential
+    sitting in its environment."""
+    from rite_ai.credentials.services import SERVICES, service_key
+
+    for svc in SERVICES.values():
+        for field in svc.secrets:
+            if field.env and service_key(svc.name, field.name) == key:
+                return field.env
+    return ""
+
+
 def resolve(key: str, credentials: object | None = None) -> Resolved:
     """Where `key` resolves for this project, WITHOUT reading the secret.
 
@@ -274,6 +295,10 @@ def resolve(key: str, credentials: object | None = None) -> Resolved:
          no alternative.
       2. This project's namespaced entry.
       3. The machine-wide entry named by the bare key.
+      4. The service's own variable (`JIRA_API_TOKEN`), which is what a
+         Worker's sandbox receives (`service_env_name`). Last, so a
+         variable exported in a host shell never outranks this project's
+         keychain entry.
 
     Tier 3 is what keeps an existing install working: a `jira_token` set
     before this project had a namespace is still found and still used —
@@ -294,6 +319,10 @@ def resolve(key: str, credentials: object | None = None) -> Resolved:
     if info(g_account).source == "keychain":
         return Resolved(key, GLOBAL, g_account, p_account, g_account)
 
+    injected = service_env_name(key)
+    if injected and os.environ.get(injected):
+        return Resolved(key, ENV, injected, p_account, g_account)
+
     return Resolved(key, NOT_FOUND, "", p_account, g_account)
 
 
@@ -309,7 +338,12 @@ def get_scoped(key: str, credentials: object | None = None) -> str | None:
         val = _keychain_get(p_account)
         if val:
             return val
-    return _keychain_get(key)
+    val = _keychain_get(key)
+    if val:
+        return val
+    # Tier 4 of `resolve`: last, for the same reason.
+    injected = service_env_name(key)
+    return (os.environ.get(injected) or None) if injected else None
 
 
 def get_account(account: str) -> str | None:

@@ -52,7 +52,7 @@ def _missing_credential(key: str, credentials: object | None) -> str:
     from the key is a thing that command explains and a one-line error
     cannot.
     """
-    from rite_ai.credentials.store import project_account
+    from rite_ai.credentials.store import project_account, service_env_name
 
     env = f"RITE_{key.upper()}"
     looked = [f"${env}"]
@@ -62,6 +62,9 @@ def _missing_credential(key: str, credentials: object | None) -> str:
         looked.append(f"keychain '{key}' (machine-global)")
     else:
         looked.append(f"keychain '{key}'")
+    injected = service_env_name(key)
+    if injected:
+        looked.append(f"${injected} (what a sandboxed Worker receives)")
 
     return (
         f"{key} not found — looked in: {', '.join(looked)}.\n"

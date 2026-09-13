@@ -52,6 +52,29 @@ def _parse_jira_datetime(s: str | None) -> datetime | None:
         return None
 
 
+def adf_to_text(node: object) -> str:
+    """Plain text of an Atlassian Document Format value, which is what the
+    v3 API returns for a description: one line per block, text runs joined
+    within it. A plain string passes through."""
+    if isinstance(node, str):
+        return node
+    if isinstance(node, list):
+        return "".join(adf_to_text(n) for n in node)
+    if not isinstance(node, dict):
+        return ""
+    kind = node.get("type")
+    if kind == "text":
+        return node.get("text", "")
+    if kind == "hardBreak":
+        return "\n"
+    inner = adf_to_text(node.get("content") or [])
+    if kind == "listItem":
+        return "- " + inner.strip("\n") + "\n"
+    if kind in ("paragraph", "heading", "codeBlock", "blockquote"):
+        return inner + "\n"
+    return inner
+
+
 def _issue_to_ticket(data: dict) -> Ticket:
     fields = data.get("fields", {})
 
@@ -69,7 +92,7 @@ def _issue_to_ticket(data: dict) -> Ticket:
         status=status,
         assignee=assignee,
         labels=labels,
-        description=fields.get("description") or "",
+        description=adf_to_text(fields.get("description")).strip(),
         url=data.get("self", ""),
         created_at=_parse_jira_datetime(fields.get("created")),
         updated_at=_parse_jira_datetime(fields.get("updated")),

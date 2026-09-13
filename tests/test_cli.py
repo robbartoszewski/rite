@@ -1,4 +1,5 @@
 import subprocess
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from click.testing import CliRunner
@@ -55,6 +56,9 @@ def test_doctor_healthy_project(tmp_path, monkeypatch):
     (rite_dir / "modules.yaml").write_text("modules: {}\n")
     (rite_dir / "config.yaml").write_text("ticket_backend:\n  type: none\n")
     monkeypatch.chdir(tmp_path)
+    # Sandboxing defaults on, and a sandboxed project without a Claude login
+    # for its sandboxes is not healthy.
+    monkeypatch.setenv("RITE_CLAUDE_TOKEN", "sk-ant-oat-test")
 
     runner = CliRunner()
     result = runner.invoke(cli, ["doctor"])
@@ -641,6 +645,9 @@ def test_sandbox_start_passes_provisioned_token_through(tmp_path, monkeypatch):
         "  backend: seatbelt\n"
     )
     (tmp_path / "workers" / "alpha").mkdir(parents=True)
+    (tmp_path / "workers" / "alpha" / "worker.yml").write_text(
+        "worker:\n  name: alpha\n  manager: ''\n  modules: []\n"
+    )
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("RITE_SANDBOX_TOKEN_ALPHA", raising=False)
 
@@ -663,8 +670,260 @@ def test_sandbox_start_passes_provisioned_token_through(tmp_path, monkeypatch):
     args = mock_run.call_args[0][0]
     assert "--backend" in args
     assert args[args.index("--backend") + 1] == "seatbelt"
-    assert "--env" in args
-    assert args[args.index("--env") + 1] == "GITHUB_TOKEN=the-stored-token"
+    env_values = [args[i + 1] for i, a in enumerate(args) if a == "--env"]
+    assert "GITHUB_TOKEN=the-stored-token" in env_values
+
+
+def _sandbox_project(tmp_path, monkeypatch):
+    rite_dir = tmp_path / ".rite"
+    rite_dir.mkdir()
+    (rite_dir / "brief.yaml").write_text("project:\n  name: acme\n  role: owner\n")
+    (rite_dir / "modules.yaml").write_text("modules: {}\n")
+    (rite_dir / "config.yaml").write_text(
+        "ticket_backend:\n  type: none\nsandbox:\n  enabled: true\n"
+        "  backend: seatbelt\n"
+    )
+    (tmp_path / "workers" / "alpha").mkdir(parents=True)
+    (tmp_path / "workers" / "alpha" / "worker.yml").write_text(
+        "worker:\n  name: alpha\n  manager: ''\n  modules: []\n"
+    )
+    monkeypatch.chdir(tmp_path)
+
+
+def test_sandbox_start_ticket_becomes_the_opening_prompt(tmp_path, monkeypatch):
+    """`--ticket` is how a sandboxed Worker learns what to do: nothing in
+    rite can type into the session once it is running."""
+    _sandbox_project(tmp_path, monkeypatch)
+    seen: dict = {}
+
+    def _run(args, *a, **kw):
+        if "new" in args:
+            seen["prompt"] = Path(args[args.index("--prompt-file") + 1]).read_text()
+            seen["args"] = args
+        stdout = '{"sandboxes": []}' if "ls" in args else ""
+        return MagicMock(returncode=0, stdout=stdout, stderr="")
+
+    with (
+        patch("keyring.get_password", return_value=None),
+        patch("rite_ai.sandbox.shutil.which", return_value="/usr/local/bin/yoloai"),
+        patch("rite_ai.sandbox.subprocess.run", side_effect=_run),
+    ):
+        result = CliRunner().invoke(
+            cli, ["sandbox", "start", "alpha", "--ticket", "RW-12"]
+        )
+    assert result.exit_code == 0, result.output
+    assert seen["prompt"] == "Work ticket RW-12.\n"
+    assert "yoloai attach rite-" in result.output
+
+
+def test_sandbox_start_refuses_ticket_and_prompt_together(tmp_path, monkeypatch):
+    _sandbox_project(tmp_path, monkeypatch)
+    with patch("rite_ai.sandbox.subprocess.run") as mock_run:
+        result = CliRunner().invoke(
+            cli, ["sandbox", "start", "alpha", "--ticket", "RW-12", "--prompt", "x"]
+        )
+    assert result.exit_code == 2, result.output
+    assert "not both" in result.output
+    mock_run.assert_not_called()
+
+
+def test_sandbox_start_refuses_a_blank_ticket(tmp_path, monkeypatch):
+    _sandbox_project(tmp_path, monkeypatch)
+    with patch("rite_ai.sandbox.subprocess.run") as mock_run:
+        result = CliRunner().invoke(cli, ["sandbox", "start", "alpha", "--ticket", " "])
+    assert result.exit_code == 2, result.output
+    assert "needs a ticket ID" in result.output
+    mock_run.assert_not_called()
+
+
+def test_sandbox_start_refuses_an_unprepared_workspace_and_says_what_to_do(
+    tmp_path, monkeypatch
+):
+    """The sandbox copies the workspace and cannot run `rite prepare`, so a
+    Worker started on a dirty or blocked checkout would work on stale code
+    silently. Start prepares first and refuses, naming the way out."""
+    from rite_ai.workspace.prepare import ModulePrepResult, WorkspacePrepResult
+
+    _sandbox_project(tmp_path, monkeypatch)
+    blocked = WorkspacePrepResult(
+        ok=False,
+        modules=[
+            ModulePrepResult("app", "dirty", False, "uncommitted changes present")
+        ],
+    )
+    with (
+        patch("rite_ai.workspace.prepare_workspace", return_value=blocked),
+        patch("rite_ai.sandbox.subprocess.run") as mock_run,
+    ):
+        result = CliRunner().invoke(
+            cli, ["sandbox", "start", "alpha", "--ticket", "RW-1"]
+        )
+    assert result.exit_code == 1, result.output
+    assert "not starting 'alpha'" in result.output
+    assert "commit and push, or stash" in result.output
+    mock_run.assert_not_called()
+
+
+def test_sandbox_start_prepares_before_it_starts(tmp_path, monkeypatch):
+    from rite_ai.workspace.prepare import WorkspacePrepResult
+
+    _sandbox_project(tmp_path, monkeypatch)
+    order: list[str] = []
+
+    def prep(*a, **kw):
+        order.append("prepare")
+        return WorkspacePrepResult(ok=True, modules=[])
+
+    def run(args, *a, **kw):
+        if "new" in args:
+            order.append("new")
+        stdout = '{"sandboxes": []}' if "ls" in args else ""
+        return MagicMock(returncode=0, stdout=stdout, stderr="")
+
+    with (
+        patch("keyring.get_password", return_value=None),
+        patch("rite_ai.workspace.prepare_workspace", side_effect=prep),
+        patch("rite_ai.sandbox.shutil.which", return_value="/usr/local/bin/yoloai"),
+        patch("rite_ai.sandbox.subprocess.run", side_effect=run),
+    ):
+        result = CliRunner().invoke(
+            cli, ["sandbox", "start", "alpha", "--ticket", "RW-1"]
+        )
+    assert result.exit_code == 0, result.output
+    assert order == ["prepare", "new"]
+
+
+def test_sandbox_start_allow_dirty_skips_prepare_and_says_so(tmp_path, monkeypatch):
+    _sandbox_project(tmp_path, monkeypatch)
+
+    def run(args, *a, **kw):
+        stdout = '{"sandboxes": []}' if "ls" in args else ""
+        return MagicMock(returncode=0, stdout=stdout, stderr="")
+
+    with (
+        patch("keyring.get_password", return_value=None),
+        patch("rite_ai.workspace.prepare_workspace") as mock_prep,
+        patch("rite_ai.sandbox.shutil.which", return_value="/usr/local/bin/yoloai"),
+        patch("rite_ai.sandbox.subprocess.run", side_effect=run),
+    ):
+        result = CliRunner().invoke(
+            cli, ["sandbox", "start", "alpha", "--allow-dirty", "--ticket", "RW-1"]
+        )
+    assert result.exit_code == 0, result.output
+    assert "not preparing workers/alpha/" in result.output
+    mock_prep.assert_not_called()
+
+
+def test_sandbox_start_warns_about_instructions_from_before_sandboxing(
+    tmp_path, monkeypatch
+):
+    _sandbox_project(tmp_path, monkeypatch)
+    claude_md = next(tmp_path.rglob("workers/alpha")) / "CLAUDE.md"
+    claude_md.write_text("# Worker alpha\n\nOld instructions.\n")
+
+    def run(args, *a, **kw):
+        stdout = '{"sandboxes": []}' if "ls" in args else ""
+        return MagicMock(returncode=0, stdout=stdout, stderr="")
+
+    with (
+        patch("keyring.get_password", return_value=None),
+        patch("rite_ai.sandbox.shutil.which", return_value="/usr/local/bin/yoloai"),
+        patch("rite_ai.sandbox.subprocess.run", side_effect=run),
+    ):
+        result = CliRunner().invoke(
+            cli, ["sandbox", "start", "alpha", "--allow-dirty", "--ticket", "RW-1"]
+        )
+    assert "was written before sandboxed Workers" in result.output
+    assert "rite remove worker alpha" in result.output
+
+
+def test_sandbox_destroy_force_reaches_destroy_worker(tmp_path, monkeypatch):
+    from rite_ai.sandbox import SandboxResult
+
+    _sandbox_project(tmp_path, monkeypatch)
+    with patch(
+        "rite_ai.sandbox.destroy_worker", return_value=SandboxResult(True, "gone")
+    ) as destroy:
+        result = CliRunner().invoke(cli, ["sandbox", "destroy", "alpha", "--force"])
+    assert result.exit_code == 0, result.output
+    assert destroy.call_args.kwargs["force"] is True
+
+
+def test_sandbox_pane_never_prints_an_injected_credential(tmp_path, monkeypatch):
+    """The pane is read by Claude sessions. A stored credential that appears
+    on screen — wrapped across lines, and not in an export statement — must
+    not reach the output."""
+    _sandbox_project(tmp_path, monkeypatch)
+    for name in (
+        "RITE_JIRA_TOKEN",
+        "JIRA_API_TOKEN",
+        "GITHUB_TOKEN",
+        "RITE_GITHUB_TOKEN",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    known = "ghp_KnownStoredValue0123456789abcdef"
+    screen = f"$ printenv GITHUB_TOKEN\n{known[:15]}\n{known[15:]}\n$ "
+
+    def run(args, *a, **kw):
+        if "ls" in args:
+            return MagicMock(returncode=0, stdout='{"sandboxes": []}', stderr="")
+        return MagicMock(returncode=0, stdout=screen, stderr="")
+
+    with (
+        patch("keyring.get_password", return_value=known),
+        patch("rite_ai.sandbox.shutil.which", return_value="/usr/local/bin/yoloai"),
+        patch("rite_ai.sandbox.subprocess.run", side_effect=run),
+    ):
+        result = CliRunner().invoke(cli, ["sandbox", "pane", "alpha"])
+    assert result.exit_code == 0, result.output
+    assert known not in result.output.replace("\n", "")
+    assert "[redacted]" in result.output
+
+
+def _doctor_with_sandbox(tmp_path, monkeypatch, extra_env=None):
+    from types import SimpleNamespace
+
+    _sandbox_project(tmp_path, monkeypatch)
+    monkeypatch.delenv("RITE_CLAUDE_TOKEN", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    for k, v in (extra_env or {}).items():
+        monkeypatch.setenv(k, v)
+    ok = SimpleNamespace(
+        ok=True, installed=True, backend="seatbelt", detail="ok", elapsed_ms=1
+    )
+    with (
+        patch("keyring.get_password", return_value=None),
+        patch("rite_ai.sandbox.verify_sandbox", return_value=ok),
+    ):
+        return CliRunner().invoke(cli, ["doctor"])
+
+
+def test_doctor_calls_a_missing_sandbox_login_a_problem(tmp_path, monkeypatch):
+    """Without it a sandboxed Worker starts and silently does nothing."""
+    result = _doctor_with_sandbox(tmp_path, monkeypatch)
+    assert result.output.count("credential claude_token: not set") == 1
+    assert "no Claude login is stored for sandboxes" in result.output
+    assert "rite credential set claude" in result.output
+    assert result.exit_code != 0
+
+
+def test_doctor_is_quiet_about_the_login_once_it_is_stored(tmp_path, monkeypatch):
+    """The same project with the credential present: the problem goes, and
+    only that problem — asserted as a difference, not a bare exit code."""
+    result = _doctor_with_sandbox(
+        tmp_path, monkeypatch, {"RITE_CLAUDE_TOKEN": "sk-ant-oat-test"}
+    )
+    assert "no Claude login is stored for sandboxes" not in result.output
+    assert "sk-ant-oat-test" not in result.output
+
+
+def test_credential_list_names_the_claude_login_when_sandboxing_is_on(
+    tmp_path, monkeypatch
+):
+    _sandbox_project(tmp_path, monkeypatch)
+    with patch("keyring.get_password", return_value=None):
+        result = CliRunner().invoke(cli, ["credential", "list"])
+    assert "claude_token" in result.output, result.output
 
 
 def test_prepare_unknown_worker_refuses(tmp_path, monkeypatch):

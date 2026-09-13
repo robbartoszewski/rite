@@ -145,6 +145,8 @@ class TestDoctorReportsIt:
         root = _project(tmp_path)
         install_pre_push_hook(root)
         monkeypatch.chdir(root)
+        # Sandboxing defaults on; a passing doctor needs the sandbox login.
+        monkeypatch.setenv("RITE_CLAUDE_TOKEN", "sk-ant-oat-test")
 
         result = CliRunner().invoke(cli, ["doctor"])
 

@@ -674,34 +674,61 @@ decisions.
 
 {modules_lines or "_(none)_"}
 {module_commands}
+## Your ticket
+
+You are usually started with a ticket ID ("Work ticket RW-12."). Read that
+ticket with `rite board show <ticket-id>`, which prints its title, status and
+description from the board this project uses, JIRA or GitHub Issues. If it is
+not complete enough to start cold — no
+definition of done, no clear scope — or you cannot read it at all, say so
+and stop rather than guessing.
+
 ## Workflow
 
 1. Prepare your workspace: `rite prepare --worker {manifest.name}` — right
    repos, right branches, no residue from a previous task (SPEC §2.1). A
-   dirty tree blocks and is never discarded.
-2. Claim paths before touching them: `rite claim <paths> --worker {manifest.name}`
-3. Work the ticket.
-4. Run the module's own **test and lint** commands. `rite prepare` prints
+   dirty tree blocks and is never discarded. In a sandbox, `rite sandbox
+   start` already ran it before your session began, and it cannot run from
+   inside: skip it.
+2. Claim paths before touching them:
+   `rite claim <paths> --worker {manifest.name} --ticket <id>`. Claim files or
+   directories, never a whole module. If the claim is refused, another
+   worker holds an overlapping path: do not work on those paths, and do not
+   claim a narrower or wider path to get around the refusal.
+3. While you hold a claim, beat every ten minutes or so:
+   `rite heartbeat --worker {manifest.name} --ticket <id>`. It is the only
+   liveness record `rite status` and the watchdog read — a worker that never
+   beats is reported STALLED.
+4. Work the ticket on its own branch: if a module is on its default branch,
+   create one named for the ticket first (`git checkout -b <ticket-id>`).
+   Push that branch after every commit, not only at the end —
+   `git push -u origin <ticket-id>`. Your work exists outside this session
+   only once it is pushed. In a sandbox this checkout is a copy that is
+   discarded with the sandbox, and a session can stop at any moment, so a
+   commit that was never pushed is gone.
+5. Run the module's own **test and lint** commands. `rite prepare` prints
    them every time it runs, resolved at that moment — those are the ones to
    use. **Module commands** above lists them as `Test:` and `Lint:` as of
    when this Worker was created, and the module map in the
    project root's `CLAUDE.md` has them as of `rite init`; a command recorded
-   in `modules.yaml` since then appears only in `rite prepare`'s output. Run
+   in `modules.yaml` since then appears only in `rite prepare`'s output. In a
+   sandbox `rite prepare` ran before you started and you cannot see its
+   output, so use **Module commands** above. Run
    them as written; where an entry says "not detected", ask rather than
    inventing a command, because one that is wrong in a way that still exits
    0 looks exactly like a passing suite.
-5. Verify your own fix before review. A green suite says the project still
+6. Verify your own fix before review. A green suite says the project still
    works, not that your change does anything — delete the fix and re-run
    whatever proves it.
-6. Run `/review` (the review convention from the project root).
-7. Open a PR, get it reviewed, merge.
-8. Release your claim (after merge, not before): `rite release --worker {manifest.name}`
+7. Run `/review` (the review convention from the project root).
+8. Push your final commits, then open a PR, get it reviewed, and merge.
+9. Release your claim (after merge, not before): `rite release --worker {manifest.name}`
 
 ## What you must not do
 
 - Push directly to the root branch.
 - Make project-wide decisions — escalate to your Manager.
-- Touch paths claimed by another worker.
+- Touch paths claimed by another worker, or work around a refused claim.
 - Open a PR without running the module's test and lint commands.
 - Skip the review convention.
 """

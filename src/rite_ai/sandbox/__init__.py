@@ -29,15 +29,19 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
 from rite_ai.config.models import Module, SandboxConfig
 
 TOKEN_ENV_VAR = "GITHUB_TOKEN"
+CLAUDE_TOKEN_ENV_VAR = "CLAUDE_CODE_OAUTH_TOKEN"
 
 
 def _yoloai_binary() -> str | None:
@@ -706,13 +710,24 @@ def start_worker(
     agent_args: list[str] | None = None,
     env: dict[str, str] | None = None,
     allow_dirty: bool = False,
+    prompt: str | None = None,
 ) -> SandboxResult:
     """Launch a Worker's session inside a fresh sandbox, mounted on that
     Worker's own workspace directory (`workers/<worker>/`, §2.1's
-    per-worker isolation — this extends it to the process). Does not
-    start the agent turn itself; that is a normal `claude` invocation
-    yoloAI runs inside the sandbox with `agent_args` as its arguments."""
+    per-worker isolation — this extends it to the process). The agent is
+    a normal `claude` invocation yoloAI runs inside the sandbox.
+
+    `prompt` is the session's opening instruction — usually which ticket
+    to work. Without one the session starts idle, and nothing in rite can
+    type into a sandbox afterwards (`rite sandbox pane` only reads), so a
+    Worker started without a prompt waits until someone attaches."""
     root = Path(root)
+    if prompt is not None and not prompt.strip():
+        return SandboxResult(
+            False,
+            "empty prompt — give the Worker something to do, or leave the "
+            "prompt out and attach to the session instead",
+        )
     binary = _yoloai_binary()
     if binary is None:
         return SandboxResult(
@@ -765,9 +780,95 @@ def start_worker(
     delivered = dict(env or {})
     if token and TOKEN_ENV_VAR not in delivered:
         delivered[TOKEN_ENV_VAR] = token
+    # The Claude login goes to yoloAI, not to `--env`. yoloAI treats
+    # CLAUDE_CODE_OAUTH_TOKEN as the claude agent's own credential and reads
+    # it from the environment `yoloai new` runs in (`yoloai system agents
+    # claude`), which is also what `yoloai help security` tells a person to
+    # export. Putting the stored one there is what makes it reach every
+    # sandbox, whichever terminal started it.
+    yoloai_env = sandbox_environment()
+    # Git settings from the host shell must not stack on the sandbox's own:
+    # GIT_CONFIG_PARAMETERS would add to them, and a host GIT_CONFIG_COUNT
+    # would compete with the one passed below. Both start GIT_CONFIG_.
+    for inherited in [k for k in yoloai_env if k.startswith("GIT_CONFIG_")]:
+        del yoloai_env[inherited]
+    claude_login = delivered.pop(CLAUDE_TOKEN_ENV_VAR, None)
+    if claude_login:
+        yoloai_env[CLAUDE_TOKEN_ENV_VAR] = claude_login
+    login_note = (
+        []
+        if yoloai_env.get(CLAUDE_TOKEN_ENV_VAR) or yoloai_env.get("ANTHROPIC_API_KEY")
+        else [
+            "  no Claude login for the sandbox, so the session will start and "
+            "do nothing — run `claude setup-token`, then `rite credential set "
+            "claude`, and start the Worker again"
+        ]
+    )
+    # The project root, named rather than found. rite walks up from cwd for
+    # `.rite/`, and inside the sandbox most of that walk is unreadable.
+    delivered.setdefault("RITE_PROJECT_ROOT", str(root))
+    git_notes = []
+    for key, value in sandbox_git_environment(shutil.which("gh")).items():
+        delivered.setdefault(key, value)
+    if shutil.which("gh") is None:
+        git_notes.append(
+            "  gh is not installed, so `git push` over HTTPS cannot authenticate "
+            "from inside — destroy this sandbox, install GitHub's `gh` CLI, and "
+            "start the Worker again"
+        )
     for key in sorted(delivered):
         args += ["--env", f"{key}={delivered[key]}"]
-    args += [sandbox_name(worker, root), str(workdir)]
+    # What the sandbox can reach, and why it is exactly this (SPEC §5.3):
+    #
+    # - the Worker's own `workers/<worker>/`, as yoloAI's isolated copy.
+    #   `rite prepare` runs outside, before the sandbox starts; the Worker's
+    #   work leaves by pushing its branch to origin, and the copy is thrown
+    #   away with the sandbox. Its cwd is outside the project, so the project
+    #   is named with RITE_PROJECT_ROOT rather than found.
+    # - the project's `.rite/`, writable: claims, heartbeats and handover
+    #   live there. yoloAI's `-d` mounts directories, so this is all of
+    #   `.rite/`: a Worker can also rewrite what unsandboxed rite acts on —
+    #   config, modules.yaml commands, gate suppressions, the handover outbox
+    #   posted with the host's credentials, other Workers' heartbeats.
+    # - read-only, each local directory one of the Worker's clones fetches
+    #   from, so git inside can fetch from it. Usually that is the root's own
+    #   checkout of the module, so those files are readable from inside. Being
+    #   read-only, it cannot be pushed to: only a URL origin takes a push. A
+    #   URL origin needs no mount.
+    #
+    # Deliberately NOT the project root. Mounting it writable would let a
+    # Worker edit another Worker's checkout, which is the isolation the
+    # sandbox exists for; yoloAI also refuses a mount that contains the
+    # Worker's directory. Other Workers' directories are neither readable
+    # nor writable from inside.
+    rite_dir = root / ".rite"
+    args += ["-d", f"{rite_dir}:rw"]
+    origins, unmountable = _local_origins(workdir, rite_dir)
+    for origin in origins:
+        args += ["-d", str(origin)]
+    local_origin_notes = [
+        f"  a clone fetches from {origin}, a local directory mounted read-only, "
+        "so that module cannot push from the sandbox — work on it would be "
+        "lost with the sandbox; give the module a URL origin to push from"
+        for origin in origins
+    ]
+    # The prompt goes through yoloAI's prompt file, not `-p` or an agent
+    # argument: on argv it is readable in `ps` and subject to quoting and
+    # length limits. The file is only needed until `yoloai new` has read it.
+    prompt_dir: str | None = None
+    if prompt is not None:
+        prompt_dir = tempfile.mkdtemp(prefix="rite-prompt-")
+        prompt_file = Path(prompt_dir) / "prompt.txt"
+        prompt_file.write_text(prompt if prompt.endswith("\n") else prompt + "\n")
+        args += ["--prompt-file", str(prompt_file)]
+    name = sandbox_name(worker, root)
+    # `:copy-all`, not yoloAI's default `:copy`. Measured on 0.11.0: when the
+    # workdir is inside a git repository — a rite project root is one, and
+    # `rite init` gitignores `workers/` — `:copy` leaves out gitignored files
+    # and nested repositories, so the sandbox received neither the Worker's
+    # CLAUDE.md nor its module clones. `:copy-all` copies the directory as it
+    # is, including gitignored files in the clones, such as a module's `.env`.
+    args += [name, f"{workdir}:copy-all"]
     if agent_args:
         args += ["--", *agent_args]
 
@@ -778,10 +879,13 @@ def start_worker(
             text=True,
             errors="replace",
             timeout=300,
-            env=sandbox_environment(),
+            env=yoloai_env,
         )
     except subprocess.TimeoutExpired:
         return SandboxResult(False, "yoloai new timed out after 300s")
+    finally:
+        if prompt_dir is not None:
+            shutil.rmtree(prompt_dir, ignore_errors=True)
     if proc.returncode != 0:
         detail = proc.stderr.strip() or proc.stdout.strip()
         if "--allow-dirty" in detail and not allow_dirty:
@@ -795,8 +899,201 @@ def start_worker(
                 "  (that advice is yoloai's own flag — from rite, re-run as "
                 "`rite sandbox start <worker> --allow-dirty`)"
             )
+        elif "already exists" in detail:
+            # Same shape: yoloAI suggests `--replace`, which `rite sandbox
+            # start` does not have. Starting a Worker on its next ticket is
+            # destroy, then start.
+            detail = (
+                f"{detail}\n"
+                "  (from rite: `rite sandbox destroy <worker>`, then start it "
+                "again)"
+            )
         return SandboxResult(False, f"yoloai new failed: {detail}")
-    return SandboxResult(True, f"sandbox '{sandbox_name(worker, root)}' started")
+    lines = [
+        f"sandbox '{name}' started",
+        f"  watch or step in: yoloai attach {name}",
+        "  its first screen shows the credentials passed in, in plain text: do not "
+        "share or record it. `rite sandbox pane` shows the screen with them redacted",
+    ]
+    lines.extend(login_note)
+    lines.extend(local_origin_notes)
+    lines.extend(git_notes)
+    for clone_name, origin in unmountable:
+        lines.append(
+            f"  {clone_name}/ fetches from {origin}, which contains the "
+            "Worker's own directory or .rite/ and so cannot be mounted — git "
+            "inside the sandbox cannot fetch from it or push to it"
+        )
+    if prompt is None:
+        lines.append(
+            "  no --ticket or --prompt was given, so unless an --agent-arg "
+            "carries an instruction the session is idle — attach and tell it "
+            "which ticket to work, or destroy it and start again with --ticket"
+        )
+    return SandboxResult(True, "\n".join(lines))
+
+
+def sandbox_git_environment(gh: str | None) -> dict[str, str]:
+    """Git settings for inside a sandbox, as environment variables.
+
+    Passed with `--env`, so they apply to that sandbox's session and change
+    no config file on the host. Git reads `GIT_CONFIG_COUNT` /
+    `GIT_CONFIG_KEY_<n>` / `GIT_CONFIG_VALUE_<n>` after every config file.
+
+    - **Credentials.** The helper git finds on macOS is the keychain
+      (`osxkeychain`, from Xcode's system config), which a Seatbelt sandbox
+      cannot read, so an HTTPS push stops at "could not read Username".
+      The list is reset and github.com is sent to `gh auth git-credential`;
+      `gh` takes its token from `GH_TOKEN` or `GITHUB_TOKEN` (`gh help
+      environment`), which rite injects. The path is shell-quoted because
+      git runs a `!` helper through the shell. Without `gh` only the reset
+      is set, and the caller says so.
+    - **Signing off.** A Worker's commits are the agent's. Signing them with
+      the host user's key would assert that person wrote them, and a
+      signing key under `~/.ssh` is unreadable inside anyway, which made
+      every commit fail.
+    - **The repository's own hooks.** `core.hooksPath` is `.git/hooks`. A
+      global hooks directory under `$HOME` is unreadable inside, and
+      measured, git then fails every push on the hook it cannot open. The
+      choice is between each clone's own hooks running and nothing
+      running, so a user's global hooks never run for a sandboxed push.
+    """
+    settings: list[tuple[str, str]] = [("credential.helper", "")]
+    if gh:
+        settings.append(
+            (
+                "credential.https://github.com.helper",
+                f"!{shlex.quote(gh)} auth git-credential",
+            )
+        )
+    settings += [
+        ("commit.gpgsign", "false"),
+        ("tag.gpgsign", "false"),
+        ("core.hooksPath", ".git/hooks"),
+    ]
+    env = {"GIT_CONFIG_COUNT": str(len(settings))}
+    for i, (key, value) in enumerate(settings):
+        env[f"GIT_CONFIG_KEY_{i}"] = key
+        env[f"GIT_CONFIG_VALUE_{i}"] = value
+    if gh:
+        # Measured: inside a Seatbelt sandbox gh exits before answering,
+        # because reading ~/.config/gh/config.yml is denied, and git falls
+        # back to a prompt that cannot be shown. Any config directory the
+        # sandbox is not denied — it need not exist — lets gh answer from
+        # GITHUB_TOKEN.
+        env["GH_CONFIG_DIR"] = str(Path(tempfile.gettempdir()) / "rite-sandbox-gh")
+    return env
+
+
+def _local_origins(
+    workdir: Path, rite_dir: Path
+) -> tuple[list[Path], list[tuple[str, Path]]]:
+    """The local directories this Worker's clones fetch from, split into
+    those that can be mounted read-only and those that cannot.
+
+    A relative origin is resolved against the clone, as git resolves it, and
+    `file://` is local. Nothing that overlaps the Worker's own directory or
+    `.rite/` is mounted — yoloAI refuses a mount containing the workdir, and
+    an origin inside either is already readable. One that CONTAINS either
+    (the project root itself, for a module registered at `.`) is returned
+    as unmountable, so the caller can say so rather than start a Worker
+    that cannot fetch from it."""
+    mounts: list[Path] = []
+    unmountable: list[tuple[str, Path]] = []
+    if not workdir.is_dir():
+        return mounts, unmountable
+    work = workdir.resolve()
+    rite = rite_dir.resolve()
+    for clone in sorted(p for p in workdir.iterdir() if (p / ".git").exists()):
+        try:
+            proc = subprocess.run(
+                ["git", "-C", str(clone), "remote", "get-url", "origin"],
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        url = proc.stdout.strip()
+        if proc.returncode != 0 or not url:
+            continue
+        if url.startswith("file://"):
+            from urllib.parse import unquote, urlparse
+
+            raw = Path(unquote(urlparse(url).path))
+        elif "://" in url or re.match(r"^[^/]+:", url):
+            continue  # https, ssh, git@host:path — fetched over the network
+        else:
+            raw = Path(url).expanduser()
+        try:
+            origin = (raw if raw.is_absolute() else clone / raw).resolve()
+        except (OSError, RuntimeError):
+            continue
+        if not origin.is_dir():
+            continue
+        if any(origin == x or x in origin.parents for x in (work, rite)):
+            continue
+        if any(origin in x.parents for x in (work, rite)):
+            unmountable.append((clone.name, origin))
+            continue
+        if origin not in mounts:
+            mounts.append(origin)
+    return mounts, unmountable
+
+
+def _yoloai_sandboxes_dir() -> Path:
+    return Path.home() / ".yoloai" / "library" / "sandboxes"
+
+
+def _sandbox_copy(name: str, workdir: Path) -> Path | None:
+    """yoloAI's copy of a Worker's directory, or None when it is not found.
+
+    Measured on yoloAI 0.11.0: a copy-mode workdir lives at
+    `~/.yoloai/library/sandboxes/<name>/rw/work/<workdir, "/" as "^s">`.
+    That layout is yoloAI's, not an interface, so a copy that is not where
+    it was measured falls back to the only directory there, and is
+    otherwise reported as not found rather than guessed at.
+    """
+    work = _yoloai_sandboxes_dir() / name / "rw" / "work"
+    measured = work / str(workdir).replace("/", "^s")
+    if measured.is_dir():
+        return measured
+    candidates = [p for p in work.iterdir() if p.is_dir()] if work.is_dir() else []
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _work_only_in_sandbox(
+    name: str, worker: str, root: str | os.PathLike[str] | None
+) -> str:
+    """What exists only in the sandbox's copy of the Worker's checkout, as
+    text naming module, branch and count — or "" when nothing is at risk.
+
+    The Worker works on a copy that `destroy` deletes, so a Worker that
+    committed and never pushed loses everything, and until this nothing
+    said so. "" also when there is no sandbox on disk under that name:
+    yoloAI then reports the missing sandbox itself. A copy that cannot be
+    found is reported, not taken as safe.
+    """
+    if root is None or not (_yoloai_sandboxes_dir() / name).is_dir():
+        return ""
+    copy = _sandbox_copy(name, Path(root) / "workers" / worker)
+    if copy is None:
+        return (
+            f"could not find the sandbox's copy of workers/{worker}/ to check "
+            "it for work that is on no remote"
+        )
+    from rite_ai.workspace import unsaved_work
+
+    items = unsaved_work(copy)
+    if not items:
+        return ""
+    lines = [
+        f"the sandbox's copy of workers/{worker}/ holds work that is on no remote:"
+    ]
+    lines += [f"  {item.describe()}" for item in items]
+    lines.append(f"  the copy is at {copy}")
+    return "\n".join(lines)
 
 
 def stop_worker(
@@ -805,9 +1102,10 @@ def stop_worker(
     binary = _yoloai_binary()
     if binary is None:
         return SandboxResult(False, "yoloai not found")
+    name = existing_sandbox_name(worker, root)
     try:
         proc = subprocess.run(
-            [binary, "stop", existing_sandbox_name(worker, root)],
+            [binary, "stop", name],
             capture_output=True,
             text=True,
             errors="replace",
@@ -817,25 +1115,36 @@ def stop_worker(
         return SandboxResult(False, "yoloai stop timed out after 120s")
     if proc.returncode != 0:
         return SandboxResult(False, proc.stderr.strip() or proc.stdout.strip())
-    return SandboxResult(
-        True, f"sandbox '{existing_sandbox_name(worker, root)}' stopped"
-    )
+    message = f"sandbox '{name}' stopped"
+    at_risk = _work_only_in_sandbox(name, worker, root)
+    if at_risk:
+        message += (
+            f"\nwarning: {at_risk}\n  `rite sandbox destroy {worker}` deletes "
+            "the copy; push that work first"
+        )
+    return SandboxResult(True, message)
 
 
 def destroy_worker(
-    worker: str, root: str | os.PathLike[str] | None = None
+    worker: str,
+    root: str | os.PathLike[str] | None = None,
+    force: bool = False,
 ) -> SandboxResult:
     binary = _yoloai_binary()
     if binary is None:
         return SandboxResult(False, "yoloai not found")
+    name = existing_sandbox_name(worker, root)
+    at_risk = "" if force else _work_only_in_sandbox(name, worker, root)
+    if at_risk:
+        return SandboxResult(
+            False,
+            f"refusing to destroy sandbox '{name}': {at_risk}\n"
+            "  destroying it deletes the copy; push that work first, or "
+            f"`rite sandbox destroy {worker} --force` to discard it",
+        )
     try:
         proc = subprocess.run(
-            [
-                binary,
-                "destroy",
-                existing_sandbox_name(worker, root),
-                "--abandon-unapplied",
-            ],
+            [binary, "destroy", name, "--abandon-unapplied"],
             capture_output=True,
             text=True,
             errors="replace",
@@ -845,9 +1154,7 @@ def destroy_worker(
         return SandboxResult(False, "yoloai destroy timed out after 120s")
     if proc.returncode != 0:
         return SandboxResult(False, proc.stderr.strip() or proc.stdout.strip())
-    return SandboxResult(
-        True, f"sandbox '{existing_sandbox_name(worker, root)}' destroyed"
-    )
+    return SandboxResult(True, f"sandbox '{name}' destroyed")
 
 
 @dataclass
@@ -864,8 +1171,45 @@ class PaneCapture:
     text: str
 
 
+# yoloAI's own launch line on Seatbelt, as it is typed into the session's
+# shell: `export NAME='value'; ` per secret, with a single quote in a value
+# written as '\''. The value can wrap across screen lines.
+_EXPORT_STATEMENT = re.compile(r"(export [A-Za-z_][A-Za-z0-9_]*=')((?:[^']|'\\'')*)(')")
+
+
+def redact_secrets(text: str, secrets: Iterable[str] = ()) -> str:
+    """`text` with every exported value and every known secret replaced.
+
+    Measured on yoloAI 0.11.0 with Seatbelt: the first thing on a sandboxed
+    session's screen is the command yoloAI types to launch the agent, and it
+    carries every `--env` value as `export NAME='value'` — the GitHub token,
+    the JIRA token, the proxy token for Claude. yoloAI has no other way to
+    take them on Seatbelt. `rite sandbox pane` exists to be read by Claude
+    sessions, so unredacted it would route live credentials into model
+    context and transcripts.
+
+    Two passes: every export statement's value, whatever its name, and then
+    each known secret value anywhere else on screen. A screen wraps long
+    lines, so a value is matched with a line break allowed between any two
+    characters. Values shorter than eight characters are not searched for:
+    `false` and `5` are not secrets, and replacing every occurrence of them
+    would destroy the capture.
+    """
+    text = _EXPORT_STATEMENT.sub(
+        lambda m: m.group(1) + "[redacted]" + m.group(3), text
+    )
+    searched = {s for s in secrets if s and len(s) >= 8}
+    for value in sorted(searched, key=len, reverse=True):
+        pattern = r"(?:\r?\n)?".join(re.escape(ch) for ch in value)
+        text = re.sub(pattern, "[redacted]", text)
+    return text
+
+
 def worker_pane(
-    worker: str, ansi: bool = False, root: str | os.PathLike[str] | None = None
+    worker: str,
+    ansi: bool = False,
+    root: str | os.PathLike[str] | None = None,
+    secrets: Iterable[str] = (),
 ) -> PaneCapture:
     """The rendered terminal of a Worker's sandboxed session.
 
@@ -909,14 +1253,16 @@ def worker_pane(
     except OSError as e:
         return PaneCapture(False, f"`yoloai ... terminal-snapshot` could not run: {e}")
     if proc.returncode != 0:
-        detail = proc.stderr.strip() or proc.stdout.strip() or "no output"
+        detail = redact_secrets(
+            proc.stderr.strip() or proc.stdout.strip() or "no output", secrets
+        )
         return PaneCapture(
             False,
             f"no pane for '{worker}' — `yoloai sandbox "
             f"{existing_sandbox_name(worker, root)} "
             f"terminal-snapshot` exited {proc.returncode}: {detail[:200]}",
         )
-    return PaneCapture(True, proc.stdout.rstrip("\n"))
+    return PaneCapture(True, redact_secrets(proc.stdout.rstrip("\n"), secrets))
 
 
 @dataclass

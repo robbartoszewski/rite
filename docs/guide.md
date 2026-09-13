@@ -126,6 +126,135 @@ scheduler.
 Sessions start only when you type a command: `rite pool fill`, which is refused
 above `sandbox.max_concurrent_workers`, or `rite sandbox start <worker>`.
 
+## Starting a sandboxed worker
+
+### Before the first one
+
+1. **Store a Claude login for sandboxes, before the first worker starts.** A
+   sandboxed session cannot use the login in your macOS keychain; without a
+   stored token a sandboxed worker starts, reports that its login has expired,
+   and does nothing. In the project root:
+
+   ```bash
+   claude setup-token            # prints a long-lived token
+   rite credential set claude    # paste it at the hidden prompt
+   ```
+
+   `rite credential set claude` needs rite v0.2.0 or later (`rite --version`).
+   An older rite does not know `claude` and offers `--allow-unknown`, which
+   stores a key that no worker is ever given. rite keeps the token in the
+   keychain for this project and passes it into each sandbox it
+   starts as `CLAUDE_CODE_OAUTH_TOKEN`, whichever shell you start it from;
+   `rite doctor` reports it missing as a problem. Inside the sandbox, Claude
+   Code's banner says "API Usage Billing" even with a subscription token:
+   yoloAI hands the session its login through a local proxy, and Claude Code
+   labels any login it receives that way as API billing, so the label says
+   nothing about how you are charged. An exported
+   `CLAUDE_CODE_OAUTH_TOKEN` also reaches sandboxes started from that shell,
+   and a stored token takes its place. yoloAI's agent list
+   (`yoloai help agents`) also names `ANTHROPIC_API_KEY` for Claude; an
+   exported key is billed per token.
+2. **Install rite where the sandbox can read it.** A sandboxed worker runs
+   `rite claim` and `rite heartbeat` with the `rite` on its PATH, and the
+   sandbox can read only some of your home directory. `install.sh` installs
+   under `~/.local` (through `uv tool` or `pipx`), which it can read; so can
+   Homebrew and system locations. A `rite` in a virtualenv anywhere else fails
+   inside the sandbox with a permission error (measured with a virtualenv
+   under the home directory).
+3. **Give it a way to push.** A worker's work leaves the sandbox by being pushed
+   (below), so store a GitHub credential for the project with
+   `rite credential set github` — a token with Contents and Pull requests
+   read/write on the module repositories — and install GitHub's `gh` CLI. rite
+   passes the credential in as `GITHUB_TOKEN` and tells git inside the sandbox
+   to authenticate github.com through `gh auth git-credential`, which reads
+   that variable, so `gh` needs no login of its own; the keychain helper git
+   would otherwise use is unreadable there. Commits made in a sandbox are not
+   signed: rite turns signing off inside it, because they are the agent's
+   commits, not yours. A module whose origin is a local directory cannot be
+   pushed from a sandbox; start names each one. A commit pushed from inside a sandbox this
+   way has been measured reaching GitHub. Sandboxed pushes run the repository's own hooks, never your
+   global ones: rite sets `core.hooksPath` to `.git/hooks` inside the sandbox,
+   because a global hooks directory under your home directory cannot be read
+   there and made every push fail. If you rely on a global pre-push hook, such
+   as a secret scan, it does not run for a sandboxed worker's pushes.
+
+### Starting it
+
+Give the worker its work when you start it. Once the sandbox is running,
+nothing in rite can type into the session — `rite sandbox pane` only reads it.
+Start prepares the worker's workspace first, as `rite prepare` does; if a
+module has uncommitted changes or cannot be updated, it stops and says what to
+do (`--allow-dirty` starts on the checkout as it is instead). Run this from the
+project root:
+
+```bash
+rite sandbox start alpha --ticket RW-12     # opening prompt: "Work ticket RW-12."
+rite sandbox start alpha --ticket 42        # a GitHub issue, by its number
+rite sandbox start alpha --prompt "Add a CSV export to the invoices page."
+```
+
+`--ticket` is for work on your board, by its key there; `--prompt` sends its
+text as written. With neither, the session starts idle until someone attaches.
+After the prepare summary, start prints:
+
+```text
+sandbox 'rite-myproject-3f9a2c-alpha' started
+  watch or step in: yoloai attach rite-myproject-3f9a2c-alpha
+```
+
+The worker starts on its own. `yoloai attach <name>` opens the session so you
+can watch it or type to it; yoloAI's own hint for leaving it running is
+`Ctrl-b d` to detach.
+
+**Its first screen shows your credentials in plain text.** On macOS, yoloAI
+launches the agent by typing a command into the session's shell, and that
+command carries every credential rite passed in (`export GITHUB_TOKEN='…'`).
+Don't share, record or screenshot a terminal attached with `yoloai attach`.
+`rite sandbox pane` prints the same screen with those values replaced by
+`[redacted]`, so a Claude session reading it never receives them.
+
+### The next ticket
+
+A worker's sandbox is started once per ticket. Its instructions take it
+through the PR, the merge and `rite release`, so it has finished when
+`rite status` no longer lists its claims. Then `rite sandbox destroy alpha`, and
+start it again with the next ticket; starting it while the old sandbox still
+exists is refused. If its session ends before the merge, merge the PR yourself
+and run `rite release --worker alpha`.
+`rite sandbox status alpha` reports whether the sandbox is running, not whether
+the ticket is done.
+
+### What the worker can reach
+
+- **A copy of its own `workers/<name>/`, gitignored files included.** rite asks
+  yoloAI for a full copy (`:copy-all`): its default copy leaves out gitignored
+  files and nested repositories inside a git repository, which in a rite
+  project is the worker's whole checkout. So a module's `.env` or other ignored
+  local files reach the sandbox too. The worker works on this copy, not on the
+  directory itself, and its work leaves by pushing
+  its branch to origin. The copy is discarded with the sandbox: anything not
+  pushed is gone. `rite sandbox stop` warns, and `rite sandbox destroy` refuses
+  without `--force`, while the copy holds uncommitted changes or commits on no
+  remote, naming them. `yoloai apply` is not part of this.
+- **The project's `.rite/`, writable**, because claims and heartbeats are
+  written there. yoloAI mounts whole directories, so this is more than claims:
+  a sandboxed worker can rewrite the project's config, the commands
+  `modules.yaml` records (which `rite prepare` prints and workers are told to
+  run), the publish gate's suppressions, other workers' heartbeats (hiding a
+  stall), and messages in the handover outbox, which rite later posts to your
+  board with your credentials.
+- **Read-only, each local repository one of its clones fetches from**, so git
+  inside can fetch from it. For a module registered without a URL that is the
+  project root's own checkout of the module, so those files are readable — and
+  read-only, so it cannot be pushed to. Only a module with a URL origin can
+  push from a sandbox.
+
+Nothing else in the project is mounted. Other workers' directories are neither
+readable nor writable from inside, and a spec kept at the project root rather
+than inside a module is not visible to the worker. If a clone fetches from a
+directory that contains the worker's own, such as the project root itself,
+start says it cannot be mounted.
+
 ## If the pre-push hook doesn't install
 
 `core.hooksPath` — set globally by some teams and by some tooling — redirects
@@ -280,8 +409,8 @@ otherwise:
     token is no longer wanted on a machine: `stop` preserves the sandbox's
     state, and a dogfood session reports the token being among what it keeps
     (not reproduced here — SPEC §5.3.3 records what is and isn't established).
-    `destroy` clears the sandbox and does not stop to ask about unapplied
-    changes, so land the Worker's work first.
+    `destroy` clears the sandbox, with the Worker's copy of its checkout; it
+    refuses while that copy holds work on no remote, unless given `--force`.
 
 ## What rite deliberately doesn't do
 

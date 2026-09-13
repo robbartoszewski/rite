@@ -669,6 +669,34 @@ def doctor() -> None:
         # sandboxing; with the feature off, the row says what it checked
         # and does not claim more.
         if project.config.sandbox.enabled:
+            # A sandboxed session cannot use the Claude login in the
+            # keychain. Without a stored token it starts, reports that its
+            # login has expired, and does nothing — the kind of failure
+            # that looks like a Worker quietly working.
+            from rite_ai.credentials.store import NOT_FOUND
+
+            # Its row is printed here, not with the credentials above: it is
+            # needed only when this project sandboxes its Workers.
+            claude_login = cred_resolve("claude_token", creds)
+            if claude_login.tier == NOT_FOUND:
+                # Doctor prints rows and only counts problems, so the
+                # guidance belongs in the row.
+                exported = (
+                    " CLAUDE_CODE_OAUTH_TOKEN is exported in this shell, but "
+                    "that reaches only sandboxes started from this shell."
+                    if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
+                    else ""
+                )
+                click.echo(
+                    f"credential claude_token: {claude_login.describe()} — "
+                    "sandbox.enabled is true but no Claude login is stored for "
+                    "sandboxes, so a sandboxed Worker starts and does nothing. "
+                    "Run `claude setup-token`, then `rite credential set claude`."
+                    + exported
+                )
+                problems.append("no Claude login stored for sandboxed Workers")
+            else:
+                click.echo(f"credential claude_token: {claude_login.describe()}")
             check = verify_sandbox(project.config.sandbox.backend)
             if check.ok:
                 click.echo(
@@ -1129,6 +1157,8 @@ def _keys_this_project_needs(config=None) -> list[str]:
     # still has to be PROVISIONED on the host, so it is a thing this
     # project needs.
     if getattr(config.sandbox, "enabled", False):
+        # The login a sandboxed session needs: it cannot read the keychain.
+        keys.append("claude_token")
         root = _find_project_root()
         workers_dir = root / "workers"
         if workers_dir.is_dir():
@@ -1413,6 +1443,7 @@ def credential_set(
     Examples:
       rite credential set jira                    # email, then token
       rite credential set github --global         # machine-wide fallback
+      rite credential set claude                  # token from `claude setup-token`
       rite credential set jira_token              # just the one field
       rite credential set sandbox_token_alpha
     """
@@ -2810,6 +2841,38 @@ def board_query(raw_query: str, role: str) -> None:
     _render_tickets(result)
 
 
+@board.command("show")
+@click.argument("ticket_id")
+@click.option("--role", default="workers", help="board | workers | testing")
+def board_show(ticket_id: str, role: str) -> None:
+    """Show one ticket: title, status, labels and description.
+
+    What a Worker reads before it starts. `list` and `query` print one line
+    per ticket, without the description the ticket's scope is written in.
+
+    Examples:
+      rite board show RW-12
+      rite board show 42
+    """
+    backend, err = _ticket_backend(role)
+    if err:
+        click.echo(err, err=True)
+        raise SystemExit(1)
+    from rite_ai.tickets import BackendError
+
+    ticket = backend.read(ticket_id)
+    if isinstance(ticket, BackendError):
+        click.echo(ticket.message, err=True)
+        raise SystemExit(1)
+    click.echo(f"{ticket.id}  [{ticket.status}]  {ticket.title}")
+    if ticket.labels:
+        click.echo(f"labels: {', '.join(ticket.labels)}")
+    if ticket.url:
+        click.echo(ticket.url)
+    click.echo("")
+    click.echo(ticket.description.strip() or "(no description)")
+
+
 @board.command("label")
 @click.argument("ticket_id")
 @click.argument("labels", nargs=-1)
@@ -3046,24 +3109,12 @@ def schedule_set_timezone(tz: str) -> None:
 # --- Workspace preparation (SPEC §2.1) ---
 
 
-@cli.command()
-@click.option("--worker", "-w", required=True, help="Worker name")
-@click.option(
-    "--branch", "-b", default=None, help="Ticket branch (default: worker's own)"
-)
-def prepare(worker: str, branch: str | None) -> None:
-    """Prepare a worker's workspace before a task — right repos, right
-    branches, no residue from the previous task (SPEC §2.1). Idempotent;
-    a dirty tree fails loudly rather than being discarded.
-
-    Examples:
-      rite prepare --worker alpha
-      rite prepare --worker alpha --branch feature/RW-12
-    """
+def _worker_modules_or_exit(root, worker: str):
+    """`workers/<worker>/` and the modules that worker was created with, or
+    exit with the reason. Shared by `rite prepare` and `rite sandbox start`,
+    which prepares the workspace before the sandbox copies it."""
     from rite_ai.config.parse import ParseError, parse_modules, parse_worker
-    from rite_ai.workspace import prepare_workspace
 
-    root = _find_project_root()
     all_modules = parse_modules(root / ".rite" / "modules.yaml")
     if isinstance(all_modules, ParseError):
         click.echo(f"cannot parse modules.yaml: {all_modules.message}", err=True)
@@ -3085,7 +3136,27 @@ def prepare(worker: str, branch: str | None) -> None:
 
     # Scope to exactly the modules this worker was created with — not
     # every module in the project, which a worker may never have cloned.
-    modules = [m for m in all_modules if m.name in manifest.modules]
+    return worker_dir, [m for m in all_modules if m.name in manifest.modules]
+
+
+@cli.command()
+@click.option("--worker", "-w", required=True, help="Worker name")
+@click.option(
+    "--branch", "-b", default=None, help="Ticket branch (default: worker's own)"
+)
+def prepare(worker: str, branch: str | None) -> None:
+    """Prepare a worker's workspace before a task — right repos, right
+    branches, no residue from the previous task (SPEC §2.1). Idempotent;
+    a dirty tree fails loudly rather than being discarded.
+
+    Examples:
+      rite prepare --worker alpha
+      rite prepare --worker alpha --branch feature/RW-12
+    """
+    from rite_ai.workspace import prepare_workspace
+
+    root = _find_project_root()
+    worker_dir, modules = _worker_modules_or_exit(root, worker)
 
     result = prepare_workspace(worker_dir, modules, root, branch=branch)
     click.echo(result.summary())
@@ -3824,20 +3895,51 @@ def sandbox() -> None:
     "--allow-dirty",
     is_flag=True,
     default=False,
-    help="Start even though the worker's workspace has uncommitted "
-    "changes (they become visible to the agent).",
+    help="Start on the workspace as it is: skip preparing it, and start "
+    "even with uncommitted changes (they become visible to the agent).",
 )
-def sandbox_start(worker: str, agent_args: tuple[str, ...], allow_dirty: bool) -> None:
+@click.option(
+    "--ticket",
+    default=None,
+    help="Ticket for the Worker to work, sent as its opening prompt "
+    '("Work ticket <TICKET>.").',
+)
+@click.option(
+    "--prompt",
+    "prompt_text",
+    default=None,
+    help="Opening prompt for the Worker, sent verbatim. For work that is not "
+    "a ticket on your board; use instead of --ticket.",
+)
+def sandbox_start(
+    worker: str,
+    agent_args: tuple[str, ...],
+    allow_dirty: bool,
+    ticket: str | None,
+    prompt_text: str | None,
+) -> None:
     """Launch WORKER's session inside a fresh sandbox. If a token was
     provisioned for this Worker (`rite add worker`'s sandbox step, or
     `rite credential set sandbox_token_<worker>`), delivers it via
     `--env` (D-31) — never a file, never a CLI argument.
 
+    Give it its work when you start it: nothing in rite can type into a
+    sandbox afterwards. The sandbox name is printed on start; `yoloai
+    attach <name>` opens the session to watch it or step in.
+
+    Before the first one, give sandboxes a Claude login: `claude
+    setup-token`, then `rite credential set claude`.
+
     Examples:
-      rite sandbox start alpha
-      rite sandbox start alpha --agent-arg --print --agent-arg "fix RW-12"
-      rite sandbox start alpha --allow-dirty
+      rite sandbox start alpha --ticket RW-12
+      rite sandbox start alpha --prompt "Add a CSV export to the invoices page."
+      rite sandbox start alpha --allow-dirty --ticket RW-12
     """
+    if ticket is not None and prompt_text is not None:
+        raise click.UsageError("give --ticket or --prompt, not both")
+    if ticket is not None and not ticket.strip():
+        raise click.UsageError("--ticket needs a ticket ID")
+    prompt = f"Work ticket {ticket}." if ticket is not None else prompt_text
     from rite_ai.credentials.store import worker_environment
     from rite_ai.sandbox import (
         GLOBAL_TOKEN_CREDENTIAL,
@@ -3847,6 +3949,48 @@ def sandbox_start(worker: str, agent_args: tuple[str, ...], allow_dirty: bool) -
     )
 
     root, config = _load_config_for_write()
+
+    # Prepare first, outside the sandbox. The sandbox works on a copy of the
+    # workspace and cannot run `rite prepare` itself, so a Worker started on
+    # an unprepared checkout would work on stale code and nothing would say.
+    from rite_ai.workspace import prepare_workspace
+
+    worker_dir, modules = _worker_modules_or_exit(root, worker)
+    # Instructions are written once, by `rite add worker`. A Worker created
+    # before they said to push would work in a copy that is discarded with
+    # the sandbox and never be told its work has to leave it.
+    claude_md = worker_dir / "CLAUDE.md"
+    if claude_md.is_file() and "## Your ticket" not in claude_md.read_text(
+        errors="replace"
+    ):
+        click.echo(
+            f"warning: workers/{worker}/CLAUDE.md was written before sandboxed "
+            "Workers were supported: it does not tell the Worker to push, send "
+            "heartbeats or read its ticket, so its work may never leave the "
+            f"sandbox. Recreate the Worker for current instructions: "
+            f"`rite remove worker {worker}`, then `rite add worker {worker}`.",
+            err=True,
+        )
+    if allow_dirty:
+        click.echo(
+            f"not preparing workers/{worker}/: --allow-dirty starts the sandbox on "
+            "the checkout as it is, uncommitted changes included"
+        )
+    else:
+        prep = prepare_workspace(worker_dir, modules, root)
+        click.echo(prep.summary())
+        if not prep.ok:
+            blocked = ", ".join(m.module for m in prep.blocking)
+            click.echo(
+                f"not starting '{worker}': its workspace is not ready ({blocked}). "
+                f"Resolve what is listed above in workers/{worker}/ — commit and "
+                "push, or stash, any uncommitted changes — then run "
+                f"`rite sandbox start {worker}` again. `--allow-dirty` starts it "
+                "on the checkout as it is instead.",
+                err=True,
+            )
+            raise SystemExit(1)
+
     token, tier = resolve_worker_token(worker, config.credentials)
     # Every credential this project holds, not just the git token (§5.3.4).
     env = worker_environment(config.credentials, worker_token=token)
@@ -3870,6 +4014,7 @@ def sandbox_start(worker: str, agent_args: tuple[str, ...], allow_dirty: bool) -
         agent_args=list(agent_args) or None,
         env=env,
         allow_dirty=allow_dirty,
+        prompt=prompt,
     )
     click.echo(result.message)
     if not result.ok:
@@ -3894,9 +4039,10 @@ def sandbox_stop(worker: str) -> None:
     this machine, and rotate it if a stopped sandbox has been sitting around.
 
     \b
-    NOTE: `rite sandbox destroy` passes yoloAI's --abandon-unapplied, so it
-    discards any unapplied changes in the sandbox along with it. Land the
-    Worker's work before destroying.
+    NOTE: the Worker's checkout inside is a copy, and `rite sandbox destroy`
+    discards it with the sandbox. Stop warns, and destroy refuses without
+    --force, while that copy holds uncommitted changes or commits on no
+    remote, naming the module, branch and count.
 
     Examples:
       rite sandbox stop alpha
@@ -3911,18 +4057,46 @@ def sandbox_stop(worker: str) -> None:
 
 @sandbox.command("destroy")
 @click.argument("worker")
-def sandbox_destroy(worker: str) -> None:
-    """Stop and remove WORKER's sandbox entirely.
+@click.option(
+    "--force",
+    is_flag=True,
+    default=False,
+    help="Destroy even though the sandbox's copy holds work on no remote; "
+    "that work is lost.",
+)
+def sandbox_destroy(worker: str, force: bool) -> None:
+    """Stop and remove WORKER's sandbox entirely, with the Worker's copy of
+    its checkout. Refuses while that copy holds uncommitted changes or
+    commits on no remote, naming them, since destroying it loses them.
 
     Examples:
       rite sandbox destroy alpha
+      rite sandbox destroy alpha --force
     """
     from rite_ai.sandbox import destroy_worker
 
-    result = destroy_worker(worker, _find_project_root())
+    result = destroy_worker(worker, _find_project_root(), force=force)
     click.echo(result.message)
     if not result.ok:
         raise SystemExit(1)
+
+
+def _injected_secret_values(root: Path | None, worker: str) -> list[str]:
+    """Every credential value `rite sandbox start` would give WORKER, so the
+    pane can be searched for them. Read on the host, where the keychain is
+    readable; nothing is printed."""
+    from rite_ai.config.parse import load_project
+    from rite_ai.credentials.store import worker_environment
+    from rite_ai.sandbox import resolve_worker_token
+
+    credentials = None
+    if root is not None:
+        project = load_project(root)
+        if not isinstance(project, list):
+            credentials = project.config.credentials
+    token, _tier = resolve_worker_token(worker, credentials)
+    injected = worker_environment(credentials, worker_token=token)
+    return [value for value in injected.values() if value]
 
 
 @sandbox.command("pane")
@@ -3946,7 +4120,10 @@ def sandbox_pane(worker: str, ansi: bool) -> None:
     """
     from rite_ai.sandbox import worker_pane
 
-    capture = worker_pane(worker, ansi=ansi, root=_find_project_root())
+    root = _find_project_root()
+    capture = worker_pane(
+        worker, ansi=ansi, root=root, secrets=_injected_secret_values(root, worker)
+    )
     click.echo(capture.text, err=not capture.ok)
     if not capture.ok:
         raise SystemExit(1)

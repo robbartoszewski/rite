@@ -59,6 +59,28 @@ def test_the_slash_command_a_worker_is_told_to_run_exists_in_its_workspace(tmp_p
     assert (worker_dir / ".claude" / "commands" / "review.md").is_file()
 
 
+def test_a_worker_is_told_to_claim_beat_and_read_its_ticket_in_its_own_file(tmp_path):
+    """A sandboxed Worker loads only the `CLAUDE.md` in its own workspace:
+    yoloAI mounts that directory and not the project root above it. The
+    claim, heartbeat and ticket instructions used to live only in the root
+    file, so a sandboxed Worker never saw them and an unsandboxed one saw
+    them only because Claude Code happens to read parent directories."""
+    root = _init_project(tmp_path)
+    assert add_worker(root, "alpha").ok
+    md = (root / "workers" / "alpha" / "CLAUDE.md").read_text()
+
+    assert "rite claim <paths> --worker alpha --ticket <id>" in md
+    assert "rite heartbeat --worker alpha --ticket <id>" in md
+    assert "refused" in md and "narrower or wider path" in md
+    assert "## Your ticket" in md
+    assert "rite release --worker alpha" in md
+    # A sandboxed Worker's checkout is a copy thrown away with the sandbox:
+    # the only way its work survives is a push.
+    assert "git push -u origin" in md
+    assert "git checkout -b <ticket-id>" in md
+    assert "after every commit" in md
+
+
 def test_the_worker_gets_every_agent_its_review_command_names(tmp_path):
     """`review.md` dispatches to four agents by name. Three of four would
     have been a quieter version of the same defect — a command that reads,
