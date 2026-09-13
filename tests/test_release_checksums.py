@@ -129,10 +129,18 @@ def test_it_publishes_the_command_the_readme_tells_the_reader_to_run():
     module = module_from_spec(spec)
     spec.loader.exec_module(module)
 
-    readme = (REPO_ROOT / "README.md").read_text()
-    assert module.READER_COMMAND in readme, (
-        "README no longer tells readers to run the command the release block "
-        f"publishes ({module.READER_COMMAND!r})"
+    # Both files, for the same reason as the length assertion below: the
+    # README was cut to a landing page and the verify-first install path
+    # moved to the notes page with the rest of the rationale. The property
+    # is unchanged — wherever a reader is told to verify the download, the
+    # command named must be the one the release block publishes.
+    told = "".join(
+        (REPO_ROOT / rel).read_text()
+        for rel in ("README.md", "docs/install-notes.md")
+    )
+    assert module.READER_COMMAND in told, (
+        "no install document tells readers to run the command the release "
+        f"block publishes ({module.READER_COMMAND!r})"
     )
 
 

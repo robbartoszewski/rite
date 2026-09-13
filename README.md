@@ -1,13 +1,30 @@
 # rite
 
-`rite` coordinates several Claude Code sessions working on one codebase at
-once. Each session runs as a named *worker* and claims the files it is about
-to touch; the second worker to claim the same ones is refused.
+> **Set it running in the evening, review it in the morning — the rite way.**
 
-rite is both halves of that: the CLI that hands out the claims, and the
-`CLAUDE.md`, agents and slash commands it installs — which are what tell your
-sessions to claim in the first place. So the commands below are ones your
-sessions run themselves.
+`rite` runs many Claude Code sessions against one codebase without them
+colliding: each works as a named *worker* and claims the files it is about to
+touch, and the second worker to claim the same ones is refused.
+
+The point is where your hours go. Once you have it set up, the work that
+needs you concentrates into a couple of hours — settling requirements, making
+the calls, reviewing what came back — while the sessions keep going in
+between. rite is both halves of that: the CLI that hands out the claims, and
+the `CLAUDE.md`, agents and commands it installs, which are what tell your
+sessions to claim and who to ask.
+
+- **Claim exclusion is measured, not asserted.** A four-minute soak of six
+  concurrent workers: 132,321 grants, zero lost and zero held twice. The same
+  harness against the previous lock produced 309 lost updates in 10 seconds.
+- **Questions go to the person who owns that area**, named by expertise tag
+  in your config, rather than to whichever session is at the keyboard.
+- **A secret scan runs on pre-push and in CI**, over full history. Suppressing
+  a finding takes a written reason — there is no global off switch.
+- **Workers can run sandboxed** (off by default; Seatbelt on macOS, Docker,
+  Podman or Tart elsewhere) with a scoped token, not with permissions
+  bypassed.
+- **50 numbered decisions** in [`SPEC.md`](SPEC.md), each with the question it
+  answers and the reasoning — including the ones that did not survive review.
 
 **If you run one session at a time you do not need this**, and it coordinates
 sessions on one machine only.
@@ -23,16 +40,10 @@ claim failed: path contention
   backend/src/billing overlaps backend/src/billing (held by alpha)
 ```
 
-`rite status` shows who holds what, and which workers have gone quiet.
-
-rite also scans your repo for secrets before anything leaves the machine —
-the `pre-push` hook and the CI workflow `rite init` writes.
-
 ## Quickstart
 
-`rite init` asks a few questions, then writes `.rite/` (project state), the
-`CLAUDE.md` and `.claude/` your sessions run from, and the secret scan in two
-places: a `pre-push` hook and a GitHub Actions workflow.
+`rite init` asks a few questions, then writes `.rite/`, the `CLAUDE.md` and
+`.claude/` your sessions run from, and the secret scan in both places.
 
 ```bash
 cd your-project
@@ -48,48 +59,40 @@ rite status                  # what is happening now
 rite doctor                  # tools and credentials — non-zero on problems
 ```
 
-`rite status` and `rite doctor` are read-only. Most commands' `--help` carries
-real examples; `rite help` is a short tour of the ones used daily.
+`rite status` and `rite doctor` are read-only. `rite help` tours the rest.
 
 ## Install
 
-**Not on PyPI yet** — that comes once there's been some feedback. Install from
-the tagged source. Needs `uv` or `pipx`, `git`, and Python 3.11+.
-
-Three ways, same result. Pick by how much you want to read first:
+**Not on PyPI yet.** Needs `uv` or `pipx`, `git`, and Python 3.11+.
 
 ```bash
-# 1. one-liner
 curl -fsSL https://raw.githubusercontent.com/robbartoszewski/rite/v0.1.0/install.sh | sh
-
-# 2. download, check, then run
-curl -fsSLO https://raw.githubusercontent.com/robbartoszewski/rite/v0.1.0/install.sh
-shasum -a 256 install.sh          # compare against the v0.1.0 release notes
-sh install.sh
-
-# 3. clone and read everything
-git clone https://github.com/robbartoszewski/rite.git
-cd rite && git checkout v0.1.0
-less install.sh                   # 161 lines of sh
-uv tool install .                 # or: pipx install .
 ```
 
-*Option 1 is the fast path. If you would rather read a `curl | sh` before
-running it — fair, for a tool that scans your repo for secrets — that is what
-2 and 3 are for. Nothing phones home; the reasoning, and the PyPI name
-collision, are in [`docs/install-notes.md`](docs/install-notes.md).*
+*That is a `curl | sh` for a tool that scans your repo for secrets, so two
+slower paths — verify the checksum first, or clone and read it — are in
+[`docs/install-notes.md`](docs/install-notes.md), with the reasoning. Nothing
+phones home.*
 
-## Scope
+## Why you might not want it
 
 **Nothing starts a session for you.** rite sets up the workspace and the
-config; starting Claude is always your explicit action.
+config; starting Claude is your explicit action.
 
 **No gates on your code.** Your sessions run your tests and linters — that is
 what rite tells them to do — but rite does not read the results, so there is
 no coverage threshold, no accessibility pass, and no opinion on your test
 strategy.
 
-**Coordinating across machines is designed and not built.**
+**One machine.** Coordinating across machines is designed and not built.
+
+**Claude only, deliberately.** `CLAUDE.md` and `.claude/agents/` are
+first-class here rather than behind a provider abstraction, and no other tool
+is planned.
+
+**Workers are interchangeable, so there is no capability routing.** Every
+worker holds the same project-scoped credentials, so assignment picks
+whichever is free rather than whichever *can*.
 
 **Tested on macOS 26.2**, where everything above has been run end to end.
 Linux is implemented but unverified on real hardware. Windows is not
@@ -97,11 +100,9 @@ attempted.
 
 ## Documentation
 
-- [`docs/guide.md`](docs/guide.md) — the roles, per-worker checkouts, handover
-  snapshots, credentials, adopting a repo that already has `.rite/`,
-  uninstalling, the roadmap.
-- [`SPEC.md`](SPEC.md) — the full design document. Written for someone
-  building it, not using it.
+[`docs/guide.md`](docs/guide.md) — roles, per-worker checkouts, handover,
+credentials, adopting an existing repo, uninstalling, the roadmap.
+[`SPEC.md`](SPEC.md) — the design document, written for someone building it.
 
 ## License
 

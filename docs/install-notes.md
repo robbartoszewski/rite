@@ -64,3 +64,31 @@ unrelated PyPI package of the same name is ahead of it on your PATH. This tool i
 too — same program, use that. (Which is also why the isolated environment
 matters, and why `pip install` into a shared one is the one thing not to do:
 the two projects share a command *and* an import name, and merge on disk.)
+
+## The three ways, in full
+
+**Not on PyPI yet** — that comes once there's been some feedback. Install from
+the tagged source. Needs `uv` or `pipx`, `git`, and Python 3.11+.
+
+Three ways, same result. Pick by how much you want to read first:
+
+```bash
+# 1. one-liner
+curl -fsSL https://raw.githubusercontent.com/robbartoszewski/rite/v0.1.0/install.sh | sh
+
+# 2. download, check, then run
+curl -fsSLO https://raw.githubusercontent.com/robbartoszewski/rite/v0.1.0/install.sh
+shasum -a 256 install.sh          # compare against the v0.1.0 release notes
+sh install.sh
+
+# 3. clone and read everything
+git clone https://github.com/robbartoszewski/rite.git
+cd rite && git checkout v0.1.0
+less install.sh                   # 161 lines of sh
+uv tool install .                 # or: pipx install .
+```
+
+*Option 1 is the fast path. If you would rather read a `curl | sh` before
+running it — fair, for a tool that scans your repo for secrets — that is what
+2 and 3 are for. Nothing phones home; the reasoning, and the PyPI name
+collision, are in [`docs/install-notes.md`](docs/install-notes.md).*
