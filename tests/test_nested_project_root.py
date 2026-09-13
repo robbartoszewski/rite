@@ -27,14 +27,19 @@ resolves, rather than trusting a fixture to stand in for it.
 from __future__ import annotations
 
 import os
+import re
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
+
+from click.testing import CliRunner
 
 from rite_ai.cli.main import (
     PROJECT_ROOT_ENV,
     _find_project_root,
     _has_project_in_scope,
     _is_project,
+    cli,
 )
 
 
@@ -115,3 +120,77 @@ class TestTheExplicitOverride:
         monkeypatch.chdir(tmp_path)
         with patch.dict(os.environ, {PROJECT_ROOT_ENV: str(outer) + "/./"}):
             assert _find_project_root() == outer.resolve()
+
+
+class TestDoctorSaysSoWhenAModuleIsItselfARiteProject:
+    """The half the marker cannot fix, and the reason it needs a voice.
+
+    Hardening `_find_project_root` to a FILE fixed the case where the inner
+    repo merely carries a committed `.rite/` — rite's own repository is that
+    case. It cannot fix a module that is a fully scaffolded rite project,
+    because such a project tracks `brief.yaml` and `modules.yaml` by design:
+    `scaffold.AUTHORED_CONFIG` re-includes them in the `.gitignore` that
+    `rite init` writes. The walk finds the inner marker first and is right to.
+
+    Only `RITE_PROJECT_ROOT` answers it, and nothing announced that. Phase
+    1's definition of done includes configuring Bentora as a rite project, so
+    this is the configuration a real run walks into — and its symptom is
+    silence: a private ledger, zero collisions, a flawless-looking run.
+    """
+
+    def _project_with_module(self, tmp_path, module_is_a_project: bool):
+        root = _project(tmp_path / "acme")
+        (root / ".rite" / "modules.yaml").write_text(
+            "modules:\n  sub:\n    path: sub\n    description: ''\n"
+        )
+        sub = root / "sub"
+        sub.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=sub, check=True)
+        if module_is_a_project:
+            _project(sub)
+        return root
+
+    def _doctor(self, root):
+        with patch.dict(os.environ, {PROJECT_ROOT_ENV: str(root)}):
+            return CliRunner().invoke(cli, ["doctor"])
+
+    def test_doctor_names_the_module_and_what_to_set(self, tmp_path):
+        root = self._project_with_module(tmp_path, module_is_a_project=True)
+
+        out = self._doctor(root).output
+
+        assert "is itself a rite project" in out, out
+        assert "module sub" in out
+        assert PROJECT_ROOT_ENV in out, "reported without the remedy"
+
+    def test_it_counts_as_a_problem_not_a_note(self, tmp_path):
+        """`doctor` exits non-zero on problems, and a private claims ledger is
+        one — it is the exclusion guarantee silently absent.
+
+        Asserted as a DIFFERENCE against the same project with an ordinary
+        module, not as a bare non-zero exit. `doctor` on a bare fixture
+        already exits non-zero for unrelated reasons (no credentials, no
+        hook), so `!= 0` passes with this check deleted — measured. The
+        contribution is what has to be visible."""
+        nested = self._doctor(
+            self._project_with_module(tmp_path / "a", module_is_a_project=True)
+        ).output
+        plain = self._doctor(
+            self._project_with_module(tmp_path / "b", module_is_a_project=False)
+        ).output
+
+        def count(out: str) -> int:
+            m = re.search(r"(\d+) problem\(s\) found", out)
+            return int(m.group(1)) if m else 0
+
+        assert count(nested) == count(plain) + 1, (
+            f"the nested-project module added no problem: "
+            f"{count(nested)} vs {count(plain)}"
+        )
+
+    def test_an_ordinary_module_is_not_flagged(self, tmp_path):
+        """The other half: a module that is a plain git repo says nothing.
+        A check that fires on every module would be ignored within a day."""
+        root = self._project_with_module(tmp_path, module_is_a_project=False)
+
+        assert "is itself a rite project" not in self._doctor(root).output

@@ -460,6 +460,31 @@ def doctor() -> None:
             click.echo(f"module {m.name}: not a git repository at {m.path}")
             problems.append(f"module {m.name} is not a git repository")
             continue
+        # A module that is ITSELF a rite project resolves to itself, and
+        # `rite prepare` clones it UNDER this project root — so a session
+        # started in `workers/<w>/<module>/` walks up, finds that clone's own
+        # marker first, and writes claims into a private ledger. Nothing is
+        # shared, nothing ever collides, and the run reports zero refusals:
+        # the exclusion guarantee absent, presenting as a flawless run.
+        #
+        # Hardening the marker to a FILE fixed the case where the inner repo
+        # merely carries a committed `.rite/` (rite's own repo is that case).
+        # It cannot fix this one: a scaffolded project tracks brief.yaml and
+        # modules.yaml by design, because `scaffold.AUTHORED_CONFIG`
+        # re-includes them. Only the explicit override answers it, and
+        # nothing else tells anyone — which is what this row is for.
+        if _is_project(module_dir):
+            click.echo(
+                f"module {m.name}: is itself a rite project "
+                f"({m.path}/.rite/). A session started inside it resolves to "
+                f"IT, not to this project, so its claims go to a private "
+                f"ledger and never collide with anyone else's. Set "
+                f"{PROJECT_ROOT_ENV}={root} in that session's environment."
+            )
+            problems.append(
+                f"module {m.name} is itself a rite project — claims made "
+                f"inside it would not be shared"
+            )
         clean = git_ops.is_clean(module_dir)
         if isinstance(clean, git_ops.GitError):
             click.echo(f"module {m.name}: {clean.message}")
