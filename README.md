@@ -16,11 +16,6 @@ sessions to claim and who to ask.
 - **Claim exclusion is measured, not asserted.** A four-minute soak of six
   concurrent workers: 132,321 grants, zero lost and zero held twice. The same
   harness against the previous lock produced 309 lost updates in 10 seconds.
-- **The Owner's `CLAUDE.md` lists who owns each area** — the Owner being the
-  session that owns the ticket board — built from the expertise tags in
-  `.rite/config.yaml`. That session can hand a decision to the person listed
-  instead of making it. Nothing is sent automatically, and rite does not route
-  questions itself.
 - **A secret scan runs on pre-push and in CI**, over full history. Suppressing
   a finding takes a written reason — there is no global off switch.
 - **Workers can run sandboxed, and on macOS `rite init` turns the setting on
@@ -51,8 +46,9 @@ below:
 
 - **Your Dispatch session** — the Claude Code session you talk to, opened at
   your project root; `rite init` ends by telling you to start one. It runs as
-  the role you picked at `rite init` (the Owner, by default). You use it to
-  write tickets and decide which worker takes which.
+  the role you picked at `rite init` (by default the Owner, the role that owns
+  the ticket board). You use it to write tickets and decide which worker takes
+  which.
 - **A worker session** — Claude Code opened in `workers/<name>/`, a directory
   holding that worker's own clone of each repository, which
   `rite add worker <name>` creates. Its `CLAUDE.md` tells it how to work a
@@ -162,6 +158,21 @@ slower paths — verify the checksum first, or clone and read it — are in
 [`docs/install-notes.md`](docs/install-notes.md), with the reasoning. Nothing
 phones home.*
 
+## Planned — not built
+
+Nothing in this section exists yet. Each item is designed, the design is in
+[`SPEC.md`](SPEC.md), and the code is not written.
+
+- **More than one machine on a project.** Planned: machines share claims and
+  the Owner role through a git repository, and if the Owner's machine goes
+  away, the highest-priority machine still running takes over. Designed in
+  SPEC §2.4 and §3.3.
+- **Questions sent to the person who owns the area.** Planned: you list people
+  and the areas they own, and rite matches each question to one of them,
+  breaks ties, and reroutes when that person's machine stops responding.
+  Designed in SPEC §4, which is written in the present tense; none of it is
+  built.
+
 ## Why you might not want it
 
 **It runs on Pro; what it is *for* may not.** Starting a worker needs no more
@@ -182,7 +193,8 @@ what rite tells them to do — but rite does not read the results, so there is
 no coverage threshold, no accessibility pass, and no opinion on your test
 strategy.
 
-**One machine.** Coordinating across machines is designed and not built.
+**One machine.** Coordinating across machines is not built; see
+[Planned](#planned--not-built).
 
 **Claude only, deliberately.** `CLAUDE.md` and `.claude/agents/` are
 first-class here rather than behind a provider abstraction, and no other tool
