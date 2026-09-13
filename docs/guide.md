@@ -96,8 +96,9 @@ silent — it says so and names the account it used — and
 **What this does and does not protect.** Per-project names stop *accidental*
 cross-project use. They are **not a security boundary**: keychain access is
 per-user, not per-process, so any unsandboxed process running as you can read
-every entry rite has stored, whatever it is named. `sandbox.enabled` is `false`
-by default, so that is the default path.
+every entry rite has stored, whatever it is named. A Worker you open yourself
+is unsandboxed whatever `sandbox.enabled` says — only `rite sandbox start`
+sandboxes one — so that is the default path.
 
 The sandbox is the only enforcement, and it is blunter than you might expect: a
 seatbelt-sandboxed Worker **cannot read the keychain at all** — not another
@@ -221,8 +222,9 @@ backends (JIRA and GitHub Issues, or none), a continuous handover snapshot,
 a cheap non-LLM watchdog, a user-set Worker schedule, burn-rate reporting
 from your own Claude Code transcripts, a small standby pool of coordinator
 sessions, and optional process sandboxing for Workers via
-[yoloAI](https://yoloai.dev) (installed separately; off by default, and read
-the caveats in [Roadmap](#roadmap) before turning it on).
+[yoloAI](https://yoloai.dev) (installed separately; on macOS `rite init` sets
+`sandbox.enabled` on by default, and Workers are sandboxed only when started
+with `rite sandbox start` — read the caveats in [Roadmap](#roadmap) first).
 
 ## Roadmap
 
@@ -252,8 +254,10 @@ otherwise:
   recommends a Worker count or throttles anything; the schedule you set is
   the only thing that controls concurrency.
 - **Sandboxing needs a real security review before you'd trust it with
-  untrusted work.** It is off by default, and four things are worth knowing
-  before you turn it on. SPEC §5.3 has the detail, and says which of them were
+  untrusted work.** On macOS `rite init` sets `sandbox.enabled` on by default
+  (it asks, and the default answer is Yes), and Workers are sandboxed only when
+  started with `rite sandbox start`. Four things are worth knowing before you
+  use it. SPEC §5.3 has the detail, and says which of them were
   checked against the installed tool and which are second-hand:
   - **Every rite-managed sandbox has unrestricted outbound network**, on every
     backend. Not because the backends can't isolate — some can — but because

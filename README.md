@@ -16,15 +16,25 @@ sessions to claim and who to ask.
 - **Claim exclusion is measured, not asserted.** A four-minute soak of six
   concurrent workers: 132,321 grants, zero lost and zero held twice. The same
   harness against the previous lock produced 309 lost updates in 10 seconds.
-- **Questions go to the person who owns that area**, named by expertise tag
-  in your config, rather than to whichever session is at the keyboard.
+- **The Owner's `CLAUDE.md` lists who owns each area** — the Owner being the
+  session that owns the ticket board — built from the expertise tags in
+  `.rite/config.yaml`. That session can hand a decision to the person listed
+  instead of making it. Nothing is sent automatically, and rite does not route
+  questions itself.
 - **A secret scan runs on pre-push and in CI**, over full history. Suppressing
   a finding takes a written reason — there is no global off switch.
-- **Workers can run sandboxed** (off by default; Seatbelt on macOS, Docker,
-  Podman or Tart elsewhere) with a scoped token, not with permissions
-  bypassed.
-- **51 numbered decisions** in [`SPEC.md`](SPEC.md), each with the question it
-  answers and the reasoning — including the ones that did not survive review.
+- **Workers can run sandboxed, and on macOS `rite init` turns the setting on
+  by default.** `rite sandbox start <name>` runs a worker under Seatbelt
+  (macOS's `sandbox-exec`) through [yoloAI](https://yoloai.dev), which `rite
+  init` offers to install. A session you open yourself is not sandboxed.
+  Inside the sandbox, outbound network is not restricted and Claude Code skips
+  permission prompts. Every worker gets every credential the project holds;
+  `rite add worker --scoped-token` gives one its own GitHub token in place of
+  the shared one. On other platforms `rite init` leaves sandboxing off. On
+  Docker, a dogfood run found file locking does not lock, so two workers can
+  be granted the same path: run one worker there.
+- **52 numbered decisions** in [`SPEC.md`](SPEC.md), each with the question it
+  answers and the reasoning.
 
 **If you run one session at a time you do not need this**, and it coordinates
 sessions on one machine only.
