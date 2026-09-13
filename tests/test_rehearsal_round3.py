@@ -455,6 +455,13 @@ def kb_server():
 
 def _kb_project(tmp_path: Path) -> Path:
     (tmp_path / ".rite" / "kb" / ".cache").mkdir(parents=True)
+    # A `.rite/` alone is not a project — `_find_project_root` keys on
+    # brief.yaml/modules.yaml so a module that is itself a rite repo cannot
+    # capture its own workers. These tests chdir here and expect rite to
+    # resolve THIS directory.
+    (tmp_path / ".rite" / "brief.yaml").write_text(
+        "project:\n  name: t\n  role: owner\n"
+    )
     return tmp_path
 
 

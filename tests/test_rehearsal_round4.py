@@ -13,6 +13,7 @@ previous commit to confirm it fails there.
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 from unittest.mock import patch
@@ -48,8 +49,17 @@ def _age(root: Path, worker: str, seconds: float) -> None:
 
 
 def _run(root: Path, argv: list[str]):
-    with patch("rite_ai.cli.main._find_project_root", return_value=root):
-        return CliRunner().invoke(cli, argv)
+    """Point rite at `root` via the documented override, not only by patching
+    the private resolver.
+
+    Patching `_find_project_root` alone left `_has_project_in_scope` walking
+    up from the REAL cwd — which, when the suite runs from rite's own
+    checkout, found rite's `.rite/` and answered True by accident. These
+    tests passed because of that accident. `RITE_PROJECT_ROOT` is the one
+    signal every resolver reads."""
+    with patch.dict(os.environ, {"RITE_PROJECT_ROOT": str(root)}):
+        with patch("rite_ai.cli.main._find_project_root", return_value=root):
+            return CliRunner().invoke(cli, argv)
 
 
 # --- an empty write is a deletion ------------------------------------------

@@ -8,12 +8,57 @@ from rite_ai import __version__
 from rite_ai.cli.help import RiteGroup
 from rite_ai.state import exclusion_holds
 
+# The files that make a directory a rite PROJECT, as opposed to a directory
+# that merely has a `.rite/`. `rite init` writes both and nothing else does,
+# and neither is present in rite's own repository — which has a `.rite/` for
+# the gate's suppressions and the review checklist, and is not a project.
+#
+# Either satisfies it: a tree may legitimately carry one without the other
+# (a project declared but with no modules registered yet), and requiring both
+# would make the answer depend on how far through setup someone is.
+PROJECT_MARKERS = (
+    Path(".rite") / "brief.yaml",
+    Path(".rite") / "modules.yaml",
+)
+
+
+def _is_project(path: Path) -> bool:
+    return any((path / m).is_file() for m in PROJECT_MARKERS)
+
+# Explicit override, checked before any walk. Two reasons it exists, and the
+# second is why it is not just a convenience:
+#
+#  1. A module that is itself a rite project. `rite prepare` clones modules
+#     UNDER the project root, so `workers/w1/rite/` sits inside the very tree
+#     being coordinated. Walking up from cwd finds the INNER project first,
+#     and every worker then gets a private claims ledger. Nothing is shared,
+#     so nothing ever collides — the run looks flawless and the exclusion
+#     guarantee is simply absent. `PROJECT_MARKERS` fixes the case where the
+#     inner repo is not a scaffolded project; this fixes the case where it is.
+#  2. Test isolation currently rests on 142 hand-written
+#     `monkeypatch.chdir(tmp_path)` calls and no autouse fixture. An env var
+#     the suite can set is a property, not a convention each test re-observes.
+PROJECT_ROOT_ENV = "RITE_PROJECT_ROOT"
+
 
 def _find_project_root() -> Path:
-    """Walk up from cwd to find a directory containing .rite/."""
+    """The rite project root: the override if set, else the nearest ancestor
+    holding `PROJECT_MARKERS`, else cwd.
+
+    The marker is a FILE, not the `.rite/` directory. `.rite/` alone is not
+    the property: rite's own repository has one — it tracks
+    `.rite/gitleaksignore` and `.rite/review-checklist.md` for the gate and
+    the review convention — and is not a rite project. Neither is any clone
+    of a project that ships its committed `.rite/` config, which is every
+    one of them, because `scaffold.AUTHORED_CONFIG` re-includes nine paths
+    under `.rite/` in the `.gitignore` that `rite init` writes.
+    """
+    override = os.environ.get(PROJECT_ROOT_ENV)
+    if override:
+        return Path(override).expanduser().resolve()
     cwd = Path.cwd()
     for parent in [cwd, *cwd.parents]:
-        if (parent / ".rite").is_dir():
+        if _is_project(parent):
             return parent
     return cwd
 
@@ -42,7 +87,7 @@ def _require_project_root() -> Path:
     message is `board`'s, which already had it right.
     """
     root = _find_project_root()
-    if (root / ".rite").is_dir():
+    if _is_project(root):
         return root
     # `_find_project_root` returns the real root when it found one and
     # cwd when it did not, and those two are told apart by exactly this:
@@ -52,9 +97,10 @@ def _require_project_root() -> Path:
     # `_find_project_root`, and a second private walk-up would quietly
     # ignore that.
     click.echo(
-        f"not a rite project ({root}) — no .rite/ directory here or in any "
-        "parent. Run `rite init` here first, or change to a project "
-        "directory.",
+        f"not a rite project ({root}) — no .rite/brief.yaml or "
+        ".rite/modules.yaml here or in any parent. Run `rite init` here "
+        "first, change to a project directory, or set "
+        f"{PROJECT_ROOT_ENV} to name one explicitly.",
         err=True,
     )
     raise SystemExit(1)
@@ -138,14 +184,55 @@ def _tracked_runtime_state(root: Path) -> list[str]:
     ]
 
 
+def _gate_root() -> Path:
+    """Where the publish gate scans.
+
+    The gate is a REPOSITORY operation — it lists tracked files and walks
+    history — so its root is the git worktree, not the rite project. Those
+    are usually the same directory and are not always: rite's own repo has a
+    `.rite/` holding the gate's suppressions and the review checklist, and is
+    not a rite project (no `PROJECT_MARKERS`). Resolving the gate through the
+    project marker alone would fall back to cwd there, so running
+    `rite publish check` from a subdirectory would scan that subdirectory and
+    silently miss `.rite/gitleaksignore` — a gate that reports clean about
+    the wrong tree.
+
+    Project root wins when there is one, so a scanned project still uses its
+    own config; otherwise the git toplevel; cwd only if neither answers.
+    """
+    import subprocess
+
+    cwd = Path.cwd()
+    for parent in [cwd, *cwd.parents]:
+        if _is_project(parent):
+            return parent
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return cwd
+    if proc.returncode == 0 and proc.stdout.strip():
+        return Path(proc.stdout.strip())
+    return cwd
+
+
 def _has_project_in_scope() -> bool:
     """Unlike `_find_project_root`, which always returns SOMETHING (falls
     back to cwd), this distinguishes "found a real .rite/" from "found
     nothing" — the distinction `rite status`'s aggregation mode needs to
     decide whether to show one project's detail or the cross-project
-    summary (SPEC §8.9)."""
+    summary (SPEC §8.9). Same marker as `_find_project_root`, and for the
+    same reason — a directory with a `.rite/` in it is not necessarily a
+    project."""
+    if os.environ.get(PROJECT_ROOT_ENV):
+        return True
     cwd = Path.cwd()
-    return any((parent / ".rite").is_dir() for parent in [cwd, *cwd.parents])
+    return any(_is_project(parent) for parent in [cwd, *cwd.parents])
 
 
 def _claims_path() -> Path:
@@ -2282,7 +2369,7 @@ def publish_install_hook(force: bool) -> None:
     """
     from rite_ai.gate.hook import install_pre_push_hook
 
-    result = install_pre_push_hook(_find_project_root(), force=force)
+    result = install_pre_push_hook(_gate_root(), force=force)
     # `install_pre_push_hook` already phrases both outcomes for a human
     # ("installed <path>" / the full reason it refused) — don't re-prefix it.
     click.echo(result.message, err=not result.ok)
@@ -2325,7 +2412,7 @@ def publish_install_ci(force: bool) -> None:
         write_ci_workflow,
     )
 
-    root = _find_project_root()
+    root = _gate_root()
     path = root / CI_WORKFLOW_REL_PATH
 
     if force:
@@ -2396,7 +2483,7 @@ def publish_check(rev_range: str | None) -> None:
     """
     from rite_ai.gate import EXIT_CLEAN, EXIT_FAIL, EXIT_WARN, run_gate
 
-    root = _find_project_root()
+    root = _gate_root()
     report = run_gate(root, rev_range=rev_range)
 
     for finding in report.findings:
@@ -2442,7 +2529,7 @@ def publish_pre_push() -> None:
     from rite_ai.gate.gate import format_report
     from rite_ai.gate.hook import compute_pre_push_ranges
 
-    root = _find_project_root()
+    root = _gate_root()
     lines = sys.stdin.read().splitlines()
 
     if not lines:

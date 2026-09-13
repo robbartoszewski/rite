@@ -44,6 +44,10 @@ def test_doctor_with_no_project(tmp_path, monkeypatch):
 def test_doctor_healthy_project(tmp_path, monkeypatch):
     rite_dir = tmp_path / ".rite"
     rite_dir.mkdir()
+    # Declares a PROJECT, not just a `.rite/`. `_find_project_root` keys on
+    # brief.yaml/modules.yaml so that a module which is itself a rite repo
+    # does not capture its own workers — see test_nested_project_root.py.
+    (rite_dir / "brief.yaml").write_text("project:\n  name: t\n  role: owner\n")
     (rite_dir / "brief.yaml").write_text(
         "project:\n  name: acme\n  role: owner\n"
         "what:\n  kind: app\ntechnology:\n  languages:\n    - python\n"
@@ -63,6 +67,10 @@ def test_doctor_healthy_project(tmp_path, monkeypatch):
 def test_doctor_reports_schedule_problems(tmp_path, monkeypatch):
     rite_dir = tmp_path / ".rite"
     rite_dir.mkdir()
+    # Declares a PROJECT, not just a `.rite/`. `_find_project_root` keys on
+    # brief.yaml/modules.yaml so that a module which is itself a rite repo
+    # does not capture its own workers — see test_nested_project_root.py.
+    (rite_dir / "brief.yaml").write_text("project:\n  name: t\n  role: owner\n")
     (rite_dir / "brief.yaml").write_text(
         "project:\n  name: acme\n  role: owner\n"
         "what:\n  kind: app\ntechnology:\n  languages:\n    - python\n"
@@ -83,6 +91,10 @@ def test_doctor_reports_schedule_problems(tmp_path, monkeypatch):
 def test_doctor_reports_missing_module_repo(tmp_path, monkeypatch):
     rite_dir = tmp_path / ".rite"
     rite_dir.mkdir()
+    # Declares a PROJECT, not just a `.rite/`. `_find_project_root` keys on
+    # brief.yaml/modules.yaml so that a module which is itself a rite repo
+    # does not capture its own workers — see test_nested_project_root.py.
+    (rite_dir / "brief.yaml").write_text("project:\n  name: t\n  role: owner\n")
     (rite_dir / "brief.yaml").write_text(
         "project:\n  name: acme\n  role: owner\n"
         "what:\n  kind: app\ntechnology:\n  languages:\n    - python\n"
@@ -102,6 +114,10 @@ def test_doctor_reports_missing_module_repo(tmp_path, monkeypatch):
 def test_claim_and_release(tmp_path, monkeypatch):
     rite_dir = tmp_path / ".rite"
     rite_dir.mkdir()
+    # Declares a PROJECT, not just a `.rite/`. `_find_project_root` keys on
+    # brief.yaml/modules.yaml so that a module which is itself a rite repo
+    # does not capture its own workers — see test_nested_project_root.py.
+    (rite_dir / "brief.yaml").write_text("project:\n  name: t\n  role: owner\n")
     monkeypatch.chdir(tmp_path)
 
     runner = CliRunner()
@@ -125,6 +141,10 @@ def test_claim_and_release(tmp_path, monkeypatch):
 def test_release_force(tmp_path, monkeypatch):
     rite_dir = tmp_path / ".rite"
     rite_dir.mkdir()
+    # Declares a PROJECT, not just a `.rite/`. `_find_project_root` keys on
+    # brief.yaml/modules.yaml so that a module which is itself a rite repo
+    # does not capture its own workers — see test_nested_project_root.py.
+    (rite_dir / "brief.yaml").write_text("project:\n  name: t\n  role: owner\n")
     monkeypatch.chdir(tmp_path)
     runner = CliRunner()
 
@@ -151,6 +171,10 @@ def test_release_force(tmp_path, monkeypatch):
 def test_release_force_requires_by_and_reason(tmp_path, monkeypatch):
     rite_dir = tmp_path / ".rite"
     rite_dir.mkdir()
+    # Declares a PROJECT, not just a `.rite/`. `_find_project_root` keys on
+    # brief.yaml/modules.yaml so that a module which is itself a rite repo
+    # does not capture its own workers — see test_nested_project_root.py.
+    (rite_dir / "brief.yaml").write_text("project:\n  name: t\n  role: owner\n")
     monkeypatch.chdir(tmp_path)
     runner = CliRunner()
 
@@ -162,6 +186,10 @@ def test_release_force_requires_by_and_reason(tmp_path, monkeypatch):
 def test_release_without_worker_or_force_refuses(tmp_path, monkeypatch):
     rite_dir = tmp_path / ".rite"
     rite_dir.mkdir()
+    # Declares a PROJECT, not just a `.rite/`. `_find_project_root` keys on
+    # brief.yaml/modules.yaml so that a module which is itself a rite repo
+    # does not capture its own workers — see test_nested_project_root.py.
+    (rite_dir / "brief.yaml").write_text("project:\n  name: t\n  role: owner\n")
     monkeypatch.chdir(tmp_path)
     runner = CliRunner()
 
@@ -172,6 +200,7 @@ def test_release_without_worker_or_force_refuses(tmp_path, monkeypatch):
 def test_context_add_list_remove(tmp_path, monkeypatch):
     rite_dir = tmp_path / ".rite"
     (rite_dir / "context").mkdir(parents=True)
+    (rite_dir / "brief.yaml").write_text("project:\n  name: t\n  role: owner\n")
     monkeypatch.chdir(tmp_path)
     runner = CliRunner()
 
@@ -194,6 +223,10 @@ def test_context_add_list_remove(tmp_path, monkeypatch):
 def test_watchdog_ok(tmp_path, monkeypatch):
     rite_dir = tmp_path / ".rite"
     rite_dir.mkdir()
+    # Declares a PROJECT, not just a `.rite/`. `_find_project_root` keys on
+    # brief.yaml/modules.yaml so that a module which is itself a rite repo
+    # does not capture its own workers — see test_nested_project_root.py.
+    (rite_dir / "brief.yaml").write_text("project:\n  name: t\n  role: owner\n")
     (rite_dir / "brief.yaml").write_text(
         "project:\n  name: acme\n  role: owner\n"
         "what:\n  kind: app\ntechnology:\n  languages:\n    - python\n"
@@ -211,6 +244,10 @@ def test_watchdog_ok(tmp_path, monkeypatch):
 def test_watchdog_blocker_exits_nonzero(tmp_path, monkeypatch):
     rite_dir = tmp_path / ".rite"
     rite_dir.mkdir()
+    # Declares a PROJECT, not just a `.rite/`. `_find_project_root` keys on
+    # brief.yaml/modules.yaml so that a module which is itself a rite repo
+    # does not capture its own workers — see test_nested_project_root.py.
+    (rite_dir / "brief.yaml").write_text("project:\n  name: t\n  role: owner\n")
     (rite_dir / "brief.yaml").write_text(
         "project:\n  name: acme\n  role: owner\n"
         "what:\n  kind: app\ntechnology:\n  languages:\n    - python\n"
@@ -232,6 +269,10 @@ def test_watchdog_blocker_exits_nonzero(tmp_path, monkeypatch):
 def test_budget_report_with_no_configured_quota(tmp_path, monkeypatch):
     rite_dir = tmp_path / ".rite"
     rite_dir.mkdir()
+    # Declares a PROJECT, not just a `.rite/`. `_find_project_root` keys on
+    # brief.yaml/modules.yaml so that a module which is itself a rite repo
+    # does not capture its own workers — see test_nested_project_root.py.
+    (rite_dir / "brief.yaml").write_text("project:\n  name: t\n  role: owner\n")
     (rite_dir / "config.yaml").write_text("ticket_backend:\n  type: none\n")
     monkeypatch.chdir(tmp_path)
 
@@ -254,6 +295,10 @@ def test_budget_report_prints_no_percentage_against_a_per_project_budget(
 
     rite_dir = tmp_path / ".rite"
     rite_dir.mkdir()
+    # Declares a PROJECT, not just a `.rite/`. `_find_project_root` keys on
+    # brief.yaml/modules.yaml so that a module which is itself a rite repo
+    # does not capture its own workers — see test_nested_project_root.py.
+    (rite_dir / "brief.yaml").write_text("project:\n  name: t\n  role: owner\n")
     (rite_dir / "config.yaml").write_text(
         "ticket_backend:\n  type: none\nbudget:\n  weekly_token_budget: 100\n"
     )
@@ -293,6 +338,10 @@ def test_budget_report_prints_no_percentage_against_a_per_project_budget(
 def test_budget_report_unrecognised_timezone_refuses_cleanly(tmp_path, monkeypatch):
     rite_dir = tmp_path / ".rite"
     rite_dir.mkdir()
+    # Declares a PROJECT, not just a `.rite/`. `_find_project_root` keys on
+    # brief.yaml/modules.yaml so that a module which is itself a rite repo
+    # does not capture its own workers — see test_nested_project_root.py.
+    (rite_dir / "brief.yaml").write_text("project:\n  name: t\n  role: owner\n")
     (rite_dir / "config.yaml").write_text(
         "ticket_backend:\n  type: none\nschedule:\n  timezone: Not/A_Real_Zone\n"
     )
@@ -307,6 +356,10 @@ def test_budget_report_unrecognised_timezone_refuses_cleanly(tmp_path, monkeypat
 def test_pool_status_with_no_pool_ever_filled(tmp_path, monkeypatch):
     rite_dir = tmp_path / ".rite"
     rite_dir.mkdir()
+    # Declares a PROJECT, not just a `.rite/`. `_find_project_root` keys on
+    # brief.yaml/modules.yaml so that a module which is itself a rite repo
+    # does not capture its own workers — see test_nested_project_root.py.
+    (rite_dir / "brief.yaml").write_text("project:\n  name: t\n  role: owner\n")
     (rite_dir / "config.yaml").write_text("ticket_backend:\n  type: none\n")
     monkeypatch.chdir(tmp_path)
 
@@ -319,6 +372,10 @@ def test_pool_status_with_no_pool_ever_filled(tmp_path, monkeypatch):
 def test_pool_fill_missing_tmux_refuses_cleanly(tmp_path, monkeypatch):
     rite_dir = tmp_path / ".rite"
     rite_dir.mkdir()
+    # Declares a PROJECT, not just a `.rite/`. `_find_project_root` keys on
+    # brief.yaml/modules.yaml so that a module which is itself a rite repo
+    # does not capture its own workers — see test_nested_project_root.py.
+    (rite_dir / "brief.yaml").write_text("project:\n  name: t\n  role: owner\n")
     (rite_dir / "config.yaml").write_text("ticket_backend:\n  type: none\n")
     monkeypatch.chdir(tmp_path)
 
@@ -332,6 +389,10 @@ def test_pool_fill_missing_tmux_refuses_cleanly(tmp_path, monkeypatch):
 def test_pool_fill_starts_sessions_up_to_target(tmp_path, monkeypatch):
     rite_dir = tmp_path / ".rite"
     rite_dir.mkdir()
+    # Declares a PROJECT, not just a `.rite/`. `_find_project_root` keys on
+    # brief.yaml/modules.yaml so that a module which is itself a rite repo
+    # does not capture its own workers — see test_nested_project_root.py.
+    (rite_dir / "brief.yaml").write_text("project:\n  name: t\n  role: owner\n")
     (rite_dir / "config.yaml").write_text(
         "ticket_backend:\n  type: none\npool:\n  coordinator_standby: 2\n"
     )
@@ -414,6 +475,10 @@ def test_prepare_worker_workspace(tmp_path, monkeypatch):
 
     rite_dir = project_root / ".rite"
     rite_dir.mkdir()
+    # Declares a PROJECT, not just a `.rite/`. `_find_project_root` keys on
+    # brief.yaml/modules.yaml so that a module which is itself a rite repo
+    # does not capture its own workers — see test_nested_project_root.py.
+    (rite_dir / "brief.yaml").write_text("project:\n  name: t\n  role: owner\n")
     (rite_dir / "modules.yaml").write_text(
         "modules:\n  backend:\n    path: .\n    description: ''\n"
     )
@@ -478,6 +543,10 @@ def test_add_worker_with_scoped_token_provisions_a_token(tmp_path, monkeypatch):
 
     rite_dir = project_root / ".rite"
     rite_dir.mkdir()
+    # Declares a PROJECT, not just a `.rite/`. `_find_project_root` keys on
+    # brief.yaml/modules.yaml so that a module which is itself a rite repo
+    # does not capture its own workers — see test_nested_project_root.py.
+    (rite_dir / "brief.yaml").write_text("project:\n  name: t\n  role: owner\n")
     (rite_dir / "modules.yaml").write_text(
         f"modules:\n  backend:\n    path: .\n    url: {remote}\n    description: ''\n"
     )
@@ -540,6 +609,10 @@ def test_add_worker_sandbox_disabled_skips_token_provisioning(tmp_path, monkeypa
 
     rite_dir = project_root / ".rite"
     rite_dir.mkdir()
+    # Declares a PROJECT, not just a `.rite/`. `_find_project_root` keys on
+    # brief.yaml/modules.yaml so that a module which is itself a rite repo
+    # does not capture its own workers — see test_nested_project_root.py.
+    (rite_dir / "brief.yaml").write_text("project:\n  name: t\n  role: owner\n")
     (rite_dir / "modules.yaml").write_text(
         "modules:\n  backend:\n    path: .\n    description: ''\n"
     )
@@ -554,6 +627,10 @@ def test_add_worker_sandbox_disabled_skips_token_provisioning(tmp_path, monkeypa
 def test_sandbox_start_passes_provisioned_token_through(tmp_path, monkeypatch):
     rite_dir = tmp_path / ".rite"
     rite_dir.mkdir()
+    # Declares a PROJECT, not just a `.rite/`. `_find_project_root` keys on
+    # brief.yaml/modules.yaml so that a module which is itself a rite repo
+    # does not capture its own workers — see test_nested_project_root.py.
+    (rite_dir / "brief.yaml").write_text("project:\n  name: t\n  role: owner\n")
     (rite_dir / "brief.yaml").write_text(
         "project:\n  name: acme\n  role: owner\n"
         "what:\n  kind: app\ntechnology:\n  languages:\n    - python\n"
@@ -593,6 +670,10 @@ def test_sandbox_start_passes_provisioned_token_through(tmp_path, monkeypatch):
 def test_prepare_unknown_worker_refuses(tmp_path, monkeypatch):
     rite_dir = tmp_path / ".rite"
     rite_dir.mkdir()
+    # Declares a PROJECT, not just a `.rite/`. `_find_project_root` keys on
+    # brief.yaml/modules.yaml so that a module which is itself a rite repo
+    # does not capture its own workers — see test_nested_project_root.py.
+    (rite_dir / "brief.yaml").write_text("project:\n  name: t\n  role: owner\n")
     (rite_dir / "modules.yaml").write_text("modules: {}\n")
     monkeypatch.chdir(tmp_path)
 
@@ -673,6 +754,10 @@ def test_status_with_no_dispatch_directory_and_no_project(tmp_path, monkeypatch)
 def test_schedule_set_upsert_and_show(tmp_path, monkeypatch):
     rite_dir = tmp_path / ".rite"
     rite_dir.mkdir()
+    # Declares a PROJECT, not just a `.rite/`. `_find_project_root` keys on
+    # brief.yaml/modules.yaml so that a module which is itself a rite repo
+    # does not capture its own workers — see test_nested_project_root.py.
+    (rite_dir / "brief.yaml").write_text("project:\n  name: t\n  role: owner\n")
     monkeypatch.chdir(tmp_path)
     runner = CliRunner()
 
@@ -695,6 +780,10 @@ def test_schedule_set_does_not_lock_itself_out(tmp_path, monkeypatch):
     `rite schedule set-timezone` call meant to fix it."""
     rite_dir = tmp_path / ".rite"
     rite_dir.mkdir()
+    # Declares a PROJECT, not just a `.rite/`. `_find_project_root` keys on
+    # brief.yaml/modules.yaml so that a module which is itself a rite repo
+    # does not capture its own workers — see test_nested_project_root.py.
+    (rite_dir / "brief.yaml").write_text("project:\n  name: t\n  role: owner\n")
     monkeypatch.chdir(tmp_path)
     runner = CliRunner()
 
@@ -709,6 +798,10 @@ def test_schedule_set_does_not_lock_itself_out(tmp_path, monkeypatch):
 def test_schedule_set_refuses_over_cap_not_clamp(tmp_path, monkeypatch):
     rite_dir = tmp_path / ".rite"
     rite_dir.mkdir()
+    # Declares a PROJECT, not just a `.rite/`. `_find_project_root` keys on
+    # brief.yaml/modules.yaml so that a module which is itself a rite repo
+    # does not capture its own workers — see test_nested_project_root.py.
+    (rite_dir / "brief.yaml").write_text("project:\n  name: t\n  role: owner\n")
     (rite_dir / "config.yaml").write_text("sandbox:\n  max_concurrent_workers: 5\n")
     monkeypatch.chdir(tmp_path)
     runner = CliRunner()
@@ -721,6 +814,10 @@ def test_schedule_set_refuses_over_cap_not_clamp(tmp_path, monkeypatch):
 def test_handover_write_and_show(tmp_path, monkeypatch):
     rite_dir = tmp_path / ".rite"
     rite_dir.mkdir()
+    # Declares a PROJECT, not just a `.rite/`. `_find_project_root` keys on
+    # brief.yaml/modules.yaml so that a module which is itself a rite repo
+    # does not capture its own workers — see test_nested_project_root.py.
+    (rite_dir / "brief.yaml").write_text("project:\n  name: t\n  role: owner\n")
     monkeypatch.chdir(tmp_path)
     runner = CliRunner()
 
@@ -754,6 +851,10 @@ def test_handover_write_and_show(tmp_path, monkeypatch):
 def test_status(tmp_path, monkeypatch):
     rite_dir = tmp_path / ".rite"
     rite_dir.mkdir()
+    # Declares a PROJECT, not just a `.rite/`. `_find_project_root` keys on
+    # brief.yaml/modules.yaml so that a module which is itself a rite repo
+    # does not capture its own workers — see test_nested_project_root.py.
+    (rite_dir / "brief.yaml").write_text("project:\n  name: t\n  role: owner\n")
     monkeypatch.chdir(tmp_path)
 
     runner = CliRunner()
@@ -848,6 +949,10 @@ def test_stop_accepts_explicit_ticket(tmp_path, monkeypatch):
     to pass a ticket through."""
     rite_dir = tmp_path / ".rite"
     rite_dir.mkdir()
+    # Declares a PROJECT, not just a `.rite/`. `_find_project_root` keys on
+    # brief.yaml/modules.yaml so that a module which is itself a rite repo
+    # does not capture its own workers — see test_nested_project_root.py.
+    (rite_dir / "brief.yaml").write_text("project:\n  name: t\n  role: owner\n")
     (rite_dir / "brief.yaml").write_text(
         "project:\n  name: acme\n  role: owner\n"
         "what:\n  kind: app\ntechnology:\n  languages:\n    - python\n"
@@ -867,6 +972,10 @@ def test_stop_accepts_explicit_ticket(tmp_path, monkeypatch):
 def _rite_project_with_backend(tmp_path):
     rite_dir = tmp_path / ".rite"
     rite_dir.mkdir()
+    # Declares a PROJECT, not just a `.rite/`. `_find_project_root` keys on
+    # brief.yaml/modules.yaml so that a module which is itself a rite repo
+    # does not capture its own workers — see test_nested_project_root.py.
+    (rite_dir / "brief.yaml").write_text("project:\n  name: t\n  role: owner\n")
     (rite_dir / "config.yaml").write_text(
         "ticket_backend:\n  type: jira\n  site: test.atlassian.net\n"
         "  projects: {workers: RW, board: SCRUM}\n  credential: ''\n"
@@ -885,6 +994,10 @@ def test_publish_pre_push_nothing_to_scan(tmp_path, monkeypatch):
 def test_board_create_no_backend_configured(tmp_path, monkeypatch):
     rite_dir = tmp_path / ".rite"
     rite_dir.mkdir()
+    # Declares a PROJECT, not just a `.rite/`. `_find_project_root` keys on
+    # brief.yaml/modules.yaml so that a module which is itself a rite repo
+    # does not capture its own workers — see test_nested_project_root.py.
+    (rite_dir / "brief.yaml").write_text("project:\n  name: t\n  role: owner\n")
     (rite_dir / "config.yaml").write_text("ticket_backend:\n  type: none\n")
     monkeypatch.chdir(tmp_path)
 
@@ -1024,6 +1137,10 @@ def test_pool_archive_releases_a_dead_slots_orphaned_claim(tmp_path, monkeypatch
 
     rite_dir = tmp_path / ".rite"
     rite_dir.mkdir()
+    # Declares a PROJECT, not just a `.rite/`. `_find_project_root` keys on
+    # brief.yaml/modules.yaml so that a module which is itself a rite repo
+    # does not capture its own workers — see test_nested_project_root.py.
+    (rite_dir / "brief.yaml").write_text("project:\n  name: t\n  role: owner\n")
     (rite_dir / "config.yaml").write_text(
         "ticket_backend:\n  type: none\npool:\n  archive_after_minutes: 30\n"
     )
@@ -1065,6 +1182,10 @@ def test_pool_archive_releases_a_dead_slots_orphaned_claim(tmp_path, monkeypatch
 def test_pool_archive_without_tmux_refuses_rather_than_guessing(tmp_path, monkeypatch):
     rite_dir = tmp_path / ".rite"
     rite_dir.mkdir()
+    # Declares a PROJECT, not just a `.rite/`. `_find_project_root` keys on
+    # brief.yaml/modules.yaml so that a module which is itself a rite repo
+    # does not capture its own workers — see test_nested_project_root.py.
+    (rite_dir / "brief.yaml").write_text("project:\n  name: t\n  role: owner\n")
     (rite_dir / "config.yaml").write_text("ticket_backend:\n  type: none\n")
     monkeypatch.chdir(tmp_path)
 
@@ -1078,6 +1199,10 @@ def test_pool_archive_without_tmux_refuses_rather_than_guessing(tmp_path, monkey
 def _minimal_project(tmp_path, worker: str = "alpha"):
     rite_dir = tmp_path / ".rite"
     rite_dir.mkdir()
+    # Declares a PROJECT, not just a `.rite/`. `_find_project_root` keys on
+    # brief.yaml/modules.yaml so that a module which is itself a rite repo
+    # does not capture its own workers — see test_nested_project_root.py.
+    (rite_dir / "brief.yaml").write_text("project:\n  name: t\n  role: owner\n")
     (rite_dir / "brief.yaml").write_text(
         "project:\n  name: acme\n  role: owner\n"
         "what:\n  kind: app\ntechnology:\n  languages:\n    - python\n"
@@ -1164,6 +1289,10 @@ def test_pool_history_reads_back_what_archive_recorded(tmp_path, monkeypatch):
 
     rite_dir = tmp_path / ".rite"
     rite_dir.mkdir()
+    # Declares a PROJECT, not just a `.rite/`. `_find_project_root` keys on
+    # brief.yaml/modules.yaml so that a module which is itself a rite repo
+    # does not capture its own workers — see test_nested_project_root.py.
+    (rite_dir / "brief.yaml").write_text("project:\n  name: t\n  role: owner\n")
     (rite_dir / "config.yaml").write_text(
         "ticket_backend:\n  type: none\npool:\n  archive_after_minutes: 30\n"
     )
@@ -1225,6 +1354,9 @@ def test_release_history_reads_back_the_force_release_audit(tmp_path, monkeypatc
     wrote the audit trail and nothing could read it, so "why did my claim
     disappear?" had no answer on the CLI."""
     (tmp_path / ".rite").mkdir()
+    (tmp_path / ".rite" / "brief.yaml").write_text(
+        "project:\n  name: t\n  role: owner\n"
+    )
     monkeypatch.chdir(tmp_path)
     runner = CliRunner()
 
