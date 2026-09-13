@@ -64,8 +64,17 @@ def _clean_clone(tmp_path: Path) -> Path:
     state of the working tree.
     """
     clone = tmp_path / "clone"
+    # `--no-tags`, and it is load-bearing. This helper's whole premise is a
+    # clone with NO release tag, so that `source_ref()`'s HEAD branch is the
+    # one under test and `_tagged_clone` below can add a tag to exercise the
+    # other. That premise held only while the repository had never been
+    # tagged: publishing `v0.1.0` made every `_clean_clone` inherit it, the
+    # tool correctly started hashing the tag instead of HEAD, and four tests
+    # here failed — on a freshly published repo, for anyone who cloned it.
     subprocess.run(
-        ["git", "clone", "-q", str(REPO_ROOT), str(clone)], check=True, timeout=120
+        ["git", "clone", "-q", "--no-tags", str(REPO_ROOT), str(clone)],
+        check=True,
+        timeout=120,
     )
     (clone / "tools").mkdir(exist_ok=True)
     (clone / "tools" / "release_checksums.py").write_bytes(TOOL.read_bytes())
