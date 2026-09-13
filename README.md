@@ -39,6 +39,79 @@ sessions to claim and who to ask.
 **If you run one session at a time you do not need this**, and it coordinates
 sessions on one machine only.
 
+## How work moves through rite
+
+Spec, plan, tickets, implementation. The last step — a worker taking a ticket
+to a merged PR — works end to end today. The first three are wholly or partly
+yours; each step's heading line says which.
+
+Commands starting with `/` are typed into a Claude Code session; `rite …`
+commands run in a terminal at your project root. Two kinds of session appear
+below:
+
+- **Your Dispatch session** — the Claude Code session you talk to, opened at
+  your project root; `rite init` ends by telling you to start one. It runs as
+  the role you picked at `rite init` (the Owner, by default). You use it to
+  write tickets and decide which worker takes which.
+- **A worker session** — Claude Code opened in `workers/<name>/`, a directory
+  holding that worker's own clone of each repository, which
+  `rite add worker <name>` creates. Its `CLAUDE.md` tells it how to work a
+  ticket.
+
+You open both yourself.
+
+**1. Spec** — yours to write; rite points workers at it
+
+You write the design, or you already have one. `rite init` looks for
+`SPEC.md`, `DESIGN.md`, `ARCHITECTURE.md` or a `docs/`, `adr/`, `rfcs/` or
+`design/` directory and offers to point workers at what it finds;
+`rite spec add <path>` adds one later, for workers created after that.
+Worker sessions get the path, never a copy, and read what their ticket needs.
+Beyond one scan at init for how the spec cites decisions, rite does not read
+it, so it cannot tell you whether it is current.
+
+**2. Plan** — yours; rite has no planning step
+
+You decide what gets built first and what can run side by side, usually by
+talking it through in your Dispatch session. The tickets you write next, and
+what blocks what between them, are the plan as rite sees it.
+
+**3. Tickets** — rite helps write one at a time; putting a whole plan on the
+board is yours
+
+In your Dispatch session, `/refine "export invoices as CSV"` drafts one
+ticket a fresh session could start cold: the paths it touches, a definition of
+done, and a `Verify` section naming the command that proves it. It checks
+your board (JIRA or GitHub Issues) for a duplicate first, and implements
+nothing. If the ticket is not on your board yet, file it from a terminal. On
+JIRA, record what blocks what as a link; GitHub Issues has no link type rite
+can set.
+
+```bash
+rite board create "Export invoices as CSV" --description "<what /refine drafted>"
+rite board link RW-19 RW-12      # JIRA: RW-19 is blocked by RW-12
+```
+
+**4. Implementation** — built
+
+Give each worker its own clones:
+
+```bash
+rite add worker alpha            # creates workers/alpha/
+```
+
+Open a worker session in `workers/alpha/` and tell it which ticket to work —
+"work RW-12". Its `CLAUDE.md` walks it through the rest: `rite prepare` to
+sync its clones, `rite claim` on the paths before touching them, your
+project's own test and lint commands, `/review` (reviewer agents against a
+checklist), a PR, and `rite release` after the merge. Several worker sessions
+can run at once: if one claims a path that overlaps a path another holds, rite
+refuses the claim, and each worker's instructions say not to touch paths
+another worker holds.
+
+When you come back, `rite status` lists each worker and the paths it has
+claimed; then read the PRs.
+
 ## Example
 
 ```console
@@ -60,8 +133,9 @@ cd your-project
 rite init
 rite add worker alpha        # a checkout of its own, under workers/alpha/
 
-rite claim backend/src --worker alpha --ticket RW-12   # before touching anything
+# What a worker session runs, in order, over ticket RW-12 (step 4 above)
 rite prepare --worker alpha                            # sync that checkout
+rite claim backend/src --worker alpha --ticket RW-12   # before touching anything
 rite heartbeat --worker alpha --ticket RW-12           # "still alive"
 rite release --worker alpha                            # after the PR merges
 
