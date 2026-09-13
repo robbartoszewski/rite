@@ -27,8 +27,8 @@ def _init_cmd(config: str | None, yes: bool, directory: str) -> None:
 # All-defaults interactive answer sequence: role, name, root_branch, module
 # name (blank = no repos found), kind, features, platform, languages,
 # frameworks, architecture, ticket backend ("3" = None for now, to skip the
-# extra JIRA-site prompt), kb link, kb file, kb commit, notes.
-_ALL_BLANK = "\n".join([""] * 10 + ["3"] + [""] * 4) + "\n"
+# extra JIRA-site prompt), sandbox, kb link, kb file, kb commit, notes.
+_ALL_BLANK = "\n".join([""] * 10 + ["3"] + [""] * 5) + "\n"
 
 
 def test_interactive_all_defaults_creates_every_file(tmp_path: Path):
@@ -95,6 +95,7 @@ def test_interactive_custom_answers_are_used(tmp_path: Path):
                 "fastify",  # frameworks
                 "event sourcing",  # architecture
                 "3",  # ticket backend: none
+                "",  # sandbox: accept the default
                 "",  # kb link
                 "",  # kb file
                 "",  # kb commit default yes
@@ -143,6 +144,7 @@ def test_interactive_detects_and_adds_repos(tmp_path: Path):
                 "",  # frameworks
                 "",  # architecture
                 "3",  # ticket backend
+                "",  # sandbox: accept the default
                 "",  # kb link
                 "",  # kb file
                 "",  # kb commit
@@ -296,6 +298,7 @@ def test_manager_role_prompts_for_owner_ref(tmp_path: Path):
                 "",  # frameworks
                 "",  # architecture
                 "3",  # ticket backend
+                "",  # sandbox: accept the default
                 "",  # kb link
                 "",  # kb file
                 "",  # kb commit

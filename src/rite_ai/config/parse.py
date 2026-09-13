@@ -214,7 +214,7 @@ def parse_config(path: Path) -> ProjectConfig | ParseError:
     sb_raw = raw.get("sandbox", {})
     sandbox = (
         SandboxConfig(
-            enabled=sb_raw.get("enabled", False),
+            enabled=sb_raw.get("enabled", True),
             backend=sb_raw.get("backend", "seatbelt"),
             token_permissions=_str_list(
                 sb_raw.get("token_permissions", ["contents", "pull_requests"])

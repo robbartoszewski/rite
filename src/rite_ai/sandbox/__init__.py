@@ -123,6 +123,64 @@ def available_backends(
     ]
 
 
+# Backends rite has verified its OWN safety property inside, not merely
+# ones yoloAI can start. SPEC §5.3: 88 concurrent claim attempts from four
+# sandboxed Workers gave exactly one grant per round on seatbelt.
+VERIFIED_BACKENDS = ("seatbelt",)
+
+# Backends measured NOT to work for rite, with why. `flock` is a no-op
+# inside a docker sandbox and every claim rests on `flock`, so two Workers
+# can hold the same path and both be told "claimed" (SPEC §5.3).
+UNSUITABLE_BACKENDS = {
+    "docker": "`flock` is a no-op inside a docker sandbox, so claims stop "
+    "excluding — two Workers can hold the same path and both be told "
+    "\"claimed\" (SPEC §5.3)",
+    "docker-desktop": "same docker runtime, same `flock` failure (SPEC §5.3)",
+    "orbstack": "same docker runtime, same `flock` failure (SPEC §5.3)",
+}
+
+
+@dataclass
+class BackendChoice:
+    """Which backend rite would sandbox with here, or why it would not."""
+
+    name: str = ""
+    reason: str = ""
+
+    @property
+    def usable(self) -> bool:
+        return bool(self.name)
+
+
+def choose_backend() -> BackendChoice | CountUnavailable:
+    """The backend rite can actually sandbox with on this machine.
+
+    Availability alone is not the bar. yoloAI reporting docker available
+    means docker can run a container, not that rite's claims still exclude
+    inside one — and they do not. Untested backends are not claimed either
+    way: they are simply not offered, because a sandbox that might silently
+    break claims is worse than no sandbox.
+    """
+    backends = available_backends()
+    if isinstance(backends, CountUnavailable):
+        return backends
+    by_name = {b.name: b for b in backends}
+    for name in VERIFIED_BACKENDS:
+        entry = by_name.get(name)
+        if entry is not None and entry.available:
+            return BackendChoice(name=name)
+
+    # Nothing verified is available. Say which way it failed.
+    seatbelt = by_name.get("seatbelt")
+    if seatbelt is not None and not seatbelt.available:
+        why = seatbelt.note or "not available on this platform"
+        return BackendChoice(reason=f"seatbelt is unavailable here ({why})")
+    return BackendChoice(
+        reason="seatbelt is macOS-only, and the container backends are not "
+        "usable by rite: " + UNSUITABLE_BACKENDS["docker"]
+    )
+
+
 @dataclass
 class SandboxCheck:
     """The result of actually round-tripping a sandbox."""

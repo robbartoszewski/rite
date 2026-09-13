@@ -89,7 +89,13 @@ class PoolConfig:
 
 @dataclass
 class SandboxConfig:
-    enabled: bool = False
+    # Default ON (D-51). The reasoning that made it opt-in — yoloAI is a
+    # separate binary, so defaulting on would fail first run for everyone
+    # without it — stopped holding once `rite init` asks and `rite doctor`
+    # verifies by starting a real sandbox: a machine without yoloAI now
+    # gets a question it can answer and a row that says what is missing,
+    # not a failure.
+    enabled: bool = True
     backend: str = "seatbelt"  # seatbelt | docker | podman | tart — these are
     # yoloAI's literal `--backend` values (verified via `yoloai system
     # backends`); "seatbelt" is yoloAI's name for macOS's `sandbox-exec`

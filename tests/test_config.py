@@ -171,7 +171,7 @@ def test_parse_config_defaults(tmp_path: Path):
     assert result.pool.coordinator_standby == 2
     assert result.pool.lease_expiry_minutes == 15
     assert result.pool.archive_after_minutes == 30
-    assert result.sandbox.enabled is False
+    assert result.sandbox.enabled is True  # D-51: default on
     assert result.sandbox.backend == "seatbelt"
     assert result.budget.weekly_quota_pct == 95
     assert result.schedule.timezone == ""

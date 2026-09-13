@@ -1131,6 +1131,12 @@ def test_doctor_flags_missing_yoloai_only_when_sandbox_enabled(tmp_path, monkeyp
     runner = CliRunner()
 
     with patch("rite_ai.sandbox._yoloai_binary", return_value=None):
+        # Stated explicitly rather than relying on the default, which is
+        # now on (D-51) — this test is about the severity following the
+        # setting, not about what the setting happens to default to.
+        (rite_dir / "config.yaml").write_text(
+            "ticket_backend:\n  type: none\nsandbox:\n  enabled: false\n"
+        )
         off = runner.invoke(cli, ["doctor"])
         assert off.exit_code == 0
         assert "not required" in off.output

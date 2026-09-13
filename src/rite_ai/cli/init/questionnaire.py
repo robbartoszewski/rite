@@ -25,6 +25,7 @@ from rite_ai.config.models import (
     Module,
     ProjectBrief,
     ProjectConfig,
+    SandboxConfig,
     TicketBackendConfig,
 )
 from rite_ai.credentials.store import make_namespace
@@ -63,6 +64,73 @@ class InitAnswers:
     modules: list[Module]
     config: ProjectConfig
     kb: KbAnswers
+
+
+def _resolve_sandbox(preset: dict, interactive: bool, ui) -> tuple[bool, str]:
+    """Ask whether Workers should run sandboxed — three answers, because
+    there are three genuinely different situations.
+
+    `install.sh` deliberately never asks anything: piping it to a shell
+    binds stdin to the pipe, so a prompt there either hangs or reads the
+    script. The question belongs at the first moment a human is certainly
+    at a terminal, which is `rite init`.
+
+    1. A verified backend is available → ask, default Yes.
+    2. yoloAI is not installed → ask, default Yes, and say where to get it.
+       Answering Yes writes the setting; `rite doctor` then reports the
+       sandbox as not working until it is installed, which is the honest
+       state rather than a silent no.
+    3. No backend rite has verified works here → do not ask. There is no
+       answer the user could give that would make it work, and a question
+       whose Yes cannot be honoured is worse than a sentence explaining
+       why. Says so in one line and continues with sandboxing off.
+    """
+    from rite_ai.sandbox import (
+        CountUnavailable,
+        choose_backend,
+        is_installed,
+    )
+
+    preset_value = preset.get("operations.sandbox")
+    default_backend = SandboxConfig().backend
+
+    if not is_installed():
+        if preset_value is not None:
+            return bool(preset_value), default_backend
+        if not interactive:
+            return True, default_backend
+        ui.note(
+            "yoloAI is not installed — sandboxing can be turned on now and it "
+            "will start working once you install it from https://yoloai.dev"
+        )
+        return ui.confirm("Run Workers in sandboxes?", default=True), default_backend
+
+    choice = choose_backend()
+    if isinstance(choice, CountUnavailable):
+        # yoloAI is installed but could not be asked. Treat it like the
+        # absent case rather than inventing a verdict.
+        if preset_value is not None:
+            return bool(preset_value), default_backend
+        if not interactive:
+            return True, default_backend
+        ui.note(f"could not ask yoloAI which backends work here: {choice.reason}")
+        return ui.confirm("Run Workers in sandboxes?", default=True), default_backend
+
+    if not choice.usable:
+        ui.note(
+            f"Workers will not be sandboxed: {choice.reason}. "
+            "Everything else works normally."
+        )
+        return False, default_backend
+
+    if preset_value is not None:
+        return bool(preset_value), choice.name
+    if not interactive:
+        return True, choice.name
+    return (
+        ui.confirm("Run Workers in sandboxes?", default=True),
+        choice.name,
+    )
 
 
 def run_questionnaire(
@@ -185,6 +253,8 @@ def run_questionnaire(
             "operations.jira_site", "JIRA site? (e.g. myteam.atlassian.net)", default=""
         )
 
+    sandbox_enabled, sandbox_backend = _resolve_sandbox(preset, interactive, ui)
+
     # --- Section 7: Knowledge ---
     ui.section("Knowledge", 7, 7)
     click.echo(
@@ -234,6 +304,7 @@ def run_questionnaire(
     config = ProjectConfig(
         ticket_backend=ticket_backend,
         credentials=CredentialsConfig(namespace=make_namespace(name)),
+        sandbox=SandboxConfig(enabled=sandbox_enabled, backend=sandbox_backend),
     )
     if borrowed_config is not None:
         config.expertise = borrowed_config.expertise
