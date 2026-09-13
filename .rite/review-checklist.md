@@ -146,6 +146,35 @@ is the intended lifecycle — see the note at the end.
       and nothing else. A release step cannot ask it, because by then nobody
       remembers which sentence the change was supposed to touch.
 
+- [ ] The commit message is written for whoever will actually read it, and
+      after publication that is a stranger. **A commit message is read by
+      someone who cannot see who asked for the change, who reviewed it, or
+      what round it was** — so third-person self-reference ("Robert's
+      framing"), and phrases that point at an absent conversation ("the
+      material handed to me said 49", "read cold by a reviewer"), name people
+      and events the reader has no access to. The test is not a list of
+      banned phrases; it is whether a sentence still resolves for someone
+      holding only the repository.
+
+      Subject ≤ 50 characters, imperative. A body only where the *why* is not
+      visible in the diff: "publishing v0.1.0 made every clone inherit a tag,
+      so four tests that assert against HEAD failed" earns one; "cut the
+      README and moved two install options" does not.
+
+      **This is not a rule that shorter is better**, and the six published
+      commits are the evidence. Four carry long bodies that were CORRECT when
+      written — their audience was the next session picking work up
+      mid-sequence, the tree diverged twice that week, and those messages
+      were sometimes the only durable record of why something had been done.
+      What changed at publication was the audience, not the quality of the
+      writing. A session working overnight on an unpublished branch may still
+      be right to write a long body; the failure is writing for an audience
+      that has moved on without noticing it has.
+
+      Same shape as the README line above, and generalises past commits:
+      every artifact has a reader, and publication is the moment that reader
+      changes.
+
 **On retiring a line.** The template's opening says a line that keeps firing
 should become a gate and a line that never fires should go. Three have moved:
 `config_to_yaml`'s totality is now
