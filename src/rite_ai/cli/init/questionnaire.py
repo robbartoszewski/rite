@@ -441,9 +441,6 @@ def run_questionnaire(
     kb_commit = resolve_bool(
         "knowledge.commit", "Commit the knowledge base to git?", default=True
     )
-    notes = resolve_text(
-        "what.notes", "Anything else the team should know?", default=""
-    )
 
     ticket_backend = TicketBackendConfig(
         type=ticket_type,
@@ -477,7 +474,6 @@ def run_questionnaire(
         root_branch=root_branch,
         kind=kind,
         features=features,
-        notes=notes,
         platform=platform,
         languages=languages,
         frameworks=frameworks,

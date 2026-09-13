@@ -1783,7 +1783,6 @@ project:
 what:
   kind: full-stack               # backend | frontend | mobile | full-stack | library | other
   features: "Order tracking with a customer-facing dashboard"
-  notes: ""                      # catch-all from init
 
 technology:
   platform: linux
@@ -2721,11 +2720,10 @@ Commit the knowledge base to git? [Y/n]
 
 Default Yes. See §8.7 for the reasoning.
 
-```
-Anything else the team should know? []
-```
-
-The catch-all is free text, skippable, stored in `brief.yaml` under `what.notes`.
+There is no closing catch-all. `init` used to end on *"Anything else the team
+should know?"*, stored as `what.notes` and read by nothing — never rendered into
+CLAUDE.md, never shown to a session. What the team should know belongs in
+`.rite/context/`, which sessions are pointed at.
 
 **Output:**
 

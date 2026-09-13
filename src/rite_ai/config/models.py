@@ -11,7 +11,6 @@ class ProjectBrief:
     root_branch: str = "main"
     kind: str = ""
     features: str = ""
-    notes: str = ""
     platform: str = ""
     languages: list[str] = field(default_factory=list)
     frameworks: list[str] = field(default_factory=list)

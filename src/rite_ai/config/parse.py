@@ -75,7 +75,6 @@ def parse_brief(path: Path) -> ProjectBrief | ParseError:
         root_branch=project.get("root_branch", "main"),
         kind=what.get("kind", ""),
         features=what.get("features", ""),
-        notes=what.get("notes", ""),
         platform=tech.get("platform", ""),
         languages=_str_list(tech.get("languages", [])),
         frameworks=_str_list(tech.get("frameworks", [])),

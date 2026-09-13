@@ -180,7 +180,6 @@ def test_generated_claude_md_points_at_the_command_too(tmp_path):
         root_branch="main",
         kind="",
         features="",
-        notes="",
         platform="",
         languages=[],
         frameworks=[],

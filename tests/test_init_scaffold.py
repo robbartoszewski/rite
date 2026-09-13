@@ -21,7 +21,6 @@ def _brief(**overrides) -> ProjectBrief:
         root_branch="main",
         kind="full-stack",
         features="Order tracking",
-        notes="",
         platform="linux",
         languages=["python"],
         frameworks=[],

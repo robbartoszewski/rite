@@ -57,7 +57,6 @@ def brief_to_yaml(brief: ProjectBrief) -> str:
         "what": {
             "kind": brief.kind,
             "features": brief.features,
-            "notes": brief.notes,
         },
         "technology": {
             "platform": brief.platform,
