@@ -119,7 +119,9 @@ class TestTheProvisioningPromptAsksForProjectScope:
         monkeypatch.chdir(tmp_path)
 
         result = click.testing.CliRunner().invoke(
-            cli, ["add", "worker", "w1", "--modules", "alpha"], input="n\n"
+            cli,
+            ["add", "worker", "w1", "--modules", "alpha", "--scoped-token"],
+            input="n\n",
         )
 
         # Created with ONE module...
@@ -131,3 +133,38 @@ class TestTheProvisioningPromptAsksForProjectScope:
             "the prompt asked for a token scoped to the worker's subset — "
             "that is the narrow token §5.3.4 says not to create"
         )
+
+
+class TestSandboxEnabledDoesNotScopeCredentials:
+    """`sandbox.enabled` governs whether Workers run in a sandbox. It is
+    not a statement about how their credentials are scoped.
+
+    While the two were wired together, turning sandboxing on also made
+    `rite add worker` provision a per-Worker token — so flipping a sandbox
+    default would have changed the credential model without anyone asking
+    for it.
+    """
+
+    def test_enabling_sandboxing_does_not_prompt_for_a_per_worker_token(
+        self, tmp_path, monkeypatch
+    ):
+        from click.testing import CliRunner
+
+        from rite_ai.cli.main import cli
+
+        root = tmp_path / "p"
+        (root / ".rite").mkdir(parents=True)
+        (root / ".rite" / "brief.yaml").write_text(
+            "project:\n  name: p\n  role: manager\n"
+        )
+        (root / ".rite" / "modules.yaml").write_text("modules: {}\n")
+        (root / ".rite" / "config.yaml").write_text(
+            "ticket_backend:\n  type: none\nsandbox:\n  enabled: true\n"
+        )
+        monkeypatch.chdir(root)
+        monkeypatch.setenv("RITE_HOME_DIR", str(tmp_path / "home"))
+
+        result = CliRunner().invoke(cli, ["add", "worker", "solo"])
+        assert result.exit_code == 0, result.output
+        assert "scoped to THIS PROJECT" not in result.output
+        assert "store the token now?" not in result.output

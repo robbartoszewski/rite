@@ -1843,16 +1843,30 @@ def add_module_cmd(name: str, url: str, branch: str, description: str) -> None:
     help="Standing direction for this one Worker — stored as worker.yml's "
     "`claude_instructions` (SPEC §8.4) and rendered into its CLAUDE.md.",
 )
-def add_worker_cmd(name: str, manager: str, modules: str, instructions: str) -> None:
-    """Create a new worker workspace. If `sandbox.enabled` is set, also
-    walks through provisioning that Worker's scoped sandbox token (§5.3.3,
-    §5.3.4) — never displayed in this project's chat, only typed directly
-    into this terminal prompt.
+@click.option(
+    "--scoped-token",
+    is_flag=True,
+    default=False,
+    help="Provision a GitHub token for this Worker alone, scoped to the "
+    "project's repos. Off by default: Workers share the project's "
+    "credentials.",
+)
+def add_worker_cmd(
+    name: str, manager: str, modules: str, instructions: str, scoped_token: bool
+) -> None:
+    """Create a new worker workspace.
+
+    With `--scoped-token`, also walks through provisioning a GitHub token
+    for this one Worker, scoped to the project's repos (§5.3.3, §5.3.4) —
+    never displayed in this project's chat, only typed directly into this
+    terminal prompt. Without it, Workers share the credentials the project
+    already holds.
 
     Examples:
       rite add worker alpha
       rite add worker beta --modules backend,shared
       rite add worker gamma --instructions "Ship nothing without a migration plan."
+      rite add worker delta --scoped-token
     """
     from rite_ai.workspace import add_worker
 
@@ -1877,7 +1891,12 @@ def add_worker_cmd(name: str, manager: str, modules: str, instructions: str) -> 
     for module_name, why in result.failed_modules:
         click.echo(f"  NOT cloned: {module_name} — {why}", err=True)
 
-    if config.sandbox.enabled and result.worker is not None:
+    # Asked for explicitly, never implied by `sandbox.enabled`. That key
+    # governs whether Workers run in a sandbox; it is not a statement about
+    # how their credentials are scoped, and letting it provision a
+    # per-Worker token meant turning sandboxing on silently changed the
+    # credential model too.
+    if scoped_token and result.worker is not None:
         _provision_worker_token(root, result.worker, config)
 
     if result.failed_modules:
@@ -1964,8 +1983,8 @@ def _provision_worker_token(root, worker, config) -> None:
 
     click.echo("")
     click.echo(
-        f"sandbox.enabled is true — worker '{worker.name}' needs a GitHub "
-        "token scoped to THIS PROJECT's repos (§5.3.3):"
+        f"worker '{worker.name}' will get a GitHub token scoped to THIS "
+        "PROJECT's repos (§5.3.3):"
     )
     click.echo("  - fine-grained personal access token")
     click.echo(
@@ -3509,10 +3528,13 @@ def sandbox() -> None:
 
     `sandbox.enabled` in config.yaml is a separate statement — that this
     project runs its Workers sandboxed as a matter of course. It governs
-    setup rather than these commands: `rite add worker` provisions a
-    scoped sandbox token, and `rite doctor` treats a missing `yoloai` as
-    a problem instead of a note. A project that leaves it false can still
-    run everything here."""
+    setup rather than these commands: `rite doctor` verifies a sandbox can
+    actually start and treats a failure as a problem instead of a note. A
+    project that leaves it false can still run everything here.
+
+    It says nothing about credentials. Per-Worker token scoping is asked
+    for with `rite add worker --scoped-token`; otherwise Workers share the
+    credentials the project already holds."""
 
 
 @sandbox.command("start")

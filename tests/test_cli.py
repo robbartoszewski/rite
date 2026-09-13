@@ -428,10 +428,14 @@ def test_prepare_worker_workspace(tmp_path, monkeypatch):
     assert "backend" in result.output
 
 
-def test_add_worker_with_sandbox_enabled_provisions_a_token(tmp_path, monkeypatch):
+def test_add_worker_with_scoped_token_provisions_a_token(tmp_path, monkeypatch):
     """`rite add worker` existed with no sandbox-token step at all — this
     is that wiring (§5.3.3, §5.3.4), exercised through the CLI rather than
-    only against the underlying `rite_ai.sandbox`/`rite_ai.credentials` modules."""
+    only against the underlying `rite_ai.sandbox`/`rite_ai.credentials` modules.
+
+    Asked for with `--scoped-token`. It used to fire off `sandbox.enabled`,
+    which made turning sandboxing on silently change the credential model
+    too."""
     from unittest.mock import patch
 
     project_root = tmp_path / "project"
@@ -491,7 +495,9 @@ def test_add_worker_with_sandbox_enabled_provisions_a_token(tmp_path, monkeypatc
         patch("rite_ai.sandbox.shutil.which", return_value=None),
     ):
         result = runner.invoke(
-            cli, ["add", "worker", "alpha"], input="y\nsecret-token\nsecret-token\n"
+            cli,
+            ["add", "worker", "alpha", "--scoped-token"],
+            input="y\nsecret-token\nsecret-token\n",
         )
     assert result.exit_code == 0, result.output
     assert "acme/widgets" in result.output

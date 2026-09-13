@@ -236,5 +236,12 @@ class TestSandboxEnabledDocstringDescribesWhatItGoverns:
 
     def test_help_names_what_the_key_actually_governs(self):
         help_text = cli.commands["sandbox"].help or ""
-        assert "rite add worker" in help_text  # scoped-token provisioning
-        assert "rite doctor" in help_text  # yoloai-missing severity
+        assert "rite doctor" in help_text  # sandbox-verification severity
+
+    def test_help_does_not_claim_the_key_scopes_credentials(self):
+        """It governed `rite add worker`'s per-Worker token provisioning
+        until that was decoupled — so turning sandboxing on changed the
+        credential model too."""
+        help_text = cli.commands["sandbox"].help or ""
+        assert "--scoped-token" in help_text
+        assert "provisions a\n    scoped sandbox token" not in help_text
