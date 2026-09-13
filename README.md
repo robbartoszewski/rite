@@ -23,7 +23,7 @@ sessions to claim and who to ask.
 - **Workers can run sandboxed** (off by default; Seatbelt on macOS, Docker,
   Podman or Tart elsewhere) with a scoped token, not with permissions
   bypassed.
-- **50 numbered decisions** in [`SPEC.md`](SPEC.md), each with the question it
+- **51 numbered decisions** in [`SPEC.md`](SPEC.md), each with the question it
   answers and the reasoning — including the ones that did not survive review.
 
 **If you run one session at a time you do not need this**, and it coordinates
