@@ -24,7 +24,6 @@
 # re-point what is left:
 #
 #     # 1. drop every commit-message entry — the squash removes the findings
-#     sed -i '' '/:<commit message>:/d' .rite/gitleaksignore
 #     # 2. re-point every remaining commit-pinned entry at the new commit
 #     NEW=$(git rev-parse HEAD)
 #     sed -i '' -E "s/^[0-9a-f]{40}:/$NEW:/" .rite/gitleaksignore
@@ -60,9 +59,9 @@
 # `test_scan_history_detects_real_secret` and the known-bad-repo integration
 # test are asserting against a token gitleaks would not flag, which is the
 # same as not testing the detector at all. Not a credential.
-eb383979f73094571db58fe6a887e31aa66697df:tests/test_gate_findings.py:github-pat:38  # synthetic PAT fixture — asserts redact() masks the middle of a token; not a real credential
-eb383979f73094571db58fe6a887e31aa66697df:tests/test_gate_gitleaks_runner.py:github-pat:21  # synthetic PAT fixture — must be gitleaks-detectable or the history-scan test asserts nothing; not a real credential
-eb383979f73094571db58fe6a887e31aa66697df:tests/test_gate_integration.py:github-pat:26  # synthetic PAT fixture — seeds the known-bad repo the end-to-end gate test scans; not a real credential
+8ace8ef84a924bd2370e464e5dd6519f1925165b:tests/test_gate_findings.py:github-pat:38  # synthetic PAT fixture — asserts redact() masks the middle of a token; not a real credential
+8ace8ef84a924bd2370e464e5dd6519f1925165b:tests/test_gate_gitleaks_runner.py:github-pat:21  # synthetic PAT fixture — must be gitleaks-detectable or the history-scan test asserts nothing; not a real credential
+8ace8ef84a924bd2370e464e5dd6519f1925165b:tests/test_gate_integration.py:github-pat:26  # synthetic PAT fixture — seeds the known-bad repo the end-to-end gate test scans; not a real credential
 
 # ── The built-in rules' own documentation ───────────────────────────────
 # builtin_rules.py declares the hardcoded-home-path patterns, and its
@@ -93,8 +92,6 @@ eb383979f73094571db58fe6a887e31aa66697df:tests/test_gate_integration.py:github-p
 # commit message and nowhere else, so a squash removes the finding along
 # with the message. Re-pointing them to the squashed commit would suppress
 # nothing and leave two stale entries behind.
-859020cb14f53e4ffd8a83e321fe208eca59a5f2:<commit message>:rite-hardcoded-macos-home-directory-path:13  # commit message of the fix, quoting the path it removed; not a path anything reads
-859020cb14f53e4ffd8a83e321fe208eca59a5f2:<commit message>:rite-hardcoded-macos-home-directory-path:14  # same message, second occurrence on the following line; not a path anything reads
 
 # ── Fixture paths the path rules must match ─────────────────────────────
 # These tests write a home-shaped path into a throwaway repo and assert the
@@ -120,8 +117,8 @@ eb383979f73094571db58fe6a887e31aa66697df:tests/test_gate_integration.py:github-p
 # Synthetic, hand-constructed, never issued by any provider, revocable by
 # nobody. Both are HISTORY findings, so both are commit-pinned — see the
 # squash note at the top of this file.
-d9b52d766c239687ad10c30b427cc919ea664624:tests/test_gate_undecodable_bytes.py:generic-api-key:34  # synthetic high-entropy token fixture for the undecodable-commit-message test; not a real credential
-8d411344e14126a8cf2782ca80fc7ddb0ef3bd0b:tests/test_gate_at_scale.py:generic-api-key:42  # the same synthetic token, planted so the at-scale test has a real detection to measure; not a real credential
+8ace8ef84a924bd2370e464e5dd6519f1925165b:tests/test_gate_undecodable_bytes.py:generic-api-key:34  # synthetic high-entropy token fixture for the undecodable-commit-message test; not a real credential
+8ace8ef84a924bd2370e464e5dd6519f1925165b:tests/test_gate_at_scale.py:generic-api-key:42  # the same synthetic token, planted so the at-scale test has a real detection to measure; not a real credential
 
 # ── Prose describing the measurement that motivated the rules ───────────
 # §11.1's failure mode again: adopting rite on git's own repository produced
@@ -139,6 +136,4 @@ d9b52d766c239687ad10c30b427cc919ea664624:tests/test_gate_undecodable_bytes.py:ge
 # is the venv config file it could not read. The username was replaced with
 # an ellipsis before it was ever committed — the rule matches the shape, not
 # a name. Reproduced in the commit message for the same reason.
--:src/rite_ai/sandbox/__init__.py:rite-hardcoded-macos-home-directory-path:287  # quoted interpreter crash output in the docstring explaining the fix; username already elided; not a real path
-91945093555140af62ed0260139e90a952a86e8f:<commit message>:rite-hardcoded-macos-home-directory-path:15  # same quoted crash output in that commit's message; username already elided; DELETE after squash, do not re-point
-8d411344e14126a8cf2782ca80fc7ddb0ef3bd0b:<commit message>:rite-hardcoded-linux-home-directory-path:30  # commit message restating the 46-finding measurement; DELETE after squash, do not re-point
+-:src/rite_ai/sandbox/__init__.py:rite-hardcoded-macos-home-directory-path:290  # quoted interpreter crash output in the docstring explaining the fix; username already elided; not a real path
