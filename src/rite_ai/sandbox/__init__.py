@@ -1194,6 +1194,14 @@ def redact_secrets(text: str, secrets: Iterable[str] = ()) -> str:
     characters. Values shorter than eight characters are not searched for:
     `false` and `5` are not secrets, and replacing every occurrence of them
     would destroy the capture.
+
+    ⚠ A mitigation, not the fix. It closes rite's own surface, the one that
+    routes a screen into Claude sessions by design; `yoloai attach` still
+    shows the values, and so does anything else that reads the session's
+    screen. The fix is for Workers to fetch credentials through a validated
+    channel instead of having them injected as environment variables — the
+    MCP entry in `.docs/FUTURE_IMPROVEMENTS.md` ("credentials through the
+    MCP server"). When that lands, this should have nothing left to redact.
     """
     text = _EXPORT_STATEMENT.sub(
         lambda m: m.group(1) + "[redacted]" + m.group(3), text
