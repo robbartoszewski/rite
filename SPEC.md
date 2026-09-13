@@ -2546,7 +2546,13 @@ Root branch?  [main]
 ```
 
 Project name defaults to the current directory name (npm init pattern).
-Root branch defaults to `main`; gitflow setups type `develop` or `next`.
+Root branch defaults to the branch detection found: the project root's own if
+the root is itself a repository, otherwise the one branch every detected
+repository shares. That is the value `modules.yaml` records for each module, so
+pressing Enter cannot produce a root branch that disagrees with the modules
+registered beside it — which a fixed `main` did, silently, for any project not
+on `main`. Repositories on different branches get no guess: init names them and
+offers `main`, which is also the default when nothing is detected.
 
 **Section 3 — Modules** `[3/7]`
 
@@ -2564,7 +2570,7 @@ Add all as modules? [Y/n]
 ```
 
 Default Yes. Individual repos can be deselected. For each added module,
-rite reads the remote URL and default branch from `.git/config`.
+rite records the remote URL and the branch currently checked out.
 
 If no repos found:
 

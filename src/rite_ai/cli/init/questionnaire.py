@@ -332,7 +332,24 @@ def run_questionnaire(
     ui.section("Project", 2, 7)
     default_name = root.name or "my-project"
     name = resolve_text("project.name", "Project name?", default=default_name)
-    root_branch = resolve_text("project.root_branch", "Root branch?", default="main")
+    # Offer the branch detection found, not a fixed `main`. Section 3 writes
+    # each module's detected branch into modules.yaml; a hardcoded default here
+    # meant pressing Enter produced a root branch that disagreed with the
+    # modules registered beside it — PRs aimed at a line the project is not on.
+    if (
+        detected.root_branch is None
+        and len({r.branch for r in detected.repos}) > 1
+        and interactive
+        and preset.get("project.root_branch") is None
+    ):
+        ui.note(
+            "Repositories are on different branches ("
+            + ", ".join(f"{r.path} {r.branch}" for r in detected.repos)
+            + ") — not guessing which is the project's line."
+        )
+    root_branch = resolve_text(
+        "project.root_branch", "Root branch?", default=detected.root_branch or "main"
+    )
 
     # --- Section 3: Modules ---
     ui.section("Modules", 3, 7)

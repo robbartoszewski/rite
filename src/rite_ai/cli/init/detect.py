@@ -251,12 +251,34 @@ def _detect_python_commands(module_path: Path) -> ModuleCommands:
     )
 
 
+def detect_root_branch(root: Path, repos: list[DetectedRepo]) -> str | None:
+    """The branch this project's line is on, or None when detection cannot say.
+
+    A project root that is itself a repository answers for itself. Otherwise
+    the answer is the one branch every detected repository shares — the same
+    values `modules.yaml` records, so the root branch `init` offers cannot
+    disagree with the modules it registers in the same run. Repositories on
+    different branches give no answer rather than a guess.
+
+    `.git` is checked directly rather than asking git about `root`: `git -C`
+    walks UP to the nearest repository, so a project directory that merely
+    sits inside some other checkout would be handed that checkout's branch.
+    """
+    if (root / ".git").exists():
+        return _git(root, ["branch", "--show-current"])
+    branches = {r.branch for r in repos}
+    if len(branches) == 1:
+        return next(iter(branches))
+    return None
+
+
 @dataclass
 class DetectionSummary:
     repos: list[DetectedRepo] = field(default_factory=list)
     languages: list[str] = field(default_factory=list)
     platform: str = "linux"
     has_language_markers: bool = False
+    root_branch: str | None = None
 
 
 def run_detection(root: Path) -> DetectionSummary:
@@ -267,6 +289,7 @@ def run_detection(root: Path) -> DetectionSummary:
         languages=languages,
         platform=detect_platform(),
         has_language_markers=bool(languages) or bool(repos),
+        root_branch=detect_root_branch(root, repos),
     )
 
 
