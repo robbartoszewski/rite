@@ -1134,7 +1134,10 @@ def test_doctor_flags_missing_yoloai_only_when_sandbox_enabled(tmp_path, monkeyp
         )
         on = runner.invoke(cli, ["doctor"])
         assert on.exit_code == 1
-        assert "sandbox.enabled is true, so" in on.output
+        # The row names the missing tool and where to get it; the severity
+        # still follows `sandbox.enabled`, which is what this test is for.
+        assert "yoloai is not installed" in on.output
+        assert "yoloai.dev" in on.output
 
 
 def test_pool_history_reads_back_what_archive_recorded(tmp_path, monkeypatch):

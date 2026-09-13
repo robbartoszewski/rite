@@ -44,10 +44,257 @@ def _yoloai_binary() -> str | None:
     return shutil.which("yoloai")
 
 
-def is_available() -> bool:
-    """Whether the `yoloai` binary is on PATH at all — cheap enough for
-    `rite doctor` to call unconditionally."""
+def is_installed() -> bool:
+    """Whether a file named `yoloai` exists on PATH.
+
+    Deliberately NOT named `is_available`. A file under that name is not
+    a working sandbox, and the gap between the two is exactly the case
+    that bit: yoloAI present but broken returned a fabricated count of
+    zero, and the worker cap silently stopped capping. Use this only to
+    tell "not installed" apart from "installed and something is wrong" —
+    never as the answer to "will a sandbox contain a worker".
+    `verify_sandbox` answers that.
+    """
     return _yoloai_binary() is not None
+
+
+# Back-compat alias. `is_available` promised more than a PATH lookup can
+# deliver, which is why it is no longer that name.
+is_available = is_installed
+
+
+@dataclass
+class BackendAvailability:
+    name: str
+    available: bool
+    note: str = ""
+
+
+def available_backends(
+    timeout: int = 15,
+) -> list[BackendAvailability] | CountUnavailable:
+    """What yoloAI says its backends can do ON THIS MACHINE.
+
+    `yoloai system backends --json` reports availability per backend with
+    a reason when it is not. Nothing in rite consulted it before, so a
+    project configured for a backend this platform cannot run — the
+    default `seatbelt` on anything that is not macOS — found out at the
+    first `rite sandbox start`.
+    """
+    binary = _yoloai_binary()
+    if binary is None:
+        return CountUnavailable("yoloai not found on PATH")
+    try:
+        proc = subprocess.run(
+            [binary, "system", "backends", "--json"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=timeout,
+            env=sandbox_environment(),
+        )
+    except subprocess.TimeoutExpired:
+        return CountUnavailable(
+            f"`yoloai system backends --json` timed out after {timeout}s"
+        )
+    except OSError as e:
+        return CountUnavailable(f"`yoloai system backends --json` could not run: {e}")
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout).strip()
+        return CountUnavailable(
+            f"`yoloai system backends --json` exited {proc.returncode}: {detail[:200]}"
+        )
+    try:
+        data = json.loads(proc.stdout)
+        entries = data["backends"]
+    except (ValueError, KeyError, TypeError):
+        return CountUnavailable(
+            "`yoloai system backends --json` did not return the expected JSON — "
+            "this rite may be too old for the installed yoloai"
+        )
+    return [
+        BackendAvailability(
+            name=str(e.get("name", "")),
+            available=bool(e.get("available")),
+            note=str(e.get("note") or ""),
+        )
+        for e in entries
+        if isinstance(e, dict)
+    ]
+
+
+@dataclass
+class SandboxCheck:
+    """The result of actually round-tripping a sandbox."""
+
+    ok: bool
+    detail: str
+    backend: str = ""
+    installed: bool = True
+    elapsed_ms: int = 0
+
+
+# The agent used for the self-test. yoloAI's own description: "No-op
+# container — keeps the sandbox running without an AI agent." The probe
+# has to START a sandbox to be worth anything — a created-but-not-started
+# one does not appear in `ls --active` at all, so "count it, expect 1"
+# would be answered by a sandbox that never ran — and starting one with a
+# real agent would spawn a coding assistant, burn a session and need
+# credentials, on every `rite doctor`.
+SELFTEST_AGENT = "idle"
+SELFTEST_PREFIX = "rite-selftest-"
+
+
+def _why_it_failed(proc: subprocess.CompletedProcess) -> str:
+    """The line of yoloAI's output that says what went wrong.
+
+    Its errors are prefixed `yoloai:` and followed by "Run 'yoloai new -h'
+    for help" — so taking the last line reports the usage hint and drops
+    the reason, which is the half worth reading.
+    """
+    lines = [
+        ln.strip()
+        for ln in ((proc.stderr or "") + "\n" + (proc.stdout or "")).splitlines()
+        if ln.strip()
+    ]
+    if not lines:
+        return "no output"
+    for line in lines:
+        if line.startswith("yoloai:"):
+            return line[len("yoloai:") :].strip()[:200]
+    informative = [ln for ln in lines if not ln.startswith("Run '")]
+    return (informative[-1] if informative else lines[-1])[:200]
+
+
+def verify_sandbox(backend: str = "", timeout: int = 120) -> SandboxCheck:
+    """Can this machine actually run a sandbox? Round-trip one and see.
+
+    Creates a throwaway sandbox on a temporary directory, confirms yoloAI
+    counts it as active, and destroys it. Measured at ~2.0s on seatbelt,
+    which is why this is affordable for `rite init` and `rite doctor`
+    rather than a `which` call standing in for it.
+
+    The teardown is in a `finally`: a probe that leaves a sandbox behind
+    on failure would add to `max_concurrent_workers` forever after.
+    """
+    import tempfile
+    import time
+    import uuid
+
+    binary = _yoloai_binary()
+    if binary is None:
+        return SandboxCheck(
+            False,
+            "yoloai is not installed — install it from https://yoloai.dev",
+            backend=backend,
+            installed=False,
+        )
+
+    name = f"{SELFTEST_PREFIX}{os.getpid()}-{uuid.uuid4().hex[:8]}"
+    started = time.monotonic()
+    env = sandbox_environment()
+
+    def _elapsed() -> int:
+        return int((time.monotonic() - started) * 1000)
+
+    with tempfile.TemporaryDirectory(prefix="rite-selftest-") as workdir:
+        args = [binary, "new", "--agent", SELFTEST_AGENT]
+        if backend:
+            args += ["--backend", backend]
+        args += [name, workdir]
+        try:
+            try:
+                proc = subprocess.run(
+                    args,
+                    capture_output=True,
+                    text=True,
+                    errors="replace",
+                    timeout=timeout,
+                    env=env,
+                )
+            except subprocess.TimeoutExpired:
+                return SandboxCheck(
+                    False,
+                    f"`yoloai new` did not finish within {timeout}s",
+                    backend=backend,
+                    elapsed_ms=_elapsed(),
+                )
+            except OSError as e:
+                return SandboxCheck(
+                    False, f"`yoloai new` could not run: {e}", backend=backend
+                )
+            if proc.returncode != 0:
+                return SandboxCheck(
+                    False,
+                    f"could not start a sandbox: {_why_it_failed(proc)}",
+                    backend=backend,
+                    elapsed_ms=_elapsed(),
+                )
+
+            counted = _count_named(binary, name, env)
+            if isinstance(counted, CountUnavailable):
+                return SandboxCheck(
+                    False,
+                    f"started a sandbox but could not confirm it: {counted.reason}",
+                    backend=backend,
+                    elapsed_ms=_elapsed(),
+                )
+            if counted != 1:
+                return SandboxCheck(
+                    False,
+                    f"started a sandbox but yoloai reports {counted} active under "
+                    f"that name — it did not stay up",
+                    backend=backend,
+                    elapsed_ms=_elapsed(),
+                )
+            return SandboxCheck(
+                True,
+                "started a sandbox, counted it, and tore it down",
+                backend=backend,
+                elapsed_ms=_elapsed(),
+            )
+        finally:
+            subprocess.run(
+                [binary, "destroy", name],
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=timeout,
+                env=env,
+                check=False,
+            )
+
+
+def _count_named(binary: str, name: str, env: dict[str, str]) -> int | CountUnavailable:
+    """How many active sandboxes carry exactly this name.
+
+    Scoped to the probe's own name rather than reusing
+    `count_active_sandboxes`, whose `rite-` prefix would also count a
+    Worker's real sandbox — and a probe that passes because somebody
+    else's sandbox is running has verified nothing.
+    """
+    try:
+        proc = subprocess.run(
+            [binary, "ls", "--active", "--json"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=30,
+            env=env,
+        )
+    except (subprocess.TimeoutExpired, OSError) as e:
+        return CountUnavailable(f"`yoloai ls --active --json` could not run: {e}")
+    if proc.returncode != 0:
+        return CountUnavailable(f"`yoloai ls --active --json` exited {proc.returncode}")
+    try:
+        entries = json.loads(proc.stdout)["sandboxes"]
+    except (ValueError, KeyError, TypeError):
+        return CountUnavailable("`yoloai ls --active --json` did not return JSON")
+    return sum(
+        1
+        for e in entries
+        if isinstance(e, dict) and (e.get("environment") or {}).get("name") == name
+    )
 
 
 @dataclass
@@ -287,7 +534,7 @@ def sandbox_environment(base: dict[str, str] | None = None) -> dict[str, str]:
 
         Fatal Python error: init_import_site: Failed to import the site module
         PermissionError: [Errno 1] Operation not permitted:
-          /Users/.../rite/.venv/pyvenv.cfg
+          .../rite/.venv/pyvenv.cfg
 
     yoloAI then reports `wait for tmux session: sandbox-exec exited`. The
     sandbox never starts, and nothing in the message points at rite.

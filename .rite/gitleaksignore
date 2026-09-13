@@ -136,4 +136,3 @@
 # is the venv config file it could not read. The username was replaced with
 # an ellipsis before it was ever committed — the rule matches the shape, not
 # a name. Reproduced in the commit message for the same reason.
--:src/rite_ai/sandbox/__init__.py:rite-hardcoded-macos-home-directory-path:290  # quoted interpreter crash output in the docstring explaining the fix; username already elided; not a real path

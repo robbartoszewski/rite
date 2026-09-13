@@ -493,50 +493,46 @@ def doctor() -> None:
             click.echo(f"config: {err.file}: {err.message}")
             problems.append(f"config {err.file}: {err.message}")
     else:
-        from rite_ai.sandbox import is_available as sandbox_available
+        from rite_ai.sandbox import is_installed, verify_sandbox
         from rite_ai.schedule import validate_schedule
 
-        # Reported unconditionally (it is one `shutil.which`), but only a
-        # PROBLEM when `sandbox.enabled` is set — a project that never asked
-        # for sandboxing is not unhealthy for lacking yoloAI (SPEC §5.3:
-        # sandboxing is optional, default off).
-        yoloai_found = sandbox_available()
-        yoloai_broken = False
-        detail = "found"
-        # Probed, not merely located — same reason as gitleaks and gh.
-        # A yoloai that cannot run means `rite sandbox start` fails at the
-        # moment a Worker is being isolated, which is the worst moment to
-        # find out.
-        yoloai_path = shutil.which("yoloai")
-        if yoloai_found and yoloai_path:
-            # `yoloai version`, not `--version`: the flag does not exist
-            # and exits 1, which would report a working install as broken.
-            runs, detail = _tool_runs(yoloai_path, ["version"])
-            if not runs:
-                yoloai_broken = True
-                click.echo(f"tool yoloai: BROKEN at {yoloai_path} — {detail}")
-                if project.config.sandbox.enabled:
-                    problems.append(
-                        f"sandbox.enabled is true but yoloai does not run: {detail}"
-                    )
-        if yoloai_broken:
-            pass  # already reported above; do not describe it twice
-        elif not yoloai_found and project.config.sandbox.enabled:
+        # Only a PROBLEM when `sandbox.enabled` is set — a project that
+        # never asked for sandboxing is not unhealthy for lacking yoloAI.
+        #
+        # Sandboxing is verified by running a sandbox, not by finding a
+        # file. `shutil.which` measured "something is installed under that
+        # name", which is what let a present-but-broken yoloAI switch the
+        # worker cap off while reporting success. The round trip costs
+        # ~2s, so it runs only when this project actually asked for
+        # sandboxing; with the feature off, the row says what it checked
+        # and does not claim more.
+        if project.config.sandbox.enabled:
+            check = verify_sandbox(project.config.sandbox.backend)
+            if check.ok:
+                click.echo(
+                    f"sandbox ({check.backend}): verified — {check.detail} "
+                    f"in {check.elapsed_ms} ms"
+                )
+            elif not check.installed:
+                click.echo(f"sandbox ({check.backend}): {check.detail}")
+                problems.append(
+                    "sandbox.enabled is true but yoloai is not installed"
+                )
+            else:
+                click.echo(f"sandbox ({check.backend}): NOT WORKING — {check.detail}")
+                problems.append(
+                    f"sandbox.enabled is true but no sandbox could be "
+                    f"started: {check.detail}"
+                )
+        elif is_installed():
             click.echo(
-                "tool yoloai: NOT FOUND — sandbox.enabled is true, so "
-                "`rite sandbox start` and `rite add worker`'s token "
-                "provisioning will both fail"
-            )
-            problems.append("sandbox.enabled is true but yoloai is not on PATH")
-        elif project.config.sandbox.enabled:
-            click.echo(f"tool yoloai: {detail} (sandbox.enabled is true)")
-        elif yoloai_found:
-            click.echo(
-                f"tool yoloai: {detail} (sandbox.enabled is false — not required)"
+                "sandbox: yoloai is installed, not verified "
+                "(sandbox.enabled is false)"
             )
         else:
             click.echo(
-                "tool yoloai: not found (sandbox.enabled is false — not required)"
+                "sandbox: yoloai not installed (sandbox.enabled is false — "
+                "not required)"
             )
 
         schedule_problems = validate_schedule(
