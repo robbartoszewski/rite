@@ -28,18 +28,24 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import click
+import yaml
 
+from rite_ai.config.models import ProjectBrief
+from rite_ai.config.parse import parse_brief
 from rite_ai.gate.hook import redirected_hooks_dir
+from rite_ai.state import write_atomic
 
 from . import claude_gen, scaffold, ui
 from .config_file import ConfigFileError, load_preset
 from .detect import run_detection
-from .questionnaire import run_questionnaire
+from .questionnaire import run_questionnaire, source_answers
 
 
 @dataclass
 class InitResult:
-    status: str  # "created" | "already_initialized" | "aborted" | "error"
+    # "created" | "already_initialized" | "aborted" | "error", and for a path
+    # that is already a rite project, "updated" | "unchanged".
+    status: str
     message: str
     created_files: list[str] = field(default_factory=list)
 
@@ -56,6 +62,16 @@ def run_init(
             status="error",
             message=f"Could not read config file {preset.file}: {preset.message}",
         )
+
+    source = _existing_source(root, preset, interactive)
+    if isinstance(source, InitResult):
+        return source
+    changes = ""
+    if source is not None:
+        changes = _read_changes(source, preset, interactive)
+        project = _rite_project_at(source)
+        if project is not None:
+            return _record_changes(project, changes)
 
     rite_dir = root / ".rite"
     if rite_dir.exists():
@@ -77,8 +93,11 @@ def run_init(
 
     rite_dir.mkdir(parents=True, exist_ok=True)
 
-    detection = run_detection(root)
-    answers = run_questionnaire(root, preset, detection, yes)
+    if source is not None:
+        answers = source_answers(root, preset, source, changes)
+    else:
+        detection = run_detection(root)
+        answers = run_questionnaire(root, preset, detection, yes)
 
     created: list[str] = []
 
@@ -258,3 +277,114 @@ def run_init(
 
 
 __all__ = ["InitResult", "run_init"]
+
+
+# --- the first question (SPEC §9.3) ----------------------------------------------
+
+EXISTING_QUESTION = "Do you have a spec or existing code for this project? [y/N]"
+PATH_PROMPT = "Path: [.]"
+READING = (
+    "Reading {path} — languages, structure and conventions will be taken\n"
+    "from what's there."
+)
+CHANGES_QUESTION = (
+    "Anything stale, or that you'd like changed? Free text, or Enter to skip."
+)
+ALREADY_A_PROJECT = (
+    "This is already a rite project — I'll apply your changes rather than "
+    "starting over."
+)
+
+
+def _display(path: Path) -> str:
+    home = Path.home()
+    return f"~/{path.relative_to(home)}" if path.is_relative_to(home) else str(path)
+
+
+def _resolve_source(root: Path, text: str) -> Path:
+    path = Path(text).expanduser()
+    return (path if path.is_absolute() else root / path).resolve()
+
+
+def _existing_source(
+    root: Path, preset, interactive: bool
+) -> Path | InitResult | None:
+    """Where the existing spec or code is, or None to start from scratch.
+
+    A path is asked for again until it exists. A typo that fell through to
+    the from-scratch flow would ask nineteen questions of someone who said
+    they had already answered them, so that never happens — in a preset
+    either, where a missing path is an error."""
+    preset_path = preset.get("source.path")
+    if preset_path is not None:
+        path = _resolve_source(root, str(preset_path))
+        if not path.exists():
+            return InitResult(
+                status="error",
+                message=f"source.path {preset_path!r} does not exist "
+                f"(looked at {path})",
+            )
+        return path
+    if not interactive:
+        return None
+    if not ui.confirm(
+        EXISTING_QUESTION.removesuffix(" [y/N]"), default=False, suffix=" "
+    ):
+        return None
+    click.echo()
+    while True:
+        path = _resolve_source(root, ui.line(PATH_PROMPT, default="."))
+        if path.exists():
+            return path
+        ui.warn(f"Nothing at {_display(path)} — check the path and enter it again.")
+
+
+def _read_changes(source: Path, preset, interactive: bool) -> str:
+    click.echo()
+    click.echo(READING.format(path=_display(source)))
+    if _rite_project_at(source) is not None:
+        click.echo()
+        click.echo(ALREADY_A_PROJECT)
+    preset_changes = preset.get("source.changes")
+    if preset_changes is not None:
+        return str(preset_changes).strip()
+    if not interactive:
+        return ""
+    click.echo()
+    click.echo(CHANGES_QUESTION)
+    return ui.paragraph(">")
+
+
+def _rite_project_at(path: Path) -> Path | None:
+    if not path.is_dir():
+        return None
+    brief = parse_brief(path / ".rite" / "brief.yaml")
+    return path if isinstance(brief, ProjectBrief) else None
+
+
+def _record_changes(project: Path, changes: str) -> InitResult:
+    """Record the answer in an existing project's brief, and nothing else.
+
+    Everything else in the file is kept as it was written, including sections
+    `init` never writes. A request recorded earlier and not yet acted on is
+    kept beside the new one rather than replaced."""
+    if not changes:
+        return InitResult(
+            status="unchanged", message="Nothing to apply — the project is unchanged."
+        )
+    brief_path = project / ".rite" / "brief.yaml"
+    raw = yaml.safe_load(brief_path.read_text())
+    source = raw.get("source")
+    if not isinstance(source, dict):
+        source = {}
+    earlier = str(source.get("changes") or "").strip()
+    source["changes"] = f"{earlier}\n\n{changes}" if earlier else changes
+    source.setdefault("path", str(project))
+    raw["source"] = source
+    write_atomic(
+        brief_path, yaml.safe_dump(raw, sort_keys=False, allow_unicode=True)
+    )
+    return InitResult(
+        status="updated",
+        message=f"Recorded in {brief_path}. Nothing else in the project was changed.",
+    )

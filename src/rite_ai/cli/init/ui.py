@@ -15,8 +15,16 @@ cannot be tested").
 from __future__ import annotations
 
 import sys
+import time
 
 import click
+
+try:
+    import fcntl
+    import struct
+    import termios
+except ImportError:  # not a POSIX terminal
+    termios = None
 
 ARROW_UP = ("\x1b[A", "k")
 ARROW_DOWN = ("\x1b[B", "j")
@@ -135,8 +143,63 @@ def text_list(question: str, default: list[str] | None = None) -> list[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
-def confirm(question: str, default: bool = True) -> bool:
-    return click.confirm(question, default=default)
+def confirm(question: str, default: bool = True, suffix: str = ": ") -> bool:
+    return click.confirm(question, default=default, prompt_suffix=suffix)
+
+
+def line(prompt_text: str, default: str = "") -> str:
+    """One line, with the prompt shown exactly as written — no bracket or
+    colon added — for copy that was written word for word."""
+    raw = click.prompt(prompt_text, default="", show_default=False, prompt_suffix=" ")
+    return raw.strip() or default
+
+
+# How long a paste is given to arrive after its first line is read.
+PASTE_SETTLE_SECONDS = 0.05
+
+
+def _terminal_fd() -> int | None:
+    if termios is None:
+        return None
+    try:
+        if sys.stdin.isatty():
+            return sys.stdin.fileno()
+    except (AttributeError, ValueError, OSError):
+        pass
+    return None
+
+
+def _queued_bytes(fd: int) -> int:
+    try:
+        raw = fcntl.ioctl(fd, termios.FIONREAD, b"\0\0\0\0")
+    except OSError:
+        return 0
+    return struct.unpack("i", raw)[0]
+
+
+def paragraph(prompt_text: str = ">") -> str:
+    """Free text that may run to several lines.
+
+    A pasted block is the expected input here, so each complete line still
+    queued after the first is read and joined rather than left to answer
+    nothing — or to reach the shell once init exits. A pasted last line with
+    no newline is invisible to the terminal until it is submitted (measured
+    on macOS), so it is not recorded; the number of lines taken is shown, so
+    a short one gets noticed."""
+    first = click.prompt(prompt_text, default="", show_default=False, prompt_suffix=" ")
+    lines = [first]
+    fd = _terminal_fd()
+    if fd is not None:
+        time.sleep(PASTE_SETTLE_SECONDS)
+        while _queued_bytes(fd) > 0:
+            lines.append(sys.stdin.readline().rstrip("\n"))
+        try:
+            termios.tcflush(fd, termios.TCIFLUSH)
+        except termios.error:
+            pass
+        if len(lines) > 1:
+            note(f"recorded {len(lines)} lines")
+    return "\n".join(piece.rstrip() for piece in lines).strip()
 
 
 def repeat_until_blank(question: str, default: str = "") -> list[str]:

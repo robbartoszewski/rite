@@ -65,6 +65,8 @@ def brief_to_yaml(brief: ProjectBrief) -> str:
             "architecture": brief.architecture,
         },
     }
+    if brief.source_path or brief.source_changes:
+        data["source"] = {"path": brief.source_path, "changes": brief.source_changes}
     return yaml.safe_dump(
         data, sort_keys=False, default_flow_style=False, allow_unicode=True
     )

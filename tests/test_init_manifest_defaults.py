@@ -53,7 +53,7 @@ def _init_cmd(yes: bool, directory: str) -> None:
 # features, platform, languages, frameworks, architecture — then "3" (no ticket
 # backend) — then blanks for this machine's sandbox and knowledge prompts.
 # Surplus blank lines are never read.
-_ENTER_THROUGH = "\n".join([""] * 10 + ["3"] + [""] * 12) + "\n"
+_ENTER_THROUGH = "n\n" + "\n".join([""] * 10 + ["3"] + [""] * 12) + "\n"
 
 
 # --- detection --------------------------------------------------------------

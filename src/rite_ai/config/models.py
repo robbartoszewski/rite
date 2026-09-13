@@ -15,6 +15,11 @@ class ProjectBrief:
     languages: list[str] = field(default_factory=list)
     frameworks: list[str] = field(default_factory=list)
     architecture: str = ""
+    # The spec or code `rite init` was pointed at, and the one open answer
+    # about what in it is stale or should change (SPEC §9.3). Recorded for
+    # whatever reads the source later; empty on a project started from scratch.
+    source_path: str = ""
+    source_changes: str = ""
 
 
 @dataclass

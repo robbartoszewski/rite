@@ -2585,6 +2585,23 @@ produces `.rite/brief.yaml`, `.rite/modules.yaml`, and `.rite/config.yaml`.
   tree and `rite prepare` blocks on one. Anything detected wrongly is corrected
   in `modules.yaml` (§8.2), which overrides detection.
 
+**The first question** is *"Do you have a spec or existing code for this
+project? [y/N]"*, asked before anything else.
+
+- **Yes** — *"Path: [.]"*, defaulting to the current directory, checked, and
+  asked again until it exists: a mistyped path never falls through to the
+  sections below. Then *"Reading <path> — languages, structure and conventions
+  will be taken from what's there."* and one open question: *"Anything stale, or
+  that you'd like changed? Free text, or Enter to skip."* The brief records the
+  path and that answer as `source.path` and `source.changes`, and none of the
+  sections below is asked. When the path is already a rite project, `init` says
+  *"This is already a rite project — I'll apply your changes rather than starting
+  over."* and records the answer in that project's brief; nothing else there is
+  touched, an earlier answer is kept beside the new one, and Enter changes
+  nothing. A preset answers it with `source.path` and `source.changes`; a
+  `source.path` that does not exist is an error. `--yes` without one answers no.
+- **No** — the sections below, unchanged.
+
 **Section 1 — Role** `[1/7]`
 
 ```

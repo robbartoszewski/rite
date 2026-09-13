@@ -458,7 +458,7 @@ def test_init_declining_the_wipe_prompt_prints_a_message_not_silence(
     runner.invoke(cli, ["init", "--yes"])
     assert (tmp_path / ".rite").is_dir()
 
-    result = runner.invoke(cli, ["init"], input="n\n")
+    result = runner.invoke(cli, ["init"], input="n\nn\n")
     assert "already exists" in result.output
     assert "left untouched" in result.output
 

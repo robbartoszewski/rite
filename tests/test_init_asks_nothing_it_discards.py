@@ -27,7 +27,7 @@ def _init_cmd(directory: str) -> None:
 
 # role, name, root branch, module name (blank), kind, features, platform,
 # languages, frameworks, architecture — then "3" — then surplus blanks.
-_ENTER_THROUGH = "\n".join([""] * 10 + ["3"] + [""] * 12) + "\n"
+_ENTER_THROUGH = "n\n" + "\n".join([""] * 10 + ["3"] + [""] * 12) + "\n"
 
 
 def test_init_does_not_ask_what_the_team_should_know(tmp_path: Path):

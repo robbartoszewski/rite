@@ -72,6 +72,10 @@ def parse_brief(path: Path) -> ProjectBrief | ParseError:
     if not isinstance(tech, dict):
         tech = {}
 
+    source = raw.get("source", {})
+    if not isinstance(source, dict):
+        source = {}
+
     return ProjectBrief(
         name=name,
         role=role,
@@ -82,6 +86,8 @@ def parse_brief(path: Path) -> ProjectBrief | ParseError:
         languages=_str_list(tech.get("languages", [])),
         frameworks=_str_list(tech.get("frameworks", [])),
         architecture=tech.get("architecture", ""),
+        source_path=str(source.get("path", "") or ""),
+        source_changes=str(source.get("changes", "") or ""),
     )
 
 

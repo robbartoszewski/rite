@@ -318,6 +318,9 @@ def init(directory: str, config_file: str | None, yes: bool) -> None:
     if result.status == "error":
         click.echo(result.message, err=True)
         raise SystemExit(1)
+    if result.status in ("updated", "unchanged"):
+        click.echo(result.message)
+        return
     if result.status == "already_initialized":
         # Nothing was created. Exiting 0 told every script that init had
         # succeeded, and `rite init --yes` in particular has no other way

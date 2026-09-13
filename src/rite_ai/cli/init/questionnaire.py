@@ -33,7 +33,7 @@ from rite_ai.credentials.store import make_namespace
 
 from . import ui
 from .config_file import Preset
-from .detect import DetectedRepo, DetectionSummary
+from .detect import DetectedRepo, DetectionSummary, detect_repos, detect_root_branch
 
 _KIND_OPTIONS = [
     ("full-stack", "Full-stack"),
@@ -610,3 +610,35 @@ def _borrow_owner_config(ref: str) -> ProjectConfig | None:
 
 
 __all__ = ["InitAnswers", "KbAnswers", "run_questionnaire"]
+
+
+def source_answers(
+    root: Path, preset: Preset, source: Path, changes: str
+) -> InitAnswers:
+    """The answers for someone who already has a spec or code.
+
+    Nothing past the first question is asked: the brief records where the
+    source is and what in it should change, and everything else about the
+    project is left for whatever reads that source. What is filled in here is
+    only what the files `init` writes cannot be valid without, each taken the
+    way `--yes` takes it.
+    """
+    base = source if source.is_dir() else source.parent
+    name = root.name or "my-project"
+    sandbox_enabled, sandbox_backend = _resolve_sandbox(preset, False, ui)
+    return InitAnswers(
+        role="owner",
+        brief=ProjectBrief(
+            name=name,
+            role="owner",
+            root_branch=detect_root_branch(base, detect_repos(base)) or "main",
+            source_path=str(source),
+            source_changes=changes,
+        ),
+        modules=[],
+        config=ProjectConfig(
+            credentials=CredentialsConfig(namespace=make_namespace(name)),
+            sandbox=SandboxConfig(enabled=sandbox_enabled, backend=sandbox_backend),
+        ),
+        kb=KbAnswers(),
+    )

@@ -55,7 +55,7 @@ def _init_cmd(yes: bool, directory: str) -> None:
 # languages, frameworks, architecture — then "3" (no ticket backend, so no
 # JIRA-site prompt) — then blanks for whatever this machine's sandbox and
 # knowledge sections ask. Surplus blank lines are never read.
-_ENTER_THROUGH = "\n".join([""] * 10 + ["3"] + [""] * 12) + "\n"
+_ENTER_THROUGH = "n\n" + "\n".join([""] * 10 + ["3"] + [""] * 12) + "\n"
 
 
 # --- detection --------------------------------------------------------------

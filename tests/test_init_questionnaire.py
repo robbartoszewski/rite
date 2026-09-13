@@ -24,11 +24,11 @@ def _init_cmd(config: str | None, yes: bool, directory: str) -> None:
     click.echo(f"STATUS:{result.status}")
 
 
-# All-defaults interactive answer sequence: role, name, root_branch, module
-# name (blank = no repos found), kind, features, platform, languages,
-# frameworks, architecture, ticket backend ("3" = None for now, to skip the
-# extra JIRA-site prompt), sandbox, kb link, kb file, kb commit.
-_ALL_BLANK = "\n".join([""] * 10 + ["3"] + [""] * 4) + "\n"
+# All-defaults interactive answer sequence: no existing spec or code, role,
+# name, root_branch, module name (blank = no repos found), kind, features,
+# platform, languages, frameworks, architecture, ticket backend ("3" = None for
+# now, to skip the extra JIRA-site prompt), sandbox, kb link, kb file, kb commit.
+_ALL_BLANK = "n\n" + "\n".join([""] * 10 + ["3"] + [""] * 4) + "\n"
 
 
 def test_interactive_all_defaults_creates_every_file(tmp_path: Path):
@@ -84,6 +84,7 @@ def test_interactive_custom_answers_are_used(tmp_path: Path):
     answers = (
         "\n".join(
             [
+                "n",  # no existing spec or code
                 "",  # role default owner
                 "myapp",  # project name
                 "develop",  # root branch
@@ -131,6 +132,7 @@ def test_interactive_detects_and_adds_repos(tmp_path: Path):
     answers = (
         "\n".join(
             [
+                "n",  # no existing spec or code
                 "",  # role
                 "",  # name
                 "",  # root branch
@@ -164,7 +166,7 @@ def test_interactive_reinit_declined_leaves_project_untouched(tmp_path: Path):
     (rite_dir / "brief.yaml").write_text("project:\n  name: original\n")
 
     runner = CliRunner()
-    result = runner.invoke(_init_cmd, [str(tmp_path)], input="n\n")
+    result = runner.invoke(_init_cmd, [str(tmp_path)], input="n\nn\n")
     assert result.exit_code == 0
     assert "STATUS:already_initialized" in result.output
     assert (rite_dir / "brief.yaml").read_text() == "project:\n  name: original\n"
@@ -176,7 +178,7 @@ def test_interactive_reinit_confirmed_wipes_and_recreates(tmp_path: Path):
     (rite_dir / "brief.yaml").write_text("project:\n  name: original\n")
 
     runner = CliRunner()
-    result = runner.invoke(_init_cmd, [str(tmp_path)], input="y\n" + _ALL_BLANK)
+    result = runner.invoke(_init_cmd, [str(tmp_path)], input="n\ny\n" + _ALL_BLANK[2:])
     assert result.exit_code == 0, result.output
     assert "STATUS:created" in result.output
     brief = yaml.safe_load((rite_dir / "brief.yaml").read_text())
@@ -283,6 +285,7 @@ def test_manager_role_prompts_for_owner_ref(tmp_path: Path):
     answers = (
         "\n".join(
             [
+                "n",  # no existing spec or code
                 "manager",  # role, typed value rather than arrow selection
                 "",  # owner ref, skipped
                 "",  # name
