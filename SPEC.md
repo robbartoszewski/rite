@@ -2639,14 +2639,29 @@ itself does not collect or generate any token.
 The question has three shapes, because there are three situations:
 
 - **A backend rite has verified is available** — ask, default Yes.
-- **yoloAI is not installed** — ask anyway, default Yes, naming where to get
-  it. Answering Yes records the setting; `rite doctor` then reports the
-  sandbox as not working until it is installed, which is the honest state.
+- **yoloAI is not installed** — offer to install it (`brew install --cask
+  yoloai`), then ask. The installer's exit code is not taken as proof: rite
+  re-resolves the binary afterwards, so an install that reports success and
+  leaves nothing on PATH is reported as what it is. A decline, a failure and
+  a half-success all continue to the sandbox question — answering Yes records
+  the setting, and `rite doctor` then reports the sandbox as not working
+  until yoloAI is there, which is the honest state.
+
+  **Declining the install is remembered for the machine, not the project**
+  (`~/.rite/init-prefs.json`). The two questions are about different things:
+  whether to install a binary is a fact about this machine and the same
+  answer serves every project on it, while whether Workers run sandboxed is
+  a per-project choice. So the offer is made once and the setting is asked
+  every time. Declining suppresses the offer only — never the question, and
+  never the feature.
 - **No backend rite has verified works here** — do not ask. seatbelt is
   macOS-only and `flock` is a no-op inside a docker sandbox (§5.3), so on
   Linux there is no backend that keeps claims excluding. A question whose
   Yes cannot be honoured is worse than one line saying why, so it states it
-  and continues with sandboxing off.
+  and continues with sandboxing off. Decided from the platform alone and
+  BEFORE the install offer — with yoloAI absent there is nothing to ask
+  about backends, and offering to install it where no verified backend can
+  exist helps nobody.
 
 **`sandbox.enabled` does not govern credentials.** Per-Worker token scoping
 is asked for with `rite add worker --scoped-token` and is off by default;

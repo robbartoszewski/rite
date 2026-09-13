@@ -152,6 +152,84 @@ class BackendChoice:
         return bool(self.name)
 
 
+def platform_can_sandbox() -> bool:
+    """Whether any backend rite has verified could exist on this platform.
+
+    Answerable without yoloAI installed, which is the point: when the
+    binary is absent there is nothing to ask about backends, and offering
+    to install it on a platform where no verified backend can exist would
+    be offering something that cannot help. seatbelt is the only backend
+    measured to keep claims excluding (§5.3) and it is macOS-only.
+    """
+    return sys.platform == "darwin"
+
+
+def yoloai_install_command() -> list[str] | None:
+    """How to install yoloAI here, or None if rite does not know.
+
+    yoloAI ships as a Homebrew cask. Returning None rather than guessing a
+    shell pipeline matters: rite offering to run an installer it is not
+    sure of is worse than naming the download page.
+    """
+    if sys.platform != "darwin":
+        return None
+    if shutil.which("brew") is None:
+        return None
+    return ["brew", "install", "--cask", "yoloai"]
+
+
+@dataclass
+class InstallOutcome:
+    ok: bool
+    detail: str
+    installed_now: bool = False
+
+
+def install_yoloai(timeout: int = 900) -> InstallOutcome:
+    """Run the installer and then CHECK, rather than trusting its exit code.
+
+    A package manager reporting success is not the same as a working
+    `yoloai` on PATH — a cask can install while the binary lands somewhere
+    the current shell's PATH does not cover, which looks like success and
+    behaves like absence. So this re-resolves the binary afterwards and
+    reports what is actually true.
+    """
+    command = yoloai_install_command()
+    if command is None:
+        return InstallOutcome(
+            False,
+            "rite does not know how to install yoloAI here — "
+            "get it from https://yoloai.dev",
+        )
+    try:
+        proc = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return InstallOutcome(
+            False, f"`{' '.join(command)}` timed out after {timeout}s"
+        )
+    except OSError as e:
+        return InstallOutcome(False, f"`{' '.join(command)}` could not run: {e}")
+
+    if proc.returncode != 0:
+        detail = _why_it_failed(proc)
+        return InstallOutcome(False, f"install failed: {detail}")
+
+    # Exit 0 is a claim, not a fact.
+    if _yoloai_binary() is None:
+        return InstallOutcome(
+            False,
+            "the installer reported success but `yoloai` is still not on "
+            "PATH — open a new shell, or install it from https://yoloai.dev",
+        )
+    return InstallOutcome(True, "yoloAI installed", installed_now=True)
+
+
 def choose_backend() -> BackendChoice | CountUnavailable:
     """The backend rite can actually sandbox with on this machine.
 

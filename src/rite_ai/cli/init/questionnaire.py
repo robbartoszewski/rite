@@ -67,70 +67,130 @@ class InitAnswers:
 
 
 def _resolve_sandbox(preset: dict, interactive: bool, ui) -> tuple[bool, str]:
-    """Ask whether Workers should run sandboxed — three answers, because
-    there are three genuinely different situations.
+    """Ask whether Workers should run sandboxed.
 
     `install.sh` deliberately never asks anything: piping it to a shell
     binds stdin to the pipe, so a prompt there either hangs or reads the
-    script. The question belongs at the first moment a human is certainly
-    at a terminal, which is `rite init`.
+    script as its own answer. The question belongs at the first moment a
+    human is certainly at a terminal, which is here.
 
-    1. A verified backend is available → ask, default Yes.
-    2. yoloAI is not installed → ask, default Yes, and say where to get it.
-       Answering Yes writes the setting; `rite doctor` then reports the
-       sandbox as not working until it is installed, which is the honest
-       state rather than a silent no.
-    3. No backend rite has verified works here → do not ask. There is no
-       answer the user could give that would make it work, and a question
-       whose Yes cannot be honoured is worse than a sentence explaining
-       why. Says so in one line and continues with sandboxing off.
+    Three situations, and only one of them is a yes/no:
+
+    1. **A verified backend is available** — ask, default Yes.
+    2. **yoloAI is not installed** — offer to install it, then ask. The
+       offer is skipped if it was declined before on this machine (see
+       `prefs`), or if rite does not know how to install it here.
+    3. **No backend rite has verified works here** — do not ask. There is
+       no answer that would make it work, so say why in one line and
+       continue with sandboxing off.
+
+    Branch 3 is decided BEFORE branch 2, from the platform alone. With
+    yoloAI absent there is nothing to ask about backends, and offering to
+    install it where no verified backend can exist would be offering
+    something that cannot help.
     """
+    from rite_ai.cli.init import prefs
     from rite_ai.sandbox import (
         CountUnavailable,
         choose_backend,
+        install_yoloai,
         is_installed,
+        platform_can_sandbox,
+        yoloai_install_command,
     )
 
-    preset_value = preset.get("operations.sandbox")
     default_backend = SandboxConfig().backend
+    preset_value = preset.get("operations.sandbox")
 
-    if not is_installed():
+    def _answer(backend: str, *, default: bool = True) -> tuple[bool, str]:
         if preset_value is not None:
-            return bool(preset_value), default_backend
+            return bool(preset_value), backend
         if not interactive:
-            return True, default_backend
-        ui.note(
-            "yoloAI is not installed — sandboxing can be turned on now and it "
-            "will start working once you install it from https://yoloai.dev"
-        )
-        return ui.confirm("Run Workers in sandboxes?", default=True), default_backend
+            return default, backend
+        return ui.confirm("Run Workers in sandboxes?", default=default), backend
 
+    # --- Branch 3: nothing rite has verified can run here ---
+    if not platform_can_sandbox():
+        ui.note(
+            "Workers will not be sandboxed: the only backend rite has "
+            "verified keeps claims working is macOS-only, and `flock` is a "
+            "no-op inside a docker sandbox. Everything else works normally."
+        )
+        return False, default_backend
+
+    # --- Branch 2: yoloAI absent ---
+    if not is_installed():
+        if interactive and preset_value is None:
+            _offer_yoloai_install(ui, prefs, install_yoloai, yoloai_install_command)
+        if not is_installed():
+            # Still absent — declined, unavailable, or the install did not
+            # take. The setting can still be turned on; `rite doctor` then
+            # reports the sandbox as not working until yoloAI is there,
+            # which is the honest state rather than a silent No.
+            return _answer(default_backend)
+
+    # --- Branch 1 (or branch 3 discovered late, once yoloAI can answer) ---
     choice = choose_backend()
     if isinstance(choice, CountUnavailable):
-        # yoloAI is installed but could not be asked. Treat it like the
-        # absent case rather than inventing a verdict.
-        if preset_value is not None:
-            return bool(preset_value), default_backend
-        if not interactive:
-            return True, default_backend
-        ui.note(f"could not ask yoloAI which backends work here: {choice.reason}")
-        return ui.confirm("Run Workers in sandboxes?", default=True), default_backend
-
+        if interactive:
+            ui.note(f"could not ask yoloAI which backends work here: {choice.reason}")
+        return _answer(default_backend)
     if not choice.usable:
         ui.note(
             f"Workers will not be sandboxed: {choice.reason}. "
             "Everything else works normally."
         )
         return False, default_backend
+    return _answer(choice.name)
 
-    if preset_value is not None:
-        return bool(preset_value), choice.name
-    if not interactive:
-        return True, choice.name
-    return (
-        ui.confirm("Run Workers in sandboxes?", default=True),
-        choice.name,
+
+def _offer_yoloai_install(ui, prefs, install_yoloai, yoloai_install_command) -> None:
+    """Offer to install yoloAI, run it, and say what actually happened.
+
+    Every outcome here is one someone will hit: no installer rite knows
+    about, a decline, a failed install, and an install that reports
+    success while leaving nothing on PATH. None of them stop `rite init` —
+    the sandbox question is still asked afterwards either way.
+    """
+    command = yoloai_install_command()
+    if command is None:
+        ui.note(
+            "yoloAI is not installed, and rite does not know how to install "
+            "it here — get it from https://yoloai.dev. Sandboxing can still "
+            "be turned on now; it starts working once yoloAI is there."
+        )
+        return
+
+    if prefs.yoloai_install_declined():
+        ui.note(
+            "yoloAI is not installed (you declined installing it before). "
+            "Get it from https://yoloai.dev; sandboxing can still be turned "
+            "on now."
+        )
+        return
+
+    ui.note(
+        "yoloAI is what runs Workers in sandboxes. It is a separate binary, "
+        "not a Python dependency."
     )
+    if not ui.confirm(f"Install it now with `{' '.join(command)}`?", default=True):
+        prefs.record_yoloai_install_declined()
+        ui.note(
+            "Not installing — and not asking again on this machine. Get it "
+            "from https://yoloai.dev whenever you want it."
+        )
+        return
+
+    ui.note(f"running `{' '.join(command)}` — this can take a minute")
+    outcome = install_yoloai()
+    if outcome.ok:
+        ui.note("yoloAI installed.")
+    else:
+        ui.warn(outcome.detail)
+        ui.note(
+            "Sandboxing can still be turned on now; it starts working once "
+            "yoloAI is there, and `rite doctor` will say so until then."
+        )
 
 
 def run_questionnaire(
