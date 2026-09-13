@@ -44,6 +44,12 @@ _KIND_OPTIONS = [
     ("other", "Other"),
 ]
 
+
+def _kind_index(kind: str | None) -> int:
+    """The option detection supports, else the first — the old fixed default."""
+    values = [value for value, _ in _KIND_OPTIONS]
+    return values.index(kind) if kind in values else 0
+
 _TICKET_OPTIONS = [
     ("jira", "JIRA"),
     ("github", "GitHub Issues"),
@@ -362,11 +368,19 @@ def run_questionnaire(
         else "What will this be?"
     )
     ui.section(title, 4, 7)
+    # Kind and description come from the project's manifests when they say.
+    # Both were fixed (Full-stack, blank) and a package that installs a command
+    # was offered Full-stack — accepted by anyone pressing Enter.
     kind = resolve_select(
-        "what.kind", "What kind of project is this?", _KIND_OPTIONS, default_index=0
+        "what.kind",
+        "What kind of project is this?",
+        _KIND_OPTIONS,
+        default_index=_kind_index(detected.kind),
     )
     features = resolve_text(
-        "what.features", "Describe what this project does:", default=""
+        "what.features",
+        "Describe what this project does:",
+        default=detected.description or "",
     )
 
     # --- Section 5: Technology ---
@@ -377,7 +391,9 @@ def run_questionnaire(
     languages = resolve_list(
         "technology.languages", "Languages?", default=list(detected.languages)
     )
-    frameworks = resolve_list("technology.frameworks", "Frameworks?", default=[])
+    frameworks = resolve_list(
+        "technology.frameworks", "Frameworks?", default=list(detected.frameworks)
+    )
     architecture = resolve_text("technology.architecture", "Architecture?", default="")
 
     # --- Section 6: Operations ---

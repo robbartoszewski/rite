@@ -2603,6 +2603,14 @@ Describe what this project does: []
 
 For empty/new projects, the header reads **"What will this be?"** instead.
 
+Both are pre-filled from the project's own manifests (`pyproject.toml`,
+`package.json`, `pubspec.yaml`) in the root and its immediate subdirectories.
+Kind: a mobile toolkit is mobile; a frontend framework with a web framework is
+full-stack, and either alone is that alone; a package that installs a command
+with neither is a library. The description is the root manifest's
+`description`, or the one every module's manifest agrees on. When the
+manifests do not say, kind stays Full-stack and the description stays blank.
+
 The description is free text, skippable. This is the field the first Claude
 session will follow up on — "event sourcing, CQRS" triggers architecture
 questions; "e-commerce" triggers domain questions.
@@ -2615,11 +2623,14 @@ Pre-filled from detected markers where possible:
 ─── Technology ─────────────────────────────────────
 Platform?       [linux] (detected from environment)
 Languages?      [python, typescript] (detected from pyproject.toml, package.json)
-Frameworks?     []
+Frameworks?     [click, pytest] (recognised packages in the dependencies)
 Architecture?   [] (e.g. event sourcing, microservices, monolith)
 ```
 
-All skippable. Auto-detected values shown as defaults. The architecture field
+All skippable. Auto-detected values shown as defaults. Frameworks are named
+from a fixed list of recognised packages found in the manifests' dependencies
+— not every dependency, since a library a project uses is not a framework it
+is built on. The architecture field
 is where domain-specific patterns go — the AI enrichment step (§8.1) will ask
 targeted follow-ups based on what the user types here.
 

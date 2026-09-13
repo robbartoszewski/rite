@@ -11,6 +11,7 @@ import json
 import re
 import subprocess
 import sys
+import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -251,6 +252,243 @@ def _detect_python_commands(module_path: Path) -> ModuleCommands:
     )
 
 
+# What the project's own manifests already say. `kind`, `features` and
+# `frameworks` were asked cold — Full-stack, blank and blank — while the answers
+# sat in files init already opens: `_detect_python_commands` reads
+# pyproject.toml to look for pytest and discards everything else. Like the rest
+# of this module these only PRE-FILL; nothing is recorded that was not offered.
+#
+# Manifests, not a crawl of the tree: the project root and its immediate
+# subdirectories, the same reach as `detect_languages`.
+
+# Frameworks worth naming, by the package that signals them. An allowlist rather
+# than every dependency: `httpx` or `pyyaml` is a library a project uses, not a
+# framework it is built on, and a default padded with libraries is a default
+# people clear instead of accepting.
+_PYTHON_FRAMEWORKS = {
+    "django": "django",
+    "flask": "flask",
+    "fastapi": "fastapi",
+    "starlette": "starlette",
+    "tornado": "tornado",
+    "aiohttp": "aiohttp",
+    "celery": "celery",
+    "click": "click",
+    "typer": "typer",
+    "pytest": "pytest",
+}
+_NODE_FRAMEWORKS = {
+    "react": "react",
+    "next": "next",
+    "vue": "vue",
+    "nuxt": "nuxt",
+    "svelte": "svelte",
+    "@sveltejs/kit": "sveltekit",
+    "@angular/core": "angular",
+    "react-native": "react-native",
+    "electron": "electron",
+    "express": "express",
+    "fastify": "fastify",
+    "@nestjs/core": "nestjs",
+    "koa": "koa",
+    "hono": "hono",
+    "jest": "jest",
+    "vitest": "vitest",
+}
+_FRONTEND_FRAMEWORKS = {
+    "react",
+    "next",
+    "vue",
+    "nuxt",
+    "svelte",
+    "sveltekit",
+    "angular",
+}
+_BACKEND_FRAMEWORKS = {
+    "django",
+    "flask",
+    "fastapi",
+    "starlette",
+    "tornado",
+    "aiohttp",
+    "express",
+    "fastify",
+    "nestjs",
+    "koa",
+    "hono",
+}
+
+_REQUIREMENT_NAME = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
+
+
+@dataclass
+class ManifestFacts:
+    description: str = ""
+    frameworks: list[str] = field(default_factory=list)
+    installs_a_command: bool = False
+    mobile: bool = False
+
+
+def _requirement_names(requirements: object) -> list[str]:
+    if not isinstance(requirements, list):
+        return []
+    names = []
+    for requirement in requirements:
+        if not isinstance(requirement, str):
+            continue
+        match = _REQUIREMENT_NAME.match(requirement)
+        if match:
+            names.append(match.group(1).lower().replace("_", "-").replace(".", "-"))
+    return names
+
+
+def _table_keys(table: object) -> list[str]:
+    if not isinstance(table, dict):
+        return []
+    return [key.lower() for key in table if isinstance(key, str)]
+
+
+def _known(names: list[str], table: dict[str, str]) -> list[str]:
+    found: list[str] = []
+    for name in names:
+        label = table.get(name)
+        if label and label not in found:
+            found.append(label)
+    return found
+
+
+def _read_pyproject(path: Path) -> ManifestFacts | None:
+    try:
+        data = tomllib.loads(path.read_text())
+    except (OSError, ValueError):  # TOMLDecodeError and UnicodeDecodeError
+        return None
+    project = data.get("project")
+    project = project if isinstance(project, dict) else {}
+    tool = data.get("tool")
+    poetry = tool.get("poetry") if isinstance(tool, dict) else None
+    poetry = poetry if isinstance(poetry, dict) else {}
+
+    names = _requirement_names(project.get("dependencies"))
+    for groups in (project.get("optional-dependencies"), data.get("dependency-groups")):
+        if isinstance(groups, dict):
+            for requirements in groups.values():
+                names.extend(_requirement_names(requirements))
+    names.extend(_table_keys(poetry.get("dependencies")))
+    names.extend(_table_keys(poetry.get("dev-dependencies")))
+    poetry_groups = poetry.get("group")
+    if isinstance(poetry_groups, dict):
+        for group in poetry_groups.values():
+            if isinstance(group, dict):
+                names.extend(_table_keys(group.get("dependencies")))
+
+    description = project.get("description") or poetry.get("description")
+    scripts = (
+        project.get("scripts") or project.get("gui-scripts") or poetry.get("scripts")
+    )
+    return ManifestFacts(
+        description=description.strip() if isinstance(description, str) else "",
+        frameworks=_known(names, _PYTHON_FRAMEWORKS),
+        installs_a_command=bool(scripts),
+    )
+
+
+def _read_package_json(path: Path) -> ManifestFacts | None:
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    names = _table_keys(data.get("dependencies")) + _table_keys(
+        data.get("devDependencies")
+    )
+    frameworks = _known(names, _NODE_FRAMEWORKS)
+    description = data.get("description")
+    return ManifestFacts(
+        description=description.strip() if isinstance(description, str) else "",
+        frameworks=frameworks,
+        installs_a_command=bool(data.get("bin")),
+        mobile="react-native" in frameworks,
+    )
+
+
+def _manifest_facts(dir_path: Path) -> list[ManifestFacts]:
+    facts: list[ManifestFacts] = []
+    for name, reader in (
+        ("pyproject.toml", _read_pyproject),
+        ("package.json", _read_package_json),
+    ):
+        if (dir_path / name).is_file():
+            read = reader(dir_path / name)
+            if read is not None:
+                facts.append(read)
+    if (dir_path / "pubspec.yaml").is_file():
+        facts.append(ManifestFacts(mobile=True))
+    return facts
+
+
+def _all_manifest_facts(root: Path) -> list[ManifestFacts]:
+    facts = _manifest_facts(root)
+    for child in iter_candidate_dirs(root):
+        facts.extend(_manifest_facts(child))
+    return facts
+
+
+def detect_frameworks(root: Path) -> list[str]:
+    """Recognised frameworks across the project's manifests, in manifest order."""
+    found: list[str] = []
+    for facts in _all_manifest_facts(root):
+        for framework in facts.frameworks:
+            if framework not in found:
+                found.append(framework)
+    return found
+
+
+def detect_description(root: Path) -> str | None:
+    """The root manifest's description; else the one every manifest agrees on.
+
+    Two modules describing themselves differently do not describe the
+    project, so that gives no answer rather than picking one.
+    """
+    for facts in _manifest_facts(root):
+        if facts.description:
+            return facts.description
+    descriptions = {
+        facts.description
+        for child in iter_candidate_dirs(root)
+        for facts in _manifest_facts(child)
+        if facts.description
+    }
+    return next(iter(descriptions)) if len(descriptions) == 1 else None
+
+
+def detect_kind(root: Path) -> str | None:
+    """A `what.kind` the manifests support, or None when they do not say.
+
+    Mobile if a mobile toolkit is declared. Otherwise a frontend framework and
+    a web framework together are full-stack, either alone is that alone, and a
+    package that installs a command with neither is a library. Anything else is
+    no answer — the questionnaire keeps its old default rather than guessing.
+    """
+    facts = _all_manifest_facts(root)
+    if not facts:
+        return None
+    frameworks = {framework for f in facts for framework in f.frameworks}
+    if any(f.mobile for f in facts):
+        return "mobile"
+    frontend = bool(frameworks & _FRONTEND_FRAMEWORKS)
+    backend = bool(frameworks & _BACKEND_FRAMEWORKS)
+    if frontend and backend:
+        return "full-stack"
+    if frontend:
+        return "frontend"
+    if backend:
+        return "backend"
+    if any(f.installs_a_command for f in facts):
+        return "library"
+    return None
+
+
 def detect_root_branch(root: Path, repos: list[DetectedRepo]) -> str | None:
     """The branch this project's line is on, or None when detection cannot say.
 
@@ -279,6 +517,9 @@ class DetectionSummary:
     platform: str = "linux"
     has_language_markers: bool = False
     root_branch: str | None = None
+    kind: str | None = None
+    description: str | None = None
+    frameworks: list[str] = field(default_factory=list)
 
 
 def run_detection(root: Path) -> DetectionSummary:
@@ -290,6 +531,9 @@ def run_detection(root: Path) -> DetectionSummary:
         platform=detect_platform(),
         has_language_markers=bool(languages) or bool(repos),
         root_branch=detect_root_branch(root, repos),
+        kind=detect_kind(root),
+        description=detect_description(root),
+        frameworks=detect_frameworks(root),
     )
 
 
