@@ -286,11 +286,11 @@ Not the roadmap above — these are boundaries, and they are not moving.
 **Accessibility, internationalisation and performance tooling.** All three are
 real review concerns, and all three are settled by *running the thing*: an axe
 pass over a rendered page, a missing-translation report out of a built bundle,
-a p95 from a load test. rite never runs your build — it detects each module's
-commands, writes them into `CLAUDE.md`, and tells the session to run them — so
-it cannot see the result, and anything it reported here would be a generated
-line asserting a fact nobody measured, which is precisely what its own review
-checklist forbids. These belong in `.rite/review-checklist.md` as lines your
+a p95 from a load test. Your sessions run those commands — that is what the
+`CLAUDE.md` rite generates tells them to do — but nothing reads the output
+back, so rite cannot see the result, and anything it reported here would be a
+generated line asserting a fact nobody measured, which is precisely what its
+own review checklist forbids. These belong in `.rite/review-checklist.md` as lines your
 reviewers work, and in the module's own CI where the build actually happens.
 **Coverage thresholds** are the same call for a different reason: a percentage
 measures which lines executed, not whether anything would have noticed them
