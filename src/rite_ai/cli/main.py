@@ -106,6 +106,36 @@ def _require_project_root() -> Path:
     raise SystemExit(1)
 
 
+def _resolved_sandbox(root: Path):
+    """The project's sandbox setting, and a line to show when it could not be
+    read. The setting decides which flags Swift commands carry, so falling back
+    to the default is said out loud rather than done quietly."""
+    from rite_ai.config.models import ProjectConfig, SandboxConfig
+    from rite_ai.config.parse import parse_config
+
+    config = parse_config(root / ".rite" / "config.yaml")
+    if isinstance(config, ProjectConfig):
+        return config.sandbox, ""
+    return SandboxConfig(), (
+        f"config.yaml could not be read ({config.message}); commands assume the "
+        "default sandbox setting"
+    )
+
+
+def _echo_command_rows(module, root: Path, sandbox, indent: str) -> str | None:
+    """Print where each of `module`'s commands came from and what it resolved
+    to. Returns the test command, or None when there is not one."""
+    from rite_ai.cli.init.detect import command_rows, module_commands
+
+    cmds = module_commands(module, root, sandbox)
+    for key, origin, value in command_rows(cmds):
+        shown = f"`{value}`" if value else "—"
+        click.echo(f"{indent}{key:<8} {origin:<10} {shown}")
+    if cmds.note:
+        click.echo(f"{indent}note: {cmds.note}")
+    return cmds.test
+
+
 def _tracked_runtime_state(root: Path) -> list[str]:
     """Runtime state this repo is committing, if any.
 
@@ -454,6 +484,7 @@ def doctor() -> None:
 
     from rite_ai.workspace import git_ops
 
+    module_sandbox, sandbox_warning = _resolved_sandbox(root)
     for m in modules:
         module_dir = root / m.path
         if not git_ops.is_git_repo(module_dir):
@@ -505,6 +536,22 @@ def doctor() -> None:
                     )
             else:
                 click.echo(f"module {m.name}: remote reachable")
+        # Which commands a session will run for this module, and where each
+        # came from. A Worker with no test command cannot check its own work,
+        # and the loop rite exists to run breaks there silently, at whatever
+        # hour the Worker reaches that step — so a missing `test` is a
+        # problem, not a note, and the row says exactly what to add.
+        click.echo(f"module {m.name}: commands")
+        if sandbox_warning:
+            click.echo(f"  note: {sandbox_warning}")
+        if not _echo_command_rows(m, root, module_sandbox, "  "):
+            click.echo(
+                "  no test command — add one to .rite/modules.yaml:\n"
+                f"    {m.name}:\n"
+                "      commands:\n"
+                "        test: <the command that runs this module's tests>"
+            )
+            problems.append(f"module {m.name} has no test command")
 
     # The WORKERS' checkouts, which the loop above never looked at. Every
     # module line it prints is about `<root>/<module>` — the project's own
@@ -3039,6 +3086,17 @@ def prepare(worker: str, branch: str | None) -> None:
 
     result = prepare_workspace(worker_dir, modules, root, branch=branch)
     click.echo(result.summary())
+    if modules:
+        # Resolved NOW, from modules.yaml and detection. A Worker's CLAUDE.md
+        # lists them as of `rite add worker`; modules.yaml may have been
+        # corrected since, and this runs before every task.
+        sandbox, sandbox_warning = _resolved_sandbox(root)
+        click.echo("\ncommands — run inside each module's checkout:")
+        if sandbox_warning:
+            click.echo(f"  note: {sandbox_warning}")
+        for m in modules:
+            click.echo(f"  {m.name}/")
+            _echo_command_rows(m, root, sandbox, "    ")
     if not result.ok:
         # Name the blockers on their own line: `summary()` lists every
         # module, passing or not, so on a large worker the one that

@@ -121,7 +121,9 @@ def test_detect_module_commands_node_pnpm(tmp_path: Path):
     )
     (tmp_path / "pnpm-lock.yaml").write_text("")
     cmds = detect_module_commands(tmp_path)
-    assert cmds.install == "pnpm install"
+    # Frozen: a plain install rewrites the lockfile, leaving a dirty tree that
+    # `rite prepare` then blocks on.
+    assert cmds.install == "pnpm install --frozen-lockfile"
     assert cmds.test == "pnpm run test"
     assert cmds.build == "pnpm run build"
     assert cmds.lint is None  # no lint script

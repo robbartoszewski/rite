@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+import difflib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -17,6 +19,7 @@ from .models import (
     ProjectBrief,
     ProjectConfig,
     PublishGateConfig,
+    RecordedCommands,
     RiteProject,
     SandboxConfig,
     ScanPattern,
@@ -82,6 +85,55 @@ def parse_brief(path: Path) -> ProjectBrief | ParseError:
     )
 
 
+# The keys a module entry may carry, taken from the dataclasses so a new field
+# needs no second edit here. `name` is the mapping key, not a key inside it.
+#
+# Unknown keys are REFUSED, not ignored. An ignored key is a setting its author
+# believes they made, and in `commands:` it is worse than that: `tests:` for
+# `test:` leaves a Worker with no way to check its work while the file looks
+# configured. `test: swift test` written under a module used to be read,
+# discarded, and dropped from the file by the next `rite add module` — the
+# silent partial read CFG-1 describes for config.yaml and brief.yaml.
+#
+# This file can be strict first at no cost to anyone upgrading: a v0.1.0
+# modules.yaml carries no key outside this set (measured against a pristine
+# `rite init --yes`), so there is nothing to retire. Every writer re-parses the
+# file and stops on a ParseError before writing, so a refused key is never
+# overwritten.
+_MODULE_KEYS = frozenset(f.name for f in dataclasses.fields(Module)) - {"name"}
+_COMMAND_KEYS = frozenset(f.name for f in dataclasses.fields(RecordedCommands))
+
+
+def _unknown_key(entry: dict, known: frozenset[str]) -> str:
+    """A message naming the first key not in `known`, or "" when there is none."""
+    for key in entry:
+        if key in known:
+            continue
+        if known is _MODULE_KEYS and key in _COMMAND_KEYS:
+            hint = f" — commands go under 'commands:', as commands: {{{key}: ...}}"
+        else:
+            close = difflib.get_close_matches(str(key), sorted(known), n=1)
+            hint = f" — did you mean '{close[0]}'?" if close else ""
+        return f"unknown key '{key}'{hint} (known: {', '.join(sorted(known))})"
+    return ""
+
+
+def _parse_recorded_commands(raw: object) -> RecordedCommands | str:
+    """The `commands:` mapping, or a message saying what is wrong with it."""
+    if raw is None:
+        return RecordedCommands()
+    if not isinstance(raw, dict):
+        known = ", ".join(sorted(_COMMAND_KEYS))
+        return f"'commands' must be a mapping of {known} to a command"
+    unknown = _unknown_key(raw, _COMMAND_KEYS)
+    if unknown:
+        return f"commands: {unknown}"
+    for key, value in raw.items():
+        if not isinstance(value, str) or not value.strip():
+            return f"commands.{key} must be a non-empty string"
+    return RecordedCommands(**{key: value.strip() for key, value in raw.items()})
+
+
 def parse_modules(path: Path) -> list[Module] | ParseError:
     if not path.exists():
         return []
@@ -106,9 +158,17 @@ def parse_modules(path: Path) -> list[Module] | ParseError:
             return ParseError(str(path), f"duplicate module name: '{name}'")
         seen.add(name)
 
+        unknown = _unknown_key(entry, _MODULE_KEYS)
+        if unknown:
+            return ParseError(str(path), f"module '{name}': {unknown}")
+
         mod_path = entry.get("path", "")
         if not mod_path:
             return ParseError(str(path), f"module '{name}' requires 'path'")
+
+        commands = _parse_recorded_commands(entry.get("commands"))
+        if isinstance(commands, str):
+            return ParseError(str(path), f"module '{name}': {commands}")
 
         modules.append(
             Module(
@@ -117,6 +177,7 @@ def parse_modules(path: Path) -> list[Module] | ParseError:
                 url=entry.get("url"),
                 branch=entry.get("branch", "main"),
                 description=entry.get("description", ""),
+                commands=commands,
             )
         )
     return modules

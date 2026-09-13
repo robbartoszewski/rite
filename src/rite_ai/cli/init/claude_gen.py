@@ -15,9 +15,9 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from rite_ai.config.models import Module, ProjectBrief, ProjectConfig
+from rite_ai.config.models import Module, ProjectBrief, ProjectConfig, SandboxConfig
 
-from .detect import ModuleCommands, detect_module_commands
+from .detect import ModuleCommands, module_commands
 from .paths import templates_dir
 
 _AGENT_FILES = [
@@ -124,7 +124,7 @@ def generate_claude_md(
         _startup_section(),
         _what_this_is(brief),
         _spec_section(config),
-        _modules_section(modules, project_root),
+        _modules_section(modules, project_root, config.sandbox),
         _role_section(role, config),
         _ticket_workflow_section(),
         _claims_section(),
@@ -222,7 +222,9 @@ def _what_this_is(brief: ProjectBrief) -> str:
 **Architecture:** {architecture}"""
 
 
-def _modules_section(modules: list[Module], project_root: Path) -> str:
+def _modules_section(
+    modules: list[Module], project_root: Path, sandbox: SandboxConfig
+) -> str:
     if not modules:
         return """\
 ## Modules
@@ -239,7 +241,7 @@ No modules registered yet. Register one with `rite add module <name> \
             f"Branch: `{m.branch}`" + (f" · {m.url}" if m.url else " · local only")
         )
         rows.append("")
-        cmds = detect_module_commands(project_root / m.path)
+        cmds = module_commands(m, project_root, sandbox)
         rows.extend(_format_commands(cmds))
         rows.append("")
     return "\n".join(rows)
@@ -247,25 +249,33 @@ No modules registered yet. Register one with `rite add module <name> \
 
 def _format_commands(cmds: ModuleCommands) -> list[str]:
     if not cmds.detected:
-        return [
-            "- Commands: not detected. Configure build/test/lint here — ask "
-            "the user or infer from the module once its structure is clearer, "
-            "and record the result in `.rite/context/`. Do not guess."
+        lines = [
+            "- Commands: not detected. Record them in `.rite/modules.yaml` under "
+            "this module's `commands:` (install, build, test, lint, format) — ask "
+            "the user, or read the module to find them. Do not guess."
         ]
+        if cmds.note:
+            lines.append(f"- Why: {cmds.note}")
+        return lines
     lines = []
-    for label, value in (
-        ("Install", cmds.install),
-        ("Build", cmds.build),
-        ("Test", cmds.test),
-        ("Lint", cmds.lint),
+    for label, key in (
+        ("Install", "install"),
+        ("Build", "build"),
+        ("Test", "test"),
+        ("Lint", "lint"),
+        ("Format", "format"),
     ):
+        value = getattr(cmds, key)
         if value:
-            lines.append(f"- {label}: `{value}`")
+            where = " (recorded in modules.yaml)" if key in cmds.configured else ""
+            lines.append(f"- {label}: `{value}`{where}")
         else:
             lines.append(
-                f"- {label}: not detected in {cmds.source} — "
-                "configure explicitly, don't guess."
+                f"- {label}: not detected in {cmds.source} — record it under "
+                "`commands:` in `.rite/modules.yaml`, don't guess."
             )
+    if cmds.note:
+        lines.append(f"- Note: {cmds.note}")
     return lines
 
 

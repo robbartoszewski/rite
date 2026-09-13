@@ -17,6 +17,7 @@ import yaml
 from rite_ai.config.models import (
     Module,
     ProjectConfig,
+    SandboxConfig,
     SpecConfig,
     WorkerManifest,
 )
@@ -320,7 +321,12 @@ def add_worker(
         claude_instructions=instructions,
     )
     _write_worker_manifest(worker_dir, manifest)
-    _write_worker_claude_config(worker_dir, manifest, _spec_config(root))
+    _write_worker_claude_config(
+        worker_dir,
+        manifest,
+        _spec_config(root),
+        _module_commands_section(root, modules),
+    )
 
     return AddWorkerResult(
         True,
@@ -591,8 +597,46 @@ in the ticket rather than silently implementing either.
 """
 
 
+def _module_commands_section(root: Path, modules: list[Module]) -> str:
+    """Each module's commands, worked out NOW, for this Worker's CLAUDE.md.
+
+    The project root's CLAUDE.md carries the same map, but as of `rite init`:
+    nothing regenerates it. A command recorded in `modules.yaml` afterwards,
+    or a sandbox setting changed since, reached no session at all. A Worker's
+    CLAUDE.md is written when the Worker is, so it sees both — and it is the
+    file the session that runs the commands actually loads.
+    """
+    from rite_ai.cli.init.claude_gen import _format_commands
+    from rite_ai.cli.init.detect import module_commands
+
+    rows = ["", "## Module commands", ""]
+    if not modules:
+        rows.append("_(no modules)_")
+        return "\n".join(rows) + "\n"
+    config = parse_config(root / ".rite" / "config.yaml")
+    if isinstance(config, ProjectConfig):
+        sandbox = config.sandbox
+    else:
+        # Said, not assumed silently: the sandbox setting decides which flags
+        # the Swift commands carry, and the default is what gets used here.
+        sandbox = SandboxConfig()
+        rows.append(
+            f"_`.rite/config.yaml` could not be read ({config.message}); the "
+            "commands below assume the default sandbox setting._"
+        )
+        rows.append("")
+    for m in modules:
+        rows.append(f"### `{m.name}/`")
+        rows.extend(_format_commands(module_commands(m, root, sandbox)))
+        rows.append("")
+    return "\n".join(rows)
+
+
 def _write_worker_claude_config(
-    worker_dir: Path, manifest: WorkerManifest, spec: SpecConfig | None = None
+    worker_dir: Path,
+    manifest: WorkerManifest,
+    spec: SpecConfig | None = None,
+    module_commands: str = "",
 ) -> None:
     claude_dir = worker_dir / ".claude"
     claude_dir.mkdir(exist_ok=True)
@@ -629,7 +673,7 @@ decisions.
 ## Your modules
 
 {modules_lines or "_(none)_"}
-
+{module_commands}
 ## Workflow
 
 1. Prepare your workspace: `rite prepare --worker {manifest.name}` — right
@@ -637,10 +681,12 @@ decisions.
    dirty tree blocks and is never discarded.
 2. Claim paths before touching them: `rite claim <paths> --worker {manifest.name}`
 3. Work the ticket.
-4. Run the module's own **test and lint** commands. They are written out
-   for you in the module map in the project root's `CLAUDE.md`, under the
-   heading for the module you touched, as `Test:` and `Lint:` — `rite init`
-   read them out of that module's own manifest so nobody has to guess. Run
+4. Run the module's own **test and lint** commands. `rite prepare` prints
+   them every time it runs, resolved at that moment — those are the ones to
+   use. **Module commands** above lists them as `Test:` and `Lint:` as of
+   when this Worker was created, and the module map in the
+   project root's `CLAUDE.md` has them as of `rite init`; a command recorded
+   in `modules.yaml` since then appears only in `rite prepare`'s output. Run
    them as written; where an entry says "not detected", ask rather than
    inventing a command, because one that is wrong in a way that still exits
    0 looks exactly like a passing suite.

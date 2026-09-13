@@ -78,6 +78,11 @@ def modules_to_yaml(modules: list[Module]) -> str:
             entry["url"] = m.url
         entry["branch"] = m.branch
         entry["description"] = m.description
+        recorded = {key: value for key, value in asdict(m.commands).items() if value}
+        if recorded:
+            # Only when something was recorded: `commands: {}` under every
+            # module would rewrite every existing modules.yaml to say nothing.
+            entry["commands"] = recorded
         data["modules"][m.name] = entry
     return yaml.safe_dump(
         data, sort_keys=False, default_flow_style=False, allow_unicode=True

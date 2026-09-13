@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 import subprocess
 import sys
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
+
+from rite_ai.config.models import Module, RecordedCommands, SandboxConfig
 
 _SKIP_DIRS = {
     ".git",
@@ -39,6 +42,7 @@ _LANGUAGE_MARKERS: dict[str, str] = {
     "Cargo.toml": "rust",
     "pubspec.yaml": "dart",
     "go.mod": "go",
+    "Package.swift": "swift",
 }
 
 
@@ -63,8 +67,20 @@ class ModuleCommands:
     build: str | None = None
     test: str | None = None
     lint: str | None = None
+    format: str | None = None
     detected: bool = False
     source: str = ""  # which marker triggered detection, for humans
+    # Why a command is missing, or was chosen as it was, when `source` does not
+    # say: two lockfiles that disagree, no simulator to test on. Shown to people.
+    note: str = ""
+    # The keys whose command came from `modules.yaml` rather than detection.
+    configured: frozenset[str] = frozenset()
+
+
+# The commands a session needs to verify its own work, in the order a session
+# runs them. Taken from `RecordedCommands` so the keys a person can record in
+# modules.yaml and the keys detection fills are the same set by construction.
+COMMAND_KEYS: tuple[str, ...] = tuple(f.name for f in fields(RecordedCommands))
 
 
 def iter_candidate_dirs(root: Path) -> list[Path]:
@@ -144,6 +160,12 @@ def detect_languages(root: Path) -> list[str]:
                 seen.add("csharp")
                 found.append("csharp")
             break
+        # `Package.swift` is in `_LANGUAGE_MARKERS`. An app project has no
+        # Package.swift at all — only an `.xcodeproj` or `.xcworkspace` bundle
+        # and `.swift` sources — and was detected as nothing.
+        if "swift" not in seen and _has_swift(dir_path):
+            seen.add("swift")
+            found.append("swift")
 
     scan(root)
     for child in iter_candidate_dirs(root):
@@ -165,18 +187,19 @@ def _js_or_ts(dir_path: Path) -> str:
     return "javascript"
 
 
-def _package_manager(dir_path: Path) -> str:
-    if (dir_path / "pnpm-lock.yaml").exists():
-        return "pnpm"
-    if (dir_path / "yarn.lock").exists():
-        return "yarn"
-    return "npm"
+def detect_module_commands(
+    module_path: Path, nested_sandbox: bool = False, boundary: Path | None = None
+) -> ModuleCommands:
+    """Best-effort commands for a single module directory.
 
-
-def detect_module_commands(module_path: Path) -> ModuleCommands:
-    """Best-effort build/test/lint commands for a single module directory."""
+    `nested_sandbox` is True when the commands will run where starting a
+    second sandbox is refused — see `nests_sandboxes`; only Swift reads it.
+    `boundary` is the project root: a Node lockfile is looked for in the module
+    and then upward, never past the repository root or this directory. With no
+    boundary only the module itself is searched.
+    """
     if (module_path / "package.json").exists():
-        return _detect_node_commands(module_path)
+        return _detect_node_commands(module_path, boundary)
     if (module_path / "pyproject.toml").exists():
         return _detect_python_commands(module_path)
     if (module_path / "Cargo.toml").exists():
@@ -185,6 +208,7 @@ def detect_module_commands(module_path: Path) -> ModuleCommands:
             build="cargo build",
             test="cargo test",
             lint="cargo clippy",
+            format="cargo fmt",
             detected=True,
             source="Cargo.toml",
         )
@@ -194,6 +218,7 @@ def detect_module_commands(module_path: Path) -> ModuleCommands:
             build="flutter build",
             test="flutter test",
             lint="flutter analyze",
+            format="dart format .",
             detected=True,
             source="pubspec.yaml",
         )
@@ -203,32 +228,166 @@ def detect_module_commands(module_path: Path) -> ModuleCommands:
             build="go build ./...",
             test="go test ./...",
             lint="go vet ./...",
+            format="gofmt -w .",
             detected=True,
             source="go.mod",
         )
+    if _xcode_containers(module_path) or (module_path / "Package.swift").is_file():
+        return _swift_commands(module_path, nested_sandbox)
     return ModuleCommands(detected=False)
 
 
-def _detect_node_commands(module_path: Path) -> ModuleCommands:
-    pm = _package_manager(module_path)
+# --- Node ---------------------------------------------------------------------
+#
+# The package manager decides whether ANY Node command works. `npm run test` in
+# a pnpm workspace fails on missing dependencies, which reads as a broken
+# project rather than the wrong tool. This used to be "pnpm-lock.yaml, else
+# yarn.lock, else npm": bun projects were run with npm, `packageManager` was
+# never read, a workspace member (whose lockfile sits at the repository root)
+# was treated as npm, and a stale second lockfile was resolved by precedence.
+#
+# The signals, strongest first:
+#
+#   1. `packageManager` in package.json ("pnpm@9.12.0") — the project's own
+#      statement, and what Corepack enforces.
+#   2. The lockfile, in the module or the nearest directory above it, up to the
+#      repository root.
+#   3. Nothing at all: npm, which ships with Node — and the note says so.
+#
+# Lockfiles from two different managers in the same place are NOT resolved.
+# One of them is stale, picking either is a guess that fails the same confusing
+# way, and the fix is a line in modules.yaml; the note names both files.
+_LOCKFILES: tuple[tuple[str, str], ...] = (
+    ("package-lock.json", "npm"),
+    ("npm-shrinkwrap.json", "npm"),
+    ("pnpm-lock.yaml", "pnpm"),
+    ("yarn.lock", "yarn"),
+    ("bun.lock", "bun"),
+    ("bun.lockb", "bun"),
+)
+_NODE_MANAGERS = frozenset(manager for _, manager in _LOCKFILES)
+
+
+@dataclass
+class _NodeTool:
+    name: str = ""  # "" when it cannot be decided
+    evidence: str = ""
+    yarn_berry: bool = False
+    locked: bool = False  # this manager's own lockfile exists
+    note: str = ""
+
+
+def _lockfile_dir(module_path: Path, boundary: Path | None) -> Path | None:
+    """The module, or the nearest directory above it holding a lockfile.
+
+    Stops at the repository root and at `boundary`, so a lockfile belonging to
+    an unrelated project further up is never read. Without a boundary only the
+    module itself is looked at.
+    """
+    current = module_path
+    while True:
+        if any((current / lock).exists() for lock, _ in _LOCKFILES):
+            return current
+        if boundary is None or (current / ".git").exists():
+            return None
+        if current == boundary or current.parent == current:
+            return None
+        current = current.parent
+
+
+def _node_tool(module_path: Path, manifest: dict, boundary: Path | None) -> _NodeTool:
+    where = _lockfile_dir(module_path, boundary)
+    present = [
+        (lock, pm) for lock, pm in _LOCKFILES if where and (where / lock).exists()
+    ]
+    shown = (
+        (lambda lock: lock)
+        if where == module_path
+        else (lambda lock: f"{lock} in {where.name}/")
+    )
+
+    declared = manifest.get("packageManager")
+    if isinstance(declared, str):
+        name, _, version = declared.partition("@")
+        name = name.strip().lower()
+        if name in _NODE_MANAGERS:
+            major = re.match(r"\d+", version)
+            return _NodeTool(
+                name=name,
+                evidence=f"packageManager {declared}",
+                yarn_berry=name == "yarn" and bool(major) and int(major.group()) >= 2,
+                locked=any(pm == name for _, pm in present),
+            )
+
+    managers = sorted({pm for _, pm in present})
+    if not managers:
+        return _NodeTool(
+            name="npm",
+            evidence="no lockfile",
+            note="no lockfile and no `packageManager` in package.json — assumed npm",
+        )
+    if len(managers) > 1:
+        files = ", ".join(shown(lock) for lock, _ in present)
+        return _NodeTool(
+            note=(
+                f"lockfiles from different package managers ({files}): one is "
+                "stale, so no package manager was chosen. Delete the stale one, or "
+                "record the commands under `commands:` in .rite/modules.yaml"
+            )
+        )
+    lock, name = present[0]
+    return _NodeTool(
+        name=name,
+        evidence=shown(lock),
+        yarn_berry=name == "yarn" and (where / ".yarnrc.yml").exists(),
+        locked=True,
+    )
+
+
+def _node_install(tool: _NodeTool) -> str:
+    """An install that will not rewrite the lockfile.
+
+    A plain `npm install` rewrites package-lock.json. That leaves the Worker's
+    checkout dirty, and `rite prepare` blocks on a dirty tree. `npm ci` and
+    yarn 1's `--frozen-lockfile` were checked against the tools' own help (npm
+    10.8.2, yarn 1.22.22). pnpm's and bun's `--frozen-lockfile` and Yarn 2+'s
+    `--immutable` are their documented equivalents, not run where this was
+    written.
+    """
+    if tool.name == "npm":
+        return "npm ci" if tool.locked else "npm install"
+    if tool.name == "yarn":
+        flag = "--immutable" if tool.yarn_berry else "--frozen-lockfile"
+        return f"yarn install {flag}"
+    return f"{tool.name} install --frozen-lockfile"
+
+
+def _detect_node_commands(module_path: Path, boundary: Path | None) -> ModuleCommands:
     try:
         raw = json.loads((module_path / "package.json").read_text())
-    except (OSError, json.JSONDecodeError):
-        return ModuleCommands(detected=False)
+    except (OSError, ValueError):
+        return ModuleCommands(detected=False, note="package.json could not be read")
+    if not isinstance(raw, dict):
+        return ModuleCommands(detected=False, note="package.json is not a JSON object")
+    tool = _node_tool(module_path, raw, boundary)
+    if not tool.name:
+        return ModuleCommands(detected=False, source="package.json", note=tool.note)
     scripts = raw.get("scripts", {})
     if not isinstance(scripts, dict):
         scripts = {}
 
-    def cmd(key: str) -> str | None:
-        return f"{pm} run {key}" if key in scripts else None
+    def script(*names: str) -> str | None:
+        return next((f"{tool.name} run {n}" for n in names if n in scripts), None)
 
     return ModuleCommands(
-        install=f"{pm} install",
-        build=cmd("build"),
-        test=cmd("test"),
-        lint=cmd("lint"),
+        install=_node_install(tool),
+        build=script("build"),
+        test=script("test"),
+        lint=script("lint"),
+        format=script("format", "fmt"),
         detected=True,
-        source="package.json",
+        source=f"package.json, {tool.evidence}",
+        note=tool.note,
     )
 
 
@@ -247,9 +406,245 @@ def _detect_python_commands(module_path: Path) -> ModuleCommands:
         build=None,
         test="uv run pytest" if has_pytest else None,
         lint="uv run ruff check ." if has_ruff else None,
+        format="uv run ruff format ." if has_ruff else None,
         detected=True,
         source="pyproject.toml",
     )
+
+
+# --- Swift --------------------------------------------------------------------
+
+
+def _xcode_containers(dir_path: Path) -> list[Path]:
+    """`.xcworkspace` bundles, then `.xcodeproj` bundles, directly in `dir_path`.
+
+    A workspace comes first because a project with more than one project in it
+    builds from the workspace. The `project.xcworkspace` inside every
+    `.xcodeproj` is not matched: it sits a level down.
+    """
+    return sorted(dir_path.glob("*.xcworkspace")) + sorted(dir_path.glob("*.xcodeproj"))
+
+
+def _has_swift(dir_path: Path) -> bool:
+    return bool(_xcode_containers(dir_path)) or any(dir_path.glob("*.swift"))
+
+
+def nests_sandboxes(sandbox: SandboxConfig) -> bool:
+    """Whether Worker commands run where starting a second sandbox is refused.
+
+    Only the seatbelt backend runs the Worker under macOS's `sandbox-exec`, and
+    macOS will not let a sandboxed process apply another sandbox: inside a
+    seatbelt Worker, `sandbox-exec` fails with `sandbox_apply: Operation not
+    permitted` (measured, exit 71). The other backends isolate with a container
+    or a VM instead.
+    """
+    return sandbox.enabled and sandbox.backend == "seatbelt"
+
+
+# Why each flag below is there. Every one of them LOOKS removable, and every
+# one was measured to be needed (Xcode 26.6, Swift 6.3.3, yoloAI 0.11.0
+# seatbelt), with The Composable Architecture as the package under test.
+#
+# SwiftPM and Xcode run parts of a build under their OWN `sandbox-exec`:
+# evaluating `Package.swift`, running package plugins, and starting the plugins
+# that implement macros. macOS refuses to start a sandbox from inside one, so
+# in a seatbelt Worker each of those steps fails, and the error names the step
+# rather than the cause:
+#
+#   * "Invalid manifest" from `swift build`, and "Could not resolve package
+#     dependencies" from xcodebuild, for a manifest that is fine;
+#   * "external macro implementation type 'SwiftMacros.TaskLocalMacro' could
+#     not be found" — the STANDARD LIBRARY's macro — for every file using any
+#     macro, because no macro plugin could start.
+#
+# Turning those inner sandboxes off DOES NOT UNSANDBOX THE WORKER. It is still
+# inside yoloAI's seatbelt profile, which is what D-51's default is about; the
+# flags remove a second sandbox that the first one makes impossible, nothing
+# more. Outside a sandbox they are left off, so an unsandboxed build keeps
+# SwiftPM's and Xcode's own protection.
+#
+# That profile also gives every Worker write access to the SAME host SwiftPM
+# and Xcode caches. Concurrent Workers resolving into them is untested — SPEC
+# §5.3.5.
+_SWIFTPM_NESTED = "--disable-sandbox"  # manifests and plugins, for `swift`
+_XCODEBUILD_NESTED = (
+    # evaluating Package.swift ("Could not resolve package dependencies")
+    "-IDEPackageSupportDisableManifestSandbox=YES",
+    # package plugins; passed with the other two, not measured on its own
+    "-IDEPackageSupportDisablePluginExecutionSandbox=YES",
+    # macro plugins, which the COMPILER starts — neither default above reaches
+    # them ("external macro implementation type ... could not be found")
+    "OTHER_SWIFT_FLAGS=$(inherited) -disable-sandbox",
+)
+# Passed with or without a sandbox. xcodebuild refuses a package's macros until
+# someone trusts them in Xcode's UI, which no Worker can do. Measured on the
+# host with no sandbox anywhere: TCA's `xcodebuild test` exits 65, "Macro
+# 'ComposableArchitectureMacros' ... must be enabled before it can be used".
+_XCODEBUILD_ALWAYS = ("-skipMacroValidation",)
+
+_SWIFT_PACKAGE_NAME = re.compile(r'Package\s*\(\s*name:\s*"([^"]+)"')
+
+
+def _swift_commands(module_path: Path, nested_sandbox: bool) -> ModuleCommands:
+    """SwiftPM for a package that builds on macOS; xcodebuild on an iOS
+    simulator for an Xcode project, or a package that only declares iOS."""
+    manifest = ""
+    try:
+        manifest = (module_path / "Package.swift").read_text()
+    except (OSError, UnicodeDecodeError):
+        pass
+    containers = _xcode_containers(module_path)
+    ios_only = ".iOS(" in manifest and ".macOS(" not in manifest
+
+    if not containers and not ios_only:
+        flag = f" {_SWIFTPM_NESTED}" if nested_sandbox else ""
+        return ModuleCommands(
+            install=f"swift package{flag} resolve",
+            build=f"swift build{flag}",
+            test=f"swift test{flag}",
+            detected=True,
+            source="Package.swift",
+        )
+
+    if containers:
+        container = containers[0]
+        option = "-workspace" if container.suffix == ".xcworkspace" else "-project"
+        selector = [option, container.name, "-scheme", _scheme(container)]
+        source = container.name
+    else:
+        name = _SWIFT_PACKAGE_NAME.search(manifest)
+        selector = ["-scheme", name.group(1) if name else module_path.name]
+        source = "Package.swift"
+
+    flags = [*_XCODEBUILD_ALWAYS, *(_XCODEBUILD_NESTED if nested_sandbox else ())]
+
+    def xcodebuild(action: str, destination: str) -> str:
+        words = ["xcodebuild", action, *selector, "-destination", destination, *flags]
+        return " ".join(shlex.quote(word) for word in words)
+
+    simulator = _ios_simulator_name()
+    return ModuleCommands(
+        # Resolution happens inside build and test; a separate resolve command
+        # for xcodebuild was not measured, so none is offered.
+        install=None,
+        # `generic/` needs no particular device to exist. Measured to build.
+        build=xcodebuild("build", "generic/platform=iOS Simulator"),
+        # A test run needs a concrete device. Measured with a name destination.
+        test=(
+            xcodebuild("test", f"platform=iOS Simulator,name={simulator}")
+            if simulator
+            else None
+        ),
+        detected=True,
+        source=source,
+        note=(
+            ""
+            if simulator
+            else "no available iPhone simulator on this machine, so no test "
+            "command — install an iOS runtime in Xcode, or record `test:`"
+        ),
+    )
+
+
+def _scheme(container: Path) -> str:
+    """The one shared scheme, else the container's own name.
+
+    Shared schemes are the committed ones (`xcshareddata/xcschemes`); a user's
+    own live under `xcuserdata` and are not in a clone. With none shared, Xcode
+    makes a scheme per target, and an app's main target conventionally carries
+    the project's name. With several shared, picking one would be a guess, so
+    the name is used — and a wrong name fails loudly, because xcodebuild lists
+    the schemes that do exist.
+    """
+    schemes = sorted(container.glob("xcshareddata/xcschemes/*.xcscheme"))
+    return schemes[0].stem if len(schemes) == 1 else container.stem
+
+
+def _ios_simulator_name() -> str | None:
+    """An available iPhone simulator on the newest installed iOS runtime.
+
+    Looked up rather than written in: simulator names change with Xcode
+    releases, and a destination naming a device the machine lacks fails
+    before anything builds. None when there is nothing to name.
+    """
+    try:
+        proc = subprocess.run(
+            ["xcrun", "simctl", "list", "devices", "available", "-j"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        devices = json.loads(proc.stdout).get("devices", {})
+    except (ValueError, AttributeError):
+        return None
+    if not isinstance(devices, dict):
+        return None
+    best: tuple[tuple[int, ...], str] | None = None
+    for runtime, entries in devices.items():
+        match = re.search(r"\.iOS-(\d+(?:-\d+)*)$", str(runtime))
+        if not match or not isinstance(entries, list):
+            continue
+        version = tuple(int(part) for part in match.group(1).split("-"))
+        for entry in entries:
+            if not isinstance(entry, dict) or not entry.get("isAvailable", True):
+                continue
+            name = entry.get("name")
+            if isinstance(name, str) and name.startswith("iPhone"):
+                if best is None or version > best[0]:
+                    best = (version, name)
+                break
+    return best[1] if best else None
+
+
+# --- what a session runs ------------------------------------------------------
+
+
+def module_commands(
+    module: Module, project_root: Path, sandbox: SandboxConfig
+) -> ModuleCommands:
+    """What a session should run for `module`.
+
+    A command recorded in `modules.yaml` overrides detection for its own key;
+    detection fills only the keys nobody recorded. Configuration is the
+    guarantee and detection the convenience, so a wrong detection is always a
+    one-line fix and never a wall.
+    """
+    detected = detect_module_commands(
+        project_root / module.path, nests_sandboxes(sandbox), boundary=project_root
+    )
+    recorded = {key: value for key, value in asdict(module.commands).items() if value}
+    if not recorded:
+        return detected
+    merged = {key: recorded.get(key, getattr(detected, key)) for key in COMMAND_KEYS}
+    sources = ["modules.yaml", *([detected.source] if detected.source else [])]
+    return ModuleCommands(
+        **merged,
+        detected=True,
+        source=" + ".join(sources),
+        # A note about detection is noise once every key is recorded.
+        note=detected.note if set(COMMAND_KEYS) - set(recorded) else "",
+        configured=frozenset(recorded),
+    )
+
+
+def command_rows(cmds: ModuleCommands) -> list[tuple[str, str, str]]:
+    """`(key, "configured" | "detected" | "missing", command)` for every key."""
+    rows = []
+    for key in COMMAND_KEYS:
+        value = getattr(cmds, key) or ""
+        if key in cmds.configured:
+            rows.append((key, "configured", value))
+        elif value:
+            rows.append((key, "detected", value))
+        else:
+            rows.append((key, "missing", ""))
+    return rows
 
 
 # What the project's own manifests already say. `kind`, `features` and
@@ -316,6 +711,8 @@ _BACKEND_FRAMEWORKS = {
     "nestjs",
     "koa",
     "hono",
+    "vapor",
+    "hummingbird",
 }
 
 _REQUIREMENT_NAME = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
@@ -327,6 +724,9 @@ class ManifestFacts:
     frameworks: list[str] = field(default_factory=list)
     installs_a_command: bool = False
     mobile: bool = False
+    # A manifest that says outright it produces a library. Python and Node
+    # manifests do not, so only Swift sets it: `.library(` in Package.swift.
+    library: bool = False
 
 
 def _requirement_names(requirements: object) -> list[str]:
@@ -412,6 +812,55 @@ def _read_package_json(path: Path) -> ManifestFacts | None:
     )
 
 
+# Swift manifests are Swift source, not data. They are read with patterns rather
+# than `swift package dump-package`, which COMPILES AND RUNS the manifest: slow,
+# a side effect detection must not have, and inside a seatbelt Worker a certain
+# failure, since SwiftPM sandboxes manifest evaluation (see `_swift_commands`).
+# A pattern can miss an unusual manifest; it cannot execute one.
+_SWIFT_FRAMEWORKS = {
+    "swift-composable-architecture": "composable-architecture",
+    "vapor": "vapor",
+    "hummingbird": "hummingbird",
+    "swift-argument-parser": "swift-argument-parser",
+}
+_SWIFT_PACKAGE_URL = re.compile(r'\.package\s*\(\s*url:\s*"([^"]+)"')
+_PBXPROJ_PACKAGE_URL = re.compile(r'repositoryURL\s*=\s*"([^"]+)"')
+
+
+def _swift_frameworks(urls: list[str]) -> list[str]:
+    names = [
+        url.rstrip("/").removesuffix(".git").rsplit("/", 1)[-1].lower() for url in urls
+    ]
+    return _known(names, _SWIFT_FRAMEWORKS)
+
+
+def _read_package_swift(path: Path) -> ManifestFacts | None:
+    try:
+        text = path.read_text()
+    except (OSError, UnicodeDecodeError):
+        return None
+    return ManifestFacts(
+        frameworks=_swift_frameworks(_SWIFT_PACKAGE_URL.findall(text)),
+        installs_a_command=".executable(" in text,
+        mobile=".iOSApplication(" in text,
+        library=".library(" in text,
+    )
+
+
+def _read_xcodeproj(project: Path) -> ManifestFacts | None:
+    """What an Xcode project's `project.pbxproj` says: an iOS SDK makes it
+    mobile, and its Swift package references name its frameworks. A workspace
+    has no pbxproj of its own; the projects inside it do."""
+    try:
+        text = (project / "project.pbxproj").read_text()
+    except (OSError, UnicodeDecodeError):
+        return None
+    return ManifestFacts(
+        frameworks=_swift_frameworks(_PBXPROJ_PACKAGE_URL.findall(text)),
+        mobile=re.search(r"\bSDKROOT\s*=\s*iphoneos\b", text) is not None,
+    )
+
+
 def _manifest_facts(dir_path: Path) -> list[ManifestFacts]:
     facts: list[ManifestFacts] = []
     for name, reader in (
@@ -424,6 +873,14 @@ def _manifest_facts(dir_path: Path) -> list[ManifestFacts]:
                 facts.append(read)
     if (dir_path / "pubspec.yaml").is_file():
         facts.append(ManifestFacts(mobile=True))
+    if (dir_path / "Package.swift").is_file():
+        read = _read_package_swift(dir_path / "Package.swift")
+        if read is not None:
+            facts.append(read)
+    for project in sorted(dir_path.glob("*.xcodeproj")):
+        read = _read_xcodeproj(project)
+        if read is not None:
+            facts.append(read)
     return facts
 
 
@@ -484,7 +941,7 @@ def detect_kind(root: Path) -> str | None:
         return "frontend"
     if backend:
         return "backend"
-    if any(f.installs_a_command for f in facts):
+    if any(f.installs_a_command or f.library for f in facts):
         return "library"
     return None
 

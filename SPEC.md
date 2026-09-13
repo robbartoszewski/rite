@@ -1493,6 +1493,24 @@ token directly without a human ever displaying it in chat.
   field in `SandboxConfig` and neither flag is ever passed. Choosing Docker today
   buys the *possibility* of isolation and not the thing itself. Until that field
   exists, this bullet describes a decision that has to be made outside rite.
+- **Swift toolchains sandbox their own sub-steps, and seatbelt forbids nesting.**
+  SwiftPM and Xcode evaluate `Package.swift`, run package plugins, and start
+  macro plugins under their own `sandbox-exec`; macOS refuses to apply a sandbox
+  from inside one (`sandbox_apply: Operation not permitted`, measured). Inside a
+  seatbelt Worker every Swift build therefore fails, with errors that name the
+  step rather than the cause — "Invalid manifest", or a missing
+  `SwiftMacros.TaskLocalMacro`. Detected Swift commands carry the flags that turn
+  those inner sandboxes off whenever `sandbox.enabled` is set and the backend is
+  `seatbelt`; `cli/init/detect.py` says why each one is there. **That does not
+  unsandbox the Worker**: it stays inside yoloAI's profile, and D-51's default
+  holds.
+
+  ⚠ **That profile gives every Worker write access to the same host caches** —
+  `~/Library/Caches/org.swift.swiftpm`, `~/Library/org.swift.swiftpm`,
+  `~/Library/Caches/swift-build` and `~/Library/Developer/Xcode`. Several Workers
+  resolving and building the same packages into one cache at once is **untested**,
+  and it is also a shared-write surface: one Worker can change a cached checkout
+  another builds from. Tracked as dogfood ticket SBX-1.
 - ⚠ **`flock` is a no-op inside a Docker sandbox, and every claim rests on
   `flock`.** Reported by a dogfood session on this machine, 2026-09-11, testing
   `fcntl.flock` on one file three ways: on the **host** a second lock is refused,
@@ -1820,7 +1838,44 @@ modules:
     path: shared/
     # no url — local-only module, no remote
     description: "Shared types and constants"
+
+  app:
+    path: app/
+    branch: main
+    description: "iOS client"
+    commands:                    # optional — only what detection gets wrong
+      test: xcodebuild test -project NewsApp.xcodeproj -scheme NewsApp -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -skipMacroValidation
 ```
+
+**`commands`** is the guarantee; detection (§9.3) is the convenience. It records
+a module's `install`, `build`, `test`, `lint` and `format` — the commands a
+session needs to verify its own work — and each recorded command **overrides**
+detection for its own key, while unrecorded keys fall back to detection. Any
+ecosystem detection does not cover is one block here, not a wall. The block is
+written only when something is recorded, so existing files are not rewritten,
+and `rite add module` / `rite remove module` carry every module's block through
+their rewrites. Comments inside `modules.yaml` are not preserved by those
+rewrites; the values are.
+
+Where it is read, and when:
+
+- **`rite prepare`** prints every one of the Worker's modules' commands, resolved
+  at that moment, before each task. This is the reader a correction reaches
+  immediately.
+- **`rite doctor`** shows, per module, each key as `configured`, `detected` or
+  `missing`, with the command it resolved to. A module with no `test` command is
+  a problem (non-zero exit): a Worker that cannot run tests cannot check its own
+  work, and that should be visible before a run.
+- A Worker's `CLAUDE.md` lists them as of `rite add worker` (§9.6), and the project
+  root's `CLAUDE.md` as of `rite init`. Neither is regenerated.
+
+**Unknown keys are an error, not ignored.** `parse_modules` refuses any key
+outside the ones shown — including a command written flat (`test:` instead of
+`commands: {test: …}`), which it names — and every writer stops on that error
+before writing. An ignored key is a setting its author believes they made, and
+the next `rite add module` would have dropped it from the file. The known keys
+come from the dataclasses, so a new field needs no second edit. Nothing is
+retired: a v0.1.0 `modules.yaml` carries no other key.
 
 ### 8.3. `config.yaml`
 
@@ -2515,7 +2570,20 @@ produces `.rite/brief.yaml`, `.rite/modules.yaml`, and `.rite/config.yaml`.
   over?"* [y/N]. Default No — accidental re-init should not destroy config.
 - Scan for `.git` directories to detect existing repos.
 - Scan for language markers (`package.json`, `pyproject.toml`, `Cargo.toml`,
-  `pubspec.yaml`, `*.sln`, `go.mod`) to pre-fill technology answers.
+  `pubspec.yaml`, `*.sln`, `go.mod`, `Package.swift`, `*.xcodeproj`,
+  `*.xcworkspace`, `*.swift`) to pre-fill technology answers. Swift manifests are
+  read with patterns, never by running `swift package dump-package`, which
+  executes the manifest.
+- Derive each module's commands (`install`, `build`, `test`, `lint`, `format`).
+  For Node the **package manager decides whether any command works**: it is
+  taken from `packageManager` in `package.json`, then from the lockfile in the
+  module or the nearest directory above it up to the repository root, and only
+  then defaults to npm. Lockfiles from two different managers leave the commands
+  undetected with a note naming both — one is stale, and guessing fails in a way
+  that looks like a broken project. Installs never rewrite the lockfile (`npm ci`,
+  `--frozen-lockfile`, `--immutable`), because a rewritten lockfile is a dirty
+  tree and `rite prepare` blocks on one. Anything detected wrongly is corrected
+  in `modules.yaml` (§8.2), which overrides detection.
 
 **Section 1 — Role** `[1/7]`
 

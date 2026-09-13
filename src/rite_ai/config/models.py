@@ -24,6 +24,27 @@ class Module:
     url: str | None = None
     branch: str = "main"
     description: str = ""
+    # A lambda so `RecordedCommands` can be defined after this class.
+    commands: RecordedCommands = field(default_factory=lambda: RecordedCommands())
+
+
+@dataclass
+class RecordedCommands:
+    """A module's commands as someone recorded them in `modules.yaml`.
+
+    Detection derives commands from a module's own manifests. It is right for
+    most modules and wrong for some — a scheme it cannot see, a test target
+    that needs a flag — and this is where the correction lives. A recorded
+    command wins over the detected one for its own key only; an unrecorded
+    key falls back to detection. `None` means "not recorded", never "there is
+    no command".
+    """
+
+    install: str | None = None
+    build: str | None = None
+    test: str | None = None
+    lint: str | None = None
+    format: str | None = None
 
 
 @dataclass
