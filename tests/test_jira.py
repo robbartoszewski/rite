@@ -228,7 +228,7 @@ class TestJiraBackendOperations:
     def test_link(self, mock_req):
         mock_req.return_value = {}
         backend = JiraBackend(_make_config())
-        result = backend.link("RW-1", "SCRUM-1", "Blocks")
+        result = backend.link("ABC-1", "XYZ-1", "Blocks")
         assert result is None
         method, path = mock_req.call_args[0][:2]
         assert method == "POST"
@@ -238,14 +238,14 @@ class TestJiraBackendOperations:
         # The TARGET is the inward issue. Measured against a live JIRA,
         # `POST /issueLink` reads "inwardIssue <type.outward> outwardIssue"
         # — see the regression test below for what the old order did.
-        assert payload["inwardIssue"]["key"] == "SCRUM-1"
-        assert payload["outwardIssue"]["key"] == "RW-1"
+        assert payload["inwardIssue"]["key"] == "XYZ-1"
+        assert payload["outwardIssue"]["key"] == "ABC-1"
 
     @patch.object(JiraBackend, "_request")
     def test_link_propagates_error(self, mock_req):
         mock_req.return_value = BackendError("JIRA 400")
         backend = JiraBackend(_make_config())
-        result = backend.link("RW-1", "SCRUM-1", "Blocks")
+        result = backend.link("ABC-1", "XYZ-1", "Blocks")
         assert isinstance(result, BackendError)
 
     @patch.object(JiraBackend, "_request")

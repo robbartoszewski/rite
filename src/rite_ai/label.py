@@ -90,7 +90,7 @@ _SLUG_MAX = 24
 def project_slug(root: Path) -> str:
     """A project's name, shaped to sit inside a session or sandbox name.
 
-    `<readable-name>-<6 hex of the resolved path>`, e.g. `bentora-3f9a2c`.
+    `<readable-name>-<6 hex of the resolved path>`, e.g. `acme-3f9a2c`.
 
     **Both halves earn their place.** The name is what a human reads in
     `tmux ls` or `yoloai ls` — the whole point of the convention is that a

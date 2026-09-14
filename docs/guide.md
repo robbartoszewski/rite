@@ -188,7 +188,7 @@ do (`--allow-dirty` starts on the checkout as it is instead). Run this from the
 project root:
 
 ```bash
-rite sandbox start alpha --ticket RW-12     # opening prompt: "Work ticket RW-12."
+rite sandbox start alpha --ticket ABC-12     # opening prompt: "Work ticket ABC-12."
 rite sandbox start alpha --ticket 42        # a GitHub issue, by its number
 rite sandbox start alpha --prompt "Add a CSV export to the invoices page."
 ```

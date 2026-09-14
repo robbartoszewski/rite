@@ -2323,7 +2323,7 @@ destroys another project's worker — a destructive mistake reachable by typing
 the correct command in the wrong place.
 
 **The form** is `rite_ai.label.project_slug(root)`: `<readable-name>-<6 hex of
-the resolved path>`, e.g. `bentora-3f9a2c`. Both halves earn their place. The
+the resolved path>`, e.g. `acme-3f9a2c`. Both halves earn their place. The
 name is what the human reads. The hash keeps it unique, because two projects
 legitimately share a name — two checkouts, two clients' `backend` — and a
 listing showing the same name twice is worse than one showing a path, since the
@@ -3381,7 +3381,7 @@ machine running a client-privileged project beside anything else, the client's
 token was the entry every other project read.
 
 **The namespace is recorded, never derived.** A generated id
-(`bentora-7f3a9c21`) is written to `config.yaml` once and committed. Deriving it
+(`acme-7f3a9c21`) is written to `config.yaml` once and committed. Deriving it
 from `project.name` would also survive a clone, but fails two ways that matter:
 renaming the project orphans every secret under the old name, and two checkouts
 of one project on one machine — a second clone, a worktree — collapse into a
@@ -3473,7 +3473,7 @@ list: with a flat namespace, nothing said how two machines hold distinct
 identities for the same project.
 
 **A recorded namespace answers it.** Both machines clone the same `config.yaml`,
-so they agree on the *name* — `bentora-7f3a9c21/jira_token` — and each holds its
+so they agree on the *name* — `acme-7f3a9c21/jira_token` — and each holds its
 **own secret** in its **own** keychain under that name. Same logical key, a
 different value per machine, no coordination and nothing shared. That is exactly
 what per-machine identity requires, and it falls out of §10.2 rather than needing

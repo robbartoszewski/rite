@@ -74,7 +74,7 @@ class TestAPersistingStallIsRecordedOnce:
         root = _project(tmp_path)
 
         for seconds_silent in (300, 360, 420, 480, 540):
-            _beat(root, "alpha", seconds_silent, ticket="RW-1")
+            _beat(root, "alpha", seconds_silent, ticket="ABC-1")
             result = run_tick(root)
             assert result.ok
 
@@ -176,7 +176,7 @@ class TestARecoveredWorkersBlockerIsRetracted:
                 "blocker",
                 {
                     "detail": "watchdog: worker 'alpha' stalled — 600s since last "
-                    "heartbeat (ticket RW-1)"
+                    "heartbeat (ticket ABC-1)"
                 },
             )
         assert len(_blockers(root)) == 5

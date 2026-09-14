@@ -82,7 +82,7 @@ def _populated() -> ProjectConfig:
             type="jira",
             site="example.atlassian.net",
             repo="org/repo",
-            projects={"workers": "RW", "decisions": "RD"},
+            projects={"workers": "ABC", "decisions": "RD"},
             credential="jira_token",
         ),
         expertise=[ExpertiseEntry(name="alice", tags=["billing", "auth"])],

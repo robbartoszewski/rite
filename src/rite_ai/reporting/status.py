@@ -113,7 +113,7 @@ class ProjectStatus:
     the query at all. Left unset, that case renders as the flag's
     message — telling the user they skipped the board with a flag they
     did not pass, on a run whose actual problem is printed four lines
-    higher. Measured against the live `BEN` project, whose `brief.yaml`
+    higher. Measured against a live JIRA project, whose `brief.yaml`
     is missing: `rite status` with no flags reported "skipped with
     --no-board"."""
     errors: list[str] = field(default_factory=list)

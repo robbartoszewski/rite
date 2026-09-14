@@ -53,7 +53,7 @@ class TestRunWatchdogCheck:
         """`handover`/`handover-label` are routine — drained by `start`'s
         own flush, not something the watchdog should wake anyone for."""
         root = _setup(tmp_path)
-        enqueue(root, "handover", {"ticket": "RW-1", "reason": "clean shutdown"})
+        enqueue(root, "handover", {"ticket": "ABC-1", "reason": "clean shutdown"})
         result = run_watchdog_check(root)
         assert result.needs_attention is False
 
@@ -112,9 +112,9 @@ class TestBlockedWorkerIsNotAStall:
         from rite_ai.handover import write_snapshot
 
         root = _setup(tmp_path, ["w1"])
-        write_heartbeat(root, "w1", ticket="RT-9")
+        write_heartbeat(root, "w1", ticket="DEF-9")
         write_snapshot(
-            root, ticket="RT-9", blockers=["QUESTION: drop or keep?"], worker="w1"
+            root, ticket="DEF-9", blockers=["QUESTION: drop or keep?"], worker="w1"
         )
 
         result = run_watchdog_check(root)
@@ -130,9 +130,9 @@ class TestBlockedWorkerIsNotAStall:
         from rite_ai.handover import write_snapshot
 
         root = _setup(tmp_path, ["w1"])
-        write_heartbeat(root, "w1", ticket="RT-9")
+        write_heartbeat(root, "w1", ticket="DEF-9")
         write_snapshot(
-            root, ticket="RT-9", blockers=["QUESTION: drop or keep?"], worker="w1"
+            root, ticket="DEF-9", blockers=["QUESTION: drop or keep?"], worker="w1"
         )
 
         reason = run_watchdog_check(root).reasons[0]
@@ -140,7 +140,7 @@ class TestBlockedWorkerIsNotAStall:
         assert "BLOCKED and waiting" in reason
         assert "stalled" not in reason
         assert "QUESTION: drop or keep?" in reason
-        assert "RT-9" in reason
+        assert "DEF-9" in reason
 
     def test_blocker_clears_when_the_worker_writes_a_clean_snapshot(
         self, tmp_path: Path
@@ -150,13 +150,13 @@ class TestBlockedWorkerIsNotAStall:
         from rite_ai.handover import write_snapshot
 
         root = _setup(tmp_path, ["w1"])
-        write_heartbeat(root, "w1", ticket="RT-9")
+        write_heartbeat(root, "w1", ticket="DEF-9")
         write_snapshot(
-            root, ticket="RT-9", blockers=["QUESTION: drop or keep?"], worker="w1"
+            root, ticket="DEF-9", blockers=["QUESTION: drop or keep?"], worker="w1"
         )
         assert run_watchdog_check(root).needs_attention
 
-        write_snapshot(root, ticket="RT-9", next_step="open PR", worker="w1")
+        write_snapshot(root, ticket="DEF-9", next_step="open PR", worker="w1")
 
         assert not run_watchdog_check(root).needs_attention
 
@@ -177,9 +177,9 @@ class TestBlockedWorkerIsNotAStall:
         from rite_ai.handover import write_snapshot
 
         root = _setup(tmp_path, ["w1"])
-        write_heartbeat(root, "w1", ticket="RT-9")
+        write_heartbeat(root, "w1", ticket="DEF-9")
         write_snapshot(
-            root, ticket="RT-9", blockers=["QUESTION: drop or keep?"], worker="w1"
+            root, ticket="DEF-9", blockers=["QUESTION: drop or keep?"], worker="w1"
         )
         hb = root / ".rite" / "heartbeats" / "w1.json"
         import json
@@ -228,9 +228,9 @@ class TestWatchdogExitCodes:
         from rite_ai.handover import write_snapshot
 
         root = _setup(tmp_path, ["w1"])
-        write_heartbeat(root, "w1", ticket="RT-9")
+        write_heartbeat(root, "w1", ticket="DEF-9")
         write_snapshot(
-            root, ticket="RT-9", blockers=["QUESTION: drop or keep?"], worker="w1"
+            root, ticket="DEF-9", blockers=["QUESTION: drop or keep?"], worker="w1"
         )
         assert self._invoke(root) == 2
 
@@ -242,9 +242,9 @@ class TestWatchdogExitCodes:
         from rite_ai.handover import write_snapshot
 
         root = _setup(tmp_path, ["w1"])
-        write_heartbeat(root, "w1", ticket="RT-9")
+        write_heartbeat(root, "w1", ticket="DEF-9")
         write_snapshot(
-            root, ticket="RT-9", blockers=["QUESTION: drop or keep?"], worker="w1"
+            root, ticket="DEF-9", blockers=["QUESTION: drop or keep?"], worker="w1"
         )
         hb = root / ".rite" / "heartbeats" / "w1.json"
         data = json.loads(hb.read_text())

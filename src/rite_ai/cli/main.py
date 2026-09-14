@@ -1737,7 +1737,7 @@ def credential_list() -> None:
                 # `credential set` writes inside a project is namespaced,
                 # so every one of them contained a "/" and was waved
                 # through as recognised. The marker is the thing that
-                # tells someone a `robbartoszewski@gmail.com` entry is a
+                # tells someone a `you@example.com` entry is a
                 # VALUE typed where a key belongs — it exists because
                 # that exact mistake was made, and silencing it for
                 # everything the command now writes retires the feature
@@ -2765,7 +2765,7 @@ def board_move(ticket_id: str, status: str, role: str) -> None:
     as the outcome is how a move that never happened reads as success.
 
     Examples:
-      rite board move RW-12 "In Progress"
+      rite board move ABC-12 "In Progress"
     """
     backend, err = _ticket_backend(role)
     if err:
@@ -2851,7 +2851,7 @@ def board_show(ticket_id: str, role: str) -> None:
     per ticket, without the description the ticket's scope is written in.
 
     Examples:
-      rite board show RW-12
+      rite board show ABC-12
       rite board show 42
     """
     backend, err = _ticket_backend(role)
@@ -2896,9 +2896,9 @@ def board_label(
     each of them.
 
     Examples:
-      rite board label RW-12 alpha scheduled
-      rite board label RW-12 beta --remove alpha
-      rite board label RW-12 --remove alpha
+      rite board label ABC-12 alpha scheduled
+      rite board label ABC-12 beta --remove alpha
+      rite board label ABC-12 --remove alpha
     """
     if not labels and not remove:
         click.echo("nothing to do — give a label to add, or --remove", err=True)
@@ -2940,8 +2940,8 @@ def board_assign(ticket_id: str, worker: str, role: str) -> None:
     label` for that.
 
     Examples:
-      rite board assign RW-12 "Ada Lovelace"
-      rite board assign RW-12 ada@example.com
+      rite board assign ABC-12 "Ada Lovelace"
+      rite board assign ABC-12 ada@example.com
     """
     backend, err = _ticket_backend(role)
     if err:
@@ -2969,7 +2969,7 @@ def board_link(ticket_id: str, target_id: str, link_type: str, role: str) -> Non
     """Link TICKET_ID to TARGET_ID (default: TICKET_ID is blocked by TARGET_ID).
 
     Examples:
-      rite board link RW-12 SCRUM-4
+      rite board link ABC-12 XYZ-4
     """
     backend, err = _ticket_backend(role)
     if err:
@@ -2985,8 +2985,8 @@ def board_link(ticket_id: str, target_id: str, link_type: str, role: str) -> Non
     # "inwardIssue <type.outward> outwardIssue" — the opposite of what the
     # field names suggest. `link()` now sends target_id as the inward
     # issue precisely so that this sentence is true; before that fix the
-    # API recorded "RW-12 blocks SCRUM-4" while this line printed "RW-12
-    # is blocked by SCRUM-4", inverting the one relationship SPEC §6.2
+    # API recorded "ABC-12 blocks XYZ-4" while this line printed "ABC-12
+    # is blocked by XYZ-4", inverting the one relationship SPEC §6.2
     # says rite's dependency logic depends on.
     #
     # "is blocked by" is a property of the "Blocks" type alone, so only
@@ -3151,7 +3151,7 @@ def prepare(worker: str, branch: str | None) -> None:
 
     Examples:
       rite prepare --worker alpha
-      rite prepare --worker alpha --branch feature/RW-12
+      rite prepare --worker alpha --branch feature/ABC-12
     """
     from rite_ai.workspace import prepare_workspace
 
@@ -3198,7 +3198,7 @@ def heartbeat(worker: str, ticket: str, message: str) -> None:
 
     Examples:
       rite heartbeat --worker alpha
-      rite heartbeat --worker alpha --ticket RW-12 --message "running tests"
+      rite heartbeat --worker alpha --ticket ABC-12 --message "running tests"
     """
     # The only writer of `.rite/heartbeats/` anywhere in the codebase.
     # `detect_stalls` (and through it `rite status` and `rite watchdog`)
@@ -3312,7 +3312,7 @@ def handover_write(
     means an empty write is a deletion. Pass `--clear` to mean it.
 
     Examples:
-      rite handover write --ticket RW-12 --progress "wiring the CLI" \\
+      rite handover write --ticket ABC-12 --progress "wiring the CLI" \\
         --next-step "add tests" --blocker "waiting on JIRA credentials"
     """
     from rite_ai.handover import has_content, write_snapshot
@@ -3931,9 +3931,9 @@ def sandbox_start(
     setup-token`, then `rite credential set claude`.
 
     Examples:
-      rite sandbox start alpha --ticket RW-12
+      rite sandbox start alpha --ticket ABC-12
       rite sandbox start alpha --prompt "Add a CSV export to the invoices page."
-      rite sandbox start alpha --allow-dirty --ticket RW-12
+      rite sandbox start alpha --allow-dirty --ticket ABC-12
     """
     if ticket is not None and prompt_text is not None:
         raise click.UsageError("give --ticket or --prompt, not both")
@@ -4297,7 +4297,7 @@ def stop_cmd(directory: str, worker: str | None, reason: str, ticket: str) -> No
     Examples:
       rite stop
       rite stop --worker alpha --reason "lunch break"
-      rite stop --worker alpha --ticket RW-12
+      rite stop --worker alpha --ticket ABC-12
       rite stop acme                # resolves a registered alias (§8.9)
     """
     from rite_ai.lifecycle import stop
@@ -4496,7 +4496,7 @@ Getting started:
 Day to day:
   rite start                        Bring rite up: read handover, load state
   rite status                       What's happening right now
-  rite claim src/ --worker alpha -t RW-12
+  rite claim src/ --worker alpha -t ABC-12
                                      Claim paths before touching them
   rite prepare --worker alpha       Sync a worker's workspace before a task
   rite release --worker alpha       Release claims after a merge

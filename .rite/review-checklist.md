@@ -149,7 +149,7 @@ is the intended lifecycle — see the note at the end.
 - [ ] The commit message is written for whoever will actually read it, and
       after publication that is a stranger. **A commit message is read by
       someone who cannot see who asked for the change, who reviewed it, or
-      what round it was** — so third-person self-reference ("Robert's
+      what round it was** — so third-person self-reference ("the owner's
       framing"), and phrases that point at an absent conversation ("the
       material handed to me said 49", "read cold by a reviewer"), name people
       and events the reader has no access to. The test is not a list of

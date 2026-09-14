@@ -114,7 +114,7 @@ class TestTheWindowOpeningIsReported:
         """The direction that already worked, kept honest."""
         root = _project(tmp_path, _DAY)
         ledger = ClaimsLedger(root / ".rite" / "claims.json")
-        ledger.claim(["src/a.ts"], "alpha", ticket="RW-1")
+        ledger.claim(["src/a.ts"], "alpha", ticket="ABC-1")
         (root / ".rite" / "schedule-state.json").write_text("3")
 
         with patch("rite_ai.scheduler.current_minute_of_day", return_value=1200):

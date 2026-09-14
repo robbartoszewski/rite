@@ -68,7 +68,7 @@ def _run(root: Path, argv: list[str]):
 class TestAnEmptyWriteDoesNotSilentlyDiscardTheSnapshot:
     """Every write replaces that session's snapshot entirely, so a write
     carrying nothing is a deletion — and it reported success. Measured: a
-    worker recorded `RT-12`, "migration 60% done", a next step and the
+    worker recorded `DEF-12`, "migration 60% done", a next step and the
     open blocker "needs DB credentials"; the next scheduled call lost its
     arguments, printed `handover snapshot written for alpha`, exited 0,
     and left five `(none)` lines where the blocker had been.
@@ -84,7 +84,7 @@ class TestAnEmptyWriteDoesNotSilentlyDiscardTheSnapshot:
         write_snapshot(
             root,
             worker="alpha",
-            ticket="RT-12",
+            ticket="DEF-12",
             progress="migration 60% done",
             next_step="run backfill on staging",
             blockers=["needs DB credentials"],
@@ -102,7 +102,7 @@ class TestAnEmptyWriteDoesNotSilentlyDiscardTheSnapshot:
             "an argument-less write discarded the open blocker the snapshot "
             "existed to carry"
         )
-        assert surviving.ticket == "RT-12"
+        assert surviving.ticket == "DEF-12"
         assert surviving.progress == "migration 60% done"
         assert result.exit_code != 0, "and reported success while doing it"
 
@@ -131,7 +131,7 @@ class TestAnEmptyWriteDoesNotSilentlyDiscardTheSnapshot:
     @pytest.mark.parametrize(
         "argv",
         [
-            ["--ticket", "RT-1"],
+            ["--ticket", "DEF-1"],
             ["--progress", "half done"],
             ["--next-step", "run it"],
             ["--blocker", "waiting on review"],
@@ -181,7 +181,7 @@ class TestAnUnreadableSnapshotIsNotNothing:
     def _corrupted(self, tmp_path: Path) -> Path:
         root = _project(tmp_path)
         write_snapshot(
-            root, worker="alpha", ticket="RT-7", blockers=["needs review from w2"]
+            root, worker="alpha", ticket="DEF-7", blockers=["needs review from w2"]
         )
         path = root / ".rite" / "handover" / "alpha.json"
         path.write_text(path.read_text()[:40])  # a kill mid-write, a full disk
@@ -253,7 +253,7 @@ class TestAnUnreadableSnapshotIsNotNothing:
 
     def test_a_readable_snapshot_is_still_not_flagged(self, tmp_path: Path):
         root = _project(tmp_path)
-        write_snapshot(root, worker="alpha", ticket="RT-7", progress="fine")
+        write_snapshot(root, worker="alpha", ticket="DEF-7", progress="fine")
 
         snapshots = read_snapshots(root)
 
@@ -288,7 +288,7 @@ class TestEveryReaderSaysHowOldTheSnapshotIs:
         write_snapshot(
             root,
             worker="alpha",
-            ticket="RT-7",
+            ticket="DEF-7",
             progress="rewrote the parser",
             blockers=["needs review from w2"],
         )
@@ -337,7 +337,7 @@ class TestEveryReaderSaysHowOldTheSnapshotIs:
         """The point is the DIFFERENCE, not the presence of a string."""
         dead = self._three_hours_dead(tmp_path / "dead")
         fresh = _project(tmp_path / "fresh")
-        write_snapshot(fresh, worker="alpha", ticket="RT-7", progress="x")
+        write_snapshot(fresh, worker="alpha", ticket="DEF-7", progress="x")
 
         dead_out = _run(dead, ["handover", "show"]).output
         fresh_out = _run(fresh, ["handover", "show"]).output
@@ -352,7 +352,7 @@ class TestEveryReaderSaysHowOldTheSnapshotIs:
         "-6s ago" reads as a bug in rite rather than as the clock change
         it is — `format_duration`'s own rule, applied here too."""
         root = _project(tmp_path)
-        write_snapshot(root, worker="alpha", ticket="RT-7")
+        write_snapshot(root, worker="alpha", ticket="DEF-7")
         _age(root, "alpha", -600)
 
         result = _run(root, ["handover", "show"])

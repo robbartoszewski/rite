@@ -120,8 +120,8 @@ def get(name: str) -> str | None:
 # --- Per-project namespacing (SPEC §10.2) ---
 #
 # The keychain SERVICE stays `SERVICE_NAME`; what changes is the ACCOUNT.
-# A project with namespace `bentora-7f3a9c` keeps its JIRA token under the
-# account `bentora-7f3a9c/jira_token`, so a second project on the same
+# A project with namespace `acme-7f3a9c` keeps its JIRA token under the
+# account `acme-7f3a9c/jira_token`, so a second project on the same
 # machine can hold a second JIRA identity — which a flat `jira_token`
 # made impossible.
 #

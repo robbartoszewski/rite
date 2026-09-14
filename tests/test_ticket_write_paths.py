@@ -53,7 +53,7 @@ def _project(tmp_path: Path, backend: str = "jira") -> Path:
             "  type: jira\n"
             "  site: test.atlassian.net\n"
             "  projects:\n"
-            "    workers: RW\n"
+            "    workers: ABC\n"
         )
     else:
         (rite_dir / "config.yaml").write_text(
@@ -68,9 +68,9 @@ def _project(tmp_path: Path, backend: str = "jira") -> Path:
 #
 # LIVE-ONLY. A mock records the call and never renders the relationship,
 # so nothing in a mocked suite can say which issue ended up blocked.
-# Measured on a real instance: sending `inwardIssue: RT-3, outwardIssue:
-# RT-4` with type "Blocks" produced "RT-3 blocks RT-4" when read back
-# from RT-3, and "RT-4 is blocked by RT-3" when read back from RT-4 — the
+# Measured on a real instance: sending `inwardIssue: DEF-3, outwardIssue:
+# DEF-4` with type "Blocks" produced "DEF-3 blocks DEF-4" when read back
+# from DEF-3, and "DEF-4 is blocked by DEF-3" when read back from DEF-4 — the
 # opposite of both the field names and of what rite printed. `POST
 # /issueLink` reads as **inwardIssue <type.outward> outwardIssue**.
 #
@@ -83,14 +83,14 @@ class TestLinkDirection:
     @patch.object(JiraBackend, "_request")
     def test_target_is_the_inward_issue(self, mock_req):
         mock_req.return_value = {}
-        assert _jira().link("RW-1", "SCRUM-1", "Blocks") is None
+        assert _jira().link("ABC-1", "XYZ-1", "Blocks") is None
         payload = mock_req.call_args[1]["json"]
         # The OUTWARD issue is the one that "is blocked by" the inward
-        # one. RW-1 is the ticket that must end up blocked, so RW-1 is
-        # outward and the blocker SCRUM-1 is inward. The original code
+        # one. ABC-1 is the ticket that must end up blocked, so ABC-1 is
+        # outward and the blocker XYZ-1 is inward. The original code
         # had these the other way round.
-        assert payload["inwardIssue"]["key"] == "SCRUM-1"
-        assert payload["outwardIssue"]["key"] == "RW-1"
+        assert payload["inwardIssue"]["key"] == "XYZ-1"
+        assert payload["outwardIssue"]["key"] == "ABC-1"
 
     @patch("rite_ai.tickets.create_backend")
     def test_cli_message_matches_the_payload_it_sent(
@@ -98,27 +98,27 @@ class TestLinkDirection:
     ):
         """The printed sentence and the created link must agree.
 
-        They did not: the CLI said "RW-1 is blocked by SCRUM-1" while the
-        API recorded "RW-1 blocks SCRUM-1". Two things were wrong at
+        They did not: the CLI said "ABC-1 is blocked by XYZ-1" while the
+        API recorded "ABC-1 blocks XYZ-1". Two things were wrong at
         once and each was cited as justification for the other, which is
         why only the live API could settle it."""
         monkeypatch.chdir(_project(tmp_path))
         backend = mock_create.return_value
         backend.link.return_value = None
 
-        result = CliRunner().invoke(cli, ["board", "link", "RW-1", "SCRUM-1"])
+        result = CliRunner().invoke(cli, ["board", "link", "ABC-1", "XYZ-1"])
         assert result.exit_code == 0
-        assert "RW-1 is blocked by SCRUM-1" in result.output
+        assert "ABC-1 is blocked by XYZ-1" in result.output
 
         # ... and the direction the backend was actually asked for.
         real = _jira()
         with patch.object(JiraBackend, "_request") as mock_req:
             mock_req.return_value = {}
-            real.link("RW-1", "SCRUM-1", "Blocks")
+            real.link("ABC-1", "XYZ-1", "Blocks")
         payload = mock_req.call_args[1]["json"]
         blocker = payload["inwardIssue"]["key"]
         blocked = payload["outwardIssue"]["key"]
-        assert (blocked, blocker) == ("RW-1", "SCRUM-1")
+        assert (blocked, blocker) == ("ABC-1", "XYZ-1")
 
     @patch.object(JiraBackend, "_request")
     def test_unknown_link_type_names_the_sites_own_types(self, mock_req):
@@ -141,7 +141,7 @@ class TestLinkDirection:
             }
 
         mock_req.side_effect = responses
-        result = _jira().link("RW-1", "SCRUM-1", "blocks")
+        result = _jira().link("ABC-1", "XYZ-1", "blocks")
         assert isinstance(result, BackendError)
         assert "Blocks, Relates" in result.message
         assert "case-sensitive" in result.message
@@ -185,15 +185,15 @@ class TestBadCredentialsOnWritePaths:
     @pytest.mark.parametrize(
         "operation",
         [
-            pytest.param(lambda b: b.move("RW-1", "Done"), id="move"),
-            pytest.param(lambda b: b.label("RW-1", ["scheduled"]), id="label"),
-            pytest.param(lambda b: b.comment("RW-1", "text"), id="comment"),
+            pytest.param(lambda b: b.move("ABC-1", "Done"), id="move"),
+            pytest.param(lambda b: b.label("ABC-1", ["scheduled"]), id="label"),
+            pytest.param(lambda b: b.comment("ABC-1", "text"), id="comment"),
             pytest.param(lambda b: b.create("title"), id="create"),
             pytest.param(
-                lambda b: b.assign("RW-1", "6054dede37065a0069a7c74f"), id="assign"
+                lambda b: b.assign("ABC-1", "6054dede37065a0069a7c74f"), id="assign"
             ),
-            pytest.param(lambda b: b.link("RW-1", "RW-2", "Blocks"), id="link"),
-            pytest.param(lambda b: b.update("RW-1", title="x"), id="update"),
+            pytest.param(lambda b: b.link("ABC-1", "ABC-2", "Blocks"), id="link"),
+            pytest.param(lambda b: b.update("ABC-1", title="x"), id="update"),
         ],
     )
     @patch.object(JiraBackend, "_request")
@@ -219,7 +219,7 @@ class TestBadCredentialsOnWritePaths:
             return BackendError(f"JIRA {method} {path} → 404: Issue does not exist")
 
         mock_req.side_effect = responses
-        result = _jira().assign("RW-1", "Ada Lovelace")
+        result = _jira().assign("ABC-1", "Ada Lovelace")
         assert isinstance(result, BackendError)
         assert "rejected the credentials" in result.message
 
@@ -236,7 +236,7 @@ class TestBadCredentialsOnWritePaths:
             return BackendError(f"JIRA {method} {path} → 404: Issue does not exist")
 
         mock_req.side_effect = responses
-        result = _jira().comment("RW-999", "text")
+        result = _jira().comment("ABC-999", "text")
         assert isinstance(result, BackendError)
         assert "→ 404" in result.message
         assert "rejected the credentials" not in result.message
@@ -246,7 +246,7 @@ class TestBadCredentialsOnWritePaths:
 # `assign` took only an accountId, and its own --help example could not work
 # --------------------------------------------------------------------------
 #
-# LIVE-ONLY. `rite board assign RW-12 alpha` is the literal example in
+# LIVE-ONLY. `rite board assign ABC-12 alpha` is the literal example in
 # the command's own help; measured, JIRA answers "Specified user does not
 # exist or you do not have required permissions", because the assignee
 # API takes an accountId and nothing else. A mock accepts any string.
@@ -266,7 +266,7 @@ class TestAssignResolvesPeople:
             return {}
 
         mock_req.side_effect = responses
-        assert _jira().assign("RW-1", "Ada Lovelace") is None
+        assert _jira().assign("ABC-1", "Ada Lovelace") is None
         assert mock_req.call_args[1]["json"] == {
             "accountId": "6054dede37065a0069a7c74f"
         }
@@ -274,7 +274,7 @@ class TestAssignResolvesPeople:
     @patch.object(JiraBackend, "_request")
     def test_an_account_id_is_passed_through_without_a_lookup(self, mock_req):
         mock_req.return_value = {}
-        assert _jira().assign("RW-1", "6054dede37065a0069a7c74f") is None
+        assert _jira().assign("ABC-1", "6054dede37065a0069a7c74f") is None
         paths = [call[0][1] for call in mock_req.call_args_list]
         assert "/user/search" not in paths
 
@@ -292,7 +292,7 @@ class TestAssignResolvesPeople:
             return {}
 
         mock_req.side_effect = responses
-        result = _jira().assign("RW-1", "Ada")
+        result = _jira().assign("ABC-1", "Ada")
         assert isinstance(result, BackendError)
         assert "matches 2 JIRA users" in result.message
         methods = [call[0][0] for call in mock_req.call_args_list]
@@ -312,7 +312,7 @@ class TestAssignResolvesPeople:
             return {}
 
         mock_req.side_effect = responses
-        result = _jira().assign("RW-1", "alpha")
+        result = _jira().assign("ABC-1", "alpha")
         assert isinstance(result, BackendError)
         assert "rite board label" in result.message
 
@@ -345,7 +345,7 @@ class TestMoveReportsWhereTheTicketLanded:
             return {}
 
         mock_req.side_effect = responses
-        assert _jira().move("RW-1", "In Progress") == "In Development"
+        assert _jira().move("ABC-1", "In Progress") == "In Development"
 
     @patch.object(JiraBackend, "_request")
     def test_jira_prefers_an_exact_destination_over_a_transition_name(self, mock_req):
@@ -364,7 +364,7 @@ class TestMoveReportsWhereTheTicketLanded:
             return {}
 
         mock_req.side_effect = responses
-        assert _jira().move("RW-1", "Done") is None
+        assert _jira().move("ABC-1", "Done") is None
         assert mock_req.call_args[1]["json"] == {"transition": {"id": "21"}}
 
     @patch("rite_ai.tickets.github._run_gh")
@@ -519,10 +519,10 @@ class TestHandoverActuallyUnassigns:
         backend.comment.return_value = None
         backend.label.return_value = None
 
-        result = perform_handover(root, worker="alpha", reason="stall", ticket="RW-1")
+        result = perform_handover(root, worker="alpha", reason="stall", ticket="ABC-1")
 
         assert result.ticket_commented is True
-        backend.label.assert_called_once_with("RW-1", ["scheduled"], remove=["alpha"])
+        backend.label.assert_called_once_with("ABC-1", ["scheduled"], remove=["alpha"])
 
     @patch("rite_ai.lifecycle.commands.create_backend_from_config")
     def test_the_queued_retry_carries_the_removal_too(self, mock_create, tmp_path):
@@ -531,7 +531,7 @@ class TestHandoverActuallyUnassigns:
         backend.comment.return_value = None
         backend.label.return_value = BackendError("board unreachable")
 
-        perform_handover(root, worker="alpha", reason="stall", ticket="RW-1")
+        perform_handover(root, worker="alpha", reason="stall", ticket="ABC-1")
 
         pending = list_pending(root)
         assert [m.kind for m in pending] == ["handover-label"]
@@ -544,7 +544,7 @@ class TestHandoverActuallyUnassigns:
         read the ticket before returning it to the pool."""
         with patch.object(JiraBackend, "_request") as mock_req:
             mock_req.return_value = {}
-            assert _jira().label("RW-1", [], remove=["never-was"]) is None
+            assert _jira().label("ABC-1", [], remove=["never-was"]) is None
             ops = mock_req.call_args[1]["json"]["update"]["labels"]
             assert ops == [{"remove": "never-was"}]
 
@@ -564,7 +564,7 @@ class TestStopSaysWhenTheBoardWasNotUpdated:
         root = _project(tmp_path)
         (root / ".rite" / "modules.yaml").write_text("modules: []\n")
 
-        result = stop(root, worker="alpha", ticket="RW-1")
+        result = stop(root, worker="alpha", ticket="ABC-1")
 
         assert result.ok is True  # local shutdown still succeeded
         assert result.queued is True
@@ -578,11 +578,11 @@ class TestStopSaysWhenTheBoardWasNotUpdated:
         backend = mock_create.return_value
         backend.comment.return_value = BackendError("JIRA rejected the credentials")
 
-        result = stop(root, worker="alpha", ticket="RW-1")
+        result = stop(root, worker="alpha", ticket="ABC-1")
 
         assert result.queued is True
         assert "board NOT updated" in result.message
-        assert "RW-1" in result.message
+        assert "ABC-1" in result.message
 
     @patch("rite_ai.lifecycle.commands.create_backend_from_config")
     def test_a_delivered_handover_says_which_ticket(self, mock_create, tmp_path):
@@ -591,10 +591,10 @@ class TestStopSaysWhenTheBoardWasNotUpdated:
         backend.comment.return_value = None
         backend.label.return_value = None
 
-        result = stop(root, worker="alpha", ticket="RW-1")
+        result = stop(root, worker="alpha", ticket="ABC-1")
 
         assert result.queued is False
-        assert "handover posted to RW-1" in result.message
+        assert "handover posted to ABC-1" in result.message
         assert "NOT updated" not in result.message
 
 
@@ -610,17 +610,17 @@ def test_board_label_remove_flag(mock_create, tmp_path, monkeypatch):
     backend.label.return_value = None
 
     result = CliRunner().invoke(
-        cli, ["board", "label", "RW-1", "beta", "--remove", "alpha"]
+        cli, ["board", "label", "ABC-1", "beta", "--remove", "alpha"]
     )
     assert result.exit_code == 0
-    backend.label.assert_called_once_with("RW-1", ["beta"], remove=["alpha"])
+    backend.label.assert_called_once_with("ABC-1", ["beta"], remove=["alpha"])
     assert "removed alpha" in result.output
 
 
 @patch("rite_ai.tickets.create_backend")
 def test_board_label_with_nothing_to_do_refuses(mock_create, tmp_path, monkeypatch):
     monkeypatch.chdir(_project(tmp_path))
-    result = CliRunner().invoke(cli, ["board", "label", "RW-1"])
+    result = CliRunner().invoke(cli, ["board", "label", "ABC-1"])
     assert result.exit_code == 1
     assert "nothing to do" in result.output
 

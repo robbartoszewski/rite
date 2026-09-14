@@ -26,7 +26,7 @@ SRC = Path(__file__).resolve().parent.parent / "src" / "rite_ai"
 
 
 class TestRiteCannotWriteToARemoteOrRewriteHistory:
-    """Robert approves merges and pushes by hand, and never force-pushes
+    """The owner approves merges and pushes by hand, and never force-pushes
     `main`, so the blast area stays "new changes" rather than "project
     history". That holds only while rite itself has no path to a remote."""
 

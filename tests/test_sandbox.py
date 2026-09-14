@@ -286,12 +286,12 @@ class TestStartWorkerPrompt:
 
         with patch("rite_ai.sandbox.subprocess.run", side_effect=run) as mock_run:
             result = start_worker(
-                tmp_path, "alpha", SandboxConfig(), prompt="Work ticket RW-12."
+                tmp_path, "alpha", SandboxConfig(), prompt="Work ticket ABC-12."
             )
         assert result.ok, result.message
         args = mock_run.call_args[0][0]
-        assert seen["content"] == "Work ticket RW-12.\n"
-        assert not any("RW-12" in a for a in args), args
+        assert seen["content"] == "Work ticket ABC-12.\n"
+        assert not any("ABC-12" in a for a in args), args
         assert "--" not in args
         # Read by `yoloai new`, then gone: nothing about the prompt is left
         # behind on the host.
@@ -679,7 +679,7 @@ class TestWorkOnlyInTheSandboxCopy:
         )
         module = work / str(root / "workers" / "alpha").replace("/", "^s") / "app"
         module.mkdir(parents=True)
-        self._git(module, "init", "-q", "-b", "RW-12")
+        self._git(module, "init", "-q", "-b", "ABC-12")
         if commit:
             self._git(module, "commit", "-q", "--allow-empty", "-m", "work")
         return module
@@ -706,7 +706,7 @@ class TestWorkOnlyInTheSandboxCopy:
         with patch("rite_ai.sandbox.subprocess.run", side_effect=run):
             result = destroy_worker("alpha", root)
         assert not result.ok
-        assert "app @ RW-12: 1 commit(s) on no remote" in result.message
+        assert "app @ ABC-12: 1 commit(s) on no remote" in result.message
         assert "--force" in result.message
         assert not any("destroy" in c for c in calls)
 
@@ -727,7 +727,7 @@ class TestWorkOnlyInTheSandboxCopy:
         remote = tmp_path / "remote.git"
         self._git(tmp_path, "init", "-q", "--bare", str(remote))
         self._git(module, "remote", "add", "origin", str(remote))
-        self._git(module, "push", "-q", "origin", "RW-12")
+        self._git(module, "push", "-q", "origin", "ABC-12")
         run, calls = self._run()
         with patch("rite_ai.sandbox.subprocess.run", side_effect=run):
             result = destroy_worker("alpha", root)
@@ -777,7 +777,7 @@ class TestWorkOnlyInTheSandboxCopy:
             result = stop_worker("alpha", root)
         assert result.ok
         assert "warning:" in result.message
-        assert "app @ RW-12: 1 commit(s) on no remote" in result.message
+        assert "app @ ABC-12: 1 commit(s) on no remote" in result.message
         assert any("stop" in c for c in calls)
 
 

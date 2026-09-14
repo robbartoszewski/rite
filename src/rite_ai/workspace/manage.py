@@ -384,8 +384,8 @@ def remove_worker(root: Path, name: str, force: bool = False) -> RemoveWorkerRes
     **Refuses while that workspace holds work that exists nowhere else.**
     It used to be an unconditional `shutil.rmtree`. Measured, on the
     scenario this whole mechanism exists for: a worker was killed between
-    claim and commit, holding `RT-1`, with a modified `README.md` and a
-    new `src/scoring.ts` on `feature/RT-1`; the Manager did the natural
+    claim and commit, holding `DEF-1`, with a modified `README.md` and a
+    new `src/scoring.ts` on `feature/DEF-1`; the Manager did the natural
     thing and retired it, and `rite remove worker w1` printed `worker 'w1'
     removed`, exited 0, and destroyed both files. They were not committed,
     not pushed, not stashed, and not anywhere else.
@@ -676,7 +676,7 @@ decisions.
 {module_commands}
 ## Your ticket
 
-You are usually started with a ticket ID ("Work ticket RW-12."). Read that
+You are usually started with a ticket ID ("Work ticket ABC-12."). Read that
 ticket with `rite board show <ticket-id>`, which prints its title, status and
 description from the board this project uses, JIRA or GitHub Issues. If it is
 not complete enough to start cold — no

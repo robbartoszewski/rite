@@ -709,10 +709,10 @@ def test_sandbox_start_ticket_becomes_the_opening_prompt(tmp_path, monkeypatch):
         patch("rite_ai.sandbox.subprocess.run", side_effect=_run),
     ):
         result = CliRunner().invoke(
-            cli, ["sandbox", "start", "alpha", "--ticket", "RW-12"]
+            cli, ["sandbox", "start", "alpha", "--ticket", "ABC-12"]
         )
     assert result.exit_code == 0, result.output
-    assert seen["prompt"] == "Work ticket RW-12.\n"
+    assert seen["prompt"] == "Work ticket ABC-12.\n"
     assert "yoloai attach rite-" in result.output
 
 
@@ -720,7 +720,7 @@ def test_sandbox_start_refuses_ticket_and_prompt_together(tmp_path, monkeypatch)
     _sandbox_project(tmp_path, monkeypatch)
     with patch("rite_ai.sandbox.subprocess.run") as mock_run:
         result = CliRunner().invoke(
-            cli, ["sandbox", "start", "alpha", "--ticket", "RW-12", "--prompt", "x"]
+            cli, ["sandbox", "start", "alpha", "--ticket", "ABC-12", "--prompt", "x"]
         )
     assert result.exit_code == 2, result.output
     assert "not both" in result.output
@@ -756,7 +756,7 @@ def test_sandbox_start_refuses_an_unprepared_workspace_and_says_what_to_do(
         patch("rite_ai.sandbox.subprocess.run") as mock_run,
     ):
         result = CliRunner().invoke(
-            cli, ["sandbox", "start", "alpha", "--ticket", "RW-1"]
+            cli, ["sandbox", "start", "alpha", "--ticket", "ABC-1"]
         )
     assert result.exit_code == 1, result.output
     assert "not starting 'alpha'" in result.output
@@ -787,7 +787,7 @@ def test_sandbox_start_prepares_before_it_starts(tmp_path, monkeypatch):
         patch("rite_ai.sandbox.subprocess.run", side_effect=run),
     ):
         result = CliRunner().invoke(
-            cli, ["sandbox", "start", "alpha", "--ticket", "RW-1"]
+            cli, ["sandbox", "start", "alpha", "--ticket", "ABC-1"]
         )
     assert result.exit_code == 0, result.output
     assert order == ["prepare", "new"]
@@ -807,7 +807,7 @@ def test_sandbox_start_allow_dirty_skips_prepare_and_says_so(tmp_path, monkeypat
         patch("rite_ai.sandbox.subprocess.run", side_effect=run),
     ):
         result = CliRunner().invoke(
-            cli, ["sandbox", "start", "alpha", "--allow-dirty", "--ticket", "RW-1"]
+            cli, ["sandbox", "start", "alpha", "--allow-dirty", "--ticket", "ABC-1"]
         )
     assert result.exit_code == 0, result.output
     assert "not preparing workers/alpha/" in result.output
@@ -831,7 +831,7 @@ def test_sandbox_start_warns_about_instructions_from_before_sandboxing(
         patch("rite_ai.sandbox.subprocess.run", side_effect=run),
     ):
         result = CliRunner().invoke(
-            cli, ["sandbox", "start", "alpha", "--allow-dirty", "--ticket", "RW-1"]
+            cli, ["sandbox", "start", "alpha", "--allow-dirty", "--ticket", "ABC-1"]
         )
     assert "was written before sandboxed Workers" in result.output
     assert "rite remove worker alpha" in result.output
@@ -1090,7 +1090,7 @@ def test_handover_write_and_show(tmp_path, monkeypatch):
             "handover",
             "write",
             "--ticket",
-            "RW-9",
+            "ABC-9",
             "--progress",
             "wiring the CLI",
             "--next-step",
@@ -1103,7 +1103,7 @@ def test_handover_write_and_show(tmp_path, monkeypatch):
 
     result = runner.invoke(cli, ["handover", "show"])
     assert result.exit_code == 0
-    assert "RW-9" in result.output
+    assert "ABC-9" in result.output
     assert "waiting on x" in result.output
 
 
@@ -1222,7 +1222,7 @@ def test_stop_accepts_explicit_ticket(tmp_path, monkeypatch):
 
     runner = CliRunner()
     result = runner.invoke(
-        cli, ["stop", "--worker", "alpha", "--ticket", "RW-9", "--reason", "eod"]
+        cli, ["stop", "--worker", "alpha", "--ticket", "ABC-9", "--reason", "eod"]
     )
     assert result.exit_code == 0
     assert "stopped" in result.output
@@ -1237,7 +1237,7 @@ def _rite_project_with_backend(tmp_path):
     (rite_dir / "brief.yaml").write_text("project:\n  name: t\n  role: owner\n")
     (rite_dir / "config.yaml").write_text(
         "ticket_backend:\n  type: jira\n  site: test.atlassian.net\n"
-        "  projects: {workers: RW, board: SCRUM}\n  credential: ''\n"
+        "  projects: {workers: ABC, board: XYZ}\n  credential: ''\n"
     )
     return tmp_path
 
@@ -1272,15 +1272,15 @@ def test_board_create_routes_to_backend(mock_create, tmp_path, monkeypatch):
     monkeypatch.chdir(root)
     backend = mock_create.return_value
     backend.create.return_value = Ticket(
-        id="RW-1", title="Fix the bug", url="https://x/RW-1"
+        id="ABC-1", title="Fix the bug", url="https://x/ABC-1"
     )
 
     runner = CliRunner()
     result = runner.invoke(cli, ["board", "create", "Fix the bug"])
     assert result.exit_code == 0
-    assert "RW-1" in result.output
+    assert "ABC-1" in result.output
     backend.create.assert_called_once_with("Fix the bug", description="", labels=[])
-    # default role is "workers" — the RW board, per the sequencing override
+    # default role is "workers" — the ABC board, per the sequencing override
     assert mock_create.call_args.kwargs["board_role"] == "workers"
 
 
@@ -1292,7 +1292,7 @@ def test_board_link_reports_backend_error(mock_create, tmp_path, monkeypatch):
     backend.link.return_value = BackendError("no link support")
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["board", "link", "RW-1", "SCRUM-1"])
+    result = runner.invoke(cli, ["board", "link", "ABC-1", "XYZ-1"])
     assert result.exit_code != 0
     assert "no link support" in result.output
 
@@ -1307,9 +1307,9 @@ def test_board_link_routes_to_board_role_by_default_workers(
     backend.link.return_value = None
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["board", "link", "RW-1", "SCRUM-1"])
+    result = runner.invoke(cli, ["board", "link", "ABC-1", "XYZ-1"])
     assert result.exit_code == 0
-    backend.link.assert_called_once_with("RW-1", "SCRUM-1", "Blocks")
+    backend.link.assert_called_once_with("ABC-1", "XYZ-1", "Blocks")
 
 
 @patch("rite_ai.tickets.create_backend")
@@ -1320,9 +1320,9 @@ def test_board_move(mock_create, tmp_path, monkeypatch):
     backend.move.return_value = None
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["board", "move", "RW-1", "In Progress"])
+    result = runner.invoke(cli, ["board", "move", "ABC-1", "In Progress"])
     assert result.exit_code == 0
-    backend.move.assert_called_once_with("RW-1", "In Progress")
+    backend.move.assert_called_once_with("ABC-1", "In Progress")
 
 
 @patch("rite_ai.tickets.create_backend")
@@ -1330,12 +1330,12 @@ def test_board_list(mock_create, tmp_path, monkeypatch):
     root = _rite_project_with_backend(tmp_path)
     monkeypatch.chdir(root)
     backend = mock_create.return_value
-    backend.list_tickets.return_value = [Ticket(id="RW-1", title="Fix the bug")]
+    backend.list_tickets.return_value = [Ticket(id="ABC-1", title="Fix the bug")]
 
     runner = CliRunner()
     result = runner.invoke(cli, ["board", "list", "--status", "In Progress"])
     assert result.exit_code == 0
-    assert "RW-1" in result.output
+    assert "ABC-1" in result.output
     filters = backend.list_tickets.call_args[0][0]
     assert filters.status == "In Progress"
 
@@ -1345,12 +1345,12 @@ def test_board_query(mock_create, tmp_path, monkeypatch):
     root = _rite_project_with_backend(tmp_path)
     monkeypatch.chdir(root)
     backend = mock_create.return_value
-    backend.query.return_value = [Ticket(id="RW-1", title="Fix the bug")]
+    backend.query.return_value = [Ticket(id="ABC-1", title="Fix the bug")]
 
     runner = CliRunner()
     result = runner.invoke(cli, ["board", "query", "labels = scheduled"])
     assert result.exit_code == 0
-    assert "RW-1" in result.output
+    assert "ABC-1" in result.output
     backend.query.assert_called_once_with("labels = scheduled")
 
 
@@ -1362,22 +1362,22 @@ def test_board_label(mock_create, tmp_path, monkeypatch):
     backend.label.return_value = None
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["board", "label", "RW-1", "alpha", "scheduled"])
+    result = runner.invoke(cli, ["board", "label", "ABC-1", "alpha", "scheduled"])
     assert result.exit_code == 0
-    backend.label.assert_called_once_with("RW-1", ["alpha", "scheduled"], remove=[])
+    backend.label.assert_called_once_with("ABC-1", ["alpha", "scheduled"], remove=[])
 
 
 @patch("rite_ai.tickets.create_backend")
 def test_board_create_role_board_routes_to_board_project(
     mock_create, tmp_path, monkeypatch
 ):
-    """The `--role` flag is what the sequencing override's SCRUM-linking
+    """The `--role` flag is what the sequencing override's board-linking
     scope depends on — confirm it actually reaches `create_backend`, not
     just that the default (`workers`) is passed."""
     root = _rite_project_with_backend(tmp_path)
     monkeypatch.chdir(root)
     backend = mock_create.return_value
-    backend.create.return_value = Ticket(id="SCRUM-1", title="New feature")
+    backend.create.return_value = Ticket(id="XYZ-1", title="New feature")
 
     runner = CliRunner()
     result = runner.invoke(cli, ["board", "create", "New feature", "--role", "board"])
@@ -1493,7 +1493,7 @@ def test_heartbeat_clears_the_stall(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
     runner = CliRunner()
-    beat = runner.invoke(cli, ["heartbeat", "--worker", "alpha", "--ticket", "RW-12"])
+    beat = runner.invoke(cli, ["heartbeat", "--worker", "alpha", "--ticket", "ABC-12"])
     assert beat.exit_code == 0
     assert "alpha" in beat.output
 
@@ -1603,9 +1603,9 @@ def test_board_assign_reaches_the_backend(mock_create, tmp_path, monkeypatch):
     backend.assign.return_value = None
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["board", "assign", "RW-1", "alpha"])
+    result = runner.invoke(cli, ["board", "assign", "ABC-1", "alpha"])
     assert result.exit_code == 0, result.output
-    backend.assign.assert_called_once_with("RW-1", "alpha")
+    backend.assign.assert_called_once_with("ABC-1", "alpha")
 
 
 def test_release_history_reads_back_the_force_release_audit(tmp_path, monkeypatch):

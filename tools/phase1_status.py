@@ -1047,7 +1047,7 @@ ITEMS: list[Item] = [
         "D41", "sandbox", EXTERNAL, "A Worker can push/PR/merge from inside its sandbox"
     ),
     Item("D42", "sandbox", EXTERNAL, "An over-scoped token is refused or flagged"),
-    Item("D43", "(dogfood)", HUMAN, "Bentora configured as a rite project"),
+    Item("D43", "(dogfood)", HUMAN, "A second codebase configured as a rite project"),
 ]
 
 

@@ -57,10 +57,10 @@ STATUS_CLONED = "cloned"
 # of them printed "ready: up to date".
 #
 # The one that costs someone their afternoon is BRANCH_CREATED. `rite
-# prepare --worker alpha --branch feature/RW-12` and the same command with
+# prepare --worker alpha --branch feature/ABC-12` and the same command with
 # a typo'd ticket id both reported
 #
-#     ✓ backend @ feature/RW-12 — ready: up to date
+#     ✓ backend @ feature/ABC-12 — ready: up to date
 #
 # — one of them having checked out the branch with your work on it, the
 # other having just created an empty branch off `main`. "up to date" is

@@ -19,7 +19,7 @@ blocked** — an open blocker in its own handover snapshot.
 ⚠ **The third check exists because the first two could not see the
 commonest real failure.** Measured 2026-09-11 against a live sandboxed
 worker: it heartbeated on schedule and wrote
-`--blocker "QUESTION: should RT-9 drop the legacy column or keep it
+`--blocker "QUESTION: should DEF-9 drop the legacy column or keep it
 nullable?"`, and `rite watchdog` answered `ok — nothing needs attention`
 with exit 0. The stall check only sees silence, and the outbox check only
 sees what `scheduler-tick` enqueues — nothing a Worker writes ever

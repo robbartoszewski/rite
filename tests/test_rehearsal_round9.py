@@ -1,6 +1,6 @@
 """The out-of-scope rule, and the gates that keep it true.
 
-Robert's rule: work found while doing a ticket, that is not that ticket,
+The rule: work found while doing a ticket, that is not that ticket,
 becomes a ticket at the moment it is found — and if the original cannot be
 finished without it, the original is recorded as blocked by it.
 
@@ -119,7 +119,8 @@ class TestTheDefectClassesCountIsCountable:
         both = [
             title.split(".")[0]
             for title, body in self._classes()
-            if re.search(r"Bentora", body) and re.search(r"\brite\b|`rite", body)
+            if re.search(r"second codebase", body)
+            and re.search(r"\brite\b|`rite", body)
         ]
         stated = re.search(r"(\w+) of the ten have members both", self._document())
         assert stated, "the document no longer states the cross-project count"

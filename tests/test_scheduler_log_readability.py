@@ -176,7 +176,7 @@ class TestStallAgeReadsAsWords:
                 {
                     "worker": "alpha",
                     "timestamp": time.time() - age_seconds,
-                    "ticket": "RT-42",
+                    "ticket": "DEF-42",
                 }
             )
         )

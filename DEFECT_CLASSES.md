@@ -1,6 +1,7 @@
 # Defect classes
 
-Seven rehearsal rounds against this tool, plus the Bentora work alongside it,
+Seven rehearsal rounds against this tool, plus work on a second, unrelated codebase
+alongside it,
 produced roughly forty defects. Counting them is not useful. What is useful is
 that they fall into ten classes, most of which recurred — and that for each
 class there is a question with a real answer: **what would a new instance have
@@ -17,7 +18,7 @@ Retiring a line in favour of a gate means reading the gate.
 **How to use this.** Reviewing a change, read the class names. They are
 phrased as the shape of the mistake rather than the name of a subsystem,
 because the shapes travel: three of the ten have members both in rite and in
-Bentora, written by different people who had not read each other's code.
+that second codebase, written by different people who had not read each other's code.
 
 **The last section is the list that matters.** It is the set of classes held
 only by someone noticing, which is to say the prediction of what comes back.
@@ -33,7 +34,7 @@ session that went looking for it, including the ones that went looking for it
 A check, gate, probe or harness runs, finds nothing, and reports clean —
 having never been in a position to find anything.
 
-**Members.** Bentora: a regex for ANSI escapes that never matched, so the scan
+**Members.** The second codebase: a regex for ANSI escapes that never matched, so the scan
 it drove was always clean; a mutation harness pointed at a database that had
 already been migrated, so every mutation "passed"; a test fixture whose data
 was rolled back before the assertions ran; a scan harness reporting clean on
@@ -227,7 +228,7 @@ resolutions, not the class.
 A missing input resolves to something plausible, and the output passes every
 check made by eye.
 
-**Members.** Bentora: an absent plural form quietly rendering the singular; an
+**Members.** The second codebase: an absent plural form quietly rendering the singular; an
 undefined token resolving to a valid-looking value; English text rendering
 through a Polish fallback locale — output that looks like a translation and is
 not. A migration chain run forward from today's schema and therefore run from
@@ -239,7 +240,7 @@ sits in the index looking exactly like a good snapshot.
 checklist's "missing or undefined input fails loudly" line.
 
 **What still gets through.** The whole class, in rite. This is the class with
-the fewest rite members and the most Bentora ones, which is worth reading as
+the fewest rite members and the most second-codebase ones, which is worth reading as
 "rite has not yet built the surface where this bites" rather than as immunity
 — rite's templating and config defaulting are the places to expect it.
 
@@ -249,7 +250,7 @@ the fewest rite members and the most Bentora ones, which is worth reading as
 
 The facts are right and the sentence still leads the reader somewhere false.
 
-**Members.** `rite prepare --branch feature/RW-12` printing `ready: up to
+**Members.** `rite prepare --branch feature/ABC-12` printing `ready: up to
 date` whether it resumed the branch carrying your commits or created an empty
 one off `main` because you mistyped the ticket id. `rite doctor` eliding a
 version string inside an open bracket, so the truncation read as part of the
@@ -272,7 +273,7 @@ review checklist's "Verification" section is written to induce.
 Every component is complete, every ticket is closed, and the thing that
 joins them was nobody's definition of done.
 
-**Members.** Bentora: `chat#14`'s second bullet, which fell out of every
+**Members.** The second codebase: `chat#14`'s second bullet, which fell out of every
 ticket's definition of done during other work and ended up tracked by nobody
 — found only because someone went looking for it. rite: the
 `collect_status` → `_aggregate_line` seam, which is the one the commit under

@@ -138,7 +138,7 @@ class TestOnlyConfiguredBoardsAreQueried:
     def test_a_role_with_no_project_key_is_not_asked_about(self, tmp_path: Path):
         root = _project(
             tmp_path,
-            '  type: jira\n  site: "x"\n  projects:\n    workers: RW\n    board: ""\n',
+            '  type: jira\n  site: "x"\n  projects:\n    workers: ABC\n    board: ""\n',
         )
         with patch("rite_ai.tickets.create_backend_from_config") as mk:
             mk.return_value.list_tickets.return_value = TicketPage([])
@@ -212,7 +212,7 @@ class TestNotQueriedSaysWhichKindOfNotQueried:
     refused". The third — "I never got far enough to ask", because
     `collect_status` returned early — rendered as the FIRST, telling the
     user they had passed `--no-board` when they had passed nothing. Found
-    by running the real CLI against the live `BEN` project, whose
+    by running the real CLI against a live JIRA project, whose
     `brief.yaml` is missing; the suite was green.
     """
 

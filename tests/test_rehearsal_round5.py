@@ -77,8 +77,8 @@ class TestRemovingAWorkerDoesNotDestroyItsWork:
     """`remove_worker` was an unconditional `shutil.rmtree`.
 
     Measured on the scenario the mechanism exists for: a worker was
-    SIGKILLed between claim and commit, holding `RT-1`, leaving a modified
-    `README.md` and a new `src/scoring.ts` on `feature/RT-1`. The Manager
+    SIGKILLed between claim and commit, holding `DEF-1`, leaving a modified
+    `README.md` and a new `src/scoring.ts` on `feature/DEF-1`. The Manager
     did the natural thing and retired it:
 
         $ rite remove worker w1
@@ -101,7 +101,7 @@ class TestRemovingAWorkerDoesNotDestroyItsWork:
     def test_uncommitted_work_is_not_deleted(self, tmp_path: Path):
         root = _project(tmp_path)
         checkout = _worker_checkout(root, _origin(tmp_path))
-        (checkout / "README.md").write_text("reviewer\n# RT-1: partial\n")
+        (checkout / "README.md").write_text("reviewer\n# DEF-1: partial\n")
         (checkout / "scoring.ts").write_text("export const scoring = 'wip';\n")
 
         result = remove_worker(root, "w1")
@@ -109,7 +109,7 @@ class TestRemovingAWorkerDoesNotDestroyItsWork:
         assert (checkout / "scoring.ts").is_file(), (
             "deleted a file that existed nowhere else"
         )
-        assert "# RT-1: partial" in (checkout / "README.md").read_text()
+        assert "# DEF-1: partial" in (checkout / "README.md").read_text()
         assert not result.ok, "and reported success while doing it"
         assert result.unsaved, "refused without saying what was at risk"
 
@@ -130,7 +130,7 @@ class TestRemovingAWorkerDoesNotDestroyItsWork:
         root = _project(tmp_path)
         checkout = _worker_checkout(root, _origin(tmp_path))
         write(checkout, "scoring.ts", "done\n")
-        commit_all(checkout, "RT-1: migrate scoring call sites")
+        commit_all(checkout, "DEF-1: migrate scoring call sites")
         assert (
             subprocess.run(
                 ["git", "status", "--porcelain"],
@@ -151,7 +151,7 @@ class TestRemovingAWorkerDoesNotDestroyItsWork:
         root = _project(tmp_path)
         checkout = _worker_checkout(root, _origin(tmp_path))
         subprocess.run(
-            ["git", "checkout", "-q", "-b", "feature/RT-1"], cwd=checkout, check=True
+            ["git", "checkout", "-q", "-b", "feature/DEF-1"], cwd=checkout, check=True
         )
         (checkout / "scoring.ts").write_text("new work\n")
 
@@ -160,7 +160,7 @@ class TestRemovingAWorkerDoesNotDestroyItsWork:
 
         assert result.exit_code == 1
         assert "scoring.ts" in result.output, "does not say what would be lost"
-        assert "feature/RT-1" in result.output, "does not say which branch"
+        assert "feature/DEF-1" in result.output, "does not say which branch"
         assert "--force" in result.output, "offers no way through"
 
     def test_force_still_removes(self, tmp_path: Path):
@@ -238,9 +238,9 @@ class TestDoctorLooksAtTheCheckoutsWorkHappensIn:
         )
         checkout = _worker_checkout(root, origin)
         subprocess.run(
-            ["git", "checkout", "-q", "-b", "feature/RT-1"], cwd=checkout, check=True
+            ["git", "checkout", "-q", "-b", "feature/DEF-1"], cwd=checkout, check=True
         )
-        (checkout / "README.md").write_text("reviewer\n# RT-1: partial\n")
+        (checkout / "README.md").write_text("reviewer\n# DEF-1: partial\n")
         (checkout / "scoring.ts").write_text("export const scoring = 'wip';\n")
         return root
 

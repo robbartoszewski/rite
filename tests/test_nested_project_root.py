@@ -16,8 +16,8 @@ nothing was ever shared.
 Every rite project ships this hazard, because `scaffold.AUTHORED_CONFIG`
 re-includes nine paths under `.rite/` in the `.gitignore` that `rite init`
 writes — so a clone of any rite project carries a tracked `.rite/` with it.
-Phase 1's own definition of done includes configuring Bentora as a rite
-project, which would have hit this identically.
+Phase 1's own definition of done includes configuring a real, separate
+    codebase as a rite project, which would have hit this identically.
 
 Asserted as a property against real directories, in the idiom of
 `TestTheSuiteDoesNotWriteIntoThisRepository`: build the shape and ask what
@@ -133,7 +133,8 @@ class TestDoctorSaysSoWhenAModuleIsItselfARiteProject:
     `rite init` writes. The walk finds the inner marker first and is right to.
 
     Only `RITE_PROJECT_ROOT` answers it, and nothing announced that. Phase
-    1's definition of done includes configuring Bentora as a rite project, so
+    1's definition of done includes configuring a real, separate
+    codebase as a rite project, so
     this is the configuration a real run walks into — and its symptom is
     silence: a private ledger, zero collisions, a flawless-looking run.
     """

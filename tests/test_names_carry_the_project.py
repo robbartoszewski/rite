@@ -54,12 +54,12 @@ class TestTheNameIsReadable:
         """Uniqueness was never the problem — the pool name was already
         unique. It embedded the resolved PATH, so the project name a human
         scans for never appeared."""
-        root = _project(tmp_path, "bentora")
-        assert "bentora" in sandbox_name("w1", root)
-        assert "bentora" in slot_name(root, 0)
+        root = _project(tmp_path, "acme")
+        assert "acme" in sandbox_name("w1", root)
+        assert "acme" in slot_name(root, 0)
 
     def test_the_slug_does_not_leak_the_whole_path(self, tmp_path):
-        root = _project(tmp_path, "bentora")
+        root = _project(tmp_path, "acme")
         assert str(root) not in slot_name(root, 0)
 
     def test_a_long_project_name_is_bounded(self, tmp_path):
@@ -67,7 +67,7 @@ class TestTheNameIsReadable:
         assert len(project_slug(root)) <= 24 + 1 + 6
 
     def test_an_awkward_name_still_produces_a_usable_slug(self, tmp_path):
-        for raw in ("Bentora Lex!", "wygrane/sprawy", "  ", "..."):
+        for raw in ("Acme Lex!", "wygrane/sprawy", "  ", "..."):
             root = tmp_path / raw.replace("/", "_") or tmp_path / "x"
             (root / ".rite").mkdir(parents=True, exist_ok=True)
             (root / ".rite" / "brief.yaml").write_text(
@@ -81,7 +81,7 @@ class TestRiteManagedSandboxesAreStillIdentifiable:
     def test_the_leading_rite_prefix_survives(self, tmp_path):
         """`count_active_sandboxes` filters the worker cap on `rite-`, so
         losing that prefix would silently switch the cap off."""
-        root = _project(tmp_path, "bentora")
+        root = _project(tmp_path, "acme")
         assert sandbox_name("w1", root).startswith("rite-")
         assert slot_name(root, 0).startswith("rite-pool-")
 
@@ -96,14 +96,14 @@ class TestUpgradeDoesNotStrandARunningSandbox:
         """A sandbox started before §8.10 must not appear to have vanished."""
         from rite_ai import sandbox as sb
 
-        root = _project(tmp_path, "bentora")
+        root = _project(tmp_path, "acme")
         monkeypatch.setattr(sb, "_list_sandbox_names", lambda: {"rite-w1"})
         assert sb.existing_sandbox_name("w1", root) == "rite-w1"
 
     def test_the_scoped_name_wins_when_both_exist(self, tmp_path, monkeypatch):
         from rite_ai import sandbox as sb
 
-        root = _project(tmp_path, "bentora")
+        root = _project(tmp_path, "acme")
         scoped = sb.sandbox_name("w1", root)
         monkeypatch.setattr(sb, "_list_sandbox_names", lambda: {"rite-w1", scoped})
         assert sb.existing_sandbox_name("w1", root) == scoped
@@ -113,7 +113,7 @@ class TestUpgradeDoesNotStrandARunningSandbox:
     ):
         from rite_ai import sandbox as sb
 
-        root = _project(tmp_path, "bentora")
+        root = _project(tmp_path, "acme")
         monkeypatch.setattr(sb, "_list_sandbox_names", lambda: set())
         assert sb.existing_sandbox_name("w1", root) == sb.sandbox_name("w1", root)
 
@@ -124,6 +124,6 @@ class TestUpgradeDoesNotStrandARunningSandbox:
         exists" — that would send a destroy at the ambiguous name."""
         from rite_ai import sandbox as sb
 
-        root = _project(tmp_path, "bentora")
+        root = _project(tmp_path, "acme")
         monkeypatch.setattr(sb, "_yoloai_binary", lambda: None)
         assert sb.existing_sandbox_name("w1", root) == sb.sandbox_name("w1", root)

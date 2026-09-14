@@ -17,7 +17,7 @@ def _setup(tmp_path: Path, ticket_backend_type: str = "none") -> Path:
     (rite_dir / "modules.yaml").write_text("modules: {}\n")
     (rite_dir / "config.yaml").write_text(
         f"ticket_backend:\n  type: {ticket_backend_type}\n  site: test.atlassian.net\n"
-        "  projects: {workers: RW, board: SCRUM}\n  credential: ''\n"
+        "  projects: {workers: ABC, board: XYZ}\n  credential: ''\n"
         "expertise: {}\npublish_gate:\n  scan_patterns: []\n"
         "  gitleaks_config: .rite/gitleaks.toml\n"
         "heartbeat:\n  interval_minutes: 10\n"
@@ -55,11 +55,11 @@ class TestStart:
         from rite_ai.handover import write_snapshot
 
         write_snapshot(
-            root, ticket="RW-9", next_step="add tests", blockers=["waiting on x"]
+            root, ticket="ABC-9", next_step="add tests", blockers=["waiting on x"]
         )
         result = start(root)
         assert result.ok
-        assert any("RW-9" in a for a in result.actions)
+        assert any("ABC-9" in a for a in result.actions)
         assert any("waiting on x" in a for a in result.actions)
 
     def test_missing_snapshot_is_not_an_error(self, tmp_path: Path):
@@ -92,7 +92,7 @@ class TestStop:
     def test_stop_writes_an_outbox_entry_when_there_is_a_ticket(self, tmp_path: Path):
         root = _setup(tmp_path)
         ClaimsLedger(root / ".rite" / "claims.json").claim(
-            ["src/app.py"], "alpha", "RW-3"
+            ["src/app.py"], "alpha", "ABC-3"
         )
         stop(root, worker="alpha", reason="done for today")
         msgs = list_pending(root)
@@ -130,7 +130,7 @@ class TestPerformHandover:
         root = _setup(tmp_path)
         claims_path = root / ".rite" / "claims.json"
         ledger = ClaimsLedger(claims_path)
-        ledger.claim(["src/app.py"], "alpha", "RW-3")
+        ledger.claim(["src/app.py"], "alpha", "ABC-3")
 
         perform_handover(root, worker="alpha", reason="stall detected")
 
@@ -138,7 +138,7 @@ class TestPerformHandover:
 
         snapshot = read_snapshot(root)
         assert snapshot is not None
-        assert snapshot.ticket == "RW-3"
+        assert snapshot.ticket == "ABC-3"
         assert "stall detected" in snapshot.progress
 
     def test_releases_and_enqueues(self, tmp_path: Path):
@@ -196,17 +196,17 @@ class TestPerformHandoverReachesTicketBackend:
         backend.comment.return_value = None
         backend.label.return_value = None
 
-        result = perform_handover(root, worker="alpha", reason="stall", ticket="RW-1")
+        result = perform_handover(root, worker="alpha", reason="stall", ticket="ABC-1")
 
         assert result.ticket_commented is True
         assert result.outbox_path == ""
         assert list_pending(root) == []
         backend.comment.assert_called_once()
-        assert backend.comment.call_args[0][0] == "RW-1"
+        assert backend.comment.call_args[0][0] == "ABC-1"
         # `remove` carries the departing worker: returning a ticket to
         # the pool is add-`scheduled` AND drop-`<worker>`, not just the
         # first half. See the regression test below.
-        backend.label.assert_called_once_with("RW-1", ["scheduled"], remove=["alpha"])
+        backend.label.assert_called_once_with("ABC-1", ["scheduled"], remove=["alpha"])
 
     @patch("rite_ai.lifecycle.commands.create_backend_from_config")
     def test_comment_success_with_label_failure_does_not_requeue_the_comment(
@@ -222,7 +222,7 @@ class TestPerformHandoverReachesTicketBackend:
         backend.comment.return_value = None
         backend.label.return_value = BackendError("label does not exist on project")
 
-        result = perform_handover(root, worker="alpha", reason="stall", ticket="RW-1")
+        result = perform_handover(root, worker="alpha", reason="stall", ticket="ABC-1")
 
         assert result.ticket_commented is True
         assert result.outbox_path == ""
@@ -233,7 +233,7 @@ class TestPerformHandoverReachesTicketBackend:
         assert len(msgs) == 1
         assert msgs[0].kind == "handover-label"
         assert msgs[0].payload == {
-            "ticket": "RW-1",
+            "ticket": "ABC-1",
             "labels": ["scheduled"],
             "remove": ["alpha"],
         }
@@ -246,13 +246,13 @@ class TestPerformHandoverReachesTicketBackend:
         backend = mock_create.return_value
         backend.comment.return_value = BackendError("JIRA unreachable")
 
-        result = perform_handover(root, worker="alpha", reason="stall", ticket="RW-1")
+        result = perform_handover(root, worker="alpha", reason="stall", ticket="ABC-1")
 
         assert result.ticket_commented is False
         assert result.outbox_path
         msgs = list_pending(root)
         assert len(msgs) == 1
-        assert msgs[0].payload["ticket"] == "RW-1"
+        assert msgs[0].payload["ticket"] == "ABC-1"
 
     def test_no_ticket_and_no_claims_queues_nothing(self, tmp_path: Path):
         """Nothing to comment on means nothing to queue — see
@@ -277,7 +277,7 @@ class TestPerformHandoverReachesTicketBackend:
         root = _setup(tmp_path, ticket_backend_type="jira")
         claims_path = root / ".rite" / "claims.json"
         ledger = ClaimsLedger(claims_path)
-        ledger.claim(["src/app.py"], "alpha", "RW-9")
+        ledger.claim(["src/app.py"], "alpha", "ABC-9")
 
         backend = mock_create.return_value
         backend.comment.return_value = None
@@ -287,7 +287,7 @@ class TestPerformHandoverReachesTicketBackend:
 
         assert result.ticket_commented is True
         backend.comment.assert_called_once()
-        assert backend.comment.call_args[0][0] == "RW-9"
+        assert backend.comment.call_args[0][0] == "ABC-9"
 
     @patch("rite_ai.lifecycle.commands.create_backend_from_config")
     def test_explicit_ticket_argument_wins_over_claims(
@@ -296,22 +296,22 @@ class TestPerformHandoverReachesTicketBackend:
         root = _setup(tmp_path, ticket_backend_type="jira")
         claims_path = root / ".rite" / "claims.json"
         ledger = ClaimsLedger(claims_path)
-        ledger.claim(["src/app.py"], "alpha", "RW-9")
+        ledger.claim(["src/app.py"], "alpha", "ABC-9")
 
         backend = mock_create.return_value
         backend.comment.return_value = None
         backend.label.return_value = None
 
         result = perform_handover(
-            root, worker="alpha", reason="stall", ticket="RW-EXPLICIT"
+            root, worker="alpha", reason="stall", ticket="ABC-EXPLICIT"
         )
 
         assert result.ticket_commented is True
-        assert backend.comment.call_args[0][0] == "RW-EXPLICIT"
+        assert backend.comment.call_args[0][0] == "ABC-EXPLICIT"
 
     def test_falls_back_to_outbox_when_no_backend_configured(self, tmp_path: Path):
         root = _setup(tmp_path, ticket_backend_type="none")
-        result = perform_handover(root, worker="alpha", reason="stall", ticket="RW-1")
+        result = perform_handover(root, worker="alpha", reason="stall", ticket="ABC-1")
         assert result.ticket_commented is False
         assert result.outbox_path
         assert len(list_pending(root)) == 1
@@ -331,7 +331,7 @@ class TestStartFlushesOutbox:
         from rite_ai.reporting.outbox import enqueue
 
         enqueue(
-            root, "handover", {"worker": "alpha", "reason": "stall", "ticket": "RW-1"}
+            root, "handover", {"worker": "alpha", "reason": "stall", "ticket": "ABC-1"}
         )
 
         result = start(root)
@@ -359,7 +359,7 @@ class TestStartFlushesOutbox:
         from rite_ai.reporting.outbox import enqueue
 
         enqueue(
-            root, "handover", {"worker": "alpha", "reason": "stall", "ticket": "RW-1"}
+            root, "handover", {"worker": "alpha", "reason": "stall", "ticket": "ABC-1"}
         )
         (root / ".rite" / "pool.json").write_text('"not an object"')
 
@@ -382,7 +382,7 @@ class TestStartFlushesOutbox:
         from rite_ai.reporting.outbox import enqueue
 
         enqueue(
-            root, "handover", {"worker": "alpha", "reason": "stall", "ticket": "RW-1"}
+            root, "handover", {"worker": "alpha", "reason": "stall", "ticket": "ABC-1"}
         )
 
         result = start(root)

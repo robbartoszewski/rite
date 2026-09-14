@@ -456,7 +456,7 @@ def sandbox_name(worker: str, root: str | os.PathLike[str] | None = None) -> str
     `rite sandbox status <worker>` and yoloAI's own `ls` agree on what to
     call it.
 
-    **Carries the project (§8.10).** `rite-bentora-3f9a2c-w1`, not
+    **Carries the project (§8.10).** `rite-acme-3f9a2c-w1`, not
     `rite-w1`. Every project names its workers `w1`, `w2`, `w3`, so on a
     machine running two projects — which is what rite is for — the old
     name collided outright: `yoloai ls` showed `rite-w1` twice and

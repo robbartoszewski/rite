@@ -326,9 +326,9 @@ class TestPrepareSaysHowItGotOntoTheBranch:
     existing local branch, one that exists on origin, and a brand-new one —
     computed all four and returned `None` for every one of them. So
 
-        rite prepare --worker alpha --branch feature/RW-12
+        rite prepare --worker alpha --branch feature/ABC-12
 
-    printed `✓ backend @ feature/RW-12 — ready: up to date` whether it had
+    printed `✓ backend @ feature/ABC-12 — ready: up to date` whether it had
     resumed the branch carrying your commits or created an empty one off
     `main` because you mistyped the ticket id. "up to date" is true of both
     and distinguishes neither, in the command whose whole job is SPEC
@@ -364,7 +364,7 @@ class TestPrepareSaysHowItGotOntoTheBranch:
         module = self._module(tmp_path)
         self._prepare(worker_dir, module, tmp_path)  # first clone
 
-        created = self._prepare(worker_dir, module, tmp_path, branch="feature/RW-12")
+        created = self._prepare(worker_dir, module, tmp_path, branch="feature/ABC-12")
 
         assert created.ok, created.message
         assert created.message != "up to date", (
@@ -378,10 +378,10 @@ class TestPrepareSaysHowItGotOntoTheBranch:
         source, worker_dir = self._module_repo(tmp_path)
         module = self._module(tmp_path)
         self._prepare(worker_dir, module, tmp_path)
-        created = self._prepare(worker_dir, module, tmp_path, branch="feature/RW-12")
+        created = self._prepare(worker_dir, module, tmp_path, branch="feature/ABC-12")
         self._prepare(worker_dir, module, tmp_path, branch="main")
 
-        resumed = self._prepare(worker_dir, module, tmp_path, branch="feature/RW-12")
+        resumed = self._prepare(worker_dir, module, tmp_path, branch="feature/ABC-12")
 
         assert resumed.ok, resumed.message
         assert resumed.message != created.message, (
@@ -395,9 +395,9 @@ class TestPrepareSaysHowItGotOntoTheBranch:
         source, worker_dir = self._module_repo(tmp_path)
         module = self._module(tmp_path)
         self._prepare(worker_dir, module, tmp_path)
-        subprocess.run(["git", "branch", "team/RW-77", "main"], cwd=source, check=True)
+        subprocess.run(["git", "branch", "team/ABC-77", "main"], cwd=source, check=True)
 
-        tracked = self._prepare(worker_dir, module, tmp_path, branch="team/RW-77")
+        tracked = self._prepare(worker_dir, module, tmp_path, branch="team/ABC-77")
 
         assert tracked.ok, tracked.message
         assert "origin" in tracked.message, (

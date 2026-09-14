@@ -179,7 +179,7 @@ class JiraBackend(TicketBackend):
 
         `read` and `list` already do this; every WRITE path did not, and
         measured against the real API that is the same defect twice. With
-        a bad token JIRA answers `PUT /issue/RT-3` and every other write
+        a bad token JIRA answers `PUT /issue/DEF-3` and every other write
         with `404 Issue does not exist or you do not have permission to
         see it` (and `POST /issue` with a 400 blaming the project) — so
         `rite board move`, `label`, `assign`, `link`, `comment` and
@@ -396,7 +396,7 @@ class JiraBackend(TicketBackend):
 
         `assign()` used to send whatever string it was given straight to
         `PUT /issue/KEY/assignee`, and the JIRA API takes ONLY an
-        accountId. So `rite board assign RW-12 alpha` — the literal
+        accountId. So `rite board assign ABC-12 alpha` — the literal
         example in the command's own `--help` — answered "Specified user
         does not exist or you do not have required permissions" against
         every real instance. Nothing in a mocked suite notices, because a
@@ -523,9 +523,9 @@ class JiraBackend(TicketBackend):
         The payload is `inwardIssue: target_id, outwardIssue: ticket_id`,
         which looks backwards until you measure it. Against the real API,
         `POST /issueLink` reads as **inwardIssue &lt;type.outward&gt;
-        outwardIssue**: sending `inwardIssue: RT-3, outwardIssue: RT-4`
-        with type "Blocks" produced "RT-3 blocks RT-4" on RT-3 and "RT-4
-        is blocked by RT-3" on RT-4 — the exact inverse of what the field
+        outwardIssue**: sending `inwardIssue: DEF-3, outwardIssue: DEF-4`
+        with type "Blocks" produced "DEF-3 blocks DEF-4" on DEF-3 and "DEF-4
+        is blocked by DEF-3" on DEF-4 — the exact inverse of what the field
         names suggest and of what rite claimed it had created.
 
         That inversion is invisible to a mocked test: the mock records the

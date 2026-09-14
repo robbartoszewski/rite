@@ -37,7 +37,7 @@ class TestEveryWorkerKeepsItsOwnHandover:
     is called per WORKER. Three workers stopping left one snapshot:
 
         $ rite handover show
-        ticket:     RW-303          <- carol's; alice's and bob's are gone
+        ticket:     ABC-303          <- carol's; alice's and bob's are gone
         progress:   handover: clean shutdown
 
     The record had no `worker` field either, so nothing said whose state it
@@ -48,29 +48,29 @@ class TestEveryWorkerKeepsItsOwnHandover:
     def test_three_workers_handing_over_keep_three_snapshots(self, tmp_path: Path):
         root = _project(tmp_path)
         for worker, ticket in (
-            ("alice", "RW-101"),
-            ("bob", "RW-202"),
-            ("carol", "RW-303"),
+            ("alice", "ABC-101"),
+            ("bob", "ABC-202"),
+            ("carol", "ABC-303"),
         ):
             write_snapshot(root, ticket=ticket, worker=worker)
 
         snapshots = read_snapshots(root)
 
         assert {s.worker for s in snapshots} == {"alice", "bob", "carol"}
-        assert {s.ticket for s in snapshots} == {"RW-101", "RW-202", "RW-303"}
+        assert {s.ticket for s in snapshots} == {"ABC-101", "ABC-202", "ABC-303"}
 
     def test_a_snapshot_records_whose_it_is(self, tmp_path: Path):
         root = _project(tmp_path)
-        write_snapshot(root, ticket="RW-1", worker="alice")
+        write_snapshot(root, ticket="ABC-1", worker="alice")
         assert read_snapshots(root)[0].worker == "alice"
 
     def test_one_workers_write_does_not_erase_another(self, tmp_path: Path):
         root = _project(tmp_path)
-        write_snapshot(root, ticket="RW-1", progress="first", worker="alice")
-        write_snapshot(root, ticket="RW-2", progress="second", worker="bob")
+        write_snapshot(root, ticket="ABC-1", progress="first", worker="alice")
+        write_snapshot(root, ticket="ABC-2", progress="second", worker="bob")
 
         alice = [s for s in read_snapshots(root) if s.worker == "alice"]
-        assert alice and alice[0].ticket == "RW-1", "bob's snapshot overwrote alice's"
+        assert alice and alice[0].ticket == "ABC-1", "bob's snapshot overwrote alice's"
 
     def test_perform_handover_keys_by_the_worker_it_was_called_for(
         self, tmp_path: Path
@@ -78,28 +78,28 @@ class TestEveryWorkerKeepsItsOwnHandover:
         """The real path: `rite stop --worker X` goes through here."""
         root = _project(tmp_path)
         ledger = ClaimsLedger(root / ".rite" / "claims.json")
-        ledger.claim(["src/a.py"], "alice", ticket="RW-101")
-        ledger.claim(["src/b.py"], "bob", ticket="RW-202")
+        ledger.claim(["src/a.py"], "alice", ticket="ABC-101")
+        ledger.claim(["src/b.py"], "bob", ticket="ABC-202")
 
         perform_handover(root, worker="alice", reason="clean shutdown")
         perform_handover(root, worker="bob", reason="clean shutdown")
 
         by_worker = {s.worker: s.ticket for s in read_snapshots(root)}
-        assert by_worker == {"alice": "RW-101", "bob": "RW-202"}
+        assert by_worker == {"alice": "ABC-101", "bob": "ABC-202"}
 
     def test_a_legacy_unkeyed_snapshot_is_still_read(self, tmp_path: Path):
         """An upgrade must not look like the snapshot vanished."""
         root = _project(tmp_path)
         (root / ".rite" / "handover.json").write_text(
-            json.dumps({"ticket": "RW-OLD", "progress": "from an older rite"})
+            json.dumps({"ticket": "ABC-OLD", "progress": "from an older rite"})
         )
         snapshots = read_snapshots(root)
-        assert [s.ticket for s in snapshots] == ["RW-OLD"]
+        assert [s.ticket for s in snapshots] == ["ABC-OLD"]
 
     def test_read_snapshot_still_answers_for_one_session(self, tmp_path: Path):
         root = _project(tmp_path)
-        write_snapshot(root, ticket="RW-1", worker="alice")
-        assert read_snapshot(root).ticket == "RW-1"
+        write_snapshot(root, ticket="ABC-1", worker="alice")
+        assert read_snapshot(root).ticket == "ABC-1"
 
     def test_no_snapshots_is_empty_not_an_error(self, tmp_path: Path):
         assert read_snapshots(_project(tmp_path)) == []
@@ -110,7 +110,7 @@ class TestEveryWorkerKeepsItsOwnHandover:
 
 def _write_one(args: tuple[str, int]) -> int:
     root, index = args
-    write_snapshot(Path(root), ticket=f"RW-{index}", worker=f"w{index}")
+    write_snapshot(Path(root), ticket=f"ABC-{index}", worker=f"w{index}")
     return index
 
 
@@ -163,7 +163,7 @@ class TestConcurrentTicksAtAScheduleBoundary:
             (root / "workers" / w / "worker.yml").write_text(
                 f'worker:\n  name: "{w}"\n  modules: []\n'
             )
-            ledger.claim([f"src/{w}.py"], w, ticket=f"RW-{w}")
+            ledger.claim([f"src/{w}.py"], w, ticket=f"ABC-{w}")
         # The previous tick saw three workers; the schedule now says zero.
         (root / ".rite" / "schedule-state.json").write_text("3")
         return root
@@ -200,15 +200,15 @@ class TestUpgradingFromAnUnkeyedSnapshot:
 
         $ rite handover show          # after upgrading, then `rite stop`
         worker:     legacy
-        ticket:     RW-OLD
+        ticket:     ABC-OLD
         worker:     (unnamed session)
-        ticket:     RW-OLD            <- the superseded file, read again
+        ticket:     ABC-OLD            <- the superseded file, read again
 
     The unkeyed record cannot be told apart from the keyed copy of itself,
     so it is read only while nothing keyed exists.
     """
 
-    def _legacy(self, root: Path, ticket: str = "RW-OLD") -> None:
+    def _legacy(self, root: Path, ticket: str = "ABC-OLD") -> None:
         (root / ".rite" / "handover.json").write_text(
             json.dumps({"ticket": ticket, "progress": "from an older rite"})
         )
@@ -216,12 +216,12 @@ class TestUpgradingFromAnUnkeyedSnapshot:
     def test_a_legacy_snapshot_is_read_when_nothing_keyed_exists(self, tmp_path: Path):
         root = _project(tmp_path)
         self._legacy(root)
-        assert [s.ticket for s in read_snapshots(root)] == ["RW-OLD"]
+        assert [s.ticket for s in read_snapshots(root)] == ["ABC-OLD"]
 
     def test_it_stops_being_read_once_a_keyed_snapshot_exists(self, tmp_path: Path):
         root = _project(tmp_path)
         self._legacy(root)
-        write_snapshot(root, ticket="RW-NEW", worker="legacy")
+        write_snapshot(root, ticket="ABC-NEW", worker="legacy")
 
         snapshots = read_snapshots(root)
 
@@ -234,5 +234,5 @@ class TestUpgradingFromAnUnkeyedSnapshot:
         file is not."""
         root = _project(tmp_path)
         self._legacy(root)
-        write_snapshot(root, ticket="RW-NEW", worker="legacy")
+        write_snapshot(root, ticket="ABC-NEW", worker="legacy")
         assert (root / ".rite" / "handover.json").is_file()

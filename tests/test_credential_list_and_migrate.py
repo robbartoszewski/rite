@@ -262,7 +262,7 @@ class TestStatusDoesNotRepeatTheWholeRemedy:
             "  What this project needs:  rite credential list"
         )
         boards = [
-            BoardState(role=r, project_key="BEN", error=multiline)
+            BoardState(role=r, project_key="XYZ", error=multiline)
             for r in ("board", "workers", "testing")
         ]
 

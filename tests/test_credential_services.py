@@ -113,7 +113,7 @@ class TestSettingByService:
                 cli,
                 ["credential", "set", "jira"],
                 # site, email, token (+confirm), board key
-                input="team.atlassian.net\nsomeone@example.com\nSEKRIT-XYZ\nSEKRIT-XYZ\nBEN\n",
+                input="team.atlassian.net\nsomeone@example.com\nSEKRIT-XYZ\nSEKRIT-XYZ\nABC\n",
             )
         assert result.exit_code == 0, result.output
         # Secrets to the keychain...
@@ -125,7 +125,7 @@ class TestSettingByService:
         # makes the next clone one command instead of two discoveries.
         written = (root / ".rite" / "config.yaml").read_text()
         assert "team.atlassian.net" in written
-        assert "BEN" in written
+        assert "ABC" in written
         assert "SEKRIT-XYZ" not in written, "a secret reached config.yaml"
 
     def test_the_single_key_form_still_works(self, tmp_path, monkeypatch):
@@ -220,7 +220,7 @@ class TestWhatAPersonActuallyTypes:
             result = CliRunner().invoke(
                 cli,
                 ["credential", "set", "JIRA"],
-                input="team.atlassian.net\nme@x.com\nTOK\nTOK\nBEN\n",
+                input="team.atlassian.net\nme@x.com\nTOK\nTOK\nABC\n",
             )
         assert result.exit_code == 0, result.output
         assert set(stored) == {
@@ -277,7 +277,7 @@ class TestSettingAServiceLeavesTheGlobalEntryAlone:
             CliRunner().invoke(
                 cli,
                 ["credential", "set", "jira"],
-                input="team.atlassian.net\nnew@x.com\nTOK\nTOK\nBEN\n",
+                input="team.atlassian.net\nnew@x.com\nTOK\nTOK\nABC\n",
             )
         assert keychain["jira_email"] == "PRE-EXISTING-GLOBAL"
         assert keychain["acme-1a2b3c/jira_email"] == "new@x.com"

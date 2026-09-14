@@ -4,7 +4,7 @@
 rite's internal vocabulary, and required the user to know both that JIRA
 needs two of them and what each is called. The reported failure is the
 direct consequence: someone reaching for their JIRA login typed
-`rite credential set robbartoszewski@gmail.com`, rite stored the ADDRESS
+`rite credential set you@example.com`, rite stored the ADDRESS
 as a key name and printed "stored", and JIRA was still unconfigured.
 
 Taking a SERVICE instead makes that mistake unavailable rather than
@@ -107,7 +107,7 @@ SERVICES: dict[str, Service] = {
             Field("token", "JIRA API token", secret=True, env="JIRA_API_TOKEN"),
             Field(
                 "board",
-                "JIRA project key for the board (e.g. BEN)",
+                "JIRA project key for the board (e.g. XYZ)",
                 secret=False,
                 config_path="ticket_backend.projects.workers",
             ),

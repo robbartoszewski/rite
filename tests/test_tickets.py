@@ -225,11 +225,11 @@ class TestCreateBackendProjectRouting:
         backend = create_backend(
             "jira",
             site="test.atlassian.net",
-            projects={"board": "SCRUM", "workers": "RW", "testing": "TEST"},
+            projects={"board": "XYZ", "workers": "ABC", "testing": "TEST"},
             board_role="workers",
         )
         assert isinstance(backend, JiraBackend)
-        assert backend.config.project_key == "RW"
+        assert backend.config.project_key == "ABC"
 
     @patch("rite_ai.credentials.store.get_scoped")
     def test_projects_dict_board_role_selects_board_project(self, mock_get):
@@ -240,11 +240,11 @@ class TestCreateBackendProjectRouting:
         backend = create_backend(
             "jira",
             site="test.atlassian.net",
-            projects={"board": "SCRUM", "workers": "RW", "testing": "TEST"},
+            projects={"board": "XYZ", "workers": "ABC", "testing": "TEST"},
             board_role="board",
         )
         assert isinstance(backend, JiraBackend)
-        assert backend.config.project_key == "SCRUM"
+        assert backend.config.project_key == "XYZ"
 
     @patch("rite_ai.credentials.store.get_scoped")
     def test_bare_project_key_still_works_without_projects_dict(self, mock_get):
@@ -269,7 +269,7 @@ class TestCreateBackendProjectRouting:
         result = create_backend(
             "jira",
             site="test.atlassian.net",
-            projects={"board": "SCRUM", "workers": "RW"},
+            projects={"board": "XYZ", "workers": "ABC"},
             board_role="testing",
         )
         assert isinstance(result, BackendError)
@@ -321,8 +321,8 @@ class TestCreateBackendFromConfig:
         tb = TicketBackendConfig(
             type="jira",
             site="test.atlassian.net",
-            projects={"workers": "RW", "board": "SCRUM"},
+            projects={"workers": "ABC", "board": "XYZ"},
         )
         backend = create_backend_from_config(tb, board_role="board")
         assert isinstance(backend, JiraBackend)
-        assert backend.config.project_key == "SCRUM"
+        assert backend.config.project_key == "XYZ"

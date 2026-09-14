@@ -54,20 +54,20 @@ class TestCollectStatus:
 
     def test_includes_handover_snapshot(self, tmp_path: Path):
         root = _full_project(tmp_path)
-        write_snapshot(root, ticket="RW-9", next_step="add tests")
+        write_snapshot(root, ticket="ABC-9", next_step="add tests")
         status = collect_status(root)
         assert len(status.handovers) == 1
-        assert status.handovers[0].ticket == "RW-9"
+        assert status.handovers[0].ticket == "ABC-9"
 
     def test_includes_every_workers_snapshot(self, tmp_path: Path):
         """One per worker — collapsing them to the newest is how two of
         three workers' handovers stopped being visible."""
         root = _full_project(tmp_path)
-        write_snapshot(root, ticket="RW-1", worker="alice")
-        write_snapshot(root, ticket="RW-2", worker="bob")
+        write_snapshot(root, ticket="ABC-1", worker="alice")
+        write_snapshot(root, ticket="ABC-2", worker="bob")
         status = collect_status(root)
         assert {s.worker for s in status.handovers} == {"alice", "bob"}
-        assert {s.ticket for s in status.handovers} == {"RW-1", "RW-2"}
+        assert {s.ticket for s in status.handovers} == {"ABC-1", "ABC-2"}
 
     def test_no_handover_snapshot_is_empty_not_an_error(self, tmp_path: Path):
         root = _full_project(tmp_path)

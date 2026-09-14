@@ -90,7 +90,7 @@ def test_make_namespace_is_unique_per_call():
     )
     assert is_valid_namespace(make_namespace("backend"))
     # Names that are not already slug-shaped still produce a valid scope.
-    for raw in ("Bentora Lex!", "  ", "wygrane/sprawy", "A" * 80):
+    for raw in ("Acme Lex!", "  ", "wygrane/sprawy", "A" * 80):
         assert is_valid_namespace(make_namespace(raw)), raw
 
 
@@ -111,7 +111,7 @@ def test_resolution_prefers_project_then_falls_back_to_global(monkeypatch):
 
     monkeypatch.setattr("rite_ai.credentials.store.info", fake_info)
 
-    # Only the global entry exists — the state Robert's machine is in.
+    # Only the global entry exists — the state a machine set up before scoping is in.
     present.add("jira_token")
     r = resolve(KEY, creds)
     assert r.tier == GLOBAL
@@ -319,22 +319,20 @@ class TestAMissingCredentialSaysEnoughToAct:
         result = create_backend(
             "jira",
             site="x.atlassian.net",
-            projects={"workers": "BEN"},
+            projects={"workers": "XYZ"},
             credentials=credentials,
         )
         assert isinstance(result, BackendError)
         return result.message
 
     def test_it_names_the_key_the_accounts_and_the_command(self, monkeypatch):
-        message = self._error(
-            CredentialsConfig(namespace="bentora-7f3a9c21"), monkeypatch
-        )
+        message = self._error(CredentialsConfig(namespace="acme-7f3a9c21"), monkeypatch)
         # WHICH credential.
         assert "jira_token" in message
         # Under WHICH name — both accounts actually consulted. With §10.2
         # the account is no longer the key, so naming only the key sends
         # someone looking for an entry rite never asked for.
-        assert "bentora-7f3a9c21/jira_token" in message
+        assert "acme-7f3a9c21/jira_token" in message
         assert "machine-global" in message
         # The exact command, not a description of one.
         assert "rite credential set jira_token" in message

@@ -89,7 +89,7 @@ can set.
 
 ```bash
 rite board create "Export invoices as CSV" --description "<what /refine drafted>"
-rite board link RW-19 RW-12      # JIRA: RW-19 is blocked by RW-12
+rite board link ABC-19 ABC-12      # JIRA: ABC-19 is blocked by ABC-12
 ```
 
 **4. Implementation** — built
@@ -101,7 +101,7 @@ rite add worker alpha            # creates workers/alpha/
 ```
 
 Open a worker session in `workers/alpha/` and tell it which ticket to work —
-"work RW-12". Its `CLAUDE.md` walks it through the rest: `rite prepare` to
+"work ABC-12". Its `CLAUDE.md` walks it through the rest: `rite prepare` to
 sync its clones, `rite claim` on the paths before touching them, your
 project's own test and lint commands, `/review` (reviewer agents against a
 checklist), a PR, and `rite release` after the merge. Several worker sessions
@@ -128,7 +128,7 @@ not run there. `rite doctor`
 reports a missing Claude login as a problem. Then, per ticket:
 
 ```bash
-rite sandbox start alpha --ticket RW-12     # GitHub Issues: --ticket 42
+rite sandbox start alpha --ticket ABC-12     # GitHub Issues: --ticket 42
                                             # no board: --prompt "<what to do>"
 ```
 
@@ -158,10 +158,10 @@ claimed; then read the PRs.
 ## Example
 
 ```console
-$ rite claim backend/src/billing --worker alpha --ticket RW-12
+$ rite claim backend/src/billing --worker alpha --ticket ABC-12
 claimed 1 path(s) for alpha
 
-$ rite claim backend/src/billing --worker beta --ticket RW-19
+$ rite claim backend/src/billing --worker beta --ticket ABC-19
 claim failed: path contention
   backend/src/billing overlaps backend/src/billing (held by alpha)
 ```
@@ -176,10 +176,10 @@ cd your-project
 rite init
 rite add worker alpha        # a checkout of its own, under workers/alpha/
 
-# What a worker session runs, in order, over ticket RW-12 (step 4 above)
+# What a worker session runs, in order, over ticket ABC-12 (step 4 above)
 rite prepare --worker alpha                            # sync that checkout
-rite claim backend/src --worker alpha --ticket RW-12   # before touching anything
-rite heartbeat --worker alpha --ticket RW-12           # "still alive"
+rite claim backend/src --worker alpha --ticket ABC-12   # before touching anything
+rite heartbeat --worker alpha --ticket ABC-12           # "still alive"
 rite release --worker alpha                            # after the PR merges
 
 rite status                  # what is happening now

@@ -19,7 +19,7 @@ def _launch_screen(width: int = 60) -> str:
         "agent-run.sh claude --dangerously-skip-permissions"
     )
     wrapped = "\n".join(line[i : i + width] for i in range(0, len(line), width))
-    return wrapped + "\n\n  Claude Code\n> Work ticket RT-9.\n"
+    return wrapped + "\n\n  Claude Code\n> Work ticket DEF-9.\n"
 
 
 def _joined(text: str) -> str:
@@ -34,7 +34,7 @@ def test_a_wrapped_launch_line_prints_no_injected_value():
     assert TOKEN not in _joined(out)
     assert JIRA not in _joined(out)
     assert "export GITHUB_TOKEN='[redacted]'" in _joined(out)
-    assert "Work ticket RT-9." in out
+    assert "Work ticket DEF-9." in out
     assert "exec agent-run.sh claude" in _joined(out)
 
 

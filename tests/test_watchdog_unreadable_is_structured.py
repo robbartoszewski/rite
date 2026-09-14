@@ -37,7 +37,7 @@ def _project(tmp_path: Path) -> Path:
 def _corrupt(root: Path, worker: str = "w1") -> Path:
     write_snapshot(
         root,
-        ticket="BEN-86",
+        ticket="XYZ-86",
         progress="mid-task",
         next_step="",
         blockers=["should the column be nullable?"],
@@ -71,7 +71,7 @@ def test_it_is_empty_when_every_snapshot_reads(tmp_path):
     that never is."""
     root = _project(tmp_path)
     write_snapshot(
-        root, ticket="BEN-1", progress="p", next_step="", blockers=[], worker="w1"
+        root, ticket="XYZ-1", progress="p", next_step="", blockers=[], worker="w1"
     )
     assert run_watchdog_check(root).unreadable == []
 

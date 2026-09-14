@@ -98,7 +98,7 @@ class TestAFirstCloneResumesAnExistingRemoteBranch:
         from rite_ai.config.models import Module
         from rite_ai.workspace.prepare import _first_clone
 
-        branch = "ticket-RT-42"
+        branch = "ticket-DEF-42"
         origin = self._module_with_remote_branch(tmp_path, branch)
         module = Module(name="backend", path="backend", url=str(origin), branch="main")
         module_dir = tmp_path / "workers" / "alpha" / "backend"
@@ -120,15 +120,15 @@ class TestAFirstCloneResumesAnExistingRemoteBranch:
         from rite_ai.config.models import Module
         from rite_ai.workspace.prepare import _first_clone
 
-        origin = self._module_with_remote_branch(tmp_path, "ticket-RT-42")
+        origin = self._module_with_remote_branch(tmp_path, "ticket-DEF-42")
         module = Module(name="backend", path="backend", url=str(origin), branch="main")
         module_dir = tmp_path / "workers" / "alpha" / "backend"
         module_dir.parent.mkdir(parents=True)
 
-        result = _first_clone(module_dir, module, "ticket-RT-99", tmp_path)
+        result = _first_clone(module_dir, module, "ticket-DEF-99", tmp_path)
 
         assert result.ok, result.message
-        assert result.branch == "ticket-RT-99"
+        assert result.branch == "ticket-DEF-99"
         assert not (module_dir / "ticket-work.txt").exists()
 
 

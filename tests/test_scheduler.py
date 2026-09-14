@@ -55,7 +55,7 @@ class TestRunTick:
             ),
         )
         ledger = ClaimsLedger(root / ".rite" / "claims.json")
-        ledger.claim(["src/a.ts"], "alpha", ticket="RW-1")
+        ledger.claim(["src/a.ts"], "alpha", ticket="ABC-1")
 
         state_path = root / ".rite" / "schedule-state.json"
         state_path.write_text("3")  # simulate "last tick saw 3 workers"
@@ -73,7 +73,7 @@ class TestRunTick:
             windows="  windows:\n    - hours: '00:00-24:00'\n      workers: 3\n",
         )
         ledger = ClaimsLedger(root / ".rite" / "claims.json")
-        ledger.claim(["src/a.ts"], "alpha", ticket="RW-1")
+        ledger.claim(["src/a.ts"], "alpha", ticket="ABC-1")
 
         state_path = root / ".rite" / "schedule-state.json"
         state_path.write_text("3")
@@ -93,7 +93,7 @@ class TestRunTick:
             windows="  windows:\n    - hours: '00:00-24:00'\n      workers: 0\n",
         )
         ledger = ClaimsLedger(root / ".rite" / "claims.json")
-        ledger.claim(["src/a.ts"], "alpha", ticket="RW-1")
+        ledger.claim(["src/a.ts"], "alpha", ticket="ABC-1")
 
         result = run_tick(root)
         assert not any("handed over" in m for m in result.messages)

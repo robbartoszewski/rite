@@ -151,7 +151,7 @@ def has_content(
 
     Every write replaces that session's snapshot entirely, so a write with
     no content is a deletion that reports success. Measured: a worker
-    recorded `RT-12`, 60%-done progress, a next step and the open blocker
+    recorded `DEF-12`, 60%-done progress, a next step and the open blocker
     "needs DB credentials"; the next scheduled call lost its arguments,
     printed `handover snapshot written for alpha`, exited 0, and left five
     `(none)` lines where the blocker had been. The docstring tells callers

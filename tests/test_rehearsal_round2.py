@@ -472,7 +472,7 @@ class TestLinkDirectionIsOnlyClaimedForBlocks:
         backend.link.return_value = None
         with patch("rite_ai.cli.main._ticket_backend", return_value=(backend, None)):
             result = CliRunner().invoke(
-                cli, ["board", "link", "RW-1", "RW-2", "--type", "Relates"]
+                cli, ["board", "link", "ABC-1", "ABC-2", "--type", "Relates"]
             )
 
         assert "is blocked by" not in result.output, (
@@ -484,9 +484,9 @@ class TestLinkDirectionIsOnlyClaimedForBlocks:
         backend = MagicMock()
         backend.link.return_value = None
         with patch("rite_ai.cli.main._ticket_backend", return_value=(backend, None)):
-            result = CliRunner().invoke(cli, ["board", "link", "RW-1", "RW-2"])
+            result = CliRunner().invoke(cli, ["board", "link", "ABC-1", "ABC-2"])
 
-        assert "RW-1 is blocked by RW-2" in result.output
+        assert "ABC-1 is blocked by ABC-2" in result.output
 
 
 # --- JIRA site: the pasted URL ----------------------------------------------
