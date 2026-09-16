@@ -1,0 +1,96 @@
+---
+description: Digest the registered project spec into units a Worker can load one slice of, then review the result in two rounds. Writes derived units only; never edits the spec.
+---
+
+Digest this project's spec so a Worker can load the part its ticket needs instead
+of the whole document. You write the unit bodies and review them. Everything
+mechanical — finding what changed, hashing, checking coverage — is `rite spec`,
+which spends no tokens.
+
+**You never edit the source spec here.** If a unit cannot be written faithfully
+because the source is wrong or contradicts itself, stop and say so: that is a
+change to the spec, and it is the user's decision.
+
+1. **Check the spec decomposes before spending anything on it.**
+
+   ```
+   rite spec index
+   ```
+
+   It lists the units, the hubs it pins, the index sections it excludes and the
+   projected slice sizes, and ends with a verdict. **If it says the spec does not
+   decompose, stop.** Workers keep reading the whole spec through its pointer,
+   and that is the supported outcome for a densely interlinked document, not a
+   failure to work around.
+
+2. **Find what needs writing.**
+
+   ```
+   rite spec status
+   ```
+
+   It names every unit that is new, stale (its source changed), removed, or
+   tampered with (its body no longer matches its recorded hash). Work only on
+   those. A unit that is none of these is still valid, and so is its last review.
+
+3. **Write each new or stale unit** at the path `rite spec status` names.
+
+   - Say what the source says, in fewer words, **without changing what it
+     means.** Keep every qualifier, every ⚠, every "unless" and "only when"; a
+     conditional turned into an absolute is the distortion this review exists to
+     catch.
+   - Keep identifiers as the source has them: `§5.3.3`, `D-31`. A citation is
+     how a Worker gets from one unit to the next; paraphrasing one breaks the link.
+   - A decision row (`D-<number>`) keeps its choice word for word. It is a
+     decision already made; restating it in other words makes a second one.
+   - Set `covers` to every source unit id the body represents. Merging two tiny
+     adjacent sections into one unit, or splitting a long one, is fine — say so
+     in `covers`, and cover everything.
+   - **Do not write `source_sha` or `body_sha` yourself.** `rite spec index`
+     records them from the files. A hash typed by hand is a guess, and the gate
+     treats it as one.
+   - Delete the unit file for anything `rite spec status` reports as removed.
+
+4. **Round 1 — each unit against its own source.** For every unit you wrote or
+   changed, give a fresh reviewer the unit and **only** its source range (from
+   the unit's `source_lines`), and ask:
+
+   - Does it omit a qualifier, drop a ⚠, or turn a conditional into an absolute?
+   - Does it say anything the source range does not?
+   - Does every citation in it still point where the source's did?
+
+   Scoped to one unit on purpose: a reviewer holding the whole document reads
+   what it expects instead of what is there. Fix what it finds and re-review
+   those units.
+
+5. **Round 2 — the set against itself.** A different question from round 1, not a
+   second pass of it. Give a fresh reviewer the changed units **and their
+   neighbours** — the units that cite them and the units they cite — and ask:
+
+   - Does any unit contradict another?
+   - Does any unit contradict something the source says *outside* its own range,
+     which round 1 cannot see because it never looks there?
+   - Did splitting separate a rule from the exception that qualifies it? That is
+     the damage splitting does, and no single-unit check can see it.
+
+   **On the first digest of a spec, and whenever the user asks for it, run round 2
+   over every unit.** Otherwise it is neighbourhood-scoped, and that is a
+   heuristic: a contradiction between two units with no citation between them is
+   missed. Your report must say which one you ran.
+
+6. **The gate.**
+
+   ```
+   rite spec verify
+   ```
+
+   It must pass: every source unit covered, nothing covering a unit that no longer
+   exists, nothing stale, nothing hand-edited. It does not check meaning — rounds
+   1 and 2 did that. Do not finish on a failing gate.
+
+7. **Report**, in one short list:
+   - units written, changed and removed;
+   - round 1: what it found and what you changed;
+   - round 2: what it found, and **whether it covered every unit or only the
+     changed ones and their neighbours**;
+   - the output of `rite spec verify`.
