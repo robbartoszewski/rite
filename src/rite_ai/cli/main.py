@@ -485,6 +485,13 @@ def _doctor_report(problems: list[str]) -> None:
             problems.append("brief.yaml missing")
     else:
         click.echo(f"brief.yaml: ok ({parsed_brief.name})")
+        # Reported, not a problem: the project works. But answers a session
+        # wrote there under the old first-session instruction reach nobody.
+        from rite_ai.project_spec import orphaned_enrichment_notice
+
+        orphan = orphaned_enrichment_notice(root)
+        if orphan:
+            click.echo(f"brief.yaml: {orphan}")
 
     from rite_ai.credentials.store import resolve as cred_resolve
 
@@ -806,10 +813,14 @@ def _doctor_report(problems: list[str]) -> None:
             if project.config.spec.convention:
                 click.echo(f"spec convention: {project.config.spec.convention}")
         else:
-            click.echo(
-                "spec: none configured — `rite spec add <path>` points "
-                "Workers at your design"
-            )
+            # Same wording as `rite start`: reported, never a problem — a
+            # project without a spec yet is not misconfigured.
+            from rite_ai.project_spec import spec_notices
+
+            for notice in spec_notices(
+                root, project.config, [m.path for m in modules]
+            ):
+                click.echo(notice)
 
         schedule_problems = validate_schedule(
             project.config.schedule, project.config.sandbox.max_concurrent_workers
@@ -3888,13 +3899,25 @@ def spec_add(path: str) -> None:
     if target.is_dir() and not cleaned.endswith("/"):
         cleaned += "/"
 
-    if cleaned in config.spec.paths:
-        click.echo(f"already pointed at {cleaned}")
-        return
-    config.spec.paths.append(cleaned)
-    write_config(root / ".rite", config)
-    click.echo(f"added {cleaned}")
-    click.echo("  new Workers pick this up; existing ones on `rite add worker`")
+    added = cleaned not in config.spec.paths
+    if added:
+        config.spec.paths.append(cleaned)
+    convention_before = config.spec.convention
+    if not config.spec.convention:
+        # A spec `/spec` just wrote may hold a single decision row. This is
+        # the moment there is something for detection to read, and without a
+        # convention line the register exists and nothing cites it.
+        from rite_ai.cli.init.detect import detect_decision_convention
+
+        config.spec.convention = detect_decision_convention(root, config.spec.paths)
+    if added or config.spec.convention != convention_before:
+        write_config(root / ".rite", config)
+    click.echo(f"added {cleaned}" if added else f"already pointed at {cleaned}")
+    if config.spec.convention:
+        click.echo(f"  convention: {config.spec.convention}")
+    # Also when nothing was added: a CLAUDE.md generated before its spec
+    # section had markers is brought up to date by running this again.
+    _report_spec_refresh(root, config)
 
 
 @spec.command("remove")
@@ -3917,8 +3940,32 @@ def spec_remove(path: str) -> None:
             click.echo("  configured: " + ", ".join(config.spec.paths), err=True)
         raise SystemExit(1)
     config.spec.paths.remove(match)
+    if not config.spec.paths:
+        config.spec.convention = ""
+    elif f"`{match}`" in config.spec.convention:
+        # The convention names the register's file; it cannot name one that
+        # is no longer registered.
+        from rite_ai.cli.init.detect import detect_decision_convention
+
+        config.spec.convention = detect_decision_convention(root, config.spec.paths)
     write_config(root / ".rite", config)
     click.echo(f"removed {match}")
+    _report_spec_refresh(root, config)
+
+
+def _report_spec_refresh(root: Path, config) -> None:
+    """Rewrite the spec section of every generated `CLAUDE.md`, and say which.
+
+    `rite init` was the only writer of the Owner's `CLAUDE.md`, so a spec
+    registered afterwards never reached the Owner, and a Worker created
+    before it kept whatever init had found."""
+    from rite_ai.project_spec import refresh_spec_sections
+
+    result = refresh_spec_sections(root, config)
+    for rel in result.updated:
+        click.echo(f"  updated {rel}")
+    for note in result.skipped:
+        click.echo(f"  not updated: {note}")
 
 
 # --- Worker sandboxing (SPEC §5.3, D-26, D-30, D-31) ---
@@ -4332,10 +4379,28 @@ def start_cmd(directory: str) -> None:
     result = start(root)
     if not result.ok:
         click.echo(result.message, err=True)
+        _echo_phase(result.phase, err=True)
         raise SystemExit(1)
     for action in result.actions:
         click.echo(f"  {action}")
     click.echo(result.message)
+    _echo_phase(result.phase)
+
+
+def _echo_phase(phase, err: bool = False) -> None:
+    """Where the project is and the next step, printed last.
+
+    It is the part of `start`'s output someone who has just run `rite init`
+    needs, so it goes where the eye lands. Printed on failure too: "no
+    `.rite/`" and "config errors" are phases, and the ones a newcomer meets
+    first."""
+    if phase is None:
+        return
+    from rite_ai.phase import render_phase
+
+    click.echo("", err=err)
+    for line in render_phase(phase):
+        click.echo(line, err=err)
 
 
 @cli.command("stop")

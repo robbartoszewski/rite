@@ -16,6 +16,8 @@ import shutil
 from pathlib import Path
 
 from rite_ai.config.models import Module, ProjectBrief, ProjectConfig, SandboxConfig
+from rite_ai.phase import PHASE_GUIDE
+from rite_ai.project_spec import mark_spec_section
 
 from .detect import ModuleCommands, module_commands
 from .paths import templates_dir
@@ -26,7 +28,7 @@ _AGENT_FILES = [
     "reviewer-seam.md",
     "reviewer-decisions.md",
 ]
-_COMMAND_FILES = ["ticket.md", "review.md", "refine.md"]
+_COMMAND_FILES = ["ticket.md", "review.md", "refine.md", "spec.md"]
 
 
 # The line every generated `CLAUDE.md` carries, and the only way to tell
@@ -137,18 +139,27 @@ def generate_claude_md(
 
 
 def _spec_section(config: ProjectConfig) -> str:
-    """Where the project's own design lives — paths, never content.
+    """Where the project's design lives — or, before there is one, how to
+    write it. Paths, never content.
 
-    The same pointer a Worker gets, because a Manager writing tickets that
-    cite decisions needs to reach the register those numbers refer to.
-    Empty when no spec is configured, rather than a heading explaining
-    that there is nothing under it."""
+    Always rendered, and always between markers. With paths configured it is
+    the pointer a Manager needs to reach the register tickets cite. With
+    none, it routes the session to `/spec`: a Dispatch session that starts
+    filing tickets with no design behind them is orchestrating work nobody
+    planned. The markers are what let `rite spec add` rewrite this section
+    later; `rite init` is otherwise the only writer of this file."""
     spec = config.spec
     if not spec.paths:
-        return ""
+        return mark_spec_section("""## Project spec
+
+**No spec yet.** Before planning work or filing tickets, run `/spec`: it
+reads `.rite/brief.yaml`, asks the follow-ups the brief warrants, writes
+`SPEC.md` with a numbered decision register, and registers it. If this
+project already has a design document rite did not find, register that with
+`rite spec add <path>` instead.""")
     listed = "\n".join(f"- `{p}`" for p in spec.paths)
     convention = f"\n{spec.convention}\n" if spec.convention else ""
-    return f"""## Project spec
+    return mark_spec_section(f"""## Project spec
 
 This project's design lives in:
 
@@ -158,7 +169,7 @@ Point Workers at it in tickets rather than restating it; read what you need
 rather than all of it.
 {convention}
 rite cannot tell whether this is current. If it contradicts the code, say so
-in the ticket rather than silently implementing either."""
+in the ticket rather than silently implementing either.""")
 
 
 def _header(brief: ProjectBrief) -> str:
@@ -177,21 +188,39 @@ index before assuming this file has everything."""
 
 
 def _startup_section() -> str:
-    return """\
-## Before anything else: read the handover snapshot
+    """The phase table itself, not a pointer to it.
 
-Run `rite handover show` before evaluating what to do next. A fresh session
-has no memory of what the previous one was doing — the snapshot is where
-that state actually lives (SPEC.md §9.10.1). If it shows an in-progress
-ticket, next step, or open blocker, start from there rather than
-re-deriving it. An empty or missing snapshot just means nothing was
-recorded yet — proceed to `rite start`'s orientation table as normal."""
+    This file used to say "proceed to `rite start`'s orientation table as
+    normal" — and the table was in neither place. A session cannot route on
+    a table it cannot see, which is why the table stayed a convention.
+    `PHASE_GUIDE` is the same table `rite start` computes the phase from."""
+    return f"""\
+## Where this project is, and what to do next
+
+Start every session here, before anything else:
+
+1. `rite handover show` — what the previous session was doing. A fresh
+   session remembers nothing; that file does. If it names a ticket or a next
+   step, continue from there rather than re-deriving it.
+2. `rite start` — prints where this project is and the next step, worked out
+   from what is on disk.
+3. **Tell the user where the project is and what comes next**, in plain
+   words, before doing anything else. Someone new to rite does not know these
+   phases; you are the guide through them.
+
+{PHASE_GUIDE}
+
+Check the rows top to bottom and act on the first that matches. Go by what is
+on disk: a spec path recorded in `.rite/config.yaml` that points at nothing
+means there is no spec."""
 
 
 def _what_this_is(brief: ProjectBrief) -> str:
-    kind = brief.kind or "(not specified — ask in the first session)"
+    kind = brief.kind or "(not specified — `/spec` asks)"
     features = (
-        brief.features or "_Not described yet — ask the user what this project does._"
+        brief.features
+        or "_Not described yet — `/spec` asks what this project does and "
+        "records it in the spec._"
     )
     tech_bits = []
     if brief.platform:
@@ -204,10 +233,9 @@ def _what_this_is(brief: ProjectBrief) -> str:
 
     architecture = (
         brief.architecture
-        or "_Not specified. If this project has an architectural pattern "
-        "(event sourcing, CQRS, microservices, monolith) worth naming, ask "
-        "and record it in `.rite/brief.yaml` under `technology.architecture`, "
-        "or as a file under `.rite/context/`._"
+        or "_Not specified. `/spec` asks about architecture and records the "
+        "answer in the spec's Architecture section and decision register, "
+        "not in `.rite/brief.yaml`._"
     )
 
     return f"""\
@@ -455,16 +483,18 @@ def _commands_section() -> str:
     return """\
 ## Commands
 
+- `/spec` — write this project's spec from the brief: follow-up questions,
+  `SPEC.md` with a numbered decision register, registered with rite.
+  Implements nothing, creates no tickets.
 - `/ticket <id>` — work a ticket end to end.
 - `/review` — run the review convention over the current change.
-- `/refine <ticket-or-phrase>` — turn a ticket or a vague phrase into
-  something startable cold. Implements nothing.
+- `/refine <ticket-or-phrase>` — turn a ticket or a vague phrase into a
+  ticket someone could start cold. Implements nothing. Not `/spec`.
 
 This file was generated by `rite init` from `.rite/brief.yaml`,
-`.rite/modules.yaml`, and `.rite/config.yaml`. The first Claude session
-should read `brief.yaml` and ask the two or three follow-ups the answers
-actually warrant, appending to the same file (SPEC.md §8.1) — this is
-expected, not a sign the questionnaire was incomplete."""
+`.rite/modules.yaml`, and `.rite/config.yaml`. `rite spec add` and
+`rite spec remove` rewrite the Project spec section; nothing else in it is
+rewritten after init."""
 
 
 __all__ = ["install_claude_config", "generate_claude_md"]

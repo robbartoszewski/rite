@@ -110,9 +110,14 @@ class TestTheWorkerIsPointedNotLoaded:
         )
         assert "D-<n>" in section
 
-    def test_no_spec_means_no_section_at_all(self):
+    def test_no_spec_means_no_worker_section_and_an_owner_route_to_spec(self):
+        """A Worker gets no heading over nothing. The Owner is routed to
+        `/spec`: with no design written down, filing tickets is planning
+        nobody did (D-53)."""
         assert worker_spec_section(SpecConfig()) == ""
-        assert project_spec_section(ProjectConfig()) == ""
+        owner = project_spec_section(ProjectConfig())
+        assert "/spec" in owner
+        assert "This project's design lives in" not in owner
 
     def test_a_real_worker_claude_md_carries_it(self, tmp_path: Path, monkeypatch):
         from rite_ai.workspace import add_worker

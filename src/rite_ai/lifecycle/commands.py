@@ -27,6 +27,7 @@ from rite_ai.config.models import ProjectConfig
 from rite_ai.config.parse import load_project
 from rite_ai.context import check_integrity
 from rite_ai.label import DOT, project_name
+from rite_ai.phase import Phase, detect_phase
 from rite_ai.pool import probe as probe_pool
 from rite_ai.reporting.outbox import OutboxMessage, enqueue, flush_outbox
 from rite_ai.state import CorruptStateError
@@ -38,6 +39,10 @@ class StartResult:
     ok: bool
     message: str
     actions: list[str] = field(default_factory=list)
+    # Where the project is and what to do next. Set on every return,
+    # including the failures: "no .rite/" and "config errors" are phases too,
+    # and they are the ones a newcomer hits first.
+    phase: Phase | None = None
 
 
 @dataclass
@@ -199,7 +204,11 @@ def start(root: Path) -> StartResult:
     """
     rite_dir = root / ".rite"
     if not rite_dir.is_dir():
-        return StartResult(False, "no .rite/ directory — run `rite init` first")
+        return StartResult(
+            False,
+            "no .rite/ directory — run `rite init` first",
+            phase=detect_phase(root),
+        )
 
     actions: list[str] = []
 
@@ -234,7 +243,9 @@ def start(root: Path) -> StartResult:
     project = load_project(root)
     if isinstance(project, list):
         errors = "; ".join(f"{e.file}: {e.message}" for e in project)
-        return StartResult(False, f"config errors: {errors}")
+        return StartResult(
+            False, f"config errors: {errors}", phase=detect_phase(root)
+        )
 
     actions.append(f"project '{project.brief.name}' loaded")
 
@@ -394,7 +405,10 @@ def start(root: Path) -> StartResult:
                         + " — retry queued, or fix by hand with `rite board label`"
                     )
 
-    return StartResult(True, "ready", actions=actions)
+    # §9.10's orientation table, finally evaluated: an inventory with no
+    # direction told someone who had just run `init` nothing about what to do
+    # next. Reported, never acted on, like everything else here.
+    return StartResult(True, "ready", actions=actions, phase=detect_phase(root))
 
 
 def perform_handover(

@@ -52,7 +52,7 @@ def test_interactive_all_defaults_creates_every_file(tmp_path: Path):
         "reviewer-decisions",
     ]:
         assert (tmp_path / ".claude" / "agents" / f"{agent}.md").exists()
-    for cmd in ["ticket", "review", "refine"]:
+    for cmd in ["ticket", "review", "refine", "spec"]:
         assert (tmp_path / ".claude" / "commands" / f"{cmd}.md").exists()
 
     brief = yaml.safe_load((rite_dir / "brief.yaml").read_text())

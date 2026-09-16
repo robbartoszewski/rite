@@ -34,9 +34,10 @@ Spawn independent, fresh-eyes reviewers against that output using the
 anything touching a gate, a shared contract, a migration, customer data, or
 user-facing copy — see `CLAUDE.md` for what counts.
 
-Also run `reviewer-decisions` once, briefed to `.rite/brief.yaml`'s
-`enriched` section and any decision-bearing files in `.rite/context/` — does
-the build match what was already decided?
+Also run `reviewer-decisions` once, briefed to the project spec's decision
+register (the paths under `spec:` in `.rite/config.yaml`) and any
+decision-bearing files in `.rite/context/` — does the build match what was
+already decided?
 
 For anything crossing a module boundary, also run `reviewer-seam`.
 

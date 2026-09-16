@@ -22,6 +22,7 @@ from rite_ai.config.models import (
     WorkerManifest,
 )
 from rite_ai.config.parse import parse_config, parse_modules
+from rite_ai.project_spec import mark_spec_section
 from rite_ai.state import locked, write_atomic
 
 
@@ -632,6 +633,14 @@ def _module_commands_section(root: Path, modules: list[Module]) -> str:
     return "\n".join(rows)
 
 
+def worker_spec_block(spec: SpecConfig) -> str:
+    """The Worker's spec section between its markers, or "" when there is no
+    spec — a Worker gets no heading over nothing. Shared with `rite spec
+    add`, which rewrites existing Workers' files."""
+    rendered = _spec_section(spec)
+    return mark_spec_section(rendered) if rendered else ""
+
+
 def _write_worker_claude_config(
     worker_dir: Path,
     manifest: WorkerManifest,
@@ -659,7 +668,8 @@ def _write_worker_claude_config(
         else ""
     )
 
-    spec_section = _spec_section(spec or SpecConfig())
+    block = worker_spec_block(spec or SpecConfig())
+    spec_section = f"\n{block}\n" if block else ""
 
     md = f"""\
 # CLAUDE.md — Worker {manifest.name}

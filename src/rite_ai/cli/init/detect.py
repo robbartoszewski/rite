@@ -1039,6 +1039,12 @@ def detect_spec_paths(root: Path, module_paths: list[str] | None = None) -> list
 _DECISION_RE = re.compile(r"(?:^|[|\s#])D-\d+\b")
 _DECISION_MINIMUM = 3
 
+# The header row of a decision register, `| D | Decision | ...`, which
+# `/spec`'s skeleton writes. Recognised alongside the count because a new
+# project's register can hold a single row: three references is a bar only a
+# mature spec clears, so the register would exist and never be cited.
+_REGISTER_HEADER_RE = re.compile(r"(?m)^\|\s*D\s*\|")
+
 
 def detect_decision_convention(root: Path, paths: list[str]) -> str:
     """A citation convention proposal, or "" if the project has none.
@@ -1056,7 +1062,8 @@ def detect_decision_convention(root: Path, paths: list[str]) -> str:
             text = candidate.read_text(errors="replace")
         except OSError:
             continue
-        if len(_DECISION_RE.findall(text)) >= _DECISION_MINIMUM:
+        hits = len(_DECISION_RE.findall(text))
+        if hits >= _DECISION_MINIMUM or (hits and _REGISTER_HEADER_RE.search(text)):
             return (
                 f"Decisions are cited as D-<number>; the register is in `{rel}`."
             )

@@ -7,7 +7,8 @@ one with no memory of this conversation — could start it without asking a
 clarifying question first.
 
 **This command implements nothing.** Its only output is a well-formed
-ticket.
+ticket. It is not `/spec`: that writes the project's spec, and this refines
+one ticket against it.
 
 1. **If it names an existing ticket**, read it and find the gaps: missing
    scope, no definition of done, no verify step, ambiguous acceptance
@@ -27,6 +28,8 @@ ticket.
    - Definition of done — a checklist, not a vibe.
    - A `## Verify` section: the exact command(s) that prove it's done.
    - Dependencies on other tickets, named explicitly.
+   - The decisions it depends on, cited as `D-<number>` from the project spec
+     rather than restated — a restated decision drifts from the register.
 
 5. **Do not start the work.** If asked to both refine and implement, refine
    first, stop, and confirm before continuing — those are two different

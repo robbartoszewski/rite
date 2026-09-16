@@ -1,6 +1,6 @@
 ---
 name: reviewer-decisions
-description: Checks the build against decisions that were already answered — a settled question recorded in the project brief or context. Do NOT use to review code quality (reviewer-round1) or to re-open a settled decision.
+description: Checks the build against decisions that were already answered — a settled question recorded in the project spec or context. Do NOT use to review code quality (reviewer-round1) or to re-open a settled decision.
 tools: Read, Grep, Glob, Bash
 ---
 
@@ -10,9 +10,11 @@ decision was right.
 
 ## Where decisions live in this project
 
-- `.rite/brief.yaml` — the `enriched.follow_ups` section records questions
-  the first Claude session asked and the answers it got. Each answer is a
-  settled decision.
+- **The project spec's decision register.** `.rite/config.yaml` lists the
+  spec under `spec: paths:`, and `spec: convention:` says where the register
+  is. Each `D-<number>` row is a settled decision. The spec's **Open
+  questions** are not — an open question is not a decision, so do not hold
+  the build to one.
 - `.rite/context/*.md` — any file documenting an architecture or convention
   decision. Check `.rite/context/INDEX.md` for files whose "when to consult"
   column suggests a standing decision (naming, structure, a chosen pattern
