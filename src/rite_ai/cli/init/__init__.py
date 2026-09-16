@@ -94,7 +94,7 @@ def run_init(
     rite_dir.mkdir(parents=True, exist_ok=True)
 
     if source is not None:
-        answers = source_answers(root, preset, source, changes)
+        answers = source_answers(root, preset, source, changes, interactive)
     else:
         detection = run_detection(root)
         answers = run_questionnaire(root, preset, detection, yes)

@@ -306,6 +306,20 @@ def _why_it_failed(proc: subprocess.CompletedProcess) -> str:
     return (informative[-1] if informative else lines[-1])[:200]
 
 
+def _will_not_run(binary: str, error: Exception) -> str:
+    """Why a yoloai that IS installed still cannot be used.
+
+    `installed` and `works` are different answers, and this is the gap the
+    round-trip check exists to find: a binary on PATH that will not
+    execute at all — built for another architecture, or a partial
+    download — raises `OSError` rather than exiting non-zero."""
+    return (
+        f"yoloai is at {binary} but will not run: {error}. Reinstall it "
+        "(https://yoloai.dev) — a download for another architecture, or a "
+        "partial one, looks exactly like this."
+    )
+
+
 def verify_sandbox(backend: str = "", timeout: int = 120) -> SandboxCheck:
     """Can this machine actually run a sandbox? Round-trip one and see.
 
@@ -359,9 +373,9 @@ def verify_sandbox(backend: str = "", timeout: int = 120) -> SandboxCheck:
                     backend=backend,
                     elapsed_ms=_elapsed(),
                 )
-            except OSError as e:
+            except (OSError, subprocess.SubprocessError) as e:
                 return SandboxCheck(
-                    False, f"`yoloai new` could not run: {e}", backend=backend
+                    False, _will_not_run(binary, e), backend=backend
                 )
             if proc.returncode != 0:
                 return SandboxCheck(
@@ -394,15 +408,25 @@ def verify_sandbox(backend: str = "", timeout: int = 120) -> SandboxCheck:
                 elapsed_ms=_elapsed(),
             )
         finally:
-            subprocess.run(
-                [binary, "destroy", name],
-                capture_output=True,
-                text=True,
-                errors="replace",
-                timeout=timeout,
-                env=env,
-                check=False,
-            )
+            # Nothing here may raise. This runs while another return value
+            # or exception is in flight, so an exception raised in a
+            # `finally` REPLACES it — measured on a tester's machine: a
+            # yoloai binary that would not exec (`OSError: [Errno 8] Exec
+            # format error`, a wrong-architecture or partial download) blew
+            # `rite doctor` up with a traceback from the teardown of a probe
+            # that had already failed for the same reason.
+            try:
+                subprocess.run(
+                    [binary, "destroy", name],
+                    capture_output=True,
+                    text=True,
+                    errors="replace",
+                    timeout=timeout,
+                    env=env,
+                    check=False,
+                )
+            except (OSError, subprocess.SubprocessError):
+                pass
 
 
 def _count_named(binary: str, name: str, env: dict[str, str]) -> int | CountUnavailable:
@@ -422,7 +446,7 @@ def _count_named(binary: str, name: str, env: dict[str, str]) -> int | CountUnav
             timeout=30,
             env=env,
         )
-    except (subprocess.TimeoutExpired, OSError) as e:
+    except (OSError, subprocess.SubprocessError) as e:
         return CountUnavailable(f"`yoloai ls --active --json` could not run: {e}")
     if proc.returncode != 0:
         return CountUnavailable(f"`yoloai ls --active --json` exited {proc.returncode}")

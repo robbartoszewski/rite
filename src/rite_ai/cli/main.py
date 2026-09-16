@@ -1,5 +1,6 @@
 import os
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 import click
@@ -394,12 +395,49 @@ def _elide(text: str, keep: int) -> str:
     return kept + "…" + "".join(reversed(unclosed))
 
 
+@contextmanager
+def _doctor_check(label: str, problems: list[str]):
+    """Run one check; a raise becomes a reported problem, never a crash.
+
+    `rite doctor` is the first command a new user runs and the one meant to
+    explain a broken machine to them. A traceback explains nothing and
+    stops every later check. Measured on a tester's machine: yoloai on PATH
+    but built for another architecture raised `OSError: [Errno 8] Exec
+    format error` out of the sandbox round-trip and killed the command
+    mid-report.
+
+    SystemExit and KeyboardInterrupt pass through: doctor's own exit and
+    the user's, not a failing check.
+    """
+    try:
+        yield
+    except (SystemExit, KeyboardInterrupt):
+        raise
+    except Exception as e:
+        click.echo(f"{label}: CHECK FAILED — {type(e).__name__}: {e}")
+        problems.append(f"{label} check failed: {type(e).__name__}: {e}")
+
+
 @cli.command()
 def doctor() -> None:
     """Is this healthy? (SPEC §9.8) Token presence, external tool
     availability, `.rite/` integrity, module sync state, git remote
     reachability, and schedule validation — as distinct from `rite
     status`'s "what's happening?"."""
+    problems: list[str] = []
+    # Structural, not one call site: each section runs inside a guard, and
+    # this outer one catches whatever a future check adds outside them, so
+    # the command cannot end in a traceback.
+    with _doctor_check("doctor", problems):
+        _doctor_report(problems)
+    if problems:
+        click.echo(f"\n{len(problems)} problem(s) found")
+        raise SystemExit(1)
+    click.echo("\nok")
+
+
+def _doctor_report(problems: list[str]) -> None:
+    """Every check doctor runs, appending to `problems`."""
     import shutil
 
     click.echo(f"rite {__version__}")
@@ -428,7 +466,6 @@ def doctor() -> None:
         raise SystemExit(1)
 
     click.echo(f"project: {root}")
-    problems: list[str] = []
 
     # PARSED, not stat'd. "found" answered whether a file was on disk,
     # which is not the question — an unparseable brief.yaml, or one
@@ -460,17 +497,23 @@ def doctor() -> None:
     # `shutil.which` and then fail the moment anything depends on them.
     # The publish gate depends on gitleaks, so a gitleaks that is present
     # and broken degrades the gate silently.
-    for tool, probe in (("gitleaks", ["version"]), ("gh", ["--version"])):
-        found = shutil.which(tool)
-        if not found:
-            click.echo(f"tool {tool}: not found")
-            continue
-        ok, detail = _tool_runs(found, probe)
-        if ok:
-            click.echo(f"tool {tool}: {detail} ({found})")
-        else:
-            click.echo(f"tool {tool}: BROKEN at {found} — {detail}")
-            problems.append(f"tool {tool} is on PATH but does not run: {detail}")
+    missing_tools: set[str] = set()
+    with _doctor_check("tools", problems):
+        for tool, probe in (("gitleaks", ["version"]), ("gh", ["--version"])):
+            found = shutil.which(tool)
+            if not found:
+                # Whether this is a PROBLEM depends on the project: `gh` is
+                # load-bearing only once Workers are sandboxed, which is
+                # known further down, where the config is parsed.
+                missing_tools.add(tool)
+                click.echo(f"tool {tool}: not found")
+                continue
+            ok, detail = _tool_runs(found, probe)
+            if ok:
+                click.echo(f"tool {tool}: {detail} ({found})")
+            else:
+                click.echo(f"tool {tool}: BROKEN at {found} — {detail}")
+                problems.append(f"tool {tool} is on PATH but does not run: {detail}")
 
     from rite_ai.config.parse import ParseError, load_project, parse_modules
     from rite_ai.context import check_integrity
@@ -592,17 +635,18 @@ def doctor() -> None:
     # `init` reports this once, at creation; nothing asked again until now.
     from rite_ai.gate.hook import gate_hook_status
 
-    for label, repo_dir in [("project root", root)] + [
-        (f"module {m.name}", root / m.path) for m in modules
-    ]:
-        status = gate_hook_status(repo_dir)
-        if status.state == "not_a_repo":
-            continue
-        if status.active:
-            click.echo(f"publish gate hook ({label}): active")
-        else:
-            click.echo(f"publish gate hook ({label}): {status.detail}")
-            problems.append(f"publish gate does not run on push from {label}")
+    with _doctor_check("publish gate hook", problems):
+        for label, repo_dir in [("project root", root)] + [
+            (f"module {m.name}", root / m.path) for m in modules
+        ]:
+            status = gate_hook_status(repo_dir)
+            if status.state == "not_a_repo":
+                continue
+            if status.active:
+                click.echo(f"publish gate hook ({label}): active")
+            else:
+                click.echo(f"publish gate hook ({label}): {status.detail}")
+                problems.append(f"publish gate does not run on push from {label}")
 
     # The other half, and per §11.5.1 the load-bearing half: the hook above is
     # disarmable by this machine's own git config with no signal, and CI is
@@ -616,25 +660,29 @@ def doctor() -> None:
     # "every repo is covered".
     from rite_ai.gate.ci import ci_workflow_status
 
-    ci_gate = ci_workflow_status(root)
-    if ci_gate.state != "not_a_repo":
-        if ci_gate.active:
-            click.echo("publish gate CI (project root): active — a job runs the gate")
-        else:
-            click.echo(f"publish gate CI (project root): {ci_gate.detail}")
-            problems.append("publish gate does not run in CI")
+    with _doctor_check("publish gate CI", problems):
+        ci_gate = ci_workflow_status(root)
+        if ci_gate.state != "not_a_repo":
+            if ci_gate.active:
+                click.echo(
+                    "publish gate CI (project root): active — a job runs the gate"
+                )
+            else:
+                click.echo(f"publish gate CI (project root): {ci_gate.detail}")
+                problems.append("publish gate does not run in CI")
 
     # The property every claim rests on, measured rather than assumed.
-    if not exclusion_holds(root / ".rite"):
-        click.echo(
-            f"file locking: DOES NOT WORK under {root / '.rite'} — two "
-            "workers can be granted the same path here and both told "
-            "'claimed'. A network mount or a VM shared folder looks like "
-            "this. Move the project to a local disk, or run one worker."
-        )
-        problems.append("file locking does not exclude in this project")
-    else:
-        click.echo("file locking: excludes (claims can be relied on)")
+    with _doctor_check("file locking", problems):
+        if not exclusion_holds(root / ".rite"):
+            click.echo(
+                f"file locking: DOES NOT WORK under {root / '.rite'} — two "
+                "workers can be granted the same path here and both told "
+                "'claimed'. A network mount or a VM shared folder looks like "
+                "this. Move the project to a local disk, or run one worker."
+            )
+            problems.append("file locking does not exclude in this project")
+        else:
+            click.echo("file locking: excludes (claims can be relied on)")
 
     for tracked in _tracked_runtime_state(root):
         click.echo(f"git tracks runtime state: {tracked}")
@@ -677,6 +725,19 @@ def doctor() -> None:
 
             # Its row is printed here, not with the credentials above: it is
             # needed only when this project sandboxes its Workers.
+            if "gh" in missing_tools:
+                # Same treatment as the missing Claude login: a sandboxed
+                # Worker's pushes authenticate through `gh`, so without it
+                # every push from a sandbox fails and the work is lost with
+                # the sandbox.
+                click.echo(
+                    "tool gh: not found — sandbox.enabled is true and a "
+                    "sandboxed Worker's pushes authenticate through `gh`, so "
+                    "every push from a sandbox fails. Install GitHub's `gh` "
+                    "CLI (https://cli.github.com); it needs no login of its "
+                    "own, rite passes the token in."
+                )
+                problems.append("gh is not installed but Workers are sandboxed")
             claude_login = cred_resolve("claude_token", creds)
             if claude_login.tier == NOT_FOUND:
                 # Doctor prints rows and only counts problems, so the
@@ -757,10 +818,7 @@ def doctor() -> None:
             click.echo(f"schedule: {p}")
         problems.extend(schedule_problems)
 
-    if problems:
-        click.echo(f"\n{len(problems)} problem(s) found")
-        raise SystemExit(1)
-    click.echo("\nok")
+    return
 
 
 def _warn_if_unregistered(worker: str) -> None:

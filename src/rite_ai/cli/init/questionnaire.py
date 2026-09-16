@@ -335,10 +335,7 @@ def run_questionnaire(
     role = resolve_select(
         "project.role",
         "Is this the Owner machine or a Manager machine?",
-        [
-            ("owner", "Owner    — owns the board, assigns work, one per project"),
-            ("manager", "Manager  — receives work from an Owner, runs its own workers"),
-        ],
+        ROLE_OPTIONS,
         default_index=0,
     )
     borrowed_config: ProjectConfig | None = None
@@ -624,36 +621,80 @@ def _borrow_owner_config(ref: str) -> ProjectConfig | None:
     return parsed
 
 
-__all__ = ["InitAnswers", "KbAnswers", "run_questionnaire"]
+# What `rite init` may NEVER derive, on any path: these are facts about
+# this person and this machine, and neither a spec nor a codebase contains
+# them. Everything else about the project — its kind, languages,
+# frameworks, modules, root branch — is derived from the source when there
+# is one, and asked only when there is not.
+#
+# Measured: the existing-source path shipped with `role="owner"` hardcoded,
+# so a tester who copied a project's `.rite/` to a second machine was never
+# asked, and that machine's session believed it owned the board.
+ABOUT_THIS_PERSON_AND_MACHINE = ("project.role", "sandbox.enabled")
+
+ROLE_OPTIONS = [
+    ("owner", "Owner    — owns the board, assigns work, one per project"),
+    ("manager", "Manager  — receives work from an Owner, runs its own workers"),
+]
+
+
+def _ask_role(preset: Preset, interactive: bool) -> str:
+    """The role question, asked the same way on every path."""
+    val = preset.get("project.role")
+    if val is not None and val in {v for v, _ in ROLE_OPTIONS}:
+        return str(val)
+    if not interactive:
+        return "owner"
+    return ui.select("Is this the Owner machine or a Manager machine?", ROLE_OPTIONS)
+
+
+__all__ = ["InitAnswers", "KbAnswers", "run_questionnaire", "source_answers"]
 
 
 def source_answers(
-    root: Path, preset: Preset, source: Path, changes: str
+    root: Path, preset: Preset, source: Path, changes: str, interactive: bool = True
 ) -> InitAnswers:
     """The answers for someone who already has a spec or code.
 
-    Nothing past the first question is asked: the brief records where the
-    source is and what in it should change, and everything else about the
-    project is left for whatever reads that source. What is filled in here is
-    only what the files `init` writes cannot be valid without, each taken the
-    way `--yes` takes it.
+    Nothing about the PROJECT is asked past the first question: the brief
+    records where the source is and what in it should change, and everything
+    else about the project is left for whatever reads that source.
+
+    `ABOUT_THIS_PERSON_AND_MACHINE` is still asked, here as on every other
+    path, because no source document answers it: which role this machine
+    takes, and whether its Workers are sandboxed. Everything else is filled
+    in the way `--yes` takes it.
     """
     base = source if source.is_dir() else source.parent
     name = root.name or "my-project"
-    sandbox_enabled, sandbox_backend = _resolve_sandbox(preset, False, ui)
+    role = _ask_role(preset, interactive)
+    borrowed_config: ProjectConfig | None = None
+    if role == "manager":
+        owner_ref = (
+            ui.text("Owner's project URL or config path?", default="")
+            if interactive
+            else str(preset.get("project.owner_ref") or "")
+        )
+        if owner_ref:
+            borrowed_config = _borrow_owner_config(owner_ref)
+    sandbox_enabled, sandbox_backend = _resolve_sandbox(preset, interactive, ui)
+    config = ProjectConfig(
+        credentials=CredentialsConfig(namespace=make_namespace(name)),
+        sandbox=SandboxConfig(enabled=sandbox_enabled, backend=sandbox_backend),
+    )
+    if borrowed_config is not None:
+        config.expertise = borrowed_config.expertise
+        config.ticket_backend = borrowed_config.ticket_backend
     return InitAnswers(
-        role="owner",
+        role=role,
         brief=ProjectBrief(
             name=name,
-            role="owner",
+            role=role,
             root_branch=detect_root_branch(base, detect_repos(base)) or "main",
             source_path=str(source),
             source_changes=changes,
         ),
         modules=[],
-        config=ProjectConfig(
-            credentials=CredentialsConfig(namespace=make_namespace(name)),
-            sandbox=SandboxConfig(enabled=sandbox_enabled, backend=sandbox_backend),
-        ),
+        config=config,
         kb=KbAnswers(),
     )

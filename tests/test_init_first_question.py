@@ -23,8 +23,10 @@ from rite_ai.cli.main import cli
 EXISTING = "Do you have a spec or existing code for this project? [y/N]"
 PATH = "Path: [.]"
 CHANGES = "Anything stale, or that you'd like changed? Free text, or Enter to skip."
-# The first prompt of the existing questionnaire.
+# Asked on EVERY path: it is about this machine, not about the source.
 ROLE = "Is this the Owner machine or a Manager machine?"
+# Asked only by the from-scratch questionnaire.
+FROM_SCRATCH = "Project name?"
 
 
 @click.command()
@@ -70,20 +72,20 @@ def test_yes_mode_without_a_preset_asks_nothing_and_records_no_source(
 # --- yes --------------------------------------------------------------------------
 
 
-def test_yes_then_enter_twice_is_three_prompts_and_done(tmp_path: Path):
+def test_yes_then_enter_twice_is_four_prompts_and_done(tmp_path: Path):
     (tmp_path / "main.py").write_text("print('hi')\n")
-    result = CliRunner().invoke(_init_cmd, [str(tmp_path)], input="y\n\n\n")
+    result = CliRunner().invoke(_init_cmd, [str(tmp_path)], input="y\n\n\n\n")
     assert result.exit_code == 0, result.output
     assert "STATUS:created" in result.output
-    for prompt in (EXISTING, PATH, CHANGES):
+    for prompt in (EXISTING, PATH, CHANGES, ROLE):
         assert prompt in result.output
     assert "languages, structure and conventions will be taken" in result.output
-    assert ROLE not in result.output, "reached the questionnaire"
+    assert FROM_SCRATCH not in result.output, "reached the questionnaire"
 
 
 def test_the_brief_holds_the_path_and_the_answer(tmp_path: Path):
     result = CliRunner().invoke(
-        _init_cmd, [str(tmp_path)], input="y\n\nThe feed poller is stale\n"
+        _init_cmd, [str(tmp_path)], input="y\n\nThe feed poller is stale\n\n"
     )
     assert result.exit_code == 0, result.output
     brief = _brief(tmp_path)
@@ -98,19 +100,19 @@ def test_the_brief_holds_the_path_and_the_answer(tmp_path: Path):
 
 def test_the_path_can_point_elsewhere(tmp_path: Path):
     (tmp_path / "code").mkdir()
-    result = CliRunner().invoke(_init_cmd, [str(tmp_path)], input="y\ncode\n\n")
+    result = CliRunner().invoke(_init_cmd, [str(tmp_path)], input="y\ncode\n\n\n")
     assert result.exit_code == 0, result.output
     assert _brief(tmp_path)["source"]["path"] == str((tmp_path / "code").resolve())
 
 
 def test_a_mistyped_path_is_asked_again_and_never_falls_through(tmp_path: Path):
     result = CliRunner().invoke(
-        _init_cmd, [str(tmp_path)], input="y\nno-such-dir\n\n\n"
+        _init_cmd, [str(tmp_path)], input="y\nno-such-dir\n\n\n\n"
     )
     assert result.exit_code == 0, result.output
     assert "Nothing at" in result.output
     assert result.output.count(PATH) == 2
-    assert ROLE not in result.output, "fell through to the from-scratch flow"
+    assert FROM_SCRATCH not in result.output, "fell through to the from-scratch flow"
     assert _brief(tmp_path)["source"]["path"] == str(tmp_path.resolve())
 
 
@@ -118,7 +120,7 @@ def test_the_root_branch_is_the_one_the_source_is_on(tmp_path: Path):
     code = tmp_path / "code"
     code.mkdir()
     subprocess.run(["git", "init", "-q", "-b", "phase-2"], cwd=code, check=True)
-    CliRunner().invoke(_init_cmd, [str(tmp_path)], input="y\ncode\n\n")
+    CliRunner().invoke(_init_cmd, [str(tmp_path)], input="y\ncode\n\n\n")
     assert _brief(tmp_path)["project"]["root_branch"] == "phase-2"
 
 
@@ -196,3 +198,30 @@ def test_a_preset_path_that_does_not_exist_is_an_error(tmp_path: Path):
     assert result.exit_code == 1
     assert "does not exist" in result.output
     assert not (tmp_path / ".rite").exists()
+
+
+class TestTheRoleIsAskedOnEveryPath:
+    """The role is about this person and this machine — no spec or codebase
+    answers it. Measured on a tester's machine: a copied `.rite/` plus the
+    existing-source path never asked, and that session believed it owned the
+    board."""
+
+    def test_the_source_path_asks_it(self, tmp_path: Path):
+        (tmp_path / "main.py").write_text("print('hi')\n")
+        result = CliRunner().invoke(_init_cmd, [str(tmp_path)], input="y\n\n\n\n")
+        assert result.exit_code == 0, result.output
+        assert ROLE in result.output
+        assert _brief(tmp_path)["project"]["role"] == "owner"
+
+    def test_manager_is_recorded_not_assumed(self, tmp_path: Path):
+        (tmp_path / "main.py").write_text("print('hi')\n")
+        result = CliRunner().invoke(_init_cmd, [str(tmp_path)], input="y\n\n\n2\n\n")
+        assert result.exit_code == 0, result.output
+        assert _brief(tmp_path)["project"]["role"] == "manager"
+
+    def test_yes_mode_takes_owner_without_asking(self, tmp_path: Path):
+        (tmp_path / "main.py").write_text("print('hi')\n")
+        result = CliRunner().invoke(_init_cmd, ["--yes", str(tmp_path)])
+        assert result.exit_code == 0, result.output
+        assert ROLE not in result.output
+        assert _brief(tmp_path)["project"]["role"] == "owner"

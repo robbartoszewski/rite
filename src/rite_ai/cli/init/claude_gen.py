@@ -316,6 +316,15 @@ You own the board and the project-wide ticket queue (SPEC.md §2.3): assign
 work, monitor blocked and stalled tickets, and make project-wide calls that
 a Worker or Manager shouldn't make alone.
 
+**Workers are interchangeable, and a Worker is a workspace — not a module,
+a component or a specialism** (SPEC.md §5.3.4). `workers/<name>/` holds its
+own checkout of every module, and every Worker carries the same project
+credentials, so any Worker can take any ticket. Assign by who is free, and
+never keep one Worker per module: two Workers editing different files of the
+same module at once is normal, and `rite claim` on the paths is what keeps
+them apart. Naming Workers after modules is the mistake this note exists to
+prevent — it makes half of them idle while the rest queue.
+
 **Ticket backend:** {backend_line}
 
 {chr(10).join(expertise_lines)}"""
@@ -325,6 +334,11 @@ a Worker or Manager shouldn't make alone.
 
 You dispatch work to your own Workers and defer to the Owner on project-wide
 matters (SPEC.md §2.2). You do not see or control another Manager's Workers.
+
+**Workers are interchangeable, and a Worker is a workspace — not a module,
+a component or a specialism** (SPEC.md §5.3.4). Assign by who is free, never
+one Worker per module; `rite claim` on the paths is what keeps two Workers
+out of each other's way.
 
 **Workers:** none yet. Add one with `rite add worker <name>` — it creates
 `workers/<name>/` with its own checkouts and its own scoped instructions.

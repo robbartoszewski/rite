@@ -1,6 +1,10 @@
 from pathlib import Path
 
-from rite_ai.cli.init.claude_gen import generate_claude_md, install_claude_config
+from rite_ai.cli.init.claude_gen import (
+    _role_section,
+    generate_claude_md,
+    install_claude_config,
+)
 from rite_ai.config.models import (
     ExpertiseEntry,
     Module,
@@ -173,3 +177,23 @@ def test_the_ticket_command_tells_the_worker_to_run_them(tmp_path: Path):
     # Before the review convention, not after it — a reviewer should not be
     # the first thing to run the suite.
     assert ticket.index("test and lint commands") < ticket.index("(`/review`)")
+
+
+class TestAssignmentGuidance:
+    """A tester's Owner session assigned one Worker per module and had to be
+    corrected. Workers map to a workspace, not a module (SPEC §5.3.4), and
+    the session only knows what this file tells it."""
+
+    def _rendered(self, role: str) -> str:
+        return _role_section(role, ProjectConfig())
+
+    def test_the_owner_is_told_workers_are_not_module_scoped(self):
+        text = self._rendered("owner")
+        assert "interchangeable" in text
+        assert "never keep one Worker per module" in text
+        assert "rite claim" in text
+
+    def test_the_manager_is_told_the_same(self):
+        text = self._rendered("manager")
+        assert "interchangeable" in text
+        assert "one Worker per module" in text

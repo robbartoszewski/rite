@@ -187,3 +187,39 @@ class TestIsInstalledIsHonestlyNamed:
     @patch("rite_ai.sandbox.shutil.which", return_value=None)
     def test_absent_binary(self, mock_which):
         assert is_installed() is False
+
+
+class TestABinaryThatWillNotExec:
+    """`installed` and `works` are different answers — the gap this check
+    exists to close. Measured on a tester's machine: yoloai on PATH built
+    for another architecture, `OSError: [Errno 8] Exec format error`."""
+
+    EXEC_FORMAT = OSError(8, "Exec format error")
+
+    @patch("rite_ai.sandbox.shutil.which", return_value="/usr/local/bin/yoloai")
+    def test_it_is_a_failed_check_not_a_traceback(self, _which):
+        with patch("rite_ai.sandbox.subprocess.run", side_effect=self.EXEC_FORMAT):
+            check = verify_sandbox("seatbelt")
+        assert not check.ok
+        assert "/usr/local/bin/yoloai" in check.detail
+        assert "Exec format error" in check.detail
+        assert "Reinstall" in check.detail
+
+    @patch("rite_ai.sandbox.shutil.which", return_value="/usr/local/bin/yoloai")
+    def test_a_teardown_that_cannot_run_does_not_replace_the_answer(self, _which):
+        """The `finally` runs with another return value in flight: an
+        exception raised there replaces it, which is how a failed probe
+        became a crash."""
+        calls = []
+
+        def run(args, *a, **kw):
+            calls.append(args[1])
+            if args[1] == "destroy":
+                raise self.EXEC_FORMAT
+            return MagicMock(returncode=1, stdout="", stderr="backend unavailable")
+
+        with patch("rite_ai.sandbox.subprocess.run", side_effect=run):
+            check = verify_sandbox("seatbelt")
+        assert "destroy" in calls
+        assert not check.ok
+        assert "backend unavailable" in check.detail
