@@ -5,12 +5,12 @@
 # All three end at the same place: rite in its own isolated environment,
 # with `rite` on your PATH.
 #
-#   1. curl -fsSL https://raw.githubusercontent.com/robbartoszewski/rite/v0.2.0/install.sh | sh
-#   2. curl -fsSLO https://raw.githubusercontent.com/robbartoszewski/rite/v0.2.0/install.sh
+#   1. curl -fsSL https://raw.githubusercontent.com/robbartoszewski/rite/v0.3.0/install.sh | sh
+#   2. curl -fsSLO https://raw.githubusercontent.com/robbartoszewski/rite/v0.3.0/install.sh
 #      shasum -a 256 install.sh     # compare against the release notes
 #      sh install.sh
 #   3. git clone https://github.com/robbartoszewski/rite.git
-#      cd rite && git checkout v0.2.0 && less install.sh && uv tool install .
+#      cd rite && git checkout v0.3.0 && less install.sh && uv tool install .
 #
 # Note the version in those URLs. This script is pinned to a release tag
 # rather than `main`, so it does not change under you as development
@@ -38,7 +38,7 @@
 set -eu
 
 REPO="https://github.com/robbartoszewski/rite.git"
-VERSION="${RITE_VERSION:-v0.2.0}"
+VERSION="${RITE_VERSION:-v0.3.0}"
 
 say()  { printf '%s\n' "$*"; }
 fail() { printf 'install.sh: %s\n' "$*" >&2; exit 1; }

@@ -245,7 +245,7 @@ def test_it_refuses_to_publish_a_digest_of_an_uncommitted_working_copy(tmp_path)
     proc = _run(repo=clone)
 
     assert proc.returncode == 1
-    assert "no v0.2.0 tag exists yet" in proc.stderr
+    assert "no v0.3.0 tag exists yet" in proc.stderr
     assert "Commit, then tag, then run this again" in proc.stderr
 
 
@@ -310,7 +310,7 @@ def test_the_readme_is_honest_about_how_long_the_script_is():
 # --- the three fixes whose evidence was a manual run ------------------------
 
 
-def _tagged_clone(tmp_path: Path, tag: str = "v0.2.0") -> Path:
+def _tagged_clone(tmp_path: Path, tag: str = "v0.3.0") -> Path:
     """A clone WITH the release tag. `_clean_clone` has none, so the tag
     branch of `source_ref()` — the whole point of the fix that moved hashing
     off HEAD — was never executed by any test."""
@@ -340,7 +340,7 @@ def test_it_hashes_the_tag_not_head_once_the_tag_exists(tmp_path):
     and then reported the correctly published digest as a mismatch."""
     clone = _tagged_clone(tmp_path)
     at_tag = subprocess.run(
-        ["git", "show", "v0.2.0:install.sh"], cwd=clone, capture_output=True, check=True
+        ["git", "show", "v0.3.0:install.sh"], cwd=clone, capture_output=True, check=True
     ).stdout
     tag_digest = hashlib.sha256(at_tag).hexdigest()
 
@@ -359,7 +359,7 @@ def test_it_hashes_the_tag_not_head_once_the_tag_exists(tmp_path):
     assert out.returncode == 0, out.stderr
     assert tag_digest in out.stdout, "published a digest no reader would compute"
     assert head_digest not in out.stdout
-    assert "tag v0.2.0" in out.stdout
+    assert "tag v0.3.0" in out.stdout
 
     # ...and the digest a reader really has still verifies.
     assert _run("--check", tag_digest, repo=clone).returncode == 0

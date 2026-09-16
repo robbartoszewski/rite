@@ -382,8 +382,8 @@ def test_generated_workflow_asks_for_no_more_token_than_it_needs(tmp_path):
 
 def test_install_sh_pins_the_same_ref_the_workflow_does():
     """The seam the first drift test missed. `install.sh` hardcodes
-    `VERSION="${RITE_VERSION:-v0.2.0}"` while `rite_install_spec` derives
-    `v{__version__}` — they agree only while VERSION is 0.2.0, and the
+    `VERSION="${RITE_VERSION:-v0.3.0}"` while `rite_install_spec` derives
+    `v{__version__}` — they agree only while VERSION is 0.3.0, and the
     comment in the generated workflow says they are the same tag."""
     import rite_ai
 
