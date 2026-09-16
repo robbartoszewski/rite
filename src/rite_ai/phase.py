@@ -136,12 +136,6 @@ def detect_phase(root: Path) -> Phase:
     orphan = orphaned_enrichment_notice(root)
     if orphan:
         notes.append(orphan)
-    if brief.role not in ("owner", "manager"):
-        notes.append(
-            "this machine's role is not recorded — ask whether it is the "
-            "Owner or a Manager and set `project.role` in `.rite/brief.yaml` "
-            "before assigning work"
-        )
 
     state = spec_state(root, config, module_paths)
 

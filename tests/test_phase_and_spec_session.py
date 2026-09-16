@@ -248,6 +248,23 @@ class TestSpecTemplate:
     def test_it_ends_by_registering(self):
         assert "rite spec add SPEC.md" in self.text
 
+    def test_nothing_is_written_before_the_user_approves(self):
+        """An abandoned `/spec` used to leave a `SPEC.md` the user never
+        agreed to and was never told about."""
+        assert "Write nothing to disk in this step." in self.text
+        draft = self.text.index("Draft the spec from this skeleton")
+        show = self.text.index("Show the draft and ask them to correct it")
+        write = self.text.index("write `SPEC.md` at the project root and register it")
+        assert draft < show < write, "the file is still written before approval"
+
+    def test_it_tells_the_user_to_commit_and_why(self):
+        """A Worker gets its files by cloning, so an uncommitted spec exists
+        in no Worker's checkout and the pointer resolves to nothing."""
+        assert "Tell them to commit" in self.text
+        assert "`.rite/config.yaml` and `CLAUDE.md`" in self.text
+        assert "cloning" in self.text
+        assert "do not run it for them" in self.text.lower()
+
     def test_answers_go_into_the_spec_not_the_brief(self):
         assert "Do not write the answers into `.rite/brief.yaml`" in self.text
 

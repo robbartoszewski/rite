@@ -34,9 +34,9 @@ afterwards, and are separate requests.
    spec: an answer that settles something is a decision, and a question the
    user cannot answer yet is an open question.
 
-3. **Write `SPEC.md` at the project root** from this skeleton. Keep every
-   heading, even for a small project — fill a section with one honest line
-   rather than dropping it.
+3. **Draft the spec from this skeleton — in your reply, not on disk.** Keep
+   every heading, even for a small project — fill a section with one honest
+   line rather than dropping it.
 
    ```markdown
    # <project name>
@@ -79,12 +79,17 @@ afterwards, and are separate requests.
    Record a decision only when the user made it or agreed to it. A choice
    you suggested is an open question until they do.
 
-4. **Show the user the spec and ask them to correct it** before registering
-   it. It is their design; you wrote it down. Explain the Decisions table in
-   one sentence when you show it: each row is a choice already made,
-   numbered so later work can refer to it instead of repeating it.
+   **Write nothing to disk in this step.** A spec the user has not agreed to
+   should not be sitting in their project — someone who walks away here is
+   left with a file they never approved and were never told about.
 
-5. **Register it:**
+4. **Show the draft and ask them to correct it.** It is their design; you
+   wrote it down. Say plainly that nothing has been written yet, so they know
+   walking away costs them nothing. Explain the Decisions table in one
+   sentence when you show it: each row is a choice already made, numbered so
+   later work can refer to it instead of repeating it.
+
+5. **Once they approve, write `SPEC.md` at the project root and register it:**
 
    ```
    rite spec add SPEC.md
@@ -94,7 +99,19 @@ afterwards, and are separate requests.
    project's `CLAUDE.md`. Run `rite doctor` afterwards and check that the
    `spec` rows name the file and the D-number convention.
 
-6. **Stop.** Report what the spec settles and what is still open, then the
+6. **Tell them to commit the three files this just changed** — `SPEC.md`,
+   `.rite/config.yaml` and `CLAUDE.md` — because a Worker gets its files by
+   cloning, so an uncommitted spec exists in no Worker's checkout and the
+   pointer just recorded resolves to a path that is not in their tree.
+
+   ```
+   git add SPEC.md .rite/config.yaml CLAUDE.md && git commit -m "Add the project spec"
+   ```
+
+   Say it; do not run it for them. What else is uncommitted in their tree is
+   theirs to judge, not yours.
+
+7. **Stop.** Report what the spec settles and what is still open, then the
    next step: rite has no planning step, so deciding what gets built first is
    the user's — usually by talking it through with you. When they have
    decided, each piece becomes a ticket via `/refine <what to build>`. Do not

@@ -3356,9 +3356,20 @@ wrote. rite orchestrated work someone else had planned.
 `/spec` is the first session's command, and the Owner's `CLAUDE.md` routes to it while
 `spec.paths` is empty. It reads `brief.yaml`, asks the two or three follow-ups the
 brief warrants — about the project, never about rite, since the person may have
-installed it an hour ago — and writes `SPEC.md` from a fixed skeleton: Problem, Scope
-and Non-goals, Architecture, **Decisions**, Open questions. It implements nothing and
-creates no tickets, and ends by running `rite spec add SPEC.md`.
+installed it an hour ago — and drafts a spec from a fixed skeleton: Problem, Scope and
+Non-goals, Architecture, **Decisions**, Open questions. It implements nothing and
+creates no tickets.
+
+**Nothing is written until the user approves it.** The draft is shown in the session,
+and `SPEC.md` is written and registered only on their say-so: a spec nobody agreed to
+should not be left sitting in their project, and someone who walks away mid-command
+would neither have approved that file nor been told it exists.
+
+**It ends by telling them to commit** `SPEC.md`, `.rite/config.yaml` and `CLAUDE.md`,
+and says why: a Worker gets its files by cloning (§2.1), so an uncommitted spec exists
+in no Worker's checkout and the pointer `rite spec add` just recorded resolves to a
+path that is not in their tree. It says it rather than running it — what else is
+uncommitted in the user's tree is theirs to judge.
 
 **The decision register is mandatory, even with one row.** A spec without it is prose;
 with it, a ticket saying "implement per D-3" resolves, and D-52's citation convention
