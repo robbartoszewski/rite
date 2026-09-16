@@ -287,6 +287,7 @@ def test_config_yaml_key_order_matches_spec(tmp_path: Path):
         "pool",
         "sandbox",
         "budget",
+        "coordination",
         "schedule",
     ]
 

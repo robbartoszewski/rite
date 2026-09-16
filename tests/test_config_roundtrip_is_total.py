@@ -28,6 +28,7 @@ from pathlib import Path
 from rite_ai.cli.init.scaffold import config_to_yaml
 from rite_ai.config.models import (
     BudgetConfig,
+    CoordinationConfig,
     ExpertiseEntry,
     ProjectConfig,
     PublishGateConfig,
@@ -105,6 +106,17 @@ def _populated() -> ProjectConfig:
             windows=[ScheduleWindow(hours="09:00-17:00", workers=3)],
         ),
         budget=BudgetConfig(weekly_token_budget=12_000_000),
+        # Phase 2 (§2.4). `managers` must be non-empty here for the same
+        # reason every other collection is: an empty list round-trips
+        # whether or not the serialiser writes it, so an empty one would
+        # let a dropped section pass the gate.
+        coordination=CoordinationConfig(
+            managers=["mac-studio", "laptop"],
+            remote="git@example.com:team/coord.git",
+            state_branch="state",
+            owner_lease_minutes=15,
+            skew_tolerance_seconds=60,
+        ),
     )
 
 

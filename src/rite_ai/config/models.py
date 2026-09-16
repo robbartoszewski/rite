@@ -212,6 +212,49 @@ class SpecConfig:
 
 
 @dataclass
+class CoordinationConfig:
+    """How this machine reaches the other Managers (SPEC §2.4, Phase 2).
+
+    Nothing here is live in Phase 1: a single-Manager setup is trivially
+    Owner and never runs an election (§2.4's own Phase 2 warning). The
+    section exists so the consumers built on top of it have something to
+    bind to.
+    """
+
+    # PRIORITY IS THE ORDER. §2.4: "Managers are listed in priority order";
+    # the first active one is Owner. A bare list rather than a list of
+    # objects — priority is the only attribute §2.4 gives them, and a
+    # machine identity can be added later without breaking the file.
+    managers: list[str] = field(default_factory=list)
+
+    # EXPLICIT, never inferred from `origin`. Inferring would couple
+    # coordination to whichever remote happens to be `origin`, which is
+    # precisely the implicit link that breaks on a fork — and the failure
+    # would be a second machine coordinating through the wrong repo, which
+    # looks like nothing at all until two Owners appear.
+    remote: str = ""
+
+    # The branch the state layer force-pushes (D-19: one repo, two
+    # mechanisms — this branch for ephemeral state, the message log on
+    # `main`). Named rather than hardcoded because it must be excludable
+    # from a host's CI triggers (§2.4.2).
+    state_branch: str = "state"
+
+    # §2.4.1's 15 minutes. NOT `PoolConfig.lease_expiry_minutes`, which is
+    # the LOCAL pool readiness lease — a different lease with a different
+    # job, and the reason this one carries `owner_` in its name.
+    owner_lease_minutes: int = 15
+
+    # D-42's 60-second margin, as a key rather than a constant. The number
+    # is a policy choice about how much clock drift a fleet tolerates, not
+    # a property of the algorithm — the same reasoning that made the pool's
+    # staleness rule configurable. NTP-synced clocks remain a documented
+    # precondition; this narrows the split-brain window, it does not close
+    # it.
+    skew_tolerance_seconds: int = 60
+
+
+@dataclass
 class ProjectConfig:
     ticket_backend: TicketBackendConfig = field(default_factory=TicketBackendConfig)
     credentials: CredentialsConfig = field(default_factory=CredentialsConfig)
@@ -224,6 +267,7 @@ class ProjectConfig:
     budget: BudgetConfig = field(default_factory=BudgetConfig)
     schedule: ScheduleConfig = field(default_factory=ScheduleConfig)
     spec: SpecConfig = field(default_factory=SpecConfig)
+    coordination: CoordinationConfig = field(default_factory=CoordinationConfig)
 
 
 @dataclass

@@ -145,6 +145,15 @@ def config_to_yaml(config: ProjectConfig) -> str:
             "weekly_token_budget": config.budget.weekly_token_budget,
             "week_start_day": config.budget.week_start_day,
         },
+        # Phase 2 (§2.4). Written even when empty so the keys are
+        # discoverable in the file rather than only in the spec.
+        "coordination": {
+            "managers": config.coordination.managers,
+            "remote": config.coordination.remote,
+            "state_branch": config.coordination.state_branch,
+            "owner_lease_minutes": config.coordination.owner_lease_minutes,
+            "skew_tolerance_seconds": config.coordination.skew_tolerance_seconds,
+        },
         "schedule": {
             "timezone": config.schedule.timezone,
             "windows": [asdict(w) for w in config.schedule.windows],
