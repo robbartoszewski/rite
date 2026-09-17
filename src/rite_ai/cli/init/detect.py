@@ -625,7 +625,15 @@ def module_commands(
     sources = ["modules.yaml", *([detected.source] if detected.source else [])]
     return ModuleCommands(
         **merged,
-        detected=True,
+        # `detected` means what its docstring says: a known marker file was
+        # found. It used to be hardcoded True here, so a module with NO
+        # manifest whose commands were recorded by hand came back claiming
+        # detection — and the generated `CLAUDE.md` then told Workers the
+        # commands had been "read out of each module's own manifest". Seen on
+        # a tester's project: two module repos holding only a README, a full
+        # command set in modules.yaml, and a root `CLAUDE.md` vouching for a
+        # manifest that was never there.
+        detected=detected.detected,
         source=" + ".join(sources),
         # A note about detection is noise once every key is recorded.
         note=detected.note if set(COMMAND_KEYS) - set(recorded) else "",

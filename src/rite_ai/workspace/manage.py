@@ -641,6 +641,15 @@ def worker_spec_block(spec: SpecConfig) -> str:
     return mark_spec_section(rendered) if rendered else ""
 
 
+# The heading a Worker's module list sits under. Defined here because this
+# module writes it, and imported by `project_spec` rather than repeated:
+# renaming it silently broke `rite spec add`'s insertion point, which had the
+# literal in a second file. `WORKER_MODULES_HEADING_LEGACY` is what releases
+# up to v0.3.0 wrote — a worker file generated then must still be found.
+WORKER_MODULES_HEADING = "## Modules checked out in your workspace"
+WORKER_MODULES_HEADING_LEGACY = "## Your modules"
+
+
 def _write_worker_claude_config(
     worker_dir: Path,
     manifest: WorkerManifest,
@@ -695,9 +704,18 @@ decisions.
 
 {manager_line}
 {extra}{spec_section}
-## Your modules
+{WORKER_MODULES_HEADING}
 
 {modules_lines or "_(none)_"}
+
+**This is not an assignment, and not a specialism. A Worker is a workspace —
+not a module, a component or a specialism** (SPEC.md §5.3.4). Every Worker
+carries the same project credentials, so any Worker can take any ticket;
+tickets go to whoever is free. Two Workers editing different files of the
+same module at once is normal, and `rite claim` on the paths is what keeps
+you apart — not which module you are "for". If you were started on a ticket
+for something not checked out above, say so rather than assuming the ticket
+went to the wrong Worker.
 {module_commands}
 ## Your ticket
 

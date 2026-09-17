@@ -19,7 +19,7 @@ from rite_ai.config.models import Module, ProjectBrief, ProjectConfig, SandboxCo
 from rite_ai.phase import PHASE_GUIDE
 from rite_ai.project_spec import mark_spec_section
 
-from .detect import ModuleCommands, module_commands
+from .detect import COMMAND_KEYS, ModuleCommands, module_commands
 from .paths import templates_dir
 
 _AGENT_FILES = [
@@ -277,7 +277,15 @@ def _modules_section(
 No modules registered yet. Register one with `rite add module <name> \
 [git-url]`, or hand-edit `.rite/modules.yaml`."""
 
-    rows = ["## Modules", ""]
+    rows = [
+        "## Modules",
+        "",
+        "A command tagged `(recorded in modules.yaml)` is one somebody wrote "
+        "down; the rest were read out of that module's own manifest, named "
+        "below. rite has run neither — a recorded command is a claim about "
+        "the module, not a measurement of it.",
+        "",
+    ]
     for m in modules:
         rows.append(f"### `{m.path}` — {m.name}")
         if m.description:
@@ -293,7 +301,12 @@ No modules registered yet. Register one with `rite add module <name> \
 
 
 def _format_commands(cmds: ModuleCommands) -> list[str]:
-    if not cmds.detected:
+    # Keyed on whether there is anything to print, NOT on `cmds.detected`.
+    # Recorded-but-undetected is the ordinary case for a module scaffolded
+    # after `rite init` ran, and hiding its commands behind the "not
+    # detected" placeholder would lose commands that are right there in
+    # modules.yaml.
+    if not any(getattr(cmds, key) for key in COMMAND_KEYS):
         lines = [
             "- Commands: not detected. Record them in `.rite/modules.yaml` under "
             "this module's `commands:` (install, build, test, lint, format) — ask "
