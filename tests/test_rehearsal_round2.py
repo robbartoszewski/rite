@@ -50,6 +50,11 @@ def _project(tmp_path: Path, workers: list[str] | None = None, **config) -> Path
         (worker_dir / "worker.yml").write_text(
             f'worker:\n  name: "{name}"\n  modules: []\n'
         )
+        # Holding a claim is what makes a never-beaten worker a stall rather
+        # than one nobody has started.
+        from rite_ai.claims.ledger import ClaimsLedger
+
+        ClaimsLedger(rite_dir / "claims.json").claim([f"src/{name}"], name)
     return tmp_path
 
 
@@ -65,7 +70,7 @@ class TestSchedulerTickDoesNotEchoItself:
     an unattended stall filled the disk within hours."""
 
     def test_repeated_ticks_do_not_multiply_outbox_entries(self, tmp_path: Path):
-        root = _project(tmp_path, workers=["alpha"])  # no heartbeat => stalled
+        root = _project(tmp_path, workers=["alpha"])  # claims, no heartbeat: stalled
 
         for _ in range(5):
             run_tick(root)

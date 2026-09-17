@@ -68,6 +68,38 @@ def read_heartbeat(root: Path, worker: str) -> HeartbeatRecord | None:
         return None
 
 
+def _workers_holding_claims(root: Path) -> set[str] | None:
+    """Who holds a claim, or None when the ledger cannot be read."""
+    path = root / ".rite" / "claims.json"
+    if not path.exists():
+        return set()
+    from rite_ai.claims.ledger import ClaimsLedger
+    from rite_ai.state import CorruptStateError
+
+    try:
+        return {c.worker for c in ClaimsLedger(path).list_claims()}
+    except CorruptStateError:
+        return None
+
+
+def not_started(root: Path, workers: list[str]) -> list[str]:
+    """Workers with no heartbeat and no claims: registered, and nothing
+    says a session has picked them up yet.
+
+    `rite add worker` followed by `rite status` used to show the new worker
+    STALLED, and `rite watchdog` exited 1 on it every cycle until a first
+    heartbeat — broken, on minute one. A claim is evidence a session did
+    start, so a worker holding one with no heartbeat is still a stall (it
+    may be working without being told to beat). When the ledger cannot be
+    read nothing counts as not started: a missed stall is worse than a
+    false one.
+    """
+    holding = _workers_holding_claims(root)
+    if holding is None:
+        return []
+    return [w for w in workers if w not in holding and read_heartbeat(root, w) is None]
+
+
 def detect_stalls(
     root: Path,
     workers: list[str],
@@ -75,7 +107,10 @@ def detect_stalls(
 ) -> list[StallReport]:
     now = time.time()
     stalls: list[StallReport] = []
+    idle = set(not_started(root, workers))
     for w in workers:
+        if w in idle:
+            continue
         hb = read_heartbeat(root, w)
         if hb is None:
             # `now` was used here previously — an absolute epoch timestamp

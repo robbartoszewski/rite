@@ -5,6 +5,15 @@ from rite_ai.reporting.outbox import enqueue
 from rite_ai.watchdog import run_watchdog_check
 
 
+def _started(root: Path, worker: str) -> Path:
+    """A claim, so a worker with no heartbeat is a stall and not one nobody
+    has started."""
+    from rite_ai.claims.ledger import ClaimsLedger
+
+    ClaimsLedger(root / ".rite" / "claims.json").claim([f"src/{worker}"], worker)
+    return root
+
+
 def _setup(tmp_path: Path, worker_names: list[str] | None = None) -> Path:
     rite_dir = tmp_path / ".rite"
     rite_dir.mkdir()
@@ -83,7 +92,7 @@ class TestRunWatchdogCheck:
         assert any("alpha" in r for r in result.reasons)
 
     def test_worker_with_no_heartbeat_at_all_needs_attention(self, tmp_path: Path):
-        root = _setup(tmp_path, worker_names=["alpha"])
+        root = _started(_setup(tmp_path, worker_names=["alpha"]), "alpha")
         result = run_watchdog_check(root)
         assert result.needs_attention is True
         assert len(result.stalled) == 1
@@ -93,7 +102,7 @@ class TestRunWatchdogCheck:
         heartbeat' for any worker that had simply never started — the
         current epoch timestamp, misread as a duration. Reproduced by
         hand: create a worker, run `rite watchdog` before it ever runs."""
-        root = _setup(tmp_path, worker_names=["alpha"])
+        root = _started(_setup(tmp_path, worker_names=["alpha"]), "alpha")
         result = run_watchdog_check(root)
         assert any("no heartbeat ever recorded" in r for r in result.reasons)
         assert not any("789" in r for r in result.reasons)  # no epoch-sized number
@@ -254,5 +263,5 @@ class TestWatchdogExitCodes:
 
     def test_a_plain_stall_still_exits_one(self, tmp_path: Path):
         """Backward compatibility: `rite watchdog || notify` is unchanged."""
-        root = _setup(tmp_path, ["w1"])
+        root = _started(_setup(tmp_path, ["w1"]), "w1")
         assert self._invoke(root) == 1

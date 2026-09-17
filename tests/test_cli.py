@@ -1477,8 +1477,12 @@ def _minimal_project(tmp_path, worker: str = "alpha"):
 def test_registered_worker_without_a_beat_is_stalled(tmp_path, monkeypatch):
     """The state `rite heartbeat` exists to get out of: `write_heartbeat`
     had no caller anywhere, so every registered Worker read as stalled
-    forever and `rite watchdog` exited 1 on every healthy project."""
+    forever and `rite watchdog` exited 1 on every healthy project. Holding a
+    claim is what makes it started; one with no claims reads as not started."""
+    from rite_ai.claims.ledger import ClaimsLedger
+
     _minimal_project(tmp_path)
+    ClaimsLedger(tmp_path / ".rite" / "claims.json").claim(["src"], "alpha")
     monkeypatch.chdir(tmp_path)
 
     runner = CliRunner()

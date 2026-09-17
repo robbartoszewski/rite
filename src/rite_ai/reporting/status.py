@@ -40,7 +40,7 @@ from rite_ai.handover import HandoverSnapshot, read_snapshots
 from rite_ai.label import project_name
 from rite_ai.pool import PoolStatus
 from rite_ai.pool import probe as probe_pool
-from rite_ai.reporting.heartbeat import StallReport, detect_stalls
+from rite_ai.reporting.heartbeat import StallReport, detect_stalls, not_started
 from rite_ai.state import CorruptStateError
 
 
@@ -69,6 +69,7 @@ class ProjectStatus:
     workers: list[WorkerManifest] = field(default_factory=list)
     claims: list[Claim] = field(default_factory=list)
     stalled_workers: list[StallReport] = field(default_factory=list)
+    not_started_workers: list[str] = field(default_factory=list)
     handovers: list[HandoverSnapshot] = field(default_factory=list)
     coordination_cost: CoordinationCostCounts = field(
         default_factory=CoordinationCostCounts
@@ -212,9 +213,9 @@ def collect_status(root: Path, board: bool = False) -> ProjectStatus:
             * 60
             * project.config.heartbeat.stall_threshold
         )
-        status.stalled_workers = detect_stalls(
-            root, [w.name for w in project.workers], threshold_seconds=threshold
-        )
+        names = [w.name for w in project.workers]
+        status.stalled_workers = detect_stalls(root, names, threshold_seconds=threshold)
+        status.not_started_workers = not_started(root, names)
 
     tz_name = project.config.schedule.timezone or "UTC"
     now = datetime.now(UTC)
@@ -352,7 +353,12 @@ def format_status(status: ProjectStatus) -> str:
         lines.append(f"\nworkers ({len(status.workers)}):")
         for w in status.workers:
             mods = ", ".join(w.modules) if w.modules else "all"
-            marker = " — STALLED" if w.name in stalled_names else ""
+            if w.name in stalled_names:
+                marker = " — STALLED"
+            elif w.name in status.not_started_workers:
+                marker = " — not started (no heartbeat or claims yet)"
+            else:
+                marker = ""
             lines.append(f"  {w.name}: modules=[{mods}]{marker}")
     else:
         lines.append("\nno workers")

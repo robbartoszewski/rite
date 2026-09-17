@@ -197,5 +197,8 @@ class TestStallAgeReadsAsWords:
 
         root = self._stalled_project(tmp_path / "p", 60)
         (root / ".rite" / "heartbeats" / "alpha.json").unlink()
+        from rite_ai.claims.ledger import ClaimsLedger
+
+        ClaimsLedger(root / ".rite" / "claims.json").claim(["src"], "alpha")
         reasons = run_watchdog_check(root).reasons
         assert any("no heartbeat ever recorded" in r for r in reasons), reasons

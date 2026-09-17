@@ -3291,8 +3291,9 @@ def heartbeat(worker: str, ticket: str, message: str) -> None:
     Call it every `heartbeat.interval_minutes` (config.yaml, default 10)
     for as long as a Worker is working. This is what `rite status` and
     `rite watchdog` read: a Worker that misses `stall_threshold` beats in
-    a row reports STALLED, and one that has never beaten at all reports
-    "no heartbeat ever recorded".
+    a row reports STALLED, and one that has never beaten but holds claims
+    reports "no heartbeat ever recorded". One with neither a heartbeat nor a
+    claim reads as not started, which is not a stall.
 
     Examples:
       rite heartbeat --worker alpha

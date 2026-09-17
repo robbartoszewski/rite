@@ -1,11 +1,17 @@
 import time
 from pathlib import Path
 
+from rite_ai.claims.ledger import ClaimsLedger
 from rite_ai.reporting.heartbeat import (
     detect_stalls,
+    not_started,
     read_heartbeat,
     write_heartbeat,
 )
+
+
+def _claim(root: Path, worker: str) -> None:
+    ClaimsLedger(root / ".rite" / "claims.json").claim([f"src/{worker}"], worker)
 
 
 class TestWriteAndRead:
@@ -30,7 +36,8 @@ class TestWriteAndRead:
 
 
 class TestDetectStalls:
-    def test_no_heartbeat_is_stall(self, tmp_path: Path):
+    def test_no_heartbeat_while_holding_claims_is_stall(self, tmp_path: Path):
+        _claim(tmp_path, "alpha")
         stalls = detect_stalls(tmp_path, ["alpha"], threshold_seconds=60)
         assert len(stalls) == 1
         assert stalls[0].worker == "alpha"
@@ -41,6 +48,7 @@ class TestDetectStalls:
         misread as a duration, i.e. every never-started worker showed as
         stalled for ~56 years. Caught by running `rite watchdog` against a
         freshly-created worker by hand."""
+        _claim(tmp_path, "alpha")
         stalls = detect_stalls(tmp_path, ["alpha"], threshold_seconds=60)
         assert stalls[0].seconds_silent == float("inf")
 
@@ -63,6 +71,33 @@ class TestDetectStalls:
 
     def test_mixed_workers(self, tmp_path: Path):
         write_heartbeat(tmp_path, "alpha")
+        _claim(tmp_path, "beta")
         stalls = detect_stalls(tmp_path, ["alpha", "beta"], threshold_seconds=60)
         assert len(stalls) == 1
         assert stalls[0].worker == "beta"
+
+
+class TestNotStarted:
+    """A worker nobody has picked up is not a stall. `rite add worker` then
+    `rite status` showed it STALLED, and the watchdog exited 1 on it every
+    cycle until a first heartbeat."""
+
+    def test_no_heartbeat_and_no_claims_is_not_started_not_stalled(self, tmp_path):
+        assert detect_stalls(tmp_path, ["alpha"], threshold_seconds=60) == []
+        assert not_started(tmp_path, ["alpha"]) == ["alpha"]
+
+    def test_a_claim_is_evidence_it_started(self, tmp_path):
+        _claim(tmp_path, "alpha")
+        assert not_started(tmp_path, ["alpha"]) == []
+        assert [s.worker for s in detect_stalls(tmp_path, ["alpha"], 60)] == ["alpha"]
+
+    def test_a_heartbeat_is_evidence_it_started(self, tmp_path):
+        write_heartbeat(tmp_path, "alpha")
+        assert not_started(tmp_path, ["alpha"]) == []
+
+    def test_an_unreadable_ledger_counts_nobody_as_not_started(self, tmp_path):
+        """A missed stall is worse than a false one."""
+        (tmp_path / ".rite").mkdir()
+        (tmp_path / ".rite" / "claims.json").write_text("{not json")
+        assert not_started(tmp_path, ["alpha"]) == []
+        assert [s.worker for s in detect_stalls(tmp_path, ["alpha"], 60)] == ["alpha"]

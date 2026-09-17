@@ -239,6 +239,9 @@ class TestATickThatCannotRunSaysSo:
         (root / "workers" / "alpha" / "worker.yml").write_text(
             'worker:\n  name: "alpha"\n  modules: []\n'
         )
+        from rite_ai.claims.ledger import ClaimsLedger
+
+        ClaimsLedger(root / ".rite" / "claims.json").claim(["src"], "alpha")
         result = run_tick(root)
         assert result.needs_attention is True
         assert result.ok is True, "a stalled worker marked the tick itself failed"
