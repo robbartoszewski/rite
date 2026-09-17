@@ -949,12 +949,21 @@ def _warn_if_unregistered(worker: str) -> None:
 def claim(paths: tuple[str, ...], worker: str, ticket: str) -> None:
     """Claim file/directory paths for a worker."""
     from rite_ai.claims.ledger import ClaimsLedger
+    from rite_ai.coordination.identity import claims_channel
 
     _require_project_root()
     ledger = ClaimsLedger(_claims_path())
-    result = ledger.claim(list(paths), worker, ticket)
+    # P2-5a/P2-5b: with a fleet, a claim is checked against and published to
+    # the other machines. Without one, both are None and nothing changes.
+    layer, machine = claims_channel(_find_project_root())
+    result = ledger.claim(list(paths), worker, ticket, layer=layer, machine=machine)
     if result.ok:
         click.echo(f"claimed {len(paths)} path(s) for {worker}")
+        if result.message:
+            # "claimed locally, but not published" — the two stores cannot
+            # be made atomic, so the gap is said out loud rather than left
+            # for another machine to discover by claiming over it.
+            click.echo(result.message, err=True)
         _warn_if_unregistered(worker)
     else:
         click.echo(f"claim failed: {result.message}", err=True)

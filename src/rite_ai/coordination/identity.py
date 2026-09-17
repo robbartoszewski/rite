@@ -83,3 +83,43 @@ def enrolment(root: Path, config: CoordinationConfig) -> str | None:
             "Owner, and the other machines will not defer to it"
         )
     return None
+
+
+def claims_channel(root: Path):
+    """(state layer, machine name) for cross-machine claims, or (None, "").
+
+    P2-5b checks other machines' published claims before granting one, and
+    P2-5a publishes the grant so those machines can see it — but only if a
+    caller supplies a layer and a name. `rite claim` supplied neither, so
+    both were inert and two machines could claim the same path.
+
+    Returns nothing at all unless coordination is configured AND this
+    machine is enrolled, so a single-machine project keeps claiming exactly
+    as it does today: local, offline, no round trip.
+
+    ⚠ With a layer, a claim NEEDS the remote: a store that cannot be read
+    refuses the claim rather than granting one it could not check (the same
+    fail-closed rule the rest of this layer follows). That is P2-5b's
+    bargain, not a new one — a machine that cannot see other machines'
+    claims cannot safely take a shared path.
+    """
+    from rite_ai.config.parse import load_project
+
+    project = load_project(root)
+    if isinstance(project, list):
+        return None, ""
+    config = project.config.coordination
+    if not config.managers or not config.remote:
+        return None, ""
+    name = this_manager(root)
+    if name is None or (config.managers and name not in config.managers):
+        return None, ""
+
+    from rite_ai.coordination.git_backend import GitStateLayer
+
+    layer = GitStateLayer(
+        config.remote,
+        root / ".rite" / "coordination-cache.git",
+        state_branch=config.state_branch,
+    )
+    return layer, name
