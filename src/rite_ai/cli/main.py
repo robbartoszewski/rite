@@ -545,10 +545,40 @@ def _doctor_report(problems: list[str]) -> None:
         for tool, probe in (("gitleaks", ["version"]), ("gh", ["--version"])):
             found = shutil.which(tool)
             if not found:
+                missing_tools.add(tool)
+                if tool == "gitleaks":
+                    # Unconditionally load-bearing, unlike `gh`. `rite init`
+                    # installs a pre-push hook and a CI job that both run the
+                    # gate, and the gate refuses to run without gitleaks
+                    # rather than scan partially — so "not found" means this
+                    # project has no secret scanning at all.
+                    #
+                    # It used to print this line and stop there: `not found`
+                    # was never appended to `problems`, so doctor exited 0
+                    # and reported a healthy project. Present-and-broken was
+                    # a problem and absent was not, which is backwards —
+                    # absent is the commoner case and disables just as much.
+                    #
+                    # The remedy names the release binaries, not only a
+                    # package manager. Measured on a tester's machine: no
+                    # gitleaks AND no Homebrew, which made "brew install
+                    # gitleaks" a dead end; she hand-grepped the staged
+                    # files instead and said so.
+                    click.echo(
+                        "tool gitleaks: not found — the publish gate cannot "
+                        "run, so nothing scans for secrets before a push. "
+                        "Install it from https://github.com/gitleaks/gitleaks "
+                        "(release binaries for macOS and Linux), or via a "
+                        "package manager if you use one (`brew install "
+                        "gitleaks`)."
+                    )
+                    problems.append(
+                        "gitleaks is not installed — the publish gate cannot run"
+                    )
+                    continue
                 # Whether this is a PROBLEM depends on the project: `gh` is
                 # load-bearing only once Workers are sandboxed, which is
                 # known further down, where the config is parsed.
-                missing_tools.add(tool)
                 click.echo(f"tool {tool}: not found")
                 continue
             ok, detail = _tool_runs(found, probe)

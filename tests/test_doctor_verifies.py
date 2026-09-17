@@ -10,6 +10,7 @@ to a remote with exit 0 while doctor printed "active" and "ok".
 from __future__ import annotations
 
 import os
+import re
 import stat
 import subprocess
 from pathlib import Path
@@ -126,6 +127,20 @@ class TestBriefIsParsedNotStatted:
         assert result.exit_code == 1
 
 
+def _hide_gitleaks(monkeypatch):
+    """Everything on PATH except gitleaks. Patches `shutil.which` itself
+    rather than a name inside `main`, because `main` imports the module and
+    looks the function up on it at call time."""
+    import shutil as _shutil
+
+    real = _shutil.which
+
+    def which(tool, *a, **k):
+        return None if tool == "gitleaks" else real(tool, *a, **k)
+
+    monkeypatch.setattr(_shutil, "which", which)
+
+
 class TestToolsAreRun:
     def test_a_tool_that_exits_non_zero_is_broken(self, tmp_path: Path):
         fake = tmp_path / "bin" / "thing"
@@ -178,6 +193,55 @@ class TestToolsAreRun:
         result = CliRunner().invoke(cli, ["doctor"])
         assert result.exit_code == 1, result.output
         assert "tool gitleaks: BROKEN" in result.output
+
+    def test_doctor_fails_when_gitleaks_is_MISSING(self, tmp_path, monkeypatch):
+        """THE REGRESSION, and the asymmetry it came from.
+
+        A gitleaks that is present-and-broken was a problem (above). A
+        gitleaks that is simply absent printed `tool gitleaks: not found`
+        and was never appended to `problems`, so `rite doctor` exited 0 and
+        reported a healthy project whose publish gate cannot run at all.
+        Absent is the commoner case and equally disabling.
+
+        Found on a tester's machine: no gitleaks and no Homebrew either, so
+        `rite publish check` could not run. She substituted a manual grep of
+        the staged files and said so. A less careful user reads doctor's
+        exit 0 and pushes.
+        """
+        root = _project(tmp_path / "p")
+        monkeypatch.chdir(root)
+
+        with_gitleaks = CliRunner().invoke(cli, ["doctor"]).output
+        _hide_gitleaks(monkeypatch)
+        without = CliRunner().invoke(cli, ["doctor"]).output
+
+        assert "tool gitleaks: not found" in without
+
+        # Asserted as a DIFFERENCE, not a bare non-zero exit. `doctor` on a
+        # bare fixture already exits 1 for unrelated reasons (no credentials,
+        # no hook), so `exit_code == 1` passes with this fix deleted —
+        # measured. The contribution is what has to be visible.
+        def count(out: str) -> int:
+            m = re.search(r"(\d+) problem\(s\) found", out)
+            return int(m.group(1)) if m else 0
+
+        assert count(without) == count(with_gitleaks) + 1, (
+            f"a missing gitleaks added no problem: {count(without)} vs "
+            f"{count(with_gitleaks)}\n{without}"
+        )
+
+    def test_the_remedy_does_not_assume_homebrew(self, tmp_path, monkeypatch):
+        """The tester had no Homebrew, so "brew install gitleaks" was a dead
+        end. gitleaks ships release binaries; say so."""
+        root = _project(tmp_path / "p")
+        _hide_gitleaks(monkeypatch)
+        monkeypatch.chdir(root)
+
+        out = CliRunner().invoke(cli, ["doctor"]).output
+
+        assert "github.com/gitleaks/gitleaks" in out, (
+            "the only remedy offered is a package manager the user may not have"
+        )
 
 
 class TestConfigErrorsAreLouderNotQuieter:

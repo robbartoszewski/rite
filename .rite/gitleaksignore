@@ -125,7 +125,7 @@
 # 46 blocking findings, every one a home-shaped path in git's test fixtures.
 # Saying so requires writing a path of the shape the rule matches. These are
 # the sentence, not a path anything reads.
--:src/rite_ai/gate/gate.py:rite-hardcoded-linux-home-directory-path:250  # docstring recording the 46-finding measurement on git's repo; illustrative, not a real machine path
+-:src/rite_ai/gate/gate.py:rite-hardcoded-linux-home-directory-path:253  # docstring recording the 46-finding measurement on git's repo; illustrative, not a real machine path
 -:tests/test_gate_at_scale.py:rite-hardcoded-linux-home-directory-path:19  # the same sentence in that test's module docstring; illustrative, not a real machine path
 -:tests/test_gate_at_scale.py:rite-hardcoded-linux-home-directory-path:44  # fixture constant the test plants and then asserts the built-in path rule fires on; see NOTE at the end of this file
 -:tools/phase1_status.py:rite-hardcoded-macos-home-directory-path:412  # deliberately-bad file written into a throwaway repo to probe that the gate catches it; placeholder username; not a real path

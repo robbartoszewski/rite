@@ -123,10 +123,13 @@ def _run_gate(
     if binary is None:
         return GateReport(
             errors=[
-                "gitleaks is not installed or not on PATH. "
-                "Install it (e.g. `brew install gitleaks`) — rite's publish "
+                "gitleaks is not installed or not on PATH. rite's publish "
                 "gate is built on gitleaks and does not reimplement secret "
-                "detection, so it cannot run without it."
+                "detection, so it cannot run without it. Install it from "
+                "https://github.com/gitleaks/gitleaks (release binaries for "
+                "macOS and Linux), or via a package manager if you use one "
+                "(`brew install gitleaks`) — naming only the package manager "
+                "was a dead end for a tester who had neither."
             ]
         )
 
