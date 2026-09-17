@@ -3505,6 +3505,20 @@ pointing at the insufficiency rate, which is the only thing that can tell a
 small-and-sufficient slice from a small-and-empty one. It is deliberately not
 a config key: a project that could tune it would be tuning away the warning.
 
+**The two levers are measured, and only one of them works on a sparse spec.**
+Raising `spec.slice_depth` to 2 follows references one step further; on rite's
+own spec that took the p90 slice from 8.9% to 14.9% (median 5.4% to 6.7%), still
+under the refusal threshold. On three specs whose units mostly cite nothing it
+changed the median by **nothing at all** — 8.8% to 8.8%, 10.1% to 10.1%, 0.9% to
+0.9% — because there is no second reference to follow. That is the shape most
+likely to be falling back, so `rite spec status` names the other levers there: a
+larger `spec.pin_count`, which loads more shared context into every slice
+(measured: pin 16 costs more at the median than depth 2 does, 9.5% against
+6.7%), and writing the missing references into the spec. Pinning nothing looks
+cheapest of all — p50 1.4% on this spec — and is the trap the whole design turns
+on: those slices are small because they are missing the context every unit
+depends on.
+
 **The insufficiency rate is not optional.** A slice that was not enough is
 invisible: the Worker reads the whole spec and the digest looks like it worked.
 So `rite spec slice` records every retrieval, `rite handover write

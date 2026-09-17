@@ -709,3 +709,36 @@ def test_upgrading_delivers_the_worker_its_spec_section(tmp_path: Path, monkeypa
     again = runner.invoke(cli, ["update", "--files-only"], catch_exceptions=False)
     assert "generated files already current" in again.output
     assert "spec section" not in again.output
+
+
+def test_the_advice_matches_the_shape_of_the_spec_it_is_given(
+    tmp_path: Path, monkeypatch
+):
+    """Depth 2 follows a second reference. On a spec whose units cite nothing
+    there is no second reference, and measured on three such specs it left the
+    median slice unchanged — so recommending it there is advice that cannot
+    work, offered to exactly the specs most likely to be falling back."""
+    from rite_ai.spec.telemetry import record_fallback
+
+    def project_with(citing: bool) -> Path:
+        root = tmp_path / ("dense" if citing else "sparse")
+        (root / ".rite").mkdir(parents=True)
+        (root / ".rite" / "config.yaml").write_text("spec:\n  paths:\n    - SPEC.md\n")
+        body = "See §1.\n" if citing else "This section references nothing.\n"
+        (root / "SPEC.md").write_text(
+            "# T\n"
+            + "".join(f"## {n}. S{n}\n{body}" + "filler\n" * 8 for n in range(1, 40))
+        )
+        record_fallback(root, "2", worker="alpha")
+        return root
+
+    sparse = project_with(citing=False)
+    monkeypatch.chdir(sparse)
+    out = _run(sparse, "status").output
+    assert "will not help here" in out
+    assert "pin_count" in out
+
+    dense = project_with(citing=True)
+    monkeypatch.chdir(dense)
+    out = _run(dense, "status").output
+    assert "slice_depth" in out and "will not help here" not in out
