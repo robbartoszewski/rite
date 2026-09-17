@@ -711,7 +711,7 @@ def _doctor_report(problems: list[str]) -> None:
             problems.append(f"config {err.file}: {err.message}")
     else:
         from rite_ai.coordination.config_check import coordination_problems
-        from rite_ai.coordination.identity import enrolment
+        from rite_ai.coordination.identity import enrolment, this_manager
         from rite_ai.sandbox import is_installed, verify_sandbox
         from rite_ai.schedule import validate_schedule
 
@@ -838,6 +838,38 @@ def _doctor_report(problems: list[str]) -> None:
         if not_enrolled:
             click.echo(not_enrolled)
             problems.append(not_enrolled)
+
+        if coordination.remote and not not_enrolled:
+            # §2.3: the Owner "detects stalled Managers and surfaces them to
+            # the human". Reading is safe on any machine — it needs no
+            # identity and writes nothing.
+            with _doctor_check("coordination state", problems):
+                from datetime import UTC, datetime
+
+                from rite_ai.coordination.git_backend import GitStateLayer
+                from rite_ai.coordination.overview import (
+                    format_overview,
+                    read_overview,
+                )
+
+                overview = read_overview(
+                    GitStateLayer(
+                        coordination.remote,
+                        root / ".rite" / "coordination-cache.git",
+                        state_branch=coordination.state_branch,
+                    ),
+                    coordination,
+                    now=datetime.now(UTC),
+                    heartbeat=project.config.heartbeat,
+                    this_machine=this_manager(root),
+                )
+                for line in format_overview(overview):
+                    click.echo(line)
+                for note in overview.notes:
+                    click.echo(f"coordination: {note}")
+                for problem in overview.problems:
+                    click.echo(f"coordination: {problem}")
+                    problems.append(f"coordination: {problem}")
 
         # P2-1e. Only once a coordination remote is configured: the probe
         # pushes, so a single-machine project must never run it.
