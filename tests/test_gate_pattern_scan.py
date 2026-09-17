@@ -159,3 +159,30 @@ def test_scan_kb_cross_reference_ignores_short_lines(tmp_path: Path):
     assert isinstance(files, list)
     findings = scan_kb_cross_reference(tmp_path, files)
     assert findings == []
+
+
+def test_kb_suppression_does_not_carry_to_another_published_file(tmp_path: Path):
+    """A kb finding is a PAIR — the kb line, and the published file it turned
+    up in — but only the kb half is in `file`, so a fingerprint built from the
+    line alone is the same whichever file it leaked into.
+
+    That makes "this line is also in a test fixture, which is fine" suppress
+    the same line appearing later in README.md. The line form hid it: the kb
+    line number was in the identity, so any edit to the kb file broke the
+    entry and forced a re-review by accident. Nothing should depend on that.
+    """
+    line = "our proprietary valuation multiplies risk by exposure factor"
+    (tmp_path / ".rite" / "kb").mkdir(parents=True)
+    (tmp_path / ".rite" / "kb" / "algo.md").write_text(f"# A\n\n{line}\n")
+    (tmp_path / "fixture.py").write_text(f"# {line}\n")
+
+    approved = scan_kb_cross_reference(tmp_path, [".rite/kb/algo.md", "fixture.py"])
+
+    (tmp_path / "fixture.py").unlink()
+    (tmp_path / "README.md").write_text(f"{line}\n")
+    leaked = scan_kb_cross_reference(tmp_path, [".rite/kb/algo.md", "README.md"])
+
+    assert approved and leaked
+    assert approved[0].content_fingerprint != leaked[0].content_fingerprint, (
+        "an entry accepting the copy in fixture.py also accepts the copy in README.md"
+    )

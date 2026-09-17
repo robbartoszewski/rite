@@ -266,7 +266,17 @@ def scan_kb_cross_reference(root: Path, files: list[str]) -> list[Finding]:
                         line=lineno,
                         commit=None,
                         match_preview=redact(stripped, keep=8),
-                        digest=content_digest(stripped) if stripped else "",
+                        # The WHERE-IT-WENT is part of what was found here.
+                        # For every other rule the finding is a string in a
+                        # file; this one is a pair — a kb line and the
+                        # published file it turned up in — and only the kb
+                        # half is in `file`. Digesting the line alone would
+                        # let "this line is also in a test fixture, which is
+                        # fine" go on suppressing the same line appearing in
+                        # README.md, which is the leak the rule exists for.
+                        digest=content_digest(f"{stripped}\n\x00{target_file}")
+                        if stripped
+                        else "",
                         source="rite-kb",
                     )
                 )
