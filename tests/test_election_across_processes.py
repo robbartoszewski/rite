@@ -39,7 +39,7 @@ SECONDS = 15.0
 def _manager_actor(args):
     """One Manager, ticking until the run ends, logging every moment it
     believed it held the role."""
-    spec, name, managers, t0, log_path, pause_at = args
+    spec, name, managers, t0, log_path, hang_after = args
 
     from election_harness import clock_for
     from rite_ai.config.models import CoordinationConfig, HeartbeatConfig
@@ -60,12 +60,21 @@ def _manager_actor(args):
     )
 
     rows = []
+    # The hang is triggered by PROGRESS, not by the clock. Pausing between
+    # two wall-clock instants looked fine and was not: the machine decides
+    # how many ticks fit in a second, and under a full suite run four
+    # spawned children got so few that the window passed with nothing having
+    # happened — no lapse, no turnover, and a test that reported "no
+    # turnover" rather than a real failure. Hanging once this Manager has
+    # actually held the role means the interesting state is reached first,
+    # however slow the machine is.
     stop = time.time() + SECONDS
     while time.time() < stop:
-        if pause_at and pause_at[0] <= time.time() - t0 <= pause_at[1]:
-            # This Manager hangs: no ticks, so no renewals. Its lease lapses
-            # and somebody else must take the role — the case the whole
-            # lease design exists for (D-17).
+        if len(rows) >= hang_after:
+            # Having held the role, this Manager stops renewing and never
+            # comes back. Its lease lapses and the next one must take over —
+            # what D-17 exists for. EVERY actor does this, so the run is a
+            # chain of handovers rather than one.
             time.sleep(0.05)
             continue
         tick = monitor.tick()
@@ -124,9 +133,12 @@ def test_four_managers_four_processes_never_overlap(specs, tmp_path):
     logs.mkdir()
 
     t0 = time.time()
-    # Two of the four hang for a while, at different times, so the run
-    # contains real promotions rather than one uneventful ownership.
-    pauses = {1: (3.0, 7.0), 0: (6.0, 10.0)}
+    # EVERY Manager hangs once it has held the role, so the run is a chain
+    # of handovers. Tying the hang to one named Manager was wrong and flaky:
+    # it assumed the highest-priority one would win the first election, and
+    # under load whoever STARTS first wins. When that was not m0, nobody ever
+    # hung, one Manager held the role for the whole run, and the test
+    # reported "no turnover" — a fragile test, not a broken election.
     args = [
         (
             specs[i],
@@ -134,7 +146,7 @@ def test_four_managers_four_processes_never_overlap(specs, tmp_path):
             [f"m{j}" for j in range(ACTORS)],
             t0,
             str(logs / f"{i}.json"),
-            pauses.get(i),
+            2,
         )
         for i in range(ACTORS)
     ]

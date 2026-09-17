@@ -55,9 +55,11 @@ def _manager(args):
     rows: list[dict] = []
     events: list[str] = []
     held: str = ""  # the `acquired` of the lease we currently believe is ours
-    stop = time.time() + SECONDS
+    # Relative to this child's own start: see the note in the election test.
+    own_start = time.time()
+    stop = own_start + SECONDS
     while time.time() < stop:
-        if time.time() - t0 < joins_after:
+        if time.time() - own_start < joins_after:
             time.sleep(0.05)
             continue
         tick = monitor.tick()
