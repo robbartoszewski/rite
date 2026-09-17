@@ -42,6 +42,10 @@
 - Fixed the file Workers actually read still telling them they own modules —
   0.3.0 corrected the Owner's copy only, and there was no way to deliver either
   correction to an existing project. Both now arrive with `rite update`.
+- Fixed one Worker's malformed `worker.yml` stopping the whole refresh: the
+  project and every other Worker received nothing, under a message that
+  blamed `.rite/` config. A Worker whose manifest will not parse now still
+  receives its copied commands and agents.
 - Fixed a stray code fence in a spec quietly deleting the sections after it.
 - Fixed `rite init` on an already-initialised directory saying only that it
   refused: it now says what else the directory can be given.
