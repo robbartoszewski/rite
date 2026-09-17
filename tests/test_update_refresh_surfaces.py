@@ -429,3 +429,72 @@ class TestTheGitignoreBlock:
         result = CliRunner().invoke(cli, ["update", "--files-only", "--dry-run"])
         assert "would add rite's newer ignore lines" in result.output
         assert gitignore.read_text() == "build/\n"
+
+
+class TestTheRefreshRunsInTheRiteThatWasJustInstalled:
+    """`rite update` replaces rite and then refreshes the project's generated
+    files — in the process that is still the OLD version, whose idea of those
+    files is the one being replaced. Upgrading from a rite with no refresh at
+    all, that meant no refresh: the user had to know to run it a second time.
+    """
+
+    def _run(self, root, calls, ok=True):
+        import subprocess
+
+        from rite_ai.update import UpdateResult
+
+        real = subprocess.run
+
+        def record(command, **kwargs):
+            if list(command[1:2]) != ["update"]:
+                return real(command, **kwargs)
+            calls.append((list(command), kwargs.get("env", {})))
+            return subprocess.CompletedProcess(command, 0)
+
+        with (
+            patch("rite_ai.cli.main._find_project_root", return_value=root),
+            patch("rite_ai.update.detect_install_method", return_value="uv"),
+            patch(
+                "rite_ai.update.run_self_update",
+                return_value=UpdateResult(ok, "Installed 2 executables: rite, rite-ai"),
+            ),
+            patch("subprocess.run", record),
+        ):
+            return CliRunner().invoke(cli, ["update", "--yes"])
+
+    def test_it_hands_the_refresh_to_the_new_binary(self, tmp_path, monkeypatch):
+        root = _project(tmp_path, monkeypatch)
+        calls: list = []
+
+        result = self._run(root, calls)
+
+        assert result.exit_code == 0, result.output
+        assert calls, "nothing was handed off — the old rite refreshed instead"
+        command, env = calls[-1]
+        assert command[1:] == ["update", "--files-only"], command
+        assert env.get("RITE_UPDATE_CHILD") == "1", "the child could recurse"
+
+    def test_the_child_refreshes_in_process(self, tmp_path, monkeypatch):
+        """The hand-off has to stop somewhere, and the child is already the
+        new version."""
+        root = _project(tmp_path, monkeypatch)
+        calls: list = []
+        monkeypatch.setenv("RITE_UPDATE_CHILD", "1")
+
+        result = self._run(root, calls)
+
+        assert not calls, "the child handed off again"
+        assert "config already current" in result.output
+
+    def test_a_failed_self_update_refreshes_here_and_still_fails(
+        self, tmp_path, monkeypatch
+    ):
+        """Nothing was installed, so this process is the newest rite there is."""
+        root = _project(tmp_path, monkeypatch)
+        calls: list = []
+
+        result = self._run(root, calls, ok=False)
+
+        assert not calls
+        assert "config already current" in result.output
+        assert result.exit_code == 1

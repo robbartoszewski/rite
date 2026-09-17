@@ -5305,6 +5305,40 @@ def review(module: str | None) -> None:
 # --- Update ---
 
 
+def _hand_off_refresh(take: tuple[str, ...]) -> bool:
+    """Run the refresh in the rite that was just installed, not in this one.
+
+    Returns whether a child ran; the caller refreshes in-process if not, which
+    is no worse than what it did before.
+    """
+    import os
+    import shutil
+    import subprocess
+    import sys
+
+    if os.environ.get("RITE_UPDATE_CHILD"):
+        return False
+    command = (
+        [rite, "update", "--files-only"]
+        if (rite := shutil.which("rite"))
+        else [sys.executable, "-m", "rite_ai.cli.main", "update", "--files-only"]
+    )
+    for name in take:
+        command += ["--take-rite", name]
+    try:
+        subprocess.run(
+            command, env={**os.environ, "RITE_UPDATE_CHILD": "1"}, timeout=300
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        click.echo(
+            f"refresh the project's generated files with `rite update "
+            f"--files-only` — this run could not ({e})",
+            err=True,
+        )
+        return True
+    return True
+
+
 @cli.command()
 @click.option("--yes", is_flag=True, help="Skip the confirmation prompt")
 @click.option(
@@ -5360,6 +5394,12 @@ def update(yes: bool, files_only: bool, dry_run: bool, take: tuple[str, ...]) ->
             result = run_self_update(method)
             click.echo(result.message, err=not result.ok)
             failed = not result.ok
+            if not failed and _hand_off_refresh(take):
+                # This process is the version that was just replaced. The
+                # refresh below would be the OLD rite's idea of what the
+                # generated files should say — on the first upgrade to a rite
+                # that has this command at all, it would be no refresh.
+                return
 
     # Runs whether or not the self-update worked: the files on disk have
     # nothing to do with whether a download succeeded.
