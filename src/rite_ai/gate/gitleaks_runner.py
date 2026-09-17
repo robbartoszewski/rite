@@ -56,6 +56,31 @@ def find_gitleaks_binary() -> str | None:
     return shutil.which("gitleaks")
 
 
+def missing_gitleaks_consequence(hook_armed: bool) -> str:
+    """What a missing gitleaks actually costs THIS machine, in one clause.
+
+    The two outcomes need different things from the reader and only one of
+    them is about scanning. With the pre-push hook armed the gate fails
+    closed — exit 3, git aborts — so what they meet is a push they cannot
+    make. Without it, the push goes through unscanned.
+
+    Said in one place because `rite init` and `rite doctor` both report it,
+    and doctor's first version hedged across both cases ("where the hook is
+    installed … where it is not") while holding the answer: it runs
+    `gate_hook_status` a few checks later and prints it. An instrument that
+    makes the reader do work it has already done is the same defect as one
+    that does not say what it cannot see.
+    """
+    return (
+        "pushes from this machine are blocked until it is installed (the "
+        "pre-push hook runs the publish gate, and the gate fails closed "
+        "rather than pass a scan it could not do)"
+        if hook_armed
+        else "the publish gate cannot run, and nothing scans before a push on "
+        "this machine"
+    )
+
+
 HOW_TO_INSTALL = (
     "Install it from https://github.com/gitleaks/gitleaks (release binaries "
     "for macOS and Linux), or via a package manager if you use one "

@@ -566,19 +566,19 @@ def _doctor_report(problems: list[str]) -> None:
                     # gitleaks AND no Homebrew, which made "brew install
                     # gitleaks" a dead end; she hand-grepped the staged
                     # files instead and said so.
-                    # "nothing scans" was half the story and the less
-                    # useful half. With the pre-push hook installed the gate
-                    # fails closed: it exits 3 and git ABORTS the push, so
-                    # what the reader will actually meet is a push they
-                    # cannot make. Without the hook, nothing scans and the
-                    # push goes through. Which of those applies is the fact
-                    # that decides what they do next.
+                    # Which of the two outcomes applies is the fact that
+                    # decides what the reader does next, and doctor knows it
+                    # — `gate_hook_status` is what the "publish gate hook"
+                    # check below prints. Asked here rather than hedged.
+                    from rite_ai.gate.hook import gate_hook_status
+
                     click.echo(
-                        "tool gitleaks: not found — the publish gate cannot "
-                        "run. Where the pre-push hook is installed it fails "
-                        "closed, so pushes from this machine are blocked "
-                        "until gitleaks is; where it is not, nothing scans "
-                        "before a push at all. " + gitleaks_runner.HOW_TO_INSTALL
+                        "tool gitleaks: not found — "
+                        + gitleaks_runner.missing_gitleaks_consequence(
+                            gate_hook_status(root).active
+                        )
+                        + ". "
+                        + gitleaks_runner.HOW_TO_INSTALL
                     )
                     problems.append(
                         "gitleaks is not installed — the publish gate cannot run"

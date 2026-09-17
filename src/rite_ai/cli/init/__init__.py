@@ -284,12 +284,7 @@ def run_init(
     # Told now, while installing a tool is a setup step. Left to the gate,
     # the reader meets it mid-push, as a push they cannot make.
     if gitleaks_runner.find_gitleaks_binary() is None:
-        local = (
-            "the pre-push hook is installed but cannot run, so pushes from "
-            "this machine are blocked until it is"
-            if installed_hooks
-            else "nothing scans before a push on this machine"
-        )
+        local = gitleaks_runner.missing_gitleaks_consequence(bool(installed_hooks))
         # The CI workflow installs its own pinned gitleaks, so the remote
         # layer is unaffected — but only if it is actually there and runs
         # the gate. Saying "CI has you covered" when it does not is the
@@ -300,7 +295,7 @@ def run_init(
             else " CI is not covering it either (see above)."
         )
         ui.note(
-            f"gitleaks is not installed — {local}.{remote} "
+            f"gitleaks is not on PATH — {local}.{remote} "
             + gitleaks_runner.HOW_TO_INSTALL
         )
     ui.generated(f"CLAUDE.md ({answers.role})")

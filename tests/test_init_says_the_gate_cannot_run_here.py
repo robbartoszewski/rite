@@ -58,7 +58,7 @@ class TestInitSaysSo:
         unable to push at all."""
         out = _init(project, capsys, gitleaks=None)
 
-        assert "blocked" in out
+        assert "pushes from this machine are blocked" in out
 
     def test_it_says_ci_is_still_covered_because_it_installs_its_own(
         self, project, capsys
@@ -101,8 +101,8 @@ class TestInitSaysSo:
         absent = _init(project, capsys, gitleaks=None)
         present = _init(other, capsys, gitleaks="/usr/local/bin/gitleaks")
 
-        assert "gitleaks is not installed" in absent
-        assert "gitleaks is not installed" not in present
+        assert "gitleaks is not on PATH" in absent
+        assert "gitleaks is not on PATH" not in present
 
 
 class TestTheRemedyIsSaidTheSameWayEverywhere:

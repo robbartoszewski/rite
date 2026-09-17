@@ -273,3 +273,58 @@ class TestConfigErrorsAreLouderNotQuieter:
         result = CliRunner().invoke(cli, ["doctor"])
         assert result.output.count("brief.yaml") == 1, result.output
         assert "1 problem(s) found" in result.output
+
+
+class TestDoctorSaysWhichOutcomeAMissingGitleaksHas:
+    """It reported the cause and hedged the consequence — "where the hook is
+    installed … where it is not" — while holding the answer: `gate_hook_status`
+    is what its own "publish gate hook" check prints a few lines later.
+
+    The two outcomes are not variants of one message. With the hook armed the
+    gate fails closed and the reader cannot push at all; without it the push
+    goes through unscanned. One of those is an interruption, the other is an
+    exposure, and the reader needs to know which they have.
+    """
+
+    def _doctor_without_gitleaks(self, root: Path, monkeypatch) -> str:
+        monkeypatch.chdir(root)
+        _hide_gitleaks(monkeypatch)
+        return CliRunner().invoke(cli, ["doctor"]).output
+
+    def test_an_armed_hook_means_pushes_are_blocked(self, tmp_path, monkeypatch):
+        root = _project(tmp_path / "p")  # installs the pre-push hook
+
+        out = self._doctor_without_gitleaks(root, monkeypatch)
+
+        assert "pushes from this machine are blocked" in out, out
+        assert "nothing scans before a push" not in out
+
+    def test_a_redirected_hook_means_nothing_scans(self, tmp_path, monkeypatch):
+        """`core.hooksPath` set elsewhere is the case SPEC 11.5.1 records:
+        the hook file exists, is correct, and git never reads it."""
+        root = _project(tmp_path / "p")
+        elsewhere = tmp_path / "hooks"
+        elsewhere.mkdir()
+        subprocess.run(
+            ["git", "config", "--local", "core.hooksPath", str(elsewhere)],
+            cwd=root,
+            check=True,
+        )
+
+        out = self._doctor_without_gitleaks(root, monkeypatch)
+
+        assert "nothing scans before a push" in out, out
+        assert "pushes from this machine are blocked" not in out
+
+    def test_doctor_prints_the_shared_clause_verbatim(self, tmp_path, monkeypatch):
+        """Pinned to the constant, not to a phrase. Three surfaces report a
+        missing gitleaks and the first two had already drifted apart before
+        it was one constant; a fourth wording written here would be the
+        drift starting again."""
+        from rite_ai.gate.gitleaks_runner import missing_gitleaks_consequence
+
+        root = _project(tmp_path / "p")
+
+        out = self._doctor_without_gitleaks(root, monkeypatch)
+
+        assert missing_gitleaks_consequence(True) in out
