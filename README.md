@@ -186,7 +186,9 @@ rite status                  # what is happening now
 rite doctor                  # tools and credentials — non-zero on problems
 ```
 
-`rite status` and `rite doctor` are read-only. `rite help` tours the rest.
+`rite status` and `rite doctor` are read-only, with one exception: once a
+coordination remote is configured, doctor pushes and then deletes one throwaway
+branch there to check that force-push is allowed. `rite help` tours the rest.
 
 ## Install
 

@@ -822,6 +822,30 @@ def _doctor_report(problems: list[str]) -> None:
             ):
                 click.echo(notice)
 
+        # Phase 2 (P2-1e). Only once a coordination remote is configured: the
+        # probe pushes, so a single-machine project must never run it.
+        coordination = project.config.coordination
+        if coordination.remote:
+            with _doctor_check("coordination remote", problems):
+                from rite_ai.coordination.remote_probe import probe_force_push
+
+                probe = probe_force_push(
+                    coordination.remote, coordination.state_branch, root
+                )
+                if probe.ok:
+                    click.echo(f"coordination remote: {probe.detail}")
+                else:
+                    click.echo(
+                        f"coordination remote: {probe.detail}"
+                        + (f" — {probe.remedy}" if probe.remedy else "")
+                    )
+                    problems.append(f"coordination remote: {probe.detail}")
+                if probe.leftover_ref:
+                    click.echo(
+                        f"coordination remote: could not delete the probe branch "
+                        f"`{probe.leftover_ref}` — delete it by hand"
+                    )
+
         schedule_problems = validate_schedule(
             project.config.schedule, project.config.sandbox.max_concurrent_workers
         )
