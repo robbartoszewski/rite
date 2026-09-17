@@ -15,6 +15,7 @@ from rite_ai.spec.digest_files import (
     body_hash,
     covers_hash,
     digest_status,
+    file_hash,
     read_unit_file,
     read_unit_files,
     render_unit_file,
@@ -59,7 +60,7 @@ def _write(root: Path, unit_id: str, covers, body: str, *, stamped=True) -> Path
             covers,
             "SPEC.md",
             covers_hash(units, covers) or "" if stamped else "",
-            body_hash(body) if stamped else "",
+            body_hash(body, unit_id, covers, "SPEC.md") if stamped else "",
             body,
         )
     )
@@ -144,7 +145,7 @@ def test_stamping_records_hashes_of_the_source_and_of_the_body(tmp_path: Path):
     assert isinstance(stamped, UnitFile), stamped
     again = read_unit_file(path)
     assert isinstance(again, UnitFile)
-    assert again.body_sha == body_hash(again.body) == stamped.body_sha
+    assert again.body_sha == file_hash(again) == stamped.body_sha
     assert again.source_sha == covers_hash(units, ("1.1",))
     assert again.body.strip() == "A Worker does the work."
 
@@ -290,3 +291,66 @@ def test_a_quoted_numeric_id_reads_as_written(tmp_path: Path):
     path.write_text(render_unit_file("8.10", ("8.10",), "SPEC.md", "a", "b", "body"))
     read = read_unit_file(path)
     assert isinstance(read, UnitFile) and read.id == "8.10"
+
+
+# --- found in review ---------------------------------------------------------------
+
+
+def test_editing_covers_by_hand_is_tampering_not_a_changed_spec(tmp_path: Path):
+    """It reported STALE — "the source changed under it" — when the source had
+    not changed at all, which sends a session off to re-derive a unit from a
+    spec that still says exactly what its file was written from."""
+    path = _write(tmp_path, "1.1", ["1.1"], "body")
+    path.write_text(path.read_text().replace("- '1.1'", "- '2'"))
+    units, kinds = _spec()
+    status = digest_status(tmp_path, units, kinds)
+    assert status.tampered == [unit_filename("1.1")]
+    assert not status.stale
+
+
+@pytest.mark.parametrize(
+    ("before", "after"), [("id: '1.1'", "id: '2'"), ("source: SPEC.md", "source: X.md")]
+)
+def test_editing_the_front_matter_by_hand_is_noticed(tmp_path: Path, before, after):
+    """The file's first line says DO NOT EDIT; its identity was editable with
+    no signal at all."""
+    path = _write(tmp_path, "1.1", ["1.1"], "body")
+    path.write_text(path.read_text().replace(before, after))
+    units, kinds = _spec()
+    assert not digest_status(tmp_path, units, kinds).clean
+
+
+def test_ids_that_differ_only_beyond_latin_1_do_not_share_a_file(tmp_path: Path):
+    """`āa` is U+0101 then 'a'; `ယ` is U+101A. Two hex digits per character
+    rendered both as `_101a`, so one unit silently overwrote the other."""
+    assert unit_filename("āa") != unit_filename("ယ")
+    assert len({unit_filename(i) for i in ("āa", "ယ", "a", "_")}) == 4
+
+
+def test_a_long_id_still_produces_a_writable_name(tmp_path: Path):
+    long_id = "-".join(f"word{n:02d}" for n in range(1, 50))
+    name = unit_filename(long_id)
+    assert len(name.encode()) < 255
+    (tmp_path / name).write_text("x")  # the real test: the file system takes it
+    assert unit_filename(long_id + "x") != name
+
+
+def test_a_units_path_that_is_not_a_directory_is_reported(tmp_path: Path):
+    """It read as "no derived files", so every unit showed as missing and
+    every stamp reported success while writing nothing."""
+    (tmp_path / ".rite" / "spec").mkdir(parents=True)
+    (tmp_path / ".rite" / "spec" / "units").write_text("not a directory\n")
+    files, problems = read_unit_files(tmp_path)
+    assert files == []
+    assert problems and "not a directory" in problems[0]
+
+
+def test_the_quoting_refusal_does_not_name_the_wrong_section(tmp_path: Path):
+    """It said "write it as '8.1'" — which is a different section of the spec,
+    and the one thing the reader must not write."""
+    path = tmp_path / "8.10.md"
+    path.write_text("---\nid: 8.10\ncovers: ['8.10']\n---\nbody\n")
+    message = read_unit_file(path)
+    assert isinstance(message, str)
+    assert "must be quoted" in message
+    assert "write it as '8.1'" not in message

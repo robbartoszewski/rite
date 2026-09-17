@@ -4082,8 +4082,6 @@ def spec_index() -> None:
 
     root, config = _spec_root_and_config()
     parsed = _parse_spec(root, config)
-    path = write_index(root, from_parsed(parsed))
-    click.echo(f"wrote {path.relative_to(root)} — {len(parsed.units)} unit(s)")
     report = decomposition_report(
         parsed,
         refuse_above=config.spec.refuse_above,
@@ -4092,7 +4090,12 @@ def spec_index() -> None:
     )
     click.echo(render_report(report))
     if not report.decomposes:
+        # Nothing is written. An index left behind after a refusal invites a
+        # digest of a spec that was just refused, and every later command would
+        # read it as a project that had chosen to have one.
         raise SystemExit(1)
+    path = write_index(root, from_parsed(parsed))
+    click.echo(f"wrote {path.relative_to(root)} — {len(parsed.units)} unit(s)")
 
 
 @spec.command("status")
@@ -4104,11 +4107,15 @@ def spec_status() -> None:
     stamped, files edited by hand, and how often a Worker had to fall back
     to the whole spec anyway.
 
+    A report, not a gate: it exits 0 whatever it finds. `rite spec verify` is
+    the one to wire into a script.
+
     Examples:
       rite spec status
     """
     from rite_ai.spec.digest_files import digest_status, unit_filename, units_dir
     from rite_ai.spec.index_file import ABSENT, UNREADABLE, from_parsed, read_index
+    from rite_ai.spec.report import decomposition_report
     from rite_ai.spec.telemetry import insufficiency_rate
 
     root, config = _spec_root_and_config()
@@ -4127,6 +4134,18 @@ def spec_status() -> None:
     else:
         click.echo(f"index: current — {len(units)} unit(s)")
 
+    report = decomposition_report(
+        parsed,
+        refuse_above=config.spec.refuse_above,
+        pin_count=config.spec.pin_count,
+        slice_depth=config.spec.slice_depth,
+    )
+    if not report.decomposes:
+        # Repeated here because a project that ran `rite spec index` once, read
+        # the refusal and moved on has no other reminder: everything below
+        # would otherwise read as ordinary work waiting to be done.
+        click.echo(f"this spec should not be digested — {report.reason}")
+
     status = digest_status(root, units, kinds)
     click.echo(f"digest: {status.files} derived file(s)")
     for label, entries in (
@@ -4136,6 +4155,7 @@ def spec_status() -> None:
         ("edited by hand since stamping", status.tampered),
         ("never stamped", status.unstamped),
         ("not readable as unit files", status.unreadable),
+        ("covered by more than one derived file", status.overlapping),
     ):
         if entries:
             click.echo(f"  {label}: {len(entries)}")
@@ -4222,8 +4242,29 @@ def spec_slice(unit: str, worker: str, depth: int | None) -> None:
         if not wanted:
             continue
         shown.update((found.source, n) for n in wanted)
-        click.echo(f"# {unit_id} ({found.source}:{found.start}-{found.end})")
-        click.echo("\n".join(lines[n - 1] for n in wanted).rstrip())
+        # Printed as the runs actually included, each labelled with its own
+        # range, with the gaps marked. A decision register whose rows are
+        # separate units is printed after those rows, so joining what is left
+        # under the register's full range would show a complete-looking table
+        # with a row missing from the middle — which a Worker would read as
+        # "that decision does not exist".
+        runs: list[list[int]] = []
+        for n in wanted:
+            if runs and n == runs[-1][-1] + 1:
+                runs[-1].append(n)
+            else:
+                runs.append([n])
+        spans = ", ".join(f"{r[0]}" if len(r) == 1 else f"{r[0]}-{r[-1]}" for r in runs)
+        click.echo(f"# {unit_id} ({found.source}:{spans})")
+        for i, run in enumerate(runs):
+            if i:
+                click.echo("# … part of this unit is printed elsewhere …")
+            click.echo("\n".join(lines[n - 1] for n in run).rstrip())
+        if wanted[0] != found.start or wanted[-1] != found.end or len(runs) > 1:
+            click.echo(
+                f"# (this is {unit_id}, lines {found.start}-{found.end}; the "
+                "rest of it is printed elsewhere in this slice)"
+            )
         click.echo("")
     record_retrieval(root, unit, worker=worker, slice_ratio=computed.ratio)
     # On stderr: the slice itself is what a Worker pipes or reads, and a
@@ -4244,7 +4285,11 @@ def spec_slice(unit: str, worker: str, depth: int | None) -> None:
 @spec.command("stamp")
 @click.argument("units", nargs=-1)
 @click.option(
-    "--all", "all_", is_flag=True, help="Stamp every derived file that needs it."
+    "--all",
+    "all_",
+    is_flag=True,
+    help="Stamp every file that has never been stamped. Refuses stale or "
+    "hand-edited ones: those are re-digested first, then stamped by name.",
 )
 def spec_stamp(units: tuple[str, ...], all_: bool) -> None:
     """Record, on each derived file, the spec it was written from.
@@ -4260,6 +4305,7 @@ def spec_stamp(units: tuple[str, ...], all_: bool) -> None:
     """
     from rite_ai.spec.digest_files import (
         UnitFile,
+        digest_status,
         read_unit_file,
         read_unit_files,
         stamp,
@@ -4280,6 +4326,25 @@ def spec_stamp(units: tuple[str, ...], all_: bool) -> None:
         targets, problems = read_unit_files(root)
         for problem in problems:
             click.echo(problem, err=True)
+            failed = True
+        # `--all` stamps what has never been stamped, and NOTHING ELSE. Stamping
+        # a stale or hand-edited file is exactly the automatic restamp this
+        # design refuses: it would record the current spec against text written
+        # from an older one, and the drift would be gone with no trace. Those
+        # files are re-digested and then stamped BY NAME, which is a deliberate
+        # act by someone who has read the new source.
+        _, kinds = _spec_graph(parsed, config)
+        state = digest_status(root, by_id, kinds)
+        drifted = set(state.stale) | set(state.tampered)
+        skipped = [t for t in targets if t.path.name in drifted]
+        targets = [t for t in targets if t.path.name not in drifted]
+        for target in skipped:
+            click.echo(
+                f"not stamped: {target.path.name} — it is stale or edited by "
+                "hand. Re-digest that unit, then stamp it by name; stamping it "
+                "as it stands would record it as matching a spec it does not.",
+                err=True,
+            )
             failed = True
     else:
         for unit_id in units:

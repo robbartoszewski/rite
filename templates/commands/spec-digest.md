@@ -64,8 +64,9 @@ change to the spec, and it is the user's decision.
    - Delete the unit file for anything `rite spec status` reports as removed.
 
 4. **Round 1 — each unit against its own source.** For every unit you wrote or
-   changed, give a fresh reviewer the unit and **only** its source range (from
-   the unit's `source_lines`), and ask:
+   changed, give a fresh reviewer the unit and **only** its source range —
+   `rite spec slice <unit>` prints that range in its header, and
+   `.rite/spec/index.json` records it — and ask:
 
    - Does it omit a qualifier, drop a ⚠, or turn a conditional into an absolute?
    - Does it say anything the source range does not?

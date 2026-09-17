@@ -94,26 +94,60 @@ def units_dir(root: Path) -> Path:
     return root / UNITS_DIR
 
 
-def unit_filename(unit_id: str) -> str:
-    """A file name for a unit id.
-
-    Ids hold characters a path should not: `/` (slug paths), `#` (a unit from a
-    later spec file), `~` (a duplicate heading). Each becomes `_` and its two
-    hex digits, `_` itself included — so DIFFERENT IDS NEVER SHARE A FILE NAME.
-    A plain substitution would: `a/b` and `a__b` would both be `a__b.md`, and
-    one derived unit would quietly overwrite the other. The id itself is in the
-    front matter; this only has to be unique and typeable.
-    """
-    safe = re.sub(r"[^A-Za-z0-9.-]", lambda m: f"_{ord(m.group()):02x}", unit_id)
-    return safe + ".md"
-
-
 def _sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def body_hash(body: str) -> str:
-    return _sha(body.replace("\r\n", "\n").strip() + "\n")
+# Long enough to stay readable, short enough that the name plus a digest and
+# `.md` clears the 255-byte limit every common file system has.
+_NAME_BUDGET = 120
+
+
+def unit_filename(unit_id: str) -> str:
+    """A file name for a unit id. DIFFERENT IDS NEVER SHARE ONE.
+
+    Ids hold characters a path should not: `/` (slug paths), `#` (a unit from a
+    later spec file), `~` (a duplicate heading), and anything a heading in any
+    language puts in a slug. Each becomes `_<hex>_`, `_` itself included.
+
+    The delimiters are the point. `_{ord:02x}` without one is not prefix-free
+    beyond U+00FF: `āa` (U+0101 then `a`) and `ယ` (U+101A) both render `_101a`,
+    so two units would land on one file and the first would be overwritten by
+    the second, silently and unrecoverably — status would go on reporting a
+    unit as missing at a path that already exists.
+
+    A name over the budget keeps a readable head and ends in a hash of the
+    whole id, because a spec with 60-character headings should not produce a
+    file nobody can write.
+    """
+    safe = re.sub(r"[^A-Za-z0-9.-]", lambda m: f"_{ord(m.group()):x}_", unit_id)
+    if len(safe) > _NAME_BUDGET:
+        safe = safe[: _NAME_BUDGET - 17] + "-" + _sha(unit_id)[:16]
+    return safe + ".md"
+
+
+def body_hash(
+    body: str, unit_id: str = "", covers: tuple[str, ...] = (), source: str = ""
+) -> str:
+    """What `body_sha` records: the file as written, minus the two stamp fields.
+
+    The front matter is inside it because it is not decoration — `covers` is
+    what the source hash is computed over, `id` is how the file is addressed.
+    While only the body was hashed, editing `covers` by hand reported the file
+    as STALE ("the spec changed under it", which it had not) and editing `id`
+    or `source` reported nothing at all, on a file whose first line says DO NOT
+    EDIT.
+    """
+    head = (
+        f"{unit_id}\n{','.join(covers)}\n{source}\n"
+        if unit_id or covers or source
+        else ""
+    )
+    return _sha(head + body.replace("\r\n", "\n").strip() + "\n")
+
+
+def file_hash(unit_file: UnitFile) -> str:
+    return body_hash(unit_file.body, unit_file.id, unit_file.covers, unit_file.source)
 
 
 def covers_hash(units: dict[str, Unit], covers: tuple[str, ...]) -> str | None:
@@ -150,10 +184,16 @@ def _unquoted(value) -> bool:
 def _quote_it(path: Path, field_name: str, value) -> str:
     """Refused rather than coerced. `id: 8.10` is the number 8.1, and 8.1 is a
     DIFFERENT section of the spec — writing str(8.1) back would point the
-    derived file at the wrong unit and nothing downstream could tell."""
+    derived file at the wrong unit and nothing downstream could tell.
+
+    Which is why the fix cannot name `value`: by the time this runs, `8.10` is
+    already gone. Telling the reader to "write it as '8.1'" would hand them the
+    wrong section with a straight face."""
     return (
-        f"{path.name}: {field_name} must be quoted — YAML read {value!r} as a "
-        f"number, so write it as '{value}' (section 8.10 unquoted becomes 8.1)"
+        f"{path.name}: {field_name} must be quoted — YAML read it as the number "
+        f"{value!r}, losing how the spec writes it (unquoted, 8.10 becomes 8.1, "
+        "which is another section). Quote it exactly as the spec numbers it: "
+        f"{field_name}: '<id>'"
     )
 
 
@@ -200,6 +240,10 @@ def read_unit_file(path: Path) -> UnitFile | str:
 
 def read_unit_files(root: Path) -> tuple[list[UnitFile], list[str]]:
     directory = units_dir(root)
+    if directory.exists() and not directory.is_dir():
+        # Reported, not read as "no files": every unit would show as missing
+        # and every stamp would report success while writing nothing.
+        return [], [f"{UNITS_DIR} is not a directory — nothing can be digested"]
     if not directory.is_dir():
         return [], []
     files, problems = [], []
@@ -220,7 +264,7 @@ def stamp(unit_file: UnitFile, units: dict[str, Unit]) -> UnitFile | str:
         )
     source_sha = covers_hash(units, unit_file.covers)
     assert source_sha is not None
-    body_sha = body_hash(unit_file.body)
+    body_sha = file_hash(unit_file)
     write_atomic(
         unit_file.path,
         render_unit_file(
@@ -272,8 +316,12 @@ def digest_status(
         if not f.source_sha or not f.body_sha:
             status.unstamped.append(name)
             continue
-        if body_hash(f.body) != f.body_sha:
+        if file_hash(f) != f.body_sha:
+            # Reported once, by its cause. A hand-edited `covers` also fails
+            # the source check, and "the spec changed under it" would send a
+            # session to re-derive a unit from a source that never moved.
             status.tampered.append(name)
+            continue
         if covers_hash(units, f.covers) != f.source_sha:
             status.stale.append(name)
     status.new = [

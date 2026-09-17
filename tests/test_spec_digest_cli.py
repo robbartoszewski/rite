@@ -286,3 +286,103 @@ def test_stamp_needs_either_units_or_all(project: Path, monkeypatch):
     assert _run(project, "stamp").exit_code == 2
     _write_unit(project, "1.1", ["1.1"])
     assert _run(project, "stamp", "1.1", "--all").exit_code == 2
+
+
+# --- found in review ---------------------------------------------------------------
+
+
+def test_stamp_all_refuses_to_bless_a_hand_edited_file(project: Path, monkeypatch):
+    """`--all` stamping everything erased every drift signal the feature
+    exists to produce, in one command, and exited 0."""
+    monkeypatch.chdir(project)
+    path = _write_unit(project, "1.1", ["1.1"])
+    _run(project, "stamp", "1.1")
+    path.write_text(path.read_text() + "\nsomeone typed this\n")
+    result = _run(project, "stamp", "--all")
+    assert result.exit_code == 1
+    assert "not stamped" in result.output and "by name" in result.output
+    assert "edited by hand since stamping" in _run(project, "status").output
+
+
+def test_stamp_all_refuses_to_bless_a_stale_file(project: Path, monkeypatch):
+    monkeypatch.chdir(project)
+    _write_unit(project, "1.1", ["1.1"])
+    _run(project, "stamp", "--all")
+    (project / "SPEC.md").write_text(
+        (SPEC + FILLER).replace("A Worker does the work", "A Worker now does it")
+    )
+    result = _run(project, "stamp", "--all")
+    assert result.exit_code == 1
+    assert "stale" in _run(project, "status").output
+
+
+def test_stamping_a_unit_by_name_is_still_how_a_rewrite_is_recorded(
+    project: Path, monkeypatch
+):
+    """The deliberate act stays available: `--all` is the bulk convenience,
+    naming a unit is the statement that its text was just rewritten."""
+    monkeypatch.chdir(project)
+    path = _write_unit(project, "1.1", ["1.1"])
+    _run(project, "stamp", "1.1")
+    path.write_text(
+        render_unit_file("1.1", ("1.1",), "SPEC.md", "", "", "rewritten by hand")
+    )
+    assert _run(project, "stamp", "1.1").exit_code == 0
+    assert _run(project, "status").output.count("edited by hand") == 0
+
+
+def test_index_writes_nothing_for_a_spec_it_refuses(tmp_path: Path, monkeypatch):
+    """A refusal that leaves an index behind invites the digest it refused."""
+    from rite_ai.spec.index_file import index_path
+
+    (tmp_path / ".rite").mkdir()
+    (tmp_path / ".rite" / "config.yaml").write_text("spec:\n  paths:\n    - SPEC.md\n")
+    (tmp_path / "SPEC.md").write_text(SPEC)
+    monkeypatch.chdir(tmp_path)
+    assert _run(tmp_path, "index").exit_code == 1
+    assert not index_path(tmp_path).exists()
+
+
+def test_status_repeats_the_refusal_rather_than_listing_work_to_do(
+    tmp_path: Path, monkeypatch
+):
+    (tmp_path / ".rite").mkdir()
+    (tmp_path / ".rite" / "config.yaml").write_text("spec:\n  paths:\n    - SPEC.md\n")
+    (tmp_path / "SPEC.md").write_text(SPEC)
+    monkeypatch.chdir(tmp_path)
+    assert "should not be digested" in _run(tmp_path, "status").output
+
+
+def test_status_reports_two_files_covering_one_unit(project: Path, monkeypatch):
+    monkeypatch.chdir(project)
+    _write_unit(project, "1.1", ["1.1"])
+    (units_dir(project) / "other.md").write_text(
+        render_unit_file("other", ("1.1",), "SPEC.md", "", "", "a second account")
+    )
+    assert "more than one derived file" in _run(project, "status").output
+
+
+def test_a_spliced_section_is_never_presented_as_a_whole_one(
+    tmp_path: Path, monkeypatch
+):
+    """A register printed without one of its rows, under the register's own
+    line range, reads as a complete table — and a Worker concludes that
+    decision does not exist. The rows are separate units, so this happens
+    whenever a row is in the slice and its register is pinned."""
+    rows = "\n".join(f"| D-{n} | Choice {n} | Because {n}. |" for n in range(1, 6))
+    sections = "\n".join(
+        f"## {n}. S{n}\nSection {n}, which implements D-3 and D-1.\n"
+        for n in range(1, 30)
+    )
+    (tmp_path / ".rite").mkdir()
+    (tmp_path / ".rite" / "config.yaml").write_text("spec:\n  paths:\n    - SPEC.md\n")
+    (tmp_path / "SPEC.md").write_text(
+        f"# T\n{sections}\n## 99. Decisions\n| D | Choice | Why |\n{rows}\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    out = _run(tmp_path, "slice", "7").output
+    register = out[out.index("# 99 (") :]
+    assert "| D-1 | Choice 1" not in register  # already printed as its own unit
+    # …so the register must not claim to be the whole table.
+    assert "printed elsewhere" in register
+    assert "# 99 (SPEC.md:" in register and "-" in register.splitlines()[0]
