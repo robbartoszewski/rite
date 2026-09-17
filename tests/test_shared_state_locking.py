@@ -392,3 +392,46 @@ class TestExclusionIsMeasuredNotAssumed:
         ledger_module.ClaimsLedger(tmp_path / ".rite" / "claims.json")
 
         assert capsys.readouterr().err == ""
+
+
+class TestTheExclusionProbeDoesNotRaceItself:
+    """`exclusion_holds` used one fixed probe filename and deleted it when
+    done. Concurrent probes of one directory then deleted each other's file
+    mid-probe; the survivor reopened the path, got a fresh inode, was granted
+    the lock, and reported that flock does not exclude — on a disk where it
+    does. Found by P2-1a's state-layer conformance suite on its first run.
+
+    It is not a theoretical interleaving: several workers running
+    `rite claim` together each build a ledger, each probe `.rite/`, and one
+    of them printed a warning telling the user to run one worker at a time.
+    """
+
+    def test_concurrent_probes_of_one_directory_all_say_it_excludes(self, tmp_path):
+        import threading
+
+        from rite_ai.state import exclusion_holds
+
+        n, trials = 16, 10
+        for trial in range(trials):
+            barrier = threading.Barrier(n)
+            results = [None] * n
+
+            def probe(i):
+                barrier.wait()
+                results[i] = exclusion_holds(tmp_path)
+
+            threads = [threading.Thread(target=probe, args=(i,)) for i in range(n)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+            assert all(results), f"trial {trial}: false 'does not exclude': {results}"
+
+    def test_the_probe_leaves_nothing_behind(self, tmp_path):
+        """A unique file per call must still be cleaned up, or every claim
+        would litter `.rite/` with probe files."""
+        from rite_ai.state import exclusion_holds
+
+        for _ in range(5):
+            exclusion_holds(tmp_path)
+        assert not list(tmp_path.glob(".rite-flock-probe*"))
