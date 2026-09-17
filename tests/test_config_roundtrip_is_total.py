@@ -201,11 +201,18 @@ def test_a_dropped_section_is_actually_caught(tmp_path):
 
     real = scaffold.config_to_yaml
     try:
-        scaffold.config_to_yaml = lambda c: "\n".join(
-            line
-            for line in real(c).splitlines()
-            if not line.startswith("sandbox:") and not line.startswith("  backend:")
-        )
+        # The whole block, not just its header: orphaned keys would land in
+        # the section above and be refused as unknown there instead.
+        def without_sandbox(c):
+            kept, inside = [], False
+            for line in real(c).splitlines():
+                if not line.startswith(" "):
+                    inside = line.startswith("sandbox:")
+                if not inside:
+                    kept.append(line)
+            return "\n".join(kept)
+
+        scaffold.config_to_yaml = without_sandbox
         path = tmp_path / "config.yaml"
         path.write_text(scaffold.config_to_yaml(original))
         parsed = parse_config(path)

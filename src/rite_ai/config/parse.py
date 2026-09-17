@@ -49,6 +49,16 @@ def parse_brief(path: Path) -> ProjectBrief | ParseError:
     if not isinstance(raw, dict):
         return ParseError(str(path), "expected a YAML mapping at top level")
 
+    unknown = _unknown_in_sections(
+        raw,
+        _BRIEF_SECTIONS,
+        frozenset(_BRIEF_SECTIONS),
+        _BRIEF_RETIRED,
+        _BRIEF_RETIRED_TOP,
+    )
+    if unknown:
+        return ParseError(str(path), unknown)
+
     project = raw.get("project", {})
     if not isinstance(project, dict):
         return ParseError(str(path), "'project' must be a mapping")
@@ -110,10 +120,96 @@ _MODULE_KEYS = frozenset(f.name for f in dataclasses.fields(Module)) - {"name"}
 _COMMAND_KEYS = frozenset(f.name for f in dataclasses.fields(RecordedCommands))
 
 
-def _unknown_key(entry: dict, known: frozenset[str]) -> str:
-    """A message naming the first key not in `known`, or "" when there is none."""
+def _fields(cls: type, *, without: frozenset[str] = frozenset()) -> frozenset[str]:
+    return frozenset(f.name for f in dataclasses.fields(cls)) - without
+
+
+# brief.yaml, config.yaml and worker.yml refuse unknown keys for the reason
+# modules.yaml does: `root_brach:` read as nothing leaves the project on `main`
+# with the file looking configured. Each set is taken from the dataclasses, so
+# a new field needs no second edit here; tests/test_config_unknown_keys.py
+# fails if a section and its dataclass disagree.
+#
+# Retired keys are accepted and ignored. Every v0.1.0 brief.yaml carries
+# `what.notes`, removed since, so refusing it would fail every project that
+# upgrades. Measured against v0.1.0 and v0.2.0 running init, add module, add
+# worker, schedule and spec: it is the only key either writes that is no
+# longer a field. `enriched:` is the other: no command wrote it, but earlier
+# versions told the first session to append one (D-53), and `rite doctor`
+# reports it — which it could not do for a brief that failed to parse.
+#
+# Every writer of these files parses them first and stops on a ParseError, so
+# a refused file is never overwritten and the key its author wrote is still
+# there to fix.
+_BRIEF_SECTIONS = {
+    "project": frozenset({"name", "role", "root_branch"}),
+    "what": frozenset({"kind", "features"}),
+    "technology": frozenset({"platform", "languages", "frameworks", "architecture"}),
+    "source": frozenset({"path", "changes"}),
+}
+_BRIEF_RETIRED = {"what": frozenset({"notes"})}
+_BRIEF_RETIRED_TOP = frozenset({"enriched"})
+
+_CONFIG_SECTIONS = {
+    "ticket_backend": _fields(TicketBackendConfig),
+    "credentials": _fields(CredentialsConfig),
+    "publish_gate": _fields(PublishGateConfig),
+    "heartbeat": _fields(HeartbeatConfig),
+    "watchdog": _fields(WatchdogConfig),
+    "pool": _fields(PoolConfig),
+    "sandbox": _fields(SandboxConfig),
+    "budget": _fields(BudgetConfig),
+    "schedule": _fields(ScheduleConfig),
+    "spec": _fields(SpecConfig),
+}
+_CONFIG_KEYS = _fields(ProjectConfig)
+_EXPERTISE_KEYS = _fields(ExpertiseEntry, without=frozenset({"name"}))
+_SCAN_PATTERN_KEYS = _fields(ScanPattern)
+_WINDOW_KEYS = _fields(ScheduleWindow)
+
+_WORKER_KEYS = _fields(WorkerManifest)
+
+
+def _unknown_in_sections(
+    raw: dict,
+    sections: dict[str, frozenset[str]],
+    top: frozenset[str],
+    retired: dict[str, frozenset[str]] | None = None,
+    retired_top: frozenset[str] = frozenset(),
+) -> str:
+    """The first unknown key at the top level or inside a known section."""
+    unknown = _unknown_key(raw, top, retired_top)
+    if unknown:
+        return unknown
+    retired = retired or {}
+    for section, known in sections.items():
+        body = raw.get(section)
+        if isinstance(body, dict):
+            unknown = _unknown_key(body, known, retired.get(section, frozenset()))
+            if unknown:
+                return f"{section}: {unknown}"
+    return ""
+
+
+def _unknown_in_items(items: object, known: frozenset[str], where: str) -> str:
+    """The first unknown key in a list of mappings, e.g. `schedule.windows`."""
+    if not isinstance(items, list):
+        return ""
+    for i, item in enumerate(items):
+        if isinstance(item, dict):
+            unknown = _unknown_key(item, known)
+            if unknown:
+                return f"{where}[{i}]: {unknown}"
+    return ""
+
+
+def _unknown_key(
+    entry: dict, known: frozenset[str], retired: frozenset[str] = frozenset()
+) -> str:
+    """A message naming the first key not in `known`, or "" when there is none.
+    Keys in `retired` were written by an earlier release and are ignored."""
     for key in entry:
-        if key in known:
+        if key in known or key in retired:
             continue
         if known is _MODULE_KEYS and key in _COMMAND_KEYS:
             hint = f" — commands go under 'commands:', as commands: {{{key}: ...}}"
@@ -199,6 +295,10 @@ def parse_config(path: Path) -> ProjectConfig | ParseError:
 
     if not isinstance(raw, dict):
         return ParseError(str(path), "expected a YAML mapping at top level")
+
+    unknown = _unknown_config_key(raw)
+    if unknown:
+        return ParseError(str(path), unknown)
 
     tb_raw = raw.get("ticket_backend", {})
     ticket_backend = (
@@ -361,6 +461,34 @@ def parse_config(path: Path) -> ProjectConfig | ParseError:
     )
 
 
+def _unknown_config_key(raw: dict) -> str:
+    unknown = _unknown_in_sections(raw, _CONFIG_SECTIONS, _CONFIG_KEYS)
+    if unknown:
+        return unknown
+    expertise = raw.get("expertise")
+    if isinstance(expertise, dict):
+        for name, entry in expertise.items():
+            if isinstance(entry, dict):
+                unknown = _unknown_key(entry, _EXPERTISE_KEYS)
+                if unknown:
+                    return f"expertise '{name}': {unknown}"
+    publish_gate = raw.get("publish_gate")
+    if isinstance(publish_gate, dict):
+        unknown = _unknown_in_items(
+            publish_gate.get("scan_patterns"),
+            _SCAN_PATTERN_KEYS,
+            "publish_gate.scan_patterns",
+        )
+        if unknown:
+            return unknown
+    schedule = raw.get("schedule")
+    if isinstance(schedule, dict):
+        return _unknown_in_items(
+            schedule.get("windows"), _WINDOW_KEYS, "schedule.windows"
+        )
+    return ""
+
+
 def parse_worker(path: Path) -> WorkerManifest | ParseError:
     if not path.exists():
         return ParseError(str(path), "file not found")
@@ -371,6 +499,10 @@ def parse_worker(path: Path) -> WorkerManifest | ParseError:
 
     if not isinstance(raw, dict):
         return ParseError(str(path), "expected a YAML mapping at top level")
+
+    unknown = _unknown_in_sections(raw, {"worker": _WORKER_KEYS}, frozenset({"worker"}))
+    if unknown:
+        return ParseError(str(path), unknown)
 
     worker = raw.get("worker", {})
     if not isinstance(worker, dict):

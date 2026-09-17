@@ -68,6 +68,12 @@ def run_init(
         return source
     changes = ""
     if source is not None:
+        # A brief that is there but cannot be read is still a rite project.
+        # Treated as none, init would go on to offer wiping `.rite/` over a
+        # typo, so it stops here with the file untouched.
+        unreadable = _unreadable_brief(source)
+        if unreadable is not None:
+            return unreadable
         changes = _read_changes(source, preset, interactive)
         project = _rite_project_at(source)
         if project is not None:
@@ -306,9 +312,7 @@ def _resolve_source(root: Path, text: str) -> Path:
     return (path if path.is_absolute() else root / path).resolve()
 
 
-def _existing_source(
-    root: Path, preset, interactive: bool
-) -> Path | InitResult | None:
+def _existing_source(root: Path, preset, interactive: bool) -> Path | InitResult | None:
     """Where the existing spec or code is, or None to start from scratch.
 
     A path is asked for again until it exists. A typo that fell through to
@@ -355,6 +359,20 @@ def _read_changes(source: Path, preset, interactive: bool) -> str:
     return ui.paragraph(">")
 
 
+def _unreadable_brief(path: Path) -> InitResult | None:
+    brief_path = path / ".rite" / "brief.yaml"
+    if not path.is_dir() or not brief_path.exists():
+        return None
+    brief = parse_brief(brief_path)
+    if isinstance(brief, ProjectBrief):
+        return None
+    return InitResult(
+        status="error",
+        message=f"{brief_path} cannot be read: {brief.message}. Fix it and run "
+        "`rite init` again — nothing was changed.",
+    )
+
+
 def _rite_project_at(path: Path) -> Path | None:
     if not path.is_dir():
         return None
@@ -381,9 +399,7 @@ def _record_changes(project: Path, changes: str) -> InitResult:
     source["changes"] = f"{earlier}\n\n{changes}" if earlier else changes
     source.setdefault("path", str(project))
     raw["source"] = source
-    write_atomic(
-        brief_path, yaml.safe_dump(raw, sort_keys=False, allow_unicode=True)
-    )
+    write_atomic(brief_path, yaml.safe_dump(raw, sort_keys=False, allow_unicode=True))
     return InitResult(
         status="updated",
         message=f"Recorded in {brief_path}. Nothing else in the project was changed.",
