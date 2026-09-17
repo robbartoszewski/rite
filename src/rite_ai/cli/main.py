@@ -4111,8 +4111,12 @@ def _spec_root_and_config(missing_exit: int = 1):
     return root, config
 
 
-def _parse_spec(root: Path, config, missing_exit: int = 1):
-    """Every registered spec file, parsed into units."""
+def _parse_spec(root: Path, config, missing_exit: int = 1, echo_problems: bool = True):
+    """Every registered spec file, parsed into units.
+
+    `echo_problems` is off for `rite spec index`, which prints the same list
+    under the verdict where it belongs — said once, after the numbers it
+    explains, rather than twice on either side of them."""
     from rite_ai.spec.units import parse_paths
 
     parsed = parse_paths(root, config.spec.paths, config.spec.extra_units)
@@ -4123,8 +4127,9 @@ def _parse_spec(root: Path, config, missing_exit: int = 1):
             err=True,
         )
         raise SystemExit(missing_exit)
-    for problem in parsed.problems:
-        click.echo(f"  {problem}", err=True)
+    if echo_problems:
+        for problem in parsed.problems:
+            click.echo(f"  {problem}", err=True)
     return parsed
 
 
@@ -4152,7 +4157,7 @@ def spec_index() -> None:
     from rite_ai.spec.report import render as render_report
 
     root, config = _spec_root_and_config()
-    parsed = _parse_spec(root, config)
+    parsed = _parse_spec(root, config, echo_problems=False)
     report = decomposition_report(
         parsed,
         refuse_above=config.spec.refuse_above,

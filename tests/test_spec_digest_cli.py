@@ -450,3 +450,14 @@ def test_show_counts_as_a_retrieval(project: Path, monkeypatch):
     assert [(e.kind, e.unit, e.worker) for e in events] == [
         ("retrieval", "1.1", "alpha")
     ]
+
+
+def test_index_says_a_parse_problem_once(project: Path, monkeypatch):
+    """It was said twice — once by the shared parse step and again as a note
+    under the verdict — which reads as two different problems."""
+    monkeypatch.chdir(project)
+    (project / "SPEC.md").write_text(
+        SPEC + FILLER + "```bash\necho hi\n## 90. Lost to the fence\ntext\n"
+    )
+    result = _run(project, "index")
+    assert result.output.count("never closed") == 1
