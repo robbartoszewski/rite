@@ -215,6 +215,8 @@ class TestCopiedTemplates:
         from rite_ai.cli.init.paths import templates_dir
         from rite_ai.update.template_history import RELEASED
 
+        from rite_ai.cli.init.scaffold import render_ci_workflow
+
         src = templates_dir()
         stale = []
         for sub, names in (("agents", _AGENT_FILES), ("commands", _COMMAND_FILES)):
@@ -222,6 +224,16 @@ class TestCopiedTemplates:
                 digest = hashlib.sha256((src / sub / name).read_bytes()).hexdigest()
                 if digest not in RELEASED.get(f"{sub}/{name}", frozenset()):
                     stale.append(f"{sub}/{name}")
+        checklist = hashlib.sha256(
+            (src / "review-checklist.md").read_bytes()
+        ).hexdigest()
+        if checklist not in RELEASED.get("review-checklist.md", frozenset()):
+            stale.append("review-checklist.md")
+        # Rendered, not copied: what a release WROTE is the template with that
+        # release's pin in it.
+        workflow = hashlib.sha256(render_ci_workflow().encode()).hexdigest()
+        if workflow not in RELEASED.get("ci/publish-gate.yml", frozenset()):
+            stale.append("ci/publish-gate.yml")
         assert not stale, (
             f"{stale} differ from every released version — if this is a release, "
             "run `uv run python tools/template_history.py` after tagging"

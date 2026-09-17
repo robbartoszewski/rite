@@ -26,6 +26,13 @@ RELEASED: dict[str, frozenset[str]] = {
             "580014c22ed19ad3464705479092760cf8ad1a2fb9a65f843d6d55254bf68d8d",
         }
     ),
+    "ci/publish-gate.yml": frozenset(
+        {
+            "3d198bd353c03a0d141030f39911b2e304c76f5861bba5711b905d7ff296809d",
+            "a1ccd9ce36863a9367f9593be33b13509744d7cb3589e1c87a4601dbc3250f40",
+            "ff1f67865f2fa62450cda8b6bf0be7f4531c3dd746cb537cd7a3fabb833d6b9f",
+        }
+    ),
     "commands/refine.md": frozenset(
         {
             "aced97a653ba7475e761746873f0194ec2bdd4c598ac7e0fa68b959bcd21dd59",
@@ -46,6 +53,11 @@ RELEASED: dict[str, frozenset[str]] = {
     "commands/ticket.md": frozenset(
         {
             "1f6a0b73bed863680ad7e0b12c04b2d982c8d246845cd6489fc956ba4abf6df3",
+        }
+    ),
+    "review-checklist.md": frozenset(
+        {
+            "3da56d0982170d8fe1de9579d5bb4c126b9b2f85e1834c9aa16c328c10501ede",
         }
     ),
 }

@@ -171,6 +171,43 @@ def refresh_template(
     return Change(label, action)
 
 
+def refresh_ci_workflow(root: Path, take: frozenset[str], apply: bool) -> Change | None:
+    """The generated CI workflow — rendered, not copied, so "pristine" means
+    "what rite would have written at some release".
+
+    Refreshing it also moves the install pin: a workflow written by v0.2.0
+    keeps installing v0.2.0 in CI forever, so the gate a project relies on is
+    the gate it was initialised with (SPEC §11.5.1 calls CI the load-bearing
+    layer). An absent workflow is REPORTED, never installed: `rite init`
+    deliberately never overwrites one, and a file someone deleted is a choice.
+    """
+    from rite_ai.cli.init.scaffold import CI_WORKFLOW_REL_PATH, render_ci_workflow
+    from rite_ai.update.template_history import RELEASED
+
+    path = root / CI_WORKFLOW_REL_PATH
+    label = CI_WORKFLOW_REL_PATH
+    if not (root / ".git").exists():
+        # `write_ci_workflow` writes nothing outside a git repository, so
+        # there is nothing here to be missing.
+        return None
+    if not path.exists():
+        return Change(label, "absent")
+    current = path.read_text(errors="replace")
+    rendered = render_ci_workflow()
+    if current == rendered:
+        return None
+    digest = hashlib.sha256(current.encode()).hexdigest()
+    if digest in RELEASED.get("ci/publish-gate.yml", frozenset()):
+        action = "refreshed"
+    elif label in take or path.name in take:
+        action = "taken"
+    else:
+        return Change(label, "kept-edited", _diff(current, rendered))
+    if apply:
+        path.write_text(rendered)
+    return Change(label, action)
+
+
 def _refresh_claude_md(
     root: Path,
     path: Path,
@@ -256,6 +293,19 @@ def refresh_project(
         )
         if ch:
             files.changes.append(ch)
+    checklist = refresh_template(
+        root / ".rite" / "review-checklist.md",
+        src / "review-checklist.md",
+        "review-checklist.md",
+        ".rite/review-checklist.md",
+        take,
+        apply,
+    )
+    if checklist:
+        files.changes.append(checklist)
+    ci = refresh_ci_workflow(root, take, apply)
+    if ci:
+        files.changes.append(ci)
     results.append(files)
 
     workers = root / "workers"
@@ -323,6 +373,7 @@ def report(results: list[FileResult], dry_run: bool, take: frozenset[str]) -> li
         if dry_run
         else "replaced with rite's version",
         "installed": "would install" if dry_run else "installed",
+        "absent": "not there — `rite publish install-ci` writes one",
     }
     kept = []
     matched = set()
@@ -330,17 +381,15 @@ def report(results: list[FileResult], dry_run: bool, take: frozenset[str]) -> li
         if r.note:
             lines.append(f"{r.path}: {r.note}")
         for ch in r.changes:
-            where = (
-                ch.target
-                if ch.target.startswith((".claude", "workers/"))
-                else f"{r.path} § {ch.target}"
-            )
+            # A target with a path stands on its own; a bare heading belongs
+            # to the file it was found in.
+            where = ch.target if "/" in ch.target else f"{r.path} § {ch.target}"
             if ch.action in KEPT:
                 kept.append((where, ch))
             else:
                 if ch.action == "taken":
                     matched.add(ch.target)
-                lines.append(f"{where}: {verb[ch.action]}")
+                lines.append(f"{where}: {verb.get(ch.action, ch.action)}")
     for where, ch in kept:
         why = (
             "you edited it since rite wrote it"
