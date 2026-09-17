@@ -23,6 +23,7 @@ from pathlib import Path
 from rite_ai.config.models import ScanPattern
 from rite_ai.gate.findings import (
     Finding,
+    content_digest,
     iter_commit_messages,
     redact,
     rev_range_args,
@@ -101,6 +102,7 @@ def scan_content(
                             line=lineno,
                             commit=None,
                             match_preview=redact(m.group(0)),
+                            digest=content_digest(m.group(0)) if m.group(0) else "",
                             source=source,
                         )
                     )
@@ -130,6 +132,7 @@ def scan_filenames(
                         line=0,
                         commit=None,
                         match_preview=redact(m.group(0)),
+                        digest=content_digest(m.group(0)) if m.group(0) else "",
                         source=source,
                     )
                 )
@@ -187,6 +190,7 @@ def scan_commit_messages(
                             line=lineno,
                             commit=sha,
                             match_preview=redact(m.group(0)),
+                            digest=content_digest(m.group(0)) if m.group(0) else "",
                             source=source,
                         )
                     )
@@ -262,6 +266,7 @@ def scan_kb_cross_reference(root: Path, files: list[str]) -> list[Finding]:
                         line=lineno,
                         commit=None,
                         match_preview=redact(stripped, keep=8),
+                        digest=content_digest(stripped) if stripped else "",
                         source="rite-kb",
                     )
                 )

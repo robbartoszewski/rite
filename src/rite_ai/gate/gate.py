@@ -40,6 +40,9 @@ class GateReport:
     # `_split_off_pre_existing`.
     pre_existing: list[Finding] = field(default_factory=list)
     stale_suppressions: list[Suppression] = field(default_factory=list)
+    # Every entry that parsed, stale or not — so a report can say how many
+    # findings one of them is covering.
+    suppressions: list[Suppression] = field(default_factory=list)
     files_scanned: int = 0
     commits_scanned: int = 0
     errors: list[str] = field(default_factory=list)
@@ -209,7 +212,11 @@ def _run_gate(
     # if the user's config also sets useDefault).
     deduped: dict[str, Finding] = {}
     for f in all_findings:
-        deduped.setdefault(f.fingerprint, f)
+        # Keyed on the digest too: two DIFFERENT secrets reported at one
+        # file:line:rule (a key and its twin on the same line, say) are two
+        # findings and two decisions, and keying on position alone silently
+        # dropped the second before anything could suppress either.
+        deduped.setdefault((f.fingerprint, f.digest), f)
     merged = list(deduped.values())
 
     suppression_path = root / DEFAULT_SUPPRESSION_PATH
@@ -227,6 +234,7 @@ def _run_gate(
         suppressed=suppressed,
         pre_existing=pre_existing,
         stale_suppressions=stale,
+        suppressions=suppressions,
         files_scanned=len(tracked),
     )
 
@@ -287,7 +295,11 @@ def format_report(report: GateReport) -> str:
             commit = f" ({f.commit[:8]})" if f.commit else ""
             lines.append(f"  [{f.rule_id}] {loc}{commit} — {f.description}")
             lines.append(f"    match: {f.match_preview}")
-            lines.append(f"    fingerprint: {f.fingerprint}")
+            # The content form when there is one: it is what a suppression
+            # should be pinned to, and printing the line form beside it just
+            # offers the reader the one that drifts.
+            lines.append(f"    fingerprint: {f.content_fingerprint or f.fingerprint}")
+        lines.append(supp_mod.HOW_TO_SUPPRESS)
     if report.pre_existing:
         n = len(report.pre_existing)
         lines.append(
@@ -311,20 +323,20 @@ def format_report(report: GateReport) -> str:
                 f"  {s.fingerprint} (line {s.line_no} of {DEFAULT_SUPPRESSION_PATH}) "
                 f"— no longer matches any finding, reason was: {s.reason}"
             )
-            # The commonest cause by far, and the one the report used to
-            # leave the reader to work out: an edit above a suppressed line
-            # moved it, so the entry went stale AND the finding it covered
-            # turned up in the blocking list above. Both facts were printed;
-            # nothing said they were the same finding.
-            moved = supp_mod.moved_to(s, report.findings)
-            if moved is not None:
-                lines.append(
-                    f"    the same rule now matches at line {moved.line} of "
-                    f"that file — if it is the same finding, re-point this "
-                    f"entry to:\n      {moved.fingerprint}"
-                )
+            # Why an entry went stale, when that can be said: the commonest
+            # cause by far is an edit above a suppressed line moving it, so
+            # the entry goes stale AND the finding it covered turns up in the
+            # blocking list above. Both facts were printed; nothing said they
+            # were the same finding.
+            hint = supp_mod.stale_hint(s, report.findings)
+            if hint:
+                lines.append(hint)
     if report.suppressed:
         lines.append(f"\n{len(report.suppressed)} finding(s) suppressed (with reason)")
+        for s, n in supp_mod.covering_more_than_one(
+            report.suppressed, report.suppressions
+        ):
+            lines.append(f"  one entry covers {n} of them: {s.fingerprint}")
     if report.exit_code == EXIT_CLEAN:
         lines.append("\nclean")
     return "\n".join(lines)

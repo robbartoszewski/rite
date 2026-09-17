@@ -2752,6 +2752,9 @@ def publish_check(rev_range: str | None) -> None:
     from rite_ai.gate import EXIT_CLEAN, EXIT_FAIL, EXIT_WARN, run_gate
 
     root = _gate_root()
+    from rite_ai.gate import suppression
+    from rite_ai.gate.suppression import stale_hint
+
     report = run_gate(root, rev_range=rev_range)
 
     for finding in report.findings:
@@ -2759,25 +2762,33 @@ def publish_check(rev_range: str | None) -> None:
             f"  [{finding.source}] {finding.file}:{finding.line} "
             f"{finding.rule_id}: {finding.match_preview}"
         )
+        # Without this, the command a human actually types names the finding
+        # and then leaves them to work out what a suppression line looks
+        # like: the fingerprint was printed only by `format_report`, which
+        # serves the hook and `python -m rite_ai.gate`.
+        click.echo(
+            f"    fingerprint: {finding.content_fingerprint or finding.fingerprint}"
+        )
+    if report.findings:
+        click.echo(suppression.HOW_TO_SUPPRESS)
+
+    for entry, n in suppression.covering_more_than_one(
+        report.suppressed, report.suppressions
+    ):
+        click.echo(f"\none entry covers {n} findings: {entry.fingerprint}")
 
     if report.stale_suppressions:
-        from rite_ai.gate.suppression import moved_to
-
         click.echo(f"\n{len(report.stale_suppressions)} stale suppression(s):")
         for fp in report.stale_suppressions:
             # The dataclass repr, which is what this printed on its own, names
             # the fingerprint and the reason and stops there. `rite publish
-            # check` is the command a human types, so the "moved to" line has
-            # to be here too and not only in `format_report` — that one serves
-            # `python -m rite_ai.gate` and the pre-push hook.
+            # check` is the command a human types, so whatever the other
+            # report says about a stale entry has to be said here too — hence
+            # one shared `stale_hint` rather than two copies that drift.
             click.echo(f"  {fp.fingerprint} — reason: {fp.reason}")
-            moved = moved_to(fp, report.findings)
-            if moved is not None:
-                click.echo(
-                    f"    the same rule now matches at line {moved.line} of "
-                    "that file — if it is the same finding, re-point this "
-                    f"entry to:\n      {moved.fingerprint}"
-                )
+            hint = stale_hint(fp, report.findings)
+            if hint:
+                click.echo(hint)
 
     if report.errors:
         for err in report.errors:

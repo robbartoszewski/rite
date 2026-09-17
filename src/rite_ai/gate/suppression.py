@@ -11,11 +11,25 @@ File format, one entry per non-comment line:
 
     <fingerprint>  # <reason>
 
-`<fingerprint>` is `commit:file:rule:line` (`-` for commit when there is
-none) — see `findings.Finding.fingerprint`, which uses the identical scheme
-gitleaks itself reports, verified against a live gitleaks JSON report. A line
-with a fingerprint but no `#` reason is a parse error, not a silent no-op —
-the reason is the point of this file existing at all, per SPEC.
+`<fingerprint>` is one of two forms, and an entry in either suppresses the
+finding it names:
+
+    commit:file:rule:line              where it was found
+    commit:file:rule:sha256-<digest>   what was found
+
+(`-` for commit when there is none.) The first is the scheme gitleaks itself
+reports, verified against a live gitleaks JSON report. An entry already
+written in it keeps working and needs no migration — it just stays exposed to
+what the second form fixes. The second is rite's, and is the one to write
+from now on: a line number is a proxy for a finding, and editing
+anything ABOVE a suppressed line silently moves it, so the entry goes stale
+and the finding it covered starts blocking publish while the code it covers
+has not changed. See `findings.Finding.content_fingerprint`. Nothing here is
+ever handed to gitleaks — rite does its own matching — so the second form
+costs no compatibility.
+
+A line with a fingerprint but no `#` reason is a parse error, not a silent
+no-op — the reason is the point of this file existing at all, per SPEC.
 """
 
 from __future__ import annotations
@@ -26,6 +40,10 @@ from pathlib import Path
 from rite_ai.gate.findings import Finding
 
 DEFAULT_SUPPRESSION_PATH = ".rite/gitleaksignore"
+
+CONTENT_PREFIX = "sha256-"
+"""What marks the content form's last field. See
+`findings.Finding.content_fingerprint`."""
 
 
 @dataclass
@@ -72,11 +90,30 @@ def parse(path: Path) -> list[Suppression] | SuppressionError:
 def apply(
     findings: list[Finding], suppressions: list[Suppression]
 ) -> tuple[list[Finding], list[Finding]]:
-    """Split findings into (blocking, suppressed) by fingerprint match."""
+    """Split findings into (blocking, suppressed) by fingerprint match.
+
+    Either form matches — a finding is suppressed by an entry naming where it
+    is or one naming what it is."""
     suppressed_fps = {s.fingerprint for s in suppressions}
-    blocking = [f for f in findings if f.fingerprint not in suppressed_fps]
-    suppressed = [f for f in findings if f.fingerprint in suppressed_fps]
+    blocking: list[Finding] = []
+    suppressed: list[Finding] = []
+    for f in findings:
+        (suppressed if _matches(f, suppressed_fps) else blocking).append(f)
     return blocking, suppressed
+
+
+def _matches(finding: Finding, fingerprints: set[str]) -> bool:
+    return finding.fingerprint in fingerprints or (
+        finding.content_fingerprint is not None
+        and finding.content_fingerprint in fingerprints
+    )
+
+
+def fingerprints_of(findings: list[Finding]) -> set[str]:
+    """Every string that would match one of these findings."""
+    live = {f.fingerprint for f in findings}
+    live |= {f.content_fingerprint for f in findings if f.content_fingerprint}
+    return live
 
 
 def find_stale(
@@ -87,18 +124,25 @@ def find_stale(
     accumulating rather than deciding." Not a blocking failure on its own
     (see gate.py's exit-code contract) — surfaced as a warning so it gets
     cleaned up rather than silently ignored forever."""
-    live_fps = {f.fingerprint for f in findings}
+    live_fps = fingerprints_of(findings)
     return [s for s in suppressions if s.fingerprint not in live_fps]
 
 
 def moved_to(stale: Suppression, findings: list[Finding]) -> Finding | None:
     """The finding this stale suppression probably covers at its new line.
 
-    A working-tree fingerprint is `-:file:rule:line`, so the line number is
-    part of the identity: an edit ANYWHERE ABOVE a suppressed line invalidates
-    its entry, the finding it covered becomes blocking, and the entry is
-    reported stale — while nothing about the suppressed code changed. The
-    report already prints both halves; it never said they were the same thing.
+    Only ever a LINE-pinned entry. In that form the line number is part of
+    the identity, so an edit ANYWHERE ABOVE a suppressed line invalidates the
+    entry, the finding it covered becomes blocking, and the entry is reported
+    stale — while nothing about the suppressed code changed. The report
+    already prints both halves; it never said they were the same thing.
+
+    A content-pinned entry is returned `None` for, always. It cannot have
+    moved: position is not in its identity, so the only way it goes stale is
+    that the matched TEXT it named is gone. Offering to re-point it at
+    whatever the rule now matches in that file would hand the reader one
+    paste that moves an accepted exemption onto a string nobody has looked at
+    — which is the case this form exists to force a decision about.
 
     Matched on `(commit, file, rule)` with a DIFFERENT line. Deliberately
     conservative:
@@ -116,7 +160,7 @@ def moved_to(stale: Suppression, findings: list[Finding]) -> Finding | None:
     want_commit, _, rest = stale.fingerprint.partition(":")
     want_file, _, rest = rest.partition(":")
     want_rule, _, want_line = rest.rpartition(":")
-    if not want_rule:
+    if not want_rule or want_line.startswith(CONTENT_PREFIX):
         return None
     candidates = [
         f
@@ -139,3 +183,66 @@ def append(path: Path, fingerprint: str, reason: str) -> None:
     with path.open("w") as f:
         f.write(existing)
         f.write(f"{fingerprint}  # {reason}\n")
+
+
+def stale_hint(stale: Suppression, findings: list[Finding]) -> str | None:
+    """The indented lines to print under a stale entry, or None.
+
+    One function because there are two reports — `gate.format_report` for the
+    pre-push hook and `python -m rite_ai.gate`, and `rite publish check`,
+    which is what a human types. The "moved to" hint was added to the shared
+    formatter first and the typed command went on printing the fingerprint
+    and stopping; the same split later meant one of them handed out the line
+    form while everything else said to write the content form. Neither was a
+    hard failure, which is exactly why it survived: the text a reader acts on
+    lives here now, and both call sites render whatever it returns.
+    """
+    moved = moved_to(stale, findings)
+    if moved is not None:
+        return (
+            f"    the same rule now matches at line {moved.line} of that file "
+            f"— if it is the same finding, re-point this entry to:\n      "
+            f"{moved.content_fingerprint or moved.fingerprint}"
+        )
+    _, _, last = stale.fingerprint.rpartition(":")
+    if last.startswith(CONTENT_PREFIX):
+        return (
+            "    this entry names matched text that is no longer there. If it "
+            "was edited,\n    what replaced it is a new decision — look at it "
+            "before suppressing it.\n    If it is gone for good, delete this "
+            "line."
+        )
+    return None
+
+
+HOW_TO_SUPPRESS = (
+    f"To accept one of these, add a line to {DEFAULT_SUPPRESSION_PATH}:\n"
+    "  <fingerprint>  # why this one is safe\n"
+    "copying the fingerprint printed above. The reason is required, not "
+    "optional — an entry without one is a parse error."
+)
+"""Said wherever findings are listed. A reader who has just been blocked
+needs the file's name, the shape of a line, and the fact that the reason is
+compulsory; the report used to print a fingerprint and leave all three to be
+found in the source."""
+
+
+def covering_more_than_one(
+    findings: list[Finding], suppressions: list[Suppression]
+) -> list[tuple[Suppression, int]]:
+    """Entries that suppress several findings at once, with how many.
+
+    A content-pinned entry names text, not a position, so a second occurrence
+    of the same string under the same rule in the same file is covered by the
+    same entry — one reason, both findings. That is usually right (it is the
+    same string, and the reason is about the string) and it is the stated
+    price of not pinning a line. What must not happen is it happening
+    quietly: a decision taken about one occurrence silently growing to cover
+    an occurrence nobody looked at. So the count is reported.
+    """
+    counts: list[tuple[Suppression, int]] = []
+    for s in suppressions:
+        n = len([f for f in findings if _matches(f, {s.fingerprint})])
+        if n > 1:
+            counts.append((s, n))
+    return counts

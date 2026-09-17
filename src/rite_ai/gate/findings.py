@@ -8,6 +8,7 @@ suppression, reporting, and exit-code logic only need to handle one shape.
 
 from __future__ import annotations
 
+import hashlib
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,18 +31,83 @@ class Finding:
     # "gitleaks" | "gitleaks-commit-msg" | "rite-pattern" | "rite-path" | "rite-kb"
     source: str
     severity: Severity = "fail"
+    digest: str = ""
+    """`content_digest` of the matched text, when the source has it. Never the
+    text itself: a Finding is printed, logged and passed around, and a real
+    secret must not ride along in it."""
+
+    @property
+    def content_fingerprint(self) -> str | None:
+        """Identity by WHAT was found, not where: the same scheme with
+        `sha256-<digest>` in place of the line number.
+
+        A line number is a proxy for a finding, and the proxy drifts. Add a
+        line anywhere above a suppressed one and its `commit:file:rule:line`
+        entry stops matching: the finding it covered starts blocking publish
+        and the entry is reported stale, while nothing about the suppressed
+        code changed. Measured on this repository — three comment lines in
+        `gate.py` moved a docstring from 253 to 256 and broke its suppression
+        mid-push.
+
+        Pinning the matched text instead cannot drift, and is narrower where
+        it counts: change the secret and the suppression stops applying, which
+        is exactly when someone should look again. It is wider in one way,
+        recorded here as the price: two identical matches of one rule in one
+        file share an entry, so one reason covers both. They are the same
+        string with the same reason, but the count is no longer visible.
+
+        `None` when the source records no matched text, in which case the line
+        form is the only identity there is.
+        """
+        if not self.digest:
+            return None
+        commit = self.commit or "-"
+        return f"{commit}:{self.file}:{self.rule_id}:sha256-{self.digest}"
 
     @property
     def fingerprint(self) -> str:
         """`.gitleaksignore`-style identity: <commit-or-'-'>:<file>:<rule>:<line>.
 
         Matches gitleaks' own fingerprint scheme exactly (verified against a
-        live gitleaks JSON report) so a finding sourced from gitleaks and one
-        sourced from rite's own scanner look the same to a human editing the
-        suppression file.
+        live gitleaks JSON report), so an entry copied out of a gitleaks
+        report suppresses the same finding here. Reports print
+        `content_fingerprint` in preference to this one wherever there is
+        one; this stays the identity for a finding with no matched text to
+        pin, and the form every already-written suppression file is full of.
         """
         commit = self.commit or "-"
         return f"{commit}:{self.file}:{self.rule_id}:{self.line}"
+
+
+def content_digest(secret: str) -> str:
+    """A stable id for matched text — 32 hex chars of its SHA-256.
+
+    Truncated at all because this is read and copied by hand out of a report
+    into a suppression file. Truncated at 128 bits rather than fewer: a
+    shorter digest invites GRINDING. Rules like `generic-api-key` accept any
+    high-entropy body, so a contributor free to choose a token's text could
+    search for one whose digest matches an entry already in the file and get
+    it exempted by a diff that touches nothing but a test fixture, with the
+    gate green. 64 bits puts that within reach of rented hardware; 128 does
+    not. Accidental collisions were never the risk worth sizing for.
+
+    Hashed rather than stored verbatim, but understand what the hash does and
+    does not hide. The pre-image is a MATCHED STRING THE PROJECT DECIDED TO
+    KEEP — suppression is for false positives, so while an entry is live its
+    text is sitting in the scanned tree, public to anyone who can read the
+    repository this file is committed to. Nothing here is protecting a
+    secret; the digest is a pointer to text that is already in the open, and
+    hashing keeps the file from quoting matched strings back at readers and
+    from tripping the gate's own rules on itself.
+
+    The corollary is the one thing to be careful about: if you ever scrub a
+    matched string out of the tree, DELETE its entry in the same change. An
+    entry outliving its text is a commitment to a string that is no longer
+    public — and for the low-entropy shapes these rules catch (a home path,
+    a username) a digest is a confirmable guess, not a one-way function. The
+    gate reports exactly that entry as stale, which is the prompt to do it.
+    """
+    return hashlib.sha256(secret.encode("utf-8", "surrogatepass")).hexdigest()[:32]
 
 
 def redact(secret: str, keep: int = 4) -> str:

@@ -15,16 +15,26 @@ The report told the reader two true things and left them to connect the two:
 The blocking finding is almost always the same one, at its new line. Saying so
 turns a detective task into a one-line edit.
 
-This does not change the fingerprint format — that is a public interface
-people hand-edit and a security boundary, and content-addressing it is filed
-separately (IMP-5). This only makes the existing report explain itself.
+Content-addressed fingerprints (IMP-5) have since landed, and a moved finding
+is now offered its CONTENT form to re-point to: the whole point of saying
+"it moved" is that the reader should not have to do it again next month.
+
+They also make one case of "stale" mean something new, and dangerous to get
+wrong — see `TestAContentEntryIsNeverOfferedARePoint`.
 """
 
 from __future__ import annotations
 
-from rite_ai.gate.findings import Finding
+from rite_ai.gate.findings import Finding, content_digest
 from rite_ai.gate.gate import GateReport, format_report
-from rite_ai.gate.suppression import Suppression, moved_to
+from rite_ai.gate.suppression import Suppression, moved_to, stale_hint
+
+# Deliberately not path- or token-shaped: these tests are about identity, not
+# about detection, so a realistic-looking string would only add findings this
+# repo's own gate then has to suppress.
+ACCEPTED = "the-text-a-decision-was-made-about"
+REPLACEMENT = "the-text-that-replaced-it"
+MATCHED = "the-matched-text"
 
 
 def _finding(
@@ -33,6 +43,7 @@ def _finding(
     rule: str = "rite-hardcoded-linux-home-directory-path",
     file: str = "src/rite_ai/gate/gate.py",
     commit: str | None = None,
+    text: str = "",
 ) -> Finding:
     return Finding(
         rule_id=rule,
@@ -42,6 +53,7 @@ def _finding(
         commit=commit,
         match_preview="/hom***ser/",
         source="rite-pattern",
+        digest=content_digest(text) if text else "",
     )
 
 
@@ -161,3 +173,89 @@ class TestTheCommandAHumanTypesSaysItToo:
             "-:src/rite_ai/gate/gate.py:rite-hardcoded-linux-home-directory-path:253"
             in out
         )
+
+
+class TestAContentEntryIsNeverOfferedARePoint:
+    """A content-pinned entry cannot move — position is not in its identity.
+    The only way one goes stale is that the text it named is GONE, which is
+    the case the form exists to force a second look at: someone replaced the
+    fixture token, or the placeholder path, with something else.
+
+    `moved_to` matched on `(commit, file, rule)` with a different LINE, and
+    for a content entry the last field is `sha256-…`, which never equals a
+    line number — so the guard was inert and the report volunteered the new
+    text's fingerprint as "re-point this entry to". One paste would have
+    carried an accepted reason onto a string nobody had looked at, which is
+    the exact inversion of what content pinning is for.
+    """
+
+    def _entry(self, text: str) -> Suppression:
+        return Suppression(
+            fingerprint=_finding(250, text=text).content_fingerprint,
+            reason="placeholder path in an example",
+            line_no=12,
+        )
+
+    def test_no_re_point_is_offered_when_the_text_changed(self):
+        replaced = _finding(250, text=REPLACEMENT)
+
+        hint = stale_hint(self._entry(ACCEPTED), [replaced])
+
+        assert replaced.content_fingerprint not in (hint or "")
+        assert "re-point" not in (hint or "")
+
+    def test_the_hint_says_what_actually_happened(self):
+        hint = stale_hint(self._entry(ACCEPTED), [_finding(250, text=REPLACEMENT)])
+
+        assert hint is not None
+        assert "no longer there" in hint
+        assert "new decision" in hint
+
+    def test_moved_to_refuses_it_outright(self):
+        """Belt and braces: whatever any future report does with the result,
+        the answer to "did this entry move?" is no."""
+        replaced = _finding(253, text=REPLACEMENT)
+
+        assert moved_to(self._entry(ACCEPTED), [replaced]) is None
+
+
+class TestBothReportsOfferTheDurableForm:
+    """The line form is what drifts. A reader who is being told "re-point
+    this" is, by definition, being told so BECAUSE it drifted, and handing
+    them the drifting form again guarantees a third visit.
+
+    Both surfaces, because they render the stale block separately and the
+    last two fixes here each landed in only one of them.
+    """
+
+    def _report(self) -> GateReport:
+        return GateReport(
+            findings=[_finding(253, text=MATCHED)],
+            stale_suppressions=[_suppression(250)],
+            files_scanned=1,
+        )
+
+    def test_format_report_offers_the_content_form(self):
+        out = format_report(self._report())
+
+        assert "sha256-" in out, out
+        assert _finding(253, text=MATCHED).content_fingerprint in out
+
+    def test_publish_check_offers_the_content_form(self, tmp_path, monkeypatch):
+        from unittest.mock import patch
+
+        from click.testing import CliRunner
+
+        from rite_ai.cli.main import cli
+
+        rite = tmp_path / ".rite"
+        rite.mkdir()
+        (rite / "brief.yaml").write_text("project:\n  name: t\n  role: owner\n")
+        (rite / "modules.yaml").write_text("modules: {}\n")
+        monkeypatch.chdir(tmp_path)
+
+        with patch("rite_ai.gate.run_gate", return_value=self._report()):
+            out = CliRunner().invoke(cli, ["publish", "check"]).output
+
+        assert "sha256-" in out, out
+        assert _finding(253, text=MATCHED).content_fingerprint in out

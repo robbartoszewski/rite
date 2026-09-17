@@ -375,6 +375,36 @@ workflow in if you want a gate there. The second limit: this is the GitHub
 Actions form — `rite publish check` is the whole gate, so any CI that can
 install rite and run one command can run it.
 
+### When it blocks something that is fine
+
+Test fixtures, documentation examples and placeholder paths trip the rules
+that exist to catch the real thing. The answer is one line per finding, with
+a reason — there is no flag that turns the gate off.
+
+`rite publish check` prints, under each finding, the line to copy:
+
+```
+  [rite-pattern] tests/fixtures.py:38 rite-hardcoded-macos-home-directory-path: /Use***ser/
+    fingerprint: -:tests/fixtures.py:rite-hardcoded-macos-home-directory-path:sha256-bdcd1f87…
+To accept one of these, add a line to .rite/gitleaksignore:
+  <fingerprint>  # why this one is safe
+```
+
+Paste the fingerprint, add ` # ` and the reason. The reason is required: an
+entry without one is an error, not a silently ignored line. Nothing creates
+that file for you — the first suppression does.
+
+Two things follow from a fingerprint naming the matched TEXT rather than a
+line number. Moving the code does not break the entry, but changing the
+matched string does, and the gate then reports the old entry as stale and
+blocks on the new string — deliberately, because a fixture token replaced by
+a real one should not inherit the old reason. And a second occurrence of the
+same string, same rule, same file is covered by the same entry; the gate says
+so ("one entry covers 2 findings") rather than letting it pass unremarked.
+
+If you ever remove a suppressed string from the repo, delete its entry in the
+same change. The gate reports it stale, which is your reminder.
+
 ### Getting rid of it
 
 `rite init` writes into your repo, so here is how to take it back out. There

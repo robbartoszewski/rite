@@ -5,16 +5,49 @@
 # global off switch by design (SPEC §11.4); every line below is a decision
 # about one specific finding.
 #
+# Every entry BELOW is pinned to WHAT was found —
+# `commit:file:rule:sha256-<digest>` — rather than to where it sits. The
+# line-numbered form gitleaks reports is still accepted and an existing file
+# full of it needs no migration; it identifies a finding by a proxy that
+# drifts, which is why this file no longer uses it:
+# insert a line anywhere above a suppressed one and the entry matches nothing,
+# so the finding it covered blocks the push and the entry is reported stale,
+# with nothing about the suppressed code changed. That is not hypothetical:
+# three added comment lines in gate.py moved a suppressed docstring by three
+# lines and failed the gate on a decision already made — measured twice, once
+# by accident mid-push and once deliberately, to check this fix.
+#
+# `rite publish check` prints the content form under every finding that has
+# one, along with this file's name and the shape of a line. Copy what it
+# prints; there is nothing to compute by hand.
+#
+# Two consequences worth knowing before you write one:
+#
+#   * The digest is the matched TEXT, so two identical matches of one rule in
+#     one file share an entry — one reason covers both. The gate says so
+#     ("one entry covers N findings") rather than letting a decision quietly
+#     grow to cover an occurrence nobody looked at.
+#   * A digest is a commitment to that text, and for the low-entropy shapes
+#     these rules catch — a home path, a username — it is a confirmable
+#     guess, not a one-way function. That is harmless while the entry is
+#     live, because a suppressed string is by definition one this project
+#     decided to keep in the open and is sitting in the tracked tree. It
+#     stops being harmless if you SCRUB the string and leave the entry: then
+#     the file commits to something no longer public. Delete the entry in the
+#     same change. The gate reports exactly that entry as stale, which is the
+#     prompt to do it.
+#
 # ── Before publishing: regenerating this file after the squash ─────────
-# A gitleaks fingerprint is `commit:file:rule:line`. Two kinds of entry here
-# depend on a commit SHA, and squashing history to a single initial commit
+# Content-pinning fixes the LINE half of a fingerprint, not the commit half.
+# Two kinds of entry here depend on a commit SHA, and squashing history to a single initial commit
 # does DIFFERENT things to them — which is why this is a procedure and not
 # one `sed`:
 #
 #   * entries for a finding in a FILE, pinned to the commit that introduced
 #     it. The squash does not remove the content, so the same finding
 #     reappears under the new commit's SHA: the gate blocks (exit 2) and the
-#     old entry goes stale (exit 1). These must be RE-POINTED.
+#     old entry goes stale (exit 1). These must be RE-POINTED — the SHA only;
+#     the digest is the same text and does not change.
 #   * entries for a finding in a `<commit message>`. A squash replaces the
 #     messages, so the finding ceases to exist. These must be DELETED.
 #     Re-pointing one suppresses nothing and leaves a stale entry behind.
@@ -48,9 +81,8 @@
 # what it reports.
 #
 # The `-:` entries are working-tree scans, not history scans, and survive the
-# squash untouched. They are pinned to a file path and LINE NUMBER, so an
-# edit anywhere above them in the same file silently invalidates them — that
-# is not hypothetical, see the note on tests/test_update.py below.
+# squash untouched. Moving one within its file no longer invalidates it; only
+# changing the matched text itself does.
 
 # ── Test fixtures for the gate's own detectors ──────────────────────────
 # The shared fixture token is synthetic but structurally valid: the GitHub
@@ -59,9 +91,9 @@
 # `test_scan_history_detects_real_secret` and the known-bad-repo integration
 # test are asserting against a token gitleaks would not flag, which is the
 # same as not testing the detector at all. Not a credential.
-8ace8ef84a924bd2370e464e5dd6519f1925165b:tests/test_gate_findings.py:github-pat:38  # synthetic PAT fixture — asserts redact() masks the middle of a token; not a real credential
-8ace8ef84a924bd2370e464e5dd6519f1925165b:tests/test_gate_gitleaks_runner.py:github-pat:21  # synthetic PAT fixture — must be gitleaks-detectable or the history-scan test asserts nothing; not a real credential
-8ace8ef84a924bd2370e464e5dd6519f1925165b:tests/test_gate_integration.py:github-pat:26  # synthetic PAT fixture — seeds the known-bad repo the end-to-end gate test scans; not a real credential
+8ace8ef84a924bd2370e464e5dd6519f1925165b:tests/test_gate_findings.py:github-pat:sha256-4e3ddbae533402b249ee3a6fe4724058  # synthetic PAT fixture — asserts redact() masks the middle of a token; not a real credential
+8ace8ef84a924bd2370e464e5dd6519f1925165b:tests/test_gate_gitleaks_runner.py:github-pat:sha256-4e3ddbae533402b249ee3a6fe4724058  # synthetic PAT fixture — must be gitleaks-detectable or the history-scan test asserts nothing; not a real credential
+8ace8ef84a924bd2370e464e5dd6519f1925165b:tests/test_gate_integration.py:github-pat:sha256-4e3ddbae533402b249ee3a6fe4724058  # synthetic PAT fixture — seeds the known-bad repo the end-to-end gate test scans; not a real credential
 
 # ── The built-in rules' own documentation ───────────────────────────────
 # builtin_rules.py declares the hardcoded-home-path patterns, and its
@@ -69,13 +101,15 @@
 # shape those patterns match. The file is the detector, not a leak: §11.1's
 # recorded failure mode is precisely a deny-list that trips over the strings
 # it exists to describe — which is also why nothing in this file quotes a
-# matched string literally. Every attempt to do so made this very file fail
+# matched string literally, digests included (see the note on scrubbing
+# above: a digest points at the text, it does not conceal it from someone who
+# can guess it). Every attempt to quote one made this very file fail
 # the gate, including once at a stage only visible after committing: the
 # pattern rules scan the working tree, but gitleaks scans history, so a
 # quoted token here stayed invisible until the commit existed.
--:src/rite_ai/gate/builtin_rules.py:rite-hardcoded-macos-home-directory-path:7  # illustrative path in the module docstring explaining why this rule exists — not a real machine path
--:src/rite_ai/gate/builtin_rules.py:rite-hardcoded-windows-home-directory-path:34  # drive-letter home path in the comment documenting the Windows pattern's escaping — not a real machine path
--:src/rite_ai/gate/builtin_rules.py:rite-hardcoded-windows-home-directory-path:35  # the doubled-backslash escaped twin of the same example, in the same comment — not a real machine path
+-:src/rite_ai/gate/builtin_rules.py:rite-hardcoded-macos-home-directory-path:sha256-bdcd1f878954208bbdd08fe17eb62969  # illustrative path in the module docstring explaining why this rule exists — not a real machine path
+-:src/rite_ai/gate/builtin_rules.py:rite-hardcoded-windows-home-directory-path:sha256-b580cd09d4efa95d2fcff55fbf1bdc1e  # drive-letter home path in the comment documenting the Windows pattern's escaping — not a real machine path
+-:src/rite_ai/gate/builtin_rules.py:rite-hardcoded-windows-home-directory-path:sha256-9d57fdeb50279e93a4a608470d17efff  # the doubled-backslash escaped twin of the same example, in the same comment — not a real machine path
 
 # ── One commit message, and the reason it is here ───────────────────────
 # Commit 859020c removed the author's real username and home path from the
@@ -97,17 +131,18 @@
 # These tests write a home-shaped path into a throwaway repo and assert the
 # gate finds it and redacts the username out of the report. A path that did
 # not match the rule would make the assertions vacuous.
--:tests/test_gate_integration.py:rite-hardcoded-macos-home-directory-path:43  # fixture path written into a tmp_path repo so the known-bad-repo test can assert the built-in rule fires; see NOTE below
--:tests/test_gate_pattern_scan.py:rite-hardcoded-macos-home-directory-path:39  # fixture path in a tmp_path repo; the test asserts the username is absent from match_preview; see NOTE below
--:tests/test_update.py:rite-hardcoded-macos-home-directory-path:69  # single-letter placeholder home path under .local/pipx/venvs, monkeypatched onto sys.executable to test pipx-install detection — not a real path
+-:tests/test_gate_integration.py:rite-hardcoded-macos-home-directory-path:sha256-bdcd1f878954208bbdd08fe17eb62969  # fixture path written into a tmp_path repo so the known-bad-repo test can assert the built-in rule fires; see NOTE below
+-:tests/test_gate_pattern_scan.py:rite-hardcoded-macos-home-directory-path:sha256-bdcd1f878954208bbdd08fe17eb62969  # fixture path in a tmp_path repo; the test asserts the username is absent from match_preview; see NOTE below
+-:tests/test_update.py:rite-hardcoded-macos-home-directory-path:sha256-da4de8c7a57512305f26621c21f7845b  # single-letter placeholder home path under .local/pipx/venvs, monkeypatched onto sys.executable to test pipx-install detection — not a real path
 #
 # NOTE on the fixture paths above: they used to spell the author's real
 # macOS username; they now use a synthetic one. Nothing about the tests
 # required the real one — any long username exercises the same redaction
 # assertion — and a repo shipping a "don't leak your username" detector
-# reads better without it. The swap was same-line, so these fingerprints
-# were unaffected. Keep it that way: a placeholder here is not laziness,
-# it is the thing the rule is for.
+# reads better without it. Changing one of these paths again changes the
+# matched text, so it invalidates the entry that covers it and the gate
+# blocks until someone decides about the new one — which is the point. Keep
+# the placeholder: it is not laziness here, it is the thing the rule is for.
 
 # ── The gate's own scale and encoding fixtures (added 2026-09-11) ───────
 # Two tests plant a structurally valid, high-entropy token so gitleaks has
@@ -117,18 +152,18 @@
 # Synthetic, hand-constructed, never issued by any provider, revocable by
 # nobody. Both are HISTORY findings, so both are commit-pinned — see the
 # squash note at the top of this file.
-8ace8ef84a924bd2370e464e5dd6519f1925165b:tests/test_gate_undecodable_bytes.py:generic-api-key:34  # synthetic high-entropy token fixture for the undecodable-commit-message test; not a real credential
-8ace8ef84a924bd2370e464e5dd6519f1925165b:tests/test_gate_at_scale.py:generic-api-key:42  # the same synthetic token, planted so the at-scale test has a real detection to measure; not a real credential
+8ace8ef84a924bd2370e464e5dd6519f1925165b:tests/test_gate_undecodable_bytes.py:generic-api-key:sha256-39292e018d2a85d0e09cf1edf3b13b94  # synthetic high-entropy token fixture for the undecodable-commit-message test; not a real credential
+8ace8ef84a924bd2370e464e5dd6519f1925165b:tests/test_gate_at_scale.py:generic-api-key:sha256-39292e018d2a85d0e09cf1edf3b13b94  # the same synthetic token, planted so the at-scale test has a real detection to measure; not a real credential
 
 # ── Prose describing the measurement that motivated the rules ───────────
 # §11.1's failure mode again: adopting rite on git's own repository produced
 # 46 blocking findings, every one a home-shaped path in git's test fixtures.
 # Saying so requires writing a path of the shape the rule matches. These are
 # the sentence, not a path anything reads.
--:src/rite_ai/gate/gate.py:rite-hardcoded-linux-home-directory-path:253  # docstring recording the 46-finding measurement on git's repo; illustrative, not a real machine path
--:tests/test_gate_at_scale.py:rite-hardcoded-linux-home-directory-path:19  # the same sentence in that test's module docstring; illustrative, not a real machine path
--:tests/test_gate_at_scale.py:rite-hardcoded-linux-home-directory-path:44  # fixture constant the test plants and then asserts the built-in path rule fires on; see NOTE at the end of this file
--:tools/phase1_status.py:rite-hardcoded-macos-home-directory-path:412  # deliberately-bad file written into a throwaway repo to probe that the gate catches it; placeholder username; not a real path
+-:src/rite_ai/gate/gate.py:rite-hardcoded-linux-home-directory-path:sha256-768d8e132161678a3434401db0b60a64  # docstring recording the 46-finding measurement on git's repo; illustrative, not a real machine path
+-:tests/test_gate_at_scale.py:rite-hardcoded-linux-home-directory-path:sha256-768d8e132161678a3434401db0b60a64  # the same sentence in that test's module docstring; illustrative, not a real machine path
+-:tests/test_gate_at_scale.py:rite-hardcoded-linux-home-directory-path:sha256-263097c439b9478e461c46ed6307b624  # fixture constant the test plants and then asserts the built-in path rule fires on; see NOTE at the end of this file
+-:tools/phase1_status.py:rite-hardcoded-macos-home-directory-path:sha256-58e9952854dee73d52cb6faa21ac8323  # deliberately-bad file written into a throwaway repo to probe that the gate catches it; placeholder username; not a real path
 
 # ── A quoted crash message, with the username already elided ────────────
 # `rite sandbox start` failed for every real installation; the diagnosis

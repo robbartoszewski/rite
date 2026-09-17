@@ -3785,6 +3785,31 @@ The suppression file is committed and reviewed like any other change. The gate c
 that every suppression still matches a live finding — stale suppressions are noise and
 a sign that someone is accumulating rather than deciding.
 
+**A suppression names what was found, not where it was found.** gitleaks identifies a
+finding as `commit:file:rule:line`, and a line number is a proxy: inserting a line
+above a suppressed one moves it, so the entry matches nothing, the finding it covered
+starts blocking, and the entry is reported stale — while the code someone decided
+about has not changed. Measured in rite's own repository, mid-push: three added
+comment lines in `gate/gate.py` moved a suppressed docstring by three lines and failed
+the gate on a decision already made and written down. rite therefore also accepts
+`commit:file:rule:sha256-<digest>`, the matched text's digest in place of the line,
+and every report prints that form for any finding that has one. The line form stays
+valid — it is what gitleaks prints, and existing files are full of it.
+
+The content form is narrower in the way that matters: change the matched text and the
+suppression stops applying, which is exactly when the decision deserves making again.
+For the same reason a stale content entry is **never** offered a "re-point" — it did
+not move, its text is gone, and one paste onto whatever replaced it would carry an
+accepted reason to a string nobody has read.
+
+It is wider in one way, and that width must be reported rather than assumed: dropping
+the line means two identical matches of one rule in one file share an entry, so the
+gate says how many findings an entry is covering. And because a digest commits to its
+text — for a home path or a username, a confirmable guess rather than a one-way
+function — an entry must be deleted in the same change that scrubs the string it
+names, not left behind. Both are properties of the file, which is committed and
+published with the project.
+
 ### 11.5. Integration
 
 - `rite publish check` runs the gate locally. It is a dry run — it refuses or passes

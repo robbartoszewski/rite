@@ -41,6 +41,7 @@ from pathlib import Path
 
 from rite_ai.gate.findings import (
     Finding,
+    content_digest,
     iter_commit_messages,
     redact,
 )
@@ -116,6 +117,7 @@ def _run_gitleaks_json(
 def _to_finding(entry: dict, source: str) -> Finding | None:
     if not isinstance(entry, dict):
         return None
+    secret = str(entry.get("Secret") or entry.get("Match") or "")
     try:
         return Finding(
             rule_id=str(entry["RuleID"]),
@@ -123,8 +125,9 @@ def _to_finding(entry: dict, source: str) -> Finding | None:
             file=str(entry.get("File", "")),
             line=int(entry.get("StartLine", 0)),
             commit=entry.get("Commit") or None,
-            match_preview=redact(str(entry.get("Secret") or entry.get("Match") or "")),
+            match_preview=redact(secret),
             source=source,
+            digest=content_digest(secret) if secret else "",
         )
     except (KeyError, ValueError, TypeError):
         return None
@@ -219,6 +222,7 @@ def scan_commit_messages(
                     commit=sha,
                     match_preview=base.match_preview,
                     source=base.source,
+                    digest=base.digest,
                 )
             )
         return findings
