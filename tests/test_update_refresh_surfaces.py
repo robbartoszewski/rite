@@ -580,3 +580,146 @@ class TestATemplateARiteNoLongerShips:
         assert "generated files already current" not in second.output, (
             "a file nothing maintains is not the same as nothing to say"
         )
+
+
+class TestAProjectShapedLikeARealOne:
+    """Modules registered and more than one Worker — the shape a tester's
+    project actually has, rather than the one Worker and no modules the other
+    tests build."""
+
+    @staticmethod
+    def _unmark(root: Path) -> None:
+        """Take the markers away, so every generated file looks like one an
+        older rite wrote."""
+        import re
+
+        for path in [root / "CLAUDE.md", *root.glob("workers/*/CLAUDE.md")]:
+            path.write_text(
+                re.sub(
+                    r"^<!-- rite:sha256=[0-9a-f]{16} -->\n",
+                    "",
+                    path.read_text(),
+                    flags=re.M,
+                )
+            )
+
+    def _project_with_modules(self, tmp_path, monkeypatch) -> Path:
+        import subprocess
+
+        root = _project(tmp_path, monkeypatch)
+        for name in ("backend", "web"):
+            # A local copy for `add worker` to clone from, as a real project
+            # registering a repo it already has checked out would have.
+            module = root / name
+            module.mkdir()
+            (module / "README.md").write_text(f"# {name}\n")
+            subprocess.run(["git", "init", "-q", str(module)], check=True)
+            subprocess.run(["git", "add", "-A"], cwd=module, check=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.email=t@t",
+                    "-c",
+                    "user.name=t",
+                    "commit",
+                    "-qm",
+                    "init",
+                ],
+                cwd=module,
+                check=True,
+            )
+        (root / ".rite" / "modules.yaml").write_text(
+            "modules:\n"
+            "  backend:\n"
+            "    path: backend/\n"
+            "    description: The API.\n"
+            "  web:\n"
+            "    path: web/\n"
+        )
+        for name in ("alpha", "beta"):
+            result = CliRunner().invoke(cli, ["add", "worker", name])
+            assert result.exit_code == 0, result.output
+        return root
+
+    def test_every_worker_is_refreshed_and_authored_files_are_untouched(
+        self, tmp_path, monkeypatch
+    ):
+        root = self._project_with_modules(tmp_path, monkeypatch)
+        authored = {
+            ".rite/architecture.md": "# Architecture\n\nOurs.\n",
+            ".rite/plan.md": "# Plan\n\nPhase 1.\n",
+        }
+        for rel, text in authored.items():
+            (root / rel).write_text(text)
+        self._unmark(root)
+
+        result = CliRunner().invoke(cli, ["update", "--files-only"])
+
+        assert result.exit_code == 0, result.output
+        for name in ("alpha", "beta"):
+            worker = (root / "workers" / name / "CLAUDE.md").read_text()
+            assert "rite:sha256" in worker, f"{name} was left unmarked"
+        assert "rite:sha256" in (root / "CLAUDE.md").read_text()
+        for rel, text in authored.items():
+            assert (root / rel).read_text() == text, rel
+
+    def test_only_the_module_list_is_left_to_the_user(self, tmp_path, monkeypatch):
+        """A module registered after the file was generated makes the Modules
+        section differ, and nothing can tell that from someone editing it — so
+        it is reported, and `--take-rite` is how it settles."""
+        root = self._project_with_modules(tmp_path, monkeypatch)
+        self._unmark(root)
+        CliRunner().invoke(cli, ["update", "--files-only"])
+
+        again = CliRunner().invoke(cli, ["update", "--files-only"])
+
+        left = [ln for ln in again.output.splitlines() if "left as it is" in ln]
+        assert len(left) == 1 and "§ Modules" in left[0], again.output
+
+        took = CliRunner().invoke(
+            cli, ["update", "--files-only", "--take-rite", "Modules"]
+        )
+        assert took.exit_code == 0, took.output
+        assert "backend" in (root / "CLAUDE.md").read_text()
+        settled = CliRunner().invoke(cli, ["update", "--files-only"])
+        assert "generated files already current" in settled.output, settled.output
+
+
+class TestAWorkerWhoseManifestWillNotParse:
+    """`worker.yml` is only what CLAUDE.md is RENDERED from. The copied
+    commands and agents are byte-for-byte templates, so one malformed manifest
+    used to stop that Worker receiving any fix at all — silently, since the
+    report mentioned only CLAUDE.md."""
+
+    def _broken(self, tmp_path, monkeypatch) -> Path:
+        root = _project(tmp_path, monkeypatch)
+        assert CliRunner().invoke(cli, ["add", "worker", "alpha"]).exit_code == 0
+        (root / "workers" / "alpha" / "worker.yml").write_text("name: [unclosed\n")
+        return root
+
+    def test_its_commands_are_still_refreshed(self, tmp_path, monkeypatch):
+        root = self._broken(tmp_path, monkeypatch)
+        review = root / "workers" / "alpha" / ".claude" / "commands" / "review.md"
+        review.unlink()
+
+        result = CliRunner().invoke(cli, ["update", "--files-only"])
+
+        assert result.exit_code == 0, result.output
+        assert review.is_file(), "a broken manifest stopped a template fix"
+        assert (
+            review.read_text()
+            == (templates_dir() / "commands" / "review.md").read_text()
+        )
+
+    def test_the_report_says_which_half_happened(self, tmp_path, monkeypatch):
+        root = self._broken(tmp_path, monkeypatch)
+        before = (root / "workers" / "alpha" / "CLAUDE.md").read_bytes()
+
+        result = CliRunner().invoke(cli, ["update", "--files-only"])
+
+        assert "workers/alpha/CLAUDE.md: not refreshed" in result.output, result.output
+        assert "its copied commands and agents still are" in result.output
+        assert (root / "workers" / "alpha" / "CLAUDE.md").read_bytes() == before, (
+            "CLAUDE.md was rewritten from a manifest that does not parse"
+        )

@@ -451,28 +451,45 @@ def refresh_project(
         generate_claude_md,
     )
     from rite_ai.cli.init.paths import templates_dir
-    from rite_ai.config.parse import ParseError, load_project, parse_worker
+    from rite_ai.config.parse import (
+        ParseError,
+        parse_brief,
+        parse_config,
+        parse_modules,
+        parse_worker,
+    )
     from rite_ai.project_spec import WORKER_GENERATED_MARKER
     from rite_ai.workspace.manage import (
         _module_commands_section,
         render_worker_claude_md,
     )
 
-    project = load_project(root)
-    if isinstance(project, list):
+    # Deliberately NOT `load_project`: that aggregates every worker.yml too,
+    # so one Worker's typo returned errors for the whole project and stopped
+    # the refresh dead — nothing delivered anywhere, under a message blaming
+    # `.rite/` config that named a file in `workers/`. The project's own three
+    # files are what the project file is rendered from; each Worker is parsed
+    # below, on its own, and can fail on its own.
+    rite_dir = root / ".rite"
+    brief = parse_brief(rite_dir / "brief.yaml")
+    modules = parse_modules(rite_dir / "modules.yaml")
+    config = parse_config(rite_dir / "config.yaml")
+    problems = [p for p in (brief, modules, config) if isinstance(p, ParseError)]
+    if problems:
         return [
             FileResult(
                 "CLAUDE.md",
                 note="not refreshed — .rite/ config does not parse: "
-                + "; ".join(e.message for e in project),
+                + "; ".join(e.message for e in problems),
             )
         ]
+    assert not isinstance(brief, ParseError)
+    assert not isinstance(modules, ParseError)
+    assert not isinstance(config, ParseError)
     src = templates_dir()
     results: list[FileResult] = []
 
-    generated = generate_claude_md(
-        project.brief.role, project.brief, project.modules, project.config, root
-    )
+    generated = generate_claude_md(brief.role, brief, modules, config, root)
     results.append(
         _refresh_claude_md(
             root, root / "CLAUDE.md", generated, GENERATED_MARKER, take, apply
@@ -536,26 +553,33 @@ def refresh_project(
         manifest = parse_worker(worker_dir / "worker.yml")
         rel = f"workers/{worker_dir.name}"
         if isinstance(manifest, ParseError):
+            # Only CLAUDE.md is rendered FROM the manifest. The copied
+            # commands and agents are byte-for-byte templates, so skipping
+            # them here would mean one malformed worker.yml quietly stopping
+            # that Worker from receiving any fix at all — the failure this
+            # whole command exists to end.
             results.append(
                 FileResult(
-                    f"{rel}/CLAUDE.md", note=f"not refreshed — {manifest.message}"
+                    f"{rel}/CLAUDE.md",
+                    note=f"not refreshed — {manifest.message}; its copied "
+                    "commands and agents still are",
                 )
             )
-            continue
-        mods = [m for m in project.modules if m.name in manifest.modules]
-        wgen = render_worker_claude_md(
-            manifest, project.config.spec, _module_commands_section(root, mods)
-        )
-        results.append(
-            _refresh_claude_md(
-                root,
-                worker_dir / "CLAUDE.md",
-                wgen,
-                WORKER_GENERATED_MARKER,
-                take,
-                apply,
+        else:
+            mods = [m for m in modules if m.name in manifest.modules]
+            wgen = render_worker_claude_md(
+                manifest, config.spec, _module_commands_section(root, mods)
             )
-        )
+            results.append(
+                _refresh_claude_md(
+                    root,
+                    worker_dir / "CLAUDE.md",
+                    wgen,
+                    WORKER_GENERATED_MARKER,
+                    take,
+                    apply,
+                )
+            )
         wfiles = FileResult(f"{rel}/.claude/")
         for fname in _AGENT_FILES:
             ch = refresh_template(
