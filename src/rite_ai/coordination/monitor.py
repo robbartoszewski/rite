@@ -54,6 +54,7 @@ from rite_ai.coordination.election import (
 )
 from rite_ai.coordination.heartbeat import publish_heartbeat
 from rite_ai.coordination.lease import LeaseLost, OwnerLeaseHolder, Renewed, Uncertain
+from rite_ai.coordination.publish import NotPublished
 from rite_ai.coordination.takeover import ToldTheBoard, hand_over_outgoing_owner
 
 
@@ -212,9 +213,16 @@ class ManagerMonitor:
             in_flight=in_flight,
             now=now,
         )
-        if not getattr(published, "version", None):
-            reason = getattr(published, "reason", "the heartbeat did not publish")
-            result.problems.append(reason)
+        if isinstance(published, NotPublished):
+            # A heartbeat that did not publish is not cosmetic: every other
+            # Manager's election reads it, and a Manager that looks silent
+            # gets its work handed over (P2-3b).
+            problem = f"the heartbeat did not publish: {published.reason}"
+            if published.may_have_landed:
+                # The lost-ack distinction again. "It failed" and "we never
+                # heard" are different things to tell a human.
+                problem += " (it may have landed — re-read before deciding)"
+            result.problems.append(problem)
 
     def _hand_over_their_work(self, outcome: Promoted, result: Tick) -> None:
         """D-14's third trigger, wired to the moment it applies."""

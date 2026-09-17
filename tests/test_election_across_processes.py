@@ -27,40 +27,10 @@ import subprocess
 import time
 from pathlib import Path
 
+from election_harness import overlapping_owners, ownership_runs
+
 ACTORS = 4
 SECONDS = 15.0
-# 15 simulated minutes per 1.5 real seconds, so leases lapse inside the run
-# and a slow push costs real simulated minutes — which is the interesting
-# case, not an artefact.
-FACTOR = 600.0
-START = 1789000000.0  # a fixed simulated epoch, shared by every process
-
-
-def overlapping_owners(runs: dict[tuple[str, str], list[float]]):
-    """Every pair of ownership runs by DIFFERENT Managers that overlap in
-    time. Compared pairwise rather than between neighbours: one long run can
-    contain several later ones, and a neighbours-only check walks straight
-    past that."""
-    spans = [(start, end, name) for (name, _), (start, end) in runs.items()]
-    found = []
-    for i, (start_a, end_a, name_a) in enumerate(spans):
-        for start_b, end_b, name_b in spans[i + 1 :]:
-            if name_a == name_b:
-                continue
-            if start_a < end_b and start_b < end_a:
-                found.append(((start_a, end_a, name_a), (start_b, end_b, name_b)))
-    return found
-
-
-def _clock(t0: float):
-    from datetime import UTC, datetime
-
-    def now():
-        return datetime.fromtimestamp(
-            START + (time.time() - t0) * FACTOR, tz=UTC
-        )
-
-    return now
 
 
 def _manager_actor(args):
@@ -68,13 +38,14 @@ def _manager_actor(args):
     believed it held the role."""
     remote, cache, name, managers, t0, log_path, pause_at = args
 
+    from election_harness import clock_for
     from rite_ai.config.models import CoordinationConfig, HeartbeatConfig
     from rite_ai.coordination.git_backend import GitStateLayer
     from rite_ai.coordination.lease import OwnerLeaseHolder
     from rite_ai.coordination.monitor import ManagerMonitor
     from rite_ai.coordination.schemas import parse_timestamp
 
-    clock = _clock(t0)
+    clock = clock_for(t0)
     config = CoordinationConfig(
         managers=list(managers),
         remote=remote,
@@ -147,13 +118,7 @@ def test_four_managers_four_processes_never_overlap(tmp_path):
     rows = [r for log in logs.glob("*.json") for r in json.loads(log.read_text())]
     assert rows, "no Manager ever held the role — the run proved nothing"
 
-    # Reconstruct ownership runs: (manager, acquired) is one run.
-    runs: dict[tuple[str, str], list[float]] = {}
-    for row in rows:
-        key = (row["manager"], row["acquired"])
-        span = runs.setdefault(key, [row["at"], row["expires"]])
-        span[0] = min(span[0], row["at"])
-        span[1] = max(span[1], row["expires"])
+    runs = ownership_runs(rows)
 
     ordered = sorted(
         ((start, end, name) for (name, _), (start, end) in runs.items())

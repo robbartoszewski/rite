@@ -278,6 +278,31 @@ class TestLiveness:
         live = liveness(layer, "alpha", now=clock(), interval_minutes=10)
         assert live.known and live.missed == 0
 
+    def test_a_heartbeat_that_did_not_publish_is_a_named_problem(
+        self, layer, config
+    ):
+        """Not cosmetic: every other Manager's election reads this, and a
+        Manager that looks silent gets its work handed over (P2-3b)."""
+
+        class NoBeat:
+            def __init__(self, inner):
+                self.inner = inner
+
+            def __getattr__(self, name):
+                return getattr(self.inner, name)
+
+            def write_state(self, key, value, expected):
+                if key.startswith("managers/"):
+                    return Unavailable("the remote went away")
+                return self.inner.write_state(key, value, expected)
+
+        clock = Clock()
+        m = monitor(layer, config, "alpha", clock, status=lambda: (["w1"], 1))
+        m.holder.layer = NoBeat(layer)
+        tick = m.tick()
+        assert any("heartbeat did not publish" in p for p in tick.problems)
+        assert any("may have landed" in p for p in tick.problems)
+
     def test_a_manager_that_was_not_told_how_does_not_pretend(self, layer, config):
         clock = Clock()
         monitor(layer, config, "alpha", clock).tick()
