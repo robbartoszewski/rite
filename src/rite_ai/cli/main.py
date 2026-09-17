@@ -4536,6 +4536,7 @@ def spec_verify(strict: bool) -> None:
       rite spec verify --strict
     """
     from rite_ai.spec.digest_files import UNITS_DIR, digest_status
+    from rite_ai.spec.graph import INDEX
     from rite_ai.spec.index_file import PRESENT, from_parsed, read_index
 
     root, config = _spec_root_and_config(missing_exit=3)
@@ -4580,6 +4581,35 @@ def spec_verify(strict: bool) -> None:
             f"and the spec has {len(units)} unit(s). Run `/spec-digest`.",
             err=True,
         )
+        raise SystemExit(1)
+
+    # Incomplete is not drifted. A first digest of a large spec is written over
+    # several passes — 189 units for rite's own — and calling that "a Worker
+    # would be reading something the spec no longer says" is both false and
+    # unactionable: nothing is wrong with what HAS been written.
+    only_uncovered = (
+        status.new
+        and not index_problem
+        and not any(
+            entries for label, entries, _ in failures if entries is not status.new
+        )
+    )
+    if only_uncovered:
+        # Against the units a digest is owed, not every unit: index sections are
+        # never owed a file, so counting them would report progress no session
+        # made.
+        owed = sum(1 for uid in units if kinds.get(uid) != INDEX)
+        covered = owed - len(status.new)
+        click.echo(
+            f"incomplete: {covered} of {owed} unit(s) digested, "
+            f"{len(status.new)} still to write — nothing that is written has "
+            "drifted. Run `/spec-digest` again to continue.",
+            err=True,
+        )
+        for entry in sorted(status.new)[:20]:
+            click.echo(f"  {entry}", err=True)
+        if len(status.new) > 20:
+            click.echo(f"  … and {len(status.new) - 20} more", err=True)
         raise SystemExit(1)
 
     total = sum(len(entries) for _, entries, _ in failures)

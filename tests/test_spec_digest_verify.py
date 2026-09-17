@@ -81,7 +81,40 @@ def test_a_unit_with_no_derived_file_fails(project: Path, monkeypatch):
     (units_dir(project) / unit_filename("1.1")).unlink()
     result = _run("verify")
     assert result.exit_code == 1
-    assert "no derived file yet" in result.output and "1.1" in result.output
+    assert "1.1" in result.output
+    assert "still to write" in result.output
+
+
+def test_an_unfinished_digest_is_reported_as_incomplete_not_as_drift(
+    project: Path, monkeypatch
+):
+    """A first digest of a large spec is written over several passes — 189
+    units for rite's own — and every pass but the last leaves units unwritten.
+    Telling that session "a Worker would be reading something the spec no
+    longer says" is false: nothing written has drifted."""
+    monkeypatch.chdir(project)
+    _run("index")
+    _write_unit(project, "1.1", ["1.1"])
+    _run("stamp", "1.1")
+    result = _run("verify")
+    assert result.exit_code == 1
+    assert "incomplete:" in result.output and "1 of" in result.output
+    assert "nothing that is written has drifted" in result.output
+    assert "no longer says" not in result.output
+
+
+def test_one_real_drift_stops_it_being_reported_as_merely_incomplete(
+    project: Path, monkeypatch
+):
+    monkeypatch.chdir(project)
+    _run("index")
+    path = _write_unit(project, "1.1", ["1.1"])
+    _run("stamp", "1.1")
+    path.write_text(path.read_text() + "\nby hand\n")
+    result = _run("verify")
+    assert result.exit_code == 1
+    assert "edited by hand" in result.output
+    assert "incomplete:" not in result.output
 
 
 def test_a_stale_file_fails_and_says_to_re_digest(project: Path, monkeypatch):
@@ -200,14 +233,15 @@ def test_what_failed_goes_to_stderr_and_a_pass_says_so_on_stdout(
     runner = CliRunner()
     ok = runner.invoke(cli, ["spec", "verify"], catch_exceptions=False)
     assert "✓" in ok.stdout and ok.stderr == ""
-    (units_dir(project) / unit_filename("1.1")).unlink()
+    path = units_dir(project) / unit_filename("1.1")
+    path.write_text(path.read_text() + "\nby hand\n")
     failed = runner.invoke(cli, ["spec", "verify"], catch_exceptions=False)
     assert "✗" in failed.stderr and "1.1" in failed.stderr
     assert failed.stdout == ""
 
 
 def test_nothing_digested_yet_is_not_reported_as_drift(project: Path, monkeypatch):
-    """"Start" and "re-digest a few units" are different instructions, and the
+    """ "Start" and "re-digest a few units" are different instructions, and the
     verdict is the only thing that says which one this is."""
     monkeypatch.chdir(project)
     _run("index")

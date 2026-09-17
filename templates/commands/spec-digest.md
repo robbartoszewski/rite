@@ -37,6 +37,13 @@ change to the spec, and it is the user's decision.
    it — a unit id is not a file name, so use the path it gives rather than
    deriving one.
 
+   **A first digest of a large spec does not fit in one pass.** rite's own spec
+   is 189 units. Write as many as you can do carefully, review those, and stop:
+   the gate in step 6 reports `incomplete: N of M unit(s) digested` for that
+   state, which is not drift and is an honest place to stop. Say in your report
+   how many remain, so the next run picks them up. Quality per unit is what
+   cannot be recovered later; coverage can.
+
    - Say what the source says, in fewer words, **without changing what it
      means.** Keep every qualifier, every ⚠, every "unless" and "only when"; a
      conditional turned into an absolute is the distortion this review exists to
@@ -98,7 +105,10 @@ change to the spec, and it is the user's decision.
 
    It must pass: every source unit covered, nothing covering a unit that no longer
    exists, nothing stale, nothing hand-edited. It does not check meaning — rounds
-   1 and 2 did that. Do not finish on a failing gate.
+   1 and 2 did that. Do not finish on a failing gate — with one exception,
+   the `incomplete:` line above, which says the units you did write are sound
+   and others are still to come. Anything else it reports is drift, and drift is
+   yours to fix before you stop.
 
    Once it passes, `rite spec show <unit>` is what hands a Worker the text you
    just wrote, with the source range it came from.
