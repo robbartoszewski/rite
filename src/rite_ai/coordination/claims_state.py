@@ -26,7 +26,7 @@ properties it has to keep, whatever the field names settle as:
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 
 from rite_ai.coordination.publish import NotPublished, Published, read_merge_write
@@ -160,3 +160,149 @@ def published_overlaps(
                             f"(held by {holder} on {machine})"
                         )
     return found
+
+
+@dataclass
+class Expiry:
+    """What an expiry pass did, and what it deliberately did not do."""
+
+    expired: dict[str, int] = field(default_factory=dict)
+    """machine -> how many published claims were expired."""
+
+    kept: dict[str, str] = field(default_factory=dict)
+    """machine -> why it was left alone (alive, or liveness unknown)."""
+
+    refused: str = ""
+    """Set when the pass did nothing at all, and why."""
+
+
+def expire_offline_claims(
+    layer: StateLayer,
+    *,
+    by: str,
+    now: datetime,
+    interval_minutes: int,
+    stall_threshold: int,
+    skip: frozenset[str] = frozenset(),
+    attempts: int = 3,
+) -> Expiry:
+    """Expire the published claims of machines whose heartbeat says they are
+    gone (P2-5c).
+
+    Claims are held until merge (§5.2), so they do not time out on age alone —
+    a long review is not an offline machine. What expires them is the
+    Manager's own heartbeat lapsing (§3.4): claim timestamps say how old the
+    work was, and go in the audit record rather than into the decision.
+
+    **Attribution is not optional.** Phase 1's `force_release` takes a `by` and
+    a reason and writes a durable audit trail, and doing this across machines
+    must not be the cheap way around that (P2-5c). The audit here is a message
+    on the log (§3.3.3 classes claim contention as a message, not state), in
+    P2-0d's convention — and it is appended BEFORE the state changes, so an
+    expiry cannot happen without its record. If the append fails, nothing is
+    expired.
+
+    A machine whose liveness cannot be established is never expired: that is
+    "cannot tell", not "gone" (D-54).
+    """
+    from rite_ai.coordination.heartbeat import is_stalled, liveness
+    from rite_ai.coordination.message_log import LogMessage, format_message
+
+    read = layer.read_state(CLAIMS_KEY)
+    if isinstance(read, Unavailable):
+        return Expiry(refused=f"could not read {CLAIMS_KEY}: {read.reason}")
+    if isinstance(read, Absent):
+        return Expiry()
+    try:
+        state = json.loads(read.value)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return Expiry(
+            refused=f"{CLAIMS_KEY} could not be parsed — nothing expired, "
+            "and the bytes are left exactly as they are"
+        )
+    if not isinstance(state, dict):
+        return Expiry(refused=f"{CLAIMS_KEY} is not an object — nothing expired")
+
+    result = Expiry()
+    gone: dict[str, int] = {}
+    for machine, claims in published_claims(state).items():
+        if machine in skip:
+            result.kept[machine] = "skipped"
+            continue
+        if not claims:
+            continue
+        live = liveness(layer, machine, now=now, interval_minutes=interval_minutes)
+        if not live.known:
+            result.kept[machine] = f"liveness unknown — {live.detail}"
+            continue
+        if not is_stalled(live, stall_threshold=stall_threshold):
+            result.kept[machine] = f"alive — {live.detail}"
+            continue
+        gone[machine] = len(claims)
+    if not gone:
+        return result
+
+    for machine, count in gone.items():
+        oldest = min(
+            (
+                c.get("timestamp")
+                for c in published_claims(state)[machine]
+                if isinstance(c.get("timestamp"), int | float)
+            ),
+            default=None,
+        )
+        message = LogMessage(
+            kind="claim-contention",
+            subject=f"{count} claim(s) expired for {machine} (heartbeat lapsed)",
+            fields={
+                "Machine": machine,
+                "By": by,
+                "Reason": "heartbeat-lapsed",
+                "Claims": str(count),
+                **(
+                    {"Oldest-Claim": _stamp(datetime.fromtimestamp(oldest, UTC))}
+                    if oldest
+                    else {}
+                ),
+            },
+        )
+        if isinstance(layer.append_message(format_message(message)), Unavailable):
+            return Expiry(
+                refused=(
+                    f"could not record the expiry of {machine}'s claims in the "
+                    "message log — nothing expired, because an expiry without "
+                    "attribution is what P2-5c forbids"
+                )
+            )
+
+    def merge(current: bytes | None) -> bytes | NotPublished:
+        if current is None:
+            return NotPublished(f"{CLAIMS_KEY} disappeared mid-expiry")
+        try:
+            fresh = json.loads(current)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return NotPublished(f"{CLAIMS_KEY} became unreadable mid-expiry")
+        if not isinstance(fresh, dict) or not isinstance(fresh.get("machines"), dict):
+            return NotPublished(f"{CLAIMS_KEY} changed shape mid-expiry")
+        machines = dict(fresh["machines"])
+        for machine in gone:
+            entry = machines.get(machine)
+            if not isinstance(entry, dict):
+                continue
+            # The entry stays, emptied: its own unknown fields survive, and the
+            # record that this machine WAS here is more useful than its absence.
+            machines[machine] = {
+                **entry,
+                "claims": [],
+                "expired": _stamp(now),
+                "expired_by": by,
+                "expired_reason": "heartbeat-lapsed",
+            }
+        fresh["machines"] = machines
+        return (json.dumps(fresh, indent=2, sort_keys=True) + "\n").encode()
+
+    written = read_merge_write(layer, CLAIMS_KEY, merge, attempts)
+    if isinstance(written, NotPublished):
+        return Expiry(refused=f"expiry recorded but not applied: {written.reason}")
+    result.expired = gone
+    return result
