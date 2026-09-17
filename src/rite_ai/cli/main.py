@@ -395,6 +395,32 @@ def _elide(text: str, keep: int) -> str:
     return kept + "…" + "".join(reversed(unclosed))
 
 
+def api_key_notice(environ) -> str | None:
+    """What `doctor` says when `ANTHROPIC_API_KEY` is exported, or None.
+
+    Nothing else in rite mentions it, and every session rite starts inherits
+    it: `rite pool fill` spawns with this environment and sandboxed Workers
+    get a copy of it. Claude Code uses the key ahead of a subscription login
+    and of CLAUDE_CODE_OAUTH_TOKEN, and without asking in non-interactive
+    mode — so an overnight run can be on the key without anyone choosing it.
+
+    A row, not a problem: a key exported on purpose is a legitimate setup,
+    the same line `sandbox_environment` draws for a venv put on PATH. The
+    value is never printed, only that it is set.
+    """
+    if not environ.get("ANTHROPIC_API_KEY"):
+        return None
+    return (
+        "env ANTHROPIC_API_KEY: set — every Claude session rite starts from "
+        "this shell inherits it (`rite pool fill`, sandboxed Workers), and "
+        "Claude Code uses it instead of your Claude subscription login and "
+        "CLAUDE_CODE_OAUTH_TOKEN, without asking in non-interactive sessions "
+        "(https://code.claude.com/docs/en/authentication"
+        "#authentication-precedence). If Workers should run on your "
+        "subscription, `unset ANTHROPIC_API_KEY` before starting them."
+    )
+
+
 @contextmanager
 def _doctor_check(label: str, problems: list[str]):
     """Run one check; a raise becomes a reported problem, never a crash.
@@ -498,6 +524,9 @@ def _doctor_report(problems: list[str]) -> None:
     creds = _project_credentials()
     for name in ["jira_token", "jira_email", "github_token"]:
         click.echo(f"credential {name}: {cred_resolve(name, creds).describe()}")
+    api_key = api_key_notice(os.environ)
+    if api_key:
+        click.echo(api_key)
 
     # RUN them. Being on PATH is not the same as working: a shim, a
     # half-finished install or an incompatible build all answer
