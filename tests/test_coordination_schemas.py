@@ -1,4 +1,4 @@
-"""The lease and Manager-status schemas (P2-0b), and D-54's ceiling.
+"""The lease and Manager-status schemas (P2-0b), and D-55's ceiling.
 
 §2.4.1 names the lease's four fields; §3.4 describes the status file only in
 prose. These shapes are therefore a proposal — but two behaviours in here are
@@ -47,7 +47,7 @@ class TestTheSkewMarginProtectsTheIncumbent:
 
 
 class TestTheCredibilityCeiling:
-    """D-54. The margin above protects against a fast CHALLENGER; this
+    """D-55. The margin above protects against a fast CHALLENGER; this
     protects against a fast INCUMBENT, which had no rule and read literally
     was a permanent wedge — a Manager whose clock is a day ahead holding the
     role forever, needing no malice, only a wrong clock."""
@@ -110,7 +110,7 @@ class TestUnknownFieldsSurviveAWriterThatDoesNotKnowThem:
 
 
 class TestUnreadableIsNotAbsent:
-    """D-53's half that lives here: a caller must be able to tell "could not
+    """D-54's half that lives here: a caller must be able to tell "could not
     read" from "not there". §2.4.2 step 2 treats a MISSING lease as the
     first-write case, and an unreadable one is emphatically not that."""
 
@@ -143,3 +143,25 @@ class TestRoundTripStability:
             name="laptop", last_seen="2026-09-16T12:00:00+00:00", workers=["w1"]
         )
         assert status_from_json(status_to_json(original)) == original
+
+
+class TestPriorityIsWrittenForAuditAndIgnoredOnRead:
+    """D-56. `coordination.managers` order is priority; the lease's own
+    `priority` records what the holder believed at acquisition and never
+    decides anything. A stale lease written before a reorder must not be
+    able to override it."""
+
+    def test_the_field_is_kept_and_round_trips(self):
+        """Not dead weight: it is the audit trail for why a promotion went
+        the way it did."""
+        out = lease_to_json(OwnerLease(owner="a", expires="x", priority=3))
+        assert lease_from_json(out).priority == 3
+
+    def test_priority_cannot_change_a_verdict(self):
+        """Two leases identical except for `priority` must be judged
+        identically — if this ever fails, something has started reading the
+        field for a decision."""
+        base = _lease(10)
+        for p in (0, 1, 99, -5):
+            other = OwnerLease(owner=base.owner, expires=base.expires, priority=p)
+            assert other.verdict(now=NOW, **CFG) == base.verdict(now=NOW, **CFG)
