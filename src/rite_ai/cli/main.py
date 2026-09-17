@@ -5422,7 +5422,42 @@ def update(yes: bool, files_only: bool, dry_run: bool, take: tuple[str, ...]) ->
 
     wanted = frozenset(take)
     results = refresh_project(root, take=wanted, apply=not dry_run)
-    for line in report(results, dry_run, wanted):
+    lines = report(results, dry_run, wanted)
+
+    # The spec section is `rite spec add`'s to rewrite, so `refresh_project`
+    # steps around it — which left it the one part of a generated file that
+    # upgrading could not deliver. A Worker created before this version kept
+    # instructions naming commands that did not exist yet, and both this
+    # command and `rite doctor` called the file current. Asking its owner is
+    # the fix that keeps the ownership: refresh does not learn the block,
+    # update just stops claiming to have finished without it.
+    from rite_ai.config.models import ProjectConfig
+    from rite_ai.config.parse import ParseError, parse_config
+    from rite_ai.project_spec import refresh_spec_sections
+
+    parsed_config = parse_config(rite_dir / "config.yaml")
+    # A config that will not parse is doctor's to report; here it only means
+    # the spec section cannot be rebuilt, so the rest of the refresh stands.
+    spec_refresh = (
+        refresh_spec_sections(root, parsed_config, apply=not dry_run)
+        if isinstance(parsed_config, ProjectConfig)
+        else None
+    )
+    if isinstance(parsed_config, ParseError):
+        lines.append(f"  spec section not refreshed: {parsed_config.message}")
+        spec_refresh = None
+    updated = spec_refresh.updated if spec_refresh else []
+    for rel in updated:
+        lines.append(
+            f"  {rel}: spec section would be brought up to date"
+            if dry_run
+            else f"  {rel}: spec section brought up to date"
+        )
+    if updated and lines and lines[0] == "generated files already current":
+        # It was not current: this command just found the part of it that
+        # `refresh_project` does not look at.
+        lines = lines[1:]
+    for line in lines:
         click.echo(line)
 
     if failed:

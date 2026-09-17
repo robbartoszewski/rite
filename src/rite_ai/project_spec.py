@@ -209,7 +209,9 @@ class RefreshResult:
     skipped: list[str] = field(default_factory=list)
 
 
-def refresh_spec_sections(root: Path, config: ProjectConfig) -> RefreshResult:
+def refresh_spec_sections(
+    root: Path, config: ProjectConfig, *, apply: bool = True
+) -> RefreshResult:
     """Rewrite the spec section of the Owner's and every Worker's generated
     `CLAUDE.md` to match `config.spec`.
 
@@ -217,6 +219,11 @@ def refresh_spec_sections(root: Path, config: ProjectConfig) -> RefreshResult:
     spec registered afterwards never reached the Owner, and a Worker created
     before it kept whatever init had found. A `CLAUDE.md` rite did not
     generate is left untouched and reported.
+
+    `apply=False` reports what would change and writes nothing, which is what
+    `rite update --files-only --dry-run` needs: this section is the one part
+    of a generated file that refresh deliberately does not own, so asking it
+    is the only way that command can tell the truth about the whole file.
     """
     from rite_ai.cli.init.claude_gen import GENERATED_MARKER
     from rite_ai.cli.init.claude_gen import _spec_section as owner_section
@@ -267,6 +274,7 @@ def refresh_spec_sections(root: Path, config: ProjectConfig) -> RefreshResult:
             result.skipped.append(f"{rel}: no {names} heading to place it before")
             continue
         if new != text:
-            write_atomic(path, new)
+            if apply:
+                write_atomic(path, new)
             result.updated.append(rel)
     return result

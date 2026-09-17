@@ -656,3 +656,56 @@ def test_doctor_carries_the_notice_for_a_project_that_has_a_spec(
     assert _run(root, "index").exit_code == 0
     again = CliRunner().invoke(cli, ["doctor"], catch_exceptions=False)
     assert "rite spec index" not in again.output
+
+
+# --- the upgrade path for the Worker's instructions -------------------------------
+
+
+def _project_with_stale_spec_section(tmp_path: Path, monkeypatch) -> Path:
+    """A project as an older rite left it: generated, with a Worker whose spec
+    section predates the retrieval commands."""
+    import subprocess
+
+    import rite_ai.sandbox as sb
+    from rite_ai.cli.init import run_init
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    monkeypatch.chdir(root)
+    monkeypatch.setattr(sb, "platform_can_sandbox", lambda: False)
+    (root / "SPEC.md").write_text("# T\n## 1. Scope\nWhat it does.\n")
+    run_init(root, yes=True)
+    assert CliRunner().invoke(cli, ["add", "worker", "alpha"]).exit_code == 0
+    worker = root / "workers" / "alpha" / "CLAUDE.md"
+    text = worker.read_text()
+    start = text.index("When your ticket cites a part of it")
+    end = text.index("rite cannot tell whether this is current.")
+    worker.write_text(text[:start] + text[end:])
+    assert "rite spec slice" not in worker.read_text()
+    return root
+
+
+def test_upgrading_delivers_the_worker_its_spec_section(tmp_path: Path, monkeypatch):
+    """`refresh_project` steps around the `<!-- rite:spec -->` block because
+    `rite spec add` owns it — which left it the one part of a generated file
+    upgrading could not deliver. A Worker kept instructions naming commands
+    that did not exist, and `rite update` called the file current."""
+    root = _project_with_stale_spec_section(tmp_path, monkeypatch)
+    worker = root / "workers" / "alpha" / "CLAUDE.md"
+
+    runner = CliRunner()
+    dry = runner.invoke(
+        cli, ["update", "--files-only", "--dry-run"], catch_exceptions=False
+    )
+    assert "spec section would be brought up to date" in dry.output
+    assert "rite spec slice" not in worker.read_text()  # a dry run writes nothing
+    assert "already current" not in dry.output
+
+    done = runner.invoke(cli, ["update", "--files-only"], catch_exceptions=False)
+    assert "spec section brought up to date" in done.output
+    assert "rite spec slice" in worker.read_text()
+
+    again = runner.invoke(cli, ["update", "--files-only"], catch_exceptions=False)
+    assert "generated files already current" in again.output
+    assert "spec section" not in again.output
