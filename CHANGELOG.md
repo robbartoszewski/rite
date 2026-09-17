@@ -22,6 +22,8 @@
   0.2.0 or 0.3.0.
 - `rite start` says when a project's instructions are behind the installed
   rite, and `rite doctor` counts what is out of date and what you changed.
+- `rite update` refreshes the project with the rite it has just installed,
+  rather than with the version it replaced — so one upgrade is one step.
 - `/spec-digest` gives a Worker the one part of the spec its ticket is about,
   with what has drifted since that part was written, instead of the whole
   document. The spec is parsed into addressable units, the references between
