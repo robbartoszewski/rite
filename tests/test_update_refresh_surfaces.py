@@ -180,3 +180,68 @@ class TestDoctorSaysWhenAProjectIsBehind:
         root = _project(tmp_path, monkeypatch)
         (root / ".claude" / "commands" / "review.md").unlink()
         assert self._doctor().exit_code == 0, "being behind is not a problem"
+
+
+class TestAWorkerFileFromAnOlderRelease:
+    """Workers are where the guidance a tester reported missing actually
+    lives, and a Worker created before markers existed has no proof of what
+    rite wrote. Release history gives it one."""
+
+    def _worker(self, root: Path) -> Path:
+        from rite_ai.workspace.manage import add_worker
+
+        result = add_worker(root, "alpha")
+        assert result.ok, result.message
+        return root / "workers" / "alpha" / "CLAUDE.md"
+
+    def _unmarked(self, text: str) -> str:
+        from rite_ai.generated_sections import MARKER_RE
+
+        return "".join(
+            line
+            for line in text.splitlines(keepends=True)
+            if not MARKER_RE.match(line.strip())
+        )
+
+    def test_a_section_a_release_wrote_is_refreshed(self, tmp_path, monkeypatch):
+        import hashlib
+
+        from rite_ai.generated_sections import parse
+
+        root = _project(tmp_path, monkeypatch)
+        path = self._worker(root)
+        current = path.read_text()
+        older = self._unmarked(current).replace(
+            "- Skip the review convention.",
+            "- Skip the review convention (v0.2.0 wording).",
+            1,
+        )
+        path.write_text(older)
+        section = next(
+            b.content
+            for b in parse(older)
+            if b.kind == "section" and b.heading == "What you must not do"
+        )
+        history = {
+            "What you must not do": frozenset(
+                {hashlib.sha256(section.strip().encode()).hexdigest()}
+            )
+        }
+        with patch("rite_ai.update.section_history.SECTIONS", history):
+            result = CliRunner().invoke(cli, ["update", "--files-only"])
+        assert result.exit_code == 0, result.output
+        assert "workers/alpha/CLAUDE.md" in result.output
+        assert "v0.2.0 wording" not in path.read_text()
+
+    def test_an_edited_worker_section_is_kept(self, tmp_path, monkeypatch):
+        root = _project(tmp_path, monkeypatch)
+        path = self._worker(root)
+        mine = path.read_text().replace(
+            "- Skip the review convention.",
+            "- Skip the review convention.\n- Deploy on Fridays.",
+            1,
+        )
+        path.write_text(mine)
+        result = CliRunner().invoke(cli, ["update", "--files-only"])
+        assert "left as it is" in result.output
+        assert "Deploy on Fridays." in path.read_text()

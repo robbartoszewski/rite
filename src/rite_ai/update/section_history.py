@@ -4,55 +4,66 @@ SHA-256 of each CLAUDE.md section every tagged release wrote identically
 for every project, so a file written before markers existed can still be
 shown to be rite's own rather than a user's edit.
 
-From: v0.1.0 (8/10 static), v0.2.0 (8/10 static), v0.3.0 (8/11 static).
+From: v0.1.0 (9/13 static), v0.2.0 (10/14 static), v0.3.0 (10/15 static).
 """
 
 SECTIONS: dict[str, frozenset[str]] = {
-    "Before anything else: read the handover snapshot": frozenset(
+    'Before anything else: read the handover snapshot': frozenset(
         {
-            "ff9e0b7a9c92a2ab72b2bbf29e59f89a61a133a8bd5c4deea4efa9c221c36e5d",
+            'ff9e0b7a9c92a2ab72b2bbf29e59f89a61a133a8bd5c4deea4efa9c221c36e5d',
         }
     ),
-    "Claims system": frozenset(
+    'Claims system': frozenset(
         {
-            "329b2de6690d6cdc647e258d931a52c0e98b60d8b5d7f7d140b0d6b07c939abf",
+            '329b2de6690d6cdc647e258d931a52c0e98b60d8b5d7f7d140b0d6b07c939abf',
         }
     ),
-    "Commands": frozenset(
+    'Commands': frozenset(
         {
-            "9128f33b816e55ea173b2af5b405a7d2e3046d7783bf1ac31b39164f66b54ee3",
-            "ce1412363c47c552d631897ea6c587cefccd6b9cfc459a1f48ffe87718e1f9be",
+            '9128f33b816e55ea173b2af5b405a7d2e3046d7783bf1ac31b39164f66b54ee3',
+            'ce1412363c47c552d631897ea6c587cefccd6b9cfc459a1f48ffe87718e1f9be',
         }
     ),
-    "Project knowledge": frozenset(
+    'Project knowledge': frozenset(
         {
-            "abe50ebbb80bcd7eff0242f85307646d70286d6084b44bebb913337b643ba8fd",
+            'abe50ebbb80bcd7eff0242f85307646d70286d6084b44bebb913337b643ba8fd',
         }
     ),
-    "Publish gate": frozenset(
+    'Publish gate': frozenset(
         {
-            "bb8b3d1498b5c0c647fafca57cc612aaa32d3bb8198d5956a553d364ba47a58c",
+            'bb8b3d1498b5c0c647fafca57cc612aaa32d3bb8198d5956a553d364ba47a58c',
         }
     ),
-    "Review convention": frozenset(
+    'Review convention': frozenset(
         {
-            "d7f64324b9f923e9af3492e39562f04fe5ff8de644f51a5aec8ded9694b57de8",
+            'd7f64324b9f923e9af3492e39562f04fe5ff8de644f51a5aec8ded9694b57de8',
         }
     ),
-    "Ticket workflow": frozenset(
+    'Ticket workflow': frozenset(
         {
-            "944f0aec70c690489ab8096d955c97c15d03dc6704159c766eb8e8657d9b72f5",
+            '944f0aec70c690489ab8096d955c97c15d03dc6704159c766eb8e8657d9b72f5',
         }
     ),
-    "What this is": frozenset(
+    'What this is': frozenset(
         {
-            "248040d4991826d740b95b5e3aa3080f8beaad188457007a2a2a9acfcb044962",
-            "5f5eda81b25e1cd571f8696a2cbe794312a2573137fe18ef3ee1af3daf6c4a34",
+            '248040d4991826d740b95b5e3aa3080f8beaad188457007a2a2a9acfcb044962',
+            '5f5eda81b25e1cd571f8696a2cbe794312a2573137fe18ef3ee1af3daf6c4a34',
         }
     ),
-    "Where this project is, and what to do next": frozenset(
+    'What you must not do': frozenset(
         {
-            "ea987dee4f97d28bb52264978f2aa218d25f777d132d6d95df1a19c2898e0ca0",
+            '6fd3b38385e6b8a2fc90306e80e5323dc7d1607ecba941bc5e5d62ae6f78708d',
+            'fb4fc0490f98d41d2acee58e8de0215eb6ef55d18811b49f87f592cf3258081a',
+        }
+    ),
+    'Where this project is, and what to do next': frozenset(
+        {
+            'ea987dee4f97d28bb52264978f2aa218d25f777d132d6d95df1a19c2898e0ca0',
+        }
+    ),
+    'Your ticket': frozenset(
+        {
+            'c82e5fda773511b0910e527a39a47213e17dad7c39a2eb489215ecb170354dc7',
         }
     ),
 }
