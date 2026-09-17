@@ -330,10 +330,25 @@ def _format_commands(cmds: ModuleCommands) -> list[str]:
             where = " (recorded in modules.yaml)" if key in cmds.configured else ""
             lines.append(f"- {label}: `{value}`{where}")
         else:
-            lines.append(
-                f"- {label}: not detected in {cmds.source} — record it under "
-                "`commands:` in `.rite/modules.yaml`, don't guess."
-            )
+            # `source` is "modules.yaml" alone when nothing was detected —
+            # it names where the OTHER commands came from, not a manifest
+            # that was read. Saying "not detected in modules.yaml — record it
+            # in modules.yaml" names the file it was missing from as the file
+            # to put it in, which is circular. Found by running `rite init`
+            # cold on two empty module repos with commands recorded by hand,
+            # which is the shape a project has before its modules are
+            # scaffolded.
+            if cmds.detected:
+                lines.append(
+                    f"- {label}: not detected in {cmds.source} — record it "
+                    "under `commands:` in `.rite/modules.yaml`, don't guess."
+                )
+            else:
+                lines.append(
+                    f"- {label}: no manifest here to detect one from, and "
+                    "none recorded — add it under `commands:` in "
+                    "`.rite/modules.yaml`, don't guess."
+                )
     if cmds.note:
         lines.append(f"- Note: {cmds.note}")
     return lines

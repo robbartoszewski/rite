@@ -133,3 +133,49 @@ class TestCommandsAreNotClaimedAsDetectedWhenNothingWasDetected:
         assert "rite has run neither" in modules_section, (
             "the module map does not say a recorded command is unverified"
         )
+
+
+class TestAMissingCommandDoesNotPointAtTheFileItWasMissingFrom:
+    """Found by running `rite init` cold on a project shaped like the
+    tester's: two empty module repos, commands recorded by hand afterwards.
+
+    For a key nobody recorded, the line read:
+
+        Install: not detected in modules.yaml — record it under `commands:`
+        in `.rite/modules.yaml`, don't guess.
+
+    It names the file it was not found in as the file to put it in. There is
+    no manifest in that module at all, which is the actual thing to say —
+    `modules.yaml` is only `source` because it is where the OTHER commands
+    came from.
+    """
+
+    def _lines(self, *, detected: bool, source: str) -> str:
+        from rite_ai.cli.init.claude_gen import _format_commands
+        from rite_ai.cli.init.detect import ModuleCommands
+
+        return "\n".join(
+            _format_commands(
+                ModuleCommands(
+                    test="pytest",
+                    detected=detected,
+                    source=source,
+                    configured=frozenset({"test"}),
+                )
+            )
+        )
+
+    def test_it_does_not_say_not_detected_in_modules_yaml(self):
+        out = self._lines(detected=False, source="modules.yaml")
+        assert "not detected in modules.yaml" not in out, out
+
+    def test_it_says_there_is_no_manifest_to_detect_from(self):
+        out = self._lines(detected=False, source="modules.yaml")
+        assert "no manifest" in out.lower(), out
+        assert "`commands:`" in out, "it must still say where to record one"
+
+    def test_a_real_manifest_is_still_named(self):
+        """The other half: when detection DID fire, naming the manifest it
+        read is the useful part and must survive."""
+        out = self._lines(detected=True, source="modules.yaml + pyproject.toml")
+        assert "pyproject.toml" in out
