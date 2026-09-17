@@ -34,6 +34,7 @@ from rite_ai.coordination.publish import (
 )
 from rite_ai.coordination.schemas import (
     ManagerStatus,
+    parse_timestamp,
     status_from_json,
     status_to_json,
 )
@@ -126,9 +127,7 @@ def liveness(
     status = status_from_json(read.value.decode("utf-8", errors="replace"))
     if status is None:
         return Liveness(None, f"{key} could not be parsed")
-    from rite_ai.coordination.schemas import _parse_ts
-
-    last = _parse_ts(status.last_seen)
+    last = parse_timestamp(status.last_seen)
     if last is None:
         return Liveness(None, f"{key} has no usable last_seen")
     interval = max(1, interval_minutes) * 60

@@ -104,7 +104,7 @@ class LeaseVerdict:
     NOT_CREDIBLE = "not_credible"
 
 
-def _parse_ts(value: object) -> datetime | None:
+def parse_timestamp(value: object) -> datetime | None:
     """An ISO-8601 timestamp, or None if it is not one.
 
     None means "unusable", never "now" — a corrupt timestamp defaulting to
@@ -164,7 +164,7 @@ class OwnerLease(_KeepsDrift):
         expired: it cannot be shown to hold, and it is the same "somebody's
         clock or file is wrong" signal.
         """
-        expires = _parse_ts(self.expires)
+        expires = parse_timestamp(self.expires)
         if expires is None:
             return LeaseVerdict.NOT_CREDIBLE
         ceiling_seconds = owner_lease_minutes * 60 + skew_tolerance_seconds
