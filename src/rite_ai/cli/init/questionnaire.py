@@ -50,6 +50,7 @@ def _kind_index(kind: str | None) -> int:
     values = [value for value, _ in _KIND_OPTIONS]
     return values.index(kind) if kind in values else 0
 
+
 _TICKET_OPTIONS = [
     ("jira", "JIRA"),
     ("github", "GitHub Issues"),
@@ -120,6 +121,16 @@ def _resolve_spec(
         return SpecConfig()
 
     if not interactive:
+        # Said, not silent. `--yes` takes the interactive default here
+        # (confirm(…, default=True)), so the decision is right — but it
+        # points every Worker at a file nobody was shown, and adopting a
+        # spec is the one `--yes` answer with a consequence outside
+        # `.rite/`. The line is what makes it correctable.
+        ui.note(
+            "Pointing Workers at the spec found here: "
+            + ", ".join(f"`{p}`" for p in found)
+            + " (--yes took the default; `rite spec remove <path>` undoes it)"
+        )
         return SpecConfig(
             paths=found, convention=detect_decision_convention(root, found)
         )
@@ -415,6 +426,13 @@ def run_questionnaire(
         "Ticket backend?",
         _TICKET_OPTIONS,
         default_index=0,
+        # The one place `--yes` deliberately differs from the interactive
+        # default (JIRA), and the only `fallback` in this file. JIRA needs a
+        # site and a project key that `--yes` cannot supply, so defaulting to
+        # it would write a backend that refuses every board command with a
+        # missing-credential error. `none` is the only answer that is not
+        # broken, and `rite credential set jira` turns it into a real board
+        # in one command. Recorded here because nothing recorded it before.
         fallback="none",
     )
     jira_site = ""
