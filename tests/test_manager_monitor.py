@@ -311,6 +311,151 @@ class TestLiveness:
         assert not liveness(layer, "alpha", now=clock(), interval_minutes=10).known
 
 
+class TestTheTickAlsoDistributesWork:
+    """P2-4b/P2-4c wired to the loop. Distribution nothing calls is the
+    defect D-14 records against `perform_handover`: correct, and inert."""
+
+    def _backend(self, tickets, refuse_label=None):
+        from rite_ai.tickets import BackendError, Ticket
+
+        class Board:
+            """Applies its own writes, so a second tick sees the board the
+            first one left behind rather than a fresh copy of the fixture."""
+
+            def __init__(self):
+                self.writes = []
+                self.comments = []
+                self.state = {t: list(ls) for t, ls in tickets}
+
+            def add(self, ticket_id, *labels):
+                self.state[ticket_id] = list(labels)
+
+            def list_tickets(self, filters=None):
+                return [
+                    Ticket(id=t, title=t, labels=list(ls))
+                    for t, ls in self.state.items()
+                ]
+
+            def label(self, ticket_id, labels, remove=None):
+                if refuse_label and ticket_id in refuse_label:
+                    return BackendError("locked")
+                self.writes.append((ticket_id, list(labels), list(remove or [])))
+                current = [
+                    label
+                    for label in self.state.get(ticket_id, [])
+                    if label not in (remove or [])
+                ]
+                self.state[ticket_id] = current + [
+                    label for label in labels if label not in current
+                ]
+                return None
+
+            def comment(self, ticket_id, text):
+                self.comments.append((ticket_id, text))
+                return None
+
+        return Board()
+
+    def _schedule(self, workers=2):
+        from rite_ai.config.models import ScheduleConfig, ScheduleWindow
+
+        return ScheduleConfig(
+            timezone="UTC",
+            windows=[ScheduleWindow(hours="00:00-24:00", workers=workers)],
+        )
+
+    def test_a_tick_hands_assigned_tickets_to_workers(self, layer, config, root):
+        board = self._backend([("ABC-1", ["alpha", "scheduled"])])
+        m = monitor(
+            layer,
+            config,
+            "alpha",
+            Clock(),
+            root=root,
+            backend=board,
+            workers=["w1", "w2"],
+            schedule=self._schedule(),
+        )
+        tick = m.tick()
+        assert tick.handouts == [("ABC-1", "w1")]
+        assert board.writes == [("ABC-1", ["w1"], ["alpha", "scheduled"])]
+
+    def test_an_established_owner_still_distributes(self, layer, config, root):
+        """The Owner is a Manager as well (§2.3), so its own Workers must not
+        go idle while it holds the role. Asserted on a LATER tick: on the
+        first one it promotes, which reaches distribution by the other path
+        and would pass even if an Owner never distributed."""
+        board = self._backend([])
+        clock = Clock()
+        m = monitor(
+            layer,
+            config,
+            "alpha",
+            clock,
+            root=root,
+            backend=board,
+            workers=["w1"],
+            schedule=self._schedule(),
+        )
+        first = m.tick()
+        assert first.action == "promoted" and first.owner
+        assert first.handouts == []
+
+        board.add("ABC-1", "alpha", "scheduled")
+        clock.advance(minutes=1)
+        second = m.tick()
+        assert second.owner and second.action == "renewed"
+        assert second.handouts == [("ABC-1", "w1")]
+
+    def test_work_for_a_missing_module_is_returned_not_held(
+        self, layer, config, root
+    ):
+        board = self._backend([("ABC-1", ["alpha", "module:ios"])])
+        m = monitor(
+            layer,
+            config,
+            "alpha",
+            Clock(),
+            root=root,
+            backend=board,
+            workers=["w1"],
+            schedule=self._schedule(),
+            modules={"backend"},
+        )
+        tick = m.tick()
+        assert "ABC-1" in tick.refused
+        assert tick.handouts == []
+
+    def test_a_ticket_that_can_be_neither_done_nor_returned_is_a_problem(
+        self, layer, config, root
+    ):
+        """It sits until somebody is told, so somebody is told."""
+        board = self._backend(
+            [("ABC-1", ["alpha", "module:ios"])], refuse_label={"ABC-1"}
+        )
+        m = monitor(
+            layer,
+            config,
+            "alpha",
+            Clock(),
+            root=root,
+            backend=board,
+            workers=["w1"],
+            schedule=self._schedule(),
+            modules={"backend"},
+        )
+        tick = m.tick()
+        assert any("could not return ABC-1" in p for p in tick.problems)
+
+    def test_without_a_board_a_tick_says_nothing_about_distribution(
+        self, layer, config
+    ):
+        """No board configured is not "nothing to distribute"."""
+        tick = monitor(layer, config, "alpha", Clock()).tick()
+        assert tick.handouts == [] and tick.refused == {}
+        assert not any("distribut" in p for p in tick.problems)
+
+
 class TestItKeepsOtherManagersClaims:
     def test_promotion_does_not_touch_our_own_workers_claims(
         self, layer, config, root

@@ -17,6 +17,12 @@ D-14's third trigger). That is the whole reason the election reports whose
 lease it displaced: promoting and leaving the old Owner's tickets assigned
 to a machine that is gone is the state `rite stop` exists to prevent.
 
+**A tick also hands this Manager's work to its Workers** (P2-4b/P2-4c), when
+the caller supplies a board and a schedule. Distribution that nothing calls is
+the same defect D-14 records against `perform_handover`: a function whose
+caller was never written, correct and inert. The Owner is a Manager too, so
+this runs whatever the role turned out to be.
+
 **Asking is done once, not every tick.** A promotion request is a file; it
 does not need rewriting every ten seconds, and the churn would conflict with
 every other writer on a whole-ref CAS (§2.4.2) for no gain.
@@ -34,7 +40,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from rite_ai.config.models import HeartbeatConfig
+from rite_ai.config.models import HeartbeatConfig, ScheduleConfig
 from rite_ai.coordination.demotion import (
     Asked,
     HandedOver,
@@ -43,6 +49,7 @@ from rite_ai.coordination.demotion import (
     request_promotion,
 )
 from rite_ai.coordination.demotion import Unknown as DemotionUnknown
+from rite_ai.coordination.distribution import Distributed, distribute
 from rite_ai.coordination.election import (
     Deferred,
     NotEligible,
@@ -71,6 +78,12 @@ class Tick:
     asked_for_promotion: bool = False
     asked_to_hand_over: bool = False
     handover: ToldTheBoard | None = None
+    handouts: list[tuple[str, str]] = field(default_factory=list)
+    """(ticket, worker) given out this tick (P2-4b)."""
+    refused: dict[str, str] = field(default_factory=dict)
+    """Tickets returned to the pool, and why (P2-4c)."""
+    held_back: dict[str, str] = field(default_factory=dict)
+    """Still ours, waiting for a slot. Not a problem — a queue."""
     problems: list[str] = field(default_factory=list)
     """Anything that could not be established. NOT fatal, and not silent:
     a tick that could not read the state must say so or a Manager looks
@@ -87,6 +100,11 @@ class ManagerMonitor:
         status: object = None,
         hand_over_when=None,
         interval: float = 60.0,
+        backend=None,
+        workers: list[str] | None = None,
+        schedule: ScheduleConfig | None = None,
+        modules: set[str] | None = None,
+        draining: str = "",
     ) -> None:
         self.holder = holder
         self.root = root
@@ -98,6 +116,14 @@ class ManagerMonitor:
         # boundary (D-43). Without it, a request is reported, never acted on.
         self.hand_over_when = hand_over_when
         self.interval = interval
+        # The board half (P2-4b/P2-4c). Absent, a tick does the coordination
+        # work and says nothing about distribution rather than implying none
+        # was needed.
+        self.backend = backend
+        self.workers = workers or []
+        self.schedule = schedule
+        self.modules = modules
+        self.draining = draining
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self.last: Tick | None = None
@@ -117,8 +143,13 @@ class ManagerMonitor:
         we_hold_it = lease is not None and lease.owner == self.holder.manager
 
         if we_hold_it:
-            return self._as_owner(now, result)
-        return self._as_manager(now, result)
+            self._as_owner(now, result)
+        else:
+            self._as_manager(now, result)
+        # Whatever the role turned out to be, this machine is a Manager and
+        # its assigned tickets are waiting.
+        self._distribute(now, result)
+        return result
 
     # --- the two halves ---
 
@@ -201,6 +232,30 @@ class ManagerMonitor:
         return result
 
     # --- the pieces ---
+
+    def _distribute(self, now: datetime, result: Tick) -> None:
+        if self.backend is None or self.schedule is None or self.root is None:
+            return
+        handed = distribute(
+            self.root,
+            self.backend,
+            manager=self.holder.manager,
+            workers=self.workers,
+            schedule=self.schedule,
+            now=now,
+            modules=self.modules,
+            draining=self.draining,
+        )
+        if not isinstance(handed, Distributed):
+            result.problems.append(handed.reason)
+            return
+        result.handouts = handed.handouts
+        result.refused = handed.refused
+        result.held_back = handed.held_back
+        for ticket, why in handed.could_not_refuse.items():
+            # Neither ours to do nor the board's to reassign. It sits until
+            # somebody is told, so somebody is told.
+            result.problems.append(f"could not return {ticket}: {why}")
 
     def _beat(self, now: datetime, result: Tick) -> None:
         if self.status is None:
