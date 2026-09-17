@@ -875,13 +875,18 @@ def _doctor_report(problems: list[str]) -> None:
                     )
             if project.config.spec.convention:
                 click.echo(f"spec convention: {project.config.spec.convention}")
-        else:
-            # Same wording as `rite start`: reported, never a problem — a
-            # project without a spec yet is not misconfigured.
-            from rite_ai.project_spec import spec_notices
 
-            for notice in spec_notices(root, project.config, [m.path for m in modules]):
-                click.echo(notice)
+        # Asked in both branches, because it has something to say in both: what
+        # to do when no spec is registered, and — once one is — that a spec too
+        # big to hold has a command for loading part of it. It says nothing the
+        # rest of the time.
+        # Same wording as `rite start`: reported, never a problem — a project
+        # without a spec yet is not misconfigured, and one with a large spec
+        # and no digest is not either.
+        from rite_ai.project_spec import spec_notices
+
+        for notice in spec_notices(root, project.config, [m.path for m in modules]):
+            click.echo(notice)
 
         # Nothing else tells anyone the refresh exists, and a project whose
         # CLAUDE.md predates a fix cannot report the fix it is missing. A

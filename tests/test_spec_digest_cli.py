@@ -568,3 +568,91 @@ def test_a_worker_with_no_spec_registered_is_told_nothing_about_slices(tmp_path:
     from rite_ai.workspace.manage import _spec_section
 
     assert _spec_section(SpecConfig(paths=[])) == ""
+
+
+# --- discovery: nothing ever mentioned the digest to a project that had a spec ----
+
+
+def _write_big_spec(root: Path) -> None:
+    """Above the line-count the notice asks about, the way a real spec is."""
+    body = "# T\n" + "".join(
+        f"## {n}. Section {n}\nProse about {n}. See §1.\n\n" + "filler\n" * 8
+        for n in range(1, 60)
+    )
+    (root / "SPEC.md").write_text(body)
+    assert len(body.splitlines()) > 500
+
+
+def _big_spec(root: Path) -> None:
+    _write_big_spec(root)
+    (root / ".rite").mkdir(exist_ok=True)
+    (root / ".rite" / "config.yaml").write_text("spec:\n  paths:\n    - SPEC.md\n")
+
+
+def test_a_large_registered_spec_is_told_the_digest_exists(tmp_path: Path):
+    """`spec_notices` went silent the moment a spec was registered, which is
+    exactly when the digest becomes relevant. A project could carry a
+    4,000-line spec forever and never learn `rite spec index` exists."""
+    from rite_ai.config.models import ProjectConfig, SpecConfig
+    from rite_ai.project_spec import spec_notices
+
+    _big_spec(tmp_path)
+    notices = spec_notices(
+        tmp_path, ProjectConfig(spec=SpecConfig(paths=["SPEC.md"])), []
+    )
+    assert len(notices) == 1
+    assert "rite spec index" in notices[0] and "lines" in notices[0]
+    assert "decompose" not in notices[0]  # line count does not predict that
+
+
+def test_a_small_spec_is_left_alone(tmp_path: Path):
+    from rite_ai.config.models import ProjectConfig, SpecConfig
+    from rite_ai.project_spec import spec_notices
+
+    (tmp_path / "SPEC.md").write_text("# T\n## 1. A\nshort\n")
+    config = ProjectConfig(spec=SpecConfig(paths=["SPEC.md"]))
+    assert spec_notices(tmp_path, config, []) == []
+
+
+def test_it_stops_once_the_project_has_answered_the_question(
+    tmp_path: Path, monkeypatch
+):
+    """A notice that keeps appearing after `rite spec index` has run is nagging
+    about a decision already made — either way, since the index is only written
+    when the spec decomposed."""
+    from rite_ai.config.models import ProjectConfig, SpecConfig
+    from rite_ai.project_spec import spec_notices
+
+    _big_spec(tmp_path)
+    config = ProjectConfig(spec=SpecConfig(paths=["SPEC.md"]))
+    assert spec_notices(tmp_path, config, [])
+    monkeypatch.chdir(tmp_path)
+    assert _run(tmp_path, "index").exit_code == 0
+    assert spec_notices(tmp_path, config, []) == []
+
+
+def test_doctor_carries_the_notice_for_a_project_that_has_a_spec(
+    tmp_path: Path, monkeypatch
+):
+    """Doctor asked `spec_notices` only when NO spec was registered, so a
+    notice about a registered spec could never reach anyone."""
+    import subprocess
+
+    import rite_ai.sandbox as sb
+    from rite_ai.cli.init import run_init
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    monkeypatch.chdir(root)
+    monkeypatch.setattr(sb, "platform_can_sandbox", lambda: False)
+    # Written BEFORE init, so init detects and registers it the way it would
+    # for a real project that already had a spec.
+    _write_big_spec(root)
+    run_init(root, yes=True)
+
+    result = CliRunner().invoke(cli, ["doctor"], catch_exceptions=False)
+    assert "rite spec index" in result.output, result.output
+    assert _run(root, "index").exit_code == 0
+    again = CliRunner().invoke(cli, ["doctor"], catch_exceptions=False)
+    assert "rite spec index" not in again.output

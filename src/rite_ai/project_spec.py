@@ -116,6 +116,39 @@ def spec_state(root: Path, config: ProjectConfig, module_paths: list[str]) -> Sp
     return state
 
 
+# Below this, reading the spec whole is not a cost worth a command. Above it,
+# `rite spec index` is the thing that ANSWERS the question — the notice
+# deliberately does not claim the spec will decompose, because line count does
+# not predict that: measured, a 606-line document decomposed and an 817-line
+# one was refused.
+_WORTH_ASKING_LINES = 500
+
+
+def _digest_notice(root: Path, config: ProjectConfig) -> list[str]:
+    """One line, once: that a registered spec is big enough to be worth asking
+    about. Silent once the project has an index, so it cannot nag a project
+    that has already answered the question either way."""
+    from rite_ai.spec.index_file import index_path
+    from rite_ai.spec.units import expand_paths
+
+    if index_path(root).exists():
+        return []
+    files, _ = expand_paths(root, config.spec.paths)
+    total = 0
+    for rel in files:
+        try:
+            total += len((root / rel).read_text(encoding="utf-8").splitlines())
+        except (OSError, UnicodeDecodeError):
+            return []  # doctor reports an unreadable spec path itself
+    if total < _WORTH_ASKING_LINES:
+        return []
+    where = files[0] if len(files) == 1 else f"{len(files)} files"
+    return [
+        f"spec: {where} is {total:,} lines — `rite spec index` says whether a "
+        "Worker could load one part of it instead of all of it"
+    ]
+
+
 def spec_notices(
     root: Path, config: ProjectConfig, module_paths: list[str]
 ) -> list[str]:
@@ -128,7 +161,7 @@ def spec_notices(
     missing ones, are reported by `doctor` itself.
     """
     if config.spec.paths:
-        return []
+        return _digest_notice(root, config)
     state = spec_state(root, config, module_paths)
     if state.unregistered_files:
         listed = ", ".join(state.unregistered_files)
