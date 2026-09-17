@@ -26,11 +26,16 @@ properties it has to keep, whatever the field names settle as:
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 
 from rite_ai.coordination.publish import NotPublished, Published, read_merge_write
-from rite_ai.coordination.state_layer import StateLayer, valid_key
+from rite_ai.coordination.state_layer import (
+    Absent,
+    StateLayer,
+    Unavailable,
+    valid_key,
+)
 
 CLAIMS_KEY = "claims.json"
 
@@ -101,3 +106,57 @@ def published_claims(state: dict) -> dict[str, list[dict]]:
         if isinstance(claims, list):
             out[name] = [c for c in claims if isinstance(c, dict)]
     return out
+
+
+@dataclass
+class CannotTell:
+    """The published claims could not be read, so no claim can be shown safe.
+
+    D-54's second half: the bytes are left exactly as they are, and the
+    operation that needed them is refused. A claim granted against claims it
+    could not read is precisely the overlap the ledger exists to prevent."""
+
+    reason: str
+
+
+def published_overlaps(
+    layer: StateLayer, own_machine: str, paths: list[str]
+) -> list[str] | CannotTell:
+    """Which of `paths` overlap a claim published by ANOTHER machine.
+
+    This machine's own entry is skipped: its ledger is the source of truth for
+    its own claims (§5.2), and a published copy of them is a projection that
+    may lag by a heartbeat."""
+    from rite_ai.claims.ledger import normalise_path, paths_overlap
+
+    read = layer.read_state(CLAIMS_KEY)
+    if isinstance(read, Unavailable):
+        return CannotTell(f"could not read {CLAIMS_KEY}: {read.reason}")
+    if isinstance(read, Absent):
+        return []
+    try:
+        state = json.loads(read.value)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return CannotTell(
+            f"{CLAIMS_KEY} could not be parsed, so a claim that might overlap "
+            "it cannot be shown safe"
+        )
+    if not isinstance(state, dict):
+        return CannotTell(f"{CLAIMS_KEY} is not an object")
+
+    found: list[str] = []
+    for machine, claims in published_claims(state).items():
+        if machine == own_machine:
+            continue
+        for claim in claims:
+            holder = str(claim.get("worker", "?"))
+            for cp in (
+                claim.get("paths", []) if isinstance(claim.get("paths"), list) else []
+            ):
+                for p in paths:
+                    if paths_overlap(normalise_path(p), normalise_path(str(cp))):
+                        found.append(
+                            f"{normalise_path(p)} overlaps {cp} "
+                            f"(held by {holder} on {machine})"
+                        )
+    return found

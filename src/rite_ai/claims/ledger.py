@@ -95,6 +95,10 @@ def _warn_if_exclusion_is_decoration(directory: Path) -> None:
 
 
 class ClaimsLedger:
+    last_publish: object = None
+    """The outcome of the last publish this ledger attempted (P2-5b), or None
+    when it has never been asked to publish."""
+
     def __init__(self, path: Path) -> None:
         self._path = path
         self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -139,8 +143,26 @@ class ClaimsLedger:
         see `rite_ai.state.locked`, which carries the measurement."""
         return locked(self._path)
 
-    def claim(self, paths: list[str], worker: str, ticket: str = "") -> ClaimResult:
-        """Claim one or more paths for a worker. Fails on overlap."""
+    def claim(
+        self,
+        paths: list[str],
+        worker: str,
+        ticket: str = "",
+        *,
+        layer=None,
+        machine: str = "",
+    ) -> ClaimResult:
+        """Claim one or more paths for a worker. Fails on overlap.
+
+        With a state layer (P2-5b), claims published by OTHER machines are
+        checked too, and the grant is published so those machines see it. The
+        local check runs first: it is free, and a path already held here needs
+        no network round trip to refuse.
+
+        Published claims that cannot be read refuse the claim (D-54): a claim
+        that might overlap them cannot be shown safe, and granting it is the
+        one thing the ledger exists to prevent.
+        """
         if not paths:
             return ClaimResult(ok=False, message="no paths to claim")
 
@@ -157,6 +179,17 @@ class ClaimsLedger:
                             overlaps.append(
                                 f"{np} overlaps {cp} (held by {claim.worker})"
                             )
+
+            if not overlaps and layer is not None:
+                from rite_ai.coordination.claims_state import (
+                    CannotTell,
+                    published_overlaps,
+                )
+
+                published = published_overlaps(layer, machine, paths)
+                if isinstance(published, CannotTell):
+                    return ClaimResult(ok=False, message=published.reason)
+                overlaps += published
 
             if overlaps:
                 return ClaimResult(
@@ -175,7 +208,22 @@ class ClaimsLedger:
             ]
             filtered.append(Claim(paths=normalised, worker=worker, ticket=ticket))
             self._write(filtered)
-            return ClaimResult(ok=True)
+            if layer is None:
+                return ClaimResult(ok=True)
+            # Published immediately: a claim other machines cannot see is one
+            # they will claim over. A failure here does not undo the local
+            # claim — the two stores cannot be made atomic — so it is reported
+            # rather than swallowed, and the caller decides.
+            from rite_ai.coordination.claims_state import publish_claims
+            from rite_ai.coordination.publish import Published
+
+            self.last_publish = publish_claims(layer, machine, filtered)
+            note = (
+                ""
+                if isinstance(self.last_publish, Published)
+                else f"claimed locally, but not published: {self.last_publish.reason}"
+            )
+            return ClaimResult(ok=True, message=note)
 
     def release(self, worker: str, paths: list[str] | None = None) -> int:
         """Release claims. If paths is None, release all for worker."""
