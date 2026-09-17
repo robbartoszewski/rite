@@ -52,6 +52,7 @@ which serves a real bare repo out of `tmp_path`).
 """
 
 import os
+from pathlib import Path
 
 import pytest
 
@@ -101,3 +102,70 @@ def _no_network_credentials(monkeypatch):
     monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
     monkeypatch.setenv("GIT_CONFIG_KEY_0", "credential.helper")
     monkeypatch.setenv("GIT_CONFIG_VALUE_0", "")
+
+
+def _checkout_state() -> str | None:
+    """`git status --porcelain` for rite's own checkout, or None if git
+    cannot answer (not a repo, no git, a timeout)."""
+    import subprocess
+
+    root = Path(__file__).resolve().parent.parent
+    try:
+        proc = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return proc.stdout if proc.returncode == 0 else None
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _suite_leaves_this_checkout_alone():
+    """A test run must leave rite's own working tree exactly as it found it.
+
+    `.rite/config.yaml` was swept into commits FOUR times, each carrying a
+    credential namespace derived from whatever directory the tree happened to
+    be in. Every diagnosis before the last blamed the `.gitignore` rule or
+    `git add -A`. Neither was the cause: the SUITE wrote it, because
+    `isolated_home` set `RITE_HOME_DIR` and did nothing about the project
+    root, so `credential set` under `CliRunner` resolved the project to this
+    repository and wrote there.
+
+    That one leak is fixed at its fixture, with a test asserting the property
+    for that one command. This is the general form, and it is the cheap one:
+    any test that writes into the checkout — by any route, now or later —
+    fails the run instead of leaving a file for `git add -A` to find.
+
+    Compared against a SNAPSHOT rather than asserting a clean tree: a
+    maintainer runs the suite with work in progress, and demanding `git
+    status` be empty would fail on their own edits rather than on the suite's.
+
+    Skipped rather than failed when git cannot answer — a packaged copy of
+    the tests, or a machine without git, is not a leak.
+    """
+    before = _checkout_state()
+    yield
+    if before is None:
+        return
+    after = _checkout_state()
+    if after is None or after == before:
+        return
+    was, now = set(before.splitlines()), set(after.splitlines())
+    appeared = sorted(now - was)
+    vanished = sorted(was - now)
+    detail = "\n".join(
+        [f"  appeared: {line}" for line in appeared]
+        + [f"  vanished: {line}" for line in vanished]
+    )
+    raise AssertionError(
+        "the test suite changed rite's own working tree:\n"
+        f"{detail}\n"
+        "A test wrote into this checkout instead of a tmp_path. Find it and "
+        "isolate it — a file left here is one `git add -A` away from being "
+        "committed, which has happened four times."
+    )
