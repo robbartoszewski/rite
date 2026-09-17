@@ -237,6 +237,20 @@ class StateLayerConformance:
         layer.write_state("b.json", b"beta", ABSENT)
         assert layer.read_state("a.json") == Present(b"alpha", v)
 
+    def test_another_handle_sees_a_write_immediately(self, store):
+        """No caching, and no read-your-writes weasel room.
+
+        The interface promises one operation per call (state_layer's closing
+        rule). A backend that cached to hide a slow round-trip would pass
+        every single-handle test here and then hand a Manager a lease that
+        moved minutes ago — and a store whose round-trip is cheap would have
+        inherited the machinery for nothing."""
+        writer, reader = self.open_layer(store), self.open_layer(store)
+        first = writer.write_state("owner-lease.json", b"one", ABSENT)
+        assert reader.read_state("owner-lease.json") == Present(b"one", first.version)
+        second = writer.write_state("owner-lease.json", b"two", first.version)
+        assert reader.read_state("owner-lease.json") == Present(b"two", second.version)
+
     def test_a_successful_write_moves_the_version(self, layer):
         v1 = layer.write_state("k.json", b"1", ABSENT).version
         v2 = layer.write_state("k.json", b"2", v1).version

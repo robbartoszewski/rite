@@ -26,28 +26,11 @@ from __future__ import annotations
 
 import json
 import socket
-import subprocess
-import sys
-from pathlib import Path
 
 import pytest
 
-from kv_backend import KeyValueStateLayer
+from kv_backend import KeyValueStateLayer, start_store
 from state_layer_conformance import StateLayerConformance
-
-
-def _start():
-    """(process, port). The store prints its port when it is listening."""
-    server = subprocess.Popen(
-        [sys.executable, str(Path(__file__).parent / "kv_server.py")],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    line = server.stdout.readline().decode().strip()
-    if not line.isdigit():
-        server.kill()
-        raise RuntimeError(f"the store never came up: {server.stderr.read().decode()}")
-    return server, int(line)
 
 
 def _break(port: int, what: str) -> None:
@@ -67,7 +50,7 @@ class TestAKeyValueBackendPassesUnchanged(StateLayerConformance):
     def store(self, tmp_path):
         # Overriding the fixture, not the suite: starting and stopping a
         # server is this backend's business and no test needs to know.
-        server, port = _start()
+        server, port = start_store()
         try:
             yield port
         finally:

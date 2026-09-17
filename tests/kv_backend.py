@@ -15,6 +15,9 @@ from __future__ import annotations
 import base64
 import json
 import socket
+import subprocess
+import sys
+from pathlib import Path
 
 from rite_ai.coordination.state_layer import (
     ABSENT,
@@ -97,3 +100,18 @@ class KeyValueStateLayer(StateLayer):
         if reply.get("unknown"):
             return Unavailable(f"unknown message cursor: {since!r}")
         return Messages([Message(c, text) for c, text in reply["items"]])
+
+
+def start_store():
+    """(process, port) for a fresh key-value store. The server prints its
+    port once it is listening, so there is nothing to poll and no sleep."""
+    server = subprocess.Popen(
+        [sys.executable, str(Path(__file__).parent / "kv_server.py")],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    line = server.stdout.readline().decode().strip()
+    if not line.isdigit():
+        server.kill()
+        raise RuntimeError(f"the store never came up: {server.stderr.read().decode()}")
+    return server, int(line)
