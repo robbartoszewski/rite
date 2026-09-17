@@ -4254,7 +4254,17 @@ def spec_status() -> None:
                 click.echo(f"    … and {len(entries) - 20} more")
     if status.clean:
         click.echo("  every unit covered, stamped and current")
-    click.echo(insufficiency_rate(root).describe())
+    rate = insufficiency_rate(root)
+    click.echo(rate.describe())
+    if rate.fallbacks:
+        # No threshold, because none has been measured. What is knowable is
+        # which levers exist, and a number printed with nothing to do about it
+        # gets read as weather.
+        click.echo(
+            "  if that is too high: `spec.slice_depth: 2` follows references "
+            "one step further, and a larger `spec.pin_count` loads more of the "
+            "sections everything depends on. Both make every slice bigger."
+        )
 
 
 @spec.command("slice")
@@ -4431,8 +4441,16 @@ def spec_show(unit: str, worker: str) -> None:
     else:
         problem = ""
     # Counted like a slice: a Worker reading a derived unit is a retrieval, and
-    # a fallback after one means the same thing either way.
+    # a fallback after one means the same thing either way. Which is why the
+    # reminder is here too: `show` counted the denominator and never asked for
+    # the numerator, so the one path the digest exists to serve could only ever
+    # push the measured rate DOWN.
     record_retrieval(root, unit, worker=worker, slice_ratio=None)
+    click.echo(
+        "if this was not enough, record it: "
+        f"rite handover write --spec-fallback {unit}",
+        err=True,
+    )
     if problem:
         click.echo(
             f"⚠ {unit} is {problem}. Re-digest it before relying on it.",

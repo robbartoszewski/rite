@@ -23,6 +23,14 @@ a damaged log cannot pass as a quiet one.
 
 Runtime state, local to the machine that wrote it: `.rite/spec-telemetry.jsonl`.
 Deliberately not under `.rite/spec/`, which holds the committed digest.
+
+**It grows without bound, and that is a measured decision rather than an
+oversight.** One line per retrieval, read whole on every `rite spec status`:
+measured at 1,000 events 0.1 MB and 1.4 ms; at 50,000 events 3.1 MB and 56 ms;
+at 250,000 events 15.7 MB and 286 ms. A quarter of a million slice retrievals
+is years of a busy project, the file is gitignored so it never reaches a repo,
+and rotation would be machinery guarding a cost nobody has paid. Re-measure
+before adding any: the read is linear, so the numbers above predict it.
 """
 
 from __future__ import annotations

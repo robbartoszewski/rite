@@ -54,10 +54,12 @@ def _run(project: Path, *args: str):
     return CliRunner().invoke(cli, ["spec", *args], catch_exceptions=False)
 
 
-def _write_unit(project: Path, unit_id: str, covers, body="derived text") -> Path:
+def _write_unit(
+    project: Path, unit_id: str, covers, body="derived text", source="SPEC.md"
+) -> Path:
     path = units_dir(project) / unit_filename(unit_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_unit_file(unit_id, tuple(covers), "SPEC.md", "", "", body))
+    path.write_text(render_unit_file(unit_id, tuple(covers), source, "", "", body))
     return path
 
 
@@ -461,3 +463,86 @@ def test_index_says_a_parse_problem_once(project: Path, monkeypatch):
     )
     result = _run(project, "index")
     assert result.output.count("never closed") == 1
+
+
+def test_show_asks_for_the_fallback_it_counts_the_retrieval_for(
+    project: Path, monkeypatch
+):
+    """`show` counted the denominator and never asked for the numerator, so
+    the retrieval path the digest exists to serve could only push the measured
+    rate down. Both halves of the measurement come from the same command."""
+    monkeypatch.chdir(project)
+    _write_unit(project, "1.1", ["1.1"])
+    _run(project, "stamp", "1.1")
+    out = _run(project, "show", "1.1").output
+    assert "--spec-fallback 1.1" in out
+
+
+def test_status_names_what_to_do_about_a_rate_that_is_too_high(
+    project: Path, monkeypatch
+):
+    """A number with nothing to do about it gets read as weather."""
+    monkeypatch.chdir(project)
+    _run(project, "slice", "2")
+    assert "slice_depth" not in _run(project, "status").output  # no fallbacks yet
+    from rite_ai.spec.telemetry import record_fallback
+
+    record_fallback(project, "2", worker="alpha")
+    out = _run(project, "status").output
+    assert "slice_depth" in out and "pin_count" in out
+
+
+# --- a spec that is several files ---------------------------------------------------
+
+
+@pytest.fixture
+def multi_file(tmp_path: Path) -> Path:
+    """`spec.paths` takes directories (D-52), and two files in one routinely
+    number their sections the same way."""
+    (tmp_path / ".rite").mkdir()
+    (tmp_path / ".rite" / "config.yaml").write_text("spec:\n  paths:\n    - docs/\n")
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "a.md").write_text(
+        "# A\n## 1. Shared number\nSee §2.\n## 2. Other\ntext\n" + FILLER
+    )
+    (docs / "b.md").write_text("# B\n## 1. Also numbered one\nDifferent document.\n")
+    return tmp_path
+
+
+def test_a_colliding_id_is_re_addressed_and_stays_usable_everywhere(
+    multi_file: Path, monkeypatch
+):
+    """The second file's `1` becomes `docs/b.md#1`. That id travels through a
+    file name (two escapes), a slice, a stamp and a show, or the unit exists
+    in the index and is reachable by nothing."""
+    monkeypatch.chdir(multi_file)
+    index = _run(multi_file, "index")
+    assert index.exit_code == 0, index.output
+    assert "docs/b.md#1" in index.output
+
+    sliced = _run(multi_file, "slice", "docs/b.md#1")
+    assert sliced.exit_code == 0, sliced.output
+    assert "Different document." in sliced.output
+
+    _write_unit(
+        multi_file, "docs/b.md#1", ["docs/b.md#1"], "derived", source="docs/b.md"
+    )
+    assert _run(multi_file, "stamp", "docs/b.md#1").exit_code == 0
+    shown = _run(multi_file, "show", "docs/b.md#1")
+    assert shown.exit_code == 0, shown.output
+    assert "derived" in shown.output and "docs/b.md" in shown.output
+
+
+def test_the_slice_ratio_is_of_the_whole_registered_spec_not_one_file(
+    multi_file: Path, monkeypatch
+):
+    """A Worker's budget is every file the project registered; a ratio per
+    file would read as smaller than what it actually loads."""
+    monkeypatch.chdir(multi_file)
+    err = _run(multi_file, "slice", "1").output
+    total = sum(
+        len((multi_file / "docs" / name).read_text().splitlines())
+        for name in ("a.md", "b.md")
+    )
+    assert f"of {total} line(s)" in err
