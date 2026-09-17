@@ -764,3 +764,67 @@ def test_a_top_level_unit_is_not_told_it_sits_inside_anything(
     _write_unit(project, "2", ["2"], "Handover.")
     _run(project, "stamp", "2")
     assert "it sits inside" not in _run(project, "show", "2").output
+
+
+# --- extra_units, from config.yaml to a Worker's slice ----------------------------
+
+
+@pytest.fixture
+def requirements_project(tmp_path: Path) -> Path:
+    """A requirements table, the shape `spec.extra_units` exists for. Modelled
+    on a real one: `| FR-3 | Dual-file storage: ... |` rows inside a section."""
+    (tmp_path / ".rite").mkdir()
+    (tmp_path / ".rite" / "config.yaml").write_text(
+        "spec:\n"
+        "  paths:\n"
+        "    - SPEC.md\n"
+        "  extra_units:\n"
+        '    - "\\\\| (FR-[0-9]+) \\\\|"\n'
+    )
+    rows = "\n".join(
+        f"| FR-{n} | Requirement number {n}, which the build must satisfy. |"
+        for n in range(1, 11)
+    )
+    (tmp_path / "SPEC.md").write_text(
+        "# T\n## 1. Overview\nWhat this is.\n\n"
+        f"## 2. Requirements\n\n| ID | Requirement |\n|----|----|\n{rows}\n\n" + FILLER
+    )
+    return tmp_path
+
+
+def test_extra_units_reach_the_index_and_a_slice_from_config(
+    requirements_project: Path, monkeypatch
+):
+    """Covered at the parser and at config parsing, and nowhere in between:
+    drop `config.spec.extra_units` from the CLI's parse and every other test
+    still passes while the item units quietly stop existing."""
+    monkeypatch.chdir(requirements_project)
+    assert _run(requirements_project, "index").exit_code == 0
+
+    import json
+
+    from rite_ai.spec.index_file import index_path
+
+    ids = [
+        u["id"]
+        for u in json.loads(index_path(requirements_project).read_text())["units"]
+    ]
+    assert "FR-3" in ids and "FR-10" in ids
+
+    sliced = _run(requirements_project, "slice", "FR-3")
+    assert sliced.exit_code == 0, sliced.output
+    assert "Requirement number 3" in sliced.output
+
+
+def test_without_the_pattern_those_rows_are_not_units(
+    requirements_project: Path, monkeypatch
+):
+    """The other half: `extra_units` is opt-in, so the same document with no
+    pattern has no FR units and says so rather than slicing something else."""
+    (requirements_project / ".rite" / "config.yaml").write_text(
+        "spec:\n  paths:\n    - SPEC.md\n"
+    )
+    monkeypatch.chdir(requirements_project)
+    result = _run(requirements_project, "slice", "FR-3")
+    assert result.exit_code == 1
+    assert "FR-3" in result.output
