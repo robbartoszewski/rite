@@ -73,8 +73,11 @@ def test_a_conflict_is_retried_against_the_state_it_lost_to(tmp_path):
         def write_state(self, key, value, expected_version):
             if not RacesOnce.raced:
                 RacesOnce.raced = True
-                # Someone else writes a different key first.
-                super().write_state("claims.json", b"{}", expected_version)
+                # Someone else writes THIS key first. Compare-and-swap is per
+                # key now, so a write to another one is not a race at all —
+                # and this Manager's own status file is what it would really
+                # be contending for.
+                super().write_state(key, b"{}", expected_version)
             return super().write_state(key, value, expected_version)
 
     racing = RacesOnce(tmp_path / "state")
@@ -82,7 +85,7 @@ def test_a_conflict_is_retried_against_the_state_it_lost_to(tmp_path):
         racing, "manager-alpha", workers=[], in_flight=1, now=NOW
     )
     assert isinstance(result, Published) and result.conflicts == 1
-    assert json.loads(racing.read_state("claims.json").value) == {}
+    # The retry merged onto what won rather than overwriting it blindly.
     assert _status(racing)["in_flight"] == 1
 
 

@@ -29,7 +29,7 @@ from rite_ai.coordination.lease import (
     Uncertain,
 )
 from rite_ai.coordination.local_backend import LocalStateLayer
-from rite_ai.coordination.state_layer import ABSENT, Unavailable, Written
+from rite_ai.coordination.state_layer import ABSENT, Present, Unavailable, Written
 
 START = datetime(2026, 9, 17, 12, 0, 0, tzinfo=UTC)
 
@@ -175,14 +175,16 @@ class TestTheGitBackendItself:
         layer = AckLost(str(remote), tmp_path / "cache")
         got = layer.write_state("owner-lease.json", b"held", ABSENT)
         assert isinstance(got, Written), got
-        # And it is genuinely on the remote, once, under that version.
-        on_remote = subprocess.run(
+        # And it is genuinely on the remote: the ref moved, and reading the
+        # key back gives the version the write reported. (The version is a
+        # fingerprint of the VALUE, not the commit — asserting it equals the
+        # branch tip would be testing git's shape, not the contract.)
+        subprocess.run(
             ["git", "--git-dir", str(remote), "rev-parse", "refs/heads/state"],
             capture_output=True,
-            text=True,
             check=True,
-        ).stdout.strip()
-        assert on_remote == got.version
+        )
+        assert layer.read_state("owner-lease.json") == Present(b"held", got.version)
 
     def test_a_push_that_truly_failed_is_still_unavailable(self, tmp_path, remote):
         """The check must not manufacture success: it looks for OUR commit,

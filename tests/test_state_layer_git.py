@@ -22,6 +22,18 @@ from rite_ai.coordination.state_layer import ABSENT, Unavailable, Written
 from state_layer_conformance import StateLayerConformance
 
 
+def _tip(remote) -> str:
+    """The state branch's commit, named explicitly. Tests that need a git
+    thing ask git for it — the layer's `version` is a value fingerprint and
+    says nothing about commits."""
+    return subprocess.run(
+        ["git", "--git-dir", str(remote), "rev-parse", "refs/heads/state"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+
 def _git(*args, cwd=None):
     return subprocess.run(
         ["git", "-c", "core.hooksPath=/dev/null", *args],
@@ -104,21 +116,27 @@ class TestGitSpecifics:
     def layer(self, tmp_path, remote):
         return GitStateLayer(str(remote), tmp_path / "cache")
 
-    def test_two_identical_writes_do_not_produce_the_same_commit(
+    def test_identical_writes_still_produce_distinct_commits(
         self, tmp_path, remote
     ):
-        """ABA, and it would be a split brain. A state commit is parentless
-        with a fixed author, so the same bytes written twice in the same
-        second would produce the SAME oid — and a writer still holding the
-        first version would then win a compare-and-swap it must lose."""
-        one = GitStateLayer(str(remote), tmp_path / "c1")
-        first = one.write_state("owner-lease.json", b"same", ABSENT)
-        assert isinstance(first, Written)
-        second = one.write_state("owner-lease.json", b"same", first.version)
-        assert isinstance(second, Written)
-        assert second.version != first.version, "identical writes collided (ABA)"
+        """The nonce, at the level it actually guards.
 
-    def test_state_is_always_exactly_one_commit(self, layer):
+        A version is a fingerprint of the VALUE now, so two writes of the
+        same bytes SHARE a version by design — that is what makes A -> B -> A
+        harmless. The commit is different: it is what `--force-with-lease`
+        compares, and a parentless commit with a fixed author and the same
+        tree would otherwise repeat, letting a stale lease succeed. So the
+        commits must differ even when the values do not."""
+        layer = GitStateLayer(str(remote), tmp_path / "c1")
+        first = layer.write_state("owner-lease.json", b"same", ABSENT)
+        assert isinstance(first, Written)
+        before = _tip(remote)
+        second = layer.write_state("owner-lease.json", b"same", first.version)
+        assert isinstance(second, Written)
+        assert second.version == first.version, "same bytes, so same version"
+        assert _tip(remote) != before, "identical writes produced one commit (ABA)"
+
+    def test_state_is_always_exactly_one_commit(self, layer, remote):
         """§3.3.1. The state branch must not accumulate history — it is a
         snapshot, and a repository that grows without bound is an operational
         bug that only shows up months in."""
@@ -128,7 +146,7 @@ class TestGitSpecifics:
             assert isinstance(result, Written)
             version = result.version
         log = subprocess.run(
-            ["git", "--git-dir", str(layer.cache), "rev-list", "--count", version],
+            ["git", "--git-dir", str(layer.cache), "rev-list", "--count", _tip(remote)],
             capture_output=True,
             text=True,
             check=True,
@@ -146,16 +164,24 @@ class TestGitSpecifics:
         managers = [
             GitStateLayer(str(remote), tmp_path / f"c{i}") for i in range(4)
         ]
-        version = ABSENT
         for i, manager in enumerate(managers):
+            # Each Manager writes only its OWN key, and expects only its own
+            # key's prior state — none of them has read the others'.
             result = manager.write_state(
-                f"managers/m{i}.json", f"m{i}".encode(), version
+                f"managers/m{i}.json", f"m{i}".encode(), ABSENT
             )
             assert isinstance(result, Written), result
-            version = result.version
 
         listed = subprocess.run(
-            ["git", "--git-dir", str(remote), "ls-tree", "-r", "--name-only", version],
+            [
+                "git",
+                "--git-dir",
+                str(remote),
+                "ls-tree",
+                "-r",
+                "--name-only",
+                _tip(remote),
+            ],
             capture_output=True,
             text=True,
             check=True,

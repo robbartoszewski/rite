@@ -296,9 +296,10 @@ class TestWhenTheTruthIsUnavailable:
         assert isinstance(beta.acquire(), Acquired)
 
     def test_a_conflicting_write_is_retried_not_reported_as_lost(self, layer, config):
-        """A whole-ref CAS conflicts on ANY concurrent write — a Manager
-        updating its own status file is enough. Reporting that as losing the
-        role would hand over the Owner role on ordinary load."""
+        """A lost race on the lease itself is retried from a fresh read, not
+        reported as losing the role: the re-read may still name us, and
+        standing down on a retryable conflict hands the role away on
+        ordinary load."""
         clock = Clock()
         h = holder(layer, config, clock=clock)
         h.acquire()
@@ -308,9 +309,11 @@ class TestWhenTheTruthIsUnavailable:
         def conflict_once(key, value, expected):
             calls["n"] += 1
             if calls["n"] == 1:
-                # Somebody else's write lands between our read and write.
-                other = layer.read_state("managers/beta.json")
-                real_write("managers/beta.json", b"{}", other.version)
+                # Somebody writes THIS key between our read and our write —
+                # re-writing our own lease unchanged, so the re-read still
+                # names us and the renewal can legitimately continue.
+                current = layer.read_state(LEASE_KEY)
+                real_write(LEASE_KEY, current.value + b" ", current.version)
             return real_write(key, value, expected)
 
         layer.write_state = conflict_once

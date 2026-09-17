@@ -65,6 +65,8 @@ _EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 _STATE_TRACK = "refs/rite/state"
 _LOG_TRACK = "refs/rite/log"
 _APPEND_ATTEMPTS = 8
+# How many times a write re-merges when the REF moved but our key did not.
+_MERGE_ATTEMPTS = 8
 _LOCK_ATTEMPTS = 8
 
 # Remote-side ref-lock contention. MEASURED, not anticipated: six writers
@@ -236,40 +238,117 @@ class GitStateLayer(StateLayer):
         if isinstance(head, Unavailable):
             return head
         if head is None:
-            return Absent(ABSENT)
-        blob = self._git(["cat-file", "blob", f"{head}:{key}"])
+            return Absent()
+        oid = self._blob_id(head, key)
+        if isinstance(oid, Unavailable):
+            return oid
+        if oid == ABSENT:
+            return Absent()
+        blob = self._git(["cat-file", "blob", oid])
         if blob.returncode != 0:
-            stderr = blob.stderr.decode("utf-8", "replace")
-            if "does not exist" in stderr or "Not a valid object name" in stderr:
-                return Absent(head)
-            return Unavailable(f"could not read {key!r}: {_last(stderr)}")
-        return Present(blob.stdout, head)
+            return Unavailable(
+                f"could not read {key!r}: "
+                f"{_last(blob.stderr.decode('utf-8', 'replace'))}"
+            )
+        # The blob id IS the fingerprint of these bytes, which is exactly what
+        # a version is (state_layer property 2) — no extra bookkeeping, and
+        # identical content deliberately keeps its version.
+        return Present(blob.stdout, oid)
 
     def write_state(
         self, key: str, value: bytes, expected_version: str
     ) -> Written | Conflict | Unavailable:
         if not valid_key(key):
             return Unavailable(f"invalid state key: {key!r}")
-        head = self._fetch(self.state_branch, _STATE_TRACK)
-        if isinstance(head, Unavailable):
-            return head
-        if expected_version == ABSENT:
-            if head is not None:
-                return Conflict(head)
-        elif head is None or self._git(
-            ["cat-file", "-e", f"{expected_version}^{{commit}}"]
-        ).returncode != 0:
-            # The version expected is not one this remote can be holding.
-            return Conflict(head)
 
+        for _ in range(_MERGE_ATTEMPTS):
+            head = self._fetch(self.state_branch, _STATE_TRACK)
+            if isinstance(head, Unavailable):
+                return head
+
+            current = ABSENT if head is None else self._blob_id(head, key)
+            if isinstance(current, Unavailable):
+                return current
+            if current != expected_version:
+                # THIS key moved. The caller's decision is stale.
+                return Conflict(current)
+
+            built = self._build(head, key, value)
+            if isinstance(built, Unavailable):
+                return built
+            new, blob = built
+
+            lease = "" if head is None else head
+            outcome, detail = self._push_retrying_lock_contention(
+                f"{new}:refs/heads/{self.state_branch}", self.state_branch, lease
+            )
+            if outcome == "written":
+                return Written(blob)
+            if outcome == "conflict":
+                # The REF moved, which says nothing about our key: somebody
+                # wrote a different one. Re-read and merge again. Exporting
+                # this as a conflict is what made the old contract git-shaped,
+                # and it is also what §2.4.2 warns falsely marks a Manager
+                # stalled when its heartbeat keeps losing the ref race.
+                continue
+            if outcome == "refused":
+                return Unavailable(
+                    f"the remote refused the write: {detail}. This is not a "
+                    "lost race — `rite doctor` probes force-push permission"
+                )
+            # Ambiguous: §2.4.2 step 5 — re-read before concluding anything.
+            landed = self._fetch(self.state_branch, _STATE_TRACK)
+            if isinstance(landed, Unavailable) or landed != new:
+                return Unavailable(
+                    f"the push neither succeeded nor was rejected ({detail}); "
+                    "the write may or may not have landed — re-read before "
+                    "deciding"
+                )
+            return Written(blob)
+
+        return Unavailable(
+            f"{key}: the state branch kept moving under us; "
+            f"gave up after {_MERGE_ATTEMPTS} merges"
+        )
+
+    def _blob_id(self, head: str, key: str):
+        """The id of the blob at `key`, or ABSENT. Unavailable if the tree
+        itself cannot be read — which is not the same as the key being
+        missing."""
+        listed = self._git(["ls-tree", "-z", head, "--", key])
+        if listed.returncode != 0:
+            return Unavailable(
+                f"could not read the state tree: "
+                f"{_last(listed.stderr.decode('utf-8', 'replace'))}"
+            )
+        entry = listed.stdout.decode("utf-8", "replace").strip("\x00").strip()
+        if not entry:
+            return ABSENT
+        # "<mode> <type> <oid>\t<path>"
+        try:
+            return entry.split("\t", 1)[0].split()[2]
+        except IndexError:
+            return Unavailable(f"could not parse the tree entry for {key!r}")
+
+    def _build(self, head: str | None, key: str, value: bytes):
+        """(commit id, blob id) — a parentless commit holding `head`'s tree
+        with `key` replaced, and the id of the value's blob.
+
+        The blob id is the KEY's version: git's own content address, which is
+        exactly what a version is (state_layer property 2), so nothing extra
+        is stored or kept in step.
+
+        The whole tree is carried over because a force-push REPLACES it — a
+        git detail, kept here rather than in the interface, where it would
+        force a key-value store to do a pointless merge.
+        """
         with tempfile.TemporaryDirectory(prefix="rite-index-") as tmp:
             index = Path(tmp) / "index"
-            env_index = {"GIT_INDEX_FILE": str(index)}
             old = os.environ.get("GIT_INDEX_FILE")
-            os.environ.update(env_index)
+            os.environ["GIT_INDEX_FILE"] = str(index)
             try:
-                if expected_version != ABSENT:
-                    read = self._git(["read-tree", f"{expected_version}^{{tree}}"])
+                if head is not None:
+                    read = self._git(["read-tree", f"{head}^{{tree}}"])
                     if read.returncode != 0:
                         return Unavailable("could not read the current state tree")
                 blob = self._git(["hash-object", "-w", "--stdin"], stdin=value)
@@ -291,36 +370,15 @@ class GitStateLayer(StateLayer):
                     os.environ["GIT_INDEX_FILE"] = old
 
         # Parentless (§3.3.1: always exactly one commit) with a NONCE, so two
-        # writers building the same tree cannot produce the same commit id.
+        # writers building the same tree cannot produce the same commit id and
+        # let a stale lease succeed.
         nonce = uuid.uuid4().hex
         commit = self._git(
             ["commit-tree", tree.stdout.decode().strip(), "-m", f"rite state {nonce}"]
         )
         if commit.returncode != 0:
             return Unavailable("could not build the state commit")
-        new = commit.stdout.decode().strip()
-
-        lease = "" if expected_version == ABSENT else expected_version
-        outcome, detail = self._push_retrying_lock_contention(
-            f"{new}:refs/heads/{self.state_branch}", self.state_branch, lease
-        )
-        if outcome == "written":
-            return Written(new)
-        if outcome == "conflict":
-            return Conflict(head)
-        if outcome == "refused":
-            return Unavailable(
-                f"the remote refused the write: {detail}. This is not a lost "
-                "race — `rite doctor` probes force-push permission (P2-1e)"
-            )
-        # Ambiguous: §2.4.2 step 5 — re-read before concluding anything.
-        landed = self._fetch(self.state_branch, _STATE_TRACK)
-        if isinstance(landed, Unavailable) or landed != new:
-            return Unavailable(
-                f"the push neither succeeded nor was rejected ({detail}); the "
-                "write may or may not have landed — re-read before deciding"
-            )
-        return Written(new)
+        return commit.stdout.decode().strip(), oid
 
     def append_message(self, content: str) -> Appended | Unavailable:
         payload = content.encode("utf-8")

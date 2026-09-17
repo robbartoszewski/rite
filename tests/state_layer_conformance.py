@@ -5,14 +5,20 @@ binds to it by subclassing `StateLayerConformance` in its own test module and
 implementing the four hooks. `test_state_layer_local.py` binds the local
 backend; P2-1b's git backend must bind and pass it UNCHANGED.
 
-**Why this suite is the hard part, and must not be weakened to fit a backend.**
-It is the git backend's contract. A test that the local backend can pass and
-the git backend structurally cannot would make the abstraction a lie. So:
+**Written against the CONTRACT, never against an implementation.** The design
+test is: could a Redis backend pass this suite unchanged? `test_state_layer_kv`
+answers it by binding a key-value store that has no trees, no refs and no
+merges — if a test here needed one of those, it would fail there, loudly.
 
-- **Versions are whole-state** (§2.4.2). The single most important assertion
-  here is `test_a_write_conflicts_if_ANY_key_changed_since_the_read`. Git's
-  `--force-with-lease` compares one ref and every key lives on it; per-key CAS
-  is not implementable there, so it must not be the contract here.
+- **Compare-and-swap is per key.** The most important assertion is now
+  `test_an_unrelated_key_changing_does_NOT_conflict`. It replaces an earlier
+  test that asserted the opposite, on the mistaken ground that git could not
+  do per-key CAS: git absorbs its ref-level race by re-merging inside the
+  backend, and the old contract would have forced a key-value store to
+  serialise every write through one global version.
+- **Nothing here names a backend's mechanism.** No oid, ref, branch, file or
+  socket appears in an assertion — only values, versions and the three
+  outcomes.
 - **Concurrency is real, repeated, and calibrated.** Every actor is a separate
   PROCESS that opens its own handle and re-synchronises on a shared wall-clock
   instant before every attempt (P2-0c's `burst` harness), so the collision
@@ -71,30 +77,44 @@ def _open(spec):
 
 def _cas_actor(args):
     """Read, then write against exactly the version read, as often as the
-    bursts allow. Logs every attempt's (expected version, outcome)."""
-    spec, log_path, seconds = args
+    bursts allow. Logs every attempt's (expected version, outcome).
+
+    Each attempt writes DISTINCT bytes. A version fingerprints the value
+    (state_layer property 2), so rewriting the same bytes is a no-op that
+    cannot move it — and every actor would appear to win the same version
+    for a reason that has nothing to do with the race."""
+    spec, log_path, seconds, actor = args
     layer = _open(spec)
     stop = deadline(seconds)
     rows = []
+    n = 0
     while time.time() < stop:
         align()
         read = layer.read_state("owner-lease.json")
         if isinstance(read, Unavailable):
             rows.append(["?", "Unavailable"])
             continue
-        result = layer.write_state("owner-lease.json", b"x", read.version)
+        n += 1
+        result = layer.write_state(
+            "owner-lease.json", f"{actor}:{n}".encode(), read.version
+        )
         rows.append([read.version, type(result).__name__])
     Path(log_path).write_text(json.dumps(rows))
     return len(rows)
 
 
 def _merge_actor(args):
-    """Add a NEW key per successful write, retrying on Conflict. Logs every key
-    it was told it wrote — each one must survive every other actor's writes."""
+    """Add a NEW key per successful write, retrying on Conflict.
+
+    Every key here belongs to ONE actor, so nobody else ever writes it. Two
+    things are logged: the keys it was told it wrote (each must survive every
+    other actor's writes) and any Conflict it was given (there must be none —
+    a conflict on a key nobody else touched is a backend exporting its own
+    contention as a semantic)."""
     spec, actor, log_path, seconds = args
     layer = _open(spec)
     stop = deadline(seconds)
-    written, n = [], 0
+    written, conflicted, n = [], [], 0
     while time.time() < stop:
         align()
         key = f"managers/a{actor}-{n}.json"
@@ -105,7 +125,11 @@ def _merge_actor(args):
         if isinstance(result, Written):
             written.append(key)
             n += 1
-    Path(log_path).write_text(json.dumps(written))
+        elif isinstance(result, Conflict):
+            conflicted.append(key)
+    Path(log_path).write_text(
+        json.dumps({"written": written, "conflicted": conflicted})
+    )
     return len(written)
 
 
@@ -170,7 +194,7 @@ class StateLayerConformance:
     def test_the_first_write_expects_absent(self, layer):
         assert isinstance(layer.write_state("claims.json", b"{}", ABSENT), Written)
 
-    # --- versions are WHOLE-STATE ---
+    # --- compare-and-swap, PER KEY ---
 
     def test_a_second_first_writer_conflicts(self, store):
         a, b = self.open_layer(store), self.open_layer(store)
@@ -182,16 +206,36 @@ class StateLayerConformance:
         layer.write_state("k.json", b"2", v1)
         assert isinstance(layer.write_state("k.json", b"3", v1), Conflict)
 
-    def test_a_write_conflicts_if_ANY_key_changed_since_the_read(self, store):
-        """THE contract. A reads key A; B writes an unrelated key; A's write
-        must conflict. Per-key CAS would pass on a local store and be
-        impossible on git's single ref (§2.4.2's own warning)."""
+    def test_an_unrelated_key_changing_does_NOT_conflict(self, store):
+        """THE contract. A reads its own key; B writes a different one; A's
+        write must still succeed.
+
+        This is what keeps the interface substitutable. A store with no
+        shared structure between keys — Redis, a table, a bucket — could only
+        satisfy the opposite rule by funnelling every write through one
+        global version, which is slower than git and absurd on its own
+        terms. It is better for git too: §2.4.2 warns that a Manager whose
+        heartbeat keeps losing the ref-level race "could be marked falsely
+        stalled", and under this rule that race never reaches the caller."""
         a, b = self.open_layer(store), self.open_layer(store)
-        seed = a.write_state("managers/a.json", b"a0", ABSENT).version
-        read = a.read_state("managers/a.json")
-        assert read.version == seed
-        assert isinstance(b.write_state("managers/b.json", b"b0", seed), Written)
-        assert isinstance(a.write_state("managers/a.json", b"a1", seed), Conflict)
+        mine = a.write_state("managers/a.json", b"a0", ABSENT).version
+        assert isinstance(b.write_state("managers/b.json", b"b0", ABSENT), Written)
+        assert isinstance(a.write_state("managers/a.json", b"a1", mine), Written)
+
+    def test_the_same_key_changing_DOES_conflict(self, store):
+        """The other half: two writers on one key, one winner."""
+        a, b = self.open_layer(store), self.open_layer(store)
+        seed = a.write_state("owner-lease.json", b"a0", ABSENT).version
+        assert isinstance(b.write_state("owner-lease.json", b"b0", seed), Written)
+        assert isinstance(a.write_state("owner-lease.json", b"a1", seed), Conflict)
+
+    def test_a_version_is_opaque_and_says_nothing_about_other_keys(self, layer):
+        """A caller must not be able to infer a store's shape from a version.
+        Writing another key may or may not change this one's — the contract
+        says only that equal versions mean equal bytes."""
+        v = layer.write_state("a.json", b"alpha", ABSENT).version
+        layer.write_state("b.json", b"beta", ABSENT)
+        assert layer.read_state("a.json") == Present(b"alpha", v)
 
     def test_a_successful_write_moves_the_version(self, layer):
         v1 = layer.write_state("k.json", b"1", ABSENT).version
@@ -199,19 +243,32 @@ class StateLayerConformance:
         assert v1 != v2
         assert layer.read_state("k.json") == Present(b"2", v2)
 
-    def test_absent_keys_report_the_current_whole_state_version(self, layer):
-        """A caller about to create a key needs the version to expect."""
-        v = layer.write_state("a.json", b"x", ABSENT).version
-        assert layer.read_state("b.json") == Absent(v)
+    def test_an_absent_key_reports_ABSENT_whatever_else_exists(self, layer):
+        """The version a caller about to create this key must expect — and it
+        cannot depend on what other keys hold, or a first writer would need
+        to read the whole store to create one key."""
+        layer.write_state("a.json", b"x", ABSENT)
+        assert layer.read_state("b.json") == Absent(ABSENT)
+
+    def test_rewriting_identical_bytes_keeps_the_version(self, layer):
+        """Property 2. A version fingerprints the VALUE, so A -> B -> A
+        cannot let a stale writer win: what it read is what is there."""
+        v1 = layer.write_state("k.json", b"same", ABSENT).version
+        v2 = layer.write_state("k.json", b"other", v1).version
+        v3 = layer.write_state("k.json", b"same", v2).version
+        assert v3 == v1
+        assert isinstance(layer.write_state("k.json", b"next", v1), Written)
 
     # --- other keys are preserved verbatim ---
 
     def test_writing_one_key_preserves_every_other(self, layer):
-        """Every single-key write is §2.4.2's read-merge-write."""
-        v = layer.write_state("a.json", b"alpha", ABSENT).version
-        v = layer.write_state("b.json", b"beta", v).version
-        assert layer.read_state("a.json") == Present(b"alpha", v)
-        assert layer.read_state("b.json") == Present(b"beta", v)
+        """Whether that costs a whole-tree merge (git) or nothing at all (a
+        key-value store) is the backend's business; the caller sees the same
+        thing either way."""
+        va = layer.write_state("a.json", b"alpha", ABSENT).version
+        vb = layer.write_state("b.json", b"beta", ABSENT).version
+        assert layer.read_state("a.json") == Present(b"alpha", va)
+        assert layer.read_state("b.json") == Present(b"beta", vb)
 
     def test_arbitrary_bytes_round_trip_verbatim(self, layer):
         """D-54's pass-through: the layer never parses a value, so content
@@ -223,7 +280,7 @@ class StateLayerConformance:
     def test_unparseable_content_survives_a_write_to_another_key(self, layer):
         raw = b"\xfe\xfe truncated {"
         v = layer.write_state("claims.json", raw, ABSENT).version
-        v = layer.write_state("owner-lease.json", b"{}", v).version
+        layer.write_state("owner-lease.json", b"{}", ABSENT)
         assert layer.read_state("claims.json") == Present(raw, v)
 
     def test_an_empty_value_is_present_not_absent(self, layer):
@@ -273,6 +330,7 @@ class StateLayerConformance:
                     self.actor_layer_spec(store, i),
                     str(logs / f"{i}.json"),
                     self.BURST_SECONDS,
+                    i,
                 )
                 for i in range(BURST_ACTORS)
             ],
@@ -310,11 +368,21 @@ class StateLayerConformance:
                 for i in range(BURST_ACTORS)
             ],
         )
-        claimed = [
-            k for log in logs.glob("*.json") for k in json.loads(log.read_text())
-        ]
+        logged = [json.loads(log.read_text()) for log in logs.glob("*.json")]
+        claimed = [k for entry in logged for k in entry["written"]]
+        conflicted = [k for entry in logged for k in entry["conflicted"]]
         assert len(claimed) > self.MIN_WRITES, (
             f"bursts barely ran ({len(claimed)}) — not a test"
+        )
+        # THE PORTABILITY PROPERTY, under load. Every key here belongs to one
+        # actor and nobody else writes it, so a Conflict can only mean the
+        # backend reported its own internal contention — git's ref-level race
+        # — as the caller's lost race. That is what made the first contract
+        # git-shaped, and it is invisible in any sequential test, because a
+        # writer that re-reads immediately before writing never sees it.
+        assert not conflicted, (
+            f"{len(conflicted)} conflicts on keys nobody else wrote, "
+            f"e.g. {conflicted[:3]} — contention leaked into the contract"
         )
         final = self.open_layer(store)
         lost = [k for k in claimed if not isinstance(final.read_state(k), Present)]

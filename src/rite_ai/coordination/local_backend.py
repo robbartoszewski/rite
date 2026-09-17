@@ -39,6 +39,7 @@ from rite_ai.coordination.state_layer import (
     StateLayer,
     Unavailable,
     Written,
+    fingerprint,
     valid_key,
 )
 from rite_ai.state import exclusion_holds, locked, write_atomic
@@ -95,6 +96,7 @@ class LocalStateLayer(StateLayer):
 
     # --- StateLayer ---
 
+
     def read_state(self, key: str) -> Present | Absent | Unavailable:
         if not valid_key(key):
             return Unavailable(f"invalid state key: {key!r}")
@@ -103,14 +105,14 @@ class LocalStateLayer(StateLayer):
         loaded = self._load()
         if isinstance(loaded, Unavailable):
             return loaded
-        version, keys = loaded
+        _, keys = loaded
         if key not in keys:
-            return Absent(version)
+            return Absent()
         try:
             value = base64.b64decode(keys[key], validate=True)
         except (ValueError, TypeError):
             return Unavailable(f"{self._snapshot}: value for {key!r} is corrupt")
-        return Present(value, version)
+        return Present(value, fingerprint(value))
 
     def write_state(
         self, key: str, value: bytes, expected_version: str
@@ -124,19 +126,27 @@ class LocalStateLayer(StateLayer):
                 loaded = self._load()
                 if isinstance(loaded, Unavailable):
                     return loaded
-                current, keys = loaded
+                generation, keys = loaded
+                # PER KEY: only this key's own version decides the race. A
+                # concurrent write to another key is not this caller's
+                # business, and reporting it as a conflict would make the
+                # snapshot file — an implementation detail — visible as a
+                # semantic.
+                current = _version_of(keys, key)
+                if isinstance(current, Unavailable):
+                    return current
                 if current != expected_version:
                     return Conflict(current)
-                # Every other key's bytes are carried over untouched — this IS
-                # §2.4.2's read-merge-write, and D-54's pass-through.
+                # Every other key's bytes are carried over untouched: D-54's
+                # pass-through, and what makes the single-file snapshot safe.
                 keys = dict(keys)
                 keys[key] = base64.b64encode(value).decode("ascii")
-                new_version = "1" if current == ABSENT else str(int(current) + 1)
+                bumped = "1" if generation == ABSENT else str(int(generation) + 1)
                 write_atomic(
                     self._snapshot,
-                    json.dumps({"version": new_version, "keys": keys}, sort_keys=True),
+                    json.dumps({"version": bumped, "keys": keys}, sort_keys=True),
                 )
-                return Written(new_version)
+                return Written(fingerprint(value))
         except (OSError, ValueError) as e:
             # The write may or may not have landed; the caller must re-read.
             return Unavailable(f"{self._snapshot}: write failed: {e}")
@@ -192,3 +202,13 @@ class LocalStateLayer(StateLayer):
             return Unavailable(f"unknown message cursor: {since!r}")
         after = int(since)
         return Messages([m for m in log if int(m.cursor) > after])
+
+
+def _version_of(keys: dict, key: str):
+    """This key's version, ABSENT if it holds nothing."""
+    if key not in keys:
+        return ABSENT
+    try:
+        return fingerprint(base64.b64decode(keys[key], validate=True))
+    except (ValueError, TypeError):
+        return Unavailable(f"value for {key!r} is corrupt")

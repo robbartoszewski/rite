@@ -95,13 +95,16 @@ def test_a_conflict_republishes_against_what_won(tmp_path):
         def write_state(self, key, value, expected_version):
             if not RacesOnce.raced:
                 RacesOnce.raced = True
-                super().write_state("owner-lease.json", b"{}", expected_version)
+                # The same key: per-key compare-and-swap means a write to a
+                # different one is not a race, which is the whole point of
+                # claims and leases not blocking each other.
+                super().write_state(key, b"{}", expected_version)
             return super().write_state(key, value, expected_version)
 
     layer = RacesOnce(tmp_path / "state")
     result = publish_claims(layer, "manager-alpha", [], now=NOW)
     assert isinstance(result, Published) and result.conflicts == 1
-    assert isinstance(layer.read_state("owner-lease.json"), Present)
+    assert isinstance(layer.read_state(CLAIMS_KEY), Present)
 
 
 def test_unavailable_says_it_may_have_landed(tmp_path):
