@@ -5053,7 +5053,39 @@ def start_cmd(directory: str) -> None:
     for action in result.actions:
         click.echo(f"  {action}")
     click.echo(result.message)
+    _echo_instruction_drift(root)
     _echo_phase(result.phase)
+
+
+def _echo_instruction_drift(root: Path) -> None:
+    """Say when this session's own instructions are behind the installed rite.
+
+    A session routes on `CLAUDE.md` and the commands in `.claude/`, and has no
+    way to tell that an older rite wrote them — which is exactly how a fix to
+    generated content fails to reach the project that reported the bug.
+    `start` is where a session begins, so it is where being behind is worth
+    one line.
+
+    Never fails `start`. Orientation is what a session needs most when
+    something is wrong, and a project whose files cannot be compared is still
+    a project that can be worked on.
+    """
+    try:
+        from rite_ai.update.refresh import KEPT, refresh_project
+
+        behind = [
+            change
+            for result in refresh_project(root, apply=False)
+            for change in result.changes
+            if change.action not in KEPT
+        ]
+    except Exception:
+        return
+    if behind:
+        click.echo(
+            f"\n{len(behind)} generated file(s) are behind this rite — "
+            "`rite update --files-only --dry-run` shows what would change"
+        )
 
 
 def _echo_phase(phase, err: bool = False) -> None:

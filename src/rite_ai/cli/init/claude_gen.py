@@ -179,13 +179,13 @@ Point Workers at it in tickets rather than restating it; read what you need
 rather than all of it.
 {convention}
 On a spec too large to hold at once, `rite spec slice <unit>` prints one
-section with what it cites and the sections everything depends on — a
-fraction of the document. If the spec has been digested, `rite spec show
-<unit>` prints that section rewritten shorter and reviewed against its
-source; it exits non-zero when what it prints no longer matches the spec. When that is not enough and you read the whole
-spec anyway, record it: `rite handover write --spec-fallback <unit>`. That
-count is the only evidence the slices are too small, and a slice nobody
-reports on reads exactly like one that worked.
+section with what it cites and the sections everything depends on — a fraction
+of the document. If the spec has been digested, `rite spec show <unit>` prints
+that section rewritten shorter and reviewed against its source; it exits
+non-zero when what it prints no longer matches the spec. When that is not
+enough and you read the whole spec anyway, record it: `rite handover write
+--spec-fallback <unit>`. That count is the only evidence the slices are too
+small, and a slice nobody reports on reads exactly like one that worked.
 
 rite cannot tell whether this is current. If it contradicts the code, say so
 in the ticket rather than silently implementing either.""")
