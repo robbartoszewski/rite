@@ -27,6 +27,9 @@ class TestLocalStateLayerConformance(StateLayerConformance):
         with open(store / "messages.jsonl", "a") as f:
             f.write("not json at all\n")
 
+    def actor_layer_spec(self, store, actor):
+        return ("rite_ai.coordination.local_backend", "LocalStateLayer", (str(store),))
+
 
 class TestLocalBackendFailsClosedWithoutExclusion:
     """Where flock is a no-op (Docker, NFS, SMB) two writers could both be

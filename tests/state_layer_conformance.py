@@ -13,11 +13,14 @@ the git backend structurally cannot would make the abstraction a lie. So:
   here is `test_a_write_conflicts_if_ANY_key_changed_since_the_read`. Git's
   `--force-with-lease` compares one ref and every key lives on it; per-key CAS
   is not implementable there, so it must not be the contract here.
-- **Concurrency is real, not simulated.** Every racing actor opens its OWN
-  handle on the shared store and runs in its own thread. For the local backend
-  that is separate open file descriptions contending on `flock`; for git it is
-  separate clones pushing. P2-0c's burst harness can later sharpen the timing;
-  it will not change what is asserted.
+- **Concurrency is real, repeated, and calibrated.** Every actor is a separate
+  PROCESS that opens its own handle and re-synchronises on a shared wall-clock
+  instant before every attempt (P2-0c's `burst` harness), so the collision
+  window is revisited thousands of times rather than once. The harness is
+  calibrated in `test_burst_harness.py` — it loses ~83% of updates on an
+  unlocked counter and none on a locked one — so a pass here means something.
+  Each actor LOGS what it believed happened; the parent checks the store
+  against those logs, which needs no sampling luck.
 
 **What this suite deliberately cannot test: §2.4.2 step 5's lost
 acknowledgement** — a write that landed on the remote while the writer saw
@@ -32,14 +35,21 @@ Hooks a backend implements:
     open_layer(store)          -> a NEW StateLayer handle on that store
     corrupt_state(store)       -> make the state unreadable, in place
     corrupt_messages(store)    -> make the message log unreadable, in place
+    actor_layer_spec(store, i) -> (module, attribute, args): how a CHILD
+                                  PROCESS opens its own handle. Picklable by
+                                  construction; git passes one clone per actor.
 """
 
 from __future__ import annotations
 
-import threading
+import importlib
+import json
+import time
+from pathlib import Path
 
 import pytest
 
+from burst import align, deadline, run_actors
 from rite_ai.coordination.state_layer import (
     ABSENT,
     Absent,
@@ -51,24 +61,68 @@ from rite_ai.coordination.state_layer import (
     Written,
 )
 
-RACERS = 8
+BURST_ACTORS = 6
+BURST_SECONDS = 1.0
 
 
-def _race(n, work):
-    """Run `work(i)` in `n` threads released together; return the results."""
-    barrier = threading.Barrier(n)
-    results = [None] * n
+def _open(spec):
+    module, attribute, args = spec
+    return getattr(importlib.import_module(module), attribute)(*args)
 
-    def run(i):
-        barrier.wait()
-        results[i] = work(i)
 
-    threads = [threading.Thread(target=run, args=(i,)) for i in range(n)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
-    return results
+def _cas_actor(args):
+    """Read, then write against exactly the version read, as often as the
+    bursts allow. Logs every attempt's (expected version, outcome)."""
+    spec, log_path, seconds = args
+    layer = _open(spec)
+    stop = deadline(seconds)
+    rows = []
+    while time.time() < stop:
+        align()
+        read = layer.read_state("owner-lease.json")
+        if isinstance(read, Unavailable):
+            rows.append(["?", "Unavailable"])
+            continue
+        result = layer.write_state("owner-lease.json", b"x", read.version)
+        rows.append([read.version, type(result).__name__])
+    Path(log_path).write_text(json.dumps(rows))
+    return len(rows)
+
+
+def _merge_actor(args):
+    """Add a NEW key per successful write, retrying on Conflict. Logs every key
+    it was told it wrote — each one must survive every other actor's writes."""
+    spec, actor, log_path, seconds = args
+    layer = _open(spec)
+    stop = deadline(seconds)
+    written, n = [], 0
+    while time.time() < stop:
+        align()
+        key = f"managers/a{actor}-{n}.json"
+        read = layer.read_state(key)
+        if isinstance(read, Unavailable):
+            continue
+        result = layer.write_state(key, f"{actor}:{n}".encode(), read.version)
+        if isinstance(result, Written):
+            written.append(key)
+            n += 1
+    Path(log_path).write_text(json.dumps(written))
+    return len(written)
+
+
+def _append_actor(args):
+    spec, actor, log_path, seconds = args
+    layer = _open(spec)
+    stop = deadline(seconds)
+    appended, n = [], 0
+    while time.time() < stop:
+        align()
+        result = layer.append_message(f"a{actor}-{n}")
+        if isinstance(result, Appended):
+            appended.append([result.cursor, f"a{actor}-{n}"])
+            n += 1
+    Path(log_path).write_text(json.dumps(appended))
+    return len(appended)
 
 
 class StateLayerConformance:
@@ -84,6 +138,9 @@ class StateLayerConformance:
         raise NotImplementedError
 
     def corrupt_messages(self, store):
+        raise NotImplementedError
+
+    def actor_layer_spec(self, store, actor):
         raise NotImplementedError
 
     @pytest.fixture
@@ -187,44 +244,100 @@ class StateLayerConformance:
         for expected in (ABSENT, "1", "anything"):
             assert isinstance(layer.write_state("a.json", b"y", expected), Unavailable)
 
-    # --- concurrency, with real handles ---
+    # --- concurrency: synchronised process bursts (P2-0c) ---
 
-    def test_racing_first_writers_produce_exactly_one_winner(self, store):
-        results = _race(
-            RACERS,
-            lambda i: self.open_layer(store).write_state(
-                "owner-lease.json", f"racer-{i}".encode(), ABSENT
-            ),
+    def _logs(self, tmp_path, name):
+        d = tmp_path / f"burst-{name}"
+        d.mkdir()
+        return d
+
+    def test_no_version_is_ever_won_twice_under_bursts(self, store, tmp_path):
+        """THE CAS PROPERTY, checked directly. Across thousands of collisions,
+        two writers that read the same version must never BOTH be told
+        Written — that is two Owners."""
+        logs = self._logs(tmp_path, "cas")
+        run_actors(
+            _cas_actor,
+            [
+                (
+                    self.actor_layer_spec(store, i),
+                    str(logs / f"{i}.json"),
+                    BURST_SECONDS,
+                )
+                for i in range(BURST_ACTORS)
+            ],
         )
-        winners = [r for r in results if isinstance(r, Written)]
-        losers = [r for r in results if isinstance(r, Conflict)]
-        assert len(winners) == 1, results
-        assert len(losers) == RACERS - 1, results
+        winners: dict[str, int] = {}
+        attempts = unavailable = 0
+        for log in logs.glob("*.json"):
+            for version, outcome in json.loads(log.read_text()):
+                attempts += 1
+                unavailable += outcome == "Unavailable"
+                if outcome == "Written":
+                    winners[version] = winners.get(version, 0) + 1
+        assert attempts > 200, f"bursts barely ran ({attempts}) — not a test"
+        assert unavailable == 0, f"{unavailable} spurious Unavailable under load"
+        doubled = {v: n for v, n in winners.items() if n > 1}
+        assert not doubled, f"versions won more than once (split brain): {doubled}"
+        assert winners, "no write ever succeeded"
 
-    def test_retrying_writers_lose_no_one_elses_key(self, store):
-        """The data-loss property at the interface level: N Managers each add
-        their own key under contention, retrying on Conflict. Every key must
-        survive — a lost one is exactly the silent destruction §2.4.2 warns
-        a delta-push causes."""
-
-        def add_own_key(i):
-            layer = self.open_layer(store)
-            key = f"managers/m{i}.json"
-            for _ in range(200):
-                read = layer.read_state(key)
-                if isinstance(read, Unavailable):
-                    return read
-                result = layer.write_state(key, f"m{i}".encode(), read.version)
-                if not isinstance(result, Conflict):
-                    return result
-            return "gave up"
-
-        results = _race(RACERS, add_own_key)
-        assert all(isinstance(r, Written) for r in results), results
+    def test_no_written_key_is_lost_under_bursts(self, store, tmp_path):
+        """§2.4.2's data-loss property. Every actor is told its key was
+        written; if any is missing afterwards, some writer merged from a stale
+        read and silently destroyed another Manager's state."""
+        logs = self._logs(tmp_path, "merge")
+        run_actors(
+            _merge_actor,
+            [
+                (
+                    self.actor_layer_spec(store, i),
+                    i,
+                    str(logs / f"{i}.json"),
+                    BURST_SECONDS,
+                )
+                for i in range(BURST_ACTORS)
+            ],
+        )
+        claimed = [
+            k for log in logs.glob("*.json") for k in json.loads(log.read_text())
+        ]
+        assert len(claimed) > 50, f"bursts barely ran ({len(claimed)}) — not a test"
         final = self.open_layer(store)
-        for i in range(RACERS):
-            got = final.read_state(f"managers/m{i}.json")
-            assert isinstance(got, Present) and got.value == f"m{i}".encode(), i
+        lost = [k for k in claimed if not isinstance(final.read_state(k), Present)]
+        assert not lost, (
+            f"{len(lost)} of {len(claimed)} written keys lost, e.g. {lost[:3]}"
+        )
+
+    def test_no_appended_message_is_lost_or_shares_a_cursor_under_bursts(
+        self, store, tmp_path
+    ):
+        logs = self._logs(tmp_path, "append")
+        run_actors(
+            _append_actor,
+            [
+                (
+                    self.actor_layer_spec(store, i),
+                    i,
+                    str(logs / f"{i}.json"),
+                    BURST_SECONDS,
+                )
+                for i in range(BURST_ACTORS)
+            ],
+        )
+        claimed = [
+            tuple(r)
+            for log in logs.glob("*.json")
+            for r in json.loads(log.read_text())
+        ]
+        assert len(claimed) > 50, f"bursts barely ran ({len(claimed)}) — not a test"
+        got = self.open_layer(store).read_messages()
+        stored = {(m.cursor, m.content) for m in got.items}
+        assert len(got.items) == len(claimed), (len(got.items), len(claimed))
+        assert len({m.cursor for m in got.items}) == len(got.items), "shared cursor"
+        missing = [c for c in claimed if c not in stored]
+        assert not missing, (
+            f"{len(missing)} appended messages missing, e.g. {missing[:3]}"
+        )
 
     # --- the message log ---
 
@@ -280,18 +393,3 @@ class StateLayerConformance:
         self.corrupt_messages(store)
         assert isinstance(layer.read_messages(), Unavailable)
 
-    def test_concurrent_appends_lose_nothing_and_never_share_a_cursor(self, store):
-        per = 10
-
-        def append_many(i):
-            layer = self.open_layer(store)
-            return [layer.append_message(f"r{i}-{j}") for j in range(per)]
-
-        results = _race(RACERS, append_many)
-        assert all(isinstance(r, Appended) for batch in results for r in batch)
-        got = self.open_layer(store).read_messages()
-        assert len(got.items) == RACERS * per
-        assert len({m.cursor for m in got.items}) == RACERS * per
-        assert {m.content for m in got.items} == {
-            f"r{i}-{j}" for i in range(RACERS) for j in range(per)
-        }
