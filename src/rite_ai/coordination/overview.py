@@ -24,9 +24,11 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from rite_ai.config.models import CoordinationConfig, HeartbeatConfig
+from rite_ai.coordination.demotion import REQUEST_KEY
 from rite_ai.coordination.heartbeat import is_stalled, liveness
 from rite_ai.coordination.lease import LEASE_KEY
-from rite_ai.coordination.schemas import LeaseVerdict, lease_from_json
+from rite_ai.coordination.promotion import request_from_json
+from rite_ai.coordination.schemas import LeaseVerdict, lease_from_json, parse_timestamp
 from rite_ai.coordination.state_layer import Absent, Present, StateLayer, Unavailable
 
 ALIVE = "alive"
@@ -109,6 +111,8 @@ def read_overview(
                     "takes the role"
                 )
 
+    _read_request(layer, config, overview, now)
+
     for name in config.managers:
         live = liveness(
             layer, name, now=now, interval_minutes=heartbeat.interval_minutes
@@ -132,6 +136,58 @@ def read_overview(
         else:
             overview.managers.append(ManagerView(name, ALIVE, live.detail, mine))
     return overview
+
+
+def _read_request(
+    layer: StateLayer, config: CoordinationConfig, overview: Overview, now: datetime
+) -> None:
+    """A pending handover is fleet state a human needs.
+
+    §2.4's graceful demotion is: the returning Manager asks, the incumbent
+    finishes one operation and hands over. Nothing forces the second half to
+    happen promptly — D-43 puts that boundary where only the incumbent can
+    see it — so a request can sit while the role stays put, and the only
+    visible symptom is that nothing changes. Saying it out loud is the
+    difference between a protocol working slowly and a protocol stuck.
+    """
+    read = layer.read_state(REQUEST_KEY)
+    if not isinstance(read, Present):
+        return  # absent is the normal case; unreadable is the lease's story
+    request = request_from_json(read.value.decode("utf-8", "replace"))
+    if request is None or not request.requester:
+        return
+    if overview.owner and not request.is_addressed_to(overview.owner):
+        # Left over from an earlier Owner. `promotion.py` treats it as
+        # stale and so does everyone else; reporting it would send a human
+        # looking for a handover nobody is waiting on.
+        return
+
+    asked = parse_timestamp(request.requested)
+    waiting = "" if asked is None else f", asked {_ago(now, asked)}"
+    overview.notes.append(
+        f"{request.requester} has asked {request.incumbent or 'the Owner'} "
+        f"for the role{waiting}"
+    )
+    if asked is not None and (now - asked).total_seconds() > (
+        config.owner_lease_minutes * 60
+    ):
+        # A whole lease has passed. Either the incumbent is never at a
+        # boundary, or nothing is calling the handover at all (Q10).
+        overview.problems.append(
+            f"{request.requester} asked for the role {_ago(now, asked)} and it "
+            f"has not moved — longer than a full lease "
+            f"({config.owner_lease_minutes}m), so the handover is not happening "
+            "on its own"
+        )
+
+
+def _ago(now: datetime, then: datetime) -> str:
+    minutes = int((now - then).total_seconds() // 60)
+    if minutes < 1:
+        return "just now"
+    if minutes < 60:
+        return f"{minutes}m ago"
+    return f"{minutes // 60}h{minutes % 60:02d}m ago"
 
 
 def format_overview(overview: Overview) -> list[str]:

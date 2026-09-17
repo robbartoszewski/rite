@@ -144,6 +144,53 @@ class TestWhoIsAlive:
         assert [m.name for m in overview.managers if m.is_this_machine] == ["alpha"]
 
 
+class TestAPendingHandover:
+    """§2.4's graceful demotion has two halves, and nothing forces the
+    second to happen promptly (Q10). A request that sits is invisible
+    otherwise: the only symptom is that nothing changes."""
+
+    def request(self, layer, config, requester="alpha", incumbent="beta", now=NOW):
+        from rite_ai.coordination.demotion import request_promotion
+
+        return request_promotion(
+            layer, requester, incumbent, managers=config.managers, now=now
+        )
+
+    def test_a_fresh_request_is_a_note_not_a_problem(self, layer, config):
+        """Asking is the protocol working. It becomes news only if the role
+        does not move."""
+        OwnerLeaseHolder(layer, "beta", config, clock=lambda: NOW).acquire()
+        self.request(layer, config)
+        overview = look(layer, config)
+        assert any("has asked" in n for n in overview.notes)
+        assert not overview.problems
+
+    def test_a_request_older_than_a_whole_lease_is_a_problem(self, layer, config):
+        """Either the incumbent is never at a boundary, or nothing is
+        calling the handover at all — both need a human."""
+        OwnerLeaseHolder(layer, "beta", config, clock=lambda: NOW).acquire()
+        self.request(layer, config)
+        later = NOW + timedelta(minutes=config.owner_lease_minutes + 1)
+        overview = look(layer, config, now=later)
+        assert any("has not moved" in p for p in overview.problems), overview.problems
+
+    def test_a_request_meant_for_an_earlier_owner_is_not_reported(
+        self, layer, config
+    ):
+        """Nobody is waiting on it: the role already changed hands some
+        other way. Reporting it sends a human looking for a handover that
+        is not pending."""
+        OwnerLeaseHolder(layer, "alpha", config, clock=lambda: NOW).acquire()
+        self.request(layer, config, requester="alpha", incumbent="beta")
+        overview = look(layer, config)
+        assert not any("has asked" in n for n in overview.notes)
+        assert not overview.problems
+
+    def test_no_request_says_nothing_at_all(self, layer, config):
+        OwnerLeaseHolder(layer, "beta", config, clock=lambda: NOW).acquire()
+        assert not any("has asked" in n for n in look(layer, config).notes)
+
+
 class TestWhatAHumanReads:
     def test_the_role_comes_first(self, layer, config):
         """The first question in an incident is who is Owner."""
