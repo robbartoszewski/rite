@@ -49,13 +49,14 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 
-from rite_ai.spec.units import SECTION, Parsed, Unit
+from rite_ai.config.models import SpecConfig
+from rite_ai.spec.units import ITEM, SECTION, Parsed, Unit
 
 HUB = "hub"
 INDEX = "index"
 ORDINARY = "ordinary"
 
-DEFAULT_PIN_COUNT = 8
+DEFAULT_PIN_COUNT = SpecConfig().pin_count
 DEFAULT_HUB_MIN_IN = 3
 DEFAULT_INDEX_MIN_OUT = 15
 
@@ -111,11 +112,23 @@ def build_graph(parsed: Parsed) -> Graph:
     ancestors = {uid: _ancestors(u, units, titles) for uid, u in units.items()}
     edges: dict[str, frozenset[str]] = {}
     citations: dict[str, frozenset[str]] = {}
+    # A project's own items (`spec.extra_units`) are cited by their ids, whatever
+    # shape those have; longest first so `REQ-14` is not read as `REQ-1`.
+    item_ids = sorted(
+        (u.id for u in parsed.units if u.kind == ITEM), key=len, reverse=True
+    )
+    item_citation = (
+        re.compile(r"(?<![\w-])(" + "|".join(map(re.escape, item_ids)) + r")(?![\w-])")
+        if item_ids
+        else None
+    )
     dangling: dict[str, frozenset[str]] = {}
     for uid, unit in units.items():
         body = "\n".join(parsed.lines.get(unit.source, [])[unit.start - 1 : unit.end])
         cited = {m.group(1) for m in _SECTION_CITATION.finditer(body)}
         cited |= {m.group(1) for m in _DECISION_CITATION.finditer(body)}
+        if item_citation is not None:
+            cited |= {m.group(1) for m in item_citation.finditer(body)}
         cited.discard(uid)
         # A section does not cite what sits inside it: see the module docstring.
         inside = (

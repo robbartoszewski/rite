@@ -210,6 +210,24 @@ class SpecConfig:
     # point of pointing at what is already there.
     convention: str = ""
 
+    # --- the spec digest: `rite spec index`, `slice` and `verify` ---
+    # Addressable items beyond headings and decision rows: regular expressions
+    # matched against each line outside fenced code, whose first capture group
+    # is the item's id — `^- (REQ-\d+)\b` for numbered requirements. Opt-in,
+    # because guessing at a spec's format is a project of its own and a wrong
+    # guess makes a coverage map that quietly omits things.
+    extra_units: list[str] = field(default_factory=list)
+    # Hubs pinned into every slice. Pinning the top eight took median
+    # transitive closure on rite's own spec from 70.5% of it to 10.3%.
+    pin_count: int = 8
+    # How many hops a slice follows: 1 or 2, never unbounded. Following every
+    # reference loads 71.5% of rite's spec at the median. Go to 2 on evidence —
+    # a rising insufficiency rate — not on taste.
+    slice_depth: int = 1
+    # Do not digest a spec whose p90 slice, pinned hubs included, is above this
+    # share of it; Workers keep reading the whole spec instead.
+    refuse_above: float = 0.25
+
 
 @dataclass
 class ProjectConfig:

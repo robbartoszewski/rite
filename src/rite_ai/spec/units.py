@@ -41,6 +41,7 @@ from pathlib import Path
 
 SECTION = "section"
 DECISION = "decision"
+ITEM = "item"  # matched by a project's own `spec.extra_units` pattern
 PREAMBLE_ID = "preamble"
 MARKDOWN_SUFFIXES = (".md", ".markdown")
 
@@ -131,8 +132,15 @@ def _outside_code(lines: list[str]) -> list[bool]:
     return outside
 
 
-def parse_text(text: str, source: str) -> Parsed:
-    """Units of one document. `source` is recorded on each unit as given."""
+def parse_text(
+    text: str, source: str, extra_units: list[str] | tuple[str, ...] = ()
+) -> Parsed:
+    """Units of one document. `source` is recorded on each unit as given.
+
+    `extra_units` are `spec.extra_units` patterns, matched at the start of each
+    line outside code that is not a heading or a decision row; a match becomes
+    an item unit, its id the pattern's first group. Ids should be distinctive
+    tokens (`REQ-14`), since they are also how items are cited."""
     lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     if lines and lines[-1] == "":
         lines.pop()
@@ -227,6 +235,7 @@ def parse_text(text: str, source: str) -> Parsed:
             "inventing structure; point Workers at the whole file instead"
         )
 
+    decision_lines: set[int] = set()
     for i, line in enumerate(lines):
         if not outside[i]:
             continue
@@ -239,6 +248,7 @@ def parse_text(text: str, source: str) -> Parsed:
                 break
             parent = sid
         name = re.sub(r"\*\*|__", "", m.group(2)).strip()
+        decision_lines.add(i)
         out.units.append(
             Unit(
                 claim(m.group(1), i + 1),
@@ -252,17 +262,59 @@ def parse_text(text: str, source: str) -> Parsed:
                 _sha([line]),
             )
         )
+    # Matched at the start of a line, so a line that merely cites `REQ-1` is not
+    # a second `REQ-1`; heading lines and decision rows are already units.
+    patterns = [re.compile(p) for p in extra_units]
+    heading_lines = {i for i, _, _ in headings}
+    taken_ids = {u.id for u in out.units}
+    for i, line in enumerate(lines):
+        if not patterns or not outside[i] or i in decision_lines or i in heading_lines:
+            continue
+        for pattern in patterns:
+            m = pattern.match(line)
+            if not m or not m.group(1):
+                continue
+            item_id = m.group(1)
+            if item_id in taken_ids:
+                out.problems.append(
+                    f"{source}:{i + 1}: extra_units matched '{item_id}', which is "
+                    "already the id of another unit — the item is not addressable; "
+                    "change the pattern so its ids are distinct"
+                )
+                break
+            parent = None
+            for start, sid in section_starts:
+                if start > i:
+                    break
+                parent = sid
+            taken_ids.add(item_id)
+            out.units.append(
+                Unit(
+                    claim(item_id, i + 1),
+                    ITEM,
+                    source,
+                    i + 1,
+                    i + 1,
+                    line.strip()[:120],
+                    0,
+                    parent,
+                    _sha([line]),
+                )
+            )
+            break
     return out
 
 
-def parse_file(path: Path, source: str | None = None) -> Parsed:
+def parse_file(
+    path: Path, source: str | None = None, extra_units: list[str] | tuple[str, ...] = ()
+) -> Parsed:
     """Units of one file, or a problem saying why it could not be read."""
     label = source if source is not None else str(path)
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError as e:
         return Parsed(problems=[f"{label}: cannot be read ({e.strerror or e})"])
-    return parse_text(text, label)
+    return parse_text(text, label, extra_units)
 
 
 def expand_paths(root: Path, paths: list[str]) -> tuple[list[str], list[str]]:
@@ -301,7 +353,9 @@ def expand_paths(root: Path, paths: list[str]) -> tuple[list[str], list[str]]:
     return files, problems
 
 
-def parse_paths(root: Path, paths: list[str]) -> Parsed:
+def parse_paths(
+    root: Path, paths: list[str], extra_units: list[str] | tuple[str, ...] = ()
+) -> Parsed:
     """Units of every registered spec path, in registration order.
 
     Ids are unique across the whole set. When a later file reuses an id an
@@ -313,7 +367,7 @@ def parse_paths(root: Path, paths: list[str]) -> Parsed:
     merged = Parsed(problems=problems)
     taken: set[str] = set()
     for rel in files:
-        parsed = parse_file(root / rel, rel)
+        parsed = parse_file(root / rel, rel, extra_units)
         merged.files.append(rel)
         merged.total_lines += parsed.total_lines
         merged.lines.update(parsed.lines)

@@ -26,6 +26,7 @@ import math
 import statistics
 from dataclasses import dataclass, field
 
+from rite_ai.config.models import SpecConfig
 from rite_ai.spec.graph import (
     DEFAULT_HUB_MIN_IN,
     DEFAULT_INDEX_MIN_OUT,
@@ -38,7 +39,7 @@ from rite_ai.spec.graph import (
 from rite_ai.spec.slice import compute_slice
 from rite_ai.spec.units import DECISION, PREAMBLE_ID, SECTION, Parsed
 
-DEFAULT_REFUSE_ABOVE = 0.25
+DEFAULT_REFUSE_ABOVE = SpecConfig().refuse_above
 
 
 def _p(values: list[float], q: float) -> float:
@@ -69,6 +70,7 @@ def decomposition_report(
     *,
     refuse_above: float = DEFAULT_REFUSE_ABOVE,
     pin_count: int = DEFAULT_PIN_COUNT,
+    slice_depth: int = SpecConfig().slice_depth,
     hub_min_in: int = DEFAULT_HUB_MIN_IN,
     index_min_out: int = DEFAULT_INDEX_MIN_OUT,
 ) -> Report:
@@ -116,7 +118,10 @@ def decomposition_report(
             None, None, False, "every unit is an index; there is nothing to slice"
         )
 
-    ratios = [compute_slice(graph, kinds, t, parsed.total_lines).ratio for t in targets]
+    ratios = [
+        compute_slice(graph, kinds, t, parsed.total_lines, slice_depth).ratio
+        for t in targets
+    ]
     p50, p90 = statistics.median(ratios), _p(ratios, 0.9)
     if p90 > refuse_above:
         return build(

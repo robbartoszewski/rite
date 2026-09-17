@@ -95,9 +95,23 @@ def closure(
     return seen
 
 
+ALLOWED_DEPTHS = (1, 2)
+
+
 def compute_slice(
-    graph: Graph, kinds: dict[str, str], target: str, total_lines: int
+    graph: Graph,
+    kinds: dict[str, str],
+    target: str,
+    total_lines: int,
+    depth: int = 1,
 ) -> Slice:
+    """`depth` is `spec.slice_depth`: 1 unless the insufficiency rate says
+    otherwise, and never more than 2 — see the module docstring."""
+    if type(depth) is not int or depth not in ALLOWED_DEPTHS:
+        raise ValueError(
+            f"slice depth {depth} — only {ALLOWED_DEPTHS} are allowed; following "
+            "every reference rebuilds most of the spec"
+        )
     if target not in graph.units:
         raise NotATarget(f"no unit '{target}' in the spec")
     if kinds.get(target) == INDEX:
@@ -106,7 +120,7 @@ def compute_slice(
             "saying anything itself; slice one of the units it lists"
         )
     pinned = {uid for uid, kind in kinds.items() if kind == HUB}
-    units = closure(graph, kinds, target, 1)
+    units = closure(graph, kinds, target, depth)
     return Slice(
         target=target,
         units=_in_spec_order(graph, units),

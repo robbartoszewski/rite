@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import difflib
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -285,6 +286,53 @@ def parse_modules(path: Path) -> list[Module] | ParseError:
     return modules
 
 
+def _spec_digest_error(raw: dict) -> str:
+    """Why the spec digest settings cannot be used, or "".
+
+    Refused rather than defaulted: a `slice_depth: 3` quietly read as 1 would
+    leave a project believing it had made slices deeper. Only keys that are
+    present are checked; an absent one takes `SpecConfig`'s default, which is
+    the one place defaults are written.
+    """
+    if "extra_units" in raw:
+        patterns = raw["extra_units"]
+        if not isinstance(patterns, list) or not all(
+            isinstance(p, str) for p in patterns
+        ):
+            return "extra_units must be a list of regular expressions"
+        for pattern in patterns:
+            try:
+                groups = re.compile(pattern).groups
+            except re.error as e:
+                return (
+                    f"extra_units pattern {pattern!r} is not a regular expression ({e})"
+                )
+            if groups < 1:
+                return (
+                    f"extra_units pattern {pattern!r} has no capture group — the "
+                    "first group is the item's id"
+                )
+    # `type(x) is int`, not isinstance: YAML's `true` is a bool, which is an int,
+    # and `2.0 in (1, 2)` is true while storing a float in an int field.
+    if "pin_count" in raw and (
+        type(raw["pin_count"]) is not int or raw["pin_count"] < 0
+    ):
+        return "pin_count must be a whole number, 0 or more"
+    if "slice_depth" in raw and (
+        type(raw["slice_depth"]) is not int or raw["slice_depth"] not in (1, 2)
+    ):
+        return (
+            "slice_depth must be 1 or 2 — following every reference loads most "
+            "of a spec (71.5% of rite's own at the median), which is the monolith "
+            "the digest exists to avoid"
+        )
+    if "refuse_above" in raw:
+        share = raw["refuse_above"]
+        if type(share) not in (int, float) or not 0 < share <= 1:
+            return "refuse_above must be a share of the spec, above 0 and at most 1"
+    return ""
+
+
 def parse_config(path: Path) -> ProjectConfig | ParseError:
     if not path.exists():
         return ProjectConfig()
@@ -380,14 +428,19 @@ def parse_config(path: Path) -> ProjectConfig | ParseError:
 
     sb_raw = raw.get("sandbox", {})
     spec_raw = raw.get("spec", {})
-    spec = (
-        SpecConfig(
+    spec = SpecConfig()
+    if isinstance(spec_raw, dict):
+        digest_error = _spec_digest_error(spec_raw)
+        if digest_error:
+            return ParseError(str(path), f"spec: {digest_error}")
+        spec = SpecConfig(
             paths=_str_list(spec_raw.get("paths", [])),
             convention=str(spec_raw.get("convention", "") or ""),
+            extra_units=_str_list(spec_raw.get("extra_units", [])),
+            pin_count=spec_raw.get("pin_count", spec.pin_count),
+            slice_depth=spec_raw.get("slice_depth", spec.slice_depth),
+            refuse_above=float(spec_raw.get("refuse_above", spec.refuse_above)),
         )
-        if isinstance(spec_raw, dict)
-        else SpecConfig()
-    )
 
     sandbox = (
         SandboxConfig(

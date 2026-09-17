@@ -46,6 +46,11 @@ class Indistinguishable(Exception):
     a field this gate claims to cover and does not."""
 
 
+# Fields whose only valid values are few, so the generic "+7" would be refused
+# on the way back in rather than round-tripped.
+_VALID_ALTERNATES = {"spec.slice_depth": 2}
+
+
 def _distinct(path: str, value):
     """A value different from the default, so a field that is written but
     ignored on the way back in is caught as well as one that is dropped.
@@ -57,6 +62,8 @@ def _distinct(path: str, value):
     `scan_patterns` and `schedule.windows`: the three the serialiser builds
     by comprehension, which is to say the three most likely to be forgotten.
     """
+    if path in _VALID_ALTERNATES:
+        return _VALID_ALTERNATES[path]
     if isinstance(value, bool):
         return not value
     if isinstance(value, int):
@@ -89,6 +96,7 @@ def _populated() -> ProjectConfig:
         spec=SpecConfig(
             paths=["SPEC.md", "docs/adr/"],
             convention="Decisions are cited as D-<number>.",
+            extra_units=[r"^- (REQ-\d+)\b"],
         ),
         publish_gate=PublishGateConfig(
             scan_patterns=[

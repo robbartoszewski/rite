@@ -120,6 +120,10 @@ def config_to_yaml(config: ProjectConfig) -> str:
         "spec": {
             "paths": config.spec.paths,
             "convention": config.spec.convention,
+            "extra_units": config.spec.extra_units,
+            "pin_count": config.spec.pin_count,
+            "slice_depth": config.spec.slice_depth,
+            "refuse_above": config.spec.refuse_above,
         },
         "heartbeat": {
             "interval_minutes": config.heartbeat.interval_minutes,
