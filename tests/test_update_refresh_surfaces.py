@@ -145,3 +145,38 @@ def test_a_dry_run_names_every_surface_and_writes_nothing(tmp_path, monkeypatch)
     assert ".claude/commands/review.md: would install" in result.output
     assert not checklist.exists()
     assert (root / "CLAUDE.md").read_text() == before_claude
+
+
+class TestDoctorSaysWhenAProjectIsBehind:
+    """Nothing else tells anyone the refresh exists, and a project whose
+    CLAUDE.md predates a fix cannot report the fix it is missing."""
+
+    def _doctor(self):
+        with patch("keyring.get_password", return_value=None):
+            return CliRunner().invoke(cli, ["doctor"])
+
+    def test_a_fresh_project_is_current(self, tmp_path, monkeypatch):
+        _project(tmp_path, monkeypatch)
+        assert "generated files: current" in self._doctor().output
+
+    def test_a_missing_file_is_reported_with_what_to_run(self, tmp_path, monkeypatch):
+        root = _project(tmp_path, monkeypatch)
+        (root / ".claude" / "commands" / "review.md").unlink()
+        output = self._doctor().output
+        assert "generated files: 1 out of date" in output
+        assert "rite update --files-only --dry-run" in output
+
+    def test_an_edited_section_is_named_as_yours_not_as_out_of_date(
+        self, tmp_path, monkeypatch
+    ):
+        root = _project(tmp_path, monkeypatch)
+        claude = root / "CLAUDE.md"
+        claude.write_text(
+            claude.read_text().replace("Claim → work", "Claim → mine → work", 1)
+        )
+        assert "changed by you or an older rite" in self._doctor().output
+
+    def test_it_reports_rather_than_failing_the_project(self, tmp_path, monkeypatch):
+        root = _project(tmp_path, monkeypatch)
+        (root / ".claude" / "commands" / "review.md").unlink()
+        assert self._doctor().exit_code == 0, "being behind is not a problem"

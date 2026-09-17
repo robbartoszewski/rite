@@ -853,6 +853,33 @@ def _doctor_report(problems: list[str]) -> None:
             for notice in spec_notices(root, project.config, [m.path for m in modules]):
                 click.echo(notice)
 
+        # Nothing else tells anyone the refresh exists, and a project whose
+        # CLAUDE.md predates a fix cannot report the fix it is missing. A
+        # NOTE, not a problem: being behind is normal between upgrades, and
+        # what to do about an edited section is the user's call.
+        with _doctor_check("generated files", problems):
+            from rite_ai.update.refresh import KEPT, refresh_project
+
+            plan = [
+                change
+                for result in refresh_project(root, apply=False)
+                for change in result.changes
+            ]
+            behind = [c for c in plan if c.action not in KEPT]
+            contested = [c for c in plan if c.action in KEPT]
+            if behind or contested:
+                parts = []
+                if behind:
+                    parts.append(f"{len(behind)} out of date")
+                if contested:
+                    parts.append(f"{len(contested)} changed by you or an older rite")
+                click.echo(
+                    f"generated files: {', '.join(parts)} — "
+                    "`rite update --files-only --dry-run` shows what would change"
+                )
+            else:
+                click.echo("generated files: current")
+
         schedule_problems = validate_schedule(
             project.config.schedule, project.config.sandbox.max_concurrent_workers
         )

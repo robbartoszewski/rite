@@ -13,9 +13,12 @@ overwrites content it cannot show to be rite's own:
   while its text still hashes to its marker. Edited, it is kept and reported.
 - **A section with no marker** — every file written before markers existed —
   is adopted, marker added and text unchanged, when it is identical to what
-  this version generates. Otherwise nothing can tell an older rite's output
-  from an edit, so it is kept and reported, with the difference, and replaced
-  only when named with `--take-rite`.
+  this version generates. When it instead matches what some RELEASE wrote
+  (`section_history`, recorded per release for the sections a release writes
+  identically for every project), it is provably rite's own and is refreshed.
+  Otherwise nothing can tell an older rite's output from an edit, so it is
+  kept and reported, with the difference, and replaced only when named with
+  `--take-rite`.
 - **A section this version generates that the file lacks** is inserted beside
   its generated neighbours. That adds; it removes nothing.
 - **A section rite does not generate** is never touched, nor is the file's
@@ -124,6 +127,11 @@ def refresh_text(
         elif c.recorded is None and c.content == g.content:
             blocks[i] = _swap(c, g.raw, g)
             changes.append(Change(g.heading, "marked"))
+        elif c.recorded is None and _written_by_a_release(g.heading, c.content):
+            # No marker, but these are bytes a release wrote and nobody has
+            # touched: the file predates markers, not the user's attention.
+            blocks[i] = _swap(c, g.raw, g)
+            changes.append(Change(g.heading, "refreshed"))
         elif g.heading in take:
             blocks[i] = _swap(c, g.raw, g)
             changes.append(Change(g.heading, "taken"))
@@ -136,6 +144,17 @@ def refresh_text(
         text = text.rstrip("\n") + "\n"
         return text, changes
     return current, changes
+
+
+def _written_by_a_release(heading: str, content: str) -> bool:
+    """Whether `content` is exactly what some tagged release wrote for this
+    section — recorded only for sections a release writes identically for
+    every project, so this can never mistake one project's rendering for
+    another's."""
+    from rite_ai.update.section_history import SECTIONS
+
+    digest = hashlib.sha256(content.strip().encode("utf-8")).hexdigest()
+    return digest in SECTIONS.get(heading, frozenset())
 
 
 def _sha(path: Path) -> str:
