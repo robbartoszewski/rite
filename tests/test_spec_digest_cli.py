@@ -546,3 +546,25 @@ def test_the_slice_ratio_is_of_the_whole_registered_spec_not_one_file(
         for name in ("a.md", "b.md")
     )
     assert f"of {total} line(s)" in err
+
+
+def test_a_worker_is_told_how_to_ask_for_one_part_of_the_spec(tmp_path: Path):
+    """The Owner's `CLAUDE.md` carried the retrieval commands and the Worker's
+    did not — the instructions were in front of the role that does not read
+    slices and hidden from the role that does. Measured on a generated
+    project: 3 mentions in the Owner's file, 0 in the Worker's."""
+    from rite_ai.config.models import SpecConfig
+    from rite_ai.workspace.manage import _spec_section
+
+    section = _spec_section(SpecConfig(paths=["SPEC.md"], convention="D-<n>"))
+    assert "rite spec slice" in section
+    assert "rite spec show" in section
+    assert "--spec-fallback" in section
+    assert "SPEC.md" in section
+
+
+def test_a_worker_with_no_spec_registered_is_told_nothing_about_slices(tmp_path: Path):
+    from rite_ai.config.models import SpecConfig
+    from rite_ai.workspace.manage import _spec_section
+
+    assert _spec_section(SpecConfig(paths=[])) == ""

@@ -570,10 +570,15 @@ def _spec_config(root: Path) -> SpecConfig:
 
 
 def _spec_section(spec: SpecConfig) -> str:
-    """The pointer a Worker reads. Paths and the convention, never the
-    content: a spec runs to thousands of lines, and pasting it into every
-    Worker's context on every job spends the quota this tool exists to
-    make last overnight.
+    """The pointer a Worker reads. Paths, the convention and how to ask for
+    one part — never the content: a spec runs to thousands of lines, and
+    pasting it into every Worker's context on every job spends the quota this
+    tool exists to make last overnight.
+
+    The retrieval commands are here because this file is where the Worker
+    doing the reading actually looks. The Owner's `CLAUDE.md` carried them
+    first and this one did not, which put the instructions in front of the
+    role that does not read slices and hid them from the role that does.
 
     The closing line is the load-bearing one. rite has no way to tell
     whether a spec still describes the code — and a stale spec handed over
@@ -593,6 +598,23 @@ This project's design lives in:
 
 Read what your ticket needs; do not read it all.
 {convention}
+When your ticket cites a part of it (`§5.3`, `D-31`), ask for that part
+rather than opening the document:
+
+```
+rite spec slice 5.3 --worker <your-name>
+```
+
+It prints that section, what it cites, and the sections everything depends
+on. Where the spec has been digested, `rite spec show 5.3` gives you the
+same section rewritten shorter and reviewed against its source, and exits
+non-zero if that text has drifted from the spec.
+
+**If the slice was not enough and you read the whole spec anyway, say so**
+when you write your handover: `rite handover write --spec-fallback 5.3`.
+Nobody can see a slice that came up short — that count is the only evidence
+the slices need to be bigger.
+
 rite cannot tell whether this is current. If it contradicts the code, say so
 in the ticket rather than silently implementing either.
 """
