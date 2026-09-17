@@ -383,3 +383,49 @@ def test_init_on_an_existing_project_names_the_refresh(tmp_path, monkeypatch):
     assert result.status == "already_initialized"
     assert "rite update --files-only" in result.message
     assert (root / ".rite" / "architecture.md").read_text() == "# Architecture\n"
+
+
+class TestTheGitignoreBlock:
+    """rite's ignore block grows between releases, and a project missing a
+    line tracks runtime state it should not — which `rite doctor` reports and
+    nothing delivered."""
+
+    def test_newer_ignore_lines_are_added_and_the_users_lines_kept(
+        self, tmp_path, monkeypatch
+    ):
+        root = _project(tmp_path, monkeypatch)
+        gitignore = root / ".gitignore"
+        mine = "# my own\nbuild/\n*.log\n"
+        gitignore.write_text(mine)
+
+        result = CliRunner().invoke(cli, ["update", "--files-only"])
+        assert result.exit_code == 0, result.output
+        assert "added rite's newer ignore lines" in result.output
+        after = gitignore.read_text()
+        assert after.startswith(mine), "the user's lines moved or changed"
+        assert ".rite/**/*.lock" in after
+
+    def test_a_project_that_already_has_them_is_left_alone(self, tmp_path, monkeypatch):
+        root = _project(tmp_path, monkeypatch)
+        before = (root / ".gitignore").read_text()
+        CliRunner().invoke(cli, ["update", "--files-only"])
+        assert (root / ".gitignore").read_text() == before
+
+    def test_a_committed_knowledge_base_is_not_flipped_back(
+        self, tmp_path, monkeypatch
+    ):
+        root = _project(tmp_path, monkeypatch)
+        gitignore = root / ".gitignore"
+        gitignore.write_text("!.rite/kb/\n")
+        CliRunner().invoke(cli, ["update", "--files-only"])
+        after = gitignore.read_text()
+        assert after.count("!.rite/kb/") == 1
+        assert ".rite/kb/.cache/" in after
+
+    def test_a_dry_run_adds_nothing(self, tmp_path, monkeypatch):
+        root = _project(tmp_path, monkeypatch)
+        gitignore = root / ".gitignore"
+        gitignore.write_text("build/\n")
+        result = CliRunner().invoke(cli, ["update", "--files-only", "--dry-run"])
+        assert "would add rite's newer ignore lines" in result.output
+        assert gitignore.read_text() == "build/\n"

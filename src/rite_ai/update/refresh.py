@@ -56,6 +56,7 @@ REFRESHABLE = (
     ".claude/commands/*",
     ".rite/review-checklist.md",
     ".github/workflows/publish-gate.yml",
+    ".gitignore",
     "workers/*/CLAUDE.md",
     "workers/*/.claude/agents/*",
     "workers/*/.claude/commands/*",
@@ -280,6 +281,38 @@ def refresh_ci_workflow(root: Path, take: frozenset[str], apply: bool) -> Change
     return Change(label, action)
 
 
+def refresh_gitignore(root: Path, apply: bool) -> Change | None:
+    """Add the ignore lines this rite ships that the project does not have.
+
+    Append-only, through the same function `rite init` uses: rite's block
+    grows between releases — `.rite/**/*.lock` arrived after 0.1.0 — and a
+    project missing a line tracks runtime state it should not, which is what
+    `doctor` reports as "git tracks runtime state" and nothing delivered.
+    Nothing is rewritten, reordered or removed, so a user's own entries cannot
+    be harmed; a rite line someone deleted on purpose does come back, which is
+    the one cost of an append-only rule and the reason it is stated here.
+
+    The knowledge-base answer is read off the file rather than guessed: a
+    project that committed its KB carries `!.rite/kb/`, and writing the
+    opposite would flip a choice its owner made at init.
+    """
+    from rite_ai.cli.init.scaffold import gitignore_lines, update_gitignore
+
+    if not (root / ".git").exists():
+        return None
+    gitignore = root / ".gitignore"
+    existing = gitignore.read_text() if gitignore.exists() else ""
+    kb_commit = "!.rite/kb/" in existing
+    missing = [line for line in gitignore_lines(kb_commit) if line not in existing]
+    if not missing:
+        return None
+    if apply:
+        if not may_refresh(root, gitignore):
+            raise RefusedWrite(f"{gitignore} is not a file rite generates")
+        update_gitignore(root, kb_commit)
+    return Change(".gitignore", "extended", "\n".join(f"+{line}" for line in missing))
+
+
 def _refresh_claude_md(
     root: Path,
     path: Path,
@@ -379,6 +412,9 @@ def refresh_project(
     ci = refresh_ci_workflow(root, take, apply)
     if ci:
         files.changes.append(ci)
+    ignored = refresh_gitignore(root, apply)
+    if ignored:
+        files.changes.append(ignored)
     results.append(files)
 
     workers = root / "workers"
@@ -449,6 +485,11 @@ def report(results: list[FileResult], dry_run: bool, take: frozenset[str]) -> li
         else "replaced with rite's version",
         "installed": "would install" if dry_run else "installed",
         "absent": "not there — `rite publish install-ci` writes one",
+        "extended": (
+            "would add rite's newer ignore lines"
+            if dry_run
+            else "added rite's newer ignore lines"
+        ),
     }
     kept = []
     matched = set()
