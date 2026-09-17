@@ -66,6 +66,12 @@ select = ["E", "F", "I", "UP"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# `tests/` is a package (`tests/__init__.py`), so pytest puts the REPO ROOT
+# on `sys.path`, not `tests/` — and a helper module imported by bare name
+# (`from burst import ...`, `from state_layer_conformance import ...`) then
+# does not resolve, failing collection of the file that imports it. Both
+# spellings work with this.
+pythonpath = ["tests"]
 
 [dependency-groups]
 dev = [
