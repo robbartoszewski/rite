@@ -39,8 +39,32 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
 from rite_ai.generated_sections import Block, parse, section_hash
+from rite_ai.workspace.manage import (
+    WORKER_MODULES_HEADING,
+    WORKER_MODULES_HEADING_LEGACY,
+)
 
 KEPT = ("kept-edited", "kept-unknown")
+
+# Sections a release RENAMED, new heading -> the headings it replaced, most
+# recent first. A section is matched to the one in your file by its heading, so
+# without this a rename matches nothing: the new section is INSERTED and the
+# old one, being a section this version does not generate, is left alone. The
+# file comes back carrying both — measured on a Worker `CLAUDE.md` when
+# `## Your modules` became `## Modules checked out in your workspace`, which
+# put the possessive framing the rename removed directly above the paragraph
+# explaining that Workers do not own their modules.
+#
+# Matching an old heading only decides WHICH section is this one. What may be
+# done to it is unchanged: marked and unedited it is rewritten under the new
+# heading, otherwise it is kept and reported like any other section whose bytes
+# rite cannot account for. Spelt from the constants so a rename that forgets to
+# add its entry here fails a test instead of shipping the duplicate.
+SUPERSEDED_HEADINGS: dict[str, tuple[str, ...]] = {
+    WORKER_MODULES_HEADING.removeprefix("## "): (
+        WORKER_MODULES_HEADING_LEGACY.removeprefix("## "),
+    ),
+}
 
 # Everything a refresh may write, and nothing else. `.rite/` is where a
 # project's AUTHORED content lives — the brief, modules, config, the context
@@ -97,6 +121,10 @@ class Change:
     """`refreshed`, `inserted`, `marked`, `taken`, `installed`, or one of
     `KEPT`."""
     diff: str = ""
+    renamed_from: str = ""
+    """The heading this section carries in the user's file, when a release
+    renamed it. Reported, so `§ <new name>` is findable in a file that does
+    not contain that name anywhere."""
 
 
 @dataclass
@@ -133,13 +161,17 @@ def refresh_text(
     changes: list[Change] = []
 
     def find(heading: str) -> int | None:
-        for i, b in enumerate(blocks):
-            if b.kind == "section" and b.heading == heading:
-                return i
+        for name in (heading, *SUPERSEDED_HEADINGS.get(heading, ())):
+            for i, b in enumerate(blocks):
+                if b.kind == "section" and b.heading == name:
+                    return i
         return None
 
     for gi, g in enumerate(wanted):
         i = find(g.heading)
+        renamed = (
+            "" if i is None or blocks[i].heading == g.heading else blocks[i].heading
+        )
         if i is None:
             pos = None
             for prev in reversed(wanted[:gi]):
@@ -170,21 +202,23 @@ def refresh_text(
             if c.content == g.content and c.recorded == g.recorded:
                 continue
             blocks[i] = _swap(c, g.raw, g)
-            changes.append(Change(g.heading, "refreshed"))
+            changes.append(Change(g.heading, "refreshed", renamed_from=renamed))
         elif c.recorded is None and c.content == g.content:
             blocks[i] = _swap(c, g.raw, g)
-            changes.append(Change(g.heading, "marked"))
+            changes.append(Change(g.heading, "marked", renamed_from=renamed))
         elif c.recorded is None and _written_by_a_release(g.heading, c.content):
             # No marker, but these are bytes a release wrote and nobody has
             # touched: the file predates markers, not the user's attention.
             blocks[i] = _swap(c, g.raw, g)
-            changes.append(Change(g.heading, "refreshed"))
+            changes.append(Change(g.heading, "refreshed", renamed_from=renamed))
         elif g.heading in take:
             blocks[i] = _swap(c, g.raw, g)
-            changes.append(Change(g.heading, "taken"))
+            changes.append(Change(g.heading, "taken", renamed_from=renamed))
         else:
             action = "kept-edited" if edited else "kept-unknown"
-            changes.append(Change(g.heading, action, _diff(c.content, g.content)))
+            changes.append(
+                Change(g.heading, action, _diff(c.content, g.content), renamed)
+            )
 
     text = "".join(b.raw for b in blocks)
     if changes and any(ch.action not in KEPT for ch in changes):
@@ -197,11 +231,15 @@ def _written_by_a_release(heading: str, content: str) -> bool:
     """Whether `content` is exactly what some tagged release wrote for this
     section — recorded only for sections a release writes identically for
     every project, so this can never mistake one project's rendering for
-    another's."""
+    another's. A renamed section was recorded under its old heading, so those
+    are asked about too."""
     from rite_ai.update.section_history import SECTIONS
 
     digest = hashlib.sha256(content.strip().encode("utf-8")).hexdigest()
-    return digest in SECTIONS.get(heading, frozenset())
+    return any(
+        digest in SECTIONS.get(name, frozenset())
+        for name in (heading, *SUPERSEDED_HEADINGS.get(heading, ()))
+    )
 
 
 def _sha(path: Path) -> str:
@@ -500,6 +538,10 @@ def report(results: list[FileResult], dry_run: bool, take: frozenset[str]) -> li
             # A target with a path stands on its own; a bare heading belongs
             # to the file it was found in.
             where = ch.target if "/" in ch.target else f"{r.path} § {ch.target}"
+            if ch.renamed_from:
+                # Otherwise the line names a heading the reader cannot find:
+                # their file still calls the section something else.
+                where += f' (renamed — your file calls it "## {ch.renamed_from}")'
             if ch.action in KEPT:
                 kept.append((where, ch))
             else:

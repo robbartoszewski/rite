@@ -126,13 +126,64 @@ def test_it_upgrades_without_touching_what_the_team_wrote(
         assert (root / "workers" / "alpha" / ".claude" / "commands" / name).is_file()
 
 
-def test_a_second_run_has_nothing_left_to_do(
+def test_a_second_run_changes_nothing_further(
     project_from_the_last_release, monkeypatch
 ):
+    """Idempotent: whatever the first run settles stays settled.
+
+    Not "silent". A Worker's module list is written per project, so no
+    release's bytes are on record for it and a refresh cannot tell the last
+    release's rendering from a list someone edited. That section is reported
+    every run until it is taken — which is the mechanism working, not
+    something left undone. What must not happen is the file CHANGING again.
+    """
     monkeypatch.chdir(project_from_the_last_release)
     assert CliRunner().invoke(cli, ["update", "--files-only"]).exit_code == 0
+    settled = _hashes(project_from_the_last_release)
+
     again = CliRunner().invoke(cli, ["update", "--files-only"])
-    assert "generated files already current" in again.output
+
+    assert again.exit_code == 0, again.output
+    assert _hashes(project_from_the_last_release) == settled
+    assert not [
+        ln
+        for ln in again.output.splitlines()
+        if ("refresh" in ln or "added" in ln or "marked" in ln)
+    ], again.output
+
+
+def test_taking_the_renamed_section_settles_it_for_good(
+    project_from_the_last_release, monkeypatch
+):
+    """The last release calls the Worker's module section `## Your modules`;
+    this one calls it `## Modules checked out in your workspace`. Renamed, it
+    is still the same section — it must not be added alongside the old one,
+    and taking rite's version must leave exactly one."""
+    monkeypatch.chdir(project_from_the_last_release)
+    worker = project_from_the_last_release / "workers" / "alpha" / "CLAUDE.md"
+
+    both = ("## Your modules", "## Modules checked out in your workspace")
+
+    CliRunner().invoke(cli, ["update", "--files-only"])
+    headings = [ln for ln in worker.read_text().splitlines() if ln.startswith("## ")]
+    assert len([h for h in headings if h in both]) == 1, f"duplicated: {headings}"
+
+    took = CliRunner().invoke(
+        cli,
+        [
+            "update",
+            "--files-only",
+            "--take-rite",
+            "Modules checked out in your workspace",
+        ],
+    )
+    assert took.exit_code == 0, took.output
+    headings = [ln for ln in worker.read_text().splitlines() if ln.startswith("## ")]
+    assert headings.count("## Modules checked out in your workspace") == 1, headings
+    assert "## Your modules" not in headings
+
+    after = CliRunner().invoke(cli, ["update", "--files-only"])
+    assert "generated files already current" in after.output, after.output
 
 
 def test_doctor_says_the_project_is_behind_before_the_refresh(
