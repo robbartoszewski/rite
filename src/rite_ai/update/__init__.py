@@ -141,6 +141,47 @@ def detect_install_method() -> str:
     return "pip"
 
 
+def install_origin(raw: str | None = None) -> str:
+    """Where this rite was installed from, for `rite doctor` — "" when the
+    install records nothing.
+
+    A version alone does not identify a build. `install.sh` installs from a
+    git TAG, and a tag is a movable pointer: two machines reporting
+    `rite 0.3.0` can be running different commits, which is exactly what a
+    re-pointed tag did once already. pip, uv and pipx all record the source
+    of a direct install in `direct_url.json` (PEP 610), including the commit
+    a VCS install resolved to, so this is read rather than stamped at build
+    time — nothing in the release process has to remember it.
+
+    `raw` is the file's contents, for tests; by default it is read from the
+    installed distribution. A wheel from an index records no `vcs_info`, so
+    that install says nothing extra."""
+    if raw is None:
+        try:
+            from importlib.metadata import distribution
+
+            raw = distribution(DIST_NAME).read_text("direct_url.json")
+        except (LookupError, OSError):
+            return ""
+    if not raw:
+        return ""
+    try:
+        info = json.loads(raw)
+    except ValueError:
+        return ""
+    if not isinstance(info, dict):
+        return ""
+    vcs = info.get("vcs_info")
+    if isinstance(vcs, dict) and vcs.get("commit_id"):
+        commit = str(vcs["commit_id"])[:12]
+        revision = vcs.get("requested_revision")
+        asked = f"{revision}, " if revision else ""
+        return f"installed from {asked}commit {commit}"
+    if info.get("dir_info", {}).get("editable") and info.get("url"):
+        return f"dev checkout at {str(info['url']).removeprefix('file://')}"
+    return ""
+
+
 def update_command_for(method: str) -> list[str] | None:
     """Every command here names the DISTRIBUTION, never the command or the
     import package. Getting this wrong is not a cosmetic bug: `pipx upgrade

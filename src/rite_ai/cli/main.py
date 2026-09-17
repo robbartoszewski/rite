@@ -26,6 +26,7 @@ PROJECT_MARKERS = (
 def _is_project(path: Path) -> bool:
     return any((path / m).is_file() for m in PROJECT_MARKERS)
 
+
 # Explicit override, checked before any walk. Two reasons it exists, and the
 # second is why it is not just a convenience:
 #
@@ -466,7 +467,12 @@ def _doctor_report(problems: list[str]) -> None:
     """Every check doctor runs, appending to `problems`."""
     import shutil
 
-    click.echo(f"rite {__version__}")
+    from rite_ai.update import install_origin
+
+    # The version alone does not say which build this is: `install.sh`
+    # installs from a git tag, and a tag can be re-pointed (one was).
+    origin = install_origin()
+    click.echo(f"rite {__version__}" + (f" ({origin})" if origin else ""))
 
     from rite_ai.config.parse import ParseError as ParseErrorType
 
@@ -802,9 +808,7 @@ def _doctor_report(problems: list[str]) -> None:
                 )
             elif not check.installed:
                 click.echo(f"sandbox ({check.backend}): {check.detail}")
-                problems.append(
-                    "sandbox.enabled is true but yoloai is not installed"
-                )
+                problems.append("sandbox.enabled is true but yoloai is not installed")
             else:
                 click.echo(f"sandbox ({check.backend}): NOT WORKING — {check.detail}")
                 problems.append(
@@ -813,8 +817,7 @@ def _doctor_report(problems: list[str]) -> None:
                 )
         elif is_installed():
             click.echo(
-                "sandbox: yoloai is installed, not verified "
-                "(sandbox.enabled is false)"
+                "sandbox: yoloai is installed, not verified (sandbox.enabled is false)"
             )
         else:
             click.echo(
@@ -846,9 +849,7 @@ def _doctor_report(problems: list[str]) -> None:
             # project without a spec yet is not misconfigured.
             from rite_ai.project_spec import spec_notices
 
-            for notice in spec_notices(
-                root, project.config, [m.path for m in modules]
-            ):
+            for notice in spec_notices(root, project.config, [m.path for m in modules]):
                 click.echo(notice)
 
         schedule_problems = validate_schedule(
@@ -4672,7 +4673,6 @@ def update(yes: bool, files_only: bool, dry_run: bool, take: tuple[str, ...]) ->
             result = run_self_update(method)
             click.echo(result.message, err=not result.ok)
             failed = not result.ok
-
 
     # Runs whether or not the self-update worked: the files on disk have
     # nothing to do with whether a download succeeded.
