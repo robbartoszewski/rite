@@ -62,6 +62,9 @@ class HandoverSnapshot:
     progress: str = ""
     next_step: str = ""
     blockers: list[str] = field(default_factory=list)
+    # The spec unit whose slice was not enough, so this session read the whole
+    # spec instead. What feeds the spec digest's insufficiency rate.
+    spec_fallback: str = ""
     timestamp: float = 0.0
     # Why this snapshot could not be read, when it could not be. Never
     # written to disk — derived by `_load` from the file in front of it.
@@ -121,6 +124,7 @@ def write_snapshot(
     next_step: str = "",
     blockers: list[str] | None = None,
     worker: str = "",
+    spec_fallback: str = "",
 ) -> Path:
     """Overwrite THIS session's snapshot — every call replaces that
     session's previous one entirely (ephemeral state; no append, no
@@ -133,6 +137,7 @@ def write_snapshot(
         progress=progress,
         next_step=next_step,
         blockers=list(blockers or []),
+        spec_fallback=spec_fallback,
     )
     path = _snapshot_path(root, worker)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -145,7 +150,11 @@ def write_snapshot(
 
 
 def has_content(
-    ticket: str, progress: str, next_step: str, blockers: list[str] | None
+    ticket: str,
+    progress: str,
+    next_step: str,
+    blockers: list[str] | None,
+    spec_fallback: str = "",
 ) -> bool:
     """Whether a proposed write would record anything at all.
 
@@ -163,6 +172,7 @@ def has_content(
         or progress.strip()
         or next_step.strip()
         or [b for b in (blockers or []) if str(b).strip()]
+        or spec_fallback.strip()
     )
 
 
@@ -229,6 +239,7 @@ def _load(root: Path, path: Path, worker: str) -> HandoverSnapshot | None:
         progress=data.get("progress", ""),
         next_step=data.get("next_step", ""),
         blockers=list(data.get("blockers", [])),
+        spec_fallback=str(data.get("spec_fallback", "") or ""),
         timestamp=data.get("timestamp", 0.0),
     )
 

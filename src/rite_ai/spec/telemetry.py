@@ -96,6 +96,43 @@ def record_fallback(
     return _append(root, Event(FALLBACK, unit, at, worker))
 
 
+def record_fallback_once(
+    root: Path, unit: str, *, worker: str = "", now: float | None = None
+) -> Event | None:
+    """Record a fallback unless it is `worker`'s most recent one already.
+
+    A Worker reports a fallback on a snapshot it rewrites every few minutes,
+    so the same report arrives many times. Deduplicated against the log
+    itself, not against whatever the snapshot last held: a write that did not
+    repeat the unit, a `--clear`, or `rite stop`'s handover all change the
+    snapshot without meaning a second fallback happened. A different unit is
+    a new fallback; the same unit again is not, until another unit comes
+    between. Checked and appended under the log's lock, so two overlapping
+    writes for one Worker cannot both count. Returns None when not recorded.
+    """
+    at = time.time() if now is None else now
+    path = telemetry_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with locked(path):
+        last = next(
+            (
+                e
+                for e in reversed(read_events(root).events)
+                if e.kind == FALLBACK and e.worker == worker
+            ),
+            None,
+        )
+        if last is not None and last.unit == unit:
+            return None
+        event = Event(FALLBACK, unit, at, worker)
+        record = {"kind": FALLBACK, "unit": unit, "at": at}
+        if worker:
+            record["worker"] = worker
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, sort_keys=True) + "\n")
+        return event
+
+
 @dataclass
 class EventLog:
     events: list[Event] = field(default_factory=list)

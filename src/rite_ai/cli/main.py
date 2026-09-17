@@ -3390,9 +3390,18 @@ def handover() -> None:
     "--clear",
     "clear",
     is_flag=True,
-    help="Deliberately record an empty snapshot, discarding what this "
-    "session recorded before. Without it, a write carrying no content is "
+    help="Deliberately record an empty snapshot, discarding whatever the "
+    "previous one held. Without it, a write carrying no content is "
     "refused rather than silently erasing the previous one.",
+)
+@click.option(
+    "--spec-fallback",
+    "spec_fallback",
+    default="",
+    metavar="UNIT",
+    help="The spec unit whose slice was not enough, so the whole spec had to "
+    "be read. Counted once for the insufficiency rate, however often the "
+    "snapshot is rewritten.",
 )
 def handover_write(
     ticket: str,
@@ -3401,6 +3410,7 @@ def handover_write(
     blockers: tuple[str, ...],
     worker: str,
     clear: bool,
+    spec_fallback: str,
 ) -> None:
     """Overwrite one worker's handover snapshot — call this on a schedule
     (every few minutes), not only when stopping. Ephemeral state: each call
@@ -3417,7 +3427,10 @@ def handover_write(
     from rite_ai.handover import has_content, write_snapshot
 
     root = _require_project_root()
-    if not clear and not has_content(ticket, progress, next_step, list(blockers)):
+    spec_fallback = spec_fallback.strip()
+    if not clear and not has_content(
+        ticket, progress, next_step, list(blockers), spec_fallback
+    ):
         # Refused, not accepted-as-empty. Every call replaces that
         # session's snapshot entirely, so an argument-less call is a
         # deletion that printed "handover snapshot written" and exited 0
@@ -3426,7 +3439,8 @@ def handover_write(
         # session's death.
         click.echo(
             "nothing to record — pass at least one of --ticket, --progress, "
-            "--next-step or --blocker. Every write REPLACES this session's "
+            "--next-step, --blocker or --spec-fallback. Every write REPLACES "
+            "this session's "
             "previous snapshot, so an empty one would discard whatever it "
             "was holding. Use --clear if discarding it is what you mean.",
             err=True,
@@ -3439,7 +3453,16 @@ def handover_write(
         next_step=next_step,
         blockers=list(blockers),
         worker=worker,
+        spec_fallback=spec_fallback,
     )
+    if spec_fallback:
+        # After the snapshot is written, so a write that fails and is retried
+        # does not count its fallback twice. Deduplicated against the log, not
+        # the snapshot — see `record_fallback_once`.
+        from rite_ai.spec.telemetry import record_fallback_once
+
+        if record_fallback_once(root, spec_fallback, worker=worker):
+            click.echo(f"spec fallback recorded for {spec_fallback}")
     click.echo(f"handover snapshot written for {worker or 'the coordinator'}")
 
 
@@ -3487,6 +3510,8 @@ def handover_show() -> None:
                 click.echo(f"  - {b}")
         else:
             click.echo("blockers:   (none)")
+        if snapshot.spec_fallback:
+            click.echo(f"spec fallback: {snapshot.spec_fallback}")
         # Relative age beside the clock time. This command's own help says
         # "read this at session startup", so its whole audience is someone
         # who does not know what time the previous session stopped.
