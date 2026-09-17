@@ -75,6 +75,9 @@ class Parsed:
     problems: list[str] = field(default_factory=list)
     files: list[str] = field(default_factory=list)
     total_lines: int = 0
+    # Each file's lines, line endings normalised, so the reference graph reads
+    # unit bodies from the same text the ranges and hashes came from.
+    lines: dict[str, list[str]] = field(default_factory=dict)
 
     def find(self, ref: str) -> list[Unit]:
         """Units matching `ref`: a bare id, or `source#id` when two files
@@ -133,7 +136,7 @@ def parse_text(text: str, source: str) -> Parsed:
     lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     if lines and lines[-1] == "":
         lines.pop()
-    out = Parsed(files=[source], total_lines=len(lines))
+    out = Parsed(files=[source], total_lines=len(lines), lines={source: lines})
     outside = _outside_code(lines)
 
     headings: list[tuple[int, int, str]] = []
@@ -313,6 +316,7 @@ def parse_paths(root: Path, paths: list[str]) -> Parsed:
         parsed = parse_file(root / rel, rel)
         merged.files.append(rel)
         merged.total_lines += parsed.total_lines
+        merged.lines.update(parsed.lines)
         merged.problems.extend(parsed.problems)
         for unit in parsed.units:
             if unit.id in taken:
