@@ -217,7 +217,7 @@ The lease is a file in the coordination repo (`owner-lease.json`):
 }
 ```
 
-**`priority` is written for audit and ignored on read** (D-56). It records what the
+**`priority` is written for audit and ignored on read** (D-60). It records what the
 holder believed its priority was when it acquired the lease, which is genuinely useful
 when reconstructing why a promotion went the way it did. It never participates in a
 decision: **priority is the order of `coordination.managers`**, and only that list is
@@ -255,7 +255,7 @@ So a lease is **not credible if it expires further ahead than an honest writer c
 have set it.** Nothing honest can write an `expires` more than
 `owner_lease_minutes + skew_tolerance` from now, because that is the longest lease
 the configuration permits plus the most drift it tolerates. A lease beyond that
-ceiling is treated as **invalid, and therefore challengeable** (D-55).
+ceiling is treated as **invalid, and therefore challengeable** (D-59).
 
 The ceiling is derived, not chosen: it falls out of the two values already in
 `coordination:`, so raising the lease duration moves it automatically and there is no
@@ -315,6 +315,16 @@ the same fetch → **read-merge-write the full state** → push-with-lease →
 on-rejection-refetch-and-retry loop; §2.4.2's steps above are the specific instance
 of that loop for the lease file.
 
+**That whole-ref behaviour is the git BACKEND's, and it stops at the state-layer
+interface (D-61).** Consequence (a) is how the git backend implements a write;
+consequence (b) does not reach a caller at all, because the backend answers a
+rejection caused by somebody else's key by re-merging and retrying rather than by
+reporting a conflict. What the interface offers is compare-and-swap on **one key**:
+a write conflicts only if that key changed. A store with no shared structure
+between keys could satisfy the whole-ref rule only by serialising every write
+through a single global version — slower than git, and absurd on its own terms —
+which would make D-21's substitutable backends decoration.
+
 ⚠ **What a writer does when the state it must merge cannot be parsed.** Read-merge-
 write assumes every file in the tree can be read. Another Manager's `claims.json` may
 be truncated by a killed push or corrupt on arrival, and the writer still has to
@@ -323,7 +333,7 @@ another machine's data to satisfy a merge, and refusing to write at all turns on
 file into a fleet-wide outage.
 
 The rule is **pass the bytes through verbatim, and fail closed on the decision that
-needed them** (D-54). The unreadable file is copied into the new tree unchanged — no
+needed them** (D-58). The unreadable file is copied into the new tree unchanged — no
 loss, no silent repair, and whoever wrote it can still recover it — while any
 operation whose correctness depends on reading it is refused. Granting a claim is the
 obvious case: a claim that might overlap an unreadable `claims.json` cannot be shown
@@ -996,9 +1006,9 @@ The state branch contains:
 `incumbent` (the lease holder the request was addressed to). The incumbent acts on
 a request only when `incumbent` names the current lease holder; a request addressed
 to an earlier Owner is left over and ignored, which needs no clock. No priority is
-carried: who outranks whom is the order of `coordination.managers` (D-56). Unknown
+carried: who outranks whom is the order of `coordination.managers` (D-60). Unknown
 fields round-trip and unreadable bytes are "could not read", as for every state file
-(D-54).
+(D-58).
 
 **Nothing on this branch has historical value BY DESIGN — but the old commits are
 not actually erased, and the claim should not be read as a confidentiality
@@ -3946,9 +3956,10 @@ happened once already and left no trace until this review found it.
 | D-52 | Existing project specs | **Point at them, never inline them** | A spec is routinely thousands of lines — rite's own is ~3,800. Inlining one into every Worker's context on every job spends, on repetition, exactly the quota this tool exists to make last overnight. It is the same arithmetic that produced D-1: an MCP call costs an LLM turn, so the cheap-per-call-but-constant thing loses to the one-off. Workers get the path and the citation convention and read what the ticket needs. `.rite/context/` was considered and rejected as the mechanism: it copies (`shutil.copyfile`) and caps an entry at 4,096 bytes, so rite's own spec would be flagged `oversize` by `rite doctor` on every run, and a copy goes stale silently the moment the original is edited. §9.13. |
 | D-53 | Greenfield spec | **`/spec` writes `SPEC.md` with a mandatory decision register; follow-ups go into the spec, not `brief.yaml`** | rite pointed at specs (D-52) and produced none, so a greenfield project had nothing for tickets to cite, and the orientation table's "no project spec" row had no code behind it. The register is required even for a one-row spec because it is what makes a spec addressable rather than prose. `brief.yaml`'s `enriched:` section is dropped: `ProjectBrief` never modelled it and only an agent read it, so it was a second, half-read home for answers the spec now holds. `rite start` reports the phase from disk, and the generated `CLAUDE.md` carries the table rather than pointing at one it does not contain. Not verified with a live session. §9.13.1. |
 
-| D-54 | Unreadable input to a state merge | **Pass the bytes through verbatim; fail closed on the decision that needed them** | Read-merge-write (§2.4.2) must produce a whole tree, but another Manager's file may be unparseable. Dropping it destroys data to satisfy a merge; refusing to write makes one bad file a fleet-wide outage. Copying the bytes unchanged loses nothing and repairs nothing, while declining only the operations that depend on reading it — granting a possibly-overlapping claim, most obviously — keeps everything else available. Same shape as D-29's fail-closed cap: unknown is not nothing, and the answer to unknown is to decline the unsafe act rather than halt or guess. Reported loudly, naming the file and its Manager. §2.4.2. |
-| D-55 | A lease that expires implausibly far ahead | **Not credible beyond `owner_lease_minutes + skew_tolerance`, and therefore challengeable** | §2.4.1's tolerance protects an incumbent from a fast challenger; the reverse case had no rule, and read literally a Manager whose clock is a day ahead holds the role permanently — a wedge needing no malice, only a wrong clock. Nothing honest can write an expiry beyond the longest permitted lease plus the most drift tolerated, so anything past that ceiling is invalid. Derived from two values already in `coordination:` rather than a third number to keep in step: raising the lease duration moves the ceiling with it. Logged distinctly, because it means somebody's clock is wrong. §2.4.1. |
-| D-56 | The lease's `priority` field | **Written for audit, ignored on read; config order always wins** | `coordination.managers` is declared intent under version control; a lease is ephemeral runtime state. A stale lease written before someone reordered the list must not override that reorder, or a deliberate config change silently fails to take effect until a lease happens to expire. The field is kept because what the holder believed its priority was at acquisition is useful when reconstructing why a promotion went the way it did — but it never participates in the comparison. Both halves stated so the field is neither deleted as dead weight nor, worse, started being read. §2.4.1. |
+| D-58 | Unreadable input to a state merge | **Pass the bytes through verbatim; fail closed on the decision that needed them** | Read-merge-write (§2.4.2) must produce a whole tree, but another Manager's file may be unparseable. Dropping it destroys data to satisfy a merge; refusing to write makes one bad file a fleet-wide outage. Copying the bytes unchanged loses nothing and repairs nothing, while declining only the operations that depend on reading it — granting a possibly-overlapping claim, most obviously — keeps everything else available. Same shape as D-29's fail-closed cap: unknown is not nothing, and the answer to unknown is to decline the unsafe act rather than halt or guess. Reported loudly, naming the file and its Manager. §2.4.2. |
+| D-59 | A lease that expires implausibly far ahead | **Not credible beyond `owner_lease_minutes + skew_tolerance`, and therefore challengeable** | §2.4.1's tolerance protects an incumbent from a fast challenger; the reverse case had no rule, and read literally a Manager whose clock is a day ahead holds the role permanently — a wedge needing no malice, only a wrong clock. Nothing honest can write an expiry beyond the longest permitted lease plus the most drift tolerated, so anything past that ceiling is invalid. Derived from two values already in `coordination:` rather than a third number to keep in step: raising the lease duration moves the ceiling with it. Logged distinctly, because it means somebody's clock is wrong. §2.4.1. |
+| D-60 | The lease's `priority` field | **Written for audit, ignored on read; config order always wins** | `coordination.managers` is declared intent under version control; a lease is ephemeral runtime state. A stale lease written before someone reordered the list must not override that reorder, or a deliberate config change silently fails to take effect until a lease happens to expire. The field is kept because what the holder believed its priority was at acquisition is useful when reconstructing why a promotion went the way it did — but it never participates in the comparison. Both halves stated so the field is neither deleted as dead weight nor, worse, started being read. §2.4.1. |
+| D-61 | Granularity of the state layer's compare-and-swap | **Per key, not whole-state; the version is an opaque fingerprint of the value** | The interface must be substitutable (D-20, D-21) or the git-versus-Redis question has no answer but "rewrite it". The first cut made the version whole-state because that is what `--force-with-lease` compares, on the stated ground that per-key CAS was not implementable on git — which was wrong: a git backend compares the key's own value, merges, pushes with the lease, and re-merges when the ref moved for an unrelated key, absorbing §2.4.2(b)'s ref-level race instead of exporting it. Better for git (that race can no longer mark a live Manager falsely stalled) and necessary for anything else (a key-value store would otherwise funnel every write through one global version). A version fingerprints the VALUE, so no backend needs a durable counter and an A→B→A rewrite is harmless: a decision made on content stays sound when the content is what was read. Proven rather than argued — `tests/test_state_layer_kv.py` binds a socket-served key-value store with no trees, refs or merges to the conformance suite unchanged, and it passes, including the process-burst concurrency tests. |
 
 ---
 

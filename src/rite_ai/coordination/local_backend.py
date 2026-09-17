@@ -89,7 +89,7 @@ class LocalStateLayer(StateLayer):
         version, keys = raw.get("version"), raw.get("keys")
         if not isinstance(version, str) or not isinstance(keys, dict):
             # The WHOLE state is unreadable, so there is no per-key content to
-            # pass through (D-54) and no version to compare against. Refusing
+            # pass through (D-58) and no version to compare against. Refusing
             # is the only honest answer at this level.
             return Unavailable(f"{self._snapshot}: not a state snapshot")
         return version, keys
@@ -137,7 +137,7 @@ class LocalStateLayer(StateLayer):
                     return current
                 if current != expected_version:
                     return Conflict(current)
-                # Every other key's bytes are carried over untouched: D-54's
+                # Every other key's bytes are carried over untouched: D-58's
                 # pass-through, and what makes the single-file snapshot safe.
                 keys = dict(keys)
                 keys[key] = base64.b64encode(value).decode("ascii")

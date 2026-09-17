@@ -1,7 +1,7 @@
 """Holding, renewing and giving up the Owner lease (P2-2a, §2.4.1, D-16/D-17).
 
 This module does the lease MECHANICS and nothing else. It does not decide who
-ought to be Owner: priority is the order of `coordination.managers` (D-56) and
+ought to be Owner: priority is the order of `coordination.managers` (D-60) and
 promotion is the election's business. A Manager asks this module "can I take
 it, and do I still have it"; the answers are honest about the third case.
 
@@ -60,7 +60,7 @@ class Acquired:
 
     lease: OwnerLease
     version: str
-    # Set when the lease we displaced was rejected as not credible (D-55).
+    # Set when the lease we displaced was rejected as not credible (D-59).
     # §2.4.1 requires this to be logged distinctly: it means somebody's
     # clock is wrong, and this is the only signal that will say so.
     displaced_not_credible: str | None = None
@@ -282,7 +282,7 @@ class OwnerLeaseHolder:
             owner=self.manager,
             acquired=keep_acquired,
             expires=stamp(now + timedelta(minutes=self.config.owner_lease_minutes)),
-            # Written for audit, never read for a decision (D-56).
+            # Written for audit, never read for a decision (D-60).
             priority=_priority_of(self.manager, self.config),
             extra=acquired.extra if ours else {},
         )

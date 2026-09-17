@@ -1,4 +1,4 @@
-"""The Owner lease and its renewal loop (P2-2a, §2.4.1, D-17, D-55, D-56).
+"""The Owner lease and its renewal loop (P2-2a, §2.4.1, D-17, D-59, D-60).
 
 The clock is injected, so every boundary is asserted at the exact second
 rather than by sleeping — a lease test that sleeps is a lease test somebody
@@ -105,7 +105,7 @@ class TestTakingIt:
         assert isinstance(holder(layer, config, clock=clock).acquire(), Acquired)
 
     def test_an_implausible_expiry_is_challenged_and_reported(self, layer, config):
-        """D-55. A lease a day ahead would otherwise wedge the role for ever,
+        """D-59. A lease a day ahead would otherwise wedge the role for ever,
         and it needs no malice — only a wrong clock. Taking it is half the
         requirement; §2.4.1 also requires saying so distinctly, because this
         is the only signal that somebody's clock is wrong."""
@@ -128,7 +128,7 @@ class TestTakingIt:
         assert again.lease.acquired == first.lease.acquired
 
     def test_the_recorded_priority_is_the_config_order(self, layer, config):
-        """D-56: written for audit, never read for a decision."""
+        """D-60: written for audit, never read for a decision."""
         assert holder(layer, config, "beta").acquire().lease.priority == 1
         stored = lease_from_json(layer.read_state(LEASE_KEY).value.decode())
         assert stored.priority == 1

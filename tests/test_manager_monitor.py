@@ -168,7 +168,7 @@ class TestPromotingProperly:
     def test_a_promotion_over_an_implausible_lease_says_a_clock_is_wrong(
         self, layer, config
     ):
-        """D-55 must reach the caller, not just the state."""
+        """D-59 must reach the caller, not just the state."""
         clock = Clock()
         beta = OwnerLeaseHolder(layer, "beta", config, clock=clock)
         beta.acquire()

@@ -13,7 +13,7 @@ label — and refuses to choose when it cannot tell.
 fungible (§5.3.4), so there is nothing to match against a ticket; the only
 useful signal is load, which is why the heartbeat carries a count at all. When
 two Managers are equally loaded the tie goes to `coordination.managers` order,
-the same list priority comes from everywhere else (D-56) — never to a
+the same list priority comes from everywhere else (D-60) — never to a
 timestamp, which across machines is exactly what §2.4.1 says cannot be trusted.
 """
 

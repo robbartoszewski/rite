@@ -85,7 +85,7 @@ def hand_over_outgoing_owner(
     """Called by the Manager that has just promoted itself (§2.4.2 step 4).
 
     `promotion_reason` is `message_log`'s vocabulary: `lease-expired`,
-    `lease-not-credible` (D-55), `no-owner`, `handed-over`.
+    `lease-not-credible` (D-59), `no-owner`, `handed-over`.
     """
     reason = f"owner lease expired, promoted by {new_owner}"
 
@@ -115,7 +115,7 @@ def hand_over_stalled_manager(
     from a machine that is still doing it, and the caller's idea of "stalled"
     may be several ticks old.
 
-    "Cannot tell" is never stalled (D-54, §3.4). No heartbeat at all is the
+    "Cannot tell" is never stalled (D-58, §3.4). No heartbeat at all is the
     same answer: a Manager that has never published one may be a machine
     that was never set up, and stripping tickets off the board on that basis
     would be a guess with consequences.
@@ -193,7 +193,7 @@ def hand_over_machines_work(
 def _claims_of(layer: StateLayer, machine: str):
     read = layer.read_state(CLAIMS_KEY)
     if isinstance(read, Unavailable):
-        # Unknown is not "it held nothing" (D-54). Promoting without
+        # Unknown is not "it held nothing" (D-58). Promoting without
         # handing over is a decision, and it must not be made by accident.
         return Unknown(f"the published claims could not be read: {read.reason}")
     if isinstance(read, Absent):

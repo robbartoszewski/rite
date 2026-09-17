@@ -145,7 +145,7 @@ def pending_request(layer: StateLayer, lease_owner: str):
         return None
     request = request_from_json(read.value.decode("utf-8", "replace"))
     if request is None:
-        # Unreadable is not "no request" (D-54). Refusing the decision is
+        # Unreadable is not "no request" (D-58). Refusing the decision is
         # the point: an Owner that reads garbage as "nobody asked" would
         # ignore a returning Manager for ever.
         return Unknown("the promotion request is not readable JSON")
@@ -173,7 +173,7 @@ def hand_over(holder: OwnerLeaseHolder, *, now: datetime | None = None):
         or holder.manager not in managers
         or managers.index(requester) >= managers.index(holder.manager)
     ):
-        # The authoritative check: config order, not the request (D-56).
+        # The authoritative check: config order, not the request (D-60).
         return Refused(f"{requester!r} does not outrank {holder.manager!r}")
 
     # Step 3, per §2.4.3: make sure what we wrote is readable before we go.

@@ -163,7 +163,7 @@ class TestTheTwoWaysThisGoesWrong:
         assert not (root / ".rite" / "outbox").exists(), "the board was touched anyway"
 
     def test_unreadable_claims_are_unknown_not_nothing_to_do(self, root, layer):
-        """D-54. "It held nothing" and "we could not tell" must not be the
+        """D-58. "It held nothing" and "we could not tell" must not be the
         same answer: promoting without handing over is a decision."""
         read = layer.read_state(CLAIMS_KEY)
         layer.write_state(CLAIMS_KEY, b"not json", read.version)

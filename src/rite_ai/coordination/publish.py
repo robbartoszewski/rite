@@ -11,7 +11,7 @@ Two rules the loop enforces for every caller:
 - **Merge, never put.** The merge function is handed the bytes currently under
   the key and returns the bytes to write, so what it does not understand it can
   carry through (P2-1d) — or refuse, when the decision needed those bytes and
-  they could not be read (D-54).
+  they could not be read (D-58).
 - **Unavailable is not a lost race.** It means the write may have landed, so it
   is returned as its own outcome and never retried blindly.
 """

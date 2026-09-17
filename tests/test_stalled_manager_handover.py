@@ -107,7 +107,7 @@ class TestDecidingItIsStalled:
     def test_a_manager_that_never_published_is_not_declared_stalled(
         self, root, layer
     ):
-        """D-54: "cannot tell" is not "gone". A Manager with no heartbeat at
+        """D-58: "cannot tell" is not "gone". A Manager with no heartbeat at
         all may be a machine that was never set up, and stripping tickets off
         the board on that basis is a guess with consequences."""
         with_work(layer, "beta")

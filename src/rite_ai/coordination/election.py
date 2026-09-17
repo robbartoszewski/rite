@@ -1,4 +1,4 @@
-"""Standing for the Owner role (P2-2b, §2.4 "Promotion", D-42, D-56).
+"""Standing for the Owner role (P2-2b, §2.4 "Promotion", D-42, D-60).
 
 The lease (P2-2a) answers "can I take it". This answers "should I" — the
 policy §2.4 states as an org chart: Managers are listed in priority order and
@@ -15,7 +15,7 @@ against `expires + skew_tolerance`, because the incumbent's own clock may not
 yet have prompted it to renew. NTP-synced clocks remain a documented
 precondition — the margin narrows the window, it does not close it.
 
-**It does not decide priority from the lease** (D-56). Only the order of
+**It does not decide priority from the lease** (D-60). Only the order of
 `coordination.managers` is consulted.
 
 ⚠ **Deferring to a Manager we cannot see would be worse than promoting.**

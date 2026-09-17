@@ -1,4 +1,4 @@
-"""Standing for Owner (P2-2b, §2.4 "Promotion", D-42, D-56).
+"""Standing for Owner (P2-2b, §2.4 "Promotion", D-42, D-60).
 
 Every case here is a decision about who should hold the role, so every test
 asserts the DECISION and, where it matters, that no write happened — a
@@ -201,7 +201,7 @@ class TestTheSkewMargin:
         assert isinstance(got, Promoted)
 
     def test_an_implausible_expiry_is_challenged_and_named(self, layer, config):
-        """D-55: a lease a day ahead would otherwise wedge the role for ever,
+        """D-59: a lease a day ahead would otherwise wedge the role for ever,
         and it needs only a wrong clock."""
         put_lease(layer, "beta", START + timedelta(days=1))
         got, _ = stand(layer, config, "alpha", Clock())

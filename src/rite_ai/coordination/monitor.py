@@ -193,7 +193,7 @@ class ManagerMonitor:
             result.action = "promoted"
             result.promoted_from = outcome.previous_owner
             if outcome.displaced_not_credible:
-                # D-55: somebody's clock is wrong, and this is the only
+                # D-59: somebody's clock is wrong, and this is the only
                 # signal that will say so.
                 result.problems.append(outcome.displaced_not_credible)
             if outcome.unseen:

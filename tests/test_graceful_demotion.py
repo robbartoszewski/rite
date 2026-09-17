@@ -124,7 +124,7 @@ class TestSeeingTheRequest:
         assert pending_request(layer, "gamma") is None
 
     def test_an_unreadable_request_is_unknown_not_absent(self, layer, config):
-        """D-54. An Owner that reads garbage as "nobody asked" ignores a
+        """D-58. An Owner that reads garbage as "nobody asked" ignores a
         returning Manager for ever."""
         read = layer.read_state(REQUEST_KEY)
         layer.write_state(REQUEST_KEY, b"not json", read.version)
@@ -171,7 +171,7 @@ class TestHandingOver:
     def test_a_request_from_a_lower_priority_manager_is_refused_on_the_config(
         self, layer, config
     ):
-        """The authoritative check is the config order (D-56), not the
+        """The authoritative check is the config order (D-60), not the
         request — a file must not be able to promote its own author."""
         clock = Clock()
         beta = OwnerLeaseHolder(layer, "beta", config, clock=clock)

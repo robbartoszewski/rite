@@ -13,12 +13,12 @@ second return) before anyone acted. Recognising that needs no clock at all,
 which matters on a branch whose timestamps are written by other machines.
 
 **Priority is not carried.** Who outranks whom is the order of
-`coordination.managers` (D-56); a request only says *who is asking*. Carrying
+`coordination.managers` (D-60); a request only says *who is asking*. Carrying
 a priority here would give a stale file a way to disagree with the list.
 
 Parsing follows the two rules P2-0b's schemas already follow, for the same
 reasons: unknown fields round-trip, and unreadable bytes are `None` — "could
-not read", never "no request" (D-54).
+not read", never "no request" (D-58).
 """
 
 from __future__ import annotations

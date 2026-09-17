@@ -97,7 +97,7 @@ class LeaseVerdict:
     `NOT_CREDIBLE` is separate from `EXPIRED` on purpose: both mean the
     lease can be challenged, but only one of them means somebody's clock
     is wrong, and that is worth saying out loud rather than silently
-    recovering from (D-55)."""
+    recovering from (D-59)."""
 
     HELD = "held"
     EXPIRED = "expired"
@@ -127,7 +127,7 @@ class OwnerLease(_KeepsDrift):
     owner: str = ""
     acquired: str = ""
     expires: str = ""
-    # WRITTEN FOR AUDIT, IGNORED ON READ (D-56). What the holder believed its
+    # WRITTEN FOR AUDIT, IGNORED ON READ (D-60). What the holder believed its
     # priority was at acquisition — useful for reconstructing why a
     # promotion went the way it did. Priority for any DECISION is the order
     # of `coordination.managers`, never this: a stale lease must not be able
@@ -152,7 +152,7 @@ class OwnerLease(_KeepsDrift):
         `now > expires + skew_tolerance`, never at the bare boundary. This
         protects an incumbent from a challenger whose clock runs fast.
 
-        **Credibility** (D-55): nothing honest can write an `expires`
+        **Credibility** (D-59): nothing honest can write an `expires`
         further ahead than `owner_lease_minutes + skew_tolerance`, because
         that is the longest lease the configuration permits plus the most
         drift it tolerates. Past that ceiling the lease is invalid and

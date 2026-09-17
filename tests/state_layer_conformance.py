@@ -271,7 +271,7 @@ class StateLayerConformance:
         assert layer.read_state("b.json") == Present(b"beta", vb)
 
     def test_arbitrary_bytes_round_trip_verbatim(self, layer):
-        """D-54's pass-through: the layer never parses a value, so content
+        """D-58's pass-through: the layer never parses a value, so content
         another Manager cannot parse is still carried unchanged."""
         raw = b"\xff\x00{not json at all\n\x80"
         v = layer.write_state("claims.json", raw, ABSENT).version

@@ -2,7 +2,7 @@
 
 `claims.json` holds every machine's claims, which is what makes it different
 from a Manager's own status file: unreadable bytes are refused, never
-replaced (D-54)."""
+replaced (D-58)."""
 
 from __future__ import annotations
 

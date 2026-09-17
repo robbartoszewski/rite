@@ -159,7 +159,7 @@ class ClaimsLedger:
         local check runs first: it is free, and a path already held here needs
         no network round trip to refuse.
 
-        Published claims that cannot be read refuse the claim (D-54): a claim
+        Published claims that cannot be read refuse the claim (D-58): a claim
         that might overlap them cannot be shown safe, and granting it is the
         one thing the ledger exists to prevent.
         """

@@ -15,7 +15,7 @@ properties it has to keep, whatever the field names settle as:
 
 - **Another machine's entry is never rewritten**, and neither is a key this
   version does not know. Publishing replaces exactly one entry.
-- **Unreadable bytes are refused, not replaced** (D-54). `managers/<name>.json`
+- **Unreadable bytes are refused, not replaced** (D-58). `managers/<name>.json`
   belongs to one Manager, so a corrupt one can be rewritten by its owner;
   `claims.json` holds everyone's, and replacing it would destroy other
   machines' claims to satisfy a write. The publisher declines and says so,
@@ -112,7 +112,7 @@ def published_claims(state: dict) -> dict[str, list[dict]]:
 class CannotTell:
     """The published claims could not be read, so no claim can be shown safe.
 
-    D-54's second half: the bytes are left exactly as they are, and the
+    D-58's second half: the bytes are left exactly as they are, and the
     operation that needed them is refused. A claim granted against claims it
     could not read is precisely the overlap the ledger exists to prevent."""
 
@@ -203,7 +203,7 @@ def expire_offline_claims(
     expired.
 
     A machine whose liveness cannot be established is never expired: that is
-    "cannot tell", not "gone" (D-54).
+    "cannot tell", not "gone" (D-58).
     """
     from rite_ai.coordination.heartbeat import is_stalled, liveness
     from rite_ai.coordination.message_log import LogMessage, format_message

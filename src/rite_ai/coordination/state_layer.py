@@ -53,8 +53,8 @@ is the backend's business.
    caller that does needs its own sequence number in the value.
 
 3. **A write preserves every other key.** Values are opaque bytes and the
-   layer never parses them, so D-54's first half — pass unreadable content
-   through unchanged — holds by construction. D-54's second half, failing
+   layer never parses them, so D-58's first half — pass unreadable content
+   through unchanged — holds by construction. D-58's second half, failing
    closed on the decision that needed the content, belongs to the consumer
    that tries to parse it. (For git this means read-merge-write of the whole
    tree, because a force-push replaces it. That is a git implementation

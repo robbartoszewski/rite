@@ -1,4 +1,4 @@
-"""The lease and Manager-status schemas (P2-0b), and D-55's ceiling.
+"""The lease and Manager-status schemas (P2-0b), and D-59's ceiling.
 
 §2.4.1 names the lease's four fields; §3.4 describes the status file only in
 prose. These shapes are therefore a proposal — but two behaviours in here are
@@ -47,7 +47,7 @@ class TestTheSkewMarginProtectsTheIncumbent:
 
 
 class TestTheCredibilityCeiling:
-    """D-55. The margin above protects against a fast CHALLENGER; this
+    """D-59. The margin above protects against a fast CHALLENGER; this
     protects against a fast INCUMBENT, which had no rule and read literally
     was a permanent wedge — a Manager whose clock is a day ahead holding the
     role forever, needing no malice, only a wrong clock."""
@@ -110,7 +110,7 @@ class TestUnknownFieldsSurviveAWriterThatDoesNotKnowThem:
 
 
 class TestUnreadableIsNotAbsent:
-    """D-54's half that lives here: a caller must be able to tell "could not
+    """D-58's half that lives here: a caller must be able to tell "could not
     read" from "not there". §2.4.2 step 2 treats a MISSING lease as the
     first-write case, and an unreadable one is emphatically not that."""
 
@@ -146,7 +146,7 @@ class TestRoundTripStability:
 
 
 class TestPriorityIsWrittenForAuditAndIgnoredOnRead:
-    """D-56. `coordination.managers` order is priority; the lease's own
+    """D-60. `coordination.managers` order is priority; the lease's own
     `priority` records what the holder believed at acquisition and never
     decides anything. A stale lease written before a reorder must not be
     able to override it."""

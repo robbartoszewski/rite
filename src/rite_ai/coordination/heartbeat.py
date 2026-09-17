@@ -68,7 +68,7 @@ def publish_heartbeat(
     liveness must not stop because its own file is corrupt, and the file
     belongs to it alone. The result says so — that replacement does lose
     whatever the file held. `claims.json`, which holds every machine's claims,
-    is refused instead (D-54); see `claims_state`.
+    is refused instead (D-58); see `claims_state`.
     """
     key = status_key(name)
     if not key:
@@ -104,7 +104,7 @@ class Liveness:
     missed: int | None
     """Consecutive intervals missed, or None for "cannot tell" — no status,
     unreadable bytes, or a `last_seen` this version cannot parse. Never
-    reported as stalled: refusing the decision is D-54's second half."""
+    reported as stalled: refusing the decision is D-58's second half."""
 
     detail: str = ""
 

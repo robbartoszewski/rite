@@ -119,7 +119,7 @@ def parse_message(text: str) -> LogMessage | None:
 def promotion_event(new_owner: str, previous_owner: str, reason: str) -> LogMessage:
     """§2.4.2 step 4's promotion event.
 
-    `reason` is one of `lease-expired`, `lease-not-credible` (D-55 — somebody's
+    `reason` is one of `lease-expired`, `lease-not-credible` (D-59 — somebody's
     clock is wrong, and this is where that gets said), `no-owner` (first
     election) or `handed-over` (graceful demotion)."""
     because = {
