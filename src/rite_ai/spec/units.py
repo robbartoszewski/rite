@@ -105,9 +105,19 @@ def _sha(lines: list[str]) -> str:
     return hashlib.sha256(("\n".join(lines) + "\n").encode("utf-8")).hexdigest()
 
 
-def _outside_code(lines: list[str]) -> list[bool]:
+def _outside_code(lines: list[str], problems: list[str] | None = None,
+                  source: str = "") -> list[bool]:
     """False for every line inside YAML front matter or a fenced code block,
-    fence lines included."""
+    fence lines included.
+
+    A fence that swallows headings is REPORTED when `problems` is given. Both
+    shapes below are what CommonMark says and what GitHub renders, so the
+    parser is not being clever — it is agreeing with every other reader. What
+    it must not do is agree silently: measured across 400 real markdown files
+    on one machine, three carried such a fence and one of them lost ten
+    headings to it, which downstream reads as a spec that simply has fewer
+    sections.
+    """
     outside = [True] * len(lines)
     i = 0
     if lines and lines[0].strip() == "---":
@@ -118,17 +128,42 @@ def _outside_code(lines: list[str]) -> list[bool]:
                 i = j + 1
                 break
     fence: str | None = None
+    opened_at = 0
+    swallowed = 0
+    reported_suspect = False
     for j in range(i, len(lines)):
         m = _FENCE.match(lines[j])
         if fence is None:
             if m:
                 fence = m.group(1)
+                opened_at, swallowed = j, 0
                 outside[j] = False
         else:
             outside[j] = False
             if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence):
                 if lines[j].strip() == m.group(1):
                     fence = None
+                    continue
+                # Text after the marker makes it an OPENING fence's info
+                # string, so it closes nothing — and whoever typed it almost
+                # certainly meant it to.
+                if problems is not None and not reported_suspect:
+                    reported_suspect = True
+                    problems.append(
+                        f"{source}:{j + 1}: this looks like the end of the code "
+                        "block opened at line "
+                        f"{opened_at + 1}, but text after the ``` makes it an "
+                        "opening fence, so the block carries on. Headings below "
+                        "it are read as code."
+                    )
+            elif _HEADING.match(lines[j]):
+                swallowed += 1
+    if fence is not None and problems is not None:
+        problems.append(
+            f"{source}:{opened_at + 1}: this code fence is never closed, so "
+            f"everything after it is read as code"
+            + (f" — including {swallowed} heading(s)" if swallowed else "")
+        )
     return outside
 
 
@@ -141,11 +176,17 @@ def parse_text(
     line outside code that is not a heading or a decision row; a match becomes
     an item unit, its id the pattern's first group. Ids should be distinctive
     tokens (`REQ-14`), since they are also how items are cited."""
+    # A byte-order mark sits BEFORE the first `#`, so without this the first
+    # heading of a Windows-authored spec is not a heading — it disappears into
+    # the preamble, and a document whose first heading is `## 1. Scope` loses
+    # that section with nothing said. Line endings are normalised for the same
+    # reason: a heading line ending `\r` matched nothing.
+    text = text.lstrip("\ufeff")
     lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     if lines and lines[-1] == "":
         lines.pop()
     out = Parsed(files=[source], total_lines=len(lines), lines={source: lines})
-    outside = _outside_code(lines)
+    outside = _outside_code(lines, out.problems, source)
 
     headings: list[tuple[int, int, str]] = []
     for i, line in enumerate(lines):

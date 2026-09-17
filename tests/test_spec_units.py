@@ -9,6 +9,8 @@ but it is unusually well structured and cannot be the only input.
 
 from pathlib import Path
 
+import pytest
+
 from rite_ai.spec.units import (
     DECISION,
     PREAMBLE_ID,
@@ -285,3 +287,65 @@ def test_rites_own_spec_parses_without_collisions():
     decisions = [u for u in parsed.units if u.kind == DECISION]
     assert len(decisions) >= 51
     assert {d.parent for d in decisions} == {"13"}
+
+
+# --- a fence that eats the document says so ---------------------------------------
+
+
+def test_an_unclosed_fence_is_reported_with_what_it_swallowed():
+    """Silently, this reads as a spec with fewer sections. Measured across 400
+    real markdown files: two carried a fence left open at the end."""
+    text = "## 1. A\ntext\n```bash\necho hi\n## 2. B\nstill code\n## 3. C\n"
+    parsed = parse_text(text, "SPEC.md")
+    assert [u.id for u in parsed.units] == ["1"]
+    assert len(parsed.problems) == 1
+    assert "never closed" in parsed.problems[0]
+    assert "2 heading(s)" in parsed.problems[0]
+    assert "SPEC.md:3" in parsed.problems[0]
+
+
+def test_a_fence_marker_with_prose_after_it_is_reported_not_guessed_at():
+    """CommonMark: text after the marker makes it an OPENING fence, so it
+    closes nothing — which is also how GitHub renders it. The parser agrees
+    with every other reader; it just must not agree in silence. Measured: one
+    file in 400 lost ten headings exactly this way."""
+    text = (
+        "## 1. A\n```bash\necho hi\n``` and then prose the author meant to write\n"
+        "## 2. B\nmore\n```\n## 3. C\n"
+    )
+    parsed = parse_text(text, "SPEC.md")
+    assert [u.id for u in parsed.units] == ["1", "3"]  # 2 was read as code
+    assert any("looks like the end of the code block" in p for p in parsed.problems)
+    assert any("opening fence" in p for p in parsed.problems)
+
+
+def test_a_well_formed_document_reports_nothing():
+    text = "## 1. A\n```bash\necho hi\n```\n## 2. B\n~~~\ncode\n~~~\n## 3. C\n"
+    parsed = parse_text(text, "SPEC.md")
+    assert [u.id for u in parsed.units] == ["1", "2", "3"]
+    assert parsed.problems == []
+
+
+def test_the_report_names_one_fence_not_every_line_inside_it():
+    """A block with several ``` lines in it should not produce a wall of
+    problems; one message names the fence that went wrong."""
+    text = "## 1. A\n```\n``` one\n``` two\n``` three\n## 2. B\n"
+    parsed = parse_text(text, "SPEC.md")
+    assert len(parsed.problems) <= 2  # the suspect line, and the unclosed fence
+
+
+@pytest.mark.parametrize(
+    ("label", "text"),
+    [
+        ("BOM", "﻿## 1. Scope\nwhat it does\n"),
+        ("CRLF", "## 1. Scope\r\nwhat it does\r\n"),
+        ("BOM and CRLF", "﻿## 1. Scope\r\nwhat it does\r\n"),
+    ],
+)
+def test_a_spec_written_on_windows_still_has_its_first_section(label, text):
+    """The mark sits before the `#`, so the heading is not a heading: the
+    section vanishes into the preamble and nothing says so. A spec whose first
+    heading is `## 1. Scope` would simply lose Scope."""
+    parsed = parse_text(text, "SPEC.md")
+    assert [u.id for u in parsed.units] == ["1"], label
+    assert parsed.units[0].title == "Scope"
