@@ -36,11 +36,57 @@ from __future__ import annotations
 import difflib
 import hashlib
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from rite_ai.generated_sections import Block, parse, section_hash
 
 KEPT = ("kept-edited", "kept-unknown")
+
+# Everything a refresh may write, and nothing else. `.rite/` is where a
+# project's AUTHORED content lives — the brief, modules, config, the context
+# and knowledge bases, and whatever architecture, plan or decisions a team
+# keeps beside them — and a command that regenerates instructions must not be
+# able to touch any of it. `review-checklist.md` is the one generated file in
+# there, so it is the one listed. Enforced at every write rather than trusted
+# to each call site: a surface added carelessly later fails a test instead of
+# eating someone's design notes.
+REFRESHABLE = (
+    "CLAUDE.md",
+    ".claude/agents/*",
+    ".claude/commands/*",
+    ".rite/review-checklist.md",
+    ".github/workflows/publish-gate.yml",
+    "workers/*/CLAUDE.md",
+    "workers/*/.claude/agents/*",
+    "workers/*/.claude/commands/*",
+)
+
+
+def may_refresh(root: Path, path: Path) -> bool:
+    """Whether `path` is one of the files rite generates in a project."""
+    try:
+        rel = path.resolve().relative_to(Path(root).resolve())
+    except ValueError:
+        return False
+    return any(PurePosixPath(rel.as_posix()).match(pattern) for pattern in REFRESHABLE)
+
+
+class RefusedWrite(RuntimeError):
+    """A refresh tried to write something rite does not generate."""
+
+
+def _write(root: Path, path: Path, data: bytes | str) -> None:
+    if not may_refresh(root, path):
+        raise RefusedWrite(
+            f"{path} is not a file rite generates — refusing to write it"
+        )
+    from rite_ai.state import write_atomic
+
+    if isinstance(data, bytes):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    else:
+        write_atomic(path, data)
 
 
 @dataclass
@@ -162,14 +208,21 @@ def _sha(path: Path) -> str:
 
 
 def refresh_template(
-    dest: Path, template: Path, key: str, label: str, take: frozenset[str], apply: bool
+    dest: Path,
+    template: Path,
+    key: str,
+    label: str,
+    take: frozenset[str],
+    apply: bool,
+    root: Path | None = None,
 ) -> Change | None:
     from rite_ai.update.template_history import RELEASED
 
     if not dest.exists():
         if apply:
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_bytes(template.read_bytes())
+            _write(
+                root if root is not None else dest.parent, dest, template.read_bytes()
+            )
         return Change(label, "installed")
     if _sha(dest) == _sha(template):
         return None
@@ -186,7 +239,7 @@ def refresh_template(
             ),
         )
     if apply:
-        dest.write_bytes(template.read_bytes())
+        _write(root if root is not None else dest.parent, dest, template.read_bytes())
     return Change(label, action)
 
 
@@ -223,7 +276,7 @@ def refresh_ci_workflow(root: Path, take: frozenset[str], apply: bool) -> Change
     else:
         return Change(label, "kept-edited", _diff(current, rendered))
     if apply:
-        path.write_text(rendered)
+        _write(root, path, rendered)
     return Change(label, action)
 
 
@@ -235,8 +288,6 @@ def _refresh_claude_md(
     take: frozenset[str],
     apply: bool,
 ) -> FileResult:
-    from rite_ai.state import write_atomic
-
     result = FileResult(str(path.relative_to(root)))
     if not path.is_file():
         result.note = "not found"
@@ -247,7 +298,7 @@ def _refresh_claude_md(
         return result
     new, result.changes = refresh_text(text, generated, take)
     if apply and new != text:
-        write_atomic(path, new)
+        _write(root, path, new)
         result.written = True
     return result
 
@@ -298,6 +349,7 @@ def refresh_project(
             f".claude/agents/{fname}",
             take,
             apply,
+            root,
         )
         if ch:
             files.changes.append(ch)
@@ -309,6 +361,7 @@ def refresh_project(
             f".claude/commands/{fname}",
             take,
             apply,
+            root,
         )
         if ch:
             files.changes.append(ch)
@@ -319,6 +372,7 @@ def refresh_project(
         ".rite/review-checklist.md",
         take,
         apply,
+        root,
     )
     if checklist:
         files.changes.append(checklist)
@@ -363,6 +417,7 @@ def refresh_project(
                 f"{rel}/.claude/agents/{fname}",
                 take,
                 apply,
+                root,
             )
             if ch:
                 wfiles.changes.append(ch)
@@ -373,6 +428,7 @@ def refresh_project(
             f"{rel}/.claude/commands/review.md",
             take,
             apply,
+            root,
         )
         if ch:
             wfiles.changes.append(ch)

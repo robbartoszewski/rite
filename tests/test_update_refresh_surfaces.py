@@ -11,6 +11,7 @@ import hashlib
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 from click.testing import CliRunner
 
 from rite_ai.cli.init.paths import templates_dir
@@ -245,3 +246,127 @@ class TestAWorkerFileFromAnOlderRelease:
         result = CliRunner().invoke(cli, ["update", "--files-only"])
         assert "left as it is" in result.output
         assert "Deploy on Fridays." in path.read_text()
+
+
+class TestAuthoredContentIsNeverTouched:
+    """A real project's `.rite/` holds its brief, modules, config, context and
+    knowledge base — and whatever architecture, plan and decisions the team
+    keeps beside them. Regenerating instructions must not be able to reach any
+    of it. This is the reason `rite init` refuses an initialised directory,
+    and refreshing must not become the way around that refusal."""
+
+    AUTHORED = {
+        ".rite/architecture.md": "# Architecture\n\nOur own notes.\n",
+        ".rite/plan.md": "# Plan\n\nPhase 1: the thing.\n",
+        ".rite/decisions.md": "# Decisions\n\nD-1: we chose X.\n",
+        ".rite/context/domain.md": "Billing rules.\n",
+        "SPEC.md": "# Spec\n\nDesign lives here.\n",
+    }
+
+    def _authored(self, root: Path) -> dict[str, str]:
+        for rel, text in self.AUTHORED.items():
+            path = root / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text)
+        return {
+            str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
+            for p in sorted(root.rglob("*"))
+            if p.is_file() and ".git/" not in str(p.relative_to(root))
+        }
+
+    def test_a_refresh_that_changes_things_leaves_them_byte_identical(
+        self, tmp_path, monkeypatch
+    ):
+        root = _project(tmp_path, monkeypatch)
+        before = self._authored(root)
+        # Something for the refresh to actually do.
+        (root / ".claude" / "commands" / "review.md").unlink()
+        claude = root / "CLAUDE.md"
+        claude.write_text(
+            "".join(
+                line
+                for line in claude.read_text().splitlines(keepends=True)
+                if "rite:sha256" not in line
+            )
+        )
+
+        result = CliRunner().invoke(cli, ["update", "--files-only"])
+        assert result.exit_code == 0, result.output
+
+        after = {
+            str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
+            for p in sorted(root.rglob("*"))
+            if p.is_file() and ".git/" not in str(p.relative_to(root))
+        }
+        changed = {k for k in before if before[k] != after.get(k)}
+        assert changed <= {"CLAUDE.md"}, f"refresh touched {changed}"
+        for rel in self.AUTHORED:
+            assert (root / rel).read_text() == self.AUTHORED[rel]
+
+    def test_the_allowlist_refuses_everything_rite_does_not_generate(self, tmp_path):
+        from rite_ai.update.refresh import may_refresh
+
+        root = tmp_path
+        for rel in (
+            ".rite/brief.yaml",
+            ".rite/config.yaml",
+            ".rite/modules.yaml",
+            ".rite/architecture.md",
+            ".rite/context/domain.md",
+            ".rite/kb/INDEX.md",
+            "SPEC.md",
+            "src/app.py",
+            "workers/alpha/worker.yml",
+            "workers/alpha/module/file.py",
+        ):
+            assert not may_refresh(root, root / rel), rel
+        for rel in (
+            "CLAUDE.md",
+            ".claude/commands/review.md",
+            ".claude/agents/reviewer-round1.md",
+            ".rite/review-checklist.md",
+            ".github/workflows/publish-gate.yml",
+            "workers/alpha/CLAUDE.md",
+            "workers/alpha/.claude/commands/review.md",
+        ):
+            assert may_refresh(root, root / rel), rel
+
+    def test_a_write_outside_the_allowlist_raises_rather_than_happening(self, tmp_path):
+        from rite_ai.update.refresh import RefusedWrite, _write
+
+        target = tmp_path / ".rite" / "brief.yaml"
+        target.parent.mkdir(parents=True)
+        target.write_text("project:\n  name: acme\n")
+        with pytest.raises(RefusedWrite):
+            _write(tmp_path, target, "clobbered\n")
+        assert target.read_text() == "project:\n  name: acme\n"
+
+    def test_a_dry_run_writes_nothing_at_all(self, tmp_path, monkeypatch):
+        root = _project(tmp_path, monkeypatch)
+        before = self._authored(root)
+        (root / ".claude" / "commands" / "review.md").unlink()
+        before.pop(".claude/commands/review.md", None)
+
+        result = CliRunner().invoke(cli, ["update", "--files-only", "--dry-run"])
+        assert result.exit_code == 0, result.output
+        after = {
+            str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
+            for p in sorted(root.rglob("*"))
+            if p.is_file() and ".git/" not in str(p.relative_to(root))
+        }
+        assert after == before
+
+
+def test_a_workers_own_added_section_survives(tmp_path, monkeypatch):
+    from rite_ai.workspace.manage import add_worker
+
+    root = _project(tmp_path, monkeypatch)
+    assert add_worker(root, "alpha").ok
+    path = root / "workers" / "alpha" / "CLAUDE.md"
+    path.write_text(
+        path.read_text() + "\n## Notes from my Manager\n\nUse the staging DB.\n"
+    )
+
+    result = CliRunner().invoke(cli, ["update", "--files-only"])
+    assert result.exit_code == 0, result.output
+    assert "## Notes from my Manager\n\nUse the staging DB.\n" in path.read_text()

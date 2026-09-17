@@ -179,9 +179,10 @@ class TestCopiedTemplates:
     def test_a_missing_command_is_installed(self, tmp_path: Path):
         template = tmp_path / "spec.md"
         template.write_text("new command\n")
-        dest = tmp_path / ".claude" / "commands" / "spec.md"
+        root = tmp_path / "proj"
+        dest = root / ".claude" / "commands" / "spec.md"
         ch = refresh_template(
-            dest, template, "commands/spec.md", "spec.md", frozenset(), True
+            dest, template, "commands/spec.md", "spec.md", frozenset(), True, root
         )
         assert ch.action == "installed" and dest.read_text() == "new command\n"
 
@@ -191,19 +192,33 @@ class TestCopiedTemplates:
         template = tmp_path / "review.md"
         template.write_text("current\n")
         released = b"what v0.1.0 shipped\n"
-        dest = tmp_path / "dest.md"
+        root = tmp_path / "proj"
+        dest = root / ".claude" / "commands" / "review.md"
+        dest.parent.mkdir(parents=True)
         dest.write_bytes(released)
         history = {
             "commands/review.md": frozenset({hashlib.sha256(released).hexdigest()})
         }
         with patch("rite_ai.update.template_history.RELEASED", history):
             ch = refresh_template(
-                dest, template, "commands/review.md", "review.md", frozenset(), True
+                dest,
+                template,
+                "commands/review.md",
+                "review.md",
+                frozenset(),
+                True,
+                root,
             )
             assert ch.action == "refreshed" and dest.read_text() == "current\n"
             dest.write_text("my edits\n")
             ch = refresh_template(
-                dest, template, "commands/review.md", "review.md", frozenset(), True
+                dest,
+                template,
+                "commands/review.md",
+                "review.md",
+                frozenset(),
+                True,
+                root,
             )
             assert ch.action == "kept-edited" and dest.read_text() == "my edits\n"
 
