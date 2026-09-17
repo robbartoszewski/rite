@@ -3475,6 +3475,14 @@ same thing. `show` prints a stale, hand-edited or unstamped unit rather than
 withholding it, and exits non-zero saying which: a Worker handed nothing cannot
 judge anything, and one handed drifted text with no warning cannot either.
 
+**What counts as an index is read from the spec, not remembered.** A section is
+an index because of how many units it cites, so an edit elsewhere can turn one
+into an ordinary unit — and that unit is then owed a derived file it never
+needed before. Measured on a full digest of this spec: deleting a section made
+§8.3 stop classifying as an index, and `rite spec verify` began reporting it as
+uncovered. That is the gate doing its job rather than a defect, but it means a
+verify failure can name a unit nobody touched.
+
 **The gate is a command, not a convention.** `rite spec verify` exits 0 only
 when every non-index unit is covered, nothing covers a unit the spec no longer
 has, nothing is stale, hand-edited or unstamped, and the index still matches the
