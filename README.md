@@ -64,6 +64,14 @@ You write the design, or you already have one. `rite init` looks for
 `SPEC.md`, `DESIGN.md`, `ARCHITECTURE.md` or a `docs/`, `adr/`, `rfcs/` or
 `design/` directory and offers to point workers at what it finds;
 `rite spec add <path>` adds one later, for workers created after that.
+
+On a spec too large to read whole, `rite spec index` turns it into addressable
+units and `rite spec slice 5.3` prints just that section, what it cites and the
+sections everything depends on — around 9% of rite's own 4000-line spec. It
+refuses specs a slice cannot help: a short or densely interlinked document is
+cheaper read whole. When a slice was not enough, `rite handover write
+--spec-fallback 5.3` records it, and `rite spec status` reports how often that
+happens — the only signal that the slices need to be bigger.
 Worker sessions get the path, never a copy, and read what their ticket needs.
 Beyond one scan at init for how the spec cites decisions, rite does not read
 it, so it cannot tell you whether it is current. A sandboxed worker cannot read

@@ -399,6 +399,10 @@ AUTHORED_CONFIG = (
     ".rite/.schema_version",
     ".rite/context/",
     ".rite/kb/",
+    # The digest: derived unit files and the index they are checked against.
+    # Committed, because a Worker on another machine reads them; the
+    # telemetry that measures them is runtime state and stays ignored.
+    ".rite/spec/",
 )
 
 # Everything else under `.rite/` is runtime state, and it is ignored by

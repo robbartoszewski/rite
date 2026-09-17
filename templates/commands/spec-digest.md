@@ -33,7 +33,9 @@ change to the spec, and it is the user's decision.
    tampered with (its body no longer matches its recorded hash). Work only on
    those. A unit that is none of these is still valid, and so is its last review.
 
-3. **Write each new or stale unit** at the path `rite spec status` names.
+3. **Write each new or stale unit** at the path `rite spec status` prints beside
+   it — a unit id is not a file name, so use the path it gives rather than
+   deriving one.
 
    - Say what the source says, in fewer words, **without changing what it
      means.** Keep every qualifier, every ⚠, every "unless" and "only when"; a
@@ -46,9 +48,19 @@ change to the spec, and it is the user's decision.
    - Set `covers` to every source unit id the body represents. Merging two tiny
      adjacent sections into one unit, or splitting a long one, is fine — say so
      in `covers`, and cover everything.
-   - **Do not write `source_sha` or `body_sha` yourself.** `rite spec index`
-     records them from the files. A hash typed by hand is a guess, and the gate
-     treats it as one.
+   - **Quote `id` and every entry in `covers`.** Unquoted, YAML reads `8.10` as
+     the number 8.1 — a different section. Write `id: '8.10'`.
+   - **Do not write `source_sha` or `body_sha` yourself.** Leave them empty and
+     stamp the file once its body is final:
+
+     ```
+     rite spec stamp 5.3 2.4/promotion
+     ```
+
+     A hash typed by hand is a guess, and the gate treats it as one. Stamping is
+     its own step rather than something `rite spec index` does, because a stamp
+     applied automatically would bless a spec change nobody read and a hand edit
+     nobody made.
    - Delete the unit file for anything `rite spec status` reports as removed.
 
 4. **Round 1 — each unit against its own source.** For every unit you wrote or

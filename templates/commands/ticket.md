@@ -8,6 +8,24 @@ Work ticket `$ARGUMENTS` end to end.
    `.rite/config.yaml`). If it isn't complete enough to start cold — no
    definition of done, no clear scope — say so and stop rather than guessing.
 
+   If it cites the project spec (`§5.3`, `D-31`), read those parts rather than
+   the whole document:
+
+   ```
+   rite spec slice 5.3 --worker <your-name>
+   ```
+
+   It prints the section, what it cites and the sections everything depends on.
+   **If that was not enough and you read the whole spec anyway, say so** when
+   you write your handover:
+
+   ```
+   rite handover write --spec-fallback 5.3 ...
+   ```
+
+   Nobody can see a slice that came up short; the count is the only evidence
+   that the slices need to be bigger.
+
 2. **Prepare your workspace** — right repos, right branches, no residue
    from a previous task (SPEC §2.1):
 

@@ -2540,6 +2540,21 @@ rite kb add --full <url>           # snapshot full content (licensing warning)
 rite kb refresh                    # re-fetch all link snapshots, show diff
 rite kb list                       # list KB entries with source and fetch date
 
+rite spec add <path>               # point Workers at a design document (§9.13)
+rite spec remove <path>            # stop pointing at one
+
+rite spec index                    # inventory the spec's units and write
+                                    #   .rite/spec/index.json; refuses a spec a slice
+                                    #   cannot help (§9.13.2)
+rite spec status                   # which units have no derived file, which are stale,
+                                    #   hand-edited or never stamped, and how often a
+                                    #   slice was not enough
+rite spec slice <unit>             # print one unit, what it cites and the pinned hubs.
+                                    #   Slice on stdout, measurement on stderr, so a
+                                    #   Worker cannot read the measurement as spec text
+rite spec stamp <unit>... | --all  # record on each derived file the spec it was
+                                    #   written from
+
 rite start [<dir>]                 # bring rite up — Claude app setup, scheduled tasks
 rite stop [<dir>]                  # shut down with handover — ticket comment, board update
 
@@ -3404,6 +3419,58 @@ told a session to write a spec, and nothing would have registered one it wrote.
 
 Planning work from a spec, and turning a plan into tickets, are not built. `/spec`
 stops at the spec.
+
+#### 9.13.2. The spec digest: loading part of a spec
+
+Pointing a Worker at a 4000-line spec and telling it to read what it needs is a
+budget, not a mechanism. The digest turns the spec into addressable units and
+gives a Worker the one its ticket names, plus what that unit depends on.
+
+**Units.** A numbered heading is its number (`5.3.3`); an unnumbered one is a
+slug path under its parent (`2.4/promotion`); each row of the decision register
+is its own unit (`D-31`), because a register that is one unit is the whole
+register on every retrieval. Headings inside fenced code and front matter are
+not units. `rite spec index` writes the inventory to `.rite/spec/index.json`,
+which is committed.
+
+**A slice is an under-approximation, on purpose.** Following every reference
+transitively loads 71.5% of rite's own spec at the median — the monolith the
+digest exists to avoid. A slice is the unit, what it cites at depth 1, and the
+pinned hubs, which is 9.3% at p90. **Hub pinning is what makes depth 1 viable:**
+the top 8 sections by in-degree are loaded whatever the target, and without them
+a Worker following references by hand rebuilds most of the document anyway.
+Index sections — the ones that cite 15 or more units and say little themselves —
+are neither traversed into nor sliceable: nobody's ticket is a table of contents.
+
+**A spec that should not be digested is refused, before anything is written.**
+When the projected p90 slice is above `spec.refuse_above` (0.25), or the
+document has no headings, `rite spec index` says so and exits non-zero. Reading
+a small or densely interlinked spec whole is cheaper than maintaining a digest
+of it, and that is a supported outcome rather than a failure to work around.
+
+**Derived units are stamped, never self-certifying.** `/spec-digest` writes one
+file per unit under `.rite/spec/units/`, then `rite spec stamp` records a hash
+of the source it covers and of its own body. Stamping is a separate command
+rather than something `rite spec index` does, because an automatic restamp would
+bless both a source change nobody had read and a hand edit nobody had made —
+after which nothing would ever read as stale or tampered again. `rite spec
+status` reports both, by file name.
+
+**The insufficiency rate is not optional.** A slice that was not enough is
+invisible: the Worker reads the whole spec and the digest looks like it worked.
+So `rite spec slice` records every retrieval, `rite handover write
+--spec-fallback <unit>` records every fallback, and `rite spec status` reports
+fallbacks over retrievals for the last 7 days. **No data is reported as no data,
+never as 0%** — a feature nobody used and a feature that always worked are
+opposite readings, and only one of them justifies leaving the depth at 1. The
+rate is the evidence for `spec.slice_depth: 2` or for pinning more hubs; without
+it the depth is a guess defended by argument.
+
+**What it cannot do.** Classification is structural, so a section that reads
+like an index without citing like one is not detected (in rite's own spec, §8.3
+is classified as an index and is not one). A spec with few explicit
+cross-references produces small slices whose dependencies are real and simply
+unwritten — the rate is what surfaces that, not the slice.
 
 ## 10. Credentials
 

@@ -185,8 +185,9 @@ def _tracked_runtime_state(root: Path) -> list[str]:
         return []
 
     def _is_shared(path: str) -> bool:
-        # Two AUTHORED_CONFIG entries are DIRECTORIES (`.rite/context/`,
-        # `.rite/kb/`), and a prefix match calls everything inside them
+        # Three AUTHORED_CONFIG entries are DIRECTORIES (`.rite/context/`,
+        # `.rite/kb/`, `.rite/spec/`), and a prefix match calls everything
+        # inside them
         # shared. That is right for their contents and wrong for the one
         # thing in them that is not content: the `<name>.lock` sidecar
         # `rite_ai.state.locked()` flocks. Without this, a project that had
@@ -4022,6 +4023,288 @@ def _report_spec_refresh(root: Path, config) -> None:
         click.echo(f"  updated {rel}")
     for note in result.skipped:
         click.echo(f"  not updated: {note}")
+
+
+# --- The spec digest: one derived file per spec unit ---
+
+
+def _spec_root_and_config():
+    """The project root and its config, or exit saying the spec is not set up."""
+    root, config = _load_config_for_write()
+    if not config.spec.paths:
+        click.echo("no spec registered — run `rite spec add <path>` first", err=True)
+        raise SystemExit(1)
+    return root, config
+
+
+def _parse_spec(root: Path, config):
+    """Every registered spec file, parsed into units."""
+    from rite_ai.spec.units import parse_paths
+
+    parsed = parse_paths(root, config.spec.paths, config.spec.extra_units)
+    if not parsed.files:
+        click.echo(
+            "the registered spec paths hold no markdown file: "
+            + ", ".join(config.spec.paths),
+            err=True,
+        )
+        raise SystemExit(1)
+    for problem in parsed.problems:
+        click.echo(f"  {problem}", err=True)
+    return parsed
+
+
+def _spec_graph(parsed, config):
+    from rite_ai.spec.graph import build_graph, classify
+
+    graph = build_graph(parsed)
+    return graph, classify(graph, pin_count=config.spec.pin_count)
+
+
+@spec.command("index")
+def spec_index() -> None:
+    """Inventory the spec's units, and say whether it is worth digesting.
+
+    Writes `.rite/spec/index.json` — every unit, where it starts and ends,
+    and a hash of its text — then reports what a Worker would load for one
+    unit. A spec small or dense enough that a slice is most of it is
+    refused: reading it whole is cheaper than maintaining a digest of it.
+
+    Examples:
+      rite spec index
+    """
+    from rite_ai.spec.index_file import from_parsed, write_index
+    from rite_ai.spec.report import decomposition_report
+    from rite_ai.spec.report import render as render_report
+
+    root, config = _spec_root_and_config()
+    parsed = _parse_spec(root, config)
+    path = write_index(root, from_parsed(parsed))
+    click.echo(f"wrote {path.relative_to(root)} — {len(parsed.units)} unit(s)")
+    report = decomposition_report(
+        parsed,
+        refuse_above=config.spec.refuse_above,
+        pin_count=config.spec.pin_count,
+        slice_depth=config.spec.slice_depth,
+    )
+    click.echo(render_report(report))
+    if not report.decomposes:
+        raise SystemExit(1)
+
+
+@spec.command("status")
+def spec_status() -> None:
+    """What the digest covers, what has drifted, and whether slices are enough.
+
+    Reports four things that are invisible otherwise: units with no derived
+    file yet, derived files whose source has changed since they were
+    stamped, files edited by hand, and how often a Worker had to fall back
+    to the whole spec anyway.
+
+    Examples:
+      rite spec status
+    """
+    from rite_ai.spec.digest_files import digest_status, unit_filename, units_dir
+    from rite_ai.spec.index_file import ABSENT, UNREADABLE, from_parsed, read_index
+    from rite_ai.spec.telemetry import insufficiency_rate
+
+    root, config = _spec_root_and_config()
+    parsed = _parse_spec(root, config)
+    units = {u.id: u for u in parsed.units}
+    _, kinds = _spec_graph(parsed, config)
+
+    read = read_index(root)
+    if read.status == UNREADABLE:
+        click.echo(f"index: unreadable — {read.error}")
+        click.echo("  run `rite spec index` to write it again")
+    elif read.status == ABSENT:
+        click.echo("index: not written yet — run `rite spec index`")
+    elif read.index != from_parsed(parsed):
+        click.echo("index: out of date with the spec — run `rite spec index`")
+    else:
+        click.echo(f"index: current — {len(units)} unit(s)")
+
+    status = digest_status(root, units, kinds)
+    click.echo(f"digest: {status.files} derived file(s)")
+    for label, entries in (
+        ("no derived file yet", status.new),
+        ("stale (the spec changed under them)", status.stale),
+        ("cover units the spec no longer has", status.removed),
+        ("edited by hand since stamping", status.tampered),
+        ("never stamped", status.unstamped),
+        ("not readable as unit files", status.unreadable),
+    ):
+        if entries:
+            click.echo(f"  {label}: {len(entries)}")
+            for entry in sorted(entries)[:20]:
+                # A unit id is not its file name (`2.4/promotion` cannot be a
+                # path), so the thing to write is spelled out rather than left
+                # for the reader to derive.
+                if entries is status.new:
+                    where = (units_dir(root) / unit_filename(entry)).relative_to(root)
+                    click.echo(f"    {entry} → {where}")
+                else:
+                    click.echo(f"    {entry}")
+            if len(entries) > 20:
+                click.echo(f"    … and {len(entries) - 20} more")
+    if status.clean:
+        click.echo("  every unit covered, stamped and current")
+    click.echo(insufficiency_rate(root).describe())
+
+
+@spec.command("slice")
+@click.argument("unit")
+@click.option(
+    "-w",
+    "--worker",
+    default="",
+    help="Which worker is reading it, recorded with the retrieval.",
+)
+@click.option(
+    "--depth",
+    type=int,
+    default=None,
+    help="How far to follow references. Overrides spec.slice_depth in config.yaml.",
+)
+def spec_slice(unit: str, worker: str, depth: int | None) -> None:
+    """Print what a Worker needs to read for UNIT, and nothing more.
+
+    UNIT is a section number, a slug path or a decision id: `5.3`,
+    `scope/non-goals`, `D-12`. The output is the unit, what it references,
+    and the sections everything depends on — the hubs — which is a fraction
+    of the spec. Each run is counted, so that `rite spec status` can say
+    how often a slice was not enough.
+
+    Examples:
+      rite spec slice 5.3
+      rite spec slice D-12 --worker alpha
+    """
+    from rite_ai.spec.slice import NotATarget, compute_slice
+    from rite_ai.spec.telemetry import record_retrieval
+
+    root, config = _spec_root_and_config()
+    parsed = _parse_spec(root, config)
+    graph, kinds = _spec_graph(parsed, config)
+    try:
+        computed = compute_slice(
+            graph,
+            kinds,
+            unit,
+            parsed.total_lines,
+            depth=config.spec.slice_depth if depth is None else depth,
+        )
+    except NotATarget as e:
+        click.echo(str(e), err=True)
+        raise SystemExit(1) from e
+    except ValueError as e:
+        # A depth the domain refuses is a usage error, and a traceback would
+        # bury the sentence that says which depths are allowed.
+        click.echo(str(e), err=True)
+        raise SystemExit(2) from e
+
+    # A section's range covers the subsections inside it, and a slice can hold
+    # both. Printed once: a Worker reading the same paragraph twice under two
+    # headings has no way to tell it is one paragraph.
+    shown: set[tuple[str, int]] = set()
+    for unit_id in computed.units + computed.pinned:
+        found = graph.units.get(unit_id)
+        if found is None:
+            continue
+        lines = parsed.lines.get(found.source, [])
+        wanted = [
+            n
+            for n in range(found.start, found.end + 1)
+            if (found.source, n) not in shown
+        ]
+        if not wanted:
+            continue
+        shown.update((found.source, n) for n in wanted)
+        click.echo(f"# {unit_id} ({found.source}:{found.start}-{found.end})")
+        click.echo("\n".join(lines[n - 1] for n in wanted).rstrip())
+        click.echo("")
+    record_retrieval(root, unit, worker=worker, slice_ratio=computed.ratio)
+    # On stderr: the slice itself is what a Worker pipes or reads, and a
+    # measurement inside it would read as part of the spec.
+    click.echo(
+        f"{computed.lines} of {computed.total_lines} line(s), "
+        f"{computed.ratio:.1%} of the spec "
+        f"({len(computed.units)} unit(s), {len(computed.pinned)} pinned)",
+        err=True,
+    )
+    click.echo(
+        "if this was not enough, record it: "
+        f"rite handover write --spec-fallback {unit}",
+        err=True,
+    )
+
+
+@spec.command("stamp")
+@click.argument("units", nargs=-1)
+@click.option(
+    "--all", "all_", is_flag=True, help="Stamp every derived file that needs it."
+)
+def spec_stamp(units: tuple[str, ...], all_: bool) -> None:
+    """Record, on each derived file, the spec it was written from.
+
+    Run after writing a derived unit's text. The stamp is what later tells
+    a stale file from a current one and a hand-edited one from a generated
+    one, so it is a deliberate step: stamping on every index run would
+    bless a spec change nobody had read and a hand edit nobody had made.
+
+    Examples:
+      rite spec stamp 5.3
+      rite spec stamp --all
+    """
+    from rite_ai.spec.digest_files import (
+        UnitFile,
+        read_unit_file,
+        read_unit_files,
+        stamp,
+        unit_filename,
+        units_dir,
+    )
+
+    if bool(units) == all_:
+        click.echo("name the unit(s) to stamp, or pass --all", err=True)
+        raise SystemExit(2)
+    root, config = _spec_root_and_config()
+    parsed = _parse_spec(root, config)
+    by_id = {u.id: u for u in parsed.units}
+
+    targets: list[UnitFile] = []
+    failed = False
+    if all_:
+        targets, problems = read_unit_files(root)
+        for problem in problems:
+            click.echo(problem, err=True)
+            failed = True
+    else:
+        for unit_id in units:
+            path = units_dir(root) / unit_filename(unit_id)
+            if not path.exists():
+                click.echo(
+                    f"{unit_id}: no derived file at "
+                    f"{path.relative_to(root)} — write it first",
+                    err=True,
+                )
+                failed = True
+                continue
+            read = read_unit_file(path)
+            if isinstance(read, str):
+                click.echo(read, err=True)
+                failed = True
+                continue
+            targets.append(read)
+
+    for target in targets:
+        result = stamp(target, by_id)
+        if isinstance(result, str):
+            click.echo(result, err=True)
+            failed = True
+        else:
+            click.echo(f"stamped {result.path.relative_to(root)} ({result.id})")
+    if failed:
+        raise SystemExit(1)
 
 
 # --- Worker sandboxing (SPEC §5.3, D-26, D-30, D-31) ---

@@ -201,8 +201,22 @@ class TestSpecCommands:
     def test_there_is_no_list_command(self):
         """`rite doctor` already prints every configured path while
         checking it resolves; a second command doing the same read is CLI
-        surface that has not earned its place."""
-        assert set(cli.commands["spec"].commands) == {"add", "remove"}
+        surface that has not earned its place.
+
+        The set is pinned, not just `list` — every addition to this group
+        should have to say why it is not doctor's job."""
+        commands = set(cli.commands["spec"].commands)
+        assert "list" not in commands
+        assert commands == {
+            # pointing at a spec
+            "add",
+            "remove",
+            # digesting one: each does something doctor cannot
+            "index",
+            "status",
+            "slice",
+            "stamp",
+        }
 
 
 class TestDoctorChecksThePointersResolve:
