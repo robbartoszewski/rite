@@ -43,6 +43,8 @@ import fcntl
 import json
 import os
 import tempfile
+import threading
+import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -147,7 +149,18 @@ def exclusion_holds(directory: Path) -> bool:
     returns False: this answers "can rite rely on exclusion here", and
     "I could not find out" is not a yes.
     """
-    probe = directory / ".rite-flock-probe"
+    # A probe file UNIQUE TO THIS CALL. It used to be one fixed name,
+    # `.rite-flock-probe`, deleted in the `finally` below — so two probes of
+    # the same directory at once raced: one deleted the file while the other
+    # was mid-probe, the other's second `open()` then created a NEW inode,
+    # its lock was granted, and it reported that flock does not exclude on a
+    # disk where it does. Measured: eight concurrent probers produced a
+    # false "does not exclude" in two trials of three. It fires on ordinary
+    # use — several workers running `rite claim` at once each construct a
+    # ledger and probe `.rite/` — and printed "run one worker at a time".
+    probe = directory / (
+        f".rite-flock-probe-{os.getpid()}-{threading.get_ident()}-{uuid.uuid4().hex}"
+    )
     try:
         directory.mkdir(parents=True, exist_ok=True)
         first = open(probe, "a+")  # noqa: SIM115
