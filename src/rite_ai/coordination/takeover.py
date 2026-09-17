@@ -41,7 +41,11 @@ from datetime import datetime
 from pathlib import Path
 
 from rite_ai.coordination.claims_state import CLAIMS_KEY, published_claims
-from rite_ai.coordination.message_log import format_message, promotion_event
+from rite_ai.coordination.message_log import (
+    LogMessage,
+    format_message,
+    promotion_event,
+)
 from rite_ai.coordination.state_layer import Absent, StateLayer, Unavailable
 
 
@@ -55,6 +59,13 @@ class ToldTheBoard:
     queued: list[str] = field(default_factory=list)
     """Tickets whose handover could not reach the backend and was queued —
     the board still says what it said before. Named, not counted."""
+
+
+@dataclass
+class Refused:
+    """The trigger's own precondition did not hold. Nothing was touched."""
+
+    reason: str
 
 
 @dataclass
@@ -76,22 +87,85 @@ def hand_over_outgoing_owner(
     `promotion_reason` is `message_log`'s vocabulary: `lease-expired`,
     `lease-not-credible` (D-55), `no-owner`, `handed-over`.
     """
-    from rite_ai.lifecycle.commands import perform_handover
-
     reason = f"owner lease expired, promoted by {new_owner}"
 
-    claims = _claims_of(layer, previous_owner)
+    return hand_over_machines_work(
+        root,
+        layer,
+        machine=previous_owner,
+        reason=reason,
+        record=promotion_event(new_owner, previous_owner, promotion_reason),
+    )
+
+
+def hand_over_stalled_manager(
+    root: Path,
+    layer: StateLayer,
+    *,
+    owner: str,
+    stalled: str,
+    now: datetime,
+    interval_minutes: int,
+    stall_threshold: int,
+):
+    """D-14's SECOND trigger: the Owner, on a stalled Manager's behalf.
+
+    The stall is re-established here rather than trusted from the caller. A
+    handover performed on a Manager that is merely quiet takes work away
+    from a machine that is still doing it, and the caller's idea of "stalled"
+    may be several ticks old.
+
+    "Cannot tell" is never stalled (D-54, §3.4). No heartbeat at all is the
+    same answer: a Manager that has never published one may be a machine
+    that was never set up, and stripping tickets off the board on that basis
+    would be a guess with consequences.
+    """
+    from rite_ai.coordination.heartbeat import is_stalled, liveness
+
+    live = liveness(layer, stalled, now=now, interval_minutes=interval_minutes)
+    if not live.known:
+        return Refused(f"cannot tell whether {stalled} is stalled: {live.detail}")
+    if not is_stalled(live, stall_threshold=stall_threshold):
+        return Refused(
+            f"{stalled} is not stalled ({live.missed} missed, "
+            f"threshold {stall_threshold})"
+        )
+
+    reason = f"manager stalled, handed over by {owner}"
+    missed = live.missed
+    record = LogMessage(
+        kind="handover",
+        subject=f"{owner} handed over {stalled}'s work ({missed} intervals missed)",
+        fields={"Manager": owner, "Stalled": stalled, "Missed": str(live.missed)},
+    )
+    return hand_over_machines_work(
+        root, layer, machine=stalled, reason=reason, record=record
+    )
+
+
+def hand_over_machines_work(
+    root: Path,
+    layer: StateLayer,
+    *,
+    machine: str,
+    reason: str,
+    record: LogMessage,
+):
+    """The one path both triggers use (D-14: "do not write a second handover
+    path", and that applies to the cross-machine wrapper too, not only to
+    `perform_handover` itself)."""
+    from rite_ai.lifecycle.commands import perform_handover
+
+    claims = _claims_of(layer, machine)
     if isinstance(claims, Unknown):
         return claims
 
-    logged = layer.append_message(
-        format_message(promotion_event(new_owner, previous_owner, promotion_reason))
-    )
+    logged = layer.append_message(format_message(record))
     if isinstance(logged, Unavailable):
         # No record, no action. The board is left exactly as it is.
-        return Unknown(f"the promotion could not be recorded: {logged.reason}")
+        return Unknown(f"the handover could not be recorded: {logged.reason}")
 
-    told = ToldTheBoard(previous_owner, reason)
+    told = ToldTheBoard(machine, reason)
     seen: set[str] = set()
     for claim in claims:
         ticket = str(claim.get("ticket") or "")
@@ -104,7 +178,7 @@ def hand_over_outgoing_owner(
         seen.add(ticket)
         result = perform_handover(
             root,
-            worker=f"{previous_owner}/{worker}" if worker else previous_owner,
+            worker=f"{machine}/{worker}" if worker else machine,
             reason=reason,
             ticket=ticket,
         )
