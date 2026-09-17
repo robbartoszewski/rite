@@ -294,8 +294,19 @@ are reported rather than guessed at.
 
 **The CI workflow's pin moves with it.** A workflow written by an older rite
 keeps installing that rite in CI, which is the layer SPEC §11.5.1 calls
-load-bearing. Refreshing it updates the pin; an edited one is left alone, and
-an absent one is reported rather than reinstated.
+load-bearing. Refreshing it updates the pin; an edited one is left alone, and an
+absent one is reported rather than reinstated.
+
+**rite's `.gitignore` lines are topped up.** The block rite writes grows between
+releases, and a project missing a line tracks runtime state it should not — what
+`rite doctor` calls "git tracks runtime state". The refresh appends only the
+lines this version ships that your file lacks: nothing is rewritten, reordered
+or removed, and a project that committed its knowledge base stays that way. One
+consequence worth knowing: a rite line you deleted deliberately comes back.
+
+**The pre-push hook is not part of this.** `rite publish install-hook` installs
+it and `rite doctor` says when the gate will not run on push, so a files
+refresh does not write inside `.git/`.
 
 ## If the pre-push hook doesn't install
 
