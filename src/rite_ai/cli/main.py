@@ -710,6 +710,7 @@ def _doctor_report(problems: list[str]) -> None:
             click.echo(f"config: {err.file}: {err.message}")
             problems.append(f"config {err.file}: {err.message}")
     else:
+        from rite_ai.coordination.config_check import coordination_problems
         from rite_ai.sandbox import is_installed, verify_sandbox
         from rite_ai.schedule import validate_schedule
 
@@ -822,9 +823,16 @@ def _doctor_report(problems: list[str]) -> None:
             ):
                 click.echo(notice)
 
-        # Phase 2 (P2-1e). Only once a coordination remote is configured: the
-        # probe pushes, so a single-machine project must never run it.
+        # Phase 2. Settings that cannot work are reported whether or not a
+        # remote is set: half a `coordination:` block does not fail, it
+        # silently never elects anybody.
         coordination = project.config.coordination
+        for problem in coordination_problems(coordination):
+            click.echo(problem)
+            problems.append(problem)
+
+        # P2-1e. Only once a coordination remote is configured: the probe
+        # pushes, so a single-machine project must never run it.
         if coordination.remote:
             with _doctor_check("coordination remote", problems):
                 from rite_ai.coordination.remote_probe import probe_force_push
