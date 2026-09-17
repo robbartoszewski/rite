@@ -41,6 +41,14 @@ from rite_ai.spec.units import DECISION, PREAMBLE_ID, SECTION, Parsed
 
 DEFAULT_REFUSE_ABOVE = SpecConfig().refuse_above
 
+# Above this share of units citing nothing, a ✓ is qualified rather than
+# plain. Between the measured populations: rite's own spec sits at 39%, and
+# every design document measured that was written without a citation gate sat
+# at 73% or above. Not a config key — it does not change what the digest DOES,
+# only how far the verdict can be trusted, and a project that could tune it
+# would be tuning away the warning.
+SPARSE_ABOVE = 0.60
+
 
 def _p(values: list[float], q: float) -> float:
     ordered = sorted(values)
@@ -63,6 +71,11 @@ class Report:
     decomposes: bool
     reason: str
     problems: tuple[str, ...] = field(default=())
+    # Units that cite nothing at all, and the share of sliceable units they
+    # are. A small slice means two opposite things depending on this number,
+    # which is why the verdict carries it.
+    unlinked: int = 0
+    unlinked_share: float = 0.0
 
 
 def decomposition_report(
@@ -83,6 +96,7 @@ def decomposition_report(
     hubs = tuple(u for u in graph.units if kinds[u] == HUB)
     indexes = tuple(u for u in graph.units if kinds[u] == INDEX)
     targets = [u for u in graph.units if kinds[u] != INDEX]
+    unlinked = [u for u in targets if not graph.citations.get(u)]
 
     def build(p50, p90, decomposes, reason) -> Report:
         return Report(
@@ -102,6 +116,8 @@ def decomposition_report(
             decomposes=decomposes,
             reason=reason,
             problems=tuple(parsed.problems),
+            unlinked=len(unlinked),
+            unlinked_share=len(unlinked) / len(targets) if targets else 0.0,
         )
 
     # Text before the first heading is a unit too, so a document with no
@@ -149,6 +165,24 @@ def render(report: Report) -> str:
         lines.append(f"projected slice: p50 {report.p50:.1%}, p90 {report.p90:.1%}")
     if report.decomposes:
         lines.append(f"✓ this spec decomposes — {report.reason}")
+        if report.unlinked_share >= SPARSE_ABOVE:
+            # Measured, not guessed. rite's own spec — written under a gate
+            # that requires cross-references — leaves 39% of its units citing
+            # nothing. Seven real design documents written WITHOUT such a gate
+            # measured 73%, 77%, 86%, 100%, 100%, and their p90 slices came out
+            # SMALLER than rite's 9.1%: 0.9%–8.7%. That is not a better
+            # decomposition, it is an emptier graph. Saying ✓ and stopping
+            # would sell the emptiness as a result.
+            lines.append(
+                f"⚠ but {report.unlinked_share:.0%} of its units cite nothing "
+                f"({report.unlinked} of them). The slices are small because "
+                "little references anything, not because the references are "
+                "covered — a unit that cites nothing gets itself and the pinned "
+                "hubs whatever it actually depends on. Treat this ✓ as "
+                "provisional and watch the insufficiency rate in "
+                "`rite spec status`; if it is high, the dependencies are real "
+                "and unwritten, and writing them into the spec is what fixes it."
+            )
     else:
         lines.append(
             f"✗ this spec does not decompose — {report.reason}. Point Workers at the "

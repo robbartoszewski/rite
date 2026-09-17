@@ -3471,6 +3471,19 @@ that — and it exits **3** when it could not run at all, so a script cannot rea
 one unit covered by two derived files; by default that is allowed, because
 merging and splitting units is how a digest is written.
 
+**A small slice means two opposite things, and the verdict says which.**
+rite's own spec has had a gate requiring `§N` and `D-n` cross-references for
+months, so its graph is dense: 39% of its units cite nothing. Seven real design
+documents from other projects, written with no such gate, measured 73%, 77%,
+86%, 100%, 100% — and their projected slices came out SMALLER than rite's
+(0.9%-8.7% at p90 against 9.1%). That is not a better decomposition, it is an
+emptier graph: a unit that cites nothing gets itself and the pinned hubs
+whatever it actually depends on. So above 60% unlinked — between the two
+measured populations — the ✓ is printed qualified, naming the share and
+pointing at the insufficiency rate, which is the only thing that can tell a
+small-and-sufficient slice from a small-and-empty one. It is deliberately not
+a config key: a project that could tune it would be tuning away the warning.
+
 **The insufficiency rate is not optional.** A slice that was not enough is
 invisible: the Worker reads the whole spec and the digest looks like it worked.
 So `rite spec slice` records every retrieval, `rite handover write

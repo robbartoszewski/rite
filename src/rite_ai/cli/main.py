@@ -4142,7 +4142,7 @@ def spec_status() -> None:
     """
     from rite_ai.spec.digest_files import digest_status, unit_filename, units_dir
     from rite_ai.spec.index_file import ABSENT, UNREADABLE, from_parsed, read_index
-    from rite_ai.spec.report import decomposition_report
+    from rite_ai.spec.report import SPARSE_ABOVE, decomposition_report
     from rite_ai.spec.telemetry import insufficiency_rate
 
     root, config = _spec_root_and_config()
@@ -4172,6 +4172,12 @@ def spec_status() -> None:
         # the refusal and moved on has no other reminder: everything below
         # would otherwise read as ordinary work waiting to be done.
         click.echo(f"this spec should not be digested — {report.reason}")
+    elif report.unlinked_share >= SPARSE_ABOVE:
+        click.echo(
+            f"{report.unlinked_share:.0%} of this spec's units cite nothing, so "
+            "its slices are small for a reason that is not coverage — the rate "
+            "below is the evidence that matters here"
+        )
 
     status = digest_status(root, units, kinds)
     click.echo(f"digest: {status.files} derived file(s)")
