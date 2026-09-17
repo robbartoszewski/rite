@@ -27,7 +27,10 @@ import subprocess
 import time
 from pathlib import Path
 
-from election_harness import overlapping_owners, ownership_runs
+import pytest
+
+from election_harness import open_layer, overlapping_owners, ownership_runs
+from kv_backend import start_store
 
 ACTORS = 4
 SECONDS = 15.0
@@ -36,11 +39,10 @@ SECONDS = 15.0
 def _manager_actor(args):
     """One Manager, ticking until the run ends, logging every moment it
     believed it held the role."""
-    remote, cache, name, managers, t0, log_path, pause_at = args
+    spec, name, managers, t0, log_path, pause_at = args
 
     from election_harness import clock_for
     from rite_ai.config.models import CoordinationConfig, HeartbeatConfig
-    from rite_ai.coordination.git_backend import GitStateLayer
     from rite_ai.coordination.lease import OwnerLeaseHolder
     from rite_ai.coordination.monitor import ManagerMonitor
     from rite_ai.coordination.schemas import parse_timestamp
@@ -48,13 +50,11 @@ def _manager_actor(args):
     clock = clock_for(t0)
     config = CoordinationConfig(
         managers=list(managers),
-        remote=remote,
+        remote="",  # the layer is already built; nothing here re-derives it
         owner_lease_minutes=15,
         skew_tolerance_seconds=60,
     )
-    holder = OwnerLeaseHolder(
-        GitStateLayer(remote, cache), name, config, clock=clock
-    )
+    holder = OwnerLeaseHolder(open_layer(spec), name, config, clock=clock)
     monitor = ManagerMonitor(
         holder, heartbeat=HeartbeatConfig(interval_minutes=10, stall_threshold=3)
     )
@@ -90,9 +90,36 @@ def _manager_actor(args):
     return len(rows)
 
 
-def test_four_managers_four_processes_never_overlap(tmp_path):
-    remote = tmp_path / "remote.git"
-    subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
+@pytest.fixture(params=["git", "kv"])
+def specs(request, tmp_path):
+    """One shared store, and a layer description per actor.
+
+    Two stores, because "exactly one Owner" is the claim the whole design
+    exists to make and it must not rest on one implementation. The key-value
+    store shares nothing with git: separate process, socket, per-key
+    compare-and-set, no refs.
+    """
+    if request.param == "git":
+        remote = tmp_path / "remote.git"
+        subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
+        yield [
+            (
+                "rite_ai.coordination.git_backend",
+                "GitStateLayer",
+                (str(remote), str(tmp_path / f"cache-{i}")),
+            )
+            for i in range(ACTORS)
+        ]
+        return
+    server, port = start_store()
+    try:
+        yield [("kv_backend", "KeyValueStateLayer", (port,)) for _ in range(ACTORS)]
+    finally:
+        server.kill()
+        server.wait(timeout=5)
+
+
+def test_four_managers_four_processes_never_overlap(specs, tmp_path):
     logs = tmp_path / "logs"
     logs.mkdir()
 
@@ -102,8 +129,7 @@ def test_four_managers_four_processes_never_overlap(tmp_path):
     pauses = {1: (3.0, 7.0), 0: (6.0, 10.0)}
     args = [
         (
-            str(remote),
-            str(tmp_path / f"cache-{i}"),
+            specs[i],
             f"m{i}",
             [f"m{j}" for j in range(ACTORS)],
             t0,

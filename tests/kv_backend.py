@@ -35,27 +35,56 @@ from rite_ai.coordination.state_layer import (
 
 
 class KeyValueStateLayer(StateLayer):
+    """One handle, one connection.
+
+    The connection is held open and reopened when it breaks, which is what
+    a client for this kind of store does. It is not a cache — no reply is
+    ever reused, and every call is a round-trip. Connecting afresh per call
+    was the first version, and under four processes ticking as fast as this
+    store answers it exhausted the ephemeral port range, after which every
+    operation failed: a property of my test double, not of rite, but it
+    looked exactly like the coordination layer giving up.
+    """
+
     def __init__(self, port: int, timeout: float = 10.0) -> None:
         self.port = int(port)
         self.timeout = timeout
+        self._socket: socket.socket | None = None
+        self._reader = None
+
+    def _connect(self):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(self.timeout)
+        s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        s.connect(("127.0.0.1", self.port))
+        self._socket, self._reader = s, s.makefile("rb")
+        return s
+
+    def _drop(self) -> None:
+        for handle in (self._reader, self._socket):
+            try:
+                if handle is not None:
+                    handle.close()
+            except OSError:
+                pass
+        self._socket, self._reader = None, None
 
     def _call(self, request: dict):
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(self.timeout)
-                s.connect(("127.0.0.1", self.port))
+        for attempt in (1, 2):  # one reconnect, then give up honestly
+            try:
+                s = self._socket or self._connect()
                 s.sendall((json.dumps(request) + "\n").encode())
-                buffer = b""
-                while not buffer.endswith(b"\n"):
-                    chunk = s.recv(65536)
-                    if not chunk:
-                        break
-                    buffer += chunk
-            reply = json.loads(buffer.decode())
-        except (OSError, ValueError) as e:
-            # The store could not answer. Whether the write landed is
-            # unknown, which is exactly what Unavailable means.
-            return Unavailable(f"the store did not answer: {e}")
+                line = self._reader.readline()
+                if not line:
+                    raise OSError("the store closed the connection")
+                reply = json.loads(line.decode())
+                break
+            except (OSError, ValueError) as e:
+                self._drop()
+                if attempt == 2:
+                    # Whether the write landed is unknown, which is exactly
+                    # what Unavailable means.
+                    return Unavailable(f"the store did not answer: {e}")
         if "error" in reply:
             return Unavailable(reply["error"])
         return reply

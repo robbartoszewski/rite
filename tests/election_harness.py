@@ -71,3 +71,16 @@ def describe(runs) -> str:
         f"{name} {start:.1f}->{end:.1f}"
         for (name, _), (start, end) in sorted(runs.items())
     )
+
+
+def open_layer(spec):
+    """Build a StateLayer in a CHILD process from a picklable description.
+
+    (module, attribute, args) — the same shape the conformance suite uses,
+    for the same reason: a child cannot be handed a live object, and naming
+    a backend here would tie the election's proof to one store.
+    """
+    import importlib
+
+    module, attribute, args = spec
+    return getattr(importlib.import_module(module), attribute)(*args)
