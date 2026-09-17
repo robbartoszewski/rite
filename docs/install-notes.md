@@ -32,7 +32,7 @@ much you verify first:
   still pulls an unverified payload.
 - **Option 3** is the only one where you read the whole thing first. It is
   169 lines of `sh` and it is the honest answer if you would flag
-  `curl | sh` in someone else's project. Its `git checkout v0.3.0` is the
+  `curl | sh` in someone else's project. Its `git checkout v0.4.0` is the
   same movable pointer as option 1, so if the distinction matters to you,
   check out the **commit SHA** published in the release notes instead — that
   cannot be repointed.
@@ -74,16 +74,16 @@ Three ways, same result. Pick by how much you want to read first:
 
 ```bash
 # 1. one-liner
-curl -fsSL https://raw.githubusercontent.com/robbartoszewski/rite/v0.3.0/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/robbartoszewski/rite/v0.4.0/install.sh | sh
 
 # 2. download, check, then run
-curl -fsSLO https://raw.githubusercontent.com/robbartoszewski/rite/v0.3.0/install.sh
-shasum -a 256 install.sh          # compare against the v0.3.0 release notes
+curl -fsSLO https://raw.githubusercontent.com/robbartoszewski/rite/v0.4.0/install.sh
+shasum -a 256 install.sh          # compare against the v0.4.0 release notes
 sh install.sh
 
 # 3. clone and read everything
 git clone https://github.com/robbartoszewski/rite.git
-cd rite && git checkout v0.3.0
+cd rite && git checkout v0.4.0
 less install.sh                   # 169 lines of sh
 uv tool install .                 # or: pipx install .
 ```
@@ -92,3 +92,6 @@ uv tool install .                 # or: pipx install .
 running it — fair, for a tool that scans your repo for secrets — that is what
 2 and 3 are for. Nothing phones home; the reasoning, and the PyPI name
 collision, are in [`docs/install-notes.md`](docs/install-notes.md).*
+
+The steps for cutting a release, including the two history tools that must
+run after the tag, are in [releasing.md](releasing.md).

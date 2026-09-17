@@ -1,5 +1,54 @@
 # Changelog
 
+## 0.4.0 (unreleased)
+
+### Enhancements
+
+- `rite update --files-only` brings an already-initialised project's generated
+  files up to this version: both `CLAUDE.md` files, the `.claude/` commands and
+  agents, the review checklist, the CI workflow and its install pin, and rite's
+  `.gitignore` lines. `--dry-run` shows every change and diff first, and
+  `--take-rite "<section or file>"` takes rite's version of one thing you were
+  asked about. Nothing under `.rite/` is written, ever: a project's
+  architecture, plan and decisions are its own.
+- Generated sections now carry a marker recording what rite wrote, so "did you
+  edit this?" is answerable per section rather than per file. An edited section
+  is kept byte-for-byte and reported; an untouched one is refreshed.
+- Projects created before markers existed are covered too. A section some
+  release wrote identically for every project is matched by hash; a section
+  that is rite's guidance around a line of the project's own details is matched
+  against what that release wrote with those runs left open. This is what
+  carries 0.3.0's worker-assignment correction into a project built by 0.1.0,
+  0.2.0 or 0.3.0.
+- `rite start` says when a project's instructions are behind the installed
+  rite, and `rite doctor` counts what is out of date and what you changed.
+- `/spec-digest` gives a Worker the one part of the spec its ticket is about,
+  with what has drifted since that part was written, instead of the whole
+  document. The spec is parsed into addressable units, the references between
+  them are graphed, and a digest that no longer matches the spec refuses to
+  call itself current.
+- A Worker can record that the spec slice it was given was not enough, and say
+  which part it needed.
+- `rite doctor` says which build of rite this is, including the tag and commit
+  it was installed from.
+
+### Bug fixes
+
+- Fixed the file Workers actually read still telling them they own modules —
+  0.3.0 corrected the Owner's copy only, and there was no way to deliver either
+  correction to an existing project. Both now arrive with `rite update`.
+- Fixed a stray code fence in a spec quietly deleting the sections after it.
+- Fixed `rite init` on an already-initialised directory saying only that it
+  refused: it now says what else the directory can be given.
+- Fixed a spec digest calling itself current after the spec moved on.
+- Fixed unknown keys in `brief.yaml`, `config.yaml` and `worker.yml` being
+  accepted in silence.
+- Fixed `install.sh` reporting the rite already on PATH rather than the one it
+  had just installed.
+- Fixed a worker nobody has started being reported as stalled.
+- Fixed `rite doctor` not saying when `ANTHROPIC_API_KEY` is exported, and not
+  counting a missing gitleaks as a problem.
+
 ## 0.3.0 (2026-09-16)
 
 ### Enhancements
