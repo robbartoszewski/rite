@@ -62,7 +62,6 @@ from rite_ai.coordination.state_layer import (
 )
 
 BURST_ACTORS = 6
-BURST_SECONDS = 1.0
 
 
 def _open(spec):
@@ -126,6 +125,17 @@ def _append_actor(args):
 
 
 class StateLayerConformance:
+    # --- how hard to push, per backend ---
+    #
+    # A backend may lower these when its transport is slower (git forks
+    # several processes per operation), because a floor only asserts THE
+    # HARNESS RAN. The properties below it are absolute and are never
+    # relaxed: no version won twice, no key lost, no message lost.
+    BURST_SECONDS = 1.0
+    MIN_CAS_ATTEMPTS = 200
+    MIN_WRITES = 50
+    MIN_MESSAGES = 50
+
     # --- hooks ---
 
     def new_store(self, tmp_path):
@@ -262,7 +272,7 @@ class StateLayerConformance:
                 (
                     self.actor_layer_spec(store, i),
                     str(logs / f"{i}.json"),
-                    BURST_SECONDS,
+                    self.BURST_SECONDS,
                 )
                 for i in range(BURST_ACTORS)
             ],
@@ -275,7 +285,9 @@ class StateLayerConformance:
                 unavailable += outcome == "Unavailable"
                 if outcome == "Written":
                     winners[version] = winners.get(version, 0) + 1
-        assert attempts > 200, f"bursts barely ran ({attempts}) — not a test"
+        assert attempts > self.MIN_CAS_ATTEMPTS, (
+            f"bursts barely ran ({attempts}) — not a test"
+        )
         assert unavailable == 0, f"{unavailable} spurious Unavailable under load"
         doubled = {v: n for v, n in winners.items() if n > 1}
         assert not doubled, f"versions won more than once (split brain): {doubled}"
@@ -293,7 +305,7 @@ class StateLayerConformance:
                     self.actor_layer_spec(store, i),
                     i,
                     str(logs / f"{i}.json"),
-                    BURST_SECONDS,
+                    self.BURST_SECONDS,
                 )
                 for i in range(BURST_ACTORS)
             ],
@@ -301,7 +313,9 @@ class StateLayerConformance:
         claimed = [
             k for log in logs.glob("*.json") for k in json.loads(log.read_text())
         ]
-        assert len(claimed) > 50, f"bursts barely ran ({len(claimed)}) — not a test"
+        assert len(claimed) > self.MIN_WRITES, (
+            f"bursts barely ran ({len(claimed)}) — not a test"
+        )
         final = self.open_layer(store)
         lost = [k for k in claimed if not isinstance(final.read_state(k), Present)]
         assert not lost, (
@@ -319,7 +333,7 @@ class StateLayerConformance:
                     self.actor_layer_spec(store, i),
                     i,
                     str(logs / f"{i}.json"),
-                    BURST_SECONDS,
+                    self.BURST_SECONDS,
                 )
                 for i in range(BURST_ACTORS)
             ],
@@ -329,7 +343,9 @@ class StateLayerConformance:
             for log in logs.glob("*.json")
             for r in json.loads(log.read_text())
         ]
-        assert len(claimed) > 50, f"bursts barely ran ({len(claimed)}) — not a test"
+        assert len(claimed) > self.MIN_MESSAGES, (
+            f"bursts barely ran ({len(claimed)}) — not a test"
+        )
         got = self.open_layer(store).read_messages()
         stored = {(m.cursor, m.content) for m in got.items}
         assert len(got.items) == len(claimed), (len(got.items), len(claimed))
