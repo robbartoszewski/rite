@@ -4436,6 +4436,7 @@ def spec_show(unit: str, worker: str) -> None:
         unit_filename,
         units_dir,
     )
+    from rite_ai.spec.graph import build_graph
     from rite_ai.spec.telemetry import record_retrieval
 
     root, config = _spec_root_and_config()
@@ -4461,6 +4462,24 @@ def spec_show(unit: str, worker: str) -> None:
     if read.source_lines:
         where += f":{read.source_lines[0]}-{read.source_lines[1]}"
     click.echo(f"\n# derived from {where}; covers {', '.join(read.covers)}")
+
+    # What a unit sits inside is where its qualifiers live, and a unit file
+    # cannot carry them: measured on a trial digest of this spec, a subsection
+    # read as current behaviour because the ⚠ saying it was unshipped sat nine
+    # lines above the cut, in the parent's own text. Naming the parent is what
+    # a Worker needs to go and look.
+    graph = build_graph(parsed)
+    parents = [
+        u.parent for c in read.covers if (u := units.get(c)) and u.parent
+    ]
+    for parent in dict.fromkeys(parents):
+        # Not the document title: it holds nothing, which is why the graph
+        # excludes it from ancestors too.
+        if parent in graph.units and graph.units[parent].level > 1:
+            click.echo(
+                f"# it sits inside {parent} — anything qualifying it may be "
+                f"there: rite spec show {parent}"
+            )
 
     if not read.source_sha or not read.body_sha:
         problem = "never stamped, so nothing says which spec it was written from"

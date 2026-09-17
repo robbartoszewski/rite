@@ -83,8 +83,21 @@ change to the spec, and it is the user's decision.
    those units.
 
 5. **Round 2 — the set against itself.** A different question from round 1, not a
-   second pass of it. Give a fresh reviewer the changed units **and their
-   neighbours** — the units that cite them and the units they cite — and ask:
+   second pass of it. Give a fresh reviewer the changed units, **their
+   neighbours** — the units that cite them and the units they cite — **and the
+   source those units sit inside**: the parent section's own text above them,
+   and the source of each section they cite.
+
+   The source is not optional here, and round 1 is where it is withheld. Two of
+   the three questions below are about text a unit's boundary EXCLUDES; handed
+   units alone a reviewer cannot answer them, and what comes back is a
+   confident "nothing found". Measured on a trial of this command: given only
+   the units, a reviewer could answer the first question and had to go and read
+   the spec to answer the other two — which then turned up a unit presenting
+   unshipped behaviour as current, because the ⚠ that said so was nine lines
+   above the cut.
+
+   Ask:
 
    - Does any unit contradict another?
    - Does any unit contradict something the source says *outside* its own range,

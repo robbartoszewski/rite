@@ -742,3 +742,25 @@ def test_the_advice_matches_the_shape_of_the_spec_it_is_given(
     monkeypatch.chdir(dense)
     out = _run(dense, "status").output
     assert "slice_depth" in out and "will not help here" not in out
+
+
+def test_show_names_what_the_unit_sits_inside(project: Path, monkeypatch):
+    """A unit file cannot carry its parent's qualifiers. Measured on a trial
+    digest of rite's own spec: a subsection read as current behaviour because
+    the ⚠ saying it was unshipped sat nine lines above the cut, in the parent
+    section's own text. `show` cannot fix that; it can say where to look."""
+    monkeypatch.chdir(project)
+    _write_unit(project, "1.1", ["1.1"], "A Worker does the work.")
+    _run(project, "stamp", "1.1")
+    out = _run(project, "show", "1.1").output
+    assert "it sits inside 1" in out
+    assert "rite spec show 1" in out
+
+
+def test_a_top_level_unit_is_not_told_it_sits_inside_anything(
+    project: Path, monkeypatch
+):
+    monkeypatch.chdir(project)
+    _write_unit(project, "2", ["2"], "Handover.")
+    _run(project, "stamp", "2")
+    assert "it sits inside" not in _run(project, "show", "2").output
