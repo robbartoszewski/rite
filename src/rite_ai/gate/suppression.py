@@ -91,6 +91,44 @@ def find_stale(
     return [s for s in suppressions if s.fingerprint not in live_fps]
 
 
+def moved_to(stale: Suppression, findings: list[Finding]) -> Finding | None:
+    """The finding this stale suppression probably covers at its new line.
+
+    A working-tree fingerprint is `-:file:rule:line`, so the line number is
+    part of the identity: an edit ANYWHERE ABOVE a suppressed line invalidates
+    its entry, the finding it covered becomes blocking, and the entry is
+    reported stale — while nothing about the suppressed code changed. The
+    report already prints both halves; it never said they were the same thing.
+
+    Matched on `(commit, file, rule)` with a DIFFERENT line. Deliberately
+    conservative:
+
+    * a different commit is not a move — that is a history rewrite, whose
+      remedy is re-pointing to a new commit, not a new line, and sending the
+      reader to the wrong fix is worse than saying nothing;
+    * two or more candidates is ambiguous, and two findings of one rule in one
+      file is the ordinary case in this repository's own suppression list, so
+      it returns None rather than guessing.
+
+    Returns None when there is no single obvious answer. The caller reports
+    the stale entry either way; this only adds the "moved to" line.
+    """
+    want_commit, _, rest = stale.fingerprint.partition(":")
+    want_file, _, rest = rest.partition(":")
+    want_rule, _, want_line = rest.rpartition(":")
+    if not want_rule:
+        return None
+    candidates = [
+        f
+        for f in findings
+        if (f.commit or "-") == want_commit
+        and f.file == want_file
+        and f.rule_id == want_rule
+        and str(f.line) != want_line
+    ]
+    return candidates[0] if len(candidates) == 1 else None
+
+
 def append(path: Path, fingerprint: str, reason: str) -> None:
     """Add one suppression entry. Never truncates or rewrites existing
     entries — suppression is additive, one decision at a time."""

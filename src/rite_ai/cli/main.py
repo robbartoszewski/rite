@@ -2756,9 +2756,23 @@ def publish_check(rev_range: str | None) -> None:
         )
 
     if report.stale_suppressions:
+        from rite_ai.gate.suppression import moved_to
+
         click.echo(f"\n{len(report.stale_suppressions)} stale suppression(s):")
         for fp in report.stale_suppressions:
-            click.echo(f"  {fp}")
+            # The dataclass repr, which is what this printed on its own, names
+            # the fingerprint and the reason and stops there. `rite publish
+            # check` is the command a human types, so the "moved to" line has
+            # to be here too and not only in `format_report` — that one serves
+            # `python -m rite_ai.gate` and the pre-push hook.
+            click.echo(f"  {fp.fingerprint} — reason: {fp.reason}")
+            moved = moved_to(fp, report.findings)
+            if moved is not None:
+                click.echo(
+                    f"    the same rule now matches at line {moved.line} of "
+                    "that file — if it is the same finding, re-point this "
+                    f"entry to:\n      {moved.fingerprint}"
+                )
 
     if report.errors:
         for err in report.errors:

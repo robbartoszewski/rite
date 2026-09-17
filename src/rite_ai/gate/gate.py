@@ -311,6 +311,18 @@ def format_report(report: GateReport) -> str:
                 f"  {s.fingerprint} (line {s.line_no} of {DEFAULT_SUPPRESSION_PATH}) "
                 f"— no longer matches any finding, reason was: {s.reason}"
             )
+            # The commonest cause by far, and the one the report used to
+            # leave the reader to work out: an edit above a suppressed line
+            # moved it, so the entry went stale AND the finding it covered
+            # turned up in the blocking list above. Both facts were printed;
+            # nothing said they were the same finding.
+            moved = supp_mod.moved_to(s, report.findings)
+            if moved is not None:
+                lines.append(
+                    f"    the same rule now matches at line {moved.line} of "
+                    f"that file — if it is the same finding, re-point this "
+                    f"entry to:\n      {moved.fingerprint}"
+                )
     if report.suppressed:
         lines.append(f"\n{len(report.suppressed)} finding(s) suppressed (with reason)")
     if report.exit_code == EXIT_CLEAN:
