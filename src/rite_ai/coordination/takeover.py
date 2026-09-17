@@ -131,6 +131,17 @@ def hand_over_stalled_manager(
             f"threshold {stall_threshold})"
         )
 
+    held = _claims_of(layer, stalled)
+    if isinstance(held, Unknown):
+        return held
+    if not held:
+        # Nothing to hand over, so nothing to record. This is what keeps the
+        # Owner's periodic duty idempotent: a machine that stays stalled is
+        # handed over ONCE, and every tick afterwards finds no claims and
+        # writes nothing — rather than appending an audit record to the
+        # message log every five minutes for as long as the machine is down.
+        return Refused(f"{stalled} is stalled but holds no published claims")
+
     reason = f"manager stalled, handed over by {owner}"
     missed = live.missed
     record = LogMessage(

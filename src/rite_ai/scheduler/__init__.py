@@ -477,6 +477,7 @@ def _coordination_tick(root: Path, project) -> list[str]:
             hand_over_when=lambda: in_flight == 0,
         )
         tick = monitor.tick()
+        duties = _owner_duties(root, layer, config, project, name, tick)
     except Exception as e:  # noqa: BLE001 - a tick must not die on coordination
         # The scheduler runs unattended from cron; an exception here would
         # take the watchdog and the window check down with it.
@@ -486,6 +487,78 @@ def _coordination_tick(root: Path, project) -> list[str]:
     if tick.detail:
         lines[0] += f" ({tick.detail})"
     lines.extend(f"coordination: {p}" for p in tick.problems)
+    lines.extend(duties)
+    return lines
+
+
+def _owner_duties(root, layer, config, project, name: str, tick) -> list[str]:
+    """What only the Owner does: act on Managers that have gone quiet.
+
+    §2.3 gives the Owner two jobs about a stalled Manager — surface it (done
+    by `doctor`) and deal with its work. D-14's SECOND trigger hands that
+    work over (P2-3b) and P2-5c expires the claims it was holding, and
+    NEITHER had a caller, so a stalled machine's tickets stayed assigned to
+    it and its claims blocked everybody else for ever.
+
+    **Only the Owner, deliberately.** Every Manager can see the same stall;
+    if each acted, one stalled machine would get N handover comments on its
+    tickets and N expiry records. The role exists to decide who acts.
+
+    **Handover first, expiry second.** The handover needs the claims to know
+    which tickets to comment on, and expiring them first would silently
+    reduce it to nothing. The expiry is also what makes this idempotent: the
+    next tick finds no claims and does nothing at all.
+    """
+    if not tick.owner:
+        return []
+
+    from datetime import UTC, datetime
+
+    from rite_ai.coordination.claims_state import expire_offline_claims
+    from rite_ai.coordination.takeover import ToldTheBoard, hand_over_stalled_manager
+
+    heartbeat = project.config.heartbeat
+    now = datetime.now(UTC)
+    lines: list[str] = []
+
+    for other in config.managers:
+        if other == name:
+            continue
+        handed = hand_over_stalled_manager(
+            root,
+            layer,
+            owner=name,
+            stalled=other,
+            now=now,
+            interval_minutes=heartbeat.interval_minutes,
+            stall_threshold=heartbeat.stall_threshold,
+        )
+        if isinstance(handed, ToldTheBoard) and handed.tickets:
+            lines.append(
+                f"coordination: handed over {other}'s work: "
+                + ", ".join(handed.tickets)
+            )
+            if handed.queued:
+                lines.append(
+                    "coordination: board NOT updated for "
+                    + ", ".join(handed.queued)
+                )
+
+    expiry = expire_offline_claims(
+        layer,
+        by=name,
+        now=now,
+        interval_minutes=heartbeat.interval_minutes,
+        stall_threshold=heartbeat.stall_threshold,
+        skip=frozenset({name}),
+    )
+    for machine, count in expiry.expired.items():
+        lines.append(
+            f"coordination: expired {count} claim(s) held by {machine} — its "
+            "heartbeat has lapsed"
+        )
+    if expiry.refused:
+        lines.append(f"coordination: claims were not expired: {expiry.refused}")
     return lines
 
 
