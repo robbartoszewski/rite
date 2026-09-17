@@ -651,6 +651,21 @@ def _write_worker_claude_config(
     claude_dir.mkdir(exist_ok=True)
     _install_worker_review_convention(claude_dir)
 
+    write_atomic(
+        worker_dir / "CLAUDE.md",
+        render_worker_claude_md(manifest, spec, module_commands),
+    )
+
+
+def render_worker_claude_md(
+    manifest: WorkerManifest,
+    spec: SpecConfig | None = None,
+    module_commands: str = "",
+) -> str:
+    """A Worker's `CLAUDE.md`, as `rite add worker` writes it — separate from
+    the writing so `rite update` can regenerate it and compare."""
+    from rite_ai.generated_sections import mark_sections
+
     manager_line = (
         f"Your Manager is **{manifest.manager}**."
         if manifest.manager
@@ -742,4 +757,4 @@ and stop rather than guessing.
 - Open a PR without running the module's test and lint commands.
 - Skip the review convention.
 """
-    write_atomic(worker_dir / "CLAUDE.md", md)
+    return mark_sections(md)

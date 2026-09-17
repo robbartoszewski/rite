@@ -29,6 +29,7 @@ from pathlib import Path
 import yaml
 
 from rite_ai.config.models import ProjectConfig
+from rite_ai.generated_sections import back_over_marker
 from rite_ai.state import write_atomic
 
 # The spec section is the one part of a generated `CLAUDE.md` rewritten
@@ -62,6 +63,8 @@ def replace_spec_section(text: str, section: str, anchor: str) -> str | None:
         legacy = text.find("\n## Project spec")
         if legacy != -1:
             nxt = text.find("\n## ", legacy + 1)
+            if nxt != -1:
+                nxt = back_over_marker(text, nxt)
             tail = "" if nxt == -1 else text[nxt + 1 :]
             new = text[: legacy + 1] + (section + "\n\n" if section else "") + tail
         elif not section:
@@ -70,6 +73,7 @@ def replace_spec_section(text: str, section: str, anchor: str) -> str | None:
             at = text.find("\n" + anchor)
             if at == -1:
                 return None
+            at = back_over_marker(text, at)
             new = text[: at + 1] + section + "\n\n" + text[at + 1 :]
     # Removing or re-sizing a section leaves the blank lines that framed it.
     return re.sub(r"\n{3,}", "\n\n", new)

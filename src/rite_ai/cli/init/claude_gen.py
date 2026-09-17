@@ -135,7 +135,11 @@ def generate_claude_md(
         _knowledge_section(),
         _commands_section(),
     ]
-    return "\n\n".join(p.strip() for p in parts) + "\n"
+    from rite_ai.generated_sections import mark_sections
+
+    # Markers record what rite wrote in each section, so `rite update` can
+    # later refresh the sections nobody has edited (rite_ai.update.refresh).
+    return mark_sections("\n\n".join(p.strip() for p in parts) + "\n")
 
 
 def _spec_section(config: ProjectConfig) -> str:

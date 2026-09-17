@@ -4593,42 +4593,84 @@ def review(module: str | None) -> None:
 
 @cli.command()
 @click.option("--yes", is_flag=True, help="Skip the confirmation prompt")
-def update(yes: bool) -> None:
-    """Update rite itself and migrate `.rite/` config files (SPEC §9.9).
+@click.option(
+    "--files-only",
+    is_flag=True,
+    help="Refresh this project's generated files; do not update rite itself.",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Show what refreshing generated files would change, with the "
+    "difference for anything left alone. Changes nothing.",
+)
+@click.option(
+    "--take-rite",
+    "take",
+    multiple=True,
+    metavar="SECTION|FILE",
+    help="Replace this CLAUDE.md section (by heading, e.g. 'Role: Owner') or "
+    "generated file with rite's current version even though it differs. "
+    "Repeatable.",
+)
+def update(yes: bool, files_only: bool, dry_run: bool, take: tuple[str, ...]) -> None:
+    """Update rite itself, migrate `.rite/` config files, and refresh the files
+    rite generated in this project (SPEC §9.9).
+
+    Refreshing never overwrites your edits. Each generated section of
+    CLAUDE.md records a hash of what rite wrote: a section still matching it is
+    replaced with this version's, a section you changed is left alone and
+    reported. Sections this version adds are inserted; your own sections are
+    never touched. A copied command or agent file is replaced only when it is
+    byte-identical to one a release shipped. The spec section is `rite spec
+    add`'s to rewrite.
 
     Examples:
       rite update
-      rite update --yes
+      rite update --files-only --dry-run
+      rite update --files-only --take-rite "Role: Owner"
     """
     from rite_ai.update import detect_install_method, migrate_config, run_self_update
 
-    method = detect_install_method()
     failed = False
-    if method == "dev":
-        click.echo(run_self_update(method).message)
-    else:
-        if not yes and not click.confirm(f"Update rite via {method}?", default=True):
-            click.echo("cancelled")
-            return
-        result = run_self_update(method)
-        click.echo(result.message, err=not result.ok)
-        failed = not result.ok
+    if not files_only and not dry_run:
+        method = detect_install_method()
+        failed = False
+        if method == "dev":
+            click.echo(run_self_update(method).message)
+        else:
+            confirmed = yes or click.confirm(f"Update rite via {method}?", default=True)
+            if not confirmed:
+                click.echo("cancelled")
+                return
+            result = run_self_update(method)
+            click.echo(result.message, err=not result.ok)
+            failed = not result.ok
 
-    # Runs whether or not the self-update worked. `rite_ai.update`'s own
-    # docstring calls these "two independent halves ... because they have
-    # independent failure modes", and this code made the second depend on
-    # the first: a self-update that failed for any reason — no network, a
-    # package manager not on PATH, the misdetected-installer bug — exited
-    # here and the project's config was never even looked at. The config
-    # on disk has nothing to do with whether a download succeeded.
+
+    # Runs whether or not the self-update worked: the files on disk have
+    # nothing to do with whether a download succeeded.
     root = _find_project_root()
     rite_dir = root / ".rite"
-    if rite_dir.is_dir():
+    if not rite_dir.is_dir():
+        if files_only or dry_run:
+            click.echo("not a rite project — no generated files to refresh")
+        if failed:
+            raise SystemExit(1)
+        return
+    if not dry_run:
         applied = migrate_config(rite_dir)
         if applied:
             click.echo(f"migrated .rite/ config: {', '.join(applied)}")
         else:
             click.echo(".rite/ config already current")
+
+    from rite_ai.update.refresh import refresh_project, report
+
+    wanted = frozenset(take)
+    results = refresh_project(root, take=wanted, apply=not dry_run)
+    for line in report(results, dry_run, wanted):
+        click.echo(line)
 
     if failed:
         raise SystemExit(1)
