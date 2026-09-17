@@ -8,6 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 from click.testing import CliRunner
 
 from rite_ai.cli.init.claude_gen import generate_claude_md
@@ -206,36 +207,72 @@ class TestCopiedTemplates:
             )
             assert ch.action == "kept-edited" and dest.read_text() == "my edits\n"
 
-    def test_the_history_covers_what_this_version_ships(self):
+    def test_the_history_covers_what_the_last_release_shipped(self):
         """A release that forgets `tools/template_history.py` would treat its
-        own templates as user edits on the next upgrade."""
-        import hashlib
+        own templates as user edits on the next upgrade.
 
-        from rite_ai.cli.init.claude_gen import _AGENT_FILES, _COMMAND_FILES
-        from rite_ai.cli.init.paths import templates_dir
-        from rite_ai.cli.init.scaffold import render_ci_workflow
+        Asked of the LAST TAG's bytes, not the working tree's. The working
+        tree is main, where a template is edited long before it is released,
+        so judging it against `RELEASED` made every template edit red until
+        the next tag — and unfixable, because the tool that regenerates the
+        table reads tags and the tag does not exist yet. The mistake worth
+        catching shows at the tag, which is where this now looks.
+        """
+        import hashlib
+        import subprocess
+
         from rite_ai.update.template_history import RELEASED
 
-        src = templates_dir()
-        stale = []
-        for sub, names in (("agents", _AGENT_FILES), ("commands", _COMMAND_FILES)):
-            for name in names:
-                digest = hashlib.sha256((src / sub / name).read_bytes()).hexdigest()
-                if digest not in RELEASED.get(f"{sub}/{name}", frozenset()):
-                    stale.append(f"{sub}/{name}")
-        checklist = hashlib.sha256(
-            (src / "review-checklist.md").read_bytes()
-        ).hexdigest()
-        if checklist not in RELEASED.get("review-checklist.md", frozenset()):
-            stale.append("review-checklist.md")
+        root = Path(__file__).resolve().parent.parent
+
+        def git(*args: str) -> bytes:
+            return subprocess.run(
+                ["git", *args], cwd=root, capture_output=True, check=True
+            ).stdout
+
+        try:
+            tags = sorted(t for t in git("tag", "-l", "v*").decode().split() if t)
+        except (OSError, subprocess.CalledProcessError) as e:  # pragma: no cover
+            pytest.skip(f"git tags are not readable here ({e})")
+        if not tags:  # pragma: no cover - a shallow or tagless checkout
+            pytest.skip("no release tags in this checkout")
+        tag = tags[-1]
+        listing = (
+            git(
+                "ls-tree",
+                "-r",
+                "--name-only",
+                tag,
+                "--",
+                "templates/commands",
+                "templates/agents",
+                "templates/review-checklist.md",
+            )
+            .decode()
+            .split()
+        )
+        assert listing, f"{tag} shipped no templates, which cannot be right"
+        missing = []
+        for path in listing:
+            digest = hashlib.sha256(git("show", f"{tag}:{path}")).hexdigest()
+            key = path.removeprefix("templates/")
+            if digest not in RELEASED.get(key, frozenset()):
+                missing.append(key)
         # Rendered, not copied: what a release WROTE is the template with that
-        # release's pin in it.
-        workflow = hashlib.sha256(render_ci_workflow().encode()).hexdigest()
-        if workflow not in RELEASED.get("ci/publish-gate.yml", frozenset()):
-            stale.append("ci/publish-gate.yml")
-        assert not stale, (
-            f"{stale} differ from every released version — if this is a release, "
-            "run `uv run python tools/template_history.py` after tagging"
+        # release's pin in it — the same substitution the generator makes.
+        template = git("show", f"{tag}:templates/ci/publish-gate.yml").decode()
+        rendered = template.replace(
+            "{{RITE_INSTALL_SPEC}}",
+            f"git+https://github.com/robbartoszewski/rite.git@{tag}",
+        )
+        if hashlib.sha256(rendered.encode()).hexdigest() not in RELEASED.get(
+            "ci/publish-gate.yml", frozenset()
+        ):
+            missing.append("ci/publish-gate.yml")
+        assert not missing, (
+            f"{tag} shipped {missing}, which `RELEASED` does not carry — run "
+            "`uv run python tools/template_history.py` after tagging, or "
+            "`rite update` will treat that release's own files as user edits"
         )
 
 
