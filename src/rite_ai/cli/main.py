@@ -711,6 +711,7 @@ def _doctor_report(problems: list[str]) -> None:
             problems.append(f"config {err.file}: {err.message}")
     else:
         from rite_ai.coordination.config_check import coordination_problems
+        from rite_ai.coordination.identity import enrolment
         from rite_ai.sandbox import is_installed, verify_sandbox
         from rite_ai.schedule import validate_schedule
 
@@ -830,6 +831,13 @@ def _doctor_report(problems: list[str]) -> None:
         for problem in coordination_problems(coordination):
             click.echo(problem)
             problems.append(problem)
+        # Needs the machine, not just the config: the same committed
+        # `config.yaml` is complete on one machine and not on another, which
+        # is the whole reason the name is not in it.
+        not_enrolled = enrolment(root, coordination)
+        if not_enrolled:
+            click.echo(not_enrolled)
+            problems.append(not_enrolled)
 
         # P2-1e. Only once a coordination remote is configured: the probe
         # pushes, so a single-machine project must never run it.

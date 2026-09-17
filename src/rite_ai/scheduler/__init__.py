@@ -405,7 +405,85 @@ def _run_tick_locked(root: Path, outcome: lock.LockAcquired) -> TickResult:
         if last_count != current_count:
             _write_last_worker_count(state_path, current_count)
 
+    coordination_messages = _coordination_tick(root, project)
+    messages.extend(coordination_messages)
+
     return TickResult(ok=True, messages=messages, needs_attention=needs_attention)
+
+
+def _coordination_tick(root: Path, project) -> list[str]:
+    """One coordination tick: publish liveness, keep or take the Owner role.
+
+    This is what makes Phase 2 run at all. The machinery landed complete and
+    called by nobody, which is D-14's defect shape — a function whose caller
+    was never written — and the scheduler tick is where the spec already puts
+    unattended periodic work (§5.1.2), on a cadence that suits it: §3.3.1
+    wants a heartbeat about every 10 minutes and a lease renewal every 15,
+    and the default tick is every 5.
+
+    **Nothing here touches the ticket backend.** A Manager also distributes
+    work to its Workers (P2-4b) and that is deliberately NOT wired to cron:
+    it writes labels and comments on a shared board, and doing that
+    unattended deserves its own decision (Q9). This tick writes only to the
+    coordination repo, which is what §2.4's mechanics are made of.
+
+    It also starts no session, so §2.5's rule is untouched: election decides
+    who the Owner IS, not that anything begins working.
+
+    Silent on a machine that is not enrolled, which is every project today.
+    """
+    config = project.config.coordination
+    if not config.managers or not config.remote:
+        return []
+
+    from rite_ai.coordination.identity import enrolment, this_manager
+
+    problem = enrolment(root, config)
+    if problem:
+        # Named, not skipped silently: a machine that thinks it is
+        # coordinating and is not looks identical to one that is.
+        return [problem]
+
+    name = this_manager(root)
+    try:
+        from rite_ai.coordination.git_backend import GitStateLayer
+        from rite_ai.coordination.lease import OwnerLeaseHolder
+        from rite_ai.coordination.monitor import ManagerMonitor
+
+        layer = GitStateLayer(
+            config.remote,
+            root / ".rite" / "coordination-cache.git",
+            state_branch=config.state_branch,
+        )
+        holder = OwnerLeaseHolder(layer, name, config)
+        monitor = ManagerMonitor(
+            holder,
+            root=root,
+            heartbeat=project.config.heartbeat,
+            status=lambda: (_this_machines_workers(root), 0),
+        )
+        tick = monitor.tick()
+    except Exception as e:  # noqa: BLE001 - a tick must not die on coordination
+        # The scheduler runs unattended from cron; an exception here would
+        # take the watchdog and the window check down with it.
+        return [f"coordination: the tick could not run: {e}"]
+
+    lines = [f"coordination: {name} — {tick.action}"]
+    if tick.detail:
+        lines[0] += f" ({tick.detail})"
+    lines.extend(f"coordination: {p}" for p in tick.problems)
+    return lines
+
+
+def _this_machines_workers(root: Path) -> list[str]:
+    """The Workers this machine is running, as the claims ledger sees them —
+    the same definition `run_tick`'s window boundary already uses."""
+    claims_path = root / ".rite" / "claims.json"
+    if not claims_path.is_file():
+        return []
+    from rite_ai.claims.ledger import ClaimsLedger
+
+    return sorted({c.worker for c in ClaimsLedger(claims_path).list_claims()})
 
 
 # ---------------------------------------------------------------------------
