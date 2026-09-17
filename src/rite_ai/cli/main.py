@@ -942,6 +942,27 @@ def _warn_if_unregistered(worker: str) -> None:
 # --- Claims ---
 
 
+def _warn_if_unpublished(ledger) -> None:
+    """Say when a release did not reach the other machines.
+
+    The local ledger and the published one cannot be updated atomically, so
+    a failed publish leaves a path claimed as far as the rest of the fleet
+    can see. Nothing takes that back on its own — claims expire on a lapsed
+    HEARTBEAT, and this machine is healthy — so the person standing here is
+    the one who can fix it.
+    """
+    from rite_ai.coordination.publish import NotPublished
+
+    outcome = getattr(ledger, "last_publish", None)
+    if isinstance(outcome, NotPublished):
+        click.echo(
+            f"released locally, but the fleet was not told: {outcome.reason} — "
+            "other machines will still see these paths as claimed until this "
+            "machine publishes again",
+            err=True,
+        )
+
+
 @cli.command()
 @click.argument("paths", nargs=-1, required=True)
 @click.option("--worker", "-w", required=True, help="Worker name")
@@ -1017,6 +1038,7 @@ def release(
       rite release --history
     """
     from rite_ai.claims.ledger import ClaimsLedger
+    from rite_ai.coordination.identity import claims_channel
 
     _require_project_root()
     ledger = ClaimsLedger(_claims_path())
@@ -1047,16 +1069,22 @@ def release(
         if not by or not reason:
             click.echo("--force requires both --by and --reason (SPEC §5.2)", err=True)
             raise SystemExit(2)
-        released = ledger.force_release(list(paths), by=by, reason=reason)
+        layer, machine = claims_channel(_find_project_root())
+        released = ledger.force_release(
+            list(paths), by=by, reason=reason, layer=layer, machine=machine
+        )
         click.echo(f"force-released {released} claim(s), by {by}: {reason}")
+        _warn_if_unpublished(ledger)
         return
 
     if not worker:
         click.echo("--worker is required (or use --force)", err=True)
         raise SystemExit(2)
     path_list = list(paths) if paths else None
-    released = ledger.release(worker, path_list)
+    layer, machine = claims_channel(_find_project_root())
+    released = ledger.release(worker, path_list, layer=layer, machine=machine)
     click.echo(f"released {released} claim(s) for {worker}")
+    _warn_if_unpublished(ledger)
 
 
 @cli.command()

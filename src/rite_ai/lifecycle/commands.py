@@ -439,11 +439,22 @@ def perform_handover(
         # Manager's behalf, which may already know the ticket without
         # reading that Manager's claims file).
         about_to_release = ledger.claims_for(worker) if worker else ledger.list_claims()
+        # A handover releases claims, and a release that the fleet never
+        # hears about leaves those paths blocked on every other machine —
+        # they expire on a lapsed heartbeat, and a machine that merely
+        # handed over is still beating.
+        from rite_ai.coordination.identity import claims_channel
+
+        layer, machine = claims_channel(root)
         if worker:
-            result.released_claims = ledger.release(worker)
+            result.released_claims = ledger.release(
+                worker, layer=layer, machine=machine
+            )
         else:
             for claim in about_to_release:
-                result.released_claims += ledger.release(claim.worker)
+                result.released_claims += ledger.release(
+                    claim.worker, layer=layer, machine=machine
+                )
 
     if not ticket:
         for claim in about_to_release:
