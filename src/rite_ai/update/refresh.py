@@ -35,7 +35,9 @@ from __future__ import annotations
 
 import difflib
 import hashlib
+import re
 from dataclasses import dataclass, field
+from functools import cache
 from pathlib import Path, PurePosixPath
 
 from rite_ai.generated_sections import Block, parse, section_hash
@@ -228,18 +230,49 @@ def refresh_text(
 
 
 def _written_by_a_release(heading: str, content: str) -> bool:
-    """Whether `content` is exactly what some tagged release wrote for this
-    section — recorded only for sections a release writes identically for
-    every project, so this can never mistake one project's rendering for
-    another's. A renamed section was recorded under its old heading, so those
-    are asked about too."""
-    from rite_ai.update.section_history import SECTIONS
+    """Whether `content` is what some tagged release wrote for this section.
+
+    Two ways to know. A section a release writes identically for every project
+    is recorded by hash, so a match is exact. A section that is fixed guidance
+    around a line or two of the project's own details is recorded as a pattern:
+    the lines both probe projects shared, with each differing run recorded as
+    the number of lines it stood for. Matching one means every word of that
+    release's guidance is present verbatim and only the project-specific runs
+    differ — which is what a file written before markers existed cannot
+    otherwise prove about itself. A renamed section was recorded under its old
+    heading, so those are asked about too.
+
+    The cost, stated plainly because it is the only place this mechanism
+    infers rather than proves: an edit made inside one of those
+    project-specific runs is not distinguishable from rite's own rendering of
+    it, and the refresh will write that run again from the project's config.
+    """
+    from rite_ai.update.section_history import PATTERNS, SECTIONS
 
     digest = hashlib.sha256(content.strip().encode("utf-8")).hexdigest()
+    names = (heading, *SUPERSEDED_HEADINGS.get(heading, ()))
+    if any(digest in SECTIONS.get(name, frozenset()) for name in names):
+        return True
     return any(
-        digest in SECTIONS.get(name, frozenset())
-        for name in (heading, *SUPERSEDED_HEADINGS.get(heading, ()))
+        _matches_pattern(pattern, content.strip())
+        for name in names
+        for pattern in PATTERNS.get(name, ())
     )
+
+
+@cache
+def _compiled(pattern: tuple[str | int, ...]) -> re.Pattern[str]:
+    parts = [
+        re.escape(item) + "\n"
+        if isinstance(item, str)
+        else rf"(?:[^\n]*\n){{0,{item}}}"
+        for item in pattern
+    ]
+    return re.compile("".join(parts))
+
+
+def _matches_pattern(pattern: tuple[str | int, ...], content: str) -> bool:
+    return _compiled(pattern).fullmatch(content + "\n") is not None
 
 
 def _sha(path: Path) -> str:
@@ -361,7 +394,14 @@ def _refresh_claude_md(
 ) -> FileResult:
     result = FileResult(str(path.relative_to(root)))
     if not path.is_file():
-        result.note = "not found"
+        # Absence is a gap, not a choice. A project or Worker with no
+        # CLAUDE.md has no instructions at all, and — unlike the CI workflow,
+        # which `rite publish install-ci` owns — nothing else writes one. It
+        # is generated content, so it is delivered like any other missing
+        # generated file.
+        if apply:
+            _write(root, path, generated)
+        result.changes.append(Change(str(path.relative_to(root)), "installed"))
         return result
     text = path.read_text()
     if marker not in text:
@@ -450,10 +490,11 @@ def refresh_project(
     ci = refresh_ci_workflow(root, take, apply)
     if ci:
         files.changes.append(ci)
+    results.append(files)
     ignored = refresh_gitignore(root, apply)
     if ignored:
-        files.changes.append(ignored)
-    results.append(files)
+        # Its own file, not one of the `.claude/` ones grouped above.
+        results.append(FileResult(".gitignore", changes=[ignored]))
 
     workers = root / "workers"
     for worker_dir in (
@@ -537,7 +578,11 @@ def report(results: list[FileResult], dry_run: bool, take: frozenset[str]) -> li
         for ch in r.changes:
             # A target with a path stands on its own; a bare heading belongs
             # to the file it was found in.
-            where = ch.target if "/" in ch.target else f"{r.path} § {ch.target}"
+            where = (
+                ch.target
+                if "/" in ch.target or ch.target == r.path
+                else f"{r.path} § {ch.target}"
+            )
             if ch.renamed_from:
                 # Otherwise the line names a heading the reader cannot find:
                 # their file still calls the section something else.

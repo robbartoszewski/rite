@@ -105,8 +105,9 @@ def _sha(lines: list[str]) -> str:
     return hashlib.sha256(("\n".join(lines) + "\n").encode("utf-8")).hexdigest()
 
 
-def _outside_code(lines: list[str], problems: list[str] | None = None,
-                  source: str = "") -> list[bool]:
+def _outside_code(
+    lines: list[str], problems: list[str] | None = None, source: str = ""
+) -> list[bool]:
     """False for every line inside YAML front matter or a fenced code block,
     fence lines included.
 

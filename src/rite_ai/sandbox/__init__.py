@@ -138,7 +138,7 @@ VERIFIED_BACKENDS = ("seatbelt",)
 UNSUITABLE_BACKENDS = {
     "docker": "`flock` is a no-op inside a docker sandbox, so claims stop "
     "excluding — two Workers can hold the same path and both be told "
-    "\"claimed\" (SPEC §5.3)",
+    '"claimed" (SPEC §5.3)',
     "docker-desktop": "same docker runtime, same `flock` failure (SPEC §5.3)",
     "orbstack": "same docker runtime, same `flock` failure (SPEC §5.3)",
 }
@@ -374,9 +374,7 @@ def verify_sandbox(backend: str = "", timeout: int = 120) -> SandboxCheck:
                     elapsed_ms=_elapsed(),
                 )
             except (OSError, subprocess.SubprocessError) as e:
-                return SandboxCheck(
-                    False, _will_not_run(binary, e), backend=backend
-                )
+                return SandboxCheck(False, _will_not_run(binary, e), backend=backend)
             if proc.returncode != 0:
                 return SandboxCheck(
                     False,
@@ -1227,9 +1225,7 @@ def redact_secrets(text: str, secrets: Iterable[str] = ()) -> str:
     MCP entry in `.docs/FUTURE_IMPROVEMENTS.md` ("credentials through the
     MCP server"). When that lands, this should have nothing left to redact.
     """
-    text = _EXPORT_STATEMENT.sub(
-        lambda m: m.group(1) + "[redacted]" + m.group(3), text
-    )
+    text = _EXPORT_STATEMENT.sub(lambda m: m.group(1) + "[redacted]" + m.group(3), text)
     searched = {s for s in secrets if s and len(s) >= 8}
     for value in sorted(searched, key=len, reverse=True):
         pattern = r"(?:\r?\n)?".join(re.escape(ch) for ch in value)

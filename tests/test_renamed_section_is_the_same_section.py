@@ -77,7 +77,7 @@ class TestARenamedSectionIsNotDuplicated:
         assert {c.target: c.action for c in changes}[NEW] == "refreshed"
 
     def test_it_is_never_reported_as_inserted(self):
-        """"inserted" is the bug's own report: it says a section was ADDED,
+        """ "inserted" is the bug's own report: it says a section was ADDED,
         which is the one thing a rename must not do."""
         for current in (
             _file(OLD, "- `backend/`"),

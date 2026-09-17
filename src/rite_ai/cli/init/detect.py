@@ -1072,7 +1072,5 @@ def detect_decision_convention(root: Path, paths: list[str]) -> str:
             continue
         hits = len(_DECISION_RE.findall(text))
         if hits >= _DECISION_MINIMUM or (hits and _REGISTER_HEADER_RE.search(text)):
-            return (
-                f"Decisions are cited as D-<number>; the register is in `{rel}`."
-            )
+            return f"Decisions are cited as D-<number>; the register is in `{rel}`."
     return ""

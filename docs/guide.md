@@ -287,10 +287,24 @@ rite update --files-only --take-rite review-checklist.md
 ```
 
 **Projects created before markers existed** (anything initialised with rite
-0.3.0 or earlier) are handled too: a section matching what some release wrote
-is refreshed, because those bytes are attributable. Sections that vary by
-project — Modules, Role, Project spec — cannot be told from an edit, so they
-are reported rather than guessed at.
+0.3.0 or earlier) are handled too, and this is the case that matters most,
+because it is every project a tester already has. rite recognises its own
+older text two ways. A section some release wrote the same way for every
+project is matched by hash, so the match is exact. A section that is fixed
+guidance around a line of your project's own details — your Role section,
+naming your ticket backend — is matched against what that release wrote with
+the project-specific runs left open: every word of the guidance has to be
+there verbatim, and each open run may only stand for about as many lines as
+the release itself put there. Either way the section is refreshed, so a
+correction written after your project was created reaches it.
+
+Sections that are mostly your project's own data — Project spec, What this is,
+Modules — are not attributable at all, and are reported rather than guessed
+at. The one place this infers rather than proves is worth stating: if you
+edited the project-specific line inside an otherwise-untouched generated
+section, the refresh regenerates that line from `.rite/`, because nothing
+distinguishes your version of it from rite's. Edit `.rite/` and let the file
+follow; a dry run shows every such line before anything is written.
 
 **The CI workflow's pin moves with it.** A workflow written by an older rite
 keeps installing that rite in CI, which is the layer SPEC §11.5.1 calls

@@ -4,66 +4,195 @@ SHA-256 of each CLAUDE.md section every tagged release wrote identically
 for every project, so a file written before markers existed can still be
 shown to be rite's own rather than a user's edit.
 
-From: v0.1.0 (9/13 static), v0.2.0 (10/14 static), v0.3.0 (10/15 static).
+From: v0.1.0 (15/23 static), v0.2.0 (16/24 static), v0.3.0 (16/26 static).
 """
 
+# ruff: noqa: E501 — these lines are the bytes a release wrote.
+
 SECTIONS: dict[str, frozenset[str]] = {
-    'Before anything else: read the handover snapshot': frozenset(
+    "Before anything else: read the handover snapshot": frozenset(
         {
-            'ff9e0b7a9c92a2ab72b2bbf29e59f89a61a133a8bd5c4deea4efa9c221c36e5d',
+            "ff9e0b7a9c92a2ab72b2bbf29e59f89a61a133a8bd5c4deea4efa9c221c36e5d",
         }
     ),
-    'Claims system': frozenset(
+    "Claims system": frozenset(
         {
-            '329b2de6690d6cdc647e258d931a52c0e98b60d8b5d7f7d140b0d6b07c939abf',
+            "329b2de6690d6cdc647e258d931a52c0e98b60d8b5d7f7d140b0d6b07c939abf",
         }
     ),
-    'Commands': frozenset(
+    "Commands": frozenset(
         {
-            '9128f33b816e55ea173b2af5b405a7d2e3046d7783bf1ac31b39164f66b54ee3',
-            'ce1412363c47c552d631897ea6c587cefccd6b9cfc459a1f48ffe87718e1f9be',
+            "9128f33b816e55ea173b2af5b405a7d2e3046d7783bf1ac31b39164f66b54ee3",
+            "ce1412363c47c552d631897ea6c587cefccd6b9cfc459a1f48ffe87718e1f9be",
         }
     ),
-    'Project knowledge': frozenset(
+    "Project knowledge": frozenset(
         {
-            'abe50ebbb80bcd7eff0242f85307646d70286d6084b44bebb913337b643ba8fd',
+            "abe50ebbb80bcd7eff0242f85307646d70286d6084b44bebb913337b643ba8fd",
         }
     ),
-    'Publish gate': frozenset(
+    "Publish gate": frozenset(
         {
-            'bb8b3d1498b5c0c647fafca57cc612aaa32d3bb8198d5956a553d364ba47a58c',
+            "bb8b3d1498b5c0c647fafca57cc612aaa32d3bb8198d5956a553d364ba47a58c",
         }
     ),
-    'Review convention': frozenset(
+    "Review convention": frozenset(
         {
-            'd7f64324b9f923e9af3492e39562f04fe5ff8de644f51a5aec8ded9694b57de8',
+            "d7f64324b9f923e9af3492e39562f04fe5ff8de644f51a5aec8ded9694b57de8",
         }
     ),
-    'Ticket workflow': frozenset(
+    "Ticket workflow": frozenset(
         {
-            '944f0aec70c690489ab8096d955c97c15d03dc6704159c766eb8e8657d9b72f5',
+            "944f0aec70c690489ab8096d955c97c15d03dc6704159c766eb8e8657d9b72f5",
         }
     ),
-    'What this is': frozenset(
+    "What you must not do": frozenset(
         {
-            '248040d4991826d740b95b5e3aa3080f8beaad188457007a2a2a9acfcb044962',
-            '5f5eda81b25e1cd571f8696a2cbe794312a2573137fe18ef3ee1af3daf6c4a34',
+            "6fd3b38385e6b8a2fc90306e80e5323dc7d1607ecba941bc5e5d62ae6f78708d",
+            "fb4fc0490f98d41d2acee58e8de0215eb6ef55d18811b49f87f592cf3258081a",
         }
     ),
-    'What you must not do': frozenset(
+    "Where this project is, and what to do next": frozenset(
         {
-            '6fd3b38385e6b8a2fc90306e80e5323dc7d1607ecba941bc5e5d62ae6f78708d',
-            'fb4fc0490f98d41d2acee58e8de0215eb6ef55d18811b49f87f592cf3258081a',
+            "ea987dee4f97d28bb52264978f2aa218d25f777d132d6d95df1a19c2898e0ca0",
         }
     ),
-    'Where this project is, and what to do next': frozenset(
+    "Your ticket": frozenset(
         {
-            'ea987dee4f97d28bb52264978f2aa218d25f777d132d6d95df1a19c2898e0ca0',
+            "c82e5fda773511b0910e527a39a47213e17dad7c39a2eb489215ecb170354dc7",
         }
     ),
-    'Your ticket': frozenset(
-        {
-            'c82e5fda773511b0910e527a39a47213e17dad7c39a2eb489215ecb170354dc7',
-        }
+}
+
+# Lines a release wrote whatever the project, with each run that depends
+# on the project written as the number of lines it may stand for.
+PATTERNS: dict[str, tuple[tuple[str | int, ...], ...]] = {
+    "Role: Manager": (
+        (
+            "## Role: Manager",
+            "",
+            "You dispatch work to your own Workers and defer to the Owner on project-wide",
+            "matters (SPEC.md §2.2). You do not see or control another Manager's Workers.",
+            "",
+            "**Workers are interchangeable, and a Worker is a workspace — not a module,",
+            "a component or a specialism** (SPEC.md §5.3.4). Assign by who is free, never",
+            "one Worker per module; `rite claim` on the paths is what keeps two Workers",
+            "out of each other's way.",
+            "",
+            "**Workers:** none yet. Add one with `rite add worker <name>` — it creates",
+            "`workers/<name>/` with its own checkouts and its own scoped instructions.",
+            "",
+            3,
+        ),
+        (
+            "## Role: Manager",
+            "",
+            "You dispatch work to your own Workers and defer to the Owner on project-wide",
+            "matters (SPEC.md §2.2). You do not see or control another Manager's Workers.",
+            "",
+            "**Workers:** none yet. Add one with `rite add worker <name>` — it creates",
+            "`workers/<name>/` with its own checkouts and its own scoped instructions.",
+            "",
+            3,
+        ),
+    ),
+    "Role: Owner": (
+        (
+            "## Role: Owner",
+            "",
+            "You own the board and the project-wide ticket queue (SPEC.md §2.3): assign",
+            "work, monitor blocked and stalled tickets, and make project-wide calls that",
+            "a Worker or Manager shouldn't make alone.",
+            "",
+            "**Workers are interchangeable, and a Worker is a workspace — not a module,",
+            "a component or a specialism** (SPEC.md §5.3.4). `workers/<name>/` holds its",
+            "own checkout of every module, and every Worker carries the same project",
+            "credentials, so any Worker can take any ticket. Assign by who is free, and",
+            "never keep one Worker per module: two Workers editing different files of the",
+            "same module at once is normal, and `rite claim` on the paths is what keeps",
+            "them apart. Naming Workers after modules is the mistake this note exists to",
+            "prevent — it makes half of them idle while the rest queue.",
+            "",
+            3,
+            "",
+            4,
+        ),
+        (
+            "## Role: Owner",
+            "",
+            "You own the board and the project-wide ticket queue (SPEC.md §2.3): assign",
+            "work, monitor blocked and stalled tickets, and make project-wide calls that",
+            "a Worker or Manager shouldn't make alone.",
+            "",
+            3,
+            "",
+            4,
+        ),
+    ),
+    "Workflow": (
+        (
+            "## Workflow",
+            "",
+            3,
+            "   repos, right branches, no residue from a previous task (SPEC §2.1). A",
+            "   dirty tree blocks and is never discarded. In a sandbox, `rite sandbox",
+            "   start` already ran it before your session began, and it cannot run from",
+            "   inside: skip it.",
+            "2. Claim paths before touching them:",
+            3,
+            "   directories, never a whole module. If the claim is refused, another",
+            "   worker holds an overlapping path: do not work on those paths, and do not",
+            "   claim a narrower or wider path to get around the refusal.",
+            "3. While you hold a claim, beat every ten minutes or so:",
+            3,
+            "   liveness record `rite status` and the watchdog read — a worker that never",
+            "   beats is reported STALLED.",
+            "4. Work the ticket on its own branch: if a module is on its default branch,",
+            "   create one named for the ticket first (`git checkout -b <ticket-id>`).",
+            "   Push that branch after every commit, not only at the end —",
+            "   `git push -u origin <ticket-id>`. Your work exists outside this session",
+            "   only once it is pushed. In a sandbox this checkout is a copy that is",
+            "   discarded with the sandbox, and a session can stop at any moment, so a",
+            "   commit that was never pushed is gone.",
+            "5. Run the module's own **test and lint** commands. `rite prepare` prints",
+            "   them every time it runs, resolved at that moment — those are the ones to",
+            "   use. **Module commands** above lists them as `Test:` and `Lint:` as of",
+            "   when this Worker was created, and the module map in the",
+            "   project root's `CLAUDE.md` has them as of `rite init`; a command recorded",
+            "   in `modules.yaml` since then appears only in `rite prepare`'s output. In a",
+            "   sandbox `rite prepare` ran before you started and you cannot see its",
+            "   output, so use **Module commands** above. Run",
+            '   them as written; where an entry says "not detected", ask rather than',
+            "   inventing a command, because one that is wrong in a way that still exits",
+            "   0 looks exactly like a passing suite.",
+            "6. Verify your own fix before review. A green suite says the project still",
+            "   works, not that your change does anything — delete the fix and re-run",
+            "   whatever proves it.",
+            "7. Run `/review` (the review convention from the project root).",
+            "8. Push your final commits, then open a PR, get it reviewed, and merge.",
+            3,
+        ),
+        (
+            "## Workflow",
+            "",
+            3,
+            "   repos, right branches, no residue from a previous task (SPEC §2.1). A",
+            "   dirty tree blocks and is never discarded.",
+            3,
+            "3. Work the ticket.",
+            "4. Run the module's own **test and lint** commands. They are written out",
+            "   for you in the module map in the project root's `CLAUDE.md`, under the",
+            "   heading for the module you touched, as `Test:` and `Lint:` — `rite init`",
+            "   read them out of that module's own manifest so nobody has to guess. Run",
+            '   them as written; where an entry says "not detected", ask rather than',
+            "   inventing a command, because one that is wrong in a way that still exits",
+            "   0 looks exactly like a passing suite.",
+            "5. Verify your own fix before review. A green suite says the project still",
+            "   works, not that your change does anything — delete the fix and re-run",
+            "   whatever proves it.",
+            "6. Run `/review` (the review convention from the project root).",
+            "7. Open a PR, get it reviewed, merge.",
+            3,
+        ),
     ),
 }

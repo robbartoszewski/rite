@@ -89,9 +89,7 @@ class SpecState:
     unregistered_dirs: list[str] = field(default_factory=list)
 
 
-def spec_state(
-    root: Path, config: ProjectConfig, module_paths: list[str]
-) -> SpecState:
+def spec_state(root: Path, config: ProjectConfig, module_paths: list[str]) -> SpecState:
     """The spec as the disk has it.
 
     A registered path with nothing behind it is not a spec, however

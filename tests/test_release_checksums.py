@@ -135,8 +135,7 @@ def test_it_publishes_the_command_the_readme_tells_the_reader_to_run():
     # is unchanged — wherever a reader is told to verify the download, the
     # command named must be the one the release block publishes.
     told = "".join(
-        (REPO_ROOT / rel).read_text()
-        for rel in ("README.md", "docs/install-notes.md")
+        (REPO_ROOT / rel).read_text() for rel in ("README.md", "docs/install-notes.md")
     )
     assert module.READER_COMMAND in told, (
         "no install document tells readers to run the command the release "

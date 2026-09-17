@@ -1,15 +1,17 @@
-"""A project built by the PREVIOUS release upgrades cleanly.
+"""A project built by ANY past release upgrades cleanly.
 
 Every other refresh test builds the project with today's code and then takes
-markers away to imitate an older one. This one runs the last release's own
+markers away to imitate an older one. These run each released version's own
 `rite init` and `rite add worker` from its git tag, so the bytes are what a
 real user has — the case that matters, and the one that cannot be imitated
-into passing.
+into passing. Every tag is covered, not just the newest, because "an existing
+project" means one built by whichever release its team happened to install.
 """
 
 from __future__ import annotations
 
 import hashlib
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -33,7 +35,7 @@ assert add_worker(root, "alpha").ok
 """
 
 
-def _previous_tag() -> str | None:
+def _release_tags() -> list[str]:
     try:
         tags = subprocess.run(
             ["git", "tag", "-l", "v*"],
@@ -43,15 +45,19 @@ def _previous_tag() -> str | None:
             check=True,
         ).stdout.split()
     except (OSError, subprocess.CalledProcessError):
-        return None
-    return sorted(tags)[-1] if tags else None
+        return []
+
+    def version(tag: str) -> tuple[int, ...]:
+        try:
+            return tuple(int(part) for part in tag.lstrip("v").split("."))
+        except ValueError:
+            return ()
+
+    return sorted(tags, key=version)
 
 
-@pytest.fixture
-def project_from_the_last_release(tmp_path: Path) -> Path:
-    tag = _previous_tag()
-    if tag is None:
-        pytest.skip("no release tag to upgrade from")
+def _build_with(tag: str, tmp_path: Path) -> Path:
+    """Run `tag`'s own init and add-worker, or skip saying why it could not."""
     src = tmp_path / "old"
     src.mkdir()
     archive = subprocess.run(
@@ -77,6 +83,37 @@ def project_from_the_last_release(tmp_path: Path) -> Path:
     return root
 
 
+@pytest.fixture(scope="session")
+def _built_once(tmp_path_factory) -> dict[str, Path]:
+    """Each tag's project is built once and copied per test — init is slow."""
+    return {}
+
+
+def _copy_of(tag: str | None, request, tmp_path: Path, built: dict[str, Path]) -> Path:
+    if tag is None:
+        pytest.skip("no release tag to upgrade from")
+    if tag not in built:
+        built[tag] = _build_with(
+            tag,
+            request.getfixturevalue("tmp_path_factory").mktemp(tag.replace(".", "_")),
+        )
+    root = tmp_path / "project"
+    shutil.copytree(built[tag], root, symlinks=True)
+    return root
+
+
+@pytest.fixture(params=_release_tags() or [None])
+def project_from_a_release(request, tmp_path: Path, _built_once) -> Path:
+    return _copy_of(request.param, request, tmp_path, _built_once)
+
+
+@pytest.fixture
+def project_from_the_last_release(request, tmp_path: Path, _built_once) -> Path:
+    """Only the newest tag, for what is specific to the step from it."""
+    tags = _release_tags()
+    return _copy_of(tags[-1] if tags else None, request, tmp_path, _built_once)
+
+
 def _hashes(root: Path) -> dict[str, str]:
     return {
         str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
@@ -86,9 +123,9 @@ def _hashes(root: Path) -> dict[str, str]:
 
 
 def test_it_upgrades_without_touching_what_the_team_wrote(
-    project_from_the_last_release, monkeypatch
+    project_from_a_release, monkeypatch
 ):
-    root = project_from_the_last_release
+    root = project_from_a_release
     authored = {
         ".rite/architecture.md": "# Architecture\n\nOurs, hand-written.\n",
         ".rite/plan.md": "# Plan\n\nPhase 1.\n",
@@ -119,6 +156,11 @@ def test_it_upgrades_without_touching_what_the_team_wrote(
     assert "Our own note." in claude.read_text(), (
         "an edit inside a generated section was reverted"
     )
+    # The correction that started all of this — an Owner assigning Workers by
+    # module — has to arrive, in the Owner's file and from every release.
+    assert "Workers are interchangeable" in claude.read_text(), (
+        "the worker-assignment correction did not reach an upgraded project"
+    )
     # The file every Worker reads is now this version's, and marked.
     worker = (root / "workers" / "alpha" / "CLAUDE.md").read_text()
     assert "rite:sha256" in worker
@@ -126,25 +168,29 @@ def test_it_upgrades_without_touching_what_the_team_wrote(
         assert (root / "workers" / "alpha" / ".claude" / "commands" / name).is_file()
 
 
-def test_a_second_run_changes_nothing_further(
-    project_from_the_last_release, monkeypatch
+def test_a_second_run_changes_nothing_and_says_the_same_thing(
+    project_from_a_release, monkeypatch
 ):
     """Idempotent: whatever the first run settles stays settled.
 
-    Not "silent". A Worker's module list is written per project, so no
-    release's bytes are on record for it and a refresh cannot tell the last
-    release's rendering from a list someone edited. That section is reported
-    every run until it is taken — which is the mechanism working, not
-    something left undone. What must not happen is the file CHANGING again.
+    Not "silent". A section that is mostly the project's own data — What this
+    is, a Worker's module list — has no release's bytes on record, so a
+    refresh cannot tell the last release's rendering of it from one someone
+    edited. Those are reported every run until they are taken, which is the
+    mechanism working rather than something left undone. What must not happen
+    is the file CHANGING again, or the report drifting.
     """
-    monkeypatch.chdir(project_from_the_last_release)
-    assert CliRunner().invoke(cli, ["update", "--files-only"]).exit_code == 0
-    settled = _hashes(project_from_the_last_release)
+    root = project_from_a_release
+    monkeypatch.chdir(root)
+    first = CliRunner().invoke(cli, ["update", "--files-only"])
+    assert first.exit_code == 0, first.output
+    settled = _hashes(root)
 
     again = CliRunner().invoke(cli, ["update", "--files-only"])
-
     assert again.exit_code == 0, again.output
-    assert _hashes(project_from_the_last_release) == settled
+    assert _hashes(root) == settled, "a second refresh still had something to write"
+    third = CliRunner().invoke(cli, ["update", "--files-only"])
+    assert third.output == again.output
     assert not [
         ln
         for ln in again.output.splitlines()
@@ -187,9 +233,9 @@ def test_taking_the_renamed_section_settles_it_for_good(
 
 
 def test_doctor_says_the_project_is_behind_before_the_refresh(
-    project_from_the_last_release, monkeypatch
+    project_from_a_release, monkeypatch
 ):
-    monkeypatch.chdir(project_from_the_last_release)
+    monkeypatch.chdir(project_from_a_release)
     from unittest.mock import patch
 
     with patch("keyring.get_password", return_value=None):

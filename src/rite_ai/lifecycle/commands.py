@@ -243,9 +243,7 @@ def start(root: Path) -> StartResult:
     project = load_project(root)
     if isinstance(project, list):
         errors = "; ".join(f"{e.file}: {e.message}" for e in project)
-        return StartResult(
-            False, f"config errors: {errors}", phase=detect_phase(root)
-        )
+        return StartResult(False, f"config errors: {errors}", phase=detect_phase(root))
 
     actions.append(f"project '{project.brief.name}' loaded")
 

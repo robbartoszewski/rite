@@ -136,9 +136,11 @@ class TestAFileWrittenBeforeMarkersExisted:
         assert "older" not in new
 
 
-def test_the_v0_2_0_owner_gets_the_phase_table_and_can_take_the_guidance():
+def test_the_v0_2_0_owner_gets_the_phase_table_and_the_guidance():
     """The case that motivated this: a project initialised before the phase
-    table and the Worker-fungibility guidance existed."""
+    table and the Worker-fungibility guidance existed. Both arrive on their
+    own — the Role section is recognisable as that release's guidance around
+    this project's own ticket-backend line."""
     current = _generated()
     phase = "Where this project is, and what to do next"
     role = _section(current, "Role: Owner")
@@ -156,11 +158,8 @@ def test_the_v0_2_0_owner_gets_the_phase_table_and_can_take_the_guidance():
     new, changes = refresh_text(legacy, current)
     actions = {c.target: c.action for c in changes}
     assert actions[phase] == "inserted"
-    assert actions["Role: Owner"] == "kept-unknown"
-    assert "interchangeable" not in new
-
-    taken, _ = refresh_text(new, current, frozenset({"Role: Owner"}))
-    assert "Workers are interchangeable" in taken
+    assert actions["Role: Owner"] == "refreshed"
+    assert "Workers are interchangeable" in new
 
 
 def test_spec_add_keeps_markers_attached(tmp_path: Path):
@@ -416,3 +415,73 @@ class TestASectionAReleaseWrote:
             f"{stale} differ from every release — if this is a release, run "
             "`uv run python tools/section_history.py` after tagging"
         )
+
+
+class TestRecognisingAnOlderReleasesText:
+    """A section that is rite's guidance around a line of the project's own
+    details is recognisable even though its bytes differ from project to
+    project — and only just that far, so an edit still blocks the refresh."""
+
+    @staticmethod
+    def _fill(pattern, gap_lines: int = 1) -> str:
+        out: list[str] = []
+        for item in pattern:
+            if isinstance(item, str):
+                out.append(item)
+            else:
+                out.extend(["**Ticket backend:** ours, and only ours."] * gap_lines)
+        return "\n".join(out)
+
+    @staticmethod
+    def _a_pattern(heading: str = "Role: Owner"):
+        from rite_ai.update.section_history import PATTERNS
+
+        patterns = PATTERNS.get(heading)
+        assert patterns, f"no recorded pattern for {heading!r}"
+        return sorted(patterns, key=repr)[0]
+
+    def test_rites_guidance_with_this_projects_details_is_recognised(self):
+        from rite_ai.update.refresh import _written_by_a_release
+
+        assert _written_by_a_release("Role: Owner", self._fill(self._a_pattern()))
+
+    def test_a_line_the_user_added_between_rites_lines_is_not(self):
+        from rite_ai.update.refresh import _written_by_a_release
+
+        text = self._fill(self._a_pattern())
+        lines = text.splitlines()
+        at = next(
+            i for i, line in enumerate(lines) if line.startswith("You own the board")
+        )
+        lines.insert(at + 1, "Our own standing note about assignment.")
+        assert not _written_by_a_release("Role: Owner", "\n".join(lines))
+
+    def test_a_gap_will_not_swallow_a_paragraph(self):
+        """The project-specific run stands for about as many lines as the
+        release itself wrote there, not for anything at all."""
+        from rite_ai.update.refresh import _written_by_a_release
+
+        assert not _written_by_a_release(
+            "Role: Owner", self._fill(self._a_pattern(), gap_lines=30)
+        )
+
+    def test_every_recorded_pattern_pins_down_real_guidance(self):
+        """A pattern of a heading and two blank lines would match almost
+        anything. `tools/section_history.py` refuses to record those; this
+        fails if a regenerated file ever contains one."""
+        from rite_ai.update.section_history import PATTERNS
+
+        for heading, patterns in PATTERNS.items():
+            for pattern in patterns:
+                guidance = [
+                    item
+                    for item in pattern
+                    if isinstance(item, str)
+                    and item.strip()
+                    and not item.startswith("## ")
+                ]
+                assert len(guidance) >= 3, f"{heading}: {guidance}"
+                assert any(isinstance(item, int) for item in pattern), heading
+                assert all(item <= 12 for item in pattern if isinstance(item, int)), (
+                    f"{heading}: a gap stands for too many lines"
+                )
