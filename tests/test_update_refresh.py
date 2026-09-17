@@ -291,6 +291,23 @@ class TestCopiedTemplates:
         )
 
 
+def test_rites_own_ci_checks_out_the_tags_those_tests_need():
+    """Four tests in this repo ask what a RELEASE shipped, and read tags to
+    find out. `actions/checkout` fetches none by default, so without this they
+    skip in CI — and a check that skips reports the same green as one that
+    passed. Measured: on a shallow clone of main, five tests skip and the suite
+    still says OK."""
+    ci = (
+        Path(__file__).resolve().parent.parent / ".github" / "workflows" / "ci.yml"
+    ).read_text()
+    checkout = ci[ci.index("actions/checkout") :]
+    checkout = checkout[: checkout.index("- name:")]
+    assert "fetch-depth: 0" in checkout or "fetch-tags: true" in checkout, (
+        "rite's CI checks out without tags, so the release-shipped tests skip "
+        "there:\n" + checkout
+    )
+
+
 def _project(tmp_path: Path, monkeypatch) -> Path:
     from rite_ai.cli.init import run_init
 

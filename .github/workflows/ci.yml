@@ -13,7 +13,13 @@ jobs:
       matrix:
         python-version: ["3.11", "3.12", "3.13"]
     steps:
+      # Tags, not just the commit: four tests ask what a RELEASE shipped —
+      # `test_the_history_covers_what_the_last_release_shipped` and the three
+      # in `test_upgrade_from_a_release.py`. Without tags they skip, and a
+      # check that skips in CI reports the same green as one that passed.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4
