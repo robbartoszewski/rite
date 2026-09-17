@@ -456,11 +456,25 @@ def _coordination_tick(root: Path, project) -> list[str]:
             state_branch=config.state_branch,
         )
         holder = OwnerLeaseHolder(layer, name, config)
+        # Read the ledger ONCE for this tick: what we publish and what we
+        # decide the handover on must be the same reading, or the tick can
+        # advertise itself busy and hand over in the same breath.
+        workers, in_flight = _this_machines_load(root)
         monitor = ManagerMonitor(
             holder,
             root=root,
             heartbeat=project.config.heartbeat,
-            status=lambda: _this_machines_load(root),
+            status=lambda: (workers, in_flight),
+            # D-43 puts the handover at an operation boundary and says only
+            # the caller knows where that is. From cron, the honest answer
+            # is "when this machine has nothing in flight": no claimed
+            # ticket means no Worker is mid-anything, which is the closest
+            # thing to a boundary a periodic job can see.
+            #
+            # Without this an incumbent that has been ASKED never hands over
+            # and the role moves only when its lease lapses — the
+            # interruption §2.4's graceful demotion exists to replace.
+            hand_over_when=lambda: in_flight == 0,
         )
         tick = monitor.tick()
     except Exception as e:  # noqa: BLE001 - a tick must not die on coordination

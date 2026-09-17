@@ -230,6 +230,91 @@ class TestWhatItTellsTheFleet:
         ]
 
 
+class TestHandingTheRoleBack:
+    """§2.4's graceful demotion, completed from cron.
+
+    Without this the incumbent that has been ASKED never hands over and the
+    role moves only when its lease lapses — the interruption graceful
+    demotion exists to replace (Q10)."""
+
+    @pytest.fixture
+    def fleet(self, tmp_path):
+        url = remote(tmp_path)
+        roots = {}
+        for name in ("alpha", "beta"):
+            root = project(
+                tmp_path / name,
+                f"coordination:\n  managers: [alpha, beta]\n  remote: '{url}'\n",
+            )
+            (root / ".rite" / "machine").write_text(f"{name}\n")
+            roots[name] = root
+        return roots, url
+
+    def owner(self, url, tmp_path, tag):
+        from rite_ai.coordination.git_backend import GitStateLayer
+        from rite_ai.coordination.lease import LEASE_KEY
+        from rite_ai.coordination.schemas import lease_from_json
+        from rite_ai.coordination.state_layer import Present
+
+        layer = GitStateLayer(url, tmp_path / f"observe-{tag}.git")
+        read = layer.read_state(LEASE_KEY)
+        if not isinstance(read, Present):
+            return None
+        return lease_from_json(read.value.decode())
+
+    def test_an_idle_owner_hands_over_when_asked(self, fleet, tmp_path):
+        roots, url = fleet
+        run_tick(roots["beta"])  # beta takes the role first
+        run_tick(roots["alpha"])  # alpha outranks it and asks
+        lines_out = coordination_lines(run_tick(roots["beta"]))
+        assert any("handed over" in line for line in lines_out), lines_out
+
+        # Released means expired IN PLACE: the file still records who held
+        # it and when, and the successor does not wait for a full lease to
+        # run out.
+        from datetime import UTC, datetime
+
+        from rite_ai.coordination.schemas import parse_timestamp
+
+        lease = self.owner(url, tmp_path, "handed")
+        assert lease.owner == "beta", "the lease file still records who held it"
+        assert lease.acquired, "and when it was taken"
+        assert parse_timestamp(lease.expires) <= datetime.now(UTC)
+
+    def test_a_busy_owner_keeps_the_role_and_says_it_was_asked(
+        self, fleet, tmp_path
+    ):
+        """The half that makes (A) safe: a machine with work in flight is
+        not at a boundary, so it holds the role and the request stays
+        pending rather than interrupting a Worker mid-ticket."""
+        from rite_ai.claims.ledger import ClaimsLedger
+
+        roots, url = fleet
+        run_tick(roots["beta"])
+        ClaimsLedger(roots["beta"] / ".rite" / "claims.json").claim(
+            ["src/a.py"], "w1", "ABC-1"
+        )
+        run_tick(roots["alpha"])
+        lines_out = coordination_lines(run_tick(roots["beta"]))
+
+        assert not any("handed over" in line for line in lines_out), lines_out
+        assert any("asked for the role" in line for line in lines_out), lines_out
+        assert self.owner(url, tmp_path, "busy").owner == "beta"
+
+    def test_the_request_is_cleared_so_it_is_not_acted_on_twice(
+        self, fleet, tmp_path
+    ):
+        from rite_ai.coordination.demotion import pending_request
+        from rite_ai.coordination.git_backend import GitStateLayer
+
+        roots, url = fleet
+        run_tick(roots["beta"])
+        run_tick(roots["alpha"])
+        run_tick(roots["beta"])
+        layer = GitStateLayer(url, tmp_path / "request-check.git")
+        assert pending_request(layer, "beta") is None
+
+
 class TestItCannotTakeTheTickDown:
     def test_an_unreachable_remote_is_reported_and_the_tick_still_succeeds(
         self, tmp_path
