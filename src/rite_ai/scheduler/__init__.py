@@ -460,7 +460,7 @@ def _coordination_tick(root: Path, project) -> list[str]:
             holder,
             root=root,
             heartbeat=project.config.heartbeat,
-            status=lambda: (_this_machines_workers(root), 0),
+            status=lambda: _this_machines_load(root),
         )
         tick = monitor.tick()
     except Exception as e:  # noqa: BLE001 - a tick must not die on coordination
@@ -475,15 +475,34 @@ def _coordination_tick(root: Path, project) -> list[str]:
     return lines
 
 
-def _this_machines_workers(root: Path) -> list[str]:
-    """The Workers this machine is running, as the claims ledger sees them —
-    the same definition `run_tick`'s window boundary already uses."""
+def _this_machines_load(root: Path) -> tuple[list[str], int]:
+    """(Workers, tickets in flight) from ONE read of the claims ledger.
+
+    Workers are those holding claims — the definition `run_tick`'s window
+    boundary already uses.
+
+    `in_flight` counts distinct TICKETS, not claims: a Worker holding four
+    paths for one ticket is doing one piece of work, and counting paths
+    would make a machine look four times as busy as it is.
+
+    It is not decoration. The Owner assigns to the least loaded Manager
+    (P2-4a: `min(v.in_flight, ...)`), so a machine that always reports 0
+    advertises itself as idle and the Owner sends it everything — routing
+    defeated silently, with every machine looking healthy. The first cut of
+    this tick hardcoded 0.
+
+    Read once, not twice: two reads could disagree and produce a worker list
+    that does not match the count beside it.
+    """
     claims_path = root / ".rite" / "claims.json"
     if not claims_path.is_file():
-        return []
+        return [], 0
     from rite_ai.claims.ledger import ClaimsLedger
 
-    return sorted({c.worker for c in ClaimsLedger(claims_path).list_claims()})
+    claims = ClaimsLedger(claims_path).list_claims()
+    workers = sorted({c.worker for c in claims})
+    tickets = {c.ticket for c in claims if c.ticket}
+    return workers, len(tickets)
 
 
 # ---------------------------------------------------------------------------

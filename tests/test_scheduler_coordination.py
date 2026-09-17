@@ -135,6 +135,101 @@ class TestWhenItRuns:
         assert not (enrolled / ".rite" / "outbox").exists()
 
 
+class TestWhatItTellsTheFleet:
+    """The heartbeat is not a liveness ping: the Owner routes work by what
+    is in it (P2-4a assigns to `min(v.in_flight, ...)`)."""
+
+    @pytest.fixture
+    def enrolled(self, tmp_path):
+        root = project(
+            tmp_path,
+            "coordination:\n  managers: [alpha, beta]\n"
+            f"  remote: '{remote(tmp_path)}'\n",
+        )
+        (root / ".rite" / "machine").write_text("alpha\n")
+        return root
+
+    def _published(self, root):
+        from rite_ai.coordination.git_backend import GitStateLayer
+        from rite_ai.coordination.heartbeat import status_key
+        from rite_ai.coordination.schemas import status_from_json
+
+        url = [
+            line.split("'")[1]
+            for line in (root / ".rite" / "config.yaml").read_text().splitlines()
+            if "remote:" in line and "'" in line
+        ][0]
+        layer = GitStateLayer(url, root / ".rite" / f"read-{id(root)}.git")
+        read = layer.read_state(status_key("alpha"))
+        return status_from_json(read.value.decode())
+
+    def test_an_idle_machine_reports_no_work(self, enrolled):
+        run_tick(enrolled)
+        assert self._published(enrolled).in_flight == 0
+
+    def test_a_busy_machine_reports_its_tickets(self, enrolled):
+        """A machine that always reported 0 would advertise itself as idle
+        and the Owner would send it everything — routing defeated silently,
+        with every machine still looking healthy."""
+        from rite_ai.claims.ledger import ClaimsLedger
+
+        ledger = ClaimsLedger(enrolled / ".rite" / "claims.json")
+        ledger.claim(["src/a.py"], "w1", "ABC-1")
+        ledger.claim(["src/b.py"], "w2", "ABC-2")
+        run_tick(enrolled)
+        status = self._published(enrolled)
+        assert status.in_flight == 2
+        assert status.workers == ["w1", "w2"]
+
+    def test_several_paths_for_one_ticket_are_one_piece_of_work(self, enrolled):
+        """Counting claims instead of tickets makes a machine look four
+        times as busy as it is, and the Owner routes around a machine that
+        is barely working."""
+        from rite_ai.claims.ledger import ClaimsLedger
+
+        ledger = ClaimsLedger(enrolled / ".rite" / "claims.json")
+        for path in ("src/a.py", "src/b.py", "src/c.py", "src/d.py"):
+            ledger.claim([path], "w1", "ABC-1")
+        run_tick(enrolled)
+        assert self._published(enrolled).in_flight == 1
+
+    def test_the_owner_routes_to_the_freer_machine(self, tmp_path):
+        """The property all of the above exists for, end to end: two
+        machines publish real load and the Owner picks the emptier one."""
+        from datetime import UTC, datetime
+
+        from rite_ai.claims.ledger import ClaimsLedger
+        from rite_ai.coordination.assignment import choose_manager, manager_views
+        from rite_ai.coordination.git_backend import GitStateLayer
+
+        url = remote(tmp_path)
+        roots = {}
+        for name in ("alpha", "beta"):
+            root = project(
+                tmp_path / name,
+                f"coordination:\n  managers: [alpha, beta]\n  remote: '{url}'\n",
+            )
+            (root / ".rite" / "machine").write_text(f"{name}\n")
+            roots[name] = root
+        ledger = ClaimsLedger(roots["alpha"] / ".rite" / "claims.json")
+        ledger.claim(["src/a.py"], "w1", "ABC-1")
+        ledger.claim(["src/b.py"], "w1", "ABC-2")
+        run_tick(roots["alpha"])
+        run_tick(roots["beta"])
+
+        views = manager_views(
+            GitStateLayer(url, tmp_path / "owner-cache.git"),
+            ["alpha", "beta"],
+            now=datetime.now(UTC),
+            interval_minutes=10,
+            stall_threshold=3,
+        )
+        chosen = choose_manager(views)
+        assert chosen is not None and chosen.name == "beta", [
+            (v.name, v.in_flight, v.assignable, v.why_not) for v in views
+        ]
+
+
 class TestItCannotTakeTheTickDown:
     def test_an_unreachable_remote_is_reported_and_the_tick_still_succeeds(
         self, tmp_path
