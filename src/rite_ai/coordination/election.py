@@ -62,6 +62,12 @@ class Promoted:
     # Higher-priority Managers we could not see. Not an error — a promotion
     # that happened BECAUSE nobody could vouch for them is worth reading.
     unseen: list[str] = field(default_factory=list)
+    # Whose lease we displaced, empty for a first election. D-14's third
+    # trigger needs this: you cannot hand over the outgoing Owner's work
+    # without knowing who the outgoing Owner was.
+    previous_owner: str = ""
+    # `message_log`'s vocabulary for why, so the promotion event says it.
+    why: str = "no-owner"
 
 
 @dataclass
@@ -140,9 +146,25 @@ def stand_for_owner(
         if not is_stalled(live, stall_threshold=heartbeat.stall_threshold):
             return Deferred(name, live.detail)
 
+    previous = "" if lease is None else lease.owner
+    why = "no-owner"
+    if lease is not None:
+        why = (
+            "lease-not-credible"
+            if holder.verdict(lease, now) == LeaseVerdict.NOT_CREDIBLE
+            else "lease-expired"
+        )
+
     got = holder.acquire()
     if isinstance(got, Acquired):
-        return Promoted(got.lease, got.version, got.displaced_not_credible, unseen)
+        return Promoted(
+            got.lease,
+            got.version,
+            got.displaced_not_credible,
+            unseen,
+            previous,
+            why,
+        )
     if isinstance(got, HeldByOther):
         # Lost the race, which is the CAS working (§2.4.2). The winner's
         # name comes from the lease we just re-read, not from a guess.
