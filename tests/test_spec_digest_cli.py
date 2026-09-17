@@ -386,3 +386,67 @@ def test_a_spliced_section_is_never_presented_as_a_whole_one(
     # …so the register must not claim to be the whole table.
     assert "printed elsewhere" in register
     assert "# 99 (SPEC.md:" in register and "-" in register.splitlines()[0]
+
+
+# --- show: the derived text, which is what the review rounds produced -------------
+
+
+def test_show_prints_the_derived_text_and_where_it_came_from(
+    project: Path, monkeypatch
+):
+    monkeypatch.chdir(project)
+    _write_unit(project, "1.1", ["1.1"], "A Worker does the work. See §2.")
+    _run(project, "stamp", "1.1")
+    result = _run(project, "show", "1.1")
+    assert result.exit_code == 0, result.output
+    assert "A Worker does the work. See §2." in result.output
+    assert "derived from SPEC.md:" in result.output  # the source pointer
+    assert "covers 1.1" in result.output
+
+
+def test_show_says_nothing_is_derived_yet_rather_than_printing_the_source(
+    project: Path, monkeypatch
+):
+    """Silently falling back to source text would make an undigested spec look
+    digested, and the two-round review is the whole difference."""
+    monkeypatch.chdir(project)
+    result = _run(project, "show", "1.1")
+    assert result.exit_code == 1
+    assert "nothing derived for it yet" in result.output
+    assert "rite spec slice 1.1" in result.output
+
+
+@pytest.mark.parametrize("how", ["stale", "tampered", "unstamped"])
+def test_show_hands_over_the_text_and_says_it_cannot_be_trusted(
+    project: Path, monkeypatch, how: str
+):
+    """Both halves matter: a Worker handed nothing cannot judge anything, and
+    a Worker handed drifted text with no warning cannot either."""
+    monkeypatch.chdir(project)
+    path = _write_unit(project, "1.1", ["1.1"], "derived text")
+    if how != "unstamped":
+        _run(project, "stamp", "1.1")
+    if how == "tampered":
+        path.write_text(path.read_text() + "\nadded by hand\n")
+    elif how == "stale":
+        (project / "SPEC.md").write_text(
+            (SPEC + FILLER).replace("A Worker does the work", "A Worker now does it")
+        )
+    result = _run(project, "show", "1.1")
+    assert result.exit_code == 1
+    assert "derived text" in result.output  # handed over anyway
+    assert "⚠" in result.output and "Re-digest" in result.output
+
+
+def test_show_counts_as_a_retrieval(project: Path, monkeypatch):
+    """Reading a derived unit is a retrieval like a slice is: a fallback after
+    either one means the same thing, and the rate needs both in its
+    denominator."""
+    monkeypatch.chdir(project)
+    _write_unit(project, "1.1", ["1.1"])
+    _run(project, "stamp", "1.1")
+    _run(project, "show", "1.1", "--worker", "alpha")
+    events = read_events(project).events
+    assert [(e.kind, e.unit, e.worker) for e in events] == [
+        ("retrieval", "1.1", "alpha")
+    ]

@@ -4315,6 +4315,83 @@ def spec_slice(unit: str, worker: str, depth: int | None) -> None:
     )
 
 
+@spec.command("show")
+@click.argument("unit")
+@click.option(
+    "-w",
+    "--worker",
+    default="",
+    help="Which worker is reading it, recorded with the retrieval.",
+)
+def spec_show(unit: str, worker: str) -> None:
+    """Print the derived text for UNIT, and where in the spec it came from.
+
+    This is what `/spec-digest` wrote and reviewed: the section said in fewer
+    words, with its citations intact. `rite spec slice` is the other half —
+    the source text of the unit and what it references.
+
+    The exit code says whether the text can be trusted: 0 when it matches the
+    spec, 1 when it is stale, hand-edited or never stamped. The text is
+    printed either way, with what is wrong with it on stderr, because a
+    Worker that has already been handed nothing cannot judge anything.
+
+    Examples:
+      rite spec show 5.3
+      rite spec show D-12 --worker alpha
+    """
+    from rite_ai.spec.digest_files import (
+        UNITS_DIR,
+        covers_hash,
+        file_hash,
+        read_unit_file,
+        unit_filename,
+        units_dir,
+    )
+    from rite_ai.spec.telemetry import record_retrieval
+
+    root, config = _spec_root_and_config()
+    parsed = _parse_spec(root, config)
+    units = {u.id: u for u in parsed.units}
+
+    path = units_dir(root) / unit_filename(unit)
+    if not path.exists():
+        click.echo(
+            f"{unit}: nothing derived for it yet — {UNITS_DIR} has no file for "
+            "this unit. Run `/spec-digest`, or read the source with "
+            f"`rite spec slice {unit}`.",
+            err=True,
+        )
+        raise SystemExit(1)
+    read = read_unit_file(path)
+    if isinstance(read, str):
+        click.echo(read, err=True)
+        raise SystemExit(1)
+
+    click.echo(read.body.strip())
+    where = read.source or "the spec"
+    if read.source_lines:
+        where += f":{read.source_lines[0]}-{read.source_lines[1]}"
+    click.echo(f"\n# derived from {where}; covers {', '.join(read.covers)}")
+
+    if not read.source_sha or not read.body_sha:
+        problem = "never stamped, so nothing says which spec it was written from"
+    elif file_hash(read) != read.body_sha:
+        problem = "edited by hand since it was stamped — it is not what was reviewed"
+    elif covers_hash(units, read.covers) != read.source_sha:
+        problem = "stale: the spec has changed since it was written"
+    else:
+        problem = ""
+    # Counted like a slice: a Worker reading a derived unit is a retrieval, and
+    # a fallback after one means the same thing either way.
+    record_retrieval(root, unit, worker=worker, slice_ratio=None)
+    if problem:
+        click.echo(
+            f"⚠ {unit} is {problem}. Re-digest it before relying on it.",
+            err=True,
+        )
+        raise SystemExit(1)
+
+
 @spec.command("stamp")
 @click.argument("units", nargs=-1)
 @click.option(

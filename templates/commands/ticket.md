@@ -16,6 +16,9 @@ Work ticket `$ARGUMENTS` end to end.
    ```
 
    It prints the section, what it cites and the sections everything depends on.
+   Where the spec has been digested, `rite spec show 5.3` gives you the same
+   section rewritten shorter and reviewed — and tells you when that text has
+   drifted from the spec.
    **If that was not enough and you read the whole spec anyway, say so** when
    you write your handover:
 

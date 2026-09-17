@@ -214,6 +214,7 @@ class TestSpecCommands:
             # digesting one: each does something doctor cannot
             "index",
             "status",
+            "show",
             "slice",
             "stamp",
             "verify",

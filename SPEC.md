@@ -2552,6 +2552,10 @@ rite spec status                   # which units have no derived file, which are
 rite spec slice <unit>             # print one unit, what it cites and the pinned hubs.
                                     #   Slice on stdout, measurement on stderr, so a
                                     #   Worker cannot read the measurement as spec text
+rite spec show <unit>              # the DERIVED text for one unit, with the source
+                                    #   range it came from. Exit 1 when it is stale,
+                                    #   hand-edited or unstamped — and it prints it
+                                    #   anyway, saying what is wrong
 rite spec stamp <unit>... | --all  # record on each derived file the spec it was
                                     #   written from
 rite spec verify [--strict]        # the gate: every unit covered, nothing stale,
@@ -3461,6 +3465,15 @@ rather than something `rite spec index` does, because an automatic restamp would
 bless both a source change nobody had read and a hand edit nobody had made —
 after which nothing would ever read as stale or tampered again. `rite spec
 status` reports both, by file name.
+
+**Two retrieval paths, and they are not the same.** `rite spec slice <unit>`
+prints SOURCE text — the unit, what it cites, the pinned hubs — and works on any
+registered spec, digested or not. `rite spec show <unit>` prints the DERIVED
+text `/spec-digest` wrote and reviewed for that unit, with the `source_lines` it
+came from. Both record a retrieval, because a fallback after either means the
+same thing. `show` prints a stale, hand-edited or unstamped unit rather than
+withholding it, and exits non-zero saying which: a Worker handed nothing cannot
+judge anything, and one handed drifted text with no warning cannot either.
 
 **The gate is a command, not a convention.** `rite spec verify` exits 0 only
 when every non-index unit is covered, nothing covers a unit the spec no longer

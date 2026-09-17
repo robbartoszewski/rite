@@ -61,6 +61,7 @@ class UnitFile:
     source_sha: str
     body_sha: str
     body: str
+    source_lines: list[int] | None = None
 
 
 @dataclass
@@ -157,6 +158,19 @@ def covers_hash(units: dict[str, Unit], covers: tuple[str, ...]) -> str | None:
     return _sha("\n".join(f"{c}:{units[c].sha}" for c in sorted(covers)))
 
 
+def source_span(units: dict[str, Unit], covers: tuple[str, ...]) -> list[int] | None:
+    """First and last source line the covered units span, or None.
+
+    What a round-1 reviewer needs: the derived unit beside ITS source range
+    and nothing else. Recorded at stamp time from the units the file covers,
+    so it cannot be typed wrong, and re-derived on every stamp, so it moves
+    with the source."""
+    known = [units[c] for c in covers if c in units]
+    if not known:
+        return None
+    return [min(u.start for u in known), max(u.end for u in known)]
+
+
 def render_unit_file(
     unit_id: str,
     covers: tuple[str, ...],
@@ -164,11 +178,13 @@ def render_unit_file(
     source_sha: str,
     body_sha: str,
     body: str,
+    source_lines: list[int] | None = None,
 ) -> str:
     meta = {
         "id": unit_id,
         "covers": list(covers),
         "source": source,
+        "source_lines": list(source_lines) if source_lines else [],
         "source_sha": source_sha,
         "body_sha": body_sha,
     }
@@ -227,11 +243,19 @@ def read_unit_file(path: Path) -> UnitFile | str:
         or not all(isinstance(c, str) and c for c in covers)
     ):
         return f"{path.name}: 'covers' must list the source unit ids it represents"
+    span = meta.get("source_lines")
     return UnitFile(
         path=path,
         id=unit_id.strip(),
         covers=tuple(covers),
         source=str(meta.get("source") or ""),
+        source_lines=(
+            [int(span[0]), int(span[1])]
+            if isinstance(span, list)
+            and len(span) == 2
+            and all(isinstance(n, int) and not isinstance(n, bool) for n in span)
+            else None
+        ),
         source_sha=str(meta.get("source_sha") or ""),
         body_sha=str(meta.get("body_sha") or ""),
         body=m.group(2),
@@ -265,6 +289,7 @@ def stamp(unit_file: UnitFile, units: dict[str, Unit]) -> UnitFile | str:
     source_sha = covers_hash(units, unit_file.covers)
     assert source_sha is not None
     body_sha = file_hash(unit_file)
+    span = source_span(units, unit_file.covers)
     write_atomic(
         unit_file.path,
         render_unit_file(
@@ -274,6 +299,7 @@ def stamp(unit_file: UnitFile, units: dict[str, Unit]) -> UnitFile | str:
             source_sha,
             body_sha,
             unit_file.body,
+            span,
         ),
     )
     return UnitFile(
@@ -284,6 +310,7 @@ def stamp(unit_file: UnitFile, units: dict[str, Unit]) -> UnitFile | str:
         source_sha,
         body_sha,
         unit_file.body,
+        span,
     )
 
 
