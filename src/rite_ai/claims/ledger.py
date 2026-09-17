@@ -252,6 +252,18 @@ class ClaimsLedger:
         with self._locked():
             return self._read()
 
+    def publish(self, layer, machine: str, now=None):
+        """Publish this machine's claims to the coordination state (P2-5a).
+
+        A projection of the ledger, not a second copy of it: local claims stay
+        the source of truth (§5.2) and this makes them visible to other
+        machines through the state layer (D-19) — no ticket-backend round
+        trip, no rate limit, and the same atomic write the lease uses.
+        """
+        from rite_ai.coordination.claims_state import publish_claims
+
+        return publish_claims(layer, machine, self.list_claims(), now=now)
+
     def claims_for(self, worker: str) -> list[Claim]:
         """List claims held by a specific worker."""
         with self._locked():

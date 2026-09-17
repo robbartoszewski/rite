@@ -35,7 +35,7 @@ def test_a_first_heartbeat_records_who_what_and_when(tmp_path):
     result = publish_heartbeat(
         layer, "manager-alpha", workers=["w1", "w2"], in_flight=2, now=NOW
     )
-    assert isinstance(result, Published) and not result.replaced_unreadable
+    assert isinstance(result, Published) and not result.note
     assert _status(layer) == {
         "name": "manager-alpha",
         "last_seen": "2026-09-17T12:00:00Z",
@@ -102,7 +102,7 @@ def test_its_own_unreadable_status_is_replaced_and_said_so(tmp_path):
     layer = _layer(tmp_path)
     layer.write_state(KEY, b"{ truncated", ABSENT)
     result = publish_heartbeat(layer, "manager-alpha", workers=[], in_flight=0, now=NOW)
-    assert isinstance(result, Published) and result.replaced_unreadable
+    assert isinstance(result, Published) and "could not be parsed" in result.note
     assert _status(layer)["name"] == "manager-alpha"
 
 

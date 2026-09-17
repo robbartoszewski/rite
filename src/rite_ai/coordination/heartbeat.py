@@ -27,6 +27,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from rite_ai.coordination.publish import (
+    NotPublished,
+    Published,
+    read_merge_write,
+)
 from rite_ai.coordination.schemas import (
     ManagerStatus,
     status_from_json,
@@ -34,10 +39,8 @@ from rite_ai.coordination.schemas import (
 )
 from rite_ai.coordination.state_layer import (
     Absent,
-    Present,
     StateLayer,
     Unavailable,
-    Written,
     valid_key,
 )
 
@@ -46,27 +49,6 @@ def status_key(name: str) -> str:
     """`managers/<name>.json` (§3.3.1), or "" when the name cannot be one."""
     key = f"managers/{name}.json"
     return key if name and valid_key(key) and "/" not in name else ""
-
-
-@dataclass
-class Published:
-    version: str
-    replaced_unreadable: bool = False
-    """The status already there could not be parsed and was replaced.
-
-    Reported rather than silent: a Manager's own liveness must not stop
-    because its own file is corrupt, but overwriting it does lose whatever it
-    held, and that is worth saying. D-54's pass-through rule protects OTHER
-    machines' files, which a heartbeat never rewrites."""
-
-    conflicts: int = 0
-
-
-@dataclass
-class NotPublished:
-    reason: str
-    may_have_landed: bool = False
-    """True after Unavailable: re-read before concluding anything."""
 
 
 def publish_heartbeat(
@@ -78,39 +60,40 @@ def publish_heartbeat(
     now: datetime | None = None,
     attempts: int = 3,
 ) -> Published | NotPublished:
+    """This Manager's own four fields, merged into whatever its status file
+    already holds.
+
+    Its own unreadable status is replaced rather than refused: a Manager's
+    liveness must not stop because its own file is corrupt, and the file
+    belongs to it alone. The result says so — that replacement does lose
+    whatever the file held. `claims.json`, which holds every machine's claims,
+    is refused instead (D-54); see `claims_state`.
+    """
     key = status_key(name)
     if not key:
         return NotPublished(f"{name!r} is not usable as a state key")
     stamp = (
         (now or datetime.now(UTC)).astimezone(UTC).isoformat().replace("+00:00", "Z")
     )
+    replaced = False
 
-    conflicts = 0
-    for _ in range(max(1, attempts)):
-        read = layer.read_state(key)
-        if isinstance(read, Unavailable):
-            return NotPublished(f"could not read {key}: {read.reason}")
-        replaced = False
-        if isinstance(read, Present):
-            status = status_from_json(read.value.decode("utf-8", errors="replace"))
-            if status is None:
-                status, replaced = ManagerStatus(), True
-        else:
-            status = ManagerStatus()
+    def merge(current: bytes | None) -> bytes | NotPublished:
+        nonlocal replaced
+        status = None
+        if current is not None:
+            status = status_from_json(current.decode("utf-8", errors="replace"))
+            replaced = status is None
+        status = status or ManagerStatus()
         status.name = name
         status.last_seen = stamp
         status.workers = list(workers)
         status.in_flight = in_flight
+        return status_to_json(status).encode()
 
-        written = layer.write_state(key, status_to_json(status).encode(), read.version)
-        if isinstance(written, Written):
-            return Published(written.version, replaced, conflicts)
-        if isinstance(written, Unavailable):
-            return NotPublished(
-                f"could not write {key}: {written.reason}", may_have_landed=True
-            )
-        conflicts += 1
-    return NotPublished(f"{key}: {conflicts} conflict(s) in a row — someone is writing")
+    result = read_merge_write(layer, key, merge, attempts)
+    if isinstance(result, Published) and replaced:
+        result.note = f"{key} could not be parsed and was replaced"
+    return result
 
 
 @dataclass
