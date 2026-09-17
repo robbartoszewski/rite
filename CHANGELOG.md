@@ -24,6 +24,9 @@
   rite, and `rite doctor` counts what is out of date and what you changed.
 - `rite update` refreshes the project with the rite it has just installed,
   rather than with the version it replaced — so one upgrade is one step.
+- A command or agent a past release shipped and this one no longer does is
+  named by the refresh rather than left to sit in `.claude/` unmaintained. It is
+  never deleted, and a command your own team wrote is never named.
 - `/spec-digest` gives a Worker the one part of the spec its ticket is about,
   with what has drifted since that part was written, instead of the whole
   document. The spec is parsed into addressable units, the references between
