@@ -83,6 +83,18 @@ def run_init(
     if rite_dir.exists():
         wipe = False
         if interactive:
+            # Say what the other answer is. Wiping is the only thing init can
+            # offer, and for a project whose `.rite/` holds its own
+            # architecture, plan and decisions it is not an option at all — so
+            # an offer with no alternative reads as "no way to get the new
+            # instructions", which is how a fix stops reaching the project
+            # that reported the bug.
+            ui.note(
+                "To get this version's CLAUDE.md, commands, agents and "
+                "checklist WITHOUT touching anything you have written, run "
+                "`rite update --files-only --dry-run` instead — it never "
+                "overwrites your edits and never touches `.rite/` content."
+            )
             wipe = ui.confirm(
                 "This directory is already initialised. Wipe and start over?",
                 default=False,
@@ -90,8 +102,11 @@ def run_init(
         if not wipe:
             return InitResult(
                 status="already_initialized",
-                message=f"{rite_dir} already exists — left untouched. "
-                "Re-run interactively and confirm to wipe and start over.",
+                message=f"{rite_dir} already exists — left untouched. To "
+                "update this project's generated files without wiping "
+                "anything, run `rite update --files-only --dry-run`, then "
+                "`rite update --files-only`. To start over instead, re-run "
+                "interactively and confirm the wipe.",
             )
         import shutil
 

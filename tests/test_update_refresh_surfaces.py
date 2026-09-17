@@ -370,3 +370,16 @@ def test_a_workers_own_added_section_survives(tmp_path, monkeypatch):
     result = CliRunner().invoke(cli, ["update", "--files-only"])
     assert result.exit_code == 0, result.output
     assert "## Notes from my Manager\n\nUse the staging DB.\n" in path.read_text()
+
+
+def test_init_on_an_existing_project_names_the_refresh(tmp_path, monkeypatch):
+    """The dead end this work exists to remove: a project whose `.rite/` holds
+    hand-written design cannot wipe, and wiping was the only thing offered."""
+    from rite_ai.cli.init import run_init
+
+    root = _project(tmp_path, monkeypatch)
+    (root / ".rite" / "architecture.md").write_text("# Architecture\n")
+    result = run_init(root, yes=True)
+    assert result.status == "already_initialized"
+    assert "rite update --files-only" in result.message
+    assert (root / ".rite" / "architecture.md").read_text() == "# Architecture\n"
