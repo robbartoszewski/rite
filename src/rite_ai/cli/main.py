@@ -4469,9 +4469,7 @@ def spec_show(unit: str, worker: str) -> None:
     # lines above the cut, in the parent's own text. Naming the parent is what
     # a Worker needs to go and look.
     graph = build_graph(parsed)
-    parents = [
-        u.parent for c in read.covers if (u := units.get(c)) and u.parent
-    ]
+    parents = [u.parent for c in read.covers if (u := units.get(c)) and u.parent]
     for parent in dict.fromkeys(parents):
         # Not the document title: it holds nothing, which is why the graph
         # excludes it from ancestors too.
