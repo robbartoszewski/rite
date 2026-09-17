@@ -991,6 +991,15 @@ The state branch contains:
 | `claims.json` | All published claims across all Managers | On claim/release |
 | `promotion-request.json` | Graceful demotion request from returning Manager | Rare — only on failback |
 
+**`promotion-request.json` — proposed shape (P2-0d, not yet a decision):**
+`requester` (the returning Manager), `requested` (ISO-8601, audit only) and
+`incumbent` (the lease holder the request was addressed to). The incumbent acts on
+a request only when `incumbent` names the current lease holder; a request addressed
+to an earlier Owner is left over and ignored, which needs no clock. No priority is
+carried: who outranks whom is the order of `coordination.managers` (D-56). Unknown
+fields round-trip and unreadable bytes are "could not read", as for every state file
+(D-54).
+
 **Nothing on this branch has historical value BY DESIGN — but the old commits are
 not actually erased, and the claim should not be read as a confidentiality
 guarantee.** A force-push replaces the branch tip; it does not scrub the overwritten
@@ -1017,6 +1026,15 @@ actually want to read later.
 | Blockers surfaced | "Worker alpha blocked on missing credentials for staging" |
 | Handovers | "Manager-beta stopped: 2 tickets returned to pool, claims released" |
 | Promotion events | "Manager-alpha promoted to Owner (manager-beta lease expired)" |
+
+**Commit convention — proposed (P2-0d, not yet a decision).** The subject stays
+human, as in the examples above; what a machine needs is carried as git trailers in
+the final paragraph — `Rite-Event: <kind>` plus `Rite-<Field>: <value>` lines (for a
+promotion: `Rite-Manager`, `Rite-Previous-Owner`, `Rite-Reason`). A commit without
+`Rite-Event` is an ordinary commit, not a message. Trailers survive a reworded
+subject, are read by `git interpret-trailers` without rite, and — because values are
+written on one line and only the final paragraph is read — cannot be forged from a
+subject, body or value. An unknown kind from a newer rite is preserved, not refused.
 
 #### 3.3.3. The boundary — what lives where
 
