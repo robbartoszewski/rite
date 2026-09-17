@@ -4150,6 +4150,18 @@ def _parse_spec(root: Path, config, missing_exit: int = 1, echo_problems: bool =
             + ", ".join(config.spec.paths),
             err=True,
         )
+        # Measured on a real sandbox: on the seatbelt backend the project root
+        # is readable and this all works, but rite mounts only `.rite/` — a
+        # backend that shows just its mounts leaves the spec unreachable while
+        # `.rite/` is right there, which reads as "the spec is missing" rather
+        # than "you cannot see it from in here".
+        if os.environ.get("RITE_PROJECT_ROOT") and not os.access(root, os.R_OK):
+            click.echo(
+                f"  {root} is not readable from here. Inside a sandbox the "
+                "project root may not be mounted, and the spec lives there — "
+                "this is not the spec being gone.",
+                err=True,
+            )
         raise SystemExit(missing_exit)
     if echo_problems:
         for problem in parsed.problems:

@@ -828,3 +828,39 @@ def test_without_the_pattern_those_rows_are_not_units(
     result = _run(requirements_project, "slice", "FR-3")
     assert result.exit_code == 1
     assert "FR-3" in result.output
+
+
+def test_an_unreachable_project_root_says_so_rather_than_blaming_the_spec(
+    tmp_path: Path, monkeypatch
+):
+    """Measured on a real sandbox: seatbelt lets the project root be read and
+    every retrieval command works, telemetry included. rite mounts only
+    `.rite/`, so a backend that shows nothing but its mounts leaves the spec
+    unreachable while `.rite/` sits right there — and the message then read as
+    "the spec is gone", which is the one thing it is not."""
+    root = tmp_path / "proj"
+    (root / ".rite").mkdir(parents=True)
+    (root / ".rite" / "config.yaml").write_text("spec:\n  paths:\n    - SPEC.md\n")
+    monkeypatch.chdir(root)
+    monkeypatch.setenv("RITE_PROJECT_ROOT", str(root))
+    root.chmod(0o300)  # writable, not readable: what a mount-only view looks like
+    try:
+        result = _run(root, "status")
+        assert result.exit_code == 1
+        assert "not readable from here" in result.output
+        assert "not the spec being gone" in result.output
+    finally:
+        root.chmod(0o700)
+
+
+def test_a_readable_root_with_no_spec_files_does_not_blame_a_sandbox(
+    tmp_path: Path, monkeypatch
+):
+    (tmp_path / ".rite").mkdir()
+    (tmp_path / ".rite" / "config.yaml").write_text("spec:\n  paths:\n    - SPEC.md\n")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("RITE_PROJECT_ROOT", str(tmp_path))
+    result = _run(tmp_path, "status")
+    assert result.exit_code == 1
+    assert "hold no markdown file" in result.output
+    assert "sandbox" not in result.output
