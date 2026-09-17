@@ -213,9 +213,8 @@ class TestCopiedTemplates:
 
         from rite_ai.cli.init.claude_gen import _AGENT_FILES, _COMMAND_FILES
         from rite_ai.cli.init.paths import templates_dir
-        from rite_ai.update.template_history import RELEASED
-
         from rite_ai.cli.init.scaffold import render_ci_workflow
+        from rite_ai.update.template_history import RELEASED
 
         src = templates_dir()
         stale = []

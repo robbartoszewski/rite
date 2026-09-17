@@ -23,10 +23,10 @@ from rite_ai.update.refresh import refresh_ci_workflow
 
 
 def _project(tmp_path: Path, monkeypatch) -> Path:
+    import subprocess
+
     import rite_ai.sandbox as sb
     from rite_ai.cli.init import run_init
-
-    import subprocess
 
     root = tmp_path / "proj"
     root.mkdir()
