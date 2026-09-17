@@ -128,11 +128,8 @@ def _run_gate(
             errors=[
                 "gitleaks is not installed or not on PATH. rite's publish "
                 "gate is built on gitleaks and does not reimplement secret "
-                "detection, so it cannot run without it. Install it from "
-                "https://github.com/gitleaks/gitleaks (release binaries for "
-                "macOS and Linux), or via a package manager if you use one "
-                "(`brew install gitleaks`) — naming only the package manager "
-                "was a dead end for a tester who had neither."
+                "detection, so it cannot run without it. "
+                + gitleaks_runner.HOW_TO_INSTALL
             ]
         )
 

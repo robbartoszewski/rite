@@ -540,6 +540,8 @@ def _doctor_report(problems: list[str]) -> None:
     # `shutil.which` and then fail the moment anything depends on them.
     # The publish gate depends on gitleaks, so a gitleaks that is present
     # and broken degrades the gate silently.
+    from rite_ai.gate import gitleaks_runner
+
     missing_tools: set[str] = set()
     with _doctor_check("tools", problems):
         for tool, probe in (("gitleaks", ["version"]), ("gh", ["--version"])):
@@ -564,13 +566,19 @@ def _doctor_report(problems: list[str]) -> None:
                     # gitleaks AND no Homebrew, which made "brew install
                     # gitleaks" a dead end; she hand-grepped the staged
                     # files instead and said so.
+                    # "nothing scans" was half the story and the less
+                    # useful half. With the pre-push hook installed the gate
+                    # fails closed: it exits 3 and git ABORTS the push, so
+                    # what the reader will actually meet is a push they
+                    # cannot make. Without the hook, nothing scans and the
+                    # push goes through. Which of those applies is the fact
+                    # that decides what they do next.
                     click.echo(
                         "tool gitleaks: not found — the publish gate cannot "
-                        "run, so nothing scans for secrets before a push. "
-                        "Install it from https://github.com/gitleaks/gitleaks "
-                        "(release binaries for macOS and Linux), or via a "
-                        "package manager if you use one (`brew install "
-                        "gitleaks`)."
+                        "run. Where the pre-push hook is installed it fails "
+                        "closed, so pushes from this machine are blocked "
+                        "until gitleaks is; where it is not, nothing scans "
+                        "before a push at all. " + gitleaks_runner.HOW_TO_INSTALL
                     )
                     problems.append(
                         "gitleaks is not installed — the publish gate cannot run"

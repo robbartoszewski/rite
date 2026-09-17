@@ -56,6 +56,25 @@ def find_gitleaks_binary() -> str | None:
     return shutil.which("gitleaks")
 
 
+HOW_TO_INSTALL = (
+    "Install it from https://github.com/gitleaks/gitleaks (release binaries "
+    "for macOS and Linux), or via a package manager if you use one "
+    "(`brew install gitleaks`)."
+)
+"""Said identically wherever rite reports gitleaks missing — the gate's own
+error, `rite doctor`, and `rite init`.
+
+Release binaries FIRST, package manager second. Both remedies used to name
+only Homebrew; measured on a tester's machine with neither gitleaks nor
+Homebrew, which made the only instruction she was given a dead end — she
+hand-grepped the staged files instead. That reasoning belongs here and not in
+the message: a stranger reading `rite doctor` cannot place "a tester", and an
+instruction is not the place to argue with an earlier version of itself.
+
+One constant because there were two copies that had already drifted apart,
+and a third was about to be written for `rite init`."""
+
+
 def _run_gitleaks_json(
     args: list[str], cwd: Path, binary: str
 ) -> list[dict] | ScanError:

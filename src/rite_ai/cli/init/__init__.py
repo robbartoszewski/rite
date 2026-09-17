@@ -32,6 +32,7 @@ import yaml
 
 from rite_ai.config.models import ProjectBrief
 from rite_ai.config.parse import parse_brief
+from rite_ai.gate import gitleaks_runner
 from rite_ai.gate.hook import redirected_hooks_dir
 from rite_ai.state import write_atomic
 
@@ -273,6 +274,34 @@ def run_init(
         ui.note(
             f"no CI workflow written ({ci.status}) — the publish gate may not "
             "run in CI. Check with `rite publish install-ci`."
+        )
+    # Both layers above are now reported as installed — and on a machine
+    # without gitleaks the local one cannot run at all. The gate is built on
+    # gitleaks and does not reimplement secret detection, so `rite init`
+    # finishes by announcing a check that will not work here, which is the
+    # same sentence it used to print about a hook git would never read.
+    #
+    # Told now, while installing a tool is a setup step. Left to the gate,
+    # the reader meets it mid-push, as a push they cannot make.
+    if gitleaks_runner.find_gitleaks_binary() is None:
+        local = (
+            "the pre-push hook is installed but cannot run, so pushes from "
+            "this machine are blocked until it is"
+            if installed_hooks
+            else "nothing scans before a push on this machine"
+        )
+        # The CI workflow installs its own pinned gitleaks, so the remote
+        # layer is unaffected — but only if it is actually there and runs
+        # the gate. Saying "CI has you covered" when it does not is the
+        # failure this file already guards against for the hook.
+        remote = (
+            " The CI workflow installs its own copy, so the scan there is unaffected."
+            if ci_ok
+            else " CI is not covering it either (see above)."
+        )
+        ui.note(
+            f"gitleaks is not installed — {local}.{remote} "
+            + gitleaks_runner.HOW_TO_INSTALL
         )
     ui.generated(f"CLAUDE.md ({answers.role})")
     if preserved_claude_md:
