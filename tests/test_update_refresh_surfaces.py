@@ -498,3 +498,85 @@ class TestTheRefreshRunsInTheRiteThatWasJustInstalled:
         assert not calls
         assert "config already current" in result.output
         assert result.exit_code == 1
+
+
+class TestATemplateARiteNoLongerShips:
+    """Refreshing walks the files THIS version ships, so one a release
+    withdrew is invisible to it. The project keeps offering a Worker a command
+    nothing maintains, and both `rite update` and `rite doctor` call the
+    project current. Nothing has been withdrawn yet; the first time one is,
+    this is what makes it visible."""
+
+    @staticmethod
+    def _shipped_by_a_release(root: Path, rel: str, name: str) -> Path:
+        """A file with a past release's own bytes, under a name this version
+        does not ship."""
+        from rite_ai.update.template_history import RELEASED
+
+        source = templates_dir() / "commands" / "review.md"
+        path = root / rel / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(source.read_bytes())
+        # Pretend that is what some release shipped under the withdrawn name.
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        RELEASED[f"commands/{name}"] = frozenset({digest})
+        return path
+
+    @pytest.fixture
+    def _restore_history(self):
+        from rite_ai.update.template_history import RELEASED
+
+        before = dict(RELEASED)
+        yield
+        RELEASED.clear()
+        RELEASED.update(before)
+
+    def test_it_is_named_and_left_alone(self, tmp_path, monkeypatch, _restore_history):
+        root = _project(tmp_path, monkeypatch)
+        withdrawn = self._shipped_by_a_release(root, ".claude/commands", "handoff.md")
+        before = withdrawn.read_bytes()
+
+        result = CliRunner().invoke(cli, ["update", "--files-only"])
+
+        assert result.exit_code == 0, result.output
+        assert ".claude/commands/handoff.md" in result.output, result.output
+        assert "delete it if you no longer want it" in result.output
+        assert withdrawn.read_bytes() == before, "a refresh deleted or rewrote it"
+
+    def test_a_command_the_team_wrote_is_never_named(self, tmp_path, monkeypatch):
+        """Only bytes a release actually shipped are rite's leftovers."""
+        root = _project(tmp_path, monkeypatch)
+        ours = root / ".claude" / "commands" / "deploy.md"
+        ours.write_text("# /deploy\n\nOurs, nothing to do with rite.\n")
+
+        result = CliRunner().invoke(cli, ["update", "--files-only"])
+
+        assert "deploy.md" not in result.output, result.output
+        assert ours.read_text().startswith("# /deploy")
+
+    def test_a_workers_copy_is_named_with_its_worker(
+        self, tmp_path, monkeypatch, _restore_history
+    ):
+        root = _project(tmp_path, monkeypatch)
+        CliRunner().invoke(cli, ["add", "worker", "alpha"])
+        self._shipped_by_a_release(root, "workers/alpha/.claude/commands", "handoff.md")
+
+        result = CliRunner().invoke(cli, ["update", "--files-only"])
+
+        assert "workers/alpha/.claude/commands/handoff.md" in result.output, (
+            result.output
+        )
+
+    def test_saying_so_does_not_change_between_runs(
+        self, tmp_path, monkeypatch, _restore_history
+    ):
+        root = _project(tmp_path, monkeypatch)
+        self._shipped_by_a_release(root, ".claude/commands", "handoff.md")
+
+        first = CliRunner().invoke(cli, ["update", "--files-only"])
+        second = CliRunner().invoke(cli, ["update", "--files-only"])
+
+        assert first.output == second.output
+        assert "generated files already current" not in second.output, (
+            "a file nothing maintains is not the same as nothing to say"
+        )

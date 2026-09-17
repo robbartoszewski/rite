@@ -306,6 +306,13 @@ section, the refresh regenerates that line from `.rite/`, because nothing
 distinguishes your version of it from rite's. Edit `.rite/` and let the file
 follow; a dry run shows every such line before anything is written.
 
+**A command or agent rite no longer ships is named, not deleted.** Refreshing
+walks the files this version ships, so one a past release wrote and this one
+withdrew would otherwise stay in `.claude/` for ever, offered to Workers and
+maintained by nothing. It is reported with its path; deleting it is yours to
+do, and a command your own team wrote is never mentioned, because only bytes a
+release actually shipped are named.
+
 **The CI workflow's pin moves with it.** A workflow written by an older rite
 keeps installing that rite in CI, which is the layer SPEC §11.5.1 calls
 load-bearing. Refreshing it updates the pin; an edited one is left alone, and an

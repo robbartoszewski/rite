@@ -414,6 +414,33 @@ def _refresh_claude_md(
     return result
 
 
+def _withdrawn(
+    directory: Path, still_shipped: tuple[str, ...], key: str, label: str
+) -> list[Change]:
+    """Files a past release wrote here that this version no longer ships.
+
+    Refreshing walks the files THIS version ships, so a command or agent a
+    release withdrew is invisible to it: the project keeps offering a Worker
+    something nothing maintains, while `rite update` and `rite doctor` both
+    call the project current. Reported, never deleted — deleting generated
+    files nobody asked about is the one thing a refresh must not do, and the
+    file may be one someone still wants.
+
+    A file is only named when its bytes are a release's own, so a command the
+    team wrote themselves is never mistaken for rite's leftovers.
+    """
+    from rite_ai.update.template_history import RELEASED
+
+    if not directory.is_dir():
+        return []
+    return [
+        Change(f"{label}/{path.name}", "withdrawn")
+        for path in sorted(directory.glob("*.md"))
+        if path.name not in still_shipped
+        and _sha(path) in RELEASED.get(f"{key}/{path.name}", frozenset())
+    ]
+
+
 def refresh_project(
     root: Path, take: frozenset[str] = frozenset(), apply: bool = True
 ) -> list[FileResult]:
@@ -476,6 +503,12 @@ def refresh_project(
         )
         if ch:
             files.changes.append(ch)
+    files.changes += _withdrawn(
+        root / ".claude" / "agents", _AGENT_FILES, "agents", ".claude/agents"
+    )
+    files.changes += _withdrawn(
+        root / ".claude" / "commands", _COMMAND_FILES, "commands", ".claude/commands"
+    )
     checklist = refresh_template(
         root / ".rite" / "review-checklist.md",
         src / "review-checklist.md",
@@ -547,6 +580,18 @@ def refresh_project(
         )
         if ch:
             wfiles.changes.append(ch)
+        wfiles.changes += _withdrawn(
+            worker_dir / ".claude" / "agents",
+            _AGENT_FILES,
+            "agents",
+            f"{rel}/.claude/agents",
+        )
+        wfiles.changes += _withdrawn(
+            worker_dir / ".claude" / "commands",
+            ("review.md",),
+            "commands",
+            f"{rel}/.claude/commands",
+        )
         results.append(wfiles)
     return results
 
@@ -564,6 +609,10 @@ def report(results: list[FileResult], dry_run: bool, take: frozenset[str]) -> li
         else "replaced with rite's version",
         "installed": "would install" if dry_run else "installed",
         "absent": "not there — `rite publish install-ci` writes one",
+        "withdrawn": (
+            "written by an older rite that shipped it; this version does not, "
+            "so nothing updates it — delete it if you no longer want it"
+        ),
         "extended": (
             "would add rite's newer ignore lines"
             if dry_run
