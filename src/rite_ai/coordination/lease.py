@@ -102,7 +102,7 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
-def _stamp(moment: datetime) -> str:
+def stamp(moment: datetime) -> str:
     return moment.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
@@ -256,7 +256,7 @@ class OwnerLeaseHolder:
             stood_down = OwnerLease(
                 owner=lease.owner,
                 acquired=lease.acquired,
-                expires=_stamp(now),
+                expires=stamp(now),
                 priority=lease.priority,
                 extra=lease.extra,
             )
@@ -276,12 +276,12 @@ class OwnerLeaseHolder:
     def _build(self, now: datetime, acquired: OwnerLease | None) -> OwnerLease:
         ours = acquired is not None and acquired.owner == self.manager
         keep_acquired = (
-            acquired.acquired if ours and acquired.acquired else _stamp(now)
+            acquired.acquired if ours and acquired.acquired else stamp(now)
         )
         return OwnerLease(
             owner=self.manager,
             acquired=keep_acquired,
-            expires=_stamp(now + timedelta(minutes=self.config.owner_lease_minutes)),
+            expires=stamp(now + timedelta(minutes=self.config.owner_lease_minutes)),
             # Written for audit, never read for a decision (D-56).
             priority=_priority_of(self.manager, self.config),
             extra=acquired.extra if ours else {},
