@@ -2554,6 +2554,10 @@ rite spec slice <unit>             # print one unit, what it cites and the pinne
                                     #   Worker cannot read the measurement as spec text
 rite spec stamp <unit>... | --all  # record on each derived file the spec it was
                                     #   written from
+rite spec verify [--strict]        # the gate: every unit covered, nothing stale,
+                                    #   hand-edited or unstamped. 0 current · 1 drifted
+                                    #   · 3 could not run. --strict also refuses two
+                                    #   files covering one unit
 
 rite start [<dir>]                 # bring rite up — Claude app setup, scheduled tasks
 rite stop [<dir>]                  # shut down with handover — ticket comment, board update
@@ -3217,6 +3221,8 @@ directory it ran in — which `rite init` then refused as already initialised.
 | `rite credential check <name>` | available | 1 — not found |
 | `rite publish check` | clean | 1 stale suppressions · 2 findings · 3 **could not run** (§11) |
 | `rite pool archive` | archived, or nothing to archive | 1 — the liveness probe could not run (§2.5.10) |
+| `rite spec index` | the spec decomposes; the index is written | 1 — it does not, and a Worker should read it whole (§9.13.2) |
+| `rite spec verify` | the digest matches the spec | 1 drift · 3 **could not run** — no spec registered, or the paths hold nothing |
 | `rite sandbox start <w>` | started | 1 — yoloai missing, **or the worker cap could not be counted** (§5.3) |
 | `rite sandbox status <w>` | answered: running, or genuinely no sandbox | 1 — the question could not be answered |
 | `rite publish install-hook` | installed | 1 — git would never read it (§11.5.1) |
@@ -3455,6 +3461,15 @@ rather than something `rite spec index` does, because an automatic restamp would
 bless both a source change nobody had read and a hand edit nobody had made —
 after which nothing would ever read as stale or tampered again. `rite spec
 status` reports both, by file name.
+
+**The gate is a command, not a convention.** `rite spec verify` exits 0 only
+when every non-index unit is covered, nothing covers a unit the spec no longer
+has, nothing is stale, hand-edited or unstamped, and the index still matches the
+spec. It reads nothing for meaning — the two review rounds in `/spec-digest` do
+that — and it exits **3** when it could not run at all, so a script cannot read
+"no spec registered" as "nothing has drifted". `--strict` additionally refuses
+one unit covered by two derived files; by default that is allowed, because
+merging and splitting units is how a digest is written.
 
 **The insufficiency rate is not optional.** A slice that was not enough is
 invisible: the Worker reads the whole spec and the digest looks like it worked.

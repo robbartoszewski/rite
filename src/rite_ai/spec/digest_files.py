@@ -71,6 +71,11 @@ class DigestStatus:
     tampered: list[str] = field(default_factory=list)
     unstamped: list[str] = field(default_factory=list)
     unreadable: list[str] = field(default_factory=list)
+    # Two derived files covering one source unit. NOT part of `clean`: merging
+    # and splitting units is allowed, so an overlap is a question ("which of
+    # these two does a Worker get?"), not a defect. `rite spec verify --strict`
+    # is where it becomes one.
+    overlapping: list[str] = field(default_factory=list)
     files: int = 0
 
     @property
@@ -245,6 +250,7 @@ def digest_status(
     files, problems = read_unit_files(root)
     status = DigestStatus(unreadable=problems, files=len(files))
     covered: set[str] = set()
+    covered_by: dict[str, list[str]] = {}
     seen_ids: dict[str, Path] = {}
     for f in files:
         name = f.path.name
@@ -255,6 +261,8 @@ def digest_status(
             continue
         seen_ids[f.id] = f.path
         covered.update(f.covers)
+        for c in f.covers:
+            covered_by.setdefault(c, []).append(name)
         missing = [c for c in f.covers if c not in units]
         if missing:
             status.removed.append(
@@ -270,5 +278,10 @@ def digest_status(
             status.stale.append(name)
     status.new = [
         uid for uid in units if uid not in covered and kinds.get(uid) != INDEX
+    ]
+    status.overlapping = [
+        f"{uid}: covered by {', '.join(sorted(names))}"
+        for uid, names in sorted(covered_by.items())
+        if len(names) > 1
     ]
     return status

@@ -216,6 +216,7 @@ class TestSpecCommands:
             "status",
             "slice",
             "stamp",
+            "verify",
         }
 
 

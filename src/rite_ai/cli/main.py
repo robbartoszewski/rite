@@ -4028,16 +4028,19 @@ def _report_spec_refresh(root: Path, config) -> None:
 # --- The spec digest: one derived file per spec unit ---
 
 
-def _spec_root_and_config():
-    """The project root and its config, or exit saying the spec is not set up."""
+def _spec_root_and_config(missing_exit: int = 1):
+    """The project root and its config, or exit saying the spec is not set up.
+
+    `missing_exit` is 3 for the gate: a gate that could not run must not share
+    an exit code with a gate that ran and found nothing wrong."""
     root, config = _load_config_for_write()
     if not config.spec.paths:
         click.echo("no spec registered — run `rite spec add <path>` first", err=True)
-        raise SystemExit(1)
+        raise SystemExit(missing_exit)
     return root, config
 
 
-def _parse_spec(root: Path, config):
+def _parse_spec(root: Path, config, missing_exit: int = 1):
     """Every registered spec file, parsed into units."""
     from rite_ai.spec.units import parse_paths
 
@@ -4048,7 +4051,7 @@ def _parse_spec(root: Path, config):
             + ", ".join(config.spec.paths),
             err=True,
         )
-        raise SystemExit(1)
+        raise SystemExit(missing_exit)
     for problem in parsed.problems:
         click.echo(f"  {problem}", err=True)
     return parsed
@@ -4305,6 +4308,98 @@ def spec_stamp(units: tuple[str, ...], all_: bool) -> None:
             click.echo(f"stamped {result.path.relative_to(root)} ({result.id})")
     if failed:
         raise SystemExit(1)
+
+
+@spec.command("verify")
+@click.option(
+    "--strict",
+    is_flag=True,
+    help="Also refuse two derived files covering the same source unit.",
+)
+def spec_verify(strict: bool) -> None:
+    """Check the digest still matches the spec. Exit 0 only if it does.
+
+    Every unit covered, nothing covering a unit the spec no longer has,
+    nothing stale, nothing hand-edited, nothing unstamped. It does not read
+    for meaning — that is what the review rounds in `/spec-digest` are for.
+
+    Exit codes: 0 the digest is current, 1 something has drifted, 3 the
+    check could not run at all.
+
+    Examples:
+      rite spec verify
+      rite spec verify --strict
+    """
+    from rite_ai.spec.digest_files import UNITS_DIR, digest_status
+    from rite_ai.spec.index_file import PRESENT, from_parsed, read_index
+
+    root, config = _spec_root_and_config(missing_exit=3)
+    parsed = _parse_spec(root, config, missing_exit=3)
+    units = {u.id: u for u in parsed.units}
+    _, kinds = _spec_graph(parsed, config)
+    status = digest_status(root, units, kinds)
+
+    failures: list[tuple[str, list[str], str]] = [
+        ("not readable as unit files", status.unreadable, "fix or delete them"),
+        (
+            "cover units the spec no longer has",
+            status.removed,
+            "delete them, or point `covers` at what replaced them",
+        ),
+        ("edited by hand since stamping", status.tampered, "re-digest those units"),
+        ("stale — the spec changed under them", status.stale, "re-digest those units"),
+        ("never stamped", status.unstamped, "run `rite spec stamp`"),
+        ("no derived file yet", status.new, "run `/spec-digest`"),
+    ]
+    if strict:
+        failures.append(
+            (
+                "covered by more than one derived file",
+                status.overlapping,
+                "merge them, or narrow `covers` so each unit has one",
+            )
+        )
+
+    read = read_index(root)
+    index_problem = ""
+    if read.status != PRESENT:
+        index_problem = f"the unit index is {read.status}"
+    elif read.index != from_parsed(parsed):
+        index_problem = "the unit index no longer matches the spec"
+
+    if not status.files:
+        # Not the same failure as a digest that has drifted, and saying so
+        # matters: one is re-digesting a few units, the other is starting.
+        click.echo(
+            f"nothing is digested — no unit files under {UNITS_DIR}, "
+            f"and the spec has {len(units)} unit(s). Run `/spec-digest`.",
+            err=True,
+        )
+        raise SystemExit(1)
+
+    total = sum(len(entries) for _, entries, _ in failures)
+    for label, entries, remedy in failures:
+        if not entries:
+            continue
+        click.echo(f"{len(entries)} {label} — {remedy}:", err=True)
+        for entry in sorted(entries)[:20]:
+            click.echo(f"  {entry}", err=True)
+        if len(entries) > 20:
+            click.echo(f"  … and {len(entries) - 20} more", err=True)
+    if index_problem:
+        click.echo(f"{index_problem} — run `rite spec index`", err=True)
+
+    if total or index_problem:
+        click.echo(
+            "✗ the digest does not match the spec — a Worker reading it would "
+            "be reading something the spec no longer says",
+            err=True,
+        )
+        raise SystemExit(1)
+    click.echo(
+        f"✓ the digest matches the spec — {status.files} derived file(s) "
+        f"covering {len(units)} unit(s)"
+    )
 
 
 # --- Worker sandboxing (SPEC §5.3, D-26, D-30, D-31) ---

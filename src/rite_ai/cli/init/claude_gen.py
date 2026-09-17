@@ -28,7 +28,13 @@ _AGENT_FILES = [
     "reviewer-seam.md",
     "reviewer-decisions.md",
 ]
-_COMMAND_FILES = ["ticket.md", "review.md", "refine.md", "spec.md"]
+_COMMAND_FILES = [
+    "ticket.md",
+    "review.md",
+    "refine.md",
+    "spec.md",
+    "spec-digest.md",
+]
 
 
 # The line every generated `CLAUDE.md` carries, and the only way to tell
