@@ -127,10 +127,21 @@ def create_backend(
         resolved_key = (projects or {}).get(board_role) or project_key
         if not resolved_key:
             configured = sorted(k for k, v in (projects or {}).items() if v)
+            # Say how to fix it. `rite init` does not ask for a project key,
+            # so this is the first thing a new JIRA project hits, and the
+            # key's name alone did not say what shape it takes or that one
+            # command records it (only for `workers`, the role it writes).
+            fix = (
+                "`rite credential set jira` asks for the project key and "
+                "records it, or add it yourself"
+                if board_role == "workers"
+                else "add it"
+            )
             return BackendError(
-                f"no project configured for role '{board_role}' — "
-                f"config.yaml's ticket_backend.projects has {configured or 'nothing'} "
-                f"configured, and no bare project_key was given either"
+                f"no JIRA project key for role '{board_role}' — config.yaml's "
+                f"ticket_backend.projects has {configured or 'nothing'} "
+                f"configured. {fix[0].upper()}{fix[1:]} under ticket_backend "
+                f"in config.yaml:\n  projects:\n    {board_role}: XYZ"
             )
         config = JiraConfig(
             site=site,

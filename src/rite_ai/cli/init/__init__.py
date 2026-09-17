@@ -273,6 +273,15 @@ def run_init(
     ui.generated(f".claude/agents/ ({claude_counts['agents']} agents)")
     ui.generated(f".claude/commands/ ({claude_counts['commands']} commands)")
     click.echo()
+    backend = answers.config.ticket_backend
+    if backend.type == "jira" and not backend.projects.get("workers"):
+        # Nothing above asks for the email, the API token or the project
+        # key, and the board refuses every command until all three exist.
+        # Said here because this is where someone looks for what is left.
+        click.echo(
+            "JIRA: run `rite credential set jira` — it asks for your email, an "
+            "API token and the project key, and the board works once it has."
+        )
     click.echo("Ready. Start a Dispatch session — it knows what to do from here.")
 
     return InitResult(
