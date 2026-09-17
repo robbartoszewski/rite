@@ -21,7 +21,74 @@ from datetime import UTC, datetime
 
 # The fields this version knows. Anything else round-trips untouched.
 _LEASE_KNOWN = frozenset({"owner", "acquired", "expires", "priority"})
-_STATUS_KNOWN = frozenset({"name", "last_seen", "workers"})
+_STATUS_KNOWN = frozenset({"name", "last_seen", "workers", "in_flight"})
+
+
+# --- A known key whose value has a shape this version does not expect ---
+#
+# `extra` keeps keys this version does not know. That is not enough: a newer
+# rite can change the SHAPE of a key this version does know — `workers` as a
+# list of objects, `last_seen` as a structure — and coercing that into the
+# old type ("" / 0 / []) and writing it back erases the newer value exactly as
+# dropping an unknown key would (P2-1d). So the raw value is kept in `drifted`
+# and written back — but only while this writer has not set the field. A
+# heartbeat that assigns `last_seen`, or fills a placeholder `workers` list in
+# place, has made its own value the truth, and stale drift must never override
+# it. Nothing ever DECIDES on a drifted value: the typed field holds the
+# placeholder, which every reader already treats as unusable.
+
+
+class _KeepsDrift:
+    """Mixin: assigning a known field discards the drifted raw value for it."""
+
+    _TYPED: frozenset[str] = frozenset()
+
+    def __setattr__(self, name: str, value: object) -> None:
+        if name in self._TYPED and self.__dict__.get("_ready"):
+            self.__dict__.get("drifted", {}).pop(name, None)
+        object.__setattr__(self, name, value)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "_ready", True)
+
+
+def _text(raw: dict, key: str, drifted: dict) -> str:
+    value = raw.get(key, "")
+    if isinstance(value, str):
+        return value
+    drifted[key] = value
+    return ""
+
+
+def _int(raw: dict, key: str, drifted: dict) -> int:
+    value = raw.get(key, 0)
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    drifted[key] = value
+    return 0
+
+
+def _texts(raw: dict, key: str, drifted: dict) -> list[str]:
+    value = raw.get(key, [])
+    if isinstance(value, list) and all(isinstance(v, str) for v in value):
+        return list(value)
+    drifted[key] = value
+    return []
+
+
+_PLACEHOLDER = {str: "", int: 0, list: []}
+
+
+def _emit(typed: dict, drifted: dict, extra: dict) -> dict:
+    """Known fields, with any untouched drifted value restored, then the keys
+    this version does not know."""
+    data = {}
+    for key, value in typed.items():
+        if key in drifted and value == _PLACEHOLDER[type(value)]:
+            data[key] = drifted[key]
+        else:
+            data[key] = value
+    return {**data, **extra}
 
 
 class LeaseVerdict:
@@ -51,9 +118,11 @@ def _parse_ts(value: object) -> datetime | None:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
-@dataclass
-class OwnerLease:
+@dataclass(eq=True)
+class OwnerLease(_KeepsDrift):
     """§2.4.1's lease file. `expires` is what everything turns on."""
+
+    _TYPED = frozenset({"owner", "acquired", "expires", "priority"})
 
     owner: str = ""
     acquired: str = ""
@@ -66,6 +135,7 @@ class OwnerLease:
     # dead weight, and do not start reading it.
     priority: int = 0
     extra: dict = field(default_factory=dict)
+    drifted: dict = field(default_factory=dict)
 
     def verdict(
         self,
@@ -105,18 +175,22 @@ class OwnerLease:
         return LeaseVerdict.HELD
 
 
-@dataclass
-class ManagerStatus:
+@dataclass(eq=True)
+class ManagerStatus(_KeepsDrift):
     """§3.4's Manager heartbeat file, whose shape is prose-only there.
 
-    `workers` is the Manager's worker names. An in-flight count belongs
-    here too once capacity routing exists, which is why unknown fields
-    round-trip rather than being dropped."""
+    `workers` is the Manager's worker names. `in_flight` is how many tasks
+    it has in progress (P2-4a): capacity cannot be enforced without it, and
+    a field added later could not be trusted until every machine upgraded."""
+
+    _TYPED = frozenset({"name", "last_seen", "workers", "in_flight"})
 
     name: str = ""
     last_seen: str = ""
     workers: list[str] = field(default_factory=list)
+    in_flight: int = 0
     extra: dict = field(default_factory=dict)
+    drifted: dict = field(default_factory=dict)
 
 
 def _split_known(raw: dict, known: frozenset[str]) -> dict:
@@ -135,24 +209,28 @@ def lease_from_json(text: str) -> OwnerLease | None:
         return None
     if not isinstance(raw, dict):
         return None
-    priority = raw.get("priority", 0)
+    drifted: dict = {}
     return OwnerLease(
-        owner=str(raw.get("owner", "")),
-        acquired=str(raw.get("acquired", "")),
-        expires=str(raw.get("expires", "")),
-        priority=priority if isinstance(priority, int) else 0,
+        owner=_text(raw, "owner", drifted),
+        acquired=_text(raw, "acquired", drifted),
+        expires=_text(raw, "expires", drifted),
+        priority=_int(raw, "priority", drifted),
         extra=_split_known(raw, _LEASE_KNOWN),
+        drifted=drifted,
     )
 
 
 def lease_to_json(lease: OwnerLease) -> str:
-    data = {
-        "owner": lease.owner,
-        "acquired": lease.acquired,
-        "expires": lease.expires,
-        "priority": lease.priority,
-        **lease.extra,
-    }
+    data = _emit(
+        {
+            "owner": lease.owner,
+            "acquired": lease.acquired,
+            "expires": lease.expires,
+            "priority": lease.priority,
+        },
+        lease.drifted,
+        lease.extra,
+    )
     return json.dumps(data, indent=2, sort_keys=True) + "\n"
 
 
@@ -163,20 +241,26 @@ def status_from_json(text: str) -> ManagerStatus | None:
         return None
     if not isinstance(raw, dict):
         return None
-    workers = raw.get("workers", [])
+    drifted: dict = {}
     return ManagerStatus(
-        name=str(raw.get("name", "")),
-        last_seen=str(raw.get("last_seen", "")),
-        workers=[str(w) for w in workers] if isinstance(workers, list) else [],
+        name=_text(raw, "name", drifted),
+        last_seen=_text(raw, "last_seen", drifted),
+        workers=_texts(raw, "workers", drifted),
+        in_flight=_int(raw, "in_flight", drifted),
         extra=_split_known(raw, _STATUS_KNOWN),
+        drifted=drifted,
     )
 
 
 def status_to_json(status: ManagerStatus) -> str:
-    data = {
-        "name": status.name,
-        "last_seen": status.last_seen,
-        "workers": status.workers,
-        **status.extra,
-    }
+    data = _emit(
+        {
+            "name": status.name,
+            "last_seen": status.last_seen,
+            "workers": status.workers,
+            "in_flight": status.in_flight,
+        },
+        status.drifted,
+        status.extra,
+    )
     return json.dumps(data, indent=2, sort_keys=True) + "\n"

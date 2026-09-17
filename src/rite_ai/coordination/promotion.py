@@ -26,11 +26,15 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
+from rite_ai.coordination.schemas import _emit, _KeepsDrift, _text
+
 _KNOWN = frozenset({"requester", "requested", "incumbent"})
 
 
-@dataclass
-class PromotionRequest:
+@dataclass(eq=True)
+class PromotionRequest(_KeepsDrift):
+    _TYPED = frozenset({"requester", "requested", "incumbent"})
+
     requester: str = ""
     """The returning Manager asking for the Owner role back."""
 
@@ -42,6 +46,7 @@ class PromotionRequest:
     """The lease holder the request was addressed to."""
 
     extra: dict = field(default_factory=dict)
+    drifted: dict = field(default_factory=dict)
 
     def is_addressed_to(self, lease_owner: str) -> bool:
         """Whether this request is for the Owner holding the lease now.
@@ -63,19 +68,24 @@ def request_from_json(text: str) -> PromotionRequest | None:
         return None
     if not isinstance(raw, dict):
         return None
+    drifted: dict = {}
     return PromotionRequest(
-        requester=str(raw.get("requester", "")),
-        requested=str(raw.get("requested", "")),
-        incumbent=str(raw.get("incumbent", "")),
+        requester=_text(raw, "requester", drifted),
+        requested=_text(raw, "requested", drifted),
+        incumbent=_text(raw, "incumbent", drifted),
         extra={k: v for k, v in raw.items() if k not in _KNOWN},
+        drifted=drifted,
     )
 
 
 def request_to_json(request: PromotionRequest) -> str:
-    data = {
-        "requester": request.requester,
-        "requested": request.requested,
-        "incumbent": request.incumbent,
-        **request.extra,
-    }
+    data = _emit(
+        {
+            "requester": request.requester,
+            "requested": request.requested,
+            "incumbent": request.incumbent,
+        },
+        request.drifted,
+        request.extra,
+    )
     return json.dumps(data, indent=2, sort_keys=True) + "\n"
