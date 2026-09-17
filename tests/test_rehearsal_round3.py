@@ -715,7 +715,7 @@ class TestInstallerChecksTheVersionExists:
         bin_dir.mkdir()
         marker = tmp_path / "uv-was-run"
         stub = bin_dir / "uv"
-        stub.write_text(f'#!/bin/sh\necho "$@" > "{marker}"\n')
+        stub.write_text(f'#!/bin/sh\necho "$@" >> "{marker}"\n')
         stub.chmod(0o755)
         return installer, bin_dir, marker
 

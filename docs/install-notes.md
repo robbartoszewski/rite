@@ -31,7 +31,7 @@ much you verify first:
   fetches the tool itself from the same movable tag, so a verified installer
   still pulls an unverified payload.
 - **Option 3** is the only one where you read the whole thing first. It is
-  161 lines of `sh` and it is the honest answer if you would flag
+  169 lines of `sh` and it is the honest answer if you would flag
   `curl | sh` in someone else's project. Its `git checkout v0.3.0` is the
   same movable pointer as option 1, so if the distinction matters to you,
   check out the **commit SHA** published in the release notes instead — that
@@ -46,9 +46,9 @@ release notes publish it for exactly that reason.
 The installer puts rite in its own isolated environment and touches nothing
 else — no shell profile, and nothing outside that environment except the
 `rite` and `rite-ai` shims your installer puts on your PATH, which is the
-point of installing it. The only thing it runs afterwards is `rite --version`,
-to tell you whether the install landed on your PATH and whether the `rite` it
-found is this one.
+point of installing it. The only thing it runs afterwards is `--version`: on
+the `rite` it just installed, to report that version, and on the `rite` your
+PATH finds, if that is a different one, to tell you which comes first.
 
 **No telemetry, no analytics, nothing phones home.** That is the narrow claim
 and it is checkable — grep the source. What rite *does* reach out to, so the
@@ -84,7 +84,7 @@ sh install.sh
 # 3. clone and read everything
 git clone https://github.com/robbartoszewski/rite.git
 cd rite && git checkout v0.3.0
-less install.sh                   # 161 lines of sh
+less install.sh                   # 169 lines of sh
 uv tool install .                 # or: pipx install .
 ```
 

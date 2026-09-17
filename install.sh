@@ -32,8 +32,8 @@
 # not modify your shell profile and writes nothing outside that environment
 # — except the `rite` and `rite-ai` shims your installer puts on your PATH,
 # which is the point of installing it. The only thing it runs afterwards is
-# `rite --version`, to report whether the install landed on your PATH and
-# whether the `rite` found there is this one.
+# `--version`: on the `rite` it installed, and on the `rite` your PATH finds
+# if that is a different one, to say which comes first.
 
 set -eu
 
@@ -131,31 +131,39 @@ else
 fi
 
 # --- verify, and say what happened -----------------------------------------
-if ! command -v rite >/dev/null 2>&1; then
-    say ""
-    say "Installed, but 'rite' is not on your PATH yet."
-    if [ "$INSTALLER" = "uv" ]; then
-        say "Run:  uv tool update-shell     then open a new shell."
-    else
-        say "Run:  pipx ensurepath          then open a new shell."
-    fi
-    exit 0
+# Report the rite the installer just wrote, not the first `rite` on PATH: an
+# older one ahead of it made a fresh install end "Done: rite, version 0.1.0".
+if [ "$INSTALLER" = "uv" ]; then
+    BIN_DIR="$(uv tool dir --bin 2>/dev/null || true)"
+    FORCE="uv tool install --force"; ON_PATH="uv tool update-shell"
+else
+    BIN_DIR="$(pipx environment --value PIPX_BIN_DIR 2>/dev/null || true)"
+    FORCE="pipx install --force"; ON_PATH="pipx ensurepath"
 fi
-
-INSTALLED="$(rite --version 2>/dev/null || true)"
-case "$INSTALLED" in
-    rite*)
-        say ""
-        say "Done: ${INSTALLED}"
-        say "Start with:  rite help        (or: rite init, in a project directory)"
-        ;;
-    *)
-        say ""
-        say "Installed, but 'rite' on your PATH is something else:"
-        say "  rite --version -> ${INSTALLED:-(no output)}"
-        say ""
-        say "That is almost certainly the unrelated 'rite' package from PyPI."
-        say "This tool also installs as 'rite-ai' — use that instead, it is the"
-        say "same program:  rite-ai --version"
-        ;;
-esac
+OURS="${BIN_DIR}/rite"
+INSTALLED="$("$OURS" --version 2>/dev/null || true)"
+say ""
+[ -n "$BIN_DIR" ] && [ -n "$INSTALLED" ] || { say "Installed, but could not run ${OURS} to check it."; exit 0; }
+# pipx exits 0 and changes nothing when rite-ai is already installed.
+case "$VERSION" in v[0-9]*)
+    if [ "$INSTALLED" != "rite, version ${VERSION#v}" ]; then
+        say "Asked for ${VERSION}, but ${OURS} reports: ${INSTALLED}"
+        say "${INSTALLER} kept an existing install. Run:  ${FORCE} ${SPEC_URL}"
+        exit 1
+    fi ;; esac
+say "Installed: ${INSTALLED}  (${OURS})"
+FOUND="$(command -v rite 2>/dev/null || true)"
+if [ -z "$FOUND" ]; then
+    say "'rite' is not on your PATH yet. Run:  ${ON_PATH}     then open a new shell."
+elif [ "$FOUND" -ef "$OURS" ]; then
+    say "Start with:  rite help        (or: rite init, in a project directory)"
+else
+    FOUND_VERSION="$(rite --version 2>/dev/null || true)"
+    say "But the 'rite' found first on your PATH is another one:"
+    say "  ${FOUND} -> ${FOUND_VERSION:-(no output)}"
+    case "$FOUND_VERSION" in
+        rite*) say "Put ${BIN_DIR} ahead of it on your PATH, or remove it." ;;
+        *) say "That is almost certainly the unrelated 'rite' package from PyPI."
+           say "This tool also installs as 'rite-ai', the same program:  ${BIN_DIR}/rite-ai --version" ;;
+    esac
+fi
