@@ -255,6 +255,48 @@ than inside a module is not visible to the worker. If a clone fetches from a
 directory that contains the worker's own, such as the project root itself,
 start says it cannot be mounted.
 
+## Keeping a project's generated files current
+
+`rite init` writes `CLAUDE.md`, `.claude/commands/`, `.claude/agents/`, the
+review checklist and the CI workflow, and `rite add worker` writes each
+worker's `CLAUDE.md`. Upgrading rite replaces the binary and touches none of
+them — so a project initialised months ago runs today's rite against the
+instructions and commands of whatever version created it. That is how a fix to
+generated content fails to reach the projects that need it.
+
+```bash
+rite update --files-only --dry-run   # the plan, plus a diff for anything contested
+rite update --files-only             # apply
+```
+
+**Your edits are safe, and that is the point.** Every generated section of
+`CLAUDE.md` carries a hidden marker recording what rite wrote there:
+
+- a section you have not touched is replaced with the current version
+- a section you edited is kept byte-for-byte and reported, with the difference
+- a section this version adds is inserted; one rite does not generate is never
+  touched, and neither is your own text above the first heading
+- a copied file (command, agent, checklist) is replaced only when it is
+  byte-identical to something a release shipped; anything else is yours
+
+Take rite's version of something it left alone by naming it:
+
+```bash
+rite update --files-only --take-rite "Role: Owner"
+rite update --files-only --take-rite review-checklist.md
+```
+
+**Projects created before markers existed** (anything initialised with rite
+0.3.0 or earlier) are handled too: a section matching what some release wrote
+is refreshed, because those bytes are attributable. Sections that vary by
+project — Modules, Role, Project spec — cannot be told from an edit, so they
+are reported rather than guessed at.
+
+**The CI workflow's pin moves with it.** A workflow written by an older rite
+keeps installing that rite in CI, which is the layer SPEC §11.5.1 calls
+load-bearing. Refreshing it updates the pin; an edited one is left alone, and
+an absent one is reported rather than reinstated.
+
 ## If the pre-push hook doesn't install
 
 `core.hooksPath` — set globally by some teams and by some tooling — redirects

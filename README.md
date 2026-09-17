@@ -218,6 +218,20 @@ slower paths — verify the checksum first, or clone and read it — are in
 [`docs/install-notes.md`](docs/install-notes.md), with the reasoning. Nothing
 phones home.*
 
+**Upgrading rite does not update a project's generated files.** `CLAUDE.md`,
+the slash commands, the agents, the review checklist and the CI workflow are
+written when you run `rite init`, and a new rite ships improvements to all of
+them. After upgrading, in each project:
+
+```bash
+rite update --files-only --dry-run   # what would change, and what it won't touch
+rite update --files-only             # apply it
+```
+
+It never overwrites your edits: a generated section you have changed is kept
+and reported, with the difference, and replaced only if you name it
+(`--take-rite "<section>"`). `rite doctor` says whether a project is behind.
+
 ## Planned — not built
 
 Nothing in this section exists yet. Each item is designed, the design is in
