@@ -407,6 +407,36 @@ class TestTheTickAlsoDistributesWork:
         assert second.owner and second.action == "renewed"
         assert second.handouts == [("ABC-1", "w1")]
 
+    def test_a_FIRST_promotion_is_recorded_even_with_nothing_to_hand_over(
+        self, layer, config, root
+    ):
+        """§2.4.2 step 4. The first election has no predecessor and nothing
+        to hand over, and used to leave no trace at all — so the question a
+        human actually asks, "when did this machine become Owner?", had no
+        answer anywhere in the fleet."""
+        from rite_ai.coordination.message_log import parse_message
+
+        board = self._backend([])
+        tick = monitor(
+            layer,
+            config,
+            "alpha",
+            Clock(),
+            root=root,
+            backend=board,
+            workers=["w1"],
+            schedule=self._schedule(),
+        ).tick()
+        assert tick.action == "promoted"
+
+        messages = layer.read_messages().items
+        assert len(messages) == 1, [m.content for m in messages]
+        parsed = parse_message(messages[0].content)
+        assert parsed.kind == "promotion"
+        assert parsed.fields["Manager"] == "alpha"
+        assert parsed.fields["Reason"] == "no-owner"
+        assert "Previous-Owner" not in parsed.fields
+
     def test_work_for_a_missing_module_is_returned_not_held(
         self, layer, config, root
     ):

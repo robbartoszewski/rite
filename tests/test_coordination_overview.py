@@ -191,6 +191,70 @@ class TestAPendingHandover:
         assert not any("has asked" in n for n in look(layer, config).notes)
 
 
+class TestTheEventLog:
+    """Promotions, handovers and claim expiries are recorded so somebody can
+    later ask why the role moved. Nothing read the log, so the answer was
+    reachable only by running git against the remote by hand."""
+
+    def test_events_come_back_newest_last(self, layer, config):
+        from rite_ai.coordination.message_log import format_message, promotion_event
+        from rite_ai.coordination.overview import recent_events
+
+        for previous in ("", "alpha", "beta"):
+            layer.append_message(
+                format_message(
+                    promotion_event("gamma", previous, "lease-expired")
+                )
+            )
+        lines = recent_events(layer)
+        assert len(lines) == 3
+        assert all(line.startswith("promotion:") for line in lines)
+        assert "beta" in lines[-1], "chronological, so the last line is the latest"
+
+    def test_only_the_tail_is_kept(self, layer, config):
+        from rite_ai.coordination.message_log import format_message, promotion_event
+        from rite_ai.coordination.overview import recent_events
+
+        for i in range(9):
+            layer.append_message(
+                format_message(promotion_event(f"m{i}", "", "no-owner"))
+            )
+        assert len(recent_events(layer, limit=4)) == 4
+
+    def test_an_empty_log_says_nothing(self, layer, config):
+        from rite_ai.coordination.overview import recent_events
+
+        assert recent_events(layer) == []
+
+    def test_an_unreadable_log_is_reported_not_skipped(self, layer, config):
+        """A log with a hole is the one thing an audit trail must not
+        present as complete (D-58)."""
+        from rite_ai.coordination.overview import recent_events
+
+        class Blind:
+            def __init__(self, inner):
+                self.inner = inner
+
+            def __getattr__(self, name):
+                return getattr(self.inner, name)
+
+            def read_messages(self, since=None):
+                return Unavailable("the log is unreachable")
+
+        lines = recent_events(Blind(layer))
+        assert lines and "could not be read" in lines[0]
+
+    def test_an_event_this_version_cannot_parse_is_still_counted(
+        self, layer, config
+    ):
+        """Hiding it would make the log look shorter than it is, which is
+        the same lie as truncating it."""
+        from rite_ai.coordination.overview import recent_events
+
+        layer.append_message("not a rite event at all")
+        assert recent_events(layer) == ["an event this version cannot read"]
+
+
 class TestWhatAHumanReads:
     def test_the_role_comes_first(self, layer, config):
         """The first question in an incident is who is Owner."""

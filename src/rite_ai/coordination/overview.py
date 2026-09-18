@@ -190,6 +190,41 @@ def _ago(now: datetime, then: datetime) -> str:
     return f"{minutes // 60}h{minutes % 60:02d}m ago"
 
 
+def recent_events(layer: StateLayer, limit: int = 5) -> list[str]:
+    """The last few things the fleet DID, for a human.
+
+    The message log is where promotions, handovers and claim expiries are
+    recorded (§3.3.2, P2-0d) — and nothing read it. Every one of those events
+    is written precisely because somebody will later ask why the role moved
+    or who took a claim, and the answer was reachable only by running git
+    against the coordination remote by hand.
+
+    Unreadable is reported, not skipped: a log with a hole is the one thing
+    an audit trail must not present as complete (D-58).
+
+    ⚠ It reads the whole log and keeps the tail. Fine for a log that grows
+    by a few events a day, wasteful for one running for years — the
+    interface has a `since` cursor but no "last N", and both a git and a
+    key-value backend could serve one (Q11).
+    """
+    from rite_ai.coordination.message_log import parse_message
+
+    got = layer.read_messages()
+    if isinstance(got, Unavailable):
+        return [f"the event log could not be read: {got.reason}"]
+    lines: list[str] = []
+    for message in got.items[-limit:]:
+        parsed = parse_message(message.content)
+        if parsed is None:
+            # A message this version cannot parse is still evidence that
+            # something happened, and hiding it would make the log look
+            # shorter than it is.
+            lines.append("an event this version cannot read")
+            continue
+        lines.append(f"{parsed.kind}: {parsed.subject}")
+    return lines
+
+
 def format_overview(overview: Overview) -> list[str]:
     """Lines for `doctor`. The role first, because it is the first question."""
     lines: list[str] = []

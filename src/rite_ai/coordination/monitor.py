@@ -280,8 +280,16 @@ class ManagerMonitor:
             result.problems.append(problem)
 
     def _hand_over_their_work(self, outcome: Promoted, result: Tick) -> None:
-        """D-14's third trigger, wired to the moment it applies."""
-        if self.root is None or not outcome.previous_owner:
+        """D-14's third trigger, and §2.4.2 step 4's promotion event.
+
+        Both, because they are one write: the event is the record that the
+        handover happens under, and a promotion with nothing to hand over
+        still has to be recorded. Skipping the whole call when there was no
+        previous Owner — which is what this did — meant a FIRST election
+        left no trace at all, so "when did this machine become Owner?" had
+        no answer anywhere.
+        """
+        if self.root is None:
             return
         handed = hand_over_outgoing_owner(
             self.root,

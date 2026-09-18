@@ -850,14 +850,16 @@ def _doctor_report(problems: list[str]) -> None:
                 from rite_ai.coordination.overview import (
                     format_overview,
                     read_overview,
+                    recent_events,
                 )
 
+                layer_for_overview = GitStateLayer(
+                    coordination.remote,
+                    root / ".rite" / "coordination-cache.git",
+                    state_branch=coordination.state_branch,
+                )
                 overview = read_overview(
-                    GitStateLayer(
-                        coordination.remote,
-                        root / ".rite" / "coordination-cache.git",
-                        state_branch=coordination.state_branch,
-                    ),
+                    layer_for_overview,
                     coordination,
                     now=datetime.now(UTC),
                     heartbeat=project.config.heartbeat,
@@ -865,6 +867,9 @@ def _doctor_report(problems: list[str]) -> None:
                 )
                 for line in format_overview(overview):
                     click.echo(line)
+                events = recent_events(layer_for_overview)
+                for line in events:
+                    click.echo(f"coordination: recently — {line}")
                 for note in overview.notes:
                     click.echo(f"coordination: {note}")
                 for problem in overview.problems:
