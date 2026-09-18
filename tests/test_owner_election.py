@@ -105,9 +105,7 @@ class TestAFreeRole:
         assert isinstance(got, Promoted)
         assert holder.holds_role()
 
-    def test_a_lower_priority_manager_defers_to_a_live_higher_one(
-        self, layer, config
-    ):
+    def test_a_lower_priority_manager_defers_to_a_live_higher_one(self, layer, config):
         clock = Clock()
         publish_heartbeat(layer, "alpha", workers=[], in_flight=0, now=clock())
         got, _ = stand(layer, config, "beta", clock)
@@ -181,9 +179,7 @@ class TestALiveLease:
 
 
 class TestTheSkewMargin:
-    def test_promotion_does_not_happen_on_the_bare_expiry_boundary(
-        self, layer, config
-    ):
+    def test_promotion_does_not_happen_on_the_bare_expiry_boundary(self, layer, config):
         """D-42. The incumbent's own clock may not yet have prompted it to
         renew; promoting at `expires` is a non-crash, non-partition route to
         two Owners."""

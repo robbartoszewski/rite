@@ -123,9 +123,7 @@ def distribute(
         # failure, and not something to work around. Work this machine could
         # never do still goes back below, because that is not about capacity.
         for ticket in mine:
-            result.held_back[ticket.id] = (
-                "the schedule has 0 Workers in this window"
-            )
+            result.held_back[ticket.id] = "the schedule has 0 Workers in this window"
         return result
 
     for ticket in mine:

@@ -36,7 +36,6 @@ from rite_ai.config.models import CoordinationConfig
 MACHINE_FILE = "machine"
 
 
-
 def _machine_file(root: Path) -> Path:
     return root / ".rite" / MACHINE_FILE
 

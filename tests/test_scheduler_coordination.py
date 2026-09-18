@@ -281,9 +281,7 @@ class TestHandingTheRoleBack:
         assert lease.acquired, "and when it was taken"
         assert parse_timestamp(lease.expires) <= datetime.now(UTC)
 
-    def test_a_busy_owner_keeps_the_role_and_says_it_was_asked(
-        self, fleet, tmp_path
-    ):
+    def test_a_busy_owner_keeps_the_role_and_says_it_was_asked(self, fleet, tmp_path):
         """The half that makes (A) safe: a machine with work in flight is
         not at a boundary, so it holds the role and the request stays
         pending rather than interrupting a Worker mid-ticket."""
@@ -301,9 +299,7 @@ class TestHandingTheRoleBack:
         assert any("asked for the role" in line for line in lines_out), lines_out
         assert self.owner(url, tmp_path, "busy").owner == "beta"
 
-    def test_the_request_is_cleared_so_it_is_not_acted_on_twice(
-        self, fleet, tmp_path
-    ):
+    def test_the_request_is_cleared_so_it_is_not_acted_on_twice(self, fleet, tmp_path):
         from rite_ai.coordination.demotion import pending_request
         from rite_ai.coordination.git_backend import GitStateLayer
 
@@ -331,7 +327,6 @@ class TestItCannotTakeTheTickDown:
         assert result.ok, "a bad remote failed the whole tick"
         assert coordination_lines(result)
 
-
     def test_an_unexpected_exception_is_caught_rather_than_killing_cron(
         self, tmp_path, monkeypatch
     ):
@@ -344,8 +339,7 @@ class TestItCannotTakeTheTickDown:
 
         root = project(
             tmp_path,
-            "coordination:\n  managers: [alpha]\n"
-            f"  remote: '{remote(tmp_path)}'\n",
+            f"coordination:\n  managers: [alpha]\n  remote: '{remote(tmp_path)}'\n",
         )
         (root / ".rite" / "machine").write_text("alpha\n")
 

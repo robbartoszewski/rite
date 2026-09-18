@@ -203,9 +203,7 @@ class TestTheHazardPerKeyCASRemoves:
             "heartbeat cost the Owner a retry"
         )
 
-    def test_two_managers_publishing_at_once_do_not_conflict(
-        self, open_layer, config
-    ):
+    def test_two_managers_publishing_at_once_do_not_conflict(self, open_layer, config):
         """Each Manager owns its own status file, so two of them writing at
         the same moment are not racing — on any store where that is true of
         the contract rather than of the file layout."""

@@ -275,9 +275,7 @@ class OwnerLeaseHolder:
 
     def _build(self, now: datetime, acquired: OwnerLease | None) -> OwnerLease:
         ours = acquired is not None and acquired.owner == self.manager
-        keep_acquired = (
-            acquired.acquired if ours and acquired.acquired else stamp(now)
-        )
+        keep_acquired = acquired.acquired if ours and acquired.acquired else stamp(now)
         return OwnerLease(
             owner=self.manager,
             acquired=keep_acquired,

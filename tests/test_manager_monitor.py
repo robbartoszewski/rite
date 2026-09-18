@@ -87,9 +87,9 @@ def monitor(layer, config, name, clock, **kw):
 
 def owner_of(layer):
     read = layer.read_state(LEASE_KEY)
-    return None if isinstance(read, Absent) else lease_from_json(
-        read.value.decode()
-    ).owner
+    return (
+        None if isinstance(read, Absent) else lease_from_json(read.value.decode()).owner
+    )
 
 
 class TestTakingAndKeepingTheRole:
@@ -142,9 +142,7 @@ class TestTakingAndKeepingTheRole:
 
 
 class TestPromotingProperly:
-    def test_promotion_hands_over_the_outgoing_owners_work(
-        self, layer, config, root
-    ):
+    def test_promotion_hands_over_the_outgoing_owners_work(self, layer, config, root):
         """P2-3c wired to the moment it applies (D-14's third trigger).
         Promoting and leaving the old Owner's tickets assigned to a machine
         that is gone is the state `rite stop` exists to prevent."""
@@ -202,9 +200,10 @@ class TestAskingForTheRoleBack:
         assert tick.action == "not owner"
         assert tick.asked_for_promotion
         assert owner_of(layer) == "beta", "asking changed the lease"
-        assert request_from_json(
-            layer.read_state(REQUEST_KEY).value.decode()
-        ).requester == "alpha"
+        assert (
+            request_from_json(layer.read_state(REQUEST_KEY).value.decode()).requester
+            == "alpha"
+        )
 
     def test_it_asks_once_not_every_tick(self, layer, config):
         """A promotion request is a file, not a poll. Rewriting it every
@@ -235,9 +234,7 @@ class TestBeingAsked:
         clock = Clock()
         m = monitor(layer, config, "beta", clock)
         m.tick()
-        request_promotion(
-            layer, "alpha", "beta", managers=config.managers, now=clock()
-        )
+        request_promotion(layer, "alpha", "beta", managers=config.managers, now=clock())
         clock.advance(minutes=1)
         tick = m.tick()
         assert tick.asked_to_hand_over
@@ -248,9 +245,7 @@ class TestBeingAsked:
         clock = Clock()
         m = monitor(layer, config, "beta", clock, hand_over_when=lambda: True)
         m.tick()
-        request_promotion(
-            layer, "alpha", "beta", managers=config.managers, now=clock()
-        )
+        request_promotion(layer, "alpha", "beta", managers=config.managers, now=clock())
         clock.advance(minutes=1)
         tick = m.tick()
         assert tick.action == "handed over"
@@ -278,9 +273,7 @@ class TestLiveness:
         live = liveness(layer, "alpha", now=clock(), interval_minutes=10)
         assert live.known and live.missed == 0
 
-    def test_a_heartbeat_that_did_not_publish_is_a_named_problem(
-        self, layer, config
-    ):
+    def test_a_heartbeat_that_did_not_publish_is_a_named_problem(self, layer, config):
         """Not cosmetic: every other Manager's election reads this, and a
         Manager that looks silent gets its work handed over (P2-3b)."""
 
@@ -437,9 +430,7 @@ class TestTheTickAlsoDistributesWork:
         assert parsed.fields["Reason"] == "no-owner"
         assert "Previous-Owner" not in parsed.fields
 
-    def test_work_for_a_missing_module_is_returned_not_held(
-        self, layer, config, root
-    ):
+    def test_work_for_a_missing_module_is_returned_not_held(self, layer, config, root):
         board = self._backend([("ABC-1", ["alpha", "module:ios"])])
         m = monitor(
             layer,
@@ -487,9 +478,7 @@ class TestTheTickAlsoDistributesWork:
 
 
 class TestItKeepsOtherManagersClaims:
-    def test_promotion_does_not_touch_our_own_workers_claims(
-        self, layer, config, root
-    ):
+    def test_promotion_does_not_touch_our_own_workers_claims(self, layer, config, root):
         ledger = ClaimsLedger(root / ".rite" / "claims.json")
         ledger.claim(["src/ours.py"], "w1", "OURS-1")
         clock = Clock()

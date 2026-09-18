@@ -488,9 +488,13 @@ class GitStateLayer(StateLayer):
                     return Unavailable(
                         f"the message may or may not have landed ({detail})"
                     )
-                if landed and self._git(
-                    ["merge-base", "--is-ancestor", new, landed]
-                ).returncode == 0:
+                if (
+                    landed
+                    and self._git(
+                        ["merge-base", "--is-ancestor", new, landed]
+                    ).returncode
+                    == 0
+                ):
                     return Appended(new)
             # conflict: someone appended first — re-parent and retry.
         return Unavailable(
@@ -505,9 +509,11 @@ class GitStateLayer(StateLayer):
             return Messages([])
         if since is not None:
             known = self._git(["cat-file", "-e", f"{since}^{{commit}}"]).returncode == 0
-            reachable = known and self._git(
-                ["merge-base", "--is-ancestor", since, head]
-            ).returncode == 0
+            reachable = (
+                known
+                and self._git(["merge-base", "--is-ancestor", since, head]).returncode
+                == 0
+            )
             if not reachable:
                 return Unavailable(f"unknown message cursor: {since!r}")
         rng = f"{since}..{head}" if since else head

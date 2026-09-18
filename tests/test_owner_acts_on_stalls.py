@@ -82,9 +82,9 @@ def claims_of(remote: str, tmp_path: Path, machine_name: str, tag: str):
 def test_the_owner_hands_over_a_stalled_managers_work(owner_and_stalled):
     alpha, _, _ = owner_and_stalled
     out = lines(run_tick(alpha))
-    assert any(
-        "handed over beta's work" in line and "ABC-9" in line for line in out
-    ), out
+    assert any("handed over beta's work" in line and "ABC-9" in line for line in out), (
+        out
+    )
 
 
 def test_the_owner_expires_the_stalled_managers_claims(owner_and_stalled):

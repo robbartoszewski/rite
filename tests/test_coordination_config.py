@@ -100,9 +100,7 @@ class TestSkewToleranceAndStateBranch:
     def test_state_branch_defaults_to_state(self):
         assert CoordinationConfig().state_branch == "state"
 
-    def test_a_blank_state_branch_falls_back_rather_than_being_empty(
-        self, tmp_path
-    ):
+    def test_a_blank_state_branch_falls_back_rather_than_being_empty(self, tmp_path):
         """An empty branch name would produce a refspec that pushes
         nothing, silently. §2.4.2 needs a name it can build
         `--force-with-lease=<branch>:<oid>` from."""

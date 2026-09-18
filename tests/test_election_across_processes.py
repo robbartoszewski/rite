@@ -158,16 +158,11 @@ def test_four_managers_four_processes_never_overlap(specs, tmp_path):
 
     runs = ownership_runs(rows)
 
-    ordered = sorted(
-        ((start, end, name) for (name, _), (start, end) in runs.items())
-    )
+    ordered = sorted(((start, end, name) for (name, _), (start, end) in runs.items()))
     overlaps = overlapping_owners(runs)
-    assert not overlaps, (
-        "TWO OWNERS AT ONCE — "
-        + "; ".join(
-            f"{a[2]} held until {a[1]:.1f} while {b[2]} held from {b[0]:.1f}"
-            for a, b in overlaps
-        )
+    assert not overlaps, "TWO OWNERS AT ONCE — " + "; ".join(
+        f"{a[2]} held until {a[1]:.1f} while {b[2]} held from {b[0]:.1f}"
+        for a, b in overlaps
     )
 
     if os.environ.get("RITE_ELECTION_STATS"):

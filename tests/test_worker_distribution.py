@@ -102,9 +102,7 @@ class TestHandingOutWork:
     ):
         """§5.3.4. There is nothing to match against a ticket, so a clever
         pick here would be inventing a routing rule the spec does not have."""
-        backend = FakeBackend(
-            [ticket("ABC-1", "beta"), ticket("ABC-2", "beta")]
-        )
+        backend = FakeBackend([ticket("ABC-1", "beta"), ticket("ABC-2", "beta")])
         got = distribute(
             root,
             backend,
@@ -167,9 +165,7 @@ class TestTheScheduleDecidesHowMany:
         assert "ABC-2" in got.held_back
         assert "2 of 3 scheduled slots in use" in got.held_back["ABC-2"]
 
-    def test_an_off_window_hands_out_nothing_and_says_the_schedule_chose_it(
-        self, root
-    ):
+    def test_an_off_window_hands_out_nothing_and_says_the_schedule_chose_it(self, root):
         """§2.7.3: zero Workers is a clean stop, not a stall and not an
         error to work around."""
         backend = FakeBackend([ticket("ABC-1", "beta")])
@@ -235,9 +231,7 @@ class TestWhenAWriteFails:
         assert isinstance(got, NotDistributed)
         assert backend.writes == []
 
-    def test_a_backend_that_ignores_the_label_filter_is_still_filtered_here(
-        self, root
-    ):
+    def test_a_backend_that_ignores_the_label_filter_is_still_filtered_here(self, root):
         """Backends differ in how faithfully they filter. Trusting the
         query would hand another Manager's ticket to our Worker — a
         cross-machine seizure caused by a backend quirk."""

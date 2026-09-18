@@ -96,7 +96,6 @@ class LocalStateLayer(StateLayer):
 
     # --- StateLayer ---
 
-
     def read_state(self, key: str) -> Present | Absent | Unavailable:
         if not valid_key(key):
             return Unavailable(f"invalid state key: {key!r}")

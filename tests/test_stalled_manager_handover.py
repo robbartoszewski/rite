@@ -83,9 +83,7 @@ def hand_over(root, layer, *, stalled="beta", now=NOW):
 
 
 class TestDecidingItIsStalled:
-    def test_a_manager_past_the_threshold_has_its_work_handed_over(
-        self, root, layer
-    ):
+    def test_a_manager_past_the_threshold_has_its_work_handed_over(self, root, layer):
         publish_heartbeat(layer, "beta", workers=["w1"], in_flight=1, now=NOW)
         with_work(layer, "beta")
         got = hand_over(root, layer, now=NOW + timedelta(minutes=31))
@@ -104,9 +102,7 @@ class TestDecidingItIsStalled:
         assert not (root / ".rite" / "outbox").exists()
         assert not layer.read_messages().items, "it recorded a handover it refused"
 
-    def test_a_manager_that_never_published_is_not_declared_stalled(
-        self, root, layer
-    ):
+    def test_a_manager_that_never_published_is_not_declared_stalled(self, root, layer):
         """D-58: "cannot tell" is not "gone". A Manager with no heartbeat at
         all may be a machine that was never set up, and stripping tickets off
         the board on that basis is a guess with consequences."""

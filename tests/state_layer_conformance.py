@@ -421,9 +421,7 @@ class StateLayerConformance:
             ],
         )
         claimed = [
-            tuple(r)
-            for log in logs.glob("*.json")
-            for r in json.loads(log.read_text())
+            tuple(r) for log in logs.glob("*.json") for r in json.loads(log.read_text())
         ]
         assert len(claimed) > self.MIN_MESSAGES, (
             f"bursts barely ran ({len(claimed)}) — not a test"
@@ -490,4 +488,3 @@ class StateLayerConformance:
         layer.append_message("one")
         self.corrupt_messages(store)
         assert isinstance(layer.read_messages(), Unavailable)
-

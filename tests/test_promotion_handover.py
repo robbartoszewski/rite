@@ -131,9 +131,7 @@ class TestTheTwoWaysThisGoesWrong:
         ledger.claim(["src/ours.py"], "w1", "OURS-9")
         publish(layer, "beta", [(["src/theirs.py"], "w1", "ABC-1")])
 
-        hand_over_outgoing_owner(
-            root, layer, new_owner="alpha", previous_owner="beta"
-        )
+        hand_over_outgoing_owner(root, layer, new_owner="alpha", previous_owner="beta")
 
         ours = ClaimsLedger(root / ".rite" / "claims.json").list_claims()
         assert [c.ticket for c in ours] == ["OURS-9"], "it released our own claim"
@@ -173,7 +171,6 @@ class TestTheTwoWaysThisGoesWrong:
         assert isinstance(got, Unknown)
         assert not layer.read_messages().items, "it recorded a promotion it aborted"
 
-
     def test_an_unreachable_state_is_unknown_too(self, root, layer):
         """The other half of the same distinction, and a different code
         path: "we could not reach it" is not "it held nothing" either.
@@ -198,9 +195,7 @@ class TestTheTwoWaysThisGoesWrong:
 
 
 class TestTheRecord:
-    def test_the_promotion_event_names_both_managers_and_the_reason(
-        self, root, layer
-    ):
+    def test_the_promotion_event_names_both_managers_and_the_reason(self, root, layer):
         publish(layer, "beta", [(["src/a.py"], "w1", "ABC-1")])
         hand_over_outgoing_owner(
             root,

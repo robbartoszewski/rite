@@ -194,9 +194,7 @@ class TestRefusalDuringDistribution:
         assert "ABC-1" in got.refused
         assert got.held_back == {}
 
-    def test_a_refusal_the_board_rejects_is_neither_refused_nor_handed_out(
-        self, root
-    ):
+    def test_a_refusal_the_board_rejects_is_neither_refused_nor_handed_out(self, root):
         """The third state, and the one a caller must not read as either of
         the others: still ours, still undoable."""
         backend = FakeBackend(

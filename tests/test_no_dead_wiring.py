@@ -84,8 +84,7 @@ def behavioural_classes() -> dict[str, Path]:
                 (isinstance(d, ast.Name) and d.id == "dataclass")
                 or (isinstance(d, ast.Attribute) and d.attr == "dataclass")
                 or (
-                    isinstance(d, ast.Call)
-                    and getattr(d.func, "id", "") == "dataclass"
+                    isinstance(d, ast.Call) and getattr(d.func, "id", "") == "dataclass"
                 )
                 for d in node.decorator_list
             )
@@ -177,6 +176,5 @@ def test_every_exemption_gives_a_real_reason():
         if len(reason) < 40 or "not yet" in reason.lower()
     ]
     assert not thin, (
-        f"these exemptions do not say why: {thin} — "
-        '"not yet" is a plan, not a reason'
+        f'these exemptions do not say why: {thin} — "not yet" is a plan, not a reason'
     )

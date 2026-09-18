@@ -97,9 +97,7 @@ class TestAsking:
 
     def test_the_request_names_the_incumbent_it_was_meant_for(self, layer, config):
         clock = Clock()
-        request_promotion(
-            layer, "alpha", "beta", managers=config.managers, now=clock()
-        )
+        request_promotion(layer, "alpha", "beta", managers=config.managers, now=clock())
         stored = request_from_json(layer.read_state(REQUEST_KEY).value.decode())
         assert stored.incumbent == "beta"
         assert stored.requester == "alpha"
@@ -109,18 +107,14 @@ class TestSeeingTheRequest:
     def test_an_owner_sees_a_request_addressed_to_it(self, layer, config):
         clock = Clock()
         OwnerLeaseHolder(layer, "beta", config, clock=clock).acquire()
-        request_promotion(
-            layer, "alpha", "beta", managers=config.managers, now=clock()
-        )
+        request_promotion(layer, "alpha", "beta", managers=config.managers, now=clock())
         assert isinstance(pending_request(layer, "beta"), Asked)
 
     def test_a_request_meant_for_an_earlier_owner_is_not_acted_on(self, layer, config):
         """The requester asked, and the role changed hands some other way
         before anyone acted. Acting now would be a seizure by accident."""
         clock = Clock()
-        request_promotion(
-            layer, "alpha", "beta", managers=config.managers, now=clock()
-        )
+        request_promotion(layer, "alpha", "beta", managers=config.managers, now=clock())
         assert pending_request(layer, "gamma") is None
 
     def test_an_unreadable_request_is_unknown_not_absent(self, layer, config):
@@ -132,9 +126,7 @@ class TestSeeingTheRequest:
 
 
 class TestHandingOver:
-    def test_the_full_round_trip_ends_with_the_requester_as_owner(
-        self, layer, config
-    ):
+    def test_the_full_round_trip_ends_with_the_requester_as_owner(self, layer, config):
         """Steps 1-5 end to end, including the skew wait the protocol as
         written still costs (§2.4.1) — asserted, not glossed."""
         clock = Clock()
@@ -142,9 +134,7 @@ class TestHandingOver:
         alpha = OwnerLeaseHolder(layer, "alpha", config, clock=clock)
         beta.acquire()
 
-        request_promotion(
-            layer, "alpha", "beta", managers=config.managers, now=clock()
-        )
+        request_promotion(layer, "alpha", "beta", managers=config.managers, now=clock())
         # ... beta finishes ONE operation (D-43), then:
         got = hand_over(beta, now=clock())
         assert isinstance(got, HandedOver)
@@ -201,9 +191,7 @@ class TestHandingOver:
         clock = Clock()
         beta = OwnerLeaseHolder(layer, "beta", config, clock=clock)
         beta.acquire()
-        request_promotion(
-            layer, "alpha", "beta", managers=config.managers, now=clock()
-        )
+        request_promotion(layer, "alpha", "beta", managers=config.managers, now=clock())
 
         class ReadsFailAfterTheRequest:
             def __init__(self, inner):
@@ -228,18 +216,14 @@ class TestHandingOver:
         beta.layer = layer
         assert isinstance(pending_request(layer, "beta"), Asked)
 
-    def test_the_request_is_cleared_before_the_lease_is_released(
-        self, layer, config
-    ):
+    def test_the_request_is_cleared_before_the_lease_is_released(self, layer, config):
         """Order matters, and only one of the two orders is safe. Releasing
         first and failing to clear leaves a live request addressed to an
         Owner that no longer exists."""
         clock = Clock()
         beta = OwnerLeaseHolder(layer, "beta", config, clock=clock)
         beta.acquire()
-        request_promotion(
-            layer, "alpha", "beta", managers=config.managers, now=clock()
-        )
+        request_promotion(layer, "alpha", "beta", managers=config.managers, now=clock())
         order = []
         real_write = layer.write_state
 

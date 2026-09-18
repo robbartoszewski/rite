@@ -116,9 +116,7 @@ class TestGitSpecifics:
     def layer(self, tmp_path, remote):
         return GitStateLayer(str(remote), tmp_path / "cache")
 
-    def test_identical_writes_still_produce_distinct_commits(
-        self, tmp_path, remote
-    ):
+    def test_identical_writes_still_produce_distinct_commits(self, tmp_path, remote):
         """The nonce, at the level it actually guards.
 
         A version is a fingerprint of the VALUE now, so two writes of the
@@ -161,9 +159,7 @@ class TestGitSpecifics:
         other Manager's state, and the next read looks like a clean start.
         So the assertion is on the commit's tree, not on what one reader
         happens to see: everything that was there must still be there."""
-        managers = [
-            GitStateLayer(str(remote), tmp_path / f"c{i}") for i in range(4)
-        ]
+        managers = [GitStateLayer(str(remote), tmp_path / f"c{i}") for i in range(4)]
         for i, manager in enumerate(managers):
             # Each Manager writes only its OWN key, and expects only its own
             # key's prior state — none of them has read the others'.

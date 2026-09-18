@@ -199,9 +199,7 @@ class TestTheGitBackendItself:
             layer.write_state("owner-lease.json", b"held", ABSENT), Unavailable
         )
 
-    def test_a_message_whose_ack_was_lost_is_not_appended_twice(
-        self, tmp_path, remote
-    ):
+    def test_a_message_whose_ack_was_lost_is_not_appended_twice(self, tmp_path, remote):
         """The audit log's version of the same hazard, and worse: a retry
         after a lost ack duplicates the entry, and a duplicated audit record
         is a false one."""

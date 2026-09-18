@@ -43,9 +43,7 @@ def _counter_actor(args):
 def _run(tmp_path: Path, use_lock: bool, actors: int = 6, seconds: float = 1.5):
     counter = tmp_path / "counter"
     counter.write_text("0")
-    made = run_actors(
-        _counter_actor, [(str(counter), use_lock, seconds)] * actors
-    )
+    made = run_actors(_counter_actor, [(str(counter), use_lock, seconds)] * actors)
     return sum(made), int(counter.read_text())
 
 

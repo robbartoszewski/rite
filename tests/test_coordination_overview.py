@@ -117,9 +117,7 @@ class TestWhoIsAlive:
         assert {m.name: m.state for m in overview.managers}["beta"] == STALLED
         assert any("beta" in p and "heartbeat" in p for p in overview.problems)
 
-    def test_a_manager_that_never_published_is_unknown_not_stalled(
-        self, layer, config
-    ):
+    def test_a_manager_that_never_published_is_unknown_not_stalled(self, layer, config):
         """D-58's shape again: a machine that was never set up is not a
         machine that died, and handing its work over would be a guess."""
         overview = look(layer, config)
@@ -174,9 +172,7 @@ class TestAPendingHandover:
         overview = look(layer, config, now=later)
         assert any("has not moved" in p for p in overview.problems), overview.problems
 
-    def test_a_request_meant_for_an_earlier_owner_is_not_reported(
-        self, layer, config
-    ):
+    def test_a_request_meant_for_an_earlier_owner_is_not_reported(self, layer, config):
         """Nobody is waiting on it: the role already changed hands some
         other way. Reporting it sends a human looking for a handover that
         is not pending."""
@@ -202,9 +198,7 @@ class TestTheEventLog:
 
         for previous in ("", "alpha", "beta"):
             layer.append_message(
-                format_message(
-                    promotion_event("gamma", previous, "lease-expired")
-                )
+                format_message(promotion_event("gamma", previous, "lease-expired"))
             )
         lines = recent_events(layer)
         assert len(lines) == 3
@@ -244,9 +238,7 @@ class TestTheEventLog:
         lines = recent_events(Blind(layer))
         assert lines and "could not be read" in lines[0]
 
-    def test_an_event_this_version_cannot_parse_is_still_counted(
-        self, layer, config
-    ):
+    def test_an_event_this_version_cannot_parse_is_still_counted(self, layer, config):
         """Hiding it would make the log look shorter than it is, which is
         the same lie as truncating it."""
         from rite_ai.coordination.overview import recent_events

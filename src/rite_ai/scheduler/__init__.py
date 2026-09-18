@@ -546,8 +546,7 @@ def _owner_duties(root, layer, config, project, name: str, tick) -> list[str]:
             )
             if handed.queued:
                 lines.append(
-                    "coordination: board NOT updated for "
-                    + ", ".join(handed.queued)
+                    "coordination: board NOT updated for " + ", ".join(handed.queued)
                 )
 
     expiry = expire_offline_claims(

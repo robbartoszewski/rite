@@ -113,11 +113,27 @@ def test_a_returning_manager_is_handed_the_role_without_a_lapse(tmp_path):
     args = [
         # beta is lower priority but starts first, so it is Owner by default
         # (§2.4, first bullet) and yields when asked.
-        (str(remote), str(tmp_path / "cb"), "beta", managers, t0,
-         str(logs / "beta.json"), 0.0, True),
+        (
+            str(remote),
+            str(tmp_path / "cb"),
+            "beta",
+            managers,
+            t0,
+            str(logs / "beta.json"),
+            0.0,
+            True,
+        ),
         # alpha returns two seconds later and outranks it.
-        (str(remote), str(tmp_path / "ca"), "alpha", managers, t0,
-         str(logs / "alpha.json"), 2.0, False),
+        (
+            str(remote),
+            str(tmp_path / "ca"),
+            "alpha",
+            managers,
+            t0,
+            str(logs / "alpha.json"),
+            2.0,
+            False,
+        ),
     ]
     with mp.get_context("spawn").Pool(2) as pool:
         pool.map(_manager, args)
@@ -155,6 +171,4 @@ def test_a_returning_manager_is_handed_the_role_without_a_lapse(tmp_path):
 
     final = GitStateLayer(str(remote), tmp_path / "check")
     assert lease_from_json(final.read_state(LEASE_KEY).value.decode()).owner == "alpha"
-    assert not request_from_json(
-        final.read_state(REQUEST_KEY).value.decode()
-    ).requester
+    assert not request_from_json(final.read_state(REQUEST_KEY).value.decode()).requester

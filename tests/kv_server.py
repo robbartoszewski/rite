@@ -90,9 +90,7 @@ def handle(request: dict) -> dict:
                 if not since.isdigit() or not (0 < int(since) <= len(MESSAGES)):
                     return {"unknown": True}
                 start = int(since)
-            items = [
-                [str(i + 1), MESSAGES[i]] for i in range(start, len(MESSAGES))
-            ]
+            items = [[str(i + 1), MESSAGES[i]] for i in range(start, len(MESSAGES))]
             return {"items": items}
     return {"error": f"unknown op {op!r}"}
 
