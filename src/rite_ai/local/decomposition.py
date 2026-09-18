@@ -5,8 +5,9 @@ decisions it cites — plus who approved the plan and what has happened to each
 subtask since. Durable from the moment it exists: SPEC §2.0 says a session's
 memory is not a record, and this is the thing three gates read.
 
-**It is evidence, never instruction** (the design's channel segregation, RL-T26). Plan review, step review
-and recomposition all read this artifact, and nothing a decomposer writes here
+**It is evidence, never instruction** (the design's channel segregation,
+RL-T26). Plan review, step review and recomposition all read this artifact,
+and nothing a decomposer writes here
 may tell a reviewer what to check or what to skip. That is why there is no
 `notes`, `guidance` or `reviewer_hint` field: a field like that is a channel
 from the tier being reviewed to the tier reviewing it, and the earlier
@@ -60,7 +61,8 @@ class Subtask:
     id: str
     intent: str
     # The paths this subtask may touch. Scope is what makes a conflict at
-    # composition evidence about the PLAN (the design's composition gate, RL-T30) rather than a chore.
+    # composition evidence about the PLAN (the design's composition gate,
+    # RL-T30) rather than a chore.
     scope: tuple[str, ...] = ()
     # Mechanical, and rite runs it rather than trusting a report (RL-7).
     verify: str = ""

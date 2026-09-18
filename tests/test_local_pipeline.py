@@ -207,8 +207,9 @@ def test_a_verify_that_does_not_exist_is_caught_before_anything_runs():
 
 
 def test_two_subtasks_claiming_one_path_are_caught_before_the_merge():
-    """The design's composition gate (RL-T30): two subtasks that conflict were two subtasks that should
-    not have been separate. Cheaper here than at composition."""
+    """The design's composition gate (RL-T30): two subtasks that conflict were
+    two subtasks that should not have been separate. Cheaper here than at
+    composition."""
     plan = _plan(
         subtasks=(
             Subtask(id="s1", intent="a", scope=("shared.py",), verify="t"),
