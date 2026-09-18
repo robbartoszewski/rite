@@ -36,5 +36,28 @@ jobs:
       - name: Format check
         run: uv run ruff format --check .
 
+      # The suite needs gitleaks present, and without it fifteen tests fail
+      # for a reason that has nothing to do with the change being tested:
+      # `rite doctor` reports "tool gitleaks: not found" as a problem, so
+      # every test asserting a healthy project, or counting problems, goes
+      # red. CI on main had been failing that way for at least twelve
+      # commits, which meant it had stopped being a signal.
+      #
+      # Pinned and checksummed exactly as `publish-gate.yml` does it — the
+      # two workflows install the same tool the same way, and this is the
+      # environment a developer already has.
+      - name: Install gitleaks
+        run: |
+          cd /tmp
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \
+            -o gitleaks_8.30.1_linux_x64.tar.gz
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_checksums.txt \
+            -o gitleaks_checksums.txt
+          grep ' gitleaks_8.30.1_linux_x64.tar.gz$' gitleaks_checksums.txt > expected.sha256
+          sha256sum --check expected.sha256
+          tar -xzf gitleaks_8.30.1_linux_x64.tar.gz -C /tmp gitleaks
+          sudo mv /tmp/gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
       - name: Test
         run: uv run pytest
