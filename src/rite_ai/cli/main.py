@@ -2758,6 +2758,7 @@ def publish_check(rev_range: str | None) -> None:
       rite publish check --rev-range origin/main..HEAD
     """
     from rite_ai.gate import EXIT_CLEAN, EXIT_FAIL, EXIT_WARN, run_gate
+    from rite_ai.gate.gate import _partial_lines
 
     root = _gate_root()
     from rite_ai.gate import suppression
@@ -2783,7 +2784,12 @@ def publish_check(rev_range: str | None) -> None:
     for entry, n in suppression.covering_more_than_one(
         report.suppressed, report.suppressions
     ):
-        click.echo(f"\none entry covers {n} findings: {entry.fingerprint}")
+        # On a run that could not complete, the count is over the sources that
+        # did — so it is a floor, not a total, and saying "covers 2" flat would
+        # understate an entry that is also covering what the failed source
+        # would have found.
+        over = " (of what could be scanned)" if report.errors else ""
+        click.echo(f"\none entry covers {n} findings{over}: {entry.fingerprint}")
 
     if report.stale_suppressions:
         click.echo(f"\n{len(report.stale_suppressions)} stale suppression(s):")
@@ -2798,9 +2804,11 @@ def publish_check(rev_range: str | None) -> None:
             if hint:
                 click.echo(hint)
 
-    if report.errors:
+    if report.errors or report.partial_findings:
         for err in report.errors:
             click.echo(f"error: {err}", err=True)
+        for line in _partial_lines(report):
+            click.echo(line, err=True)
 
     if report.exit_code == EXIT_CLEAN:
         click.echo("gate: clean")

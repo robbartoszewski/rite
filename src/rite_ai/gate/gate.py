@@ -46,10 +46,21 @@ class GateReport:
     files_scanned: int = 0
     commits_scanned: int = 0
     errors: list[str] = field(default_factory=list)
+    # What the sources that COULD run found, when another source could not.
+    # Reported so a blocked run is still worth something, and deliberately
+    # kept out of `findings` and out of `exit_code`: a run missing a source
+    # is EXIT_ERROR whatever these say, and they are not a verdict on the
+    # tree. Empty here never means clean.
+    partial_findings: list[Finding] = field(default_factory=list)
 
     @property
     def exit_code(self) -> int:
-        if self.errors:
+        if self.errors or self.partial_findings:
+            # `partial_findings` is only ever populated beside an error. If
+            # it is ever populated without one, the report is malformed and
+            # the honest answer is still "this did not complete" — the one
+            # thing this contract exists to stop is findings existing
+            # somewhere the exit code cannot see.
             return EXIT_ERROR
         if self.findings:
             return EXIT_FAIL
@@ -124,24 +135,36 @@ def _run_gate(
 
     binary = gitleaks_runner.find_gitleaks_binary()
     if binary is None:
-        return GateReport(
-            errors=[
-                "gitleaks is not installed or not on PATH. rite's publish "
-                "gate is built on gitleaks and does not reimplement secret "
-                "detection, so it cannot run without it. "
-                + gitleaks_runner.HOW_TO_INSTALL
-            ]
+        # Still an error, and still EXIT_ERROR: rite does not reimplement
+        # secret detection, so without gitleaks it cannot say this tree is
+        # safe, and saying so would be the one failure this exit code exists
+        # to prevent. But rite's OWN rules — the built-in hardcoded-path
+        # rules §11.3 calls never optional, the user's declared patterns, and
+        # the kb/ cross-reference — need no gitleaks at all. Returning here
+        # ran none of them, so someone on a machine without gitleaks got
+        # nothing: not a partial answer, no answer, and then a second round
+        # of failures after they installed it. They run, and what they find
+        # is reported under the error.
+        errors.append(
+            "gitleaks is not installed or not on PATH. rite's publish "
+            "gate is built on gitleaks and does not reimplement secret "
+            "detection, so it cannot run without it. " + gitleaks_runner.HOW_TO_INSTALL
         )
 
     if config is None:
         loaded = parse_config(root / ".rite" / "config.yaml")
         if not isinstance(loaded, ProjectConfig):
-            return GateReport(errors=[f"invalid .rite/config.yaml: {loaded.message}"])
+            return GateReport(
+                errors=errors + [f"invalid .rite/config.yaml: {loaded.message}"]
+            )
         config = loaded
 
     tracked = pattern_scan.list_tracked_files(root)
     if isinstance(tracked, pattern_scan.ScanError):
-        return GateReport(errors=[tracked.message])
+        # `errors +` and not `[...]`: a missing gitleaks is recorded above,
+        # and dropping it here left the user reading about the second problem
+        # with no mention of the first.
+        return GateReport(errors=errors + [tracked.message])
 
     user_config_path: Path | None = None
     candidate = root / config.publish_gate.gitleaks_config
@@ -150,25 +173,26 @@ def _run_gate(
 
     all_findings: list[Finding] = []
 
-    # 1. gitleaks: maintained secret-detection ruleset over full git history
-    #    (or the push range). Covers current + historical file content.
-    history = gitleaks_runner.scan_history(
-        root, binary, config_path=user_config_path, log_opts=rev_range
-    )
-    if isinstance(history, gitleaks_runner.ScanError):
-        errors.append(f"gitleaks history scan failed: {history.message}")
-    else:
-        all_findings.extend(history)
+    if binary is not None:
+        # 1. gitleaks: maintained secret-detection ruleset over full git
+        #    history (or the push range). Current + historical file content.
+        history = gitleaks_runner.scan_history(
+            root, binary, config_path=user_config_path, log_opts=rev_range
+        )
+        if isinstance(history, gitleaks_runner.ScanError):
+            errors.append(f"gitleaks history scan failed: {history.message}")
+        else:
+            all_findings.extend(history)
 
-    # 2. gitleaks via the commit-message relay (see gitleaks_runner module
-    #    docstring — gitleaks does not scan commit messages on its own).
-    msg_scan = gitleaks_runner.scan_commit_messages(
-        root, binary, config_path=user_config_path, rev_range=rev_range
-    )
-    if isinstance(msg_scan, gitleaks_runner.ScanError):
-        errors.append(f"gitleaks commit-message scan failed: {msg_scan.message}")
-    else:
-        all_findings.extend(msg_scan)
+        # 2. gitleaks via the commit-message relay (see gitleaks_runner module
+        #    docstring — gitleaks does not scan commit messages on its own).
+        msg_scan = gitleaks_runner.scan_commit_messages(
+            root, binary, config_path=user_config_path, rev_range=rev_range
+        )
+        if isinstance(msg_scan, gitleaks_runner.ScanError):
+            errors.append(f"gitleaks commit-message scan failed: {msg_scan.message}")
+        else:
+            all_findings.extend(msg_scan)
 
     # 3. rite's own patterns: user-declared (config.yaml) + always-on built-in
     #    hardcoded-path rules. Applied to content, file names, and commit
@@ -202,24 +226,44 @@ def _run_gate(
         # EXIT_CLEAN/EXIT_FAIL built from incomplete data. This is the
         # specific guard against "errored to stderr, stdout stayed empty,
         # read as clean."
-        return GateReport(errors=errors, files_scanned=len(tracked))
+        #
+        # What the sources that DID run found still goes in the report, under
+        # a field no exit code reads: throwing it away made a blocked run
+        # worth nothing, and told the user about their real problems one
+        # round at a time. Suppressions are applied when the file parses, so
+        # this does not re-raise decisions someone already made; when it does
+        # not parse, everything found is shown unfiltered rather than hidden.
+        partial, suppressed, entries = _suppress_best_effort(
+            root, _dedupe(all_findings)
+        )
+        return GateReport(
+            errors=errors,
+            files_scanned=len(tracked),
+            partial_findings=partial,
+            suppressed=suppressed,
+            suppressions=entries,
+        )
 
-    # Dedupe: the same finding can legitimately surface twice (e.g. gitleaks'
-    # default ruleset run both standalone and via the user's extended config,
-    # if the user's config also sets useDefault).
-    deduped: dict[str, Finding] = {}
-    for f in all_findings:
-        # Keyed on the digest too: two DIFFERENT secrets reported at one
-        # file:line:rule (a key and its twin on the same line, say) are two
-        # findings and two decisions, and keying on position alone silently
-        # dropped the second before anything could suppress either.
-        deduped.setdefault((f.fingerprint, f.digest), f)
-    merged = list(deduped.values())
+    merged = _dedupe(all_findings)
 
     suppression_path = root / DEFAULT_SUPPRESSION_PATH
-    suppressions = supp_mod.parse(suppression_path)
+    try:
+        suppressions = supp_mod.parse(suppression_path)
+    except Exception as exc:  # noqa: BLE001 - `parse` reads bytes it did not write
+        suppressions = supp_mod.SuppressionError(
+            f"{DEFAULT_SUPPRESSION_PATH} could not be read: {type(exc).__name__}: {exc}"
+        )
     if isinstance(suppressions, supp_mod.SuppressionError):
-        return GateReport(errors=[suppressions.message], files_scanned=len(tracked))
+        # Still EXIT_ERROR — nothing here can be suppressed, so nothing here
+        # can be vouched for. But the findings go out under `partial_findings`
+        # rather than into the bin: a typo'd suppression line used to hide
+        # every real finding in the tree behind one parse error, which is the
+        # same information loss the missing-gitleaks path had.
+        return GateReport(
+            errors=[suppressions.message],
+            files_scanned=len(tracked),
+            partial_findings=merged,
+        )
 
     blocking, suppressed = supp_mod.apply(merged, suppressions)
     stale = supp_mod.find_stale(suppressions, merged)
@@ -234,6 +278,48 @@ def _run_gate(
         suppressions=suppressions,
         files_scanned=len(tracked),
     )
+
+
+def _dedupe(findings: list[Finding]) -> list[Finding]:
+    """The same finding can legitimately surface twice (e.g. gitleaks' default
+    ruleset run both standalone and via the user's extended config, if the
+    user's config also sets useDefault).
+
+    Keyed on the digest too: two DIFFERENT secrets reported at one
+    file:line:rule (a key and its twin on the same line, say) are two findings
+    and two decisions, and keying on position alone silently dropped the
+    second before anything could suppress either.
+    """
+    deduped: dict[tuple[str, str], Finding] = {}
+    for f in findings:
+        deduped.setdefault((f.fingerprint, f.digest), f)
+    return list(deduped.values())
+
+
+def _suppress_best_effort(
+    root: Path, findings: list[Finding]
+) -> tuple[list[Finding], list[Finding], list[Suppression]]:
+    """`findings` split into (blocking, suppressed) plus the entries applied.
+
+    Best effort by design: this runs only on a path that is already going to
+    be EXIT_ERROR, so anything wrong with the suppression file must not
+    swallow the findings — every failure falls back to showing all of them.
+    `parse` reads the file without decoding guarantees, so this catches rather
+    than trusting it to return its error type.
+
+    Stale entries are deliberately NOT computed here: a scan missing a source
+    is missing findings, so entries covering those findings would be reported
+    as matching nothing, and the fix for "stale" is deleting the line that is
+    still doing its job.
+    """
+    try:
+        suppressions = supp_mod.parse(root / DEFAULT_SUPPRESSION_PATH)
+    except Exception:  # noqa: BLE001 - the fallback IS showing everything
+        return findings, [], []
+    if isinstance(suppressions, supp_mod.SuppressionError):
+        return findings, [], []
+    blocking, suppressed = supp_mod.apply(findings, suppressions)
+    return blocking, suppressed, suppressions
 
 
 def _split_off_pre_existing(
@@ -274,14 +360,52 @@ def _split_off_pre_existing(
     return still_blocking, pre_existing
 
 
+def _partial_lines(report: GateReport, limit: int = 10) -> list[str]:
+    """The findings from the sources that completed.
+
+    Says only that — the checks above it are whichever ones failed, which is
+    not always the secret detector. Wording this as "the checks that did not
+    run are the ones that detect secrets" printed a gitleaks-confirmed token
+    under a sentence telling the reader to discount it.
+    """
+    if not report.partial_findings and not report.suppressed:
+        return []
+    lines: list[str] = []
+    n = len(report.partial_findings)
+    if n:
+        lines.append(
+            f"\n{n} finding(s) from the checks that DID complete — not a verdict "
+            "on this tree, which has not been fully scanned:"
+        )
+        for f in report.partial_findings[:limit]:
+            loc = f"{f.file}:{f.line}" if f.line else f.file
+            lines.append(f"  [{f.rule_id}] {loc} — {f.description}")
+            lines.append(f"    fingerprint: {f.content_fingerprint or f.fingerprint}")
+        if n > limit:
+            lines.append(f"  … and {n - limit} more")
+    if report.suppressed:
+        # The complete path says this further down; the error branch returns
+        # before it, so without this a filtered list reads as the whole one —
+        # and when everything found was suppressed, the run said nothing at
+        # all about what it had seen.
+        lines.append(
+            f"  ({len(report.suppressed)} finding(s) matched an entry in "
+            f"{DEFAULT_SUPPRESSION_PATH} and are not listed)"
+        )
+    if n:
+        lines.append(supp_mod.HOW_TO_SUPPRESS)
+    return lines
+
+
 def format_report(report: GateReport) -> str:
     """Human-readable summary — used by both the standalone `__main__` CLI
     and (once wired) the `rite publish check` command."""
     lines: list[str] = []
-    if report.errors:
+    if report.errors or report.partial_findings:
         lines.append("ERROR — the gate could not complete:")
         for e in report.errors:
             lines.append(f"  {e}")
+        lines.extend(_partial_lines(report))
         return "\n".join(lines)
 
     lines.append(f"scanned {report.files_scanned} tracked file(s)")
