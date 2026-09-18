@@ -33,6 +33,10 @@ _LOCAL = re.compile(r"^local:([a-z0-9][a-z0-9-]*)$")
 # is how a reader makes sense of the list.
 DECIDE = "decide"
 BOARD = "board"
+# Held by the Owner (RL-52). A named duty rather than an emergent behaviour, so
+# the single-router property is one rite enforces: a question relayed by the
+# Owner is not relayed onward, and that rule now has a holder.
+ROUTE = "route"
 SPEC = "spec"
 PLAN_REVIEW = "plan-review"
 DECOMPOSE = "decompose"
@@ -43,6 +47,7 @@ EXECUTE = "execute"
 DUTIES: tuple[str, ...] = (
     DECIDE,
     BOARD,
+    ROUTE,
     SPEC,
     PLAN_REVIEW,
     DECOMPOSE,
@@ -54,10 +59,10 @@ DUTIES: tuple[str, ...] = (
 # Presets are named defaults, not types (RL-2). A project may declare any
 # combination, and a new combination needs no code here.
 PRESETS: dict[str, tuple[str, ...]] = {
-    "lead": (DECIDE, BOARD, SPEC, PLAN_REVIEW, INTEGRATE, EXECUTE),
+    "lead": (DECIDE, BOARD, ROUTE, SPEC, PLAN_REVIEW, INTEGRATE, EXECUTE),
     "planner": (DECOMPOSE, STEP_REVIEW, EXECUTE),
     "executor": (EXECUTE,),
-    "pm": (DECIDE, BOARD),
+    "pm": (DECIDE, BOARD, ROUTE),
 }
 
 # Only a `local:*` engine may carry these, and it must carry all three: the
@@ -353,13 +358,16 @@ def configuration_problems(
             )
 
     eligible = [
-        r for r in roles if r.engine != HUMAN and {DECIDE, BOARD} <= held[r.name]
+        r for r in roles if r.engine != HUMAN and {DECIDE, BOARD, ROUTE} <= held[r.name]
     ]
     if not eligible:
-        # RL-32: the Owner runs unattended, so it cannot be a person, and it
-        # decides and owns the board by definition.
+        # RL-32 with RL-52: the Owner runs unattended, so it cannot be a
+        # person; it decides and owns the board by definition; and routing is
+        # a duty it holds rather than a behaviour it falls into.
         problems.append(
-            "no manager can be Owner: that needs decide and board on an engine "
-            "that runs unattended, and every manager holding both is 'human'"
+            "no manager can be Owner: that needs decide, board and route on an "
+            "engine that runs unattended. A 'human' manager can answer a "
+            "question routed to it, but cannot hold the lease that makes it "
+            "the router"
         )
     return problems

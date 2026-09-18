@@ -342,3 +342,62 @@ def test_a_role_that_is_serialised_and_reparsed_is_the_same_role():
     again = parse_managers([to_yaml_entry(r) for r in original])
     assert not again.error, again.error
     assert again.roles[0] == original[0]
+
+
+# --- routing is a duty, not a behaviour (RL-52) -----------------------------------
+
+
+def test_route_is_in_the_closed_vocabulary():
+    """Robert's answer: the Owner is responsible for routing questions, as a
+    duty. Naming it makes the single-router property enforceable — a gate can
+    key on it, and "a question relayed by the Owner is not relayed onward" has
+    a holder rather than being an emergent behaviour."""
+    assert "route" in DUTIES
+    (role,) = _roles({"name": "m", "duties": ["route", "decide"]})
+    assert effective_duties(role, 2) == {"route", "decide"}
+
+
+def test_a_would_be_owner_without_route_is_reported():
+    """decide and board used to be the whole test. A Manager that decides and
+    owns the board but cannot route is not an Owner any more, and the project
+    has nobody to hand a question to."""
+    roles = _roles(
+        {"name": "half", "duties": ["decide", "board"]},
+        {
+            "name": "worker",
+            "engine": "local:small",
+            "preset": "executor",
+            "endpoint": "http://localhost:11434/v1",
+            "model": "qwen3:8b",
+            "agent": "opencode",
+        },
+    )
+    problems = configuration_problems(list(roles))
+    assert any("route" in p and "Owner" in p for p in problems)
+
+
+def test_the_presets_that_can_be_owner_carry_route():
+    """`lead`, and `pm` on a claude engine, are the two the design says may
+    hold the lease (§8.4). Both must therefore route."""
+    assert "route" in PRESETS["lead"]
+    assert "route" in PRESETS["pm"]
+    for preset in ("planner", "executor"):
+        assert "route" not in PRESETS[preset]
+
+
+def test_a_human_pm_answers_questions_but_cannot_be_the_router():
+    """§8.4: a person with no session cannot renew the lease that makes a
+    Manager the router. The message says so rather than just refusing."""
+    roles = _roles(
+        {"name": "robert", "engine": "human", "preset": "pm"},
+        {
+            "name": "worker",
+            "engine": "local:small",
+            "preset": "executor",
+            "endpoint": "http://localhost:11434/v1",
+            "model": "qwen3:8b",
+            "agent": "opencode",
+        },
+    )
+    problems = configuration_problems(list(roles))
+    assert any("lease" in p for p in problems)
