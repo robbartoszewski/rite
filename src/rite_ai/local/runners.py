@@ -90,6 +90,10 @@ class SubprocessVerifier:
                 cwd=workspace,
                 capture_output=True,
                 text=True,
+                # A verify runs arbitrary tools and some of them emit bytes
+                # that are not UTF-8. Decoding strictly would turn a test
+                # failure into an exception from the reporting path.
+                errors="replace",
                 timeout=self.timeout,
                 check=False,
             )
@@ -117,7 +121,15 @@ class SubprocessVerifier:
 
 def _git(args: list[str], cwd: str) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["git", *args], cwd=cwd, capture_output=True, text=True, check=False
+        ["git", *args],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        # git hands back path bytes as they are on disk, which need not be
+        # UTF-8 — a filename from a different locale would otherwise raise
+        # here rather than being reported.
+        errors="replace",
+        check=False,
     )
 
 
