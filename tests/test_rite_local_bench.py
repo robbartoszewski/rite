@@ -16,7 +16,6 @@ declared as such rather than letting it hide among the others.
 
 from __future__ import annotations
 
-import shutil
 import subprocess
 import sys
 from pathlib import Path

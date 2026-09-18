@@ -113,6 +113,7 @@ class ManagerMonitor:
         schedule: ScheduleConfig | None = None,
         modules: set[str] | None = None,
         draining: str = "",
+        distribution_off: str = "",
     ) -> None:
         self.holder = holder
         self.root = root
@@ -132,6 +133,11 @@ class ManagerMonitor:
         self.schedule = schedule
         self.modules = modules
         self.draining = draining
+        # A caller that decided this tick may not distribute, and why (Q9).
+        # Given rather than inferred from a missing backend: "policy says no"
+        # and "nobody wired a board" are different facts, and a reader who is
+        # told the second while the first is true goes looking for a bug.
+        self.distribution_off = distribution_off
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self.last: Tick | None = None
@@ -242,6 +248,9 @@ class ManagerMonitor:
     # --- the pieces ---
 
     def _distribute(self, now: datetime, result: Tick) -> None:
+        if self.distribution_off:
+            result.distribution = f"not attempted: {self.distribution_off}"
+            return
         missing = [
             name
             for name, value in (
@@ -266,6 +275,9 @@ class ManagerMonitor:
             now=now,
             modules=self.modules,
             draining=self.draining,
+            # So a refusal lands where the Owner can read it (Q9 rule 2), not
+            # only as a board comment nothing reads back.
+            layer=self.holder.layer,
         )
         if not isinstance(handed, Distributed):
             result.problems.append(handed.reason)

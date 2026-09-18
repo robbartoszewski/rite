@@ -161,6 +161,7 @@ def config_to_yaml(config: ProjectConfig) -> str:
             "state_branch": config.coordination.state_branch,
             "owner_lease_minutes": config.coordination.owner_lease_minutes,
             "skew_tolerance_seconds": config.coordination.skew_tolerance_seconds,
+            "assign_unattended": config.coordination.assign_unattended,
         },
         "schedule": {
             "timezone": config.schedule.timezone,

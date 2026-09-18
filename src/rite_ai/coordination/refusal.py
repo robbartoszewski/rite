@@ -42,11 +42,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from rite_ai.coordination.message_log import LogMessage, format_message, parse_message
 from rite_ai.coordination.ticket_labels import SCHEDULED, module_required_by
 from rite_ai.tickets import BackendError
 
 FULL = "full"
 SHUTTING_DOWN = "shutting down"
+REFUSAL = "refusal"
+"""A message-log kind. Not in `KNOWN_KINDS`, which is §3.3.3's list — and the
+log deliberately preserves a kind it does not know rather than dropping it, so
+an older rite reading this branch ignores these rows instead of failing."""
 
 
 @dataclass
@@ -84,8 +89,17 @@ def refusal_reason(ticket, *, modules: set[str], draining: str = "") -> str | No
     return None
 
 
-def refuse_assignment(backend, ticket_id: str, *, manager: str, reason: str):
-    """Put the ticket back in the pool and say why."""
+def refuse_assignment(
+    backend, ticket_id: str, *, manager: str, reason: str, layer=None
+):
+    """Put the ticket back in the pool, say why, and remember it.
+
+    `layer` is the state layer, and without it the refusal is on the board and
+    nowhere rite can read: the Owner's next tick sees an unassigned ticket,
+    picks the least loaded Manager — still this one, because refusing cost it
+    nothing — and hands it straight back, with a comment each time. Q9's second
+    rule is the memory; this is where it is written.
+    """
     written = backend.label(ticket_id, [SCHEDULED], remove=[manager])
     if isinstance(written, BackendError):
         # It is still ours. Saying anything on the board now would describe a
@@ -94,4 +108,71 @@ def refuse_assignment(backend, ticket_id: str, *, manager: str, reason: str):
     posted = backend.comment(
         ticket_id, f"{manager} cannot take this ticket: {reason}. Returned to the pool."
     )
+    if layer is not None:
+        # Board state first, then the record: a remembered refusal for a ticket
+        # still carrying this Manager's name would exclude the only machine
+        # that has it.
+        layer.append_message(format_message(_refusal_event(ticket_id, manager, reason)))
     return Refused(ticket_id, reason, not isinstance(posted, BackendError))
+
+
+def _refusal_event(ticket: str, manager: str, reason: str) -> LogMessage:
+    """One refusal, as a §3.3.2 message. Private: the only way to write one is
+    to actually refuse, so nothing can record a refusal that did not happen."""
+    return LogMessage(
+        kind=REFUSAL,
+        subject=f"{manager} returned {ticket} to the pool ({reason})",
+        fields={"Ticket": ticket, "Manager": manager, "Reason": reason},
+    )
+
+
+def refusals_by_ticket(layer, *, limit: int = 100):
+    """ticket -> {manager: reason} from the message log, or `Unavailable`.
+
+    The refusal memory Q9's second rule needs. Returned rather than applied:
+    "assign without the memory" and "assign nothing this tick" are both
+    defensible when the log cannot be read, and only the caller knows which
+    tick this is.
+
+    `limit` is the last N events, not the whole log, for the reason
+    `overview.py` measured — each message is a commit on the git backend, about
+    9ms to read, so a year of them would put a five-minute tick into seconds of
+    reading. The cost of the window is that a refusal older than N events is
+    forgotten, which loses a ping-pong that has been quiet for a hundred
+    events. That is the right thing to forget.
+    """
+    from rite_ai.coordination.state_layer import Unavailable
+
+    got = layer.read_messages(limit=limit)
+    if isinstance(got, Unavailable):
+        return got
+    found: dict[str, dict[str, str]] = {}
+    for message in got.items:
+        parsed = parse_message(message.content)
+        if parsed is None or parsed.kind != REFUSAL:
+            continue
+        ticket = parsed.fields.get("Ticket", "")
+        manager = parsed.fields.get("Manager", "")
+        if ticket and manager:
+            # Last write wins: a later refusal of the same ticket by the same
+            # Manager is the current reason, and the reason decides below
+            # whether it still applies.
+            found.setdefault(ticket, {})[manager] = parsed.fields.get("Reason", "")
+    return found
+
+
+def refusal_still_applies(reason: str, *, manager_is_live: bool) -> bool:
+    """Whether a recorded refusal should still exclude that Manager.
+
+    The reasons are not the same kind of fact. *Missing the module* is true of
+    the machine and stays true until somebody clones a repo — permanent, as far
+    as rite can see. *Shutting down* was true of a moment, and a Manager that
+    is publishing heartbeats again is not shutting down any more; keeping it
+    would retire a machine from a ticket because it once restarted while
+    holding it. That starvation grows one ticket at a time and is visible
+    nowhere, which is why it is decided here rather than by leaving every
+    refusal in place for ever.
+    """
+    if reason.startswith(SHUTTING_DOWN) or reason.startswith(FULL):
+        return not manager_is_live
+    return True

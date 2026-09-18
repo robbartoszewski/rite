@@ -30,15 +30,19 @@ COORDINATION = SRC / "rite_ai" / "coordination"
 
 # name -> why nothing calls it. A reason is required; "not yet" is not one.
 UNCALLED_ON_PURPOSE = {
-    "manager_views": (
-        "The Owner's assignment path (P2-3a/P2-4a): read every Manager's "
-        "status, choose the least loaded, label the ticket with its name. "
-        "Nothing calls it because assigning writes to the shared ticket "
-        "backend, and whether an unattended tick may do that is Q9, "
-        "unanswered. Wiring it is one call in `_owner_duties`."
+    # `manager_views` and `assign_to_manager` were here, exempted because
+    # "whether an unattended tick may [write to the board] is Q9, unanswered.
+    # Wiring it is one call in `_owner_duties`." Q9 now has a switch
+    # (`coordination.assign_unattended`) and that call exists, so those
+    # exemptions are gone rather than reworded — which is what this file's own
+    # staleness test is for.
+    "choose_manager": (
+        "The DECISION half of `assign_to_manager`, which is called. Split so "
+        "the choice can be made and tested without a board write — the "
+        "routing rules (duty before load, no fallback when nobody holds the "
+        "duty) are the part worth testing, and a test that had to supply a "
+        "fake board to reach them would be testing the write instead."
     ),
-    "choose_manager": "Same path as `manager_views` — blocked on Q9.",
-    "assign_to_manager": "Same path as `manager_views` — blocked on Q9.",
     "renewal_interval": (
         "Policy a caller may want to read (a third of the lease, so two "
         "renewals can fail before expiry). `RenewalLoop` uses it as its "
@@ -68,8 +72,10 @@ UNCONSTRUCTED_ON_PURPOSE = {
         "from its own tick instead (§5.1.2), so nothing here needs a thread "
         "— it exists for a caller that is not cron."
     ),
-    "Assigned": "Result type of the Owner assignment path — blocked on Q9.",
-    "NotAssigned": "Result type of the Owner assignment path — blocked on Q9.",
+    # `Assigned` and `NotAssigned` were here too. They are dataclasses, so
+    # `behavioural_classes()` never collected them and the exemptions did
+    # nothing either way — but they said "blocked on Q9", and a list that
+    # still says that after Q9 is answered is how the next dead entry hides.
 }
 
 

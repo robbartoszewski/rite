@@ -247,11 +247,12 @@ class CoordinationConfig:
     # machine identity can be added later without breaking the file.
     managers: list[str] = field(default_factory=list)
 
-    # WHAT each Manager is for, parsed from the same `managers:` entries
-    # (rite local, RL-T3). One key in the file, two fields here: the names
-    # above are what thirty-nine call sites already read, and a second key
-    # could disagree with them. Empty on a file that declares nothing, which
-    # is every project written before this existed.
+    # WHAT each Manager is for (rite local, RL-T3), from its own
+    # `manager_roles:` key. TWO keys in the file, and they are allowed to
+    # disagree: a role for a manager nobody listed, or a listed manager with
+    # no role. `rite doctor` names both — an invariant nothing checks is worse
+    # than one stated where it is read. Empty on a file that declares nothing,
+    # which is every project written before this existed.
     manager_roles: list[ManagerRole] = field(default_factory=list)
 
     # EXPLICIT, never inferred from `origin`. Inferring would couple
@@ -279,6 +280,19 @@ class CoordinationConfig:
     # precondition; this narrows the split-brain window, it does not close
     # it.
     skew_tolerance_seconds: int = 60
+
+    # Q9: may an UNATTENDED tick hand this Manager's tickets to its Workers?
+    # Off by default, and the default is the decision rather than an absence
+    # of one — distribution writes labels and comments on a shared board that
+    # other people read, and the scheduler runs from cron with nobody
+    # watching. Everything else a tick does writes only to the coordination
+    # branch, which is rite talking to itself.
+    #
+    # A project that wants the loop turns it on and gets told what it does;
+    # a project that has not decided gets told the arm is off, which is the
+    # part that was missing — the switch existed as "nobody ever passed a
+    # backend", which reads exactly like "there was nothing to hand out".
+    assign_unattended: bool = False
 
 
 @dataclass

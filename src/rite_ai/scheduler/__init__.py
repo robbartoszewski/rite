@@ -421,11 +421,13 @@ def _coordination_tick(root: Path, project) -> list[str]:
     wants a heartbeat about every 10 minutes and a lease renewal every 15,
     and the default tick is every 5.
 
-    **Nothing here touches the ticket backend.** A Manager also distributes
-    work to its Workers (P2-4b) and that is deliberately NOT wired to cron:
-    it writes labels and comments on a shared board, and doing that
-    unattended deserves its own decision (Q9). This tick writes only to the
-    coordination repo, which is what §2.4's mechanics are made of.
+    **This tick touches the ticket backend only when the project says it
+    may** (Q9). A Manager also distributes work to its Workers (P2-4b), and
+    that writes labels and comments on a shared board — so it is off unless
+    `coordination.assign_unattended` is set, and when it is off the tick
+    SAYS so. It said nothing before, which made a project that had never
+    decided indistinguishable from one with an empty queue, for as many
+    nights as nobody looked. `coordination/unattended.py` holds the rule.
 
     It also starts no session, so §2.5's rule is untouched: election decides
     who the Owner IS, not that anything begins working.
@@ -460,11 +462,17 @@ def _coordination_tick(root: Path, project) -> list[str]:
         # decide the handover on must be the same reading, or the tick can
         # advertise itself busy and hand over in the same breath.
         workers, in_flight = _this_machines_load(root)
+        board, off = _board_for_distribution(project)
         monitor = ManagerMonitor(
             holder,
             root=root,
             heartbeat=project.config.heartbeat,
             status=lambda: (workers, in_flight),
+            backend=board,
+            schedule=project.config.schedule,
+            workers=[w.name for w in project.workers],
+            modules={m.name for m in project.modules},
+            distribution_off=off,
             # D-43 puts the handover at an operation boundary and says only
             # the caller knows where that is. From cron, the honest answer
             # is "when this machine has nothing in flight": no claimed
@@ -477,7 +485,7 @@ def _coordination_tick(root: Path, project) -> list[str]:
             hand_over_when=lambda: in_flight == 0,
         )
         tick = monitor.tick()
-        duties = _owner_duties(root, layer, config, project, name, tick)
+        duties = _owner_duties(root, layer, config, project, name, tick, board)
     except Exception as e:  # noqa: BLE001 - a tick must not die on coordination
         # The scheduler runs unattended from cron; an exception here would
         # take the watchdog and the window check down with it.
@@ -493,11 +501,222 @@ def _coordination_tick(root: Path, project) -> list[str]:
     if tick.detail:
         lines[0] += f" ({tick.detail})"
     lines.extend(f"coordination: {p}" for p in tick.problems)
+    lines.extend(_distribution_lines(tick))
     lines.extend(duties)
     return lines
 
 
-def _owner_duties(root, layer, config, project, name: str, tick) -> list[str]:
+def _board_for_distribution(project) -> tuple[object | None, str]:
+    """(board, why not) for an unattended tick's distribution arm (Q9).
+
+    The board is built HERE rather than inside the monitor: the monitor is
+    given a backend by every other caller too, and a module that reaches for
+    credentials on its own is one a test cannot run without them.
+    """
+    from rite_ai.coordination.unattended import distribution_refusal
+
+    refusal = distribution_refusal(project)
+    if refusal:
+        return None, refusal
+
+    from rite_ai.tickets import BackendError, create_backend_from_config
+
+    backend = create_backend_from_config(
+        project.config.ticket_backend,
+        board_role="workers",
+        credentials=project.config.credentials,
+    )
+    if isinstance(backend, BackendError):
+        # Turned on and unreachable is not the same as turned off, and a
+        # missing credential at 3am is the likeliest way this arm stops.
+        return None, f"the board could not be reached: {backend.message}"
+    return backend, ""
+
+
+def _distribution_lines(tick) -> list[str]:
+    """What the tick did with this Manager's tickets, or why it did nothing.
+
+    Named rather than counted, throughout: "held back 3" sends a reader to the
+    board to find out which three, and the reason is the useful half.
+    """
+    lines: list[str] = []
+    if tick.handouts:
+        given = ", ".join(f"{ticket}→{worker}" for ticket, worker in tick.handouts)
+        lines.append(f"coordination: handed out {given}")
+    for ticket, why in tick.refused.items():
+        lines.append(f"coordination: returned {ticket} to the pool — {why}")
+    for ticket, why in tick.held_back.items():
+        # Not a problem: a queue. But a silent queue is how a night passes.
+        lines.append(f"coordination: {ticket} held — {why}")
+    if tick.distribution:
+        lines.append(f"coordination: handed nothing out — {tick.distribution}")
+    return lines
+
+
+def _assign_the_pool(layer, config, project, name: str, board, now) -> list[str]:
+    """The Owner labels waiting tickets with a Manager's name (P2-3a, §2.3).
+
+    `manager_views`, `choose_manager` and `assign_to_manager` were three of
+    Phase 2's nine complete-and-uncalled functions, and `test_no_dead_wiring`
+    names the reason: "whether an unattended tick may [write to the shared
+    ticket backend] is Q9, unanswered. Wiring it is one call in
+    `_owner_duties`." Q9 now has a switch, so this is that call.
+
+    **RULE 1 — a ticket already carrying a Manager's name is left alone.**
+    Assignment ADDS a name and leaves `scheduled` in place, so an assigned
+    ticket still matches the query above: without this it is assigned again
+    next tick, to a possibly different Manager, and two Managers hand the same
+    work to two Workers. Each write looks correct on its own.
+
+    **RULE 2 — never to a Manager that refused this ticket.** Refusing costs
+    the refuser nothing, so it is still the least loaded and gets the ticket
+    straight back, with a board comment, every five minutes for ever. The
+    memory is rite's own message log; board comments are not readable back.
+
+    **RULE 3 — never past the schedule.** `in_flight` alone routes work to a
+    Manager already at its Worker limit, where it sits as an invisible backlog
+    on one machine while others idle. The ceiling is `workers_at(schedule)` —
+    the same committed schedule the receiving machine applies to itself, which
+    is why this rule needs no new heartbeat field.
+
+    **In-flight is incremented as we go.** Reading the heartbeats once and
+    then assigning five tickets would send all five to whichever Manager was
+    idlest at the top of the loop — the counts do not change until those
+    Managers next publish. The local increment is an estimate and says so;
+    the alternative is a stampede onto one machine every tick.
+    """
+    from rite_ai.coordination.assignment import (
+        Assigned,
+        assign_to_manager,
+        manager_views,
+    )
+    from rite_ai.coordination.refusal import refusal_still_applies, refusals_by_ticket
+    from rite_ai.coordination.state_layer import Unavailable
+    from rite_ai.coordination.ticket_labels import SCHEDULED
+    from rite_ai.schedule import current_minute_of_day, workers_at
+    from rite_ai.tickets import BackendError, TicketFilter
+
+    waiting = board.list_tickets(TicketFilter(label=SCHEDULED))
+    if isinstance(waiting, BackendError):
+        return [f"coordination: could not read the backlog: {waiting.message}"]
+
+    # Rule 1.
+    managers = set(config.managers)
+    unassigned = [t for t in waiting if not (set(t.labels or []) & managers)]
+    if not unassigned:
+        return []
+
+    # Rule 2's memory. Unreadable is a REFUSAL to assign, not a licence to
+    # assign without it: the failure this rule prevents is silent and
+    # repeating, and one quiet tick is cheaper than restarting a ping-pong.
+    refusals = refusals_by_ticket(layer)
+    if isinstance(refusals, Unavailable):
+        return [
+            "coordination: assigned nothing — the refusal log could not be "
+            f"read ({refusals.reason}), and assigning without it can hand a "
+            "ticket back to the Manager that just refused it"
+        ]
+
+    # Rule 3's ceiling, from the committed schedule every machine shares.
+    schedule = project.config.schedule
+    minute = current_minute_of_day(schedule.timezone, now)
+    if minute is None:
+        return [
+            f"coordination: assigned nothing — the schedule's timezone "
+            f"{schedule.timezone!r} could not be resolved"
+        ]
+    capacity = workers_at(schedule, minute)
+    if capacity == 0:
+        # §2.7.3's clean stop, and the schedule's own answer rather than a
+        # failure: the user scheduled nobody for this hour.
+        return [
+            f"coordination: assigned nothing — the schedule has 0 Workers in "
+            f"this window, so there is nowhere for {len(unassigned)} waiting "
+            "ticket(s) to go yet"
+        ]
+
+    heartbeat = project.config.heartbeat
+    views = manager_views(
+        layer,
+        config.managers,
+        now=now,
+        interval_minutes=heartbeat.interval_minutes,
+        stall_threshold=heartbeat.stall_threshold,
+    )
+    # Duty routing only where the project declared duties (RL-4): a fleet of
+    # alike Managers has nothing to route between, and its behaviour must not
+    # change. `decompose` is the ENTRY stage — a ticket off the backlog is
+    # work nobody has sliced yet; the later stages are routed by whatever
+    # advances the decomposition, not from here.
+    roles = config.manager_roles or None
+    stage = "decompose" if roles else ""
+    live = {v.name for v in views if v.assignable}
+
+    lines: list[str] = []
+    for ticket in unassigned:
+        refused_by = {
+            manager
+            for manager, why in refusals.get(ticket.id, {}).items()
+            if refusal_still_applies(why, manager_is_live=manager in live)
+        }
+        eligible = [
+            v
+            for v in views
+            if v.name not in refused_by  # rule 2
+            and v.in_flight < capacity  # rule 3
+        ]
+        if not eligible:
+            lines.append(
+                f"coordination: {ticket.id} not assigned — "
+                + _why_none_eligible(views, refused_by, capacity)
+            )
+            # A refusal is about THIS ticket, so the next one may still go
+            # somewhere. Everything else is the fleet's state, and repeating it
+            # forty times at 3am is a way of saying nothing.
+            if refused_by:
+                continue
+            break
+        outcome = assign_to_manager(
+            board, ticket.id, eligible, roles=roles, stage=stage
+        )
+        if isinstance(outcome, Assigned):
+            lines.append(f"coordination: assigned {ticket.id} to {outcome.manager}")
+            for view in views:
+                if view.name == outcome.manager:
+                    view.in_flight += 1
+            continue
+        lines.append(f"coordination: {ticket.id} not assigned — {outcome.reason}")
+        break
+    return lines
+
+
+def _why_none_eligible(views, refused_by: set[str], capacity: int) -> str:
+    """Which rule emptied the list — the part a reader can act on.
+
+    "No Manager can be given work" covers a fleet that is down, a fleet that
+    is full, and a ticket every Manager has refused. They need three different
+    things done about them.
+    """
+    if refused_by:
+        others = [v.name for v in views if v.name not in refused_by]
+        if not others:
+            return (
+                f"every manager has refused it ({', '.join(sorted(refused_by))}) "
+                "— it needs a machine that can do it, or the requirement relaxed"
+            )
+        return (
+            f"refused by {', '.join(sorted(refused_by))}, and the rest are at "
+            f"the schedule's limit of {capacity}"
+        )
+    return (
+        f"every manager is at the schedule's limit of {capacity} worker(s) — "
+        "a queue, not a fault"
+    )
+
+
+def _owner_duties(
+    root, layer, config, project, name: str, tick, board=None
+) -> list[str]:
     """What only the Owner does: act on Managers that have gone quiet.
 
     §2.3 gives the Owner two jobs about a stalled Manager — surface it (done
@@ -514,6 +733,9 @@ def _owner_duties(root, layer, config, project, name: str, tick) -> list[str]:
     which tickets to comment on, and expiring them first would silently
     reduce it to nothing. The expiry is also what makes this idempotent: the
     next tick finds no claims and does nothing at all.
+
+    **Then assignment, if the project allows unattended board writes** (Q9).
+    `board` is None when it does not, which is the default.
     """
     if not tick.owner:
         return []
@@ -564,6 +786,14 @@ def _owner_duties(root, layer, config, project, name: str, tick) -> list[str]:
         )
     if expiry.refused:
         lines.append(f"coordination: claims were not expired: {expiry.refused}")
+
+    if board is not None:
+        # Last, and after the expiry: a stalled Manager's tickets come back to
+        # the pool above, and assigning before that would hand them out again
+        # to the machine that is gone. Gated by the same Q9 switch as
+        # distribution — `board` is None when the project has not turned it
+        # on, and `_distribution_lines` has already said so.
+        lines.extend(_assign_the_pool(layer, config, project, name, board, now))
     return lines
 
 

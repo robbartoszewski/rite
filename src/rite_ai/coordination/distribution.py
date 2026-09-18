@@ -84,12 +84,17 @@ def distribute(
     busy: set[str] | None = None,
     modules: set[str] | None = None,
     draining: str = "",
+    layer=None,
 ):
     """Hand this Manager's assigned tickets to its free Workers.
 
     `modules` is what this machine actually has (P2-4c); `draining` is its own
     shutdown reason. Work it cannot do goes back to the pool rather than
     sitting here — but being merely FULL is not that, and holds instead.
+
+    `layer` records refusals where rite can read them back (Q9 rule 2).
+    Without it a refusal exists only as a board comment, and the Owner hands
+    the same ticket to the same Manager on its next tick, for ever.
     """
     minute = current_minute_of_day(schedule.timezone, now)
     if minute is None:
@@ -131,7 +136,9 @@ def distribute(
         if why:
             # P2-4c: not ours to do. Back to the pool, with the reason on the
             # ticket, before any question of capacity arises.
-            outcome = refuse_assignment(backend, ticket.id, manager=manager, reason=why)
+            outcome = refuse_assignment(
+                backend, ticket.id, manager=manager, reason=why, layer=layer
+            )
             if isinstance(outcome, Refused):
                 result.refused[ticket.id] = why
             else:

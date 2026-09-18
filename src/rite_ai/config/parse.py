@@ -398,6 +398,7 @@ def parse_config(path: Path) -> ProjectConfig | ParseError:
             state_branch=str(coord_raw.get("state_branch", "") or "state"),
             owner_lease_minutes=coord_raw.get("owner_lease_minutes", 15),
             skew_tolerance_seconds=coord_raw.get("skew_tolerance_seconds", 60),
+            assign_unattended=bool(coord_raw.get("assign_unattended", False)),
         )
     else:
         coordination = CoordinationConfig()

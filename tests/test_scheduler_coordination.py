@@ -129,10 +129,33 @@ class TestWhenItRuns:
     def test_cron_does_not_touch_the_ticket_backend(self, enrolled):
         """A Manager also distributes work to its Workers (P2-4b). That
         writes labels and comments on a shared board, and doing it
-        unattended is its own decision — so the tick must not have started
-        doing it by accident."""
+        unattended is its own decision (Q9) — off unless the project says
+        otherwise, so the default tick must still touch nothing."""
         run_tick(enrolled)
         assert not (enrolled / ".rite" / "outbox").exists()
+
+    def test_a_tick_that_may_not_distribute_says_which_key_would_let_it(self, enrolled):
+        """It said nothing at all before, which made a project that had never
+        decided look exactly like one with an empty queue — for as many nights
+        as nobody went and looked."""
+        lines = coordination_lines(run_tick(enrolled))
+        assert any("handed nothing out" in line for line in lines), lines
+        assert any("assign_unattended" in line for line in lines), lines
+
+    def test_turning_it_on_changes_what_the_tick_reports(self, tmp_path):
+        """The switch is read, and a project that turned it on and has no
+        board is told THAT rather than the same sentence as a project that
+        left it off."""
+        root = project(
+            tmp_path,
+            "coordination:\n  managers: [alpha, beta]\n"
+            f"  remote: '{remote(tmp_path)}'\n"
+            "  assign_unattended: true\n",
+        )
+        (root / ".rite" / "machine").write_text("alpha\n")
+        lines = coordination_lines(run_tick(root))
+        assert any("no board to hand work out on" in line for line in lines), lines
+        assert not any("assign_unattended is false" in line for line in lines)
 
 
 class TestWhatItTellsTheFleet:

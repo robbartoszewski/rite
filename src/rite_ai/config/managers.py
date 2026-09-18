@@ -8,16 +8,19 @@ them, and the project manager is the proof: it has a purpose and no model.
 and a gate cannot key on a string a project invented: a misspelt `plan-reveiw`
 in an open set is a Manager that silently skips plan review.
 
-## The file keeps one key; the model keeps the old type
+## Two keys, and the disagreement they allow is reported rather than prevented
 
 `coordination.managers` shipped in v0.4.0 as a list of names in priority order,
-and thirty-nine places read it that way. So an entry here may be **either** a
-bare name or a mapping, and parsing produces both a `list[str]` of names — the
-same list those callers already have — and the roles beside it.
+and thirty-nine places read it that way. Roles live beside it under
+`manager_roles:`, parsed independently.
 
-One key rather than a second `manager_roles:` block, because two keys can
-disagree: a role naming a manager that is not listed, or a listed manager with
-no role. Neither is expressible here.
+One key was tried first, on the reasoning that two keys can disagree — a role
+naming a manager that is not listed, or a listed manager with no role. The
+round-trip gate refused it, and it was right to: a schema where one key must
+produce two fields that always agree is a schema with an invariant nothing
+checks. So the disagreement is allowed to exist on disk and named by
+`configuration_problems` below, which is where a configuration that parses and
+cannot work belongs.
 """
 
 from __future__ import annotations
