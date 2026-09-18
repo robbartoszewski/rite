@@ -283,7 +283,32 @@ defect I then had to fix in round 7 was sitting in precisely that seam. This
 project has built a component nothing called at least seven times; a seam
 nothing owns is the same shape with two owners instead of none.
 
-**Guarded by.** The checklist's existing seam line — "every seam this change
+**Phase 2 produced nine more, and they came from the ticket set's shape.**
+The set had a ticket for every MECHANISM and none for the wiring, so the
+mechanisms shipped complete, correct, tested — and called by nobody: the
+Manager loop with no caller, a heartbeat publishing a hardcoded `in_flight=0`
+that silently defeated load routing, `rite claim` passing no state layer so
+two machines could claim one path, release never publishing so a finished
+path blocked the fleet for ever, the stalled-Manager handover and the claim
+expiry both uncalled, the message log written and never read, a first
+election recording nothing, and the Owner's assignment path still dead. Each
+had passing tests, because every test supplied the missing argument or called
+the function itself. **The sentence to keep: the set specified mechanisms and
+nothing owned the integration.** Six things had to be built without tickets to
+close it — something to run the loop, machine identity, fleet state for a
+human, the claim path's wiring, the Owner's duties on a stall, and the guard
+below. A ticket set that specifies mechanisms needs a wiring ticket per
+mechanism.
+
+**Guarded by.** `tests/test_no_dead_wiring.py`, which is mechanical rather
+than conventional: a public function in `coordination/` must be reachable
+from production code outside its own module, and a public behavioural class
+must be constructed somewhere, or carry a written reason that survives three
+checks — an exemption for something now called fails, an exemption for a
+deleted function fails, and "not yet" is rejected as a plan rather than a
+reason. Unit tests structurally cannot catch this class: the defect is the
+ABSENCE of a caller, and absence is what a test that calls the thing cannot
+see. Also the checklist's existing seam line — "every seam this change
 touches ... has a ticket or a test that owns it, not left implicit because
 'it's obviously fine'" — and, now, one rule at the moment of discovery, in
 `/ticket` and in the reviewer's half of the checklist:

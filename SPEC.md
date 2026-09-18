@@ -1092,6 +1092,23 @@ by default** — any git remote — and scales if the team needs it.
 
 **Managers use heartbeats; the Owner uses a lease.** The distinction matters.
 
+**A stalled Manager is dealt with ONCE, and that is a property rather than a
+check.** The Owner hands the stalled machine's work back and then expires the
+claims it was holding, in that order — the handover needs those claims to know
+which tickets to comment on. Because the expiry removes them, the next pass
+finds nothing to hand over and writes nothing at all: no second handover
+comment, no second audit record, no guard flag to get out of step with
+reality. Measured rather than reasoned: 200 consecutive Owner passes against a
+permanently stalled Manager produced one handover, a message log flat at three
+entries, and no drift in how long a pass took (0.611s over the first twenty,
+0.597s over the last twenty).
+
+The order is therefore load-bearing. Expiring first would silently reduce the
+handover to nothing; handing over without expiring would repeat it for as long
+as the machine stayed down. An implementation that adds a "already handled"
+flag instead has reintroduced state that can disagree with the claims it
+describes.
+
 ⚠ **This section, as written, is Manager↔Owner (Phase 2) — but the SAME shape
 already applies one level down, in Phase 1, and is built (P1.11).** A single
 Manager tracks its own Workers' heartbeats exactly as the Owner tracks Managers'

@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.4.0 (2026-09-18)
+
+### Enhancements
+
+- **Several machines can run one project (Phase 2).** They elect a single
+  Owner through the coordination repository, and the role moves on its own
+  when a machine stops: the Owner holds a lease it has to renew, the next
+  Manager in priority order promotes once that lease expires, and a returning
+  higher-priority Manager asks for the role back rather than seizing it, so
+  work is never interrupted mid-operation.
+- **The state layer is substitutable, and that is demonstrated rather than
+  claimed.** Compare-and-swap is per key against an opaque version, with no
+  git vocabulary in the interface — no oids, refs, or fetch-then-push — so
+  another store can take git's place. The same conformance suite runs
+  unchanged against three backends: the git remote, a local filesystem, and a
+  socket-served key-value store with no trees, refs or merges, standing in for
+  Redis. Git remains the default because it needs nothing a team does not
+  already have; nothing in the design requires it.
+- **Claims are safe across machines.** `rite claim` checks what other machines
+  hold before granting a path and publishes what it granted, so two Workers on
+  different machines cannot edit the same file. Releasing publishes too, so a
+  finished path stops blocking the fleet immediately rather than when
+  something else happens to notice.
+- **A stalled machine no longer strands its work.** When a Manager's heartbeat
+  lapses, the Owner hands its tickets back and expires the claims it held —
+  once, with an audit record on the coordination log.
+- **`rite doctor` shows the fleet:** who holds the Owner role and until when,
+  every Manager as alive, stalled or unknown, a handover that has been asked
+  for and not happened, and the last few coordination events. It also reports
+  coordination settings that cannot work — managers with no remote, a
+  duplicate name that makes priority ambiguous, a lease already expired when
+  written — rather than leaving a half-configured block to do nothing quietly.
+- **`rite status` says what this machine's last coordination pass concluded**,
+  stamped with its age, read from local state without touching the network.
+
+### Notes for existing projects
+
+- **Nothing changes for a single-machine project.** Coordination stays off
+  until `coordination.managers` and `coordination.remote` are set and this
+  machine names itself in `.rite/machine`. Without that it does not publish,
+  elect, or touch another machine's work.
+- The coordination cache under `.rite/` collects its own garbage and stays
+  bounded. A self-hosted coordination remote holds roughly a fortnight of
+  unreachable objects before git's own housekeeping clears them.
+
 ## 0.3.0 (2026-09-16)
 
 ### Enhancements
