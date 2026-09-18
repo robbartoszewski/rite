@@ -864,3 +864,42 @@ def test_a_readable_root_with_no_spec_files_does_not_blame_a_sandbox(
     assert result.exit_code == 1
     assert "hold no markdown file" in result.output
     assert "sandbox" not in result.output
+
+
+def test_show_hands_over_the_text_when_the_spec_cannot_be_read(
+    project: Path, monkeypatch
+):
+    """Derived units live under `.rite/`, which a sandbox mounts; the spec
+    lives at the project root, which it may not. `show` is the one retrieval
+    command that can still work there, so it must."""
+    monkeypatch.chdir(project)
+    _write_unit(project, "1.1", ["1.1"], "A Worker does the work.")
+    _run(project, "stamp", "1.1")
+    (project / "SPEC.md").chmod(0o000)
+    try:
+        result = _run(project, "show", "1.1")
+        assert "A Worker does the work." in result.output  # handed over anyway
+        assert "not checkable from here" in result.output
+        assert "has not been shown to be stale" in result.output
+        assert result.exit_code == 1  # cannot claim 0: nothing was verified
+    finally:
+        (project / "SPEC.md").chmod(0o644)
+
+
+def test_an_unreadable_spec_is_never_reported_as_a_changed_one(
+    project: Path, monkeypatch
+):
+    """It said "the spec has changed since it was written" — which sends a
+    Worker to re-digest, something it cannot do from inside a sandbox, over
+    text that may be perfectly current. An unreadable spec parses to no units,
+    so every hash mismatches and staleness is indistinguishable from silence."""
+    monkeypatch.chdir(project)
+    _write_unit(project, "1.1", ["1.1"], "derived")
+    _run(project, "stamp", "1.1")
+    (project / "SPEC.md").chmod(0o000)
+    try:
+        out = _run(project, "show", "1.1").output
+        assert "has changed since it was written" not in out
+        assert "Re-digest it" not in out
+    finally:
+        (project / "SPEC.md").chmod(0o644)

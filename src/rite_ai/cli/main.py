@@ -4135,7 +4135,13 @@ def _spec_root_and_config(missing_exit: int = 1):
     return root, config
 
 
-def _parse_spec(root: Path, config, missing_exit: int = 1, echo_problems: bool = True):
+def _parse_spec(
+    root: Path,
+    config,
+    missing_exit: int = 1,
+    echo_problems: bool = True,
+    required: bool = True,
+):
     """Every registered spec file, parsed into units.
 
     `echo_problems` is off for `rite spec index`, which prints the same list
@@ -4162,6 +4168,8 @@ def _parse_spec(root: Path, config, missing_exit: int = 1, echo_problems: bool =
                 "this is not the spec being gone.",
                 err=True,
             )
+        if not required:
+            return None
         raise SystemExit(missing_exit)
     if echo_problems:
         for problem in parsed.problems:
@@ -4460,8 +4468,16 @@ def spec_show(unit: str, worker: str) -> None:
     from rite_ai.spec.telemetry import record_retrieval
 
     root, config = _spec_root_and_config()
-    parsed = _parse_spec(root, config)
-    units = {u.id: u for u in parsed.units}
+    # `required=False`: the derived text lives under `.rite/`, which a sandbox
+    # mounts, while the spec lives at the project root, which it may not. A
+    # Worker that can read the unit should be handed it even when the source
+    # cannot be checked — saying so, rather than guessing at its freshness.
+    parsed = _parse_spec(root, config, required=False)
+    units = {u.id: u for u in parsed.units} if parsed else {}
+    # An unreadable spec file is FOUND but yields nothing — `parse_paths`
+    # records "cannot be read" and returns no units — so "no files" is not the
+    # test. No units at all is: a spec that exists says something.
+    readable = parsed is not None and bool(units)
 
     path = units_dir(root) / unit_filename(unit)
     if not path.exists():
@@ -4488,8 +4504,12 @@ def spec_show(unit: str, worker: str) -> None:
     # read as current behaviour because the ⚠ saying it was unshipped sat nine
     # lines above the cut, in the parent's own text. Naming the parent is what
     # a Worker needs to go and look.
-    graph = build_graph(parsed)
-    parents = [u.parent for c in read.covers if (u := units.get(c)) and u.parent]
+    graph = build_graph(parsed) if readable else None
+    parents = (
+        [u.parent for c in read.covers if (u := units.get(c)) and u.parent]
+        if graph
+        else []
+    )
     for parent in dict.fromkeys(parents):
         # Not the document title: it holds nothing, which is why the graph
         # excludes it from ancestors too.
@@ -4503,6 +4523,15 @@ def spec_show(unit: str, worker: str) -> None:
         problem = "never stamped, so nothing says which spec it was written from"
     elif file_hash(read) != read.body_sha:
         problem = "edited by hand since it was stamped — it is not what was reviewed"
+    elif not readable:
+        # NOT "stale". An unreadable spec parses to nothing, so every hash
+        # mismatches, and "the spec has changed since it was written" would be
+        # a lie in the worst direction: it sends a Worker to re-digest — which
+        # it cannot do from inside a sandbox — over text that may be current.
+        problem = (
+            "not checkable from here: the spec could not be read, so whether "
+            "this still matches it is unknown. It has not been shown to be stale"
+        )
     elif covers_hash(units, read.covers) != read.source_sha:
         problem = "stale: the spec has changed since it was written"
     else:
@@ -4519,10 +4548,12 @@ def spec_show(unit: str, worker: str) -> None:
         err=True,
     )
     if problem:
-        click.echo(
-            f"⚠ {unit} is {problem}. Re-digest it before relying on it.",
-            err=True,
+        remedy = (
+            "Check it where the spec is readable before relying on it."
+            if not readable
+            else "Re-digest it before relying on it."
         )
+        click.echo(f"⚠ {unit} is {problem}. {remedy}", err=True)
         raise SystemExit(1)
 
 
