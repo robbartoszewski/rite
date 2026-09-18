@@ -152,14 +152,14 @@ def _trigger_status(doc: dict) -> tuple[bool, str]:
     )
 
 
-def _outside_quotes(segment: str) -> bool:
+def _outside_quotes(segment: str, invocations: tuple[str, ...]) -> bool:
     """Is one of the invocations here a COMMAND, rather than an argument?
 
     `grep -r 'rite publish check' docs/` and `git commit -m "rite publish
     check"` both contain the invocation and neither runs it. Quote-balance
     before the match separates the two without pretending to parse shell.
     """
-    for invocation in GATE_INVOCATIONS:
+    for invocation in invocations:
         index = segment.find(invocation)
         while index != -1:
             before = segment[:index]
@@ -169,25 +169,34 @@ def _outside_quotes(segment: str) -> bool:
     return False
 
 
-def _runs_the_gate(run: object) -> bool:
-    """Does this step's `run:` actually invoke the gate, unneutralised?
+def script_invokes(script: object, invocations: tuple[str, ...]) -> bool:
+    """Does this shell script actually run one of `invocations`, unneutralised?
 
-    A `run:` block is a shell script, and this does not parse shell. It
-    handles the cases that have actually been seen to lie — a commented-out
-    line, an `echo` mentioning the command, the invocation quoted as an
-    argument, `|| true`, `set +e`, a backgrounded `&` — and bails out on a
-    heredoc rather than guessing at its contents.
+    This does not parse shell. It handles the cases that have actually been
+    seen to lie — a commented-out line, an `echo` mentioning the command, the
+    invocation quoted as an argument, `|| true`, `set +e`, a backgrounded `&`
+    — and bails out on a heredoc rather than guessing at its contents. Where
+    it cannot tell, it answers NO: for a security control an under-claim sends
+    someone to look, and an over-claim sends them away reassured.
+
+    Shared with the pre-push hook, which asked the same question of a script
+    of its own and answered it with `"rite publish pre-push" in text`. A
+    substring is true of a hook that mentions the command in a comment, or
+    one whose invocation someone commented out to get a push through — both
+    of which leave `rite doctor` printing "active" over a gate that does not
+    run. The CI half had already been hardened against exactly that; the two
+    halves now ask the question the same way.
     """
-    if not isinstance(run, str):
+    if not isinstance(script, str):
         return False  # a list `run:` is invalid for Actions; `str()` of one
         # used to stringify to "['rite publish check']" and match.
-    if "<<" in run:
+    if "<<" in script:
         return False  # a heredoc's body is data, not commands — cannot tell.
-    if _DISABLES_ERREXIT.search(run):
+    if _DISABLES_ERREXIT.search(script):
         return False  # the step cannot fail once errexit is off.
-    for line in run.splitlines():
+    for line in script.splitlines():
         line = line.strip()
-        if not any(invocation in line for invocation in GATE_INVOCATIONS):
+        if not any(invocation in line for invocation in invocations):
             continue
         if _NEUTRALISED.search(line) or _BACKGROUNDED.search(line):
             continue
@@ -195,9 +204,14 @@ def _runs_the_gate(run: object) -> bool:
             segment = segment.strip()
             if not segment or segment.startswith(_NOT_A_COMMAND):
                 continue
-            if _outside_quotes(segment):
+            if _outside_quotes(segment, invocations):
                 return True
     return False
+
+
+def _runs_the_gate(run: object) -> bool:
+    """Does this step's `run:` actually invoke the gate, unneutralised?"""
+    return script_invokes(run, GATE_INVOCATIONS)
 
 
 def _truthy(value: object) -> bool:

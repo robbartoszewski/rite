@@ -36,6 +36,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from rite_ai.gate.ci import script_invokes
+
 HOOK_MARKER = "# installed-by: rite publish gate"
 
 # Markers this module has used historically. `rite init`'s scaffold shipped
@@ -45,6 +47,16 @@ HOOK_MARKER = "# installed-by: rite publish gate"
 # user needs `rite update` to be able to perform). Add to this set, never
 # remove from it, if the marker ever changes again.
 _RECOGNISED_MARKERS = (HOOK_MARKER, "# rite: publish gate")
+
+# Every spelling that runs the gate from a pre-push hook. Every release so
+# far writes the first one (checked against v0.1.0, v0.2.0 and v0.3.0); the
+# others are for a hook someone wrote by hand after following the advice
+# `rite init` prints when git reads hooks from elsewhere.
+PRE_PUSH_INVOCATIONS = (
+    "rite publish pre-push",
+    "rite-ai publish pre-push",
+    "rite_ai.gate pre-push",
+)
 
 PRE_PUSH_HOOK_SCRIPT = f"""#!/bin/sh
 {HOOK_MARKER}
@@ -60,6 +72,14 @@ exec rite publish pre-push
 
 
 def _is_rite_installed(hook_text: str) -> bool:
+    """Did rite AUTHOR this hook? Not whether it runs — see `gate_hook_status`.
+
+    The distinction is the one `ci.py` already draws between
+    `is_rite_workflow` and `workflow_runs_gate`. Authorship decides whether
+    `install_pre_push_hook` may overwrite the file; it says nothing about
+    what the file does now, because the first thing anyone does to a
+    generated hook is edit it.
+    """
     return any(marker in hook_text for marker in _RECOGNISED_MARKERS)
 
 
@@ -177,7 +197,11 @@ class HookStatus:
 
     state: str
     # "active" | "missing" | "redirected" | "foreign" | "not_executable"
-    # | "not_a_repo"
+    # | "disarmed" | "not_a_repo"
+    #
+    # "foreign" and "disarmed" differ only in who wrote the hook that is not
+    # running the gate, and they are two states because the remedy differs:
+    # one is a file to add a line to, the other is a line to put back.
     detail: str = ""
 
     @property
@@ -221,10 +245,17 @@ def gate_hook_status(repo_root: Path) -> HookStatus:
     except OSError as e:
         return HookStatus("missing", f"pre-push hook is unreadable: {e}")
 
-    runs_gate = _is_rite_installed(text) or "rite publish pre-push" in text
-    # The second case is a hand-written hook, or one written into a shared
-    # hooks directory by a user following the redirect advice above. It
-    # runs the gate, which is the thing that matters.
+    # Read as a SCRIPT, not searched as text. This was
+    # `_is_rite_installed(text) or "rite publish pre-push" in text`: a marker
+    # is authorship, and a substring is true of a hook that only mentions the
+    # command — in a comment, or in the line someone commented out to get one
+    # push through and never restored. Both leave every signal saying
+    # "active" over a gate git runs and that does nothing, which is §11.5.1's
+    # shape and the reason the CI half stopped substring-matching.
+    #
+    # A hand-written hook counts as much as rite's own: what matters is that
+    # the gate runs, not who typed it.
+    runs_gate = script_invokes(text, PRE_PUSH_INVOCATIONS)
     if runs_gate:
         if not os.access(hook_path, os.X_OK):
             # git does not run a hook without the execute bit. It skips it
@@ -243,6 +274,19 @@ def gate_hook_status(repo_root: Path) -> HookStatus:
                 "--force`.",
             )
         return HookStatus("active")
+    if _is_rite_installed(text):
+        # rite wrote this file and it no longer runs the gate. Saying "was
+        # not installed by rite" here — which is what this reported once
+        # liveness stopped following the marker — is a false claim about the
+        # user's own repository, and it sends them looking for a hook someone
+        # else wrote instead of at the edit they made.
+        return HookStatus(
+            "disarmed",
+            f"{hook_path} was written by rite but no longer runs `rite "
+            "publish pre-push` — commented out, removed, or neutralised with "
+            "`|| true` or `set +e`. The gate does not run on push. Restore "
+            "the line, or `rite publish install-hook --force`.",
+        )
     return HookStatus(
         "foreign",
         f"{hook_path} exists but was not installed by rite and does not run "
