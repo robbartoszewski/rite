@@ -32,7 +32,7 @@ def test_default_template_has_verification_category_with_named_lessons():
     """
     items = load_checklist(TEMPLATE_PATH)
     verification_items = [i.text for i in items if i.category == "Verification"]
-    assert len(verification_items) == 7
+    assert len(verification_items) == 8
 
     joined = " ".join(verification_items).lower()
     assert "exits non-zero" in joined  # silent failures that exit zero
@@ -42,6 +42,8 @@ def test_default_template_has_verification_category_with_named_lessons():
     assert "proves the module works and nothing else" in joined  # built, uncalled
     assert "the state a new user starts in" in joined  # never run from step 0
     assert "missing or undefined input" in joined  # silently plausible defaults
+    # a condition that was detectable all along, by a command nobody ran
+    assert "a check nobody runs is a check that is not there" in joined
 
 
 def test_the_proxy_line_is_not_scoped_to_tests_alone():

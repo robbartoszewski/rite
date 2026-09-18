@@ -44,6 +44,19 @@ one.
       check and a test assertion all fail the same way. Delete the code under
       test, or break the property itself, and confirm the check goes red; one
       that stays green either way is not checking anything.
+- [ ] A condition this code can already detect is reported where it is
+      CAUSED, not only where someone thinks to ask. The question a check has
+      to answer is not "does anything detect this?" but "what does the person
+      doing the thing see at the moment they do it?" — a check nobody runs is
+      a check that is not there. Three of these landed in one audit here: an
+      installer announcing a gate that could not run on that machine, a
+      health check that knew whether the hook was armed and hedged across
+      both cases anyway, and a command that wrote config and left every
+      generated file asserting the opposite. All three were detectable the
+      whole time, by a command nobody had a reason to run just then. Where
+      the condition is a function of state the tool owns, put it on the
+      shared path once rather than adding a reminder to each command — the
+      per-command version is the one the next command forgets.
 - [ ] Exercised from the state a new user starts in — empty database, fresh
       clone, no config — not only from the state already on the developer's
       machine. A migration chain that has only ever been run forward from

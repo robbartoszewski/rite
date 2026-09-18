@@ -57,10 +57,16 @@ class RiteCommand(click.Command):
         one still holds. Losing the record of who holds what is recoverable
         by re-claiming; two sessions editing the same file believing they
         have it exclusively is not."""
+        from rite_ai.cli import staleness
         from rite_ai.state import CorruptStateError
 
+        # Taken BEFORE the command and read after it: see `staleness`. Only
+        # on the way out of a command that succeeded — a notice stapled to a
+        # failure buries the error the person actually needs.
+        root = staleness.project_root()
+        before = staleness.snapshot(root)
         try:
-            return super().invoke(ctx)
+            result = super().invoke(ctx)
         except CorruptStateError as e:
             click.echo(f"error: {e}", err=True)
             click.echo("", err=True)
@@ -77,6 +83,9 @@ class RiteCommand(click.Command):
                 err=True,
             )
             raise SystemExit(1) from None
+        for line in staleness.report_if_behind(root, before):
+            click.echo(line)
+        return result
 
 
 class RiteGroup(click.Group):

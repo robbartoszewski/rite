@@ -2185,40 +2185,6 @@ def add() -> None:
     """Add a module or worker."""
 
 
-def _say_the_module_map_is_behind(root: Path) -> None:
-    """Registering a module changes `.rite/modules.yaml`; the module map that
-    every CLAUDE.md carries is GENERATED from it and does not move.
-
-    So the moment this command succeeds, the standing instructions every
-    session loads are wrong about the project — and on the first module they
-    are flatly false, still reading "No modules registered yet". `rite doctor`
-    and `rite start` both notice, but only if someone runs them; the command
-    that caused it is where it costs a line.
-
-    Silent when nothing is behind, and it says so differently when the map is
-    one of the sections a refresh would NOT rewrite — a user edit there is
-    kept, and sending someone to a command that will decline to act is worse
-    than saying nothing.
-    """
-    try:
-        from rite_ai.update.refresh import pending
-
-        plan = pending(root)
-    except Exception:
-        return  # never fail an add over a report about it
-    if plan.behind:
-        click.echo(
-            f"{len(plan.files)} generated file(s) now behind — "
-            "`rite update --files-only` rewrites the module map"
-        )
-    elif plan.contested:
-        click.echo(
-            "the module map in your generated files was edited, so a refresh "
-            "will report it rather than rewrite it — "
-            "`rite update --files-only --dry-run` shows the difference"
-        )
-
-
 @add.command("module")
 @click.argument("name")
 @click.argument("url", default="")
@@ -2244,7 +2210,6 @@ def add_module_cmd(name: str, url: str, branch: str, description: str) -> None:
     )
     if result.ok:
         click.echo(result.message)
-        _say_the_module_map_is_behind(root)
     else:
         click.echo(result.message, err=True)
         raise SystemExit(1)
@@ -2451,7 +2416,6 @@ def remove_module_cmd(name: str) -> None:
     result = remove_module(root, name)
     if result.ok:
         click.echo(result.message)
-        _say_the_module_map_is_behind(root)
     else:
         click.echo(result.message, err=True)
         raise SystemExit(1)
