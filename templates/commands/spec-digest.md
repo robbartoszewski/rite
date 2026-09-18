@@ -7,6 +7,11 @@ of the whole document. You write the unit bodies and review them. Everything
 mechanical — finding what changed, hashing, checking coverage — is `rite spec`,
 which spends no tokens.
 
+**This runs where the spec is — the project itself, not inside a Worker's
+sandbox.** Every step below reads the whole spec; a sandboxed Worker mounts
+`.rite/` and usually not the project root, so the digest is written on the host
+and a Worker then reads it with `rite spec slice` and `rite spec show`.
+
 **You never edit the source spec here.** If a unit cannot be written faithfully
 because the source is wrong or contradicts itself, stop and say so: that is a
 change to the spec, and it is the user's decision.

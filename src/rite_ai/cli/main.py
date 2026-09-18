@@ -4145,6 +4145,7 @@ def _parse_spec(
     missing_exit: int = 1,
     echo_problems: bool = True,
     required: bool = True,
+    worker_side: bool = False,
 ):
     """Every registered spec file, parsed into units.
 
@@ -4195,6 +4196,18 @@ def _parse_spec(
             "about whether the spec, or the digest of it, is sound.",
             err=True,
         )
+        # Which commands belong where. `slice` and `show` are what a Worker
+        # runs and both say more than this on their own; the rest read the
+        # whole spec by nature and belong where it lives. A sandboxed Worker
+        # mounts `.rite/` and often not the project root, so "run it again
+        # from here" is advice that cannot work.
+        if not worker_side:
+            click.echo(
+                "  this command reads the spec, so it runs where the spec is: "
+                "the project itself. `/spec-digest` and `rite spec "
+                "index|status|verify|stamp` are not Worker-side commands.",
+                err=True,
+            )
         if not required:
             return None
         raise SystemExit(missing_exit)
@@ -4398,7 +4411,7 @@ def spec_slice(unit: str, worker: str, depth: int | None) -> None:
     from rite_ai.spec.telemetry import record_retrieval
 
     root, config = _spec_root_and_config()
-    parsed = _parse_spec(root, config, required=False)
+    parsed = _parse_spec(root, config, required=False, worker_side=True)
     if parsed is None:
         # The refusal is honest, and on its own it is a dead end. A Worker
         # standing where the spec cannot be read still has two moves, and they
@@ -4533,7 +4546,7 @@ def spec_show(unit: str, worker: str) -> None:
     # mounts, while the spec lives at the project root, which it may not. A
     # Worker that can read the unit should be handed it even when the source
     # cannot be checked — saying so, rather than guessing at its freshness.
-    parsed = _parse_spec(root, config, required=False)
+    parsed = _parse_spec(root, config, required=False, worker_side=True)
     units = {u.id: u for u in parsed.units} if parsed else {}
     # An unreadable spec file is FOUND but yields nothing — `parse_paths`
     # records "cannot be read" and returns no units — so "no files" is not the

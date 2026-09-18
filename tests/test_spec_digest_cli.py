@@ -1046,3 +1046,35 @@ def test_it_does_not_offer_derived_text_that_does_not_exist(project: Path, monke
         assert "--spec-fallback 9.9" in result.output
     finally:
         (project / "SPEC.md").chmod(0o644)
+
+
+@pytest.mark.parametrize("args", [["status"], ["verify"], ["index"], ["stamp", "1.1"]])
+def test_a_host_side_command_says_where_it_belongs(project: Path, monkeypatch, args):
+    """`slice` and `show` are Worker-side and say what else to try. These read
+    the whole spec by nature, so the useful thing to say is WHERE they run —
+    a sandboxed Worker mounts `.rite/` and often not the project root, and
+    "try again from here" is advice that cannot succeed."""
+    monkeypatch.chdir(project)
+    _write_unit(project, "1.1", ["1.1"])
+    (project / "SPEC.md").chmod(0o000)
+    try:
+        out = _run(project, *args).output
+        assert "runs where the spec is" in out
+        assert "not Worker-side commands" in out
+    finally:
+        (project / "SPEC.md").chmod(0o644)
+
+
+@pytest.mark.parametrize("args", [["slice", "1.1"], ["show", "1.1"]])
+def test_a_worker_side_command_does_not_tell_a_worker_to_move(
+    project: Path, monkeypatch, args
+):
+    monkeypatch.chdir(project)
+    _write_unit(project, "1.1", ["1.1"])
+    _run(project, "stamp", "1.1")
+    (project / "SPEC.md").chmod(0o000)
+    try:
+        out = _run(project, *args).output
+        assert "not Worker-side commands" not in out
+    finally:
+        (project / "SPEC.md").chmod(0o644)

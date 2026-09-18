@@ -3466,6 +3466,15 @@ bless both a source change nobody had read and a hand edit nobody had made —
 after which nothing would ever read as stale or tampered again. `rite spec
 status` reports both, by file name.
 
+**Two sides, and the commands do not cross.** `rite spec slice` and `rite spec
+show` are what a Worker runs, and both work from `.rite/` plus whatever of the
+spec it can reach. `rite spec index`, `status`, `verify` and `stamp` read the
+whole spec by nature, so they run where the spec lives, which is the project
+itself; `/spec-digest` says so in its opening. It matters because a sandboxed
+Worker mounts `.rite/` and often not the project root (§5.3), so a host-side
+command run from inside cannot work, and telling someone to run it again from
+there is advice that never succeeds.
+
 **Two retrieval paths, and they are not the same.** `rite spec slice <unit>`
 prints SOURCE text — the unit, what it cites, the pinned hubs — and works on any
 registered spec, digested or not. `rite spec show <unit>` prints the DERIVED
