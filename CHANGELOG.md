@@ -34,6 +34,25 @@
   written — rather than leaving a half-configured block to do nothing quietly.
 - **`rite status` says what this machine's last coordination pass concluded**,
   stamped with its age, read from local state without touching the network.
+- **A spec too large to hold can be read a part at a time.** `rite spec index`
+  turns a registered spec into addressable units — numbered sections, slug
+  paths, and each row of a decision register — and says whether splitting it is
+  worth anything before a token is spent: on rite's own 4,000-line spec a
+  Worker loads 9% of it at p90, and a short or densely interlinked spec is
+  REFUSED, because reading it whole costs less. `rite spec slice <unit>` prints
+  what a ticket needs: the unit, what it cites, and the sections everything
+  depends on. `/spec-digest` writes a reviewed unit per section under
+  `.rite/spec/`, `rite spec show` hands one to a Worker, and `rite spec verify`
+  is the gate that refuses to call a digest current when the spec has moved
+  under it.
+- **A slice that was not enough is counted, because otherwise it is invisible.**
+  A Worker that had to read the whole spec anyway records it with
+  `rite handover write --spec-fallback <unit>`, and `rite spec status` reports
+  fallbacks against retrievals. No data is reported as no data, never as 0%: a
+  feature nobody used and a feature that always worked are opposite readings.
+  The verdict is also qualified when most units cite nothing — measured across
+  nine specs written without a citation gate, slices come out SMALLER there,
+  and that is an empty reference graph rather than a good decomposition.
 
 ### Notes for existing projects
 
