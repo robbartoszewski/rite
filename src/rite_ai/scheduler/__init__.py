@@ -483,6 +483,12 @@ def _coordination_tick(root: Path, project) -> list[str]:
         # take the watchdog and the window check down with it.
         return [f"coordination: the tick could not run: {e}"]
 
+    # Written down so `rite status` can say what this machine concluded
+    # without a round trip — stamped with the time, never as a live answer.
+    from rite_ai.coordination import last_tick as last_tick_file
+
+    last_tick_file.record(root, name, tick.action, tick.owner, len(tick.problems))
+
     lines = [f"coordination: {name} — {tick.action}"]
     if tick.detail:
         lines[0] += f" ({tick.detail})"
