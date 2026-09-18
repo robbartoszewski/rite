@@ -4429,11 +4429,31 @@ def spec_slice(unit: str, worker: str, depth: int | None) -> None:
       rite spec slice 5.3
       rite spec slice D-12 --worker alpha
     """
+    from rite_ai.spec.digest_files import unit_filename, units_dir
     from rite_ai.spec.slice import NotATarget, compute_slice
     from rite_ai.spec.telemetry import record_retrieval
 
     root, config = _spec_root_and_config()
-    parsed = _parse_spec(root, config)
+    parsed = _parse_spec(root, config, required=False)
+    if parsed is None:
+        # The refusal is honest, and on its own it is a dead end. A Worker
+        # standing where the spec cannot be read still has two moves, and they
+        # are the two halves that must not be confused: the derived text, which
+        # lives under `.rite/` and is readable from inside a sandbox, and
+        # recording that the whole spec had to be read instead — which is the
+        # only thing that makes this visible to anybody afterwards.
+        if (units_dir(root) / unit_filename(unit)).exists():
+            click.echo(
+                f"  the derived text for {unit} is readable from here: "
+                f"rite spec show {unit}",
+                err=True,
+            )
+        click.echo(
+            "  and if you read the whole spec instead, record it: "
+            f"rite handover write --spec-fallback {unit}",
+            err=True,
+        )
+        raise SystemExit(1)
     graph, kinds = _spec_graph(parsed, config)
     try:
         computed = compute_slice(

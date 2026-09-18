@@ -1012,3 +1012,37 @@ def test_fallbacks_with_no_retrievals_are_not_diagnosed_as_small_slices(
     out = _run(project, "status").output
     assert "nothing was sliced at all" not in out
     assert "slice_depth" in out
+
+
+def test_a_refused_slice_names_the_two_paths_that_still_work(
+    project: Path, monkeypatch
+):
+    """The refusal is honest and, alone, a dead end. From where a Worker is
+    standing there are still two moves, and they are the two halves that must
+    not be confused: the derived text, which lives under `.rite/` and is
+    readable inside a sandbox, and recording that the whole spec was read —
+    the only thing that makes the shortfall visible to anyone afterwards."""
+    monkeypatch.chdir(project)
+    _write_unit(project, "1.1", ["1.1"], "derived text")
+    _run(project, "stamp", "1.1")
+    (project / "SPEC.md").chmod(0o000)
+    try:
+        result = _run(project, "slice", "1.1")
+        assert result.exit_code == 1
+        assert "rite spec show 1.1" in result.output
+        assert "--spec-fallback 1.1" in result.output
+    finally:
+        (project / "SPEC.md").chmod(0o644)
+
+
+def test_it_does_not_offer_derived_text_that_does_not_exist(project: Path, monkeypatch):
+    """Offering `rite spec show` for a unit nobody has digested sends a Worker
+    to a second refusal."""
+    monkeypatch.chdir(project)
+    (project / "SPEC.md").chmod(0o000)
+    try:
+        result = _run(project, "slice", "9.9")
+        assert "rite spec show" not in result.output
+        assert "--spec-fallback 9.9" in result.output
+    finally:
+        (project / "SPEC.md").chmod(0o644)
