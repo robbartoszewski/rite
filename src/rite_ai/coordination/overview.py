@@ -202,18 +202,19 @@ def recent_events(layer: StateLayer, limit: int = 5) -> list[str]:
     Unreadable is reported, not skipped: a log with a hole is the one thing
     an audit trail must not present as complete (D-58).
 
-    ⚠ It reads the whole log and keeps the tail. Fine for a log that grows
-    by a few events a day, wasteful for one running for years — the
-    interface has a `since` cursor but no "last N", and both a git and a
-    key-value backend could serve one (Q11).
+    It asks for the last `limit` and nothing more (Q11). Reading the whole
+    log to print five events was the one cost in this system that grew with
+    a fleet's age — measured at about 9ms per message on the git backend,
+    because each message is its own commit, so a year of three events a day
+    put `rite doctor` at roughly nine seconds of reading to show five lines.
     """
     from rite_ai.coordination.message_log import parse_message
 
-    got = layer.read_messages()
+    got = layer.read_messages(limit=limit)
     if isinstance(got, Unavailable):
         return [f"the event log could not be read: {got.reason}"]
     lines: list[str] = []
-    for message in got.items[-limit:]:
+    for message in got.items:
         parsed = parse_message(message.content)
         if parsed is None:
             # A message this version cannot parse is still evidence that

@@ -16,7 +16,7 @@ line, one JSON object back.
     {"op": "get",    "key": k}                        -> found, value, version
     {"op": "cas",    "key": k, "value": v, "expected": ver} -> ok, version
     {"op": "append", "value": s}                      -> cursor
-    {"op": "range",  "since": cursor|null}            -> items | unknown
+    {"op": "range",  "since": cursor|null, "limit": n|null} -> items | unknown
     {"op": "break",  "what": "state"|"messages"}      -> the store starts
                                                          failing that half
 
@@ -90,7 +90,16 @@ def handle(request: dict) -> dict:
                 if not since.isdigit() or not (0 < int(since) <= len(MESSAGES)):
                     return {"unknown": True}
                 start = int(since)
-            items = [[str(i + 1), MESSAGES[i]] for i in range(start, len(MESSAGES))]
+            stop = len(MESSAGES)
+            limit = request.get("limit")
+            if limit is not None:
+                # A reverse range read: the last n of what was asked for.
+                # Serving this without walking the log is the whole point of
+                # the parameter, and a store that can only do it by reading
+                # everything and slicing would not have proved anything —
+                # this one indexes.
+                start = max(start, stop - int(limit))
+            items = [[str(i + 1), MESSAGES[i]] for i in range(start, stop)]
             return {"items": items}
     return {"error": f"unknown op {op!r}"}
 

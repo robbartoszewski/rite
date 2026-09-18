@@ -122,8 +122,10 @@ class KeyValueStateLayer(StateLayer):
             return reply
         return Appended(reply["cursor"])
 
-    def read_messages(self, since: str | None = None):
-        reply = self._call({"op": "range", "since": since})
+    def read_messages(self, since: str | None = None, limit: int | None = None):
+        if limit is not None and limit < 1:
+            raise ValueError(f"limit must be at least 1, got {limit}")
+        reply = self._call({"op": "range", "since": since, "limit": limit})
         if isinstance(reply, Unavailable):
             return reply
         if reply.get("unknown"):

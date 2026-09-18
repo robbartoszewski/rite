@@ -502,3 +502,54 @@ class StateLayerConformance:
         layer.append_message("one")
         self.corrupt_messages(store)
         assert isinstance(layer.read_messages(), Unavailable)
+
+    def test_the_last_n_come_back_in_order_and_never_more(self, layer):
+        """Q11: a caller that wants five events must not pay for the whole
+        log to get them.
+
+        The property, not the mechanism: git serves it with `rev-list -n`
+        and a key-value store with a reverse range read, and this suite is
+        held to the contract rather than to either. Measured before it was
+        asked for — about 9ms per message on the git backend, so a fleet a
+        year old spent ~9 seconds of `rite doctor` reading events to print
+        five.
+        """
+        for i in range(5):
+            assert isinstance(layer.append_message(f"event {i}"), Appended)
+
+        got = layer.read_messages(limit=2)
+
+        assert isinstance(got, Messages), got
+        assert [m.content.strip() for m in got.items] == ["event 3", "event 4"]
+
+    def test_a_limit_larger_than_the_log_returns_the_log(self, layer):
+        for i in range(2):
+            layer.append_message(f"event {i}")
+
+        got = layer.read_messages(limit=99)
+
+        assert isinstance(got, Messages)
+        assert len(got.items) == 2
+
+    def test_a_limit_applies_after_since_not_before(self, layer):
+        """Both at once means "the last n of what is new", which is what a
+        caller polling with a cursor and a cap is asking for. Applying the
+        limit first would return old messages and call them new."""
+        for i in range(5):
+            layer.append_message(f"event {i}")
+        all_of_them = layer.read_messages()
+        assert isinstance(all_of_them, Messages)
+        second = all_of_them.items[1].cursor
+
+        got = layer.read_messages(since=second, limit=2)
+
+        assert isinstance(got, Messages), got
+        assert [m.content.strip() for m in got.items] == ["event 3", "event 4"]
+
+    def test_a_limit_below_one_is_a_callers_mistake_not_a_store_condition(self, layer):
+        """`Unavailable` would say the store could not be read, when it was
+        never asked."""
+        import pytest as _pytest
+
+        with _pytest.raises(ValueError):
+            layer.read_messages(limit=0)

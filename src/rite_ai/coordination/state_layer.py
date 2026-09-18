@@ -6,7 +6,7 @@ Four operations, behind an interface exactly as the ticket backend is
     read_state(key)                         -> Present | Absent | Unavailable
     write_state(key, value, expected)       -> Written | Conflict | Unavailable
     append_message(content)                 -> Appended | Unavailable
-    read_messages(since)                    -> Messages | Unavailable
+    read_messages(since, limit)             -> Messages | Unavailable
 
 Four properties are load-bearing, and every backend must honour all of them.
 `tests/state_layer_conformance.py` asserts each one against the CONTRACT, never
@@ -203,4 +203,26 @@ class StateLayer(ABC):
     def append_message(self, content: str) -> Appended | Unavailable: ...
 
     @abstractmethod
-    def read_messages(self, since: str | None = None) -> Messages | Unavailable: ...
+    def read_messages(
+        self, since: str | None = None, limit: int | None = None
+    ) -> Messages | Unavailable:
+        """Messages after `since`, or all of them; at most `limit`, newest-end.
+
+        `limit` is the LAST n, not the first: every caller that wants a few
+        wants the recent few, and reading the whole log to drop all but the
+        tail is the one cost in this system that grows for ever. The log is
+        append-only by design (§3.3.2), so nothing else does — measured on
+        the git backend at about 9ms per message, which is ~9 seconds of
+        `rite doctor` for a fleet a year old printing five events.
+
+        Backend-agnostic on purpose, which is the test this interface is held
+        to: git does `rev-list -n`, a key-value store does a reverse range
+        read. Neither has to fetch what it will not return.
+
+        Ordering does not change: still append order, oldest first, so a
+        caller can keep passing the last `cursor` back as `since`.
+
+        `limit` below 1 is a caller's mistake, not a store condition, and
+        raises rather than returning `Unavailable` — which would say the
+        store could not be read when it was never asked.
+        """

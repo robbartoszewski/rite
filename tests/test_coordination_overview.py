@@ -232,7 +232,7 @@ class TestTheEventLog:
             def __getattr__(self, name):
                 return getattr(self.inner, name)
 
-            def read_messages(self, since=None):
+            def read_messages(self, since=None, limit=None):
                 return Unavailable("the log is unreachable")
 
         lines = recent_events(Blind(layer))

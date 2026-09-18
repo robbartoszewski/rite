@@ -501,7 +501,11 @@ class GitStateLayer(StateLayer):
             f"could not append after {_APPEND_ATTEMPTS} attempts: {last_detail}"
         )
 
-    def read_messages(self, since: str | None = None) -> Messages | Unavailable:
+    def read_messages(
+        self, since: str | None = None, limit: int | None = None
+    ) -> Messages | Unavailable:
+        if limit is not None and limit < 1:
+            raise ValueError(f"limit must be at least 1, got {limit}")
         head = self._fetch(self.log_branch, _LOG_TRACK)
         if isinstance(head, Unavailable):
             return head
@@ -517,7 +521,12 @@ class GitStateLayer(StateLayer):
             if not reachable:
                 return Unavailable(f"unknown message cursor: {since!r}")
         rng = f"{since}..{head}" if since else head
-        listing = self._git(["rev-list", "--reverse", rng])
+        # `-n` BEFORE `--reverse`: rev-list chooses the newest n and then
+        # reverses what it chose, so this is the last n in append order. The
+        # whole point is not reading the rest — each message is its own
+        # commit and every one costs a `cat-file`.
+        limited = ["-n", str(limit)] if limit is not None else []
+        listing = self._git(["rev-list", *limited, "--reverse", rng])
         if listing.returncode != 0:
             return Unavailable("could not list messages")
         items = []

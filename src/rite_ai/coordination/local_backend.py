@@ -188,19 +188,24 @@ class LocalStateLayer(StateLayer):
                 return Unavailable(f"{self._messages}: line {n} is corrupt")
         return out
 
-    def read_messages(self, since: str | None = None) -> Messages | Unavailable:
+    def read_messages(
+        self, since: str | None = None, limit: int | None = None
+    ) -> Messages | Unavailable:
+        if limit is not None and limit < 1:
+            raise ValueError(f"limit must be at least 1, got {limit}")
         log = self._read_log()
         if isinstance(log, Unavailable):
             return log
         if since is None:
-            return Messages(log)
+            return Messages(log[-limit:] if limit is not None else log)
         if not any(m.cursor == since for m in log):
             # An unknown cursor is not "nothing new": returning an empty list
             # would silently skip every message after a position the caller
             # believes exists.
             return Unavailable(f"unknown message cursor: {since!r}")
         after = int(since)
-        return Messages([m for m in log if int(m.cursor) > after])
+        newer = [m for m in log if int(m.cursor) > after]
+        return Messages(newer[-limit:] if limit is not None else newer)
 
 
 def _version_of(keys: dict, key: str):
