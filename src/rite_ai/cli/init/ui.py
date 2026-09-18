@@ -119,8 +119,16 @@ def _select_fallback(
         )
 
 
-def text(question: str, default: str = "", required: bool = False) -> str:
-    """Free-text prompt. Empty input returns `default` unless `required`."""
+def text(
+    question: str, default: str = "", required: bool = False, absorb_paste: bool = False
+) -> str:
+    """Free-text prompt. Empty input returns `default` unless `required`.
+
+    `absorb_paste` is for the one caller that asks the SAME question again
+    (`repeat_until_blank`), where a pasted list one-item-per-line is the point.
+    Everywhere else a second pasted line would answer a different question
+    that was never shown, so it is discarded and reported.
+    """
     shown_default = default if default else "[]"
     prompt_text = f"{question} [{shown_default}]" if default else f"{question} []"
     while True:
@@ -130,7 +138,11 @@ def text(question: str, default: str = "", required: bool = False) -> str:
             if required and not default:
                 click.echo("This field is required.")
                 continue
+            if not absorb_paste:
+                discard_pasted_remainder(default, f'"{question}"')
             return default
+        if not absorb_paste:
+            discard_pasted_remainder(raw, f'"{question}"')
         return raw
 
 
@@ -156,6 +168,10 @@ def line(prompt_text: str, default: str = "") -> str:
 
 # How long a paste is given to arrive after its first line is read.
 PASTE_SETTLE_SECONDS = 0.05
+# How many consecutive quiet windows end the wait. Six of them is ~0.3s of
+# silence, which covers a paste arriving in chunks over a slow connection
+# without making a typed one-line answer feel stuck.
+PASTE_IDLE_WINDOWS = 6
 
 
 def _terminal_fd() -> int | None:
@@ -177,6 +193,39 @@ def _queued_bytes(fd: int) -> int:
     return struct.unpack("i", raw)[0]
 
 
+def discard_pasted_remainder(kept: str, what: str = "this answer") -> int:
+    """Drop whatever a paste left queued after a ONE-LINE answer, and say so.
+
+    Measured through a pty: pasting "acme\nlinux-box\nthird-line" at "Project
+    name?" answered the NEXT question with `linux-box` without it ever being
+    shown, and left `third-line` queued for the one after. Not overflow —
+    input silently accepted as answers to questions the user never saw, which
+    is worse than input silently dropped, because the project is then
+    configured from it.
+
+    Returns how many lines were discarded, so a caller can test this without
+    a terminal.
+    """
+    fd = _terminal_fd()
+    if fd is None:
+        return 0
+    time.sleep(PASTE_SETTLE_SECONDS)
+    extra: list[str] = []
+    while _queued_bytes(fd) > 0:
+        extra.append(sys.stdin.readline().rstrip("\n"))
+    try:
+        termios.tcflush(fd, termios.TCIFLUSH)
+    except termios.error:
+        pass
+    extra = [line_ for line_ in extra if line_.strip()]
+    if extra:
+        warn(
+            f"{len(extra)} further pasted line(s) ignored — {what} takes one "
+            f"line. Kept: {kept!r}"
+        )
+    return len(extra)
+
+
 def paragraph(prompt_text: str = ">") -> str:
     """Free text that may run to several lines.
 
@@ -190,9 +239,20 @@ def paragraph(prompt_text: str = ">") -> str:
     lines = [first]
     fd = _terminal_fd()
     if fd is not None:
-        time.sleep(PASTE_SETTLE_SECONDS)
-        while _queued_bytes(fd) > 0:
-            lines.append(sys.stdin.readline().rstrip("\n"))
+        # One 50ms look was a sample, not a wait. Measured through a pty: a
+        # paste arriving in chunks 200ms apart recorded only its first line,
+        # and the rest reached the SHELL after init exited — the leak this
+        # drain exists to prevent. Keep waiting while lines keep arriving, and
+        # only give up after the input has been quiet for several windows.
+        idle = 0
+        while idle < PASTE_IDLE_WINDOWS:
+            time.sleep(PASTE_SETTLE_SECONDS)
+            if _queued_bytes(fd) > 0:
+                idle = 0
+                while _queued_bytes(fd) > 0:
+                    lines.append(sys.stdin.readline().rstrip("\n"))
+            else:
+                idle += 1
         try:
             termios.tcflush(fd, termios.TCIFLUSH)
         except termios.error:
@@ -206,7 +266,10 @@ def repeat_until_blank(question: str, default: str = "") -> list[str]:
     """Repeat a text prompt until the user gives an empty answer."""
     items: list[str] = []
     while True:
-        value = text(question, default=default)
+        # The one prompt that WANTS the rest of a paste: it asks the same
+        # question again, so line two is an answer to the question line one
+        # answered.
+        value = text(question, default=default, absorb_paste=True)
         if not value:
             break
         items.append(value)
