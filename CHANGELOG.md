@@ -42,6 +42,11 @@
 - Fixed the file Workers actually read still telling them they own modules —
   0.3.0 corrected the Owner's copy only, and there was no way to deliver either
   correction to an existing project. Both now arrive with `rite update`.
+- Fixed a multi-line paste at an `init` prompt answering the questions after
+  it. Pasting three lines at "Project name?" used to set the name from line
+  one and answer the next question with line two, which was never shown; the
+  extra lines are now discarded and reported. A paste arriving slowly no
+  longer loses its later lines to the shell either.
 - `rite init --yes` prints every answer it resolved, and where each came from
   (typed, `--config`, detected, or a `--yes` default), before it writes
   anything. The ticket-backend line names the interactive default it did
