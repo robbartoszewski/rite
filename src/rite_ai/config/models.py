@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from rite_ai.config.managers import ManagerRole
+
 
 @dataclass
 class ProjectBrief:
@@ -244,6 +246,13 @@ class CoordinationConfig:
     # objects — priority is the only attribute §2.4 gives them, and a
     # machine identity can be added later without breaking the file.
     managers: list[str] = field(default_factory=list)
+
+    # WHAT each Manager is for, parsed from the same `managers:` entries
+    # (rite local, RL-T3). One key in the file, two fields here: the names
+    # above are what thirty-nine call sites already read, and a second key
+    # could disagree with them. Empty on a file that declares nothing, which
+    # is every project written before this existed.
+    manager_roles: list[ManagerRole] = field(default_factory=list)
 
     # EXPLICIT, never inferred from `origin`. Inferring would couple
     # coordination to whichever remote happens to be `origin`, which is

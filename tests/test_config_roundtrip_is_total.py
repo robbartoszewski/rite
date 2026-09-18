@@ -26,6 +26,7 @@ import dataclasses
 from pathlib import Path
 
 from rite_ai.cli.init.scaffold import config_to_yaml
+from rite_ai.config.managers import ManagerRole
 from rite_ai.config.models import (
     BudgetConfig,
     CoordinationConfig,
@@ -49,7 +50,17 @@ class Indistinguishable(Exception):
 
 # Fields whose only valid values are few, so the generic "+7" would be refused
 # on the way back in rather than round-tripped.
-_VALID_ALTERNATES = {"spec.slice_depth": 2}
+_VALID_ALTERNATES = {
+    "spec.slice_depth": 2,
+    # A Manager's fields constrain each other — the vocabularies are closed
+    # and the endpoint/model/agent trio is local-only — so "any distinct
+    # value" would build a role the parser is right to refuse. Each alternate
+    # below keeps the role internally valid while still differing.
+    "coordination.manager_roles[].engine": "local:large",
+    "coordination.manager_roles[].preset": "planner",
+    "coordination.manager_roles[].duties": ("decompose",),
+    "coordination.manager_roles[].agent": "aider",
+}
 
 
 def _distinct(path: str, value):
@@ -120,6 +131,20 @@ def _populated() -> ProjectConfig:
         # let a dropped section pass the gate.
         coordination=CoordinationConfig(
             managers=["mac-studio", "laptop"],
+            manager_roles=[
+                # One role, fully populated and internally consistent: a local
+                # engine with the three fields it must carry.
+                ManagerRole(
+                    name="laptop",
+                    engine="local:small",
+                    duties=("execute",),
+                    preset="executor",
+                    endpoint="http://localhost:11434/v1",
+                    model="qwen3:8b",
+                    agent="opencode",
+                    credential="local_endpoint_key",
+                ),
+            ],
             remote="git@example.com:team/coord.git",
             state_branch="state",
             owner_lease_minutes=15,

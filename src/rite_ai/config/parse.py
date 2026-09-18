@@ -10,6 +10,7 @@ from pathlib import Path
 
 import yaml
 
+from .managers import parse_managers
 from .models import (
     BudgetConfig,
     CoordinationConfig,
@@ -381,8 +382,18 @@ def parse_config(path: Path) -> ProjectConfig | ParseError:
     # that reads config.yaml, including the ones that would repair it.
     coord_raw = raw.get("coordination", {})
     if isinstance(coord_raw, dict):
+        # Two keys, deliberately: `managers` is the priority order thirty-nine
+        # call sites already read, and `manager_roles` is what each is FOR.
+        # They are parsed independently and never cross-checked here — a role
+        # naming a manager that is not listed parses fine and is reported by
+        # `rite doctor`, which is where a configuration that parses and cannot
+        # work belongs.
+        parsed_roles = parse_managers(coord_raw.get("manager_roles", []))
+        if parsed_roles.error:
+            return ParseError(f"config.yaml: {parsed_roles.error}")
         coordination = CoordinationConfig(
             managers=_str_list(coord_raw.get("managers", [])),
+            manager_roles=parsed_roles.roles,
             remote=str(coord_raw.get("remote", "") or ""),
             state_branch=str(coord_raw.get("state_branch", "") or "state"),
             owner_lease_minutes=coord_raw.get("owner_lease_minutes", 15),

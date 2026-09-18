@@ -15,6 +15,7 @@ from pathlib import Path
 
 import yaml
 
+from rite_ai.config.managers import to_yaml_entry
 from rite_ai.config.models import Module, ProjectBrief, ProjectConfig
 from rite_ai.context.manage import CONTEXT_INDEX_TEMPLATE as CONTEXT_INDEX
 from rite_ai.gate.ci import (
@@ -153,6 +154,9 @@ def config_to_yaml(config: ProjectConfig) -> str:
         # discoverable in the file rather than only in the spec.
         "coordination": {
             "managers": config.coordination.managers,
+            "manager_roles": [
+                to_yaml_entry(r) for r in config.coordination.manager_roles
+            ],
             "remote": config.coordination.remote,
             "state_branch": config.coordination.state_branch,
             "owner_lease_minutes": config.coordination.owner_lease_minutes,
