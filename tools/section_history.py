@@ -66,7 +66,7 @@ def build(kind, role):
         config.ticket_backend = models.TicketBackendConfig(type="github", repo="o/r")
         if hasattr(config, "spec"):
             config.spec = models.SpecConfig(paths=["SPEC.md"], convention="D-<n>")
-        config.expertise = [models.ExpertiseEntry(name="ana", tags=["api"])]
+        config.expertise = [models.ExpertiseEntry(name="alice", tags=["api"])]
     modules = [] if kind == "a" else [models.Module(name="web", path="web/")]
     return generate_claude_md(role, brief, modules, config, Path(tempfile.mkdtemp()))
 
