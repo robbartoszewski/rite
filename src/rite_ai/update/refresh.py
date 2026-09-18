@@ -620,6 +620,46 @@ def refresh_project(
     return results
 
 
+@dataclass
+class Pending:
+    """What a refresh would do to a project, without doing any of it."""
+
+    behind: list[Change] = field(default_factory=list)
+    """Sections and files this rite would rewrite or add."""
+    contested: list[Change] = field(default_factory=list)
+    """Sections it would leave alone — edited, or written by an older rite
+    and not provably its own. Being behind and being contested are different
+    situations with different remedies, so they are counted apart."""
+    files: list[str] = field(default_factory=list)
+    """The paths `behind` falls in. A file is usually behind in several
+    sections at once, so this is the number to say when saying "files":
+    `rite start` counted CHANGES and called them files, and a project one
+    release out of date announced three files behind when it had one."""
+
+    def __bool__(self) -> bool:
+        return bool(self.behind or self.contested)
+
+
+def pending(root: Path) -> Pending:
+    """`refresh_project` with `apply=False`, split the way callers ask about it.
+
+    Three commands ask this question — `rite doctor`, `rite start`, and the
+    module commands, which leave the generated module map behind the moment
+    they write `.rite/modules.yaml`. It was open-coded twice before there was
+    a third, and the two copies had already drifted on what they counted.
+    """
+    out = Pending()
+    for result in refresh_project(root, apply=False):
+        for change in result.changes:
+            if change.action in KEPT:
+                out.contested.append(change)
+            else:
+                out.behind.append(change)
+                if result.path not in out.files:
+                    out.files.append(result.path)
+    return out
+
+
 def report(results: list[FileResult], dry_run: bool, take: frozenset[str]) -> list[str]:
     lines: list[str] = []
     verb = {

@@ -901,21 +901,17 @@ def _doctor_report(problems: list[str]) -> None:
         # NOTE, not a problem: being behind is normal between upgrades, and
         # what to do about an edited section is the user's call.
         with _doctor_check("generated files", problems):
-            from rite_ai.update.refresh import KEPT, refresh_project
+            from rite_ai.update.refresh import pending
 
-            plan = [
-                change
-                for result in refresh_project(root, apply=False)
-                for change in result.changes
-            ]
-            behind = [c for c in plan if c.action not in KEPT]
-            contested = [c for c in plan if c.action in KEPT]
-            if behind or contested:
+            plan = pending(root)
+            if plan:
                 parts = []
-                if behind:
-                    parts.append(f"{len(behind)} out of date")
-                if contested:
-                    parts.append(f"{len(contested)} changed by you or an older rite")
+                if plan.behind:
+                    parts.append(f"{len(plan.behind)} out of date")
+                if plan.contested:
+                    parts.append(
+                        f"{len(plan.contested)} changed by you or an older rite"
+                    )
                 click.echo(
                     f"generated files: {', '.join(parts)} — "
                     "`rite update --files-only --dry-run` shows what would change"
@@ -2189,6 +2185,40 @@ def add() -> None:
     """Add a module or worker."""
 
 
+def _say_the_module_map_is_behind(root: Path) -> None:
+    """Registering a module changes `.rite/modules.yaml`; the module map that
+    every CLAUDE.md carries is GENERATED from it and does not move.
+
+    So the moment this command succeeds, the standing instructions every
+    session loads are wrong about the project — and on the first module they
+    are flatly false, still reading "No modules registered yet". `rite doctor`
+    and `rite start` both notice, but only if someone runs them; the command
+    that caused it is where it costs a line.
+
+    Silent when nothing is behind, and it says so differently when the map is
+    one of the sections a refresh would NOT rewrite — a user edit there is
+    kept, and sending someone to a command that will decline to act is worse
+    than saying nothing.
+    """
+    try:
+        from rite_ai.update.refresh import pending
+
+        plan = pending(root)
+    except Exception:
+        return  # never fail an add over a report about it
+    if plan.behind:
+        click.echo(
+            f"{len(plan.files)} generated file(s) now behind — "
+            "`rite update --files-only` rewrites the module map"
+        )
+    elif plan.contested:
+        click.echo(
+            "the module map in your generated files was edited, so a refresh "
+            "will report it rather than rewrite it — "
+            "`rite update --files-only --dry-run` shows the difference"
+        )
+
+
 @add.command("module")
 @click.argument("name")
 @click.argument("url", default="")
@@ -2214,6 +2244,7 @@ def add_module_cmd(name: str, url: str, branch: str, description: str) -> None:
     )
     if result.ok:
         click.echo(result.message)
+        _say_the_module_map_is_behind(root)
     else:
         click.echo(result.message, err=True)
         raise SystemExit(1)
@@ -2420,6 +2451,7 @@ def remove_module_cmd(name: str) -> None:
     result = remove_module(root, name)
     if result.ok:
         click.echo(result.message)
+        _say_the_module_map_is_behind(root)
     else:
         click.echo(result.message, err=True)
         raise SystemExit(1)
@@ -5237,19 +5269,17 @@ def _echo_instruction_drift(root: Path) -> None:
     a project that can be worked on.
     """
     try:
-        from rite_ai.update.refresh import KEPT, refresh_project
+        from rite_ai.update.refresh import pending
 
-        behind = [
-            change
-            for result in refresh_project(root, apply=False)
-            for change in result.changes
-            if change.action not in KEPT
-        ]
+        plan = pending(root)
     except Exception:
         return
-    if behind:
+    if plan.files:
+        # FILES, because that is the noun in the sentence. This counted
+        # changes: one CLAUDE.md a release out of date is behind in several
+        # sections at once, and announced itself as three files.
         click.echo(
-            f"\n{len(behind)} generated file(s) are behind this rite — "
+            f"\n{len(plan.files)} generated file(s) are behind this rite — "
             "`rite update --files-only --dry-run` shows what would change"
         )
 
