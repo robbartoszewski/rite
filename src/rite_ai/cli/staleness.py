@@ -72,9 +72,12 @@ def project_root() -> Path | None:
 def snapshot(root: Path | None) -> Snapshot:
     """Cheap fingerprint of the authored inputs: size and mtime, no reads.
 
-    Deliberately not a hash. This runs before every command, including the
-    ones a Worker calls in a loop, and its only job is to decide whether the
-    29ms measurement is worth taking. A false positive costs that
+    Deliberately not a hash, and deliberately three files rather than the
+    measurement itself. This runs before every command, including the ones a
+    Worker calls in a loop, and its only job is to decide whether the
+    measurement is worth taking — rendering what this rite would write for
+    the whole project, ~29ms on a small one and growing with it. A test
+    asserts that `rite claim` never reaches it. A false positive costs that
     measurement, which then prints nothing; a false negative costs one
     notice, and `rite doctor` and `rite start` still report it.
     """

@@ -221,3 +221,47 @@ class TestTheWatchedInputsStayHonest:
                 )
             finally:
                 path.write_text(original)
+
+
+class TestItCostsNothingOnCommandsThatChangeNothing:
+    """The hook runs on EVERY command, including the ones a Worker calls in
+    a loop. Measuring whether the generated files are behind means rendering
+    what this rite would write for the whole project — ~29ms on a small one,
+    and it grows with the project.
+
+    That is why the gate is a stat of three files rather than the
+    measurement itself: `rite claim` must not pay for a question about
+    generated files it cannot have changed. Asserted rather than timed —
+    interpreter startup swamps the difference on the command line, so a
+    regression here would be invisible in a stopwatch.
+    """
+
+    def _counting_pending(self, monkeypatch):
+        import rite_ai.update.refresh as refresh
+
+        calls: list[int] = []
+        real = refresh.pending
+
+        def counted(root):
+            calls.append(1)
+            return real(root)
+
+        monkeypatch.setattr(refresh, "pending", counted)
+        return calls
+
+    def test_claiming_a_path_does_not_render_the_project(self, project, monkeypatch):
+        calls = self._counting_pending(monkeypatch)
+
+        CliRunner().invoke(cli, ["claim", "--worker", "a", "x.txt"])
+
+        assert calls == [], "a claim paid for a generated-files measurement"
+
+    def test_but_registering_a_module_does(self, project, monkeypatch):
+        """The difference. Without this the test above passes on a build
+        where the hook never runs at all."""
+        _module(project, "backend")
+        calls = self._counting_pending(monkeypatch)
+
+        CliRunner().invoke(cli, ["add", "module", "backend"])
+
+        assert calls, "registering a module skipped the measurement"
