@@ -1,0 +1,40 @@
+ticket_backend:
+  type: github
+  site: example.atlassian.net
+  repo: robbartoszewski/rite-dogfood-board
+  projects:
+    workers: ABC
+  credential: ''
+credentials:
+  namespace: rite-30ba7cfe
+expertise: {}
+publish_gate:
+  scan_patterns: []
+  gitleaks_config: .rite/gitleaks.toml
+spec:
+  paths: []
+  convention: ''
+heartbeat:
+  interval_minutes: 10
+  stall_threshold: 3
+watchdog:
+  interval_minutes: 5
+pool:
+  coordinator_standby: 2
+  warn_threshold: 0.5
+  lease_expiry_minutes: 15
+  archive_after_minutes: 30
+sandbox:
+  enabled: false
+  backend: seatbelt
+  token_permissions:
+  - contents
+  - pull_requests
+  max_concurrent_workers: 5
+budget:
+  weekly_quota_pct: 95
+  weekly_token_budget: null
+  week_start_day: monday
+schedule:
+  timezone: ''
+  windows: []
