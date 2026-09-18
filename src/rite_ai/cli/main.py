@@ -4171,6 +4171,29 @@ def _parse_spec(
         if not required:
             return None
         raise SystemExit(missing_exit)
+    # A registered file that cannot be read stops everything, even when other
+    # files parsed. Every command downstream states a CONCLUSION about the
+    # spec's content — "no unit '5.3'", "covers 5.3, which the spec does not
+    # have", "it has no headings", "the digest does not match the spec" — and
+    # each of those was false on a spec nobody had read: a permissions blip
+    # made `rite spec index` refuse the digest outright. The raw cause was
+    # printed as a note underneath, which is no help to a script and little to
+    # a session that reads the verdict. Partial is refused for the same reason
+    # it is refused in the config parser: a silent partial read is worse than a
+    # hard failure.
+    unreadable = [p for p in parsed.problems if "cannot be read" in p]
+    if unreadable:
+        click.echo("the spec could not be read:", err=True)
+        for problem in unreadable:
+            click.echo(f"  {problem}", err=True)
+        click.echo(
+            "  nothing below this can be judged from here — this says nothing "
+            "about whether the spec, or the digest of it, is sound.",
+            err=True,
+        )
+        if not required:
+            return None
+        raise SystemExit(missing_exit)
     if echo_problems:
         for problem in parsed.problems:
             click.echo(f"  {problem}", err=True)

@@ -903,3 +903,64 @@ def test_an_unreadable_spec_is_never_reported_as_a_changed_one(
         assert "Re-digest it" not in out
     finally:
         (project / "SPEC.md").chmod(0o644)
+
+
+# --- a spec nobody could read is not a spec that says something -------------------
+
+
+@pytest.mark.parametrize(
+    ("args", "code"),
+    [
+        (["index"], 1),
+        (["status"], 1),
+        (["verify"], 3),
+        (["slice", "1.1"], 1),
+        (["stamp", "1.1"], 1),
+    ],
+)
+def test_an_unreadable_spec_stops_every_command_that_judges_it(
+    project: Path, monkeypatch, args, code
+):
+    """Each of these stated a CONCLUSION about the spec's content on a spec
+    nobody had read: "no unit '1.1'", "covers 1.1, which the spec does not
+    have", "it has no headings" — that last one made `rite spec index` REFUSE
+    the digest outright on a permissions blip. `verify` failed a gate claiming
+    drift, which is the same lie with a non-zero exit attached."""
+    monkeypatch.chdir(project)
+    _write_unit(project, "1.1", ["1.1"])
+    (project / "SPEC.md").chmod(0o000)
+    try:
+        result = _run(project, *args)
+        assert result.exit_code == code, result.output
+        assert "the spec could not be read" in result.output
+        assert "says nothing about whether the spec" in result.output
+        for lie in ("no headings", "does not have", "no unit", "no longer says"):
+            assert lie not in result.output, result.output
+    finally:
+        (project / "SPEC.md").chmod(0o644)
+
+
+def test_one_unreadable_file_stops_a_multi_file_spec_too(tmp_path: Path, monkeypatch):
+    """Partial is refused for the reason the config parser refuses it: a
+    silent partial read is worse than a hard failure. Here it would be worse
+    still — the units of the missing file read as deleted."""
+    (tmp_path / ".rite").mkdir()
+    (tmp_path / ".rite" / "config.yaml").write_text("spec:\n  paths:\n    - docs/\n")
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "a.md").write_text("# A\n## 1. One\nSee §2.\n" + FILLER)
+    (docs / "b.md").write_text(
+        "# B\n## 90. Ninety\nSee §1.\n" + FILLER.replace("##", "###")
+    )
+    monkeypatch.chdir(tmp_path)
+    # Green first, so what follows is caused by the file becoming unreadable
+    # and not by the spec being one the digest would refuse anyway.
+    assert _run(tmp_path, "index").exit_code == 0
+
+    (docs / "b.md").chmod(0o000)
+    try:
+        result = _run(tmp_path, "status")
+        assert result.exit_code == 1
+        assert "b.md" in result.output and "the spec could not be read" in result.output
+    finally:
+        (docs / "b.md").chmod(0o644)
