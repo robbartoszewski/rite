@@ -72,6 +72,10 @@ class InitAnswers:
     modules: list[Module]
     config: ProjectConfig
     kb: KbAnswers
+    # question key -> where the value came from: "typed", "--config",
+    # "detected" or "--yes default". Populated by `run_questionnaire`; used
+    # to say what a non-interactive run decided on the user's behalf.
+    sources: dict[str, str] = field(default_factory=dict)
 
 
 def _resolve_spec(
@@ -290,15 +294,54 @@ def _offer_yoloai_install(ui, prefs, install_yoloai, yoloai_install_command) -> 
         )
 
 
+def _say_what_was_decided(sources: dict[str, str], values: dict[str, str]) -> None:
+    """Print every answer a non-interactive run resolved, and where it came
+    from.
+
+    `--yes` answered eleven questions and printed one line about one of them.
+    Each answer was defensible on its own — the audit checked every field
+    against the interactive default and found one real divergence — but a
+    project was configured out of detection and defaults with nothing said,
+    and `.rite/` is not where someone thinks to look for what they did not
+    know was decided. Nothing here asks anything: this is a report, not the
+    review screen the interactive redesign is parked on.
+    """
+    key_width = max(len(k) for k in values)
+    shown = {k: (v if v else "—") for k, v in values.items()}
+    value_width = min(max(len(v) for v in shown.values()), 40)
+    ui.note("Resolved without asking (rite init --yes):")
+    for key, value in shown.items():
+        source = sources.get(key, "--yes default")
+        ui.plain(f"  {key.ljust(key_width)}  {value.ljust(value_width)}  [{source}]")
+    ui.plain("  Change any of these in .rite/, or re-run `rite init` in an")
+    ui.plain("  empty directory to be asked.")
+
+
 def run_questionnaire(
     root: Path, preset: Preset, detected: DetectionSummary, yes: bool
 ) -> InitAnswers:
     interactive = not yes
+    sources: dict[str, str] = {}
+
+    def _source(key: str, from_preset: bool, detected_default: bool) -> None:
+        if from_preset:
+            sources[key] = "--config"
+        elif interactive:
+            sources[key] = "typed"
+        elif detected_default:
+            sources[key] = "detected"
+        else:
+            sources[key] = "--yes default"
 
     def resolve_text(
-        key: str, question: str, default: str = "", required: bool = False
+        key: str,
+        question: str,
+        default: str = "",
+        required: bool = False,
+        detected_default: bool = False,
     ) -> str:
         val = preset.get(key)
+        _source(key, val is not None, detected_default and bool(default))
         if val is not None:
             return str(val)
         if not interactive:
@@ -306,10 +349,14 @@ def run_questionnaire(
         return ui.text(question, default=default, required=required)
 
     def resolve_list(
-        key: str, question: str, default: list[str] | None = None
+        key: str,
+        question: str,
+        default: list[str] | None = None,
+        detected_default: bool = False,
     ) -> list[str]:
         default = default or []
         val = preset.get(key)
+        _source(key, val is not None, detected_default and bool(default))
         if val is not None:
             if isinstance(val, list):
                 return [str(v) for v in val]
@@ -324,17 +371,29 @@ def run_questionnaire(
         options: list[tuple[str, str]],
         default_index: int = 0,
         fallback: str | None = None,
+        detected_default: bool = False,
     ) -> str:
         val = preset.get(key)
         valid = {v for v, _ in options}
+        _source(key, val is not None and val in valid, detected_default)
         if val is not None and val in valid:
             return val
         if not interactive:
-            return fallback if fallback is not None else options[default_index][0]
+            if fallback is not None:
+                # The one place `--yes` does not take the interactive default,
+                # so the line says which default it did not take.
+                interactive_default = options[default_index][0]
+                sources[key] = (
+                    f"--yes fallback, not the interactive "
+                    f"default ({interactive_default})"
+                )
+                return fallback
+            return options[default_index][0]
         return ui.select(question, options, default=default_index)
 
     def resolve_bool(key: str, question: str, default: bool = True) -> bool:
         val = preset.get(key)
+        _source(key, val is not None, False)
         if val is not None:
             return bool(val)
         if not interactive:
@@ -360,7 +419,9 @@ def run_questionnaire(
     # --- Section 2: Project ---
     ui.section("Project", 2, 7)
     default_name = root.name or "my-project"
-    name = resolve_text("project.name", "Project name?", default=default_name)
+    name = resolve_text(
+        "project.name", "Project name?", default=default_name, detected_default=True
+    )
     # Offer the branch detection found, not a fixed `main`. Section 3 writes
     # each module's detected branch into modules.yaml; a hardcoded default here
     # meant pressing Enter produced a root branch that disagreed with the
@@ -377,7 +438,10 @@ def run_questionnaire(
             + ") — not guessing which is the project's line."
         )
     root_branch = resolve_text(
-        "project.root_branch", "Root branch?", default=detected.root_branch or "main"
+        "project.root_branch",
+        "Root branch?",
+        default=detected.root_branch or "main",
+        detected_default=detected.root_branch is not None,
     )
 
     # --- Section 3: Modules ---
@@ -399,23 +463,34 @@ def run_questionnaire(
         "What kind of project is this?",
         _KIND_OPTIONS,
         default_index=_kind_index(detected.kind),
+        detected_default=detected.kind is not None,
     )
     features = resolve_text(
         "what.features",
         "Describe what this project does:",
         default=detected.description or "",
+        detected_default=bool(detected.description),
     )
 
     # --- Section 5: Technology ---
     ui.section("Technology", 5, 7)
     platform = resolve_text(
-        "technology.platform", "Platform?", default=detected.platform
+        "technology.platform",
+        "Platform?",
+        default=detected.platform,
+        detected_default=bool(detected.platform),
     )
     languages = resolve_list(
-        "technology.languages", "Languages?", default=list(detected.languages)
+        "technology.languages",
+        "Languages?",
+        default=list(detected.languages),
+        detected_default=True,
     )
     frameworks = resolve_list(
-        "technology.frameworks", "Frameworks?", default=list(detected.frameworks)
+        "technology.frameworks",
+        "Frameworks?",
+        default=list(detected.frameworks),
+        detected_default=True,
     )
     architecture = resolve_text("technology.architecture", "Architecture?", default="")
 
@@ -510,12 +585,34 @@ def run_questionnaire(
         architecture=architecture,
     )
 
+    if not interactive:
+        _say_what_was_decided(
+            sources,
+            {
+                "project.role": role,
+                "project.name": name,
+                "project.root_branch": root_branch,
+                "what.kind": kind,
+                "what.features": features,
+                "technology.platform": platform,
+                "technology.languages": ", ".join(languages),
+                "technology.frameworks": ", ".join(frameworks),
+                "technology.architecture": architecture,
+                # The key the resolver recorded, not the config field it
+                # ends up in — a mismatch here silently relabels the one
+                # answer that actually diverges as an ordinary default.
+                "operations.ticket_backend": ticket_type,
+                "kb.commit": "yes" if kb_commit else "no",
+            },
+        )
+
     return InitAnswers(
         role=role,
         brief=brief,
         modules=modules,
         config=config,
         kb=KbAnswers(links=kb_links, files=kb_files, commit=kb_commit),
+        sources=sources,
     )
 
 

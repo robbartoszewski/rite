@@ -217,6 +217,14 @@ def note(message: str) -> None:
     click.secho(f"  {message}", dim=True)
 
 
+def plain(message: str) -> None:
+    """A line printed as written — no indent added, no styling.
+
+    `note` adds its own two spaces, which wrecks a column-aligned block.
+    """
+    click.secho(message, dim=True)
+
+
 def warn(message: str) -> None:
     """A line that must not be skimmed past.
 
