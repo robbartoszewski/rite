@@ -134,6 +134,7 @@ def generate_claude_md(
         _spec_section(config),
         _modules_section(modules, project_root, config.sandbox),
         _role_section(role, config),
+        _working_the_queue_section(),
         _ticket_workflow_section(),
         _claims_section(),
         _review_section(),
@@ -419,6 +420,48 @@ out of each other's way.
 `workers/<name>/` with its own checkouts and its own scoped instructions.
 
 **Ticket backend:** {backend_line}"""
+
+
+def _working_the_queue_section() -> str:
+    """One ticket is not the job; the queue is.
+
+    A session finishes what it was asked and exits, because nothing standing
+    tells it there is a next thing — so a person ends up typing "don't stop
+    after BEN-191" by hand, every time. SPEC §2.7 puts work-seeking exactly
+    here: "Workers start when a Manager has safe work to give one, never
+    because a clock crossed a boundary with nobody watching." The Manager IS
+    the loop, and this is the standing instruction that says so.
+
+    It OFFERS and does not instruct. No line here says "start N sessions now":
+    a generated file that spends quota when an agent reads it is the surprise
+    that §9.12 and `rite pool fill`'s ceiling exist to prevent. It names what
+    is ready and leaves the decision where it belongs.
+    """
+    return """\
+## Working the queue
+
+**One ticket is not the job.** When you finish one, look for the next before
+you stop — a session that ends with work still ready is the most common way
+this project stalls, and the only signal a human gets is silence.
+
+```
+rite status                      # in flight, claimed, stalled
+rite board list --label scheduled # what is waiting to be picked up
+```
+
+If something is ready and you have capacity, take it: claim, work, hand over,
+then look again. Stop when the queue is empty, when the schedule's window has
+closed, or when something needs a decision you cannot make — and say which of
+the three it was, because "stopped" alone is indistinguishable from "crashed".
+
+**Starting other sessions is a decision, not a step.** Workers start when you
+have safe work to give one (SPEC §2.7) — never to fill capacity, and never
+because a queue looks long. Each one spends quota that no cleanup returns, so
+if you are unsure whether the work is ready to hand over, it is not.
+
+**Hand back rather than hold.** A ticket you cannot progress goes back to the
+board with the reason on it. Holding it looks identical to working on it, and
+the difference is only visible to you."""
 
 
 def _ticket_workflow_section() -> str:

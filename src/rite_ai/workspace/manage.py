@@ -789,6 +789,18 @@ and stop rather than guessing.
 8. Push your final commits, then open a PR, get it reviewed, and merge.
 9. Release your claim (after merge, not before): `rite release --worker {manifest.name}`
 
+## When this ticket is done
+
+Tell your Manager you are free, in the same message that reports the work.
+Do not start another ticket on your own: your Manager holds the board and the
+capacity, and two Workers picking their own next ticket is how the same path
+gets claimed twice.
+
+If nothing comes back, stop — and say you are stopping because you were not
+given more, rather than going quiet. A Worker that finishes and falls silent
+is indistinguishable from one that died mid-ticket, and only one of those
+needs somebody woken up.
+
 ## What you must not do
 
 - Push directly to the root branch.
