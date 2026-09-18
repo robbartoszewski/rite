@@ -11,11 +11,15 @@ what keeps SPEC §5.3.4's fungibility intact. A project whose Managers are all
 alike keeps today's behaviour, including Worker labels, because there is
 nothing to route between.
 
-**Capacity is passed in, not discovered here.** P2-4a's heartbeat carries an
-in-flight count and is not built (checked on origin/main: nothing defines
-`in_flight`). Rather than block, this takes capacity as an argument — which is
-also the shape that makes the routing decision testable without a fleet, and
-the shape the harness will supply from the heartbeat when it exists.
+**Capacity is passed in, not discovered here.** P2-4a's heartbeat does carry
+an in-flight count — `publish_heartbeat(..., in_flight=...)` — and the harness
+supplies it from there. Taking it as an argument rather than reading it here
+keeps the routing decision testable without a fleet, and keeps this module's
+only dependency the duty vocabulary.
+
+(An earlier version of this docstring said the in-flight count was not built.
+That was wrong: it was grepped for in `coordination/__init__.py` alone rather
+than across the package.)
 """
 
 from __future__ import annotations
