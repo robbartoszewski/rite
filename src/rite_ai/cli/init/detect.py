@@ -463,9 +463,31 @@ def nests_sandboxes(sandbox: SandboxConfig) -> bool:
 # more. Outside a sandbox they are left off, so an unsandboxed build keeps
 # SwiftPM's and Xcode's own protection.
 #
+# MEASURED END TO END 2026-09-18, seatbelt backend, Xcode 26.6, iOS 26.4
+# simulator, on a SwiftPM package declaring only `.iOS(.v17)`. The friction
+# audit carried "no iOS build or test was run inside a sandbox" as its last
+# unverified item; this is that run:
+#
+#   * raw `xcodebuild ... build` inside the sandbox FAILS before compiling
+#     anything — "Could not resolve package dependencies: sandbox-exec:
+#     sandbox_apply: Operation not permitted" — and the message names
+#     sandbox-exec, never the project;
+#   * `IDEPackageSupportDisableManifestSandbox=YES` as an ENVIRONMENT
+#     variable does not help. It has to be the `-IDEPackage…=YES` argument
+#     below, which is how these are passed;
+#   * with the flags below, `xcodebuild build` reaches BUILD SUCCEEDED and
+#     `xcodebuild test` reaches TEST SUCCEEDED on a booted simulator, from
+#     inside the sandbox.
+#
+# Not covered by that run: the tart backend (not installed here), an
+# `.xcodeproj` app with a UI test target, and macro-using packages, whose
+# separate failure is recorded above from a host run.
+#
 # That profile also gives every Worker write access to the SAME host SwiftPM
-# and Xcode caches. Concurrent Workers resolving into them is untested — SPEC
-# §5.3.5.
+# and Xcode caches — the DerivedData path in the sandboxed build's own output
+# is the host's. Concurrent Workers resolving into them is untested — SPEC
+# §5.3.5. Xcode's own cache DB under ~/Library/Caches is denied inside the
+# sandbox ("authorization denied"), which is noisy and not fatal.
 _SWIFTPM_NESTED = "--disable-sandbox"  # manifests and plugins, for `swift`
 _XCODEBUILD_NESTED = (
     # evaluating Package.swift ("Could not resolve package dependencies")
