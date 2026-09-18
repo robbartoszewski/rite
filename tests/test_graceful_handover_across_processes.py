@@ -24,7 +24,12 @@ from pathlib import Path
 
 from election_harness import clock_for, describe, overlapping_owners, ownership_runs
 
-SECONDS = 12.0
+CAP_SECONDS = 90.0
+"""A cap, not a duration. The run ends when the handover has happened, and
+this only bounds a machine that never gets there — a shared CI runner does a
+fraction of a laptop's work in the same wall clock, and a fixed window meant
+the sequence (beta takes it, alpha asks, beta hands over, alpha promotes)
+ran out of clock with alpha still asking."""
 
 
 def _manager(args):
@@ -55,10 +60,11 @@ def _manager(args):
     rows: list[dict] = []
     events: list[str] = []
     held: str = ""  # the `acquired` of the lease we currently believe is ours
+    done = False  # this machine has seen the handover through its own eyes
     # Relative to this child's own start: see the note in the election test.
     own_start = time.time()
-    stop = own_start + SECONDS
-    while time.time() < stop:
+    stop = own_start + CAP_SECONDS
+    while time.time() < stop and not done:
         if time.time() - own_start < joins_after:
             time.sleep(0.05)
             continue
@@ -69,6 +75,10 @@ def _manager(args):
             events.append("asked")
         if tick.asked_to_hand_over:
             events.append("was asked")
+        if tick.action == "handed over":
+            done = True  # the incumbent's part is finished
+        if yields_role is False and tick.action == "promoted" and events.count("asked"):
+            done = True  # the returning Manager has the role back
         if tick.action == "handed over" and held:
             # Belief ends HERE, not at the expiry we last renewed to.
             moment = clock().timestamp()
@@ -161,14 +171,24 @@ def test_a_returning_manager_is_handed_the_role_without_a_lapse(tmp_path):
     owners = [name for (name, _) in runs]
     assert owners.count("beta") >= 1 and owners.count("alpha") >= 1, owners
 
-    # And it ended in the right place, with the request cleared so no later
-    # Owner acts on it again.
-    from rite_ai.coordination.demotion import REQUEST_KEY
+    # And it ended in the right place, with nothing left WAITING.
+    #
+    # Not "the request file is empty": the returning Manager asks again
+    # between the handover and its own promotion — the lease still names
+    # the incumbent until it expires — so a request addressed to the OLD
+    # incumbent can outlive the handover. That is inert by design: P2-0d
+    # gives a request an `incumbent` precisely so one meant for an earlier
+    # Owner is recognised as stale and ignored (`is_addressed_to`). The
+    # property is that nobody is waiting on a handover that will not come,
+    # and asserting the file was emptied tested the mechanism instead.
+    from rite_ai.coordination.demotion import pending_request
     from rite_ai.coordination.git_backend import GitStateLayer
     from rite_ai.coordination.lease import LEASE_KEY
-    from rite_ai.coordination.promotion import request_from_json
     from rite_ai.coordination.schemas import lease_from_json
 
-    final = GitStateLayer(str(remote), tmp_path / "check")
-    assert lease_from_json(final.read_state(LEASE_KEY).value.decode()).owner == "alpha"
-    assert not request_from_json(final.read_state(REQUEST_KEY).value.decode()).requester
+    final = GitStateLayer(remote, tmp_path / "final.git")
+    owner = lease_from_json(final.read_state(LEASE_KEY).value.decode()).owner
+    assert owner == "alpha", owner
+    assert pending_request(final, owner) is None, (
+        "the new Owner has a promotion request pending against it"
+    )

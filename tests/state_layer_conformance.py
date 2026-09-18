@@ -83,12 +83,16 @@ def _cas_actor(args):
     (state_layer property 2), so rewriting the same bytes is a no-op that
     cannot move it — and every actor would appear to win the same version
     for a reason that has nothing to do with the race."""
-    spec, log_path, seconds, actor = args
+    spec, log_path, seconds, actor, enough = args
     layer = _open(spec)
     stop = deadline(seconds)
     rows = []
     n = 0
-    while time.time() < stop:
+    # Until enough has happened OR the cap is reached — not "for N seconds".
+    # A shared CI runner does a fraction of the work a laptop does in the
+    # same wall clock, and a floor that a laptop clears easily is a floor
+    # that fails there for a reason having nothing to do with the property.
+    while time.time() < stop and len(rows) < enough:
         align()
         read = layer.read_state("owner-lease.json")
         if isinstance(read, Unavailable):
@@ -111,11 +115,11 @@ def _merge_actor(args):
     other actor's writes) and any Conflict it was given (there must be none —
     a conflict on a key nobody else touched is a backend exporting its own
     contention as a semantic)."""
-    spec, actor, log_path, seconds = args
+    spec, actor, log_path, seconds, enough = args
     layer = _open(spec)
     stop = deadline(seconds)
     written, conflicted, n = [], [], 0
-    while time.time() < stop:
+    while time.time() < stop and len(written) < enough:
         align()
         key = f"managers/a{actor}-{n}.json"
         read = layer.read_state(key)
@@ -134,11 +138,11 @@ def _merge_actor(args):
 
 
 def _append_actor(args):
-    spec, actor, log_path, seconds = args
+    spec, actor, log_path, seconds, enough = args
     layer = _open(spec)
     stop = deadline(seconds)
     appended, n = [], 0
-    while time.time() < stop:
+    while time.time() < stop and len(appended) < enough:
         align()
         result = layer.append_message(f"a{actor}-{n}")
         if isinstance(result, Appended):
@@ -156,6 +160,11 @@ class StateLayerConformance:
     # HARNESS RAN. The properties below it are absolute and are never
     # relaxed: no version won twice, no key lost, no message lost.
     BURST_SECONDS = 1.0
+    BURST_CAP_SECONDS = 60.0
+    """How long an actor may take to reach its share of the floor. Reached
+    in about a second on a laptop and several times that on a shared CI
+    runner — so it is a CAP, not a duration, and the test fails on the floor
+    rather than on the clock."""
     MIN_CAS_ATTEMPTS = 200
     MIN_WRITES = 50
     MIN_MESSAGES = 50
@@ -343,8 +352,9 @@ class StateLayerConformance:
                 (
                     self.actor_layer_spec(store, i),
                     str(logs / f"{i}.json"),
-                    self.BURST_SECONDS,
+                    self.BURST_CAP_SECONDS,
                     i,
+                    self.MIN_CAS_ATTEMPTS // BURST_ACTORS + 1,
                 )
                 for i in range(BURST_ACTORS)
             ],
@@ -370,6 +380,7 @@ class StateLayerConformance:
         written; if any is missing afterwards, some writer merged from a stale
         read and silently destroyed another Manager's state."""
         logs = self._logs(tmp_path, "merge")
+        enough_each = self.MIN_WRITES // BURST_ACTORS + 1
         run_actors(
             _merge_actor,
             [
@@ -377,7 +388,8 @@ class StateLayerConformance:
                     self.actor_layer_spec(store, i),
                     i,
                     str(logs / f"{i}.json"),
-                    self.BURST_SECONDS,
+                    self.BURST_CAP_SECONDS,
+                    enough_each,
                 )
                 for i in range(BURST_ACTORS)
             ],
@@ -408,6 +420,7 @@ class StateLayerConformance:
         self, store, tmp_path
     ):
         logs = self._logs(tmp_path, "append")
+        enough_each = self.MIN_MESSAGES // BURST_ACTORS + 1
         run_actors(
             _append_actor,
             [
@@ -415,7 +428,8 @@ class StateLayerConformance:
                     self.actor_layer_spec(store, i),
                     i,
                     str(logs / f"{i}.json"),
-                    self.BURST_SECONDS,
+                    self.BURST_CAP_SECONDS,
+                    enough_each,
                 )
                 for i in range(BURST_ACTORS)
             ],
