@@ -142,3 +142,54 @@ class TestTheReportNamesTheOldHeading:
         )
 
         assert "renamed" not in line, line
+
+
+class TestAKeptRenameSaysItCarriesACorrection:
+    """A v0.2.0 project upgraded with today's rite KEEPS `## Your modules`.
+
+    Measured, end to end: build a project with v0.2.0's own `rite init` and
+    `add_worker`, run today's `rite update --files-only`, and the Worker file
+    still carries the heading — and the framing — that told a real Owner to
+    pre-bind unstarted tickets to named Workers. The refresh is right to
+    leave it: the section lists this project's modules, so no release's bytes
+    are on record for it and nothing can prove it is rite's rather than an
+    edit.
+
+    So the fix shipped and does not arrive. The most the refresh can do
+    without overwriting someone's file is say WHICH of the kept sections is
+    the one carrying a correction — it knows, because the heading only
+    matched through the supersession map — instead of reporting it in the
+    same neutral line as every section that is merely old.
+    """
+
+    def _kept(self):
+        from rite_ai.update.refresh import FileResult, refresh_text, report
+
+        _, changes = refresh_text(_file(OLD, "- `backend/`  # mine"), _generated())
+        return "\n".join(
+            report([FileResult("workers/alpha/CLAUDE.md", changes)], False, frozenset())
+        )
+
+    def test_it_names_the_command_for_that_section(self):
+        out = self._kept()
+
+        assert f'--take-rite "{NEW}"' in out, out
+
+    def test_it_says_the_text_was_corrected_not_just_renamed(self):
+        """ "Renamed" alone reads as cosmetic, and a reader triaging eight
+        kept sections skips cosmetic."""
+        out = self._kept()
+
+        assert "corrected, not just renamed" in out
+
+    def test_an_ordinary_kept_section_gets_no_such_line(self):
+        """Every kept section carrying this would make it noise, and the
+        generic "to take one" line at the end already covers them."""
+        from rite_ai.update.refresh import FileResult, refresh_text, report
+
+        _, changes = refresh_text(_file(NEW, "- `backend/`  # mine"), _generated())
+        out = "\n".join(
+            report([FileResult("workers/alpha/CLAUDE.md", changes)], False, frozenset())
+        )
+
+        assert "corrected, not just renamed" not in out

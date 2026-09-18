@@ -714,6 +714,26 @@ def report(results: list[FileResult], dry_run: bool, take: frozenset[str]) -> li
             "wrote it, or you edited it"
         )
         lines.append(f"{where}: left as it is — {why}")
+        if ch.renamed_from:
+            # A rename is not decoration. A release only renames a generated
+            # heading when the words were wrong, and the one this mechanism
+            # was built on is the reason: `## Your modules` told every Worker
+            # it owned a set of modules, and an Owner who read it pre-bound
+            # unstarted tickets to named Workers before anyone had started.
+            #
+            # Such a section is per-project — it lists this project's modules
+            # — so no release's bytes are on record for it and a refresh
+            # cannot prove it is rite's own. It is kept, correctly. But it is
+            # then reported in the same neutral line as every other kept
+            # section, and the reader has no way to tell the one carrying a
+            # correction from the seven that are merely old. Say which, and
+            # give the command, rather than leaving them to infer it from a
+            # heading that changed.
+            lines.append(
+                f"    a later release replaced that heading — its text was "
+                f"corrected, not just renamed. To take it:\n      rite update "
+                f'--files-only --take-rite "{ch.target}"'
+            )
         if dry_run and ch.diff:
             lines.extend("    " + d for d in ch.diff.splitlines())
     for name in sorted(take - matched):
