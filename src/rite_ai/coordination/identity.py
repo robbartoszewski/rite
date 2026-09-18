@@ -37,7 +37,7 @@ MACHINE_FILE = "machine"
 
 
 
-def machine_file(root: Path) -> Path:
+def _machine_file(root: Path) -> Path:
     return root / ".rite" / MACHINE_FILE
 
 
@@ -48,7 +48,7 @@ def this_manager(root: Path) -> str | None:
     read. A name that cannot be established must never be guessed — the
     whole point of the name is that other machines act on what it says.
     """
-    path = machine_file(root)
+    path = _machine_file(root)
     try:
         name = path.read_text(encoding="utf-8").strip()
     except (OSError, UnicodeDecodeError):

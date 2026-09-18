@@ -118,7 +118,7 @@ def distribute(
     if not mine:
         return result
 
-    if capacity == 0 and not draining and not modules_matter(mine):
+    if capacity == 0 and not draining and not _modules_matter(mine):
         # §2.7.3: the user scheduled zero Workers for this hour. Not a
         # failure, and not something to work around. Work this machine could
         # never do still goes back below, because that is not about capacity.
@@ -172,7 +172,7 @@ def _busy_workers(root: Path) -> set[str]:
     return {claim.worker for claim in ClaimsLedger(claims_path).list_claims()}
 
 
-def modules_matter(tickets) -> bool:
+def _modules_matter(tickets) -> bool:
     """Whether any of these tickets names a module at all — so an off-window
     Manager still returns work it could never do, rather than holding it
     until a window it will refuse it in anyway."""

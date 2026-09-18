@@ -71,7 +71,7 @@ def _why(proc: subprocess.CompletedProcess) -> str:
     return "; ".join(lines[-2:]) if lines else f"git exited {proc.returncode}"
 
 
-def resolve_remote(remote: str, project_root: Path, timeout: int = 10) -> str | None:
+def _resolve_remote(remote: str, project_root: Path, timeout: int = 10) -> str | None:
     """The URL to push to. `coordination.remote` may be a URL or path, used as
     given, or the name of a remote in the project's repository."""
     if _URL_LIKE.match(remote):
@@ -86,7 +86,7 @@ def resolve_remote(remote: str, project_root: Path, timeout: int = 10) -> str | 
 def probe_force_push(
     remote: str, state_branch: str, project_root: Path, timeout: int = 60
 ) -> ForcePushProbe:
-    url = resolve_remote(remote, project_root)
+    url = _resolve_remote(remote, project_root)
     if url is None:
         return ForcePushProbe(
             False,
