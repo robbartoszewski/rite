@@ -940,6 +940,22 @@ def _doctor_report(problems: list[str]) -> None:
             click.echo(not_enrolled)
             problems.append(not_enrolled)
 
+        # RL-42. `local:large` names a tier, not a runtime, and two projects'
+        # "large" are different machines — so the endpoint is probed rather
+        # than assumed. An engine that is not there fails every subtask routed
+        # to it as infrastructure (RL-47): honest reports, all night, and no
+        # progress.
+        local_roles = [r for r in coordination.manager_roles if r.is_local]
+        if local_roles:
+            with _doctor_check("local engines", problems):
+                from rite_ai.local.engine_probe import probe_local_engines
+
+                for probe in probe_local_engines(local_roles):
+                    click.echo(f"local engine {probe.manager}: {probe.detail}")
+                    for problem in probe.problems:
+                        click.echo(problem)
+                        problems.append(problem)
+
         if coordination.remote and not not_enrolled:
             # §2.3: the Owner "detects stalled Managers and surfaces them to
             # the human". Reading is safe on any machine — it needs no
