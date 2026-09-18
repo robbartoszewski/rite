@@ -5,6 +5,7 @@ Asserted against real generated output, not fixtures that imitate it: what
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
@@ -16,6 +17,8 @@ from rite_ai.cli.main import cli
 from rite_ai.config.models import ProjectBrief, ProjectConfig
 from rite_ai.generated_sections import MARKER_RE, parse
 from rite_ai.update.refresh import refresh_template, refresh_text
+
+REPO = Path(__file__).resolve().parents[1]
 
 
 def _generated(config: ProjectConfig | None = None, tmp: Path = Path("/tmp")) -> str:
@@ -392,28 +395,55 @@ class TestASectionAReleaseWrote:
         ]
         assert "MY STEP" in new
 
-    def test_the_history_covers_this_versions_static_sections(self):
+    def test_the_history_covers_the_newest_release(self):
         """A release that forgets `tools/section_history.py` stops delivering
-        improvements to every project initialised before it."""
-        import hashlib
+        improvements to every project initialised before it.
 
-        from rite_ai.update.section_history import SECTIONS
+        THE PROPERTY, after four releases of a proxy for it. This asserted
+        that the text THIS TREE generates hashes into `SECTIONS`, which is a
+        different claim, and v0.4.0 shipped straight through it: the static
+        sections happened not to have changed since v0.3.0, so current text
+        still matched a recorded release while the newest one was absent
+        entirely. The tool had not been run, every project built by v0.4.0
+        was unattributable to the next release, and this stayed green — the
+        exact failure it was written to catch. It was caught by the TEMPLATE
+        history's guard, which asks about the last release rather than about
+        today's bytes.
 
-        current = _generated()
-        stale = [
-            heading
-            for heading in (
-                "Ticket workflow",
-                "Claims system",
-                "Review convention",
-                "Publish gate",
-            )
-            if hashlib.sha256(_section(current, heading).strip().encode()).hexdigest()
-            not in SECTIONS.get(heading, frozenset())
-        ]
-        assert not stale, (
-            f"{stale} differ from every release — if this is a release, run "
-            "`uv run python tools/section_history.py` after tagging"
+        The proxy had a second cost. Pinning current text made the four
+        sections it named uneditable between releases — correcting one turned
+        the suite red until someone tagged — and a sentence in the Ticket
+        workflow section that is false about how module commands are detected
+        has been waiting for a release window since v0.1.0.
+
+        Current text has no role here. `_written_by_a_release` matches what is
+        in a USER's file against what some release wrote; what this tree
+        generates is recorded when it becomes a release, and not before.
+        """
+        from rite_ai.update.section_history import RELEASES
+
+        tags = subprocess.run(
+            ["git", "tag", "-l", "v*"],
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.split()
+        if not tags:
+            pytest.skip("no release tags in this checkout")
+
+        def version(tag: str) -> tuple[int, ...]:
+            # Not string order: "v0.10.0" sorts before "v0.4.0" that way, and
+            # the answer would quietly become some older release.
+            return tuple(int(part) for part in tag.lstrip("v").split("."))
+
+        newest = max(tags, key=version)
+
+        assert newest in RELEASES, (
+            f"{newest} is not in section_history.RELEASES — run "
+            "`uv run python tools/section_history.py` and commit the result. "
+            "Until then a project initialised on that release cannot be shown "
+            "to be rite's own by the next one."
         )
 
 

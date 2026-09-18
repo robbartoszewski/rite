@@ -9,6 +9,10 @@ From: v0.1.0 (15/23 static), v0.2.0 (16/24 static), v0.3.0 (16/26 static), v0.4.
 
 # ruff: noqa: E501 — these lines are the bytes a release wrote.
 
+# The releases read to build this file. Machine-readable on purpose:
+# `tests/test_update_refresh.py` asserts the newest tag is here.
+RELEASES: tuple[str, ...] = ("v0.1.0", "v0.2.0", "v0.3.0", "v0.4.0")
+
 SECTIONS: dict[str, frozenset[str]] = {
     "Before anything else: read the handover snapshot": frozenset(
         {
