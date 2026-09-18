@@ -11,8 +11,26 @@ alignment — so neither can say which entry of `coordination.managers` is
 committed set, and everything else runtime state that is "meaningful only on
 the machine that wrote it".
 
-So: `.rite/machine`, one line, the name as it appears in
-`coordination.managers`.
+So: `.rite/machine`, the name as it appears in `coordination.managers`.
+
+**One line was an assumption, not a decision** (RL-60, found building RL-T32).
+Q8 asked "which Manager is this machine", and the question's shape gave the
+answer: one. rite local breaks that — its Q1 answer is "one machine", with a
+lead, a planner and an executor sharing it, each needing its own name because
+the Owner routes on heartbeats and a ticket labelled `planner` is picked up by
+whatever publishes as `planner`. So the file takes one name per line.
+
+**The FIRST line is still one name, and that is deliberate.** A machine holds
+one lease, publishes one set of claims and stands for Owner once; two local
+Managers competing for the Owner role on the same box is nonsense. So this is
+a primary identity plus the Managers it hosts, never a list that replaces the
+name — `this_manager()` keeps meaning what every caller already reads it to
+mean, and `hosted_managers()` is the new question.
+
+**A file this version cannot read fully is not enrolled at all.** Not "the
+first line, and ignore the rest": a name that cannot be established must never
+be guessed, and a second line in a format this version does not understand is
+evidence that the file means something other than what it appears to.
 
 **Absent means not enrolled, and that is the safe default.** A machine
 nobody has named does not publish heartbeats, does not stand for Owner and
@@ -40,23 +58,47 @@ def _machine_file(root: Path) -> Path:
     return root / ".rite" / MACHINE_FILE
 
 
-def this_manager(root: Path) -> str | None:
-    """This machine's Manager name, or None when it is not enrolled.
+def hosted_managers(root: Path) -> list[str]:
+    """Every Manager this machine hosts, primary first. Empty when it is not
+    enrolled, or when the file cannot be read as a whole.
 
-    None for every reason: no file, an empty one, or one this version cannot
-    read. A name that cannot be established must never be guessed — the
-    whole point of the name is that other machines act on what it says.
+    Empty for every reason: no file, an empty one, a name that is not usable
+    as a state key, or a duplicate. A name that cannot be established must
+    never be guessed — the whole point of the name is that other machines act
+    on what it says — and half a declaration is not a smaller declaration, it
+    is an unknown one.
     """
     path = _machine_file(root)
     try:
-        name = path.read_text(encoding="utf-8").strip()
+        text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
-        return None
-    if not name or "\n" in name or "/" in name:
-        # One line, one name. A path-like value would also be a state key
-        # with a directory in it, which is a different file entirely.
-        return None
-    return name
+        return []
+    names = [line.strip() for line in text.splitlines()]
+    names = [name for name in names if name]
+    if not names:
+        return []
+    for name in names:
+        if "/" in name or name.split() != [name]:
+            # A path-like value would be a state key with a directory in it,
+            # which is a different file entirely; whitespace inside a name
+            # means this line is not a name.
+            return []
+    if len(set(names)) != len(names):
+        # Two of the same Manager on one machine would publish one heartbeat
+        # between them and take work twice.
+        return []
+    return names
+
+
+def this_manager(root: Path) -> str | None:
+    """This machine's PRIMARY Manager name, or None when it is not enrolled.
+
+    The one that holds the lease, publishes this machine's claims and stands
+    for Owner — unchanged for every caller and for every single-line file
+    that exists today. `hosted_managers` is the other question.
+    """
+    hosted = hosted_managers(root)
+    return hosted[0] if hosted else None
 
 
 def enrolment(root: Path, config: CoordinationConfig) -> str | None:
@@ -68,19 +110,33 @@ def enrolment(root: Path, config: CoordinationConfig) -> str | None:
     """
     if not config.managers and not config.remote:
         return None  # not coordinating at all, which is Phase 1
-    name = this_manager(root)
-    if name is None:
+    hosted = hosted_managers(root)
+    if not hosted:
         return (
-            "coordination: this machine has no `.rite/machine`, so it is not "
-            "enrolled — it will not publish a heartbeat, stand for Owner, or "
-            "take over another machine's work"
+            "coordination: this machine has no usable `.rite/machine`, so it "
+            "is not enrolled — it will not publish a heartbeat, stand for "
+            "Owner, or take over another machine's work"
         )
+    name = hosted[0]
     if config.managers and name not in config.managers:
         return (
             f"coordination: this machine calls itself {name!r}, which is not "
             f"in `managers` ({', '.join(config.managers)}) — it can never be "
             "Owner, and the other machines will not defer to it"
         )
+    if config.managers:
+        strangers = [n for n in hosted[1:] if n not in config.managers]
+        if strangers:
+            # Named separately from the primary: this machine IS enrolled and
+            # coordinating, and the problem is one line further down a file
+            # nobody re-reads.
+            return (
+                f"coordination: `.rite/machine` also hosts "
+                f"{', '.join(repr(s) for s in strangers)}, which "
+                f"{'are' if len(strangers) > 1 else 'is'} not in `managers` "
+                f"({', '.join(config.managers)}) — nothing will ever be routed "
+                f"to {'them' if len(strangers) > 1 else 'it'}"
+            )
     return None
 
 

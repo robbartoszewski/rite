@@ -54,9 +54,10 @@ def manager_views(
     for name in names:
         live = liveness(layer, name, now=now, interval_minutes=interval_minutes)
         if not live.known:
-            views.append(
-                ManagerView(name, live, why_not=f"cannot tell — {live.detail}")
-            )
+            # "Never ran" and "cannot see" were sharing one sentence, and they
+            # are a configuration a person fixes and a fleet problem (RL-60).
+            prefix = "never started" if live.never_seen else "cannot tell"
+            views.append(ManagerView(name, live, why_not=f"{prefix} — {live.detail}"))
             continue
         if is_stalled(live, stall_threshold=stall_threshold):
             views.append(ManagerView(name, live, why_not=f"stalled — {live.detail}"))

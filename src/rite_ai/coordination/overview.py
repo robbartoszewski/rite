@@ -34,6 +34,13 @@ from rite_ai.coordination.state_layer import Absent, Present, StateLayer, Unavai
 ALIVE = "alive"
 STALLED = "stalled"
 UNKNOWN = "unknown"
+NEVER = "never started"
+"""A FOURTH answer, which this module's own opening argument asks for and did
+not have: a Manager that has published nothing EVER is not "cannot tell". It
+is declared and not running, which a person fixes by starting something, and
+it was previously indistinguishable from a store nobody could read (RL-60).
+rite local makes this the common case — several Managers on one machine, of
+which only some have anything running as them."""
 
 
 @dataclass
@@ -69,7 +76,11 @@ def read_overview(
     now: datetime,
     heartbeat: HeartbeatConfig | None = None,
     this_machine: str | None = None,
+    hosted: tuple[str, ...] = (),
 ) -> Overview:
+    """`hosted` is every Manager this machine runs, which on rite local is
+    more than one (RL-60). `this_machine` stays the primary — the one that
+    holds the lease — so callers that only know that keep working."""
     heartbeat = heartbeat or HeartbeatConfig()
     overview = Overview()
 
@@ -117,8 +128,19 @@ def read_overview(
         live = liveness(
             layer, name, now=now, interval_minutes=heartbeat.interval_minutes
         )
-        mine = this_machine is not None and name == this_machine
-        if not live.known:
+        mine = name in hosted or (this_machine is not None and name == this_machine)
+        if live.never_seen:
+            overview.managers.append(ManagerView(name, NEVER, live.detail, mine))
+            if mine:
+                # Only for a Manager THIS machine claims to host: a name that
+                # belongs to a box that has not been set up yet is somebody
+                # else's business, and reporting it here would put a problem
+                # in front of the one person who cannot act on it.
+                overview.problems.append(
+                    f"this machine hosts {name} and nothing has ever published "
+                    "as it — work labelled for it will wait for ever"
+                )
+        elif not live.known:
             # No note: the Manager's own line already says "unknown" and
             # why. Saying it twice in one report teaches the reader to skim,
             # which is how the line that mattered gets missed.

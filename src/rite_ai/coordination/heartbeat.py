@@ -108,6 +108,14 @@ class Liveness:
 
     detail: str = ""
 
+    never_seen: bool = False
+    """This Manager has published NOTHING, ever — as opposed to a store that
+    could not be read. Both are `missed=None` and they are different facts: the
+    first is "declared, and nothing runs as it", which is a configuration a
+    person fixes, and the second is "I cannot see", which is a fleet problem.
+    Collapsing them made a Manager nobody built indistinguishable from a
+    Manager nobody could reach (RL-60)."""
+
     @property
     def known(self) -> bool:
         return self.missed is not None
@@ -123,7 +131,11 @@ def liveness(
     if isinstance(read, Unavailable):
         return Liveness(None, f"could not read {key}: {read.reason}")
     if isinstance(read, Absent):
-        return Liveness(None, f"{name} has never published a heartbeat")
+        return Liveness(
+            None,
+            f"{name} has never published a heartbeat — is anything running as it?",
+            never_seen=True,
+        )
     status = status_from_json(read.value.decode("utf-8", errors="replace"))
     if status is None:
         return Liveness(None, f"{key} could not be parsed")

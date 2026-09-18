@@ -17,6 +17,7 @@ from rite_ai.coordination.lease import LEASE_KEY, OwnerLeaseHolder
 from rite_ai.coordination.local_backend import LocalStateLayer
 from rite_ai.coordination.overview import (
     ALIVE,
+    NEVER,
     STALLED,
     UNKNOWN,
     format_overview,
@@ -117,12 +118,18 @@ class TestWhoIsAlive:
         assert {m.name: m.state for m in overview.managers}["beta"] == STALLED
         assert any("beta" in p and "heartbeat" in p for p in overview.problems)
 
-    def test_a_manager_that_never_published_is_unknown_not_stalled(self, layer, config):
+    def test_a_manager_that_never_published_is_not_stalled(self, layer, config):
         """D-58's shape again: a machine that was never set up is not a
-        machine that died, and handing its work over would be a guess."""
+        machine that died, and handing its work over would be a guess.
+
+        It is `NEVER` rather than `UNKNOWN` since RL-60 — a fourth answer this
+        module's own opening argument asks for, because "published nothing
+        ever" and "I could not read the store" are different facts. What the
+        test protects is unchanged: not stalled, said with a reason, said
+        once, and not somebody's problem to act on from here."""
         overview = look(layer, config)
         view = {m.name: m for m in overview.managers}["alpha"]
-        assert view.state == UNKNOWN
+        assert view.state == NEVER and view.state != STALLED
         assert view.detail, "unknown without a reason is not a report"
         assert not any("alpha" in p for p in overview.problems)
         # And said ONCE: a per-Manager fact repeated as a note is noise.

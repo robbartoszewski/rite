@@ -785,7 +785,11 @@ def _doctor_report(problems: list[str]) -> None:
             problems.append(f"config {err.file}: {err.message}")
     else:
         from rite_ai.coordination.config_check import coordination_problems
-        from rite_ai.coordination.identity import enrolment, this_manager
+        from rite_ai.coordination.identity import (
+            enrolment,
+            hosted_managers,
+            this_manager,
+        )
         from rite_ai.sandbox import is_installed, verify_sandbox
         from rite_ai.schedule import validate_schedule
 
@@ -961,6 +965,11 @@ def _doctor_report(problems: list[str]) -> None:
                     now=datetime.now(UTC),
                     heartbeat=project.config.heartbeat,
                     this_machine=this_manager(root),
+                    # Every Manager this box runs, not just the primary: on
+                    # rite local one machine hosts several, and the ones it
+                    # hosts are the ones whose silence it can do something
+                    # about (RL-60).
+                    hosted=tuple(hosted_managers(root)),
                 )
                 for line in format_overview(overview):
                     click.echo(line)

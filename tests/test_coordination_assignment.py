@@ -65,7 +65,11 @@ def test_a_manager_that_never_published_is_not_assumed_idle(tmp_path):
     layer = _layer(tmp_path)
     views = manager_views(layer, ["manager-alpha"], now=NOW, **WINDOW)
     assert choose_manager(views) is None
-    assert "cannot tell" in views[0].why_not
+    # Never started, NOT "cannot tell" (RL-60): one is a configuration a
+    # person fixes by starting something, the other is a fleet nobody can
+    # see, and they used to share a sentence.
+    assert not views[0].assignable
+    assert views[0].why_not.startswith("never started")
 
 
 def test_unreadable_status_is_not_assignable(tmp_path):
