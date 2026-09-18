@@ -84,6 +84,14 @@ class Tick:
     """Tickets returned to the pool, and why (P2-4c)."""
     held_back: dict[str, str] = field(default_factory=dict)
     """Still ours, waiting for a slot. Not a problem — a queue."""
+    distribution: str = ""
+    """Why distribution was not attempted, or "" when it was.
+
+    NOT a problem, which is why it is not in `problems`: a monitor with no
+    board is a configuration, not a fault. But it is not nothing either —
+    "no board configured" and "nothing to hand out" produce identical ticks
+    otherwise, and the first is why an overnight run can do nothing all night
+    while every tick reports success."""
     problems: list[str] = field(default_factory=list)
     """Anything that could not be established. NOT fatal, and not silent:
     a tick that could not read the state must say so or a Manager looks
@@ -234,7 +242,20 @@ class ManagerMonitor:
     # --- the pieces ---
 
     def _distribute(self, now: datetime, result: Tick) -> None:
-        if self.backend is None or self.schedule is None or self.root is None:
+        missing = [
+            name
+            for name, value in (
+                ("a board backend", self.backend),
+                ("a schedule", self.schedule),
+                ("a project root", self.root),
+            )
+            if value is None
+        ]
+        if missing:
+            result.distribution = (
+                "not attempted: this monitor was constructed without "
+                f"{', '.join(missing)}"
+            )
             return
         handed = distribute(
             self.root,

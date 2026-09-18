@@ -84,12 +84,46 @@ def manager_views(
     return views
 
 
-def choose_manager(views: list[ManagerView]) -> ManagerView | None:
+def choose_manager(
+    views: list[ManagerView],
+    *,
+    roles: list | None = None,
+    stage: str = "",
+) -> ManagerView | None:
     """The assignable Manager with the fewest tasks in flight, ties going to
-    the order the views came in — which is config order."""
+    the order the views came in — which is config order.
+
+    **Duty first, then load** (RL-5, RL-T33). When the project declares what
+    its Managers are FOR, a task's stage decides which of them may take it at
+    all: a decomposition waiting for review is not work an executor can take,
+    however idle it is. Load only breaks the tie among those that may.
+
+    `roles` and `stage` are optional because a project whose Managers are all
+    alike has nothing to route between (RL-4) — that is today's behaviour, and
+    it stays exactly as it was.
+    """
     assignable = [v for v in views if v.assignable]
     if not assignable:
         return None
+    if roles and stage:
+        from rite_ai.config.managers import effective_duties
+        from rite_ai.local.duty_router import STAGE_DUTY
+
+        duty = STAGE_DUTY.get(stage)
+        if duty is not None:
+            by_name = {r.name: r for r in roles}
+            holders = [
+                v
+                for v in assignable
+                if v.name in by_name
+                and duty in effective_duties(by_name[v.name], len(roles))
+            ]
+            # No holder is NOT "fall back to anyone": giving a task to a
+            # Manager that does not hold its duty is the mis-route the router
+            # exists to prevent, and it would look like success.
+            assignable = holders
+            if not assignable:
+                return None
     return min(assignable, key=lambda v: (v.in_flight, views.index(v)))
 
 
@@ -106,15 +140,45 @@ class NotAssigned:
 
 
 def assign_to_manager(
-    backend, ticket_id: str, views: list[ManagerView]
+    backend,
+    ticket_id: str,
+    views: list[ManagerView],
+    *,
+    roles: list | None = None,
+    stage: str = "",
 ) -> Assigned | NotAssigned:
     """Label `ticket_id` with the chosen Manager's name (§2.3).
 
     The label IS the assignment, so a backend that refuses the write leaves the
-    ticket unassigned — reported, never reported as assigned."""
+    ticket unassigned — reported, never reported as assigned.
+
+    `roles` and `stage` route by duty before load (RL-T33). Without them this
+    behaves exactly as it did, which is what a single-tier project wants."""
     from rite_ai.tickets import BackendError
 
-    chosen = choose_manager(views)
+    chosen = choose_manager(views, roles=roles, stage=stage)
+    if chosen is None and roles and stage:
+        # Two different causes were about to share one sentence. "Nobody is
+        # free" is a wait; "nobody holds this duty" is a configuration that
+        # will never progress, and a reader who cannot tell them apart waits
+        # for the second one.
+        from rite_ai.config.managers import effective_duties
+        from rite_ai.local.duty_router import STAGE_DUTY
+
+        duty = STAGE_DUTY.get(stage)
+        if duty is not None:
+            holders = [r.name for r in roles if duty in effective_duties(r, len(roles))]
+            if not holders:
+                return NotAssigned(
+                    f"no manager holds {duty}, which {stage} needs — "
+                    f"{ticket_id} would wait for ever. Give a manager that "
+                    "duty, or a preset that includes it"
+                )
+            return NotAssigned(
+                f"the manager(s) holding {duty} ({', '.join(holders)}) cannot "
+                f"be given work now",
+                {v.name: v.why_not for v in views if v.name in holders} or None,
+            )
     if chosen is None:
         return NotAssigned(
             "no Manager can be given work",

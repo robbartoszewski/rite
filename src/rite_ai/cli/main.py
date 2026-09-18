@@ -1081,7 +1081,13 @@ def claim(paths: tuple[str, ...], worker: str, ticket: str) -> None:
     layer, machine = claims_channel(_find_project_root())
     result = ledger.claim(list(paths), worker, ticket, layer=layer, machine=machine)
     if result.ok:
-        click.echo(f"claimed {len(paths)} path(s) for {worker}")
+        scope = "across the fleet" if layer is not None else "on this machine only"
+        # WHICH MODE, every time. The same success line for both is correct
+        # for one machine and wrong the day a second joins, and the day it
+        # becomes wrong is the day nobody re-reads this line. `claims_channel`
+        # returns nothing unless `managers` AND `remote` are both set, so the
+        # local-only mode is also what a half-configured fleet gets.
+        click.echo(f"claimed {len(paths)} path(s) for {worker} — {scope}")
         if result.message:
             # "claimed locally, but not published" — the two stores cannot
             # be made atomic, so the gap is said out loud rather than left
