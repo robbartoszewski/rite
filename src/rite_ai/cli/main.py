@@ -4299,7 +4299,7 @@ def spec_status() -> None:
     from rite_ai.spec.digest_files import digest_status, unit_filename, units_dir
     from rite_ai.spec.index_file import ABSENT, UNREADABLE, from_parsed, read_index
     from rite_ai.spec.report import SPARSE_ABOVE, decomposition_report
-    from rite_ai.spec.telemetry import insufficiency_rate
+    from rite_ai.spec.telemetry import FALLBACKS_ONLY, insufficiency_rate
 
     root, config = _spec_root_and_config()
     parsed = _parse_spec(root, config)
@@ -4363,7 +4363,21 @@ def spec_status() -> None:
         click.echo("  every unit covered, stamped and current")
     rate = insufficiency_rate(root)
     click.echo(rate.describe())
-    if rate.fallbacks:
+    if rate.status == FALLBACKS_ONLY:
+        # Every fallback and not one retrieval. Depth and pinning are about
+        # slices being too SMALL; here none was taken, so neither lever can
+        # move this number. Measured today: a Worker that cannot reach the
+        # spec produces exactly this signature — `rite spec slice` refuses,
+        # `rite handover write --spec-fallback` still records, because the
+        # first needs the project root and the second needs only `.rite/`.
+        click.echo(
+            "  nothing was sliced at all, so this is not the slices being too "
+            "small. Check that a Worker can run `rite spec slice` where it "
+            "works: inside a sandbox the project root holding the spec may not "
+            "be mounted, while `.rite/` is — which lets the fallback record "
+            "and the retrieval fail."
+        )
+    elif rate.fallbacks:
         # No threshold, because none has been measured. What IS measured is
         # which lever works on a spec of this shape — and the first version of
         # this advice named depth 2 unconditionally, which is useless on

@@ -718,7 +718,7 @@ def test_the_advice_matches_the_shape_of_the_spec_it_is_given(
     there is no second reference, and measured on three such specs it left the
     median slice unchanged — so recommending it there is advice that cannot
     work, offered to exactly the specs most likely to be falling back."""
-    from rite_ai.spec.telemetry import record_fallback
+    from rite_ai.spec.telemetry import record_fallback, record_retrieval
 
     def project_with(citing: bool) -> Path:
         root = tmp_path / ("dense" if citing else "sparse")
@@ -729,6 +729,10 @@ def test_the_advice_matches_the_shape_of_the_spec_it_is_given(
             "# T\n"
             + "".join(f"## {n}. S{n}\n{body}" + "filler\n" * 8 for n in range(1, 40))
         )
+        # A retrieval as well as a fallback: with fallbacks alone the rate is
+        # FALLBACKS_ONLY, which is a different diagnosis — nothing was sliced,
+        # so no lever that makes slices bigger can help.
+        record_retrieval(root, "2", worker="alpha", slice_ratio=0.05)
         record_fallback(root, "2", worker="alpha")
         return root
 
@@ -964,3 +968,47 @@ def test_one_unreadable_file_stops_a_multi_file_spec_too(tmp_path: Path, monkeyp
         assert "b.md" in result.output and "the spec could not be read" in result.output
     finally:
         (docs / "b.md").chmod(0o644)
+
+
+def test_the_fallback_still_records_when_the_spec_cannot_be_read(
+    project: Path, monkeypatch
+):
+    """The one thing that must survive an unreachable spec. A Worker that
+    cannot read the spec is a Worker that falls back, so if recording needed
+    the spec too, the rate would go quiet exactly when it has something to
+    say. `slice` needs the project root; the handover needs only `.rite/`,
+    which is what a sandbox mounts."""
+    monkeypatch.chdir(project)
+    (project / "SPEC.md").chmod(0o000)
+    try:
+        assert _run(project, "slice", "1.1").exit_code == 1
+        from rite_ai.spec.telemetry import record_fallback
+
+        record_fallback(project, "1.1", worker="alpha")
+        from rite_ai.spec.telemetry import FALLBACKS_ONLY, insufficiency_rate
+
+        assert insufficiency_rate(project).status == FALLBACKS_ONLY
+    finally:
+        (project / "SPEC.md").chmod(0o644)
+
+
+def test_fallbacks_with_no_retrievals_are_not_diagnosed_as_small_slices(
+    project: Path, monkeypatch
+):
+    """Depth and pinning make slices BIGGER. When nothing was sliced at all
+    they cannot move the number, and the advice that named them was pointing
+    away from the likeliest cause — a Worker that cannot reach the spec, which
+    produces exactly this signature."""
+    from rite_ai.spec.telemetry import record_fallback
+
+    monkeypatch.chdir(project)
+    record_fallback(project, "1.1", worker="alpha")
+    out = _run(project, "status").output
+    assert "nothing was sliced at all" in out
+    assert "slice_depth" not in out
+    assert "sandbox" in out
+
+    _run(project, "slice", "2")  # now there is a retrieval to compare against
+    out = _run(project, "status").output
+    assert "nothing was sliced at all" not in out
+    assert "slice_depth" in out
