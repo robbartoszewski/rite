@@ -784,6 +784,8 @@ def _doctor_report(problems: list[str]) -> None:
             click.echo(f"config: {err.file}: {err.message}")
             problems.append(f"config {err.file}: {err.message}")
     else:
+        from rite_ai.coordination.config_check import coordination_problems
+        from rite_ai.coordination.identity import enrolment, this_manager
         from rite_ai.sandbox import is_installed, verify_sandbox
         from rite_ai.schedule import validate_schedule
 
@@ -919,6 +921,81 @@ def _doctor_report(problems: list[str]) -> None:
             else:
                 click.echo("generated files: current")
 
+        # Phase 2. Settings that cannot work are reported whether or not a
+        # remote is set: half a `coordination:` block does not fail, it
+        # silently never elects anybody.
+        coordination = project.config.coordination
+        for problem in coordination_problems(coordination):
+            click.echo(problem)
+            problems.append(problem)
+        # Needs the machine, not just the config: the same committed
+        # `config.yaml` is complete on one machine and not on another, which
+        # is the whole reason the name is not in it.
+        not_enrolled = enrolment(root, coordination)
+        if not_enrolled:
+            click.echo(not_enrolled)
+            problems.append(not_enrolled)
+
+        if coordination.remote and not not_enrolled:
+            # §2.3: the Owner "detects stalled Managers and surfaces them to
+            # the human". Reading is safe on any machine — it needs no
+            # identity and writes nothing.
+            with _doctor_check("coordination state", problems):
+                from datetime import UTC, datetime
+
+                from rite_ai.coordination.git_backend import GitStateLayer
+                from rite_ai.coordination.overview import (
+                    format_overview,
+                    read_overview,
+                    recent_events,
+                )
+
+                layer_for_overview = GitStateLayer(
+                    coordination.remote,
+                    root / ".rite" / "coordination-cache.git",
+                    state_branch=coordination.state_branch,
+                )
+                overview = read_overview(
+                    layer_for_overview,
+                    coordination,
+                    now=datetime.now(UTC),
+                    heartbeat=project.config.heartbeat,
+                    this_machine=this_manager(root),
+                )
+                for line in format_overview(overview):
+                    click.echo(line)
+                events = recent_events(layer_for_overview)
+                for line in events:
+                    click.echo(f"coordination: recently — {line}")
+                for note in overview.notes:
+                    click.echo(f"coordination: {note}")
+                for problem in overview.problems:
+                    click.echo(f"coordination: {problem}")
+                    problems.append(f"coordination: {problem}")
+
+        # P2-1e. Only once a coordination remote is configured: the probe
+        # pushes, so a single-machine project must never run it.
+        if coordination.remote:
+            with _doctor_check("coordination remote", problems):
+                from rite_ai.coordination.remote_probe import probe_force_push
+
+                probe = probe_force_push(
+                    coordination.remote, coordination.state_branch, root
+                )
+                if probe.ok:
+                    click.echo(f"coordination remote: {probe.detail}")
+                else:
+                    click.echo(
+                        f"coordination remote: {probe.detail}"
+                        + (f" — {probe.remedy}" if probe.remedy else "")
+                    )
+                    problems.append(f"coordination remote: {probe.detail}")
+                if probe.leftover_ref:
+                    click.echo(
+                        f"coordination remote: could not delete the probe branch "
+                        f"`{probe.leftover_ref}` — delete it by hand"
+                    )
+
         schedule_problems = validate_schedule(
             project.config.schedule, project.config.sandbox.max_concurrent_workers
         )
@@ -967,6 +1044,27 @@ def _warn_if_unregistered(worker: str) -> None:
 # --- Claims ---
 
 
+def _warn_if_unpublished(ledger) -> None:
+    """Say when a release did not reach the other machines.
+
+    The local ledger and the published one cannot be updated atomically, so
+    a failed publish leaves a path claimed as far as the rest of the fleet
+    can see. Nothing takes that back on its own — claims expire on a lapsed
+    HEARTBEAT, and this machine is healthy — so the person standing here is
+    the one who can fix it.
+    """
+    from rite_ai.coordination.publish import NotPublished
+
+    outcome = getattr(ledger, "last_publish", None)
+    if isinstance(outcome, NotPublished):
+        click.echo(
+            f"released locally, but the fleet was not told: {outcome.reason} — "
+            "other machines will still see these paths as claimed until this "
+            "machine publishes again",
+            err=True,
+        )
+
+
 @cli.command()
 @click.argument("paths", nargs=-1, required=True)
 @click.option("--worker", "-w", required=True, help="Worker name")
@@ -974,12 +1072,21 @@ def _warn_if_unregistered(worker: str) -> None:
 def claim(paths: tuple[str, ...], worker: str, ticket: str) -> None:
     """Claim file/directory paths for a worker."""
     from rite_ai.claims.ledger import ClaimsLedger
+    from rite_ai.coordination.identity import claims_channel
 
     _require_project_root()
     ledger = ClaimsLedger(_claims_path())
-    result = ledger.claim(list(paths), worker, ticket)
+    # P2-5a/P2-5b: with a fleet, a claim is checked against and published to
+    # the other machines. Without one, both are None and nothing changes.
+    layer, machine = claims_channel(_find_project_root())
+    result = ledger.claim(list(paths), worker, ticket, layer=layer, machine=machine)
     if result.ok:
         click.echo(f"claimed {len(paths)} path(s) for {worker}")
+        if result.message:
+            # "claimed locally, but not published" — the two stores cannot
+            # be made atomic, so the gap is said out loud rather than left
+            # for another machine to discover by claiming over it.
+            click.echo(result.message, err=True)
         _warn_if_unregistered(worker)
     else:
         click.echo(f"claim failed: {result.message}", err=True)
@@ -1033,6 +1140,7 @@ def release(
       rite release --history
     """
     from rite_ai.claims.ledger import ClaimsLedger
+    from rite_ai.coordination.identity import claims_channel
 
     _require_project_root()
     ledger = ClaimsLedger(_claims_path())
@@ -1063,16 +1171,22 @@ def release(
         if not by or not reason:
             click.echo("--force requires both --by and --reason (SPEC §5.2)", err=True)
             raise SystemExit(2)
-        released = ledger.force_release(list(paths), by=by, reason=reason)
+        layer, machine = claims_channel(_find_project_root())
+        released = ledger.force_release(
+            list(paths), by=by, reason=reason, layer=layer, machine=machine
+        )
         click.echo(f"force-released {released} claim(s), by {by}: {reason}")
+        _warn_if_unpublished(ledger)
         return
 
     if not worker:
         click.echo("--worker is required (or use --force)", err=True)
         raise SystemExit(2)
     path_list = list(paths) if paths else None
-    released = ledger.release(worker, path_list)
+    layer, machine = claims_channel(_find_project_root())
+    released = ledger.release(worker, path_list, layer=layer, machine=machine)
     click.echo(f"released {released} claim(s) for {worker}")
+    _warn_if_unpublished(ledger)
 
 
 @cli.command()

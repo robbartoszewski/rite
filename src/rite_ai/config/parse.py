@@ -12,6 +12,7 @@ import yaml
 
 from .models import (
     BudgetConfig,
+    CoordinationConfig,
     CredentialsConfig,
     ExpertiseEntry,
     HeartbeatConfig,
@@ -162,6 +163,7 @@ _CONFIG_SECTIONS = {
     "budget": _fields(BudgetConfig),
     "schedule": _fields(ScheduleConfig),
     "spec": _fields(SpecConfig),
+    "coordination": _fields(CoordinationConfig),
 }
 _CONFIG_KEYS = _fields(ProjectConfig)
 _EXPERTISE_KEYS = _fields(ExpertiseEntry, without=frozenset({"name"}))
@@ -374,6 +376,21 @@ def parse_config(path: Path) -> ProjectConfig | ParseError:
         else CredentialsConfig()
     )
 
+    # A malformed `coordination` block narrows to defaults rather than
+    # failing the parse: `parse_config` raising takes out every command
+    # that reads config.yaml, including the ones that would repair it.
+    coord_raw = raw.get("coordination", {})
+    if isinstance(coord_raw, dict):
+        coordination = CoordinationConfig(
+            managers=_str_list(coord_raw.get("managers", [])),
+            remote=str(coord_raw.get("remote", "") or ""),
+            state_branch=str(coord_raw.get("state_branch", "") or "state"),
+            owner_lease_minutes=coord_raw.get("owner_lease_minutes", 15),
+            skew_tolerance_seconds=coord_raw.get("skew_tolerance_seconds", 60),
+        )
+    else:
+        coordination = CoordinationConfig()
+
     expertise: list[ExpertiseEntry] = []
     exp_raw = raw.get("expertise", {})
     if isinstance(exp_raw, dict):
@@ -497,6 +514,7 @@ def parse_config(path: Path) -> ProjectConfig | ParseError:
     return ProjectConfig(
         ticket_backend=ticket_backend,
         credentials=credentials,
+        coordination=coordination,
         expertise=expertise,
         publish_gate=PublishGateConfig(
             scan_patterns=patterns,

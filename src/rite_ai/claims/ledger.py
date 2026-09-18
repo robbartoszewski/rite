@@ -95,6 +95,10 @@ def _warn_if_exclusion_is_decoration(directory: Path) -> None:
 
 
 class ClaimsLedger:
+    last_publish: object = None
+    """The outcome of the last publish this ledger attempted (P2-5b), or None
+    when it has never been asked to publish."""
+
     def __init__(self, path: Path) -> None:
         self._path = path
         self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -139,8 +143,26 @@ class ClaimsLedger:
         see `rite_ai.state.locked`, which carries the measurement."""
         return locked(self._path)
 
-    def claim(self, paths: list[str], worker: str, ticket: str = "") -> ClaimResult:
-        """Claim one or more paths for a worker. Fails on overlap."""
+    def claim(
+        self,
+        paths: list[str],
+        worker: str,
+        ticket: str = "",
+        *,
+        layer=None,
+        machine: str = "",
+    ) -> ClaimResult:
+        """Claim one or more paths for a worker. Fails on overlap.
+
+        With a state layer (P2-5b), claims published by OTHER machines are
+        checked too, and the grant is published so those machines see it. The
+        local check runs first: it is free, and a path already held here needs
+        no network round trip to refuse.
+
+        Published claims that cannot be read refuse the claim (D-58): a claim
+        that might overlap them cannot be shown safe, and granting it is the
+        one thing the ledger exists to prevent.
+        """
         if not paths:
             return ClaimResult(ok=False, message="no paths to claim")
 
@@ -157,6 +179,17 @@ class ClaimsLedger:
                             overlaps.append(
                                 f"{np} overlaps {cp} (held by {claim.worker})"
                             )
+
+            if not overlaps and layer is not None:
+                from rite_ai.coordination.claims_state import (
+                    CannotTell,
+                    published_overlaps,
+                )
+
+                published = published_overlaps(layer, machine, paths)
+                if isinstance(published, CannotTell):
+                    return ClaimResult(ok=False, message=published.reason)
+                overlaps += published
 
             if overlaps:
                 return ClaimResult(
@@ -175,10 +208,51 @@ class ClaimsLedger:
             ]
             filtered.append(Claim(paths=normalised, worker=worker, ticket=ticket))
             self._write(filtered)
-            return ClaimResult(ok=True)
+            if layer is None:
+                return ClaimResult(ok=True)
+            # Published immediately: a claim other machines cannot see is one
+            # they will claim over. A failure here does not undo the local
+            # claim — the two stores cannot be made atomic — so it is reported
+            # rather than swallowed, and the caller decides.
+            from rite_ai.coordination.claims_state import publish_claims
+            from rite_ai.coordination.publish import Published
 
-    def release(self, worker: str, paths: list[str] | None = None) -> int:
-        """Release claims. If paths is None, release all for worker."""
+            self.last_publish = publish_claims(layer, machine, filtered)
+            note = (
+                ""
+                if isinstance(self.last_publish, Published)
+                else f"claimed locally, but not published: {self.last_publish.reason}"
+            )
+            return ClaimResult(ok=True, message=note)
+
+    def release(
+        self,
+        worker: str,
+        paths: list[str] | None = None,
+        *,
+        layer=None,
+        machine: str = "",
+    ) -> int:
+        """Release claims. If paths is None, release all for worker.
+
+        **With a state layer, the release is PUBLISHED** (P2-5a). Releasing
+        only locally leaves the path claimed as far as every other machine
+        can see, and nothing takes it back: `expire_offline_claims` expires
+        the claims of a machine whose HEARTBEAT lapsed, and a healthy
+        machine that simply finished its work never lapses. So each
+        completed piece of work would poison its paths for the rest of the
+        fleet, permanently, with no symptom except other machines being
+        refused a path nobody holds.
+
+        Publishing is part of releasing rather than something callers
+        remember, because four call sites already existed and none of them
+        did it.
+
+        A publish that fails does NOT undo the local release — the two
+        stores cannot be made atomic — so it is recorded in `last_publish`
+        for the caller to report. The local claim is gone either way, and
+        the published one is stale until something republishes.
+        """
         with self._locked():
             existing = self._read()
             if paths is None:
@@ -193,12 +267,24 @@ class ClaimsLedger:
                 ]
             released = len(existing) - len(after)
             self._write(after)
+            if layer is not None:
+                from rite_ai.coordination.claims_state import publish_claims
+
+                self.last_publish = publish_claims(layer, machine, after)
             return released
 
     def _audit_path(self) -> Path:
         return self._path.parent / "force-releases.jsonl"
 
-    def force_release(self, paths: list[str], by: str, reason: str) -> int:
+    def force_release(
+        self,
+        paths: list[str],
+        by: str,
+        reason: str,
+        *,
+        layer=None,
+        machine: str = "",
+    ) -> int:
         """Force-release paths regardless of owner, with attribution and a
         reason persisted to a durable audit trail (SPEC §5.2 — an earlier
         version accepted `by` and silently discarded it, and had no
@@ -227,6 +313,14 @@ class ClaimsLedger:
                 with self._audit_path().open("a") as f:
                     f.write(json.dumps(record) + "\n")
 
+            if layer is not None:
+                # Same reason as `release`: a force-release that only
+                # happens locally leaves every other machine refusing a
+                # path nobody holds.
+                from rite_ai.coordination.claims_state import publish_claims
+
+                self.last_publish = publish_claims(layer, machine, after)
+
             return len(released_claims)
 
     def force_release_audit(self) -> list[dict]:
@@ -251,6 +345,18 @@ class ClaimsLedger:
         """List all active claims."""
         with self._locked():
             return self._read()
+
+    def publish(self, layer, machine: str, now=None):
+        """Publish this machine's claims to the coordination state (P2-5a).
+
+        A projection of the ledger, not a second copy of it: local claims stay
+        the source of truth (§5.2) and this makes them visible to other
+        machines through the state layer (D-19) — no ticket-backend round
+        trip, no rate limit, and the same atomic write the lease uses.
+        """
+        from rite_ai.coordination.claims_state import publish_claims
+
+        return publish_claims(layer, machine, self.list_claims(), now=now)
 
     def claims_for(self, worker: str) -> list[Claim]:
         """List claims held by a specific worker."""

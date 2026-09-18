@@ -405,7 +405,197 @@ def _run_tick_locked(root: Path, outcome: lock.LockAcquired) -> TickResult:
         if last_count != current_count:
             _write_last_worker_count(state_path, current_count)
 
+    coordination_messages = _coordination_tick(root, project)
+    messages.extend(coordination_messages)
+
     return TickResult(ok=True, messages=messages, needs_attention=needs_attention)
+
+
+def _coordination_tick(root: Path, project) -> list[str]:
+    """One coordination tick: publish liveness, keep or take the Owner role.
+
+    This is what makes Phase 2 run at all. The machinery landed complete and
+    called by nobody, which is D-14's defect shape — a function whose caller
+    was never written — and the scheduler tick is where the spec already puts
+    unattended periodic work (§5.1.2), on a cadence that suits it: §3.3.1
+    wants a heartbeat about every 10 minutes and a lease renewal every 15,
+    and the default tick is every 5.
+
+    **Nothing here touches the ticket backend.** A Manager also distributes
+    work to its Workers (P2-4b) and that is deliberately NOT wired to cron:
+    it writes labels and comments on a shared board, and doing that
+    unattended deserves its own decision (Q9). This tick writes only to the
+    coordination repo, which is what §2.4's mechanics are made of.
+
+    It also starts no session, so §2.5's rule is untouched: election decides
+    who the Owner IS, not that anything begins working.
+
+    Silent on a machine that is not enrolled, which is every project today.
+    """
+    config = project.config.coordination
+    if not config.managers or not config.remote:
+        return []
+
+    from rite_ai.coordination.identity import enrolment, this_manager
+
+    problem = enrolment(root, config)
+    if problem:
+        # Named, not skipped silently: a machine that thinks it is
+        # coordinating and is not looks identical to one that is.
+        return [problem]
+
+    name = this_manager(root)
+    try:
+        from rite_ai.coordination.git_backend import GitStateLayer
+        from rite_ai.coordination.lease import OwnerLeaseHolder
+        from rite_ai.coordination.monitor import ManagerMonitor
+
+        layer = GitStateLayer(
+            config.remote,
+            root / ".rite" / "coordination-cache.git",
+            state_branch=config.state_branch,
+        )
+        holder = OwnerLeaseHolder(layer, name, config)
+        # Read the ledger ONCE for this tick: what we publish and what we
+        # decide the handover on must be the same reading, or the tick can
+        # advertise itself busy and hand over in the same breath.
+        workers, in_flight = _this_machines_load(root)
+        monitor = ManagerMonitor(
+            holder,
+            root=root,
+            heartbeat=project.config.heartbeat,
+            status=lambda: (workers, in_flight),
+            # D-43 puts the handover at an operation boundary and says only
+            # the caller knows where that is. From cron, the honest answer
+            # is "when this machine has nothing in flight": no claimed
+            # ticket means no Worker is mid-anything, which is the closest
+            # thing to a boundary a periodic job can see.
+            #
+            # Without this an incumbent that has been ASKED never hands over
+            # and the role moves only when its lease lapses — the
+            # interruption §2.4's graceful demotion exists to replace.
+            hand_over_when=lambda: in_flight == 0,
+        )
+        tick = monitor.tick()
+        duties = _owner_duties(root, layer, config, project, name, tick)
+    except Exception as e:  # noqa: BLE001 - a tick must not die on coordination
+        # The scheduler runs unattended from cron; an exception here would
+        # take the watchdog and the window check down with it.
+        return [f"coordination: the tick could not run: {e}"]
+
+    # Written down so `rite status` can say what this machine concluded
+    # without a round trip — stamped with the time, never as a live answer.
+    from rite_ai.coordination import last_tick as last_tick_file
+
+    last_tick_file.record(root, name, tick.action, tick.owner, len(tick.problems))
+
+    lines = [f"coordination: {name} — {tick.action}"]
+    if tick.detail:
+        lines[0] += f" ({tick.detail})"
+    lines.extend(f"coordination: {p}" for p in tick.problems)
+    lines.extend(duties)
+    return lines
+
+
+def _owner_duties(root, layer, config, project, name: str, tick) -> list[str]:
+    """What only the Owner does: act on Managers that have gone quiet.
+
+    §2.3 gives the Owner two jobs about a stalled Manager — surface it (done
+    by `doctor`) and deal with its work. D-14's SECOND trigger hands that
+    work over (P2-3b) and P2-5c expires the claims it was holding, and
+    NEITHER had a caller, so a stalled machine's tickets stayed assigned to
+    it and its claims blocked everybody else for ever.
+
+    **Only the Owner, deliberately.** Every Manager can see the same stall;
+    if each acted, one stalled machine would get N handover comments on its
+    tickets and N expiry records. The role exists to decide who acts.
+
+    **Handover first, expiry second.** The handover needs the claims to know
+    which tickets to comment on, and expiring them first would silently
+    reduce it to nothing. The expiry is also what makes this idempotent: the
+    next tick finds no claims and does nothing at all.
+    """
+    if not tick.owner:
+        return []
+
+    from datetime import UTC, datetime
+
+    from rite_ai.coordination.claims_state import expire_offline_claims
+    from rite_ai.coordination.takeover import ToldTheBoard, hand_over_stalled_manager
+
+    heartbeat = project.config.heartbeat
+    now = datetime.now(UTC)
+    lines: list[str] = []
+
+    for other in config.managers:
+        if other == name:
+            continue
+        handed = hand_over_stalled_manager(
+            root,
+            layer,
+            owner=name,
+            stalled=other,
+            now=now,
+            interval_minutes=heartbeat.interval_minutes,
+            stall_threshold=heartbeat.stall_threshold,
+        )
+        if isinstance(handed, ToldTheBoard) and handed.tickets:
+            lines.append(
+                f"coordination: handed over {other}'s work: "
+                + ", ".join(handed.tickets)
+            )
+            if handed.queued:
+                lines.append(
+                    "coordination: board NOT updated for "
+                    + ", ".join(handed.queued)
+                )
+
+    expiry = expire_offline_claims(
+        layer,
+        by=name,
+        now=now,
+        interval_minutes=heartbeat.interval_minutes,
+        stall_threshold=heartbeat.stall_threshold,
+        skip=frozenset({name}),
+    )
+    for machine, count in expiry.expired.items():
+        lines.append(
+            f"coordination: expired {count} claim(s) held by {machine} — its "
+            "heartbeat has lapsed"
+        )
+    if expiry.refused:
+        lines.append(f"coordination: claims were not expired: {expiry.refused}")
+    return lines
+
+
+def _this_machines_load(root: Path) -> tuple[list[str], int]:
+    """(Workers, tickets in flight) from ONE read of the claims ledger.
+
+    Workers are those holding claims — the definition `run_tick`'s window
+    boundary already uses.
+
+    `in_flight` counts distinct TICKETS, not claims: a Worker holding four
+    paths for one ticket is doing one piece of work, and counting paths
+    would make a machine look four times as busy as it is.
+
+    It is not decoration. The Owner assigns to the least loaded Manager
+    (P2-4a: `min(v.in_flight, ...)`), so a machine that always reports 0
+    advertises itself as idle and the Owner sends it everything — routing
+    defeated silently, with every machine looking healthy. The first cut of
+    this tick hardcoded 0.
+
+    Read once, not twice: two reads could disagree and produce a worker list
+    that does not match the count beside it.
+    """
+    claims_path = root / ".rite" / "claims.json"
+    if not claims_path.is_file():
+        return [], 0
+    from rite_ai.claims.ledger import ClaimsLedger
+
+    claims = ClaimsLedger(claims_path).list_claims()
+    workers = sorted({c.worker for c in claims})
+    tickets = {c.ticket for c in claims if c.ticket}
+    return workers, len(tickets)
 
 
 # ---------------------------------------------------------------------------

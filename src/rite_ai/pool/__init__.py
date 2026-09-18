@@ -611,9 +611,14 @@ def _archive_locked(
             dry_run=True,
         )
 
+    from rite_ai.coordination.identity import claims_channel
+
+    pool_layer, pool_machine = claims_channel(root)
     for entry in archived:
         if entry.released_claims:
-            ledger.release(entry.worker)
+            # Published too: an archived slot's claims must stop blocking
+            # other machines, and nothing else will take them back.
+            ledger.release(entry.worker, layer=pool_layer, machine=pool_machine)
 
     if records:
         path = _archive_log_path(root)

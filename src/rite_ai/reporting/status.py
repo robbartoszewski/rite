@@ -74,6 +74,11 @@ class ProjectStatus:
     coordination_cost: CoordinationCostCounts = field(
         default_factory=CoordinationCostCounts
     )
+    coordination: str = ""
+    """What this machine's last coordination tick concluded, with its age —
+    read from local state, never fetched. Empty when this machine does not
+    coordinate, or has not ticked yet. `rite doctor` reads the fleet live;
+    this is what `status` can say without a round trip (§2.5.2)."""
     burn_rate: BurnRateReport | None = None
     pool: PoolStatus | None = None
     pool_unreadable: str = ""
@@ -176,6 +181,12 @@ def collect_status(root: Path, board: bool = False) -> ProjectStatus:
         return status
 
     status.coordination_cost = read_counts(root)
+
+    from rite_ai.coordination import last_tick as last_tick_file
+
+    last = last_tick_file.read(root)
+    if last is not None:
+        status.coordination = last_tick_file.describe(last)
     status.handovers = read_snapshots(root)
 
     # Claims are read regardless of whether `load_project` below succeeds
@@ -401,6 +412,11 @@ def format_status(status: ProjectStatus) -> str:
             lines.append(f"    recorded: {snap.describe_age()}")
     else:
         lines.append("\nno handover snapshot recorded yet")
+
+    if status.coordination:
+        # Above the cost counters, because "who is Owner" is the question
+        # somebody has when they run this during an incident.
+        lines.append(f"\ncoordination: {status.coordination}")
 
     cc = status.coordination_cost
     lines.append("\ncoordination cost (§2.7.2):")
