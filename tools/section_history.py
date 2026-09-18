@@ -177,6 +177,22 @@ def _sections(text: str) -> dict[str, str]:
     return out
 
 
+def _format(path: Path) -> None:
+    """Hand the generated file to ruff.
+
+    The emitter writes valid Python, not FORMATTED Python, so running this
+    tool as `docs/releasing.md` step 5 says produced a file that fails
+    `ruff format --check` — a red gate on the release commit, for a file
+    nobody edits by hand. Measured after tagging v0.4.0.
+    """
+    subprocess.run(
+        ["uv", "run", "ruff", "format", str(path)],
+        cwd=ROOT,
+        capture_output=True,
+        check=False,
+    )
+
+
 def main() -> None:
     tags = sorted(t for t in _git("tag", "-l", "v*").decode().split() if t)
     sections: dict[str, set[str]] = {}
@@ -260,6 +276,7 @@ def main() -> None:
         lines.append("    ),")
     lines.append("}")
     OUT.write_text("\n".join(lines) + "\n")
+    _format(OUT)
     print(
         f"wrote {OUT.relative_to(ROOT)}: {len(sections)} heading(s) and "
         f"{len(patterns)} pattern heading(s) from {len(covered)} tag(s)"

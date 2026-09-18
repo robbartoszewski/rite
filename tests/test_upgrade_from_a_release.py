@@ -232,13 +232,31 @@ def test_taking_the_renamed_section_settles_it_for_good(
     assert "generated files already current" in after.output, after.output
 
 
-def test_doctor_says_the_project_is_behind_before_the_refresh(
+def test_doctor_and_the_refresh_agree_about_this_project(
     project_from_a_release, monkeypatch
 ):
-    monkeypatch.chdir(project_from_a_release)
+    """Doctor's count is a second opinion on the same question, so it has to
+    give the same answer as the refresh itself — including for a project built
+    by the CURRENT release, which is current and must not be reported as
+    behind. That case only started existing when this version was tagged, and
+    it is the one a tester on the newest release is in.
+    """
     from unittest.mock import patch
 
+    monkeypatch.chdir(project_from_a_release)
+
+    dry = CliRunner().invoke(cli, ["update", "--files-only", "--dry-run"])
+    assert dry.exit_code == 0, dry.output
+    behind = "generated files already current" not in dry.output
+
     with patch("keyring.get_password", return_value=None):
-        before = CliRunner().invoke(cli, ["doctor"])
-    assert "generated files:" in before.output
-    assert "current" not in before.output.split("generated files:")[1].splitlines()[0]
+        doctor = CliRunner().invoke(cli, ["doctor"])
+    assert "generated files:" in doctor.output
+    line = doctor.output.split("generated files:")[1].splitlines()[0]
+
+    if behind:
+        assert "current" not in line, (
+            f"the refresh has work to do and doctor says {line.strip()!r}"
+        )
+    else:
+        assert "current" in line, f"nothing to refresh and doctor says {line.strip()!r}"

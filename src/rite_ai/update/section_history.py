@@ -4,7 +4,7 @@ SHA-256 of each CLAUDE.md section every tagged release wrote identically
 for every project, so a file written before markers existed can still be
 shown to be rite's own rather than a user's edit.
 
-From: v0.1.0 (15/23 static), v0.2.0 (16/24 static), v0.3.0 (16/26 static).
+From: v0.1.0 (15/23 static), v0.2.0 (16/24 static), v0.3.0 (16/26 static), v0.4.0 (13/26 static).
 """
 
 # ruff: noqa: E501 — these lines are the bytes a release wrote.
@@ -18,6 +18,7 @@ SECTIONS: dict[str, frozenset[str]] = {
     "Claims system": frozenset(
         {
             "329b2de6690d6cdc647e258d931a52c0e98b60d8b5d7f7d140b0d6b07c939abf",
+            "86cf362d10c2b9f84cf20d3cd690aa781616b642ddffc42624b2fcf88d5f04dc",
         }
     ),
     "Commands": frozenset(
@@ -29,20 +30,24 @@ SECTIONS: dict[str, frozenset[str]] = {
     "Project knowledge": frozenset(
         {
             "abe50ebbb80bcd7eff0242f85307646d70286d6084b44bebb913337b643ba8fd",
+            "ae4fa6690fa507602191ed5913afe1e6ff061ffdee0646b5bf813a0dc62a53d4",
         }
     ),
     "Publish gate": frozenset(
         {
             "bb8b3d1498b5c0c647fafca57cc612aaa32d3bb8198d5956a553d364ba47a58c",
+            "f268b393bdfaa1a34900822d77208166c8deb2b13a017ea284674208409eadda",
         }
     ),
     "Review convention": frozenset(
         {
+            "39a91d00d95d328b4347491dad923394a74c32826a47fb0d078658cdc24df91c",
             "d7f64324b9f923e9af3492e39562f04fe5ff8de644f51a5aec8ded9694b57de8",
         }
     ),
     "Ticket workflow": frozenset(
         {
+            "2ce6b90e5f6b32c021e6dabab1ec1e1101a685020b664d690cc4df2fb7a2db95",
             "944f0aec70c690489ab8096d955c97c15d03dc6704159c766eb8e8657d9b72f5",
         }
     ),
@@ -67,6 +72,24 @@ SECTIONS: dict[str, frozenset[str]] = {
 # Lines a release wrote whatever the project, with each run that depends
 # on the project written as the number of lines it may stand for.
 PATTERNS: dict[str, tuple[tuple[str | int, ...], ...]] = {
+    "Modules checked out in your workspace": (
+        (
+            "## Modules checked out in your workspace",
+            "",
+            3,
+            "",
+            "**This is not an assignment, and not a specialism. A Worker is a workspace —",
+            "not a module, a component or a specialism** (SPEC.md §5.3.4). Every Worker",
+            "carries the same project credentials, so any Worker can take any ticket;",
+            "tickets go to whoever is free. Two Workers editing different files of the",
+            "same module at once is normal, and `rite claim` on the paths is what keeps",
+            'you apart — not which module you are "for". If you were started on a ticket',
+            "for something not checked out above, say so rather than assuming the ticket",
+            "went to the wrong Worker.",
+            3,
+            "<!-- rite:sha256=c82e5fda773511b0 -->",
+        ),
+    ),
     "Role: Manager": (
         (
             "## Role: Manager",
@@ -83,6 +106,24 @@ PATTERNS: dict[str, tuple[tuple[str | int, ...], ...]] = {
             "`workers/<name>/` with its own checkouts and its own scoped instructions.",
             "",
             3,
+        ),
+        (
+            "## Role: Manager",
+            "",
+            "You dispatch work to your own Workers and defer to the Owner on project-wide",
+            "matters (SPEC.md §2.2). You do not see or control another Manager's Workers.",
+            "",
+            "**Workers are interchangeable, and a Worker is a workspace — not a module,",
+            "a component or a specialism** (SPEC.md §5.3.4). Assign by who is free, never",
+            "one Worker per module; `rite claim` on the paths is what keeps two Workers",
+            "out of each other's way.",
+            "",
+            "**Workers:** none yet. Add one with `rite add worker <name>` — it creates",
+            "`workers/<name>/` with its own checkouts and its own scoped instructions.",
+            "",
+            3,
+            "",
+            "<!-- rite:sha256=944f0aec70c69048 -->",
         ),
         (
             "## Role: Manager",
@@ -124,9 +165,61 @@ PATTERNS: dict[str, tuple[tuple[str | int, ...], ...]] = {
             "work, monitor blocked and stalled tickets, and make project-wide calls that",
             "a Worker or Manager shouldn't make alone.",
             "",
+            "**Workers are interchangeable, and a Worker is a workspace — not a module,",
+            "a component or a specialism** (SPEC.md §5.3.4). `workers/<name>/` holds its",
+            "own checkout of every module, and every Worker carries the same project",
+            "credentials, so any Worker can take any ticket. Assign by who is free, and",
+            "never keep one Worker per module: two Workers editing different files of the",
+            "same module at once is normal, and `rite claim` on the paths is what keeps",
+            "them apart. Naming Workers after modules is the mistake this note exists to",
+            "prevent — it makes half of them idle while the rest queue.",
+            "",
             3,
             "",
             4,
+            "",
+            "<!-- rite:sha256=944f0aec70c69048 -->",
+        ),
+        (
+            "## Role: Owner",
+            "",
+            "You own the board and the project-wide ticket queue (SPEC.md §2.3): assign",
+            "work, monitor blocked and stalled tickets, and make project-wide calls that",
+            "a Worker or Manager shouldn't make alone.",
+            "",
+            3,
+            "",
+            4,
+        ),
+    ),
+    "Where this project is, and what to do next": (
+        (
+            "## Where this project is, and what to do next",
+            "",
+            "Start every session here, before anything else:",
+            "",
+            "1. `rite handover show` — what the previous session was doing. A fresh",
+            "   session remembers nothing; that file does. If it names a ticket or a next",
+            "   step, continue from there rather than re-deriving it.",
+            "2. `rite start` — prints where this project is and the next step, worked out",
+            "   from what is on disk.",
+            "3. **Tell the user where the project is and what comes next**, in plain",
+            "   words, before doing anything else. Someone new to rite does not know these",
+            "   phases; you are the guide through them.",
+            "",
+            "| Where the project is | How you can tell | What to do next |",
+            "|---|---|---|",
+            "| Not set up | No `.rite/` here, or `.rite/brief.yaml` is missing or unreadable | `rite init` — or `rite doctor` to see what is broken |",
+            "| Work in progress | `rite handover show` names a ticket, or `rite status` lists claims | Continue it: `/ticket <id>` |",
+            "| No spec | `rite start` says there is no project spec — including when the spec path it has recorded points at nothing | `/spec`: it asks about the project, writes `SPEC.md` and registers it. A spec file that already exists: `rite spec add <path>` |",
+            "| Spec, no tickets yet | A spec is registered, it exists, and nothing is in progress | rite has no planning step — deciding what gets built first is yours, usually by talking it through in this session. Turn one part of the spec into a ticket with `/refine <what to build>`, and repeat for each part. Tickets need a board; `rite doctor` says whether one is configured |",
+            "| Tickets on the board | `rite board list` shows them | Work one end to end: `/ticket <id>` |",
+            "",
+            "Check the rows top to bottom and act on the first that matches. Go by what is",
+            "on disk: a spec path recorded in `.rite/config.yaml` that points at nothing",
+            "means there is no spec.",
+            "",
+            3,
         ),
     ),
     "Workflow": (
@@ -177,6 +270,50 @@ PATTERNS: dict[str, tuple[tuple[str | int, ...], ...]] = {
             "",
             3,
             "   repos, right branches, no residue from a previous task (SPEC §2.1). A",
+            "   dirty tree blocks and is never discarded. In a sandbox, `rite sandbox",
+            "   start` already ran it before your session began, and it cannot run from",
+            "   inside: skip it.",
+            "2. Claim paths before touching them:",
+            3,
+            "   directories, never a whole module. If the claim is refused, another",
+            "   worker holds an overlapping path: do not work on those paths, and do not",
+            "   claim a narrower or wider path to get around the refusal.",
+            "3. While you hold a claim, beat every ten minutes or so:",
+            3,
+            "   liveness record `rite status` and the watchdog read — a worker that never",
+            "   beats is reported STALLED.",
+            "4. Work the ticket on its own branch: if a module is on its default branch,",
+            "   create one named for the ticket first (`git checkout -b <ticket-id>`).",
+            "   Push that branch after every commit, not only at the end —",
+            "   `git push -u origin <ticket-id>`. Your work exists outside this session",
+            "   only once it is pushed. In a sandbox this checkout is a copy that is",
+            "   discarded with the sandbox, and a session can stop at any moment, so a",
+            "   commit that was never pushed is gone.",
+            "5. Run the module's own **test and lint** commands. `rite prepare` prints",
+            "   them every time it runs, resolved at that moment — those are the ones to",
+            "   use. **Module commands** above lists them as `Test:` and `Lint:` as of",
+            "   when this Worker was created, and the module map in the",
+            "   project root's `CLAUDE.md` has them as of `rite init`; a command recorded",
+            "   in `modules.yaml` since then appears only in `rite prepare`'s output. In a",
+            "   sandbox `rite prepare` ran before you started and you cannot see its",
+            "   output, so use **Module commands** above. Run",
+            '   them as written; where an entry says "not detected", ask rather than',
+            "   inventing a command, because one that is wrong in a way that still exits",
+            "   0 looks exactly like a passing suite.",
+            "6. Verify your own fix before review. A green suite says the project still",
+            "   works, not that your change does anything — delete the fix and re-run",
+            "   whatever proves it.",
+            "7. Run `/review` (the review convention from the project root).",
+            "8. Push your final commits, then open a PR, get it reviewed, and merge.",
+            3,
+            "",
+            "<!-- rite:sha256=6fd3b38385e6b8a2 -->",
+        ),
+        (
+            "## Workflow",
+            "",
+            3,
+            "   repos, right branches, no residue from a previous task (SPEC §2.1). A",
             "   dirty tree blocks and is never discarded.",
             3,
             "3. Work the ticket.",
@@ -192,6 +329,20 @@ PATTERNS: dict[str, tuple[tuple[str | int, ...], ...]] = {
             "   whatever proves it.",
             "6. Run `/review` (the review convention from the project root).",
             "7. Open a PR, get it reviewed, merge.",
+            3,
+        ),
+    ),
+    "Your ticket": (
+        (
+            "## Your ticket",
+            "",
+            'You are usually started with a ticket ID ("Work ticket ABC-12."). Read that',
+            "ticket with `rite board show <ticket-id>`, which prints its title, status and",
+            "description from the board this project uses, JIRA or GitHub Issues. If it is",
+            "not complete enough to start cold — no",
+            "definition of done, no clear scope — or you cannot read it at all, say so",
+            "and stop rather than guessing.",
+            "",
             3,
         ),
     ),
