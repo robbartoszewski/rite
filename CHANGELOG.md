@@ -42,6 +42,10 @@
 - Fixed the file Workers actually read still telling them they own modules —
   0.3.0 corrected the Owner's copy only, and there was no way to deliver either
   correction to an existing project. Both now arrive with `rite update`.
+- `rite init --yes` prints every answer it resolved, and where each came from
+  (typed, `--config`, detected, or a `--yes` default), before it writes
+  anything. The ticket-backend line names the interactive default it did
+  not take.
 - Fixed a machine without gitleaks getting no publish-gate scan at all. The
   gate still refuses to vouch for a tree it could not fully scan, but rite's
   own rules — the built-in hardcoded-path rules, your declared patterns and
