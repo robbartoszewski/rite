@@ -34,6 +34,19 @@
 # ran against.
 set -u
 
+# Per-run log directory. The paths here used to be fixed — /tmp/rite-verify-
+# pytest.log and friends — so two runs on one machine overwrote each other's
+# evidence. The decisions were never wrong (`rc` comes from the command, not
+# from a log) but the RECEIPT was: a concurrent run's summary could be
+# printed under this run's verdict, and it was. A maintainer read PUSHED
+# beneath somebody else's "1 error" line, concluded this script had let a
+# failing suite through, and reported it as the night's sharpest finding. The
+# guard had worked perfectly and its receipt lied, which for a tool whose
+# whole job is producing a verdict a human can trust is worse than being
+# visibly broken: it spends trust rather than time.
+LOGS="$(mktemp -d "${TMPDIR:-/tmp}/rite-verify-XXXXXX")"
+echo "logs: $LOGS"
+
 step() { printf '\n== %s\n' "$1"; }
 
 for attempt in 1 2 3 4 5; do
@@ -45,44 +58,44 @@ for attempt in 1 2 3 4 5; do
   # script implements says "Suite, lint, format and `rite publish check`
   # green"; it was doing two of the four while standing in for all of it.
   step "lint (attempt $attempt)"
-  uv run ruff check . > /tmp/rite-verify-lint.log 2>&1; rc=$?
+  uv run ruff check . > "$LOGS/lint.log" 2>&1; rc=$?
   if [ $rc -ne 0 ]; then
     echo "LINT FAILED (exit $rc) — not pushing"
-    tail -20 /tmp/rite-verify-lint.log
+    tail -20 "$LOGS/lint.log"
     exit 1
   fi
   echo "ruff check: clean"
 
   step "format"
-  uv run ruff format --check . > /tmp/rite-verify-format.log 2>&1; rc=$?
+  uv run ruff format --check . > "$LOGS/format.log" 2>&1; rc=$?
   if [ $rc -ne 0 ]; then
     echo "FORMAT FAILED (exit $rc) — not pushing"
-    tail -20 /tmp/rite-verify-format.log
+    tail -20 "$LOGS/format.log"
     exit 1
   fi
-  tail -1 /tmp/rite-verify-format.log
+  tail -1 "$LOGS/format.log"
 
   step "suite (attempt $attempt)"
-  uv run pytest -q > /tmp/rite-verify-pytest.log 2>&1; rc=$?
-  tail -1 /tmp/rite-verify-pytest.log
+  uv run pytest -q > "$LOGS/pytest.log" 2>&1; rc=$?
+  tail -1 "$LOGS/pytest.log"
   if [ $rc -ne 0 ]; then
     echo "SUITE FAILED (exit $rc) — not pushing"
-    grep -E "^(FAILED|ERROR)" /tmp/rite-verify-pytest.log | head -20
-    echo "full log: /tmp/rite-verify-pytest.log"
+    grep -E "^(FAILED|ERROR)" "$LOGS/pytest.log" | head -20
+    echo "full log: $LOGS/pytest.log"
     exit 1
   fi
 
   step "publish gate"
-  uv run rite publish check > /tmp/rite-verify-gate.log 2>&1; rc=$?
-  tail -1 /tmp/rite-verify-gate.log
+  uv run rite publish check > "$LOGS/gate.log" 2>&1; rc=$?
+  tail -1 "$LOGS/gate.log"
   if [ $rc -ne 0 ]; then
     echo "GATE FAILED (exit $rc) — not pushing"
-    tail -20 /tmp/rite-verify-gate.log
+    tail -20 "$LOGS/gate.log"
     exit 1
   fi
 
   step "push"
-  git push origin HEAD:main > /tmp/rite-verify-push.log 2>&1; rc=$?
+  git push origin HEAD:main > "$LOGS/push.log" 2>&1; rc=$?
   if [ $rc -eq 0 ]; then
     echo "PUSHED"
     git log --oneline -3
@@ -92,13 +105,13 @@ for attempt in 1 2 3 4 5; do
     exit 0
   fi
   echo "push rejected (exit $rc):"
-  tail -3 /tmp/rite-verify-push.log
+  tail -3 "$LOGS/push.log"
 
   step "rebase onto origin/main, then verify again from the top"
-  git pull --rebase origin main > /tmp/rite-verify-rebase.log 2>&1; rc=$?
+  git pull --rebase origin main > "$LOGS/rebase.log" 2>&1; rc=$?
   if [ $rc -ne 0 ]; then
     echo "REBASE FAILED (exit $rc) — resolve by hand, nothing was pushed"
-    tail -20 /tmp/rite-verify-rebase.log
+    tail -20 "$LOGS/rebase.log"
     exit 1
   fi
   echo "rebased onto $(git rev-parse --short origin/main)"

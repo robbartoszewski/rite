@@ -103,7 +103,12 @@ def test_no_line_pipes_anything_except_reading_a_log():
     file: a pipe is allowed only where it formats an already-written log, and
     nowhere a command's exit code could be swallowed.
     """
-    allowed = "/tmp/rite-verify-"
+    # The per-run log directory. This was "/tmp/rite-verify-" until the
+    # paths became unique per run, and this test went red on that change —
+    # which is the premise check doing its job rather than a nuisance: the
+    # allowlist names a path scheme, so changing the scheme must break it
+    # loudly instead of silently permitting every pipe in the file.
+    allowed = "$LOGS/"
     for line in _code_lines():
         if "|" not in line or "||" in line:
             continue
