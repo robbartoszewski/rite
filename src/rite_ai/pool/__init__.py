@@ -374,6 +374,20 @@ def _fill_locked(
             # have claimed anything, so there is nothing to link and
             # reserving the name would cost a name per failed attempt for
             # no benefit. Three failed runs would otherwise consume six.
+            #
+            # ⚠ The limit, because the signal is narrower than the reasoning
+            # above needs it to be. `_settled_alive` proves the session was
+            # not alive at every poll. It does NOT prove the command never
+            # ran: "never started" and "started, claimed a path, died at
+            # 1.4s" produce the same answer, and only the first is safe to
+            # forget. Two conditions, one symptom, and this takes the cheap
+            # reading deliberately — a session that claims inside ~2.2s is
+            # not a realistic sequence, and the cost of the careful reading
+            # is a burned slot name on every failed attempt for ever.
+            #
+            # So: if an orphaned claim is ever found with no pool record
+            # behind it, this is where it came from. That is the whole
+            # reason the sentence is here rather than in a commit message.
             _write_state(root, live + dead)
             return FillResult(
                 False,
