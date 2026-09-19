@@ -84,3 +84,42 @@ def test_a_rebase_is_followed_by_re_verification():
     )
     loop = next(i for i, line in enumerate(lines) if line.startswith("for attempt"))
     assert loop < rebase, "the rebase is outside the retry loop, so nothing re-verifies"
+
+
+def test_no_line_pipes_anything_except_reading_a_log():
+    """The check above names three commands, so a FOURTH one added later and
+    piped would pass it. This one needs no list.
+
+    A guard that enumerates what it forbids goes quietly out of date as the
+    thing it guards grows — the same shape as the eleventh rule one level up:
+    it must fail when its own premise stops holding, not only when the
+    behaviour it watches goes wrong. So the property is stated over the whole
+    file: a pipe is allowed only where it formats an already-written log, and
+    nowhere a command's exit code could be swallowed.
+    """
+    allowed = "/tmp/rite-verify-"
+    for line in _code_lines():
+        if "|" not in line or "||" in line:
+            continue
+        assert allowed in line, (
+            "a pipe outside log formatting swallows the exit code of "
+            f"whatever runs left of it:\n  {line.strip()}"
+        )
+
+
+def test_the_commands_this_file_names_still_exist_in_the_script():
+    """The premise of `test_every_verification_command_has_its_exit_code_captured`.
+
+    If the script is reworded — `python -m pytest`, a different gate command —
+    that test starts checking for text that exists nowhere and passes for ever
+    while guarding nothing. It already asserts presence; this states the
+    dependency as its own named failure so the reason is legible when it goes
+    red, rather than arriving as a confusing assertion inside another test.
+    """
+    body = "\n".join(_code_lines())
+    for verdict in VERDICTS:
+        assert verdict in body, (
+            f"{verdict!r} is gone from {SCRIPT.name}. If the script now runs "
+            "something else, update VERDICTS here — until then the exit-code "
+            "guard above is checking for a command that is not there"
+        )
