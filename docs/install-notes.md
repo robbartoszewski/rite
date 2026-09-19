@@ -55,9 +55,10 @@ and it is checkable — grep the source. What rite *does* reach out to, so the
 list is a list and not a gesture: the ticket board you configure; URLs you
 hand it (`rite kb add`, a config preset given to `rite init`); `git
 fetch`/`git clone` against your own module remotes during `rite prepare`;
-`gh api` when provisioning a sandbox token; and PyPI when *you* run `rite
-update`. The installer itself obviously fetches over the network — that is
-what installing is.
+`gh api` when provisioning a sandbox token; and GitHub when *you* run `rite
+update`, which upgrades the tool from the tag it was installed from — not
+PyPI, where rite is not published (see below). The installer itself
+obviously fetches over the network — that is what installing is.
 
 **If `rite --version` prints anything other than `rite, version …`**, an
 unrelated PyPI package of the same name is ahead of it on your PATH. This tool installs as `rite-ai`

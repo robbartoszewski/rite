@@ -59,6 +59,23 @@ jobs:
           sudo mv /tmp/gitleaks /usr/local/bin/gitleaks
           gitleaks version
 
+      # THE SAME REASONING AS gitleaks ABOVE, for the defect it let through.
+      # 19 tests in `test_loop_start_really_starts.py` skip when tmux is
+      # absent, and the runner has no tmux — so they have never executed in
+      # CI. They are the ONLY success-path coverage of `loop.session.start`,
+      # and `rite loop start` shipped as a facade that printed success while
+      # starting nothing. It passed every test it had, because every test
+      # that could have caught it either mocked tmux or silently did not run
+      # here.
+      #
+      # This file already says it, twelve lines up: "a check that skips in CI
+      # reports the same green as one that passed."
+      - name: Install tmux
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq tmux
+          tmux -V
+
       - name: Test
         run: uv run pytest
         env:

@@ -16,6 +16,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from rite_ai.names import require_safe_name
 from rite_ai.state import write_atomic
 
 
@@ -68,6 +69,14 @@ def write_heartbeat(
     ticket: str = "",
     message: str = "",
 ) -> None:
+    # `rite heartbeat --worker ../../IMPORTANT` overwrote
+    # `<root>/IMPORTANT.json` — arbitrary .json clobber from a CLI flag,
+    # because `--worker` is a free string and the registration check runs
+    # AFTER the write. Raising rather than returning: this function
+    # returns None on success, so it has no channel to report a refusal,
+    # and silently not beating would read as a stalled worker.
+    require_safe_name(worker, kind="worker name")
+
     hb_dir = root / ".rite" / "heartbeats"
     hb_dir.mkdir(parents=True, exist_ok=True)
     record = {

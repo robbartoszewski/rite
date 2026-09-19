@@ -386,7 +386,26 @@ at. The one place this infers rather than proves is worth stating: if you
 edited the project-specific line inside an otherwise-untouched generated
 section, the refresh regenerates that line from `.rite/`, because nothing
 distinguishes your version of it from rite's. Edit `.rite/` and let the file
-follow; a dry run shows every such line before anything is written.
+follow.
+
+**Two corrections to this section, both found in review before 0.5.0.** It
+said a dry run "shows every such line before anything is written" — it does
+not. A section refreshed by pattern rather than by hash is recorded with an
+empty diff, so the dry run prints one line saying it *would* refresh and
+shows you nothing of what changes. Read the file, not only the dry run, if
+that distinction matters to you.
+
+And `## Project spec` was listed above as reported rather than rewritten
+while it was in fact regenerated in full on every refresh — so prose added
+there was destroyed with no diff and no prompt.
+
+**That section is derived, and since 0.5.0 it says so.** It regenerates from
+`.rite/` every time, unconditionally, which is what lets a Worker created by
+an older rite receive a newer spec section at all. Notes of your own go in
+`.rite/spec-notes.md`, which rite never generates and never rewrites. The
+"never overwrites your edits" promise is unconditional again because there
+is nothing of yours in the derived half — not because refresh got cleverer
+about guessing.
 
 **A command or agent rite no longer ships is named, not deleted.** Refreshing
 walks the files this version ships, so one a past release wrote and this one

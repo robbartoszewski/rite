@@ -28,11 +28,16 @@ sessions to claim and who to ask.
   the shared one. On other platforms `rite init` leaves sandboxing off. On
   Docker, a dogfood run found file locking does not lock, so two workers can
   be granted the same path: run one worker there.
-- **52 numbered decisions** in [`SPEC.md`](SPEC.md), each with the question it
+- **61 numbered decisions** in [`SPEC.md`](SPEC.md), each with the question it
   answers and the reasoning.
 
-**If you run one session at a time you do not need this**, and it coordinates
-sessions on one machine only.
+**If you run one session at a time you do not need this.** Several machines
+can share one project — they elect an Owner and the role moves on its own when
+a machine stops — but that shipped in 0.4.0 and has never been run on two
+physical machines over a real network. Treat it as implemented and unproven.
+
+*This sentence said "one machine only" until 0.5.0, which was false from the
+moment 0.4.0 shipped, and was contradicted 250 lines below by this same file.*
 
 ## How work moves through rite
 
@@ -73,8 +78,11 @@ cheaper read whole. When a slice was not enough, `rite handover write
 --spec-fallback 5.3` records it, and `rite spec status` reports how often that
 happens — the only signal that the slices need to be bigger.
 Worker sessions get the path, never a copy, and read what their ticket needs.
-Beyond one scan at init for how the spec cites decisions, rite does not read
-it, so it cannot tell you whether it is current. A sandboxed worker cannot read
+rite reads the spec when you ask it to — `rite spec index` maps it into
+addressable units, `slice` and `show` hand a Worker one, and `verify` refuses
+to call a digest current once the spec has moved under it. What it does not do
+is read it on its own or check it against the code, so it cannot tell you
+whether the spec still describes what you built. A sandboxed worker cannot read
 files at the project root, so it sees a spec only when the spec lives inside a
 module; keep one it should read in a module's repository.
 
@@ -205,9 +213,13 @@ rite status                  # what is happening now
 rite doctor                  # tools and credentials — non-zero on problems
 ```
 
-`rite status` and `rite doctor` are read-only, with one exception: once a
-coordination remote is configured, doctor pushes and then deletes one throwaway
-branch there to check that force-push is allowed. `rite help` tours the rest.
+`rite status` and `rite doctor` change nothing you would notice, with two
+exceptions worth naming rather than rounding off. Once a coordination remote
+is configured, doctor pushes and then deletes one throwaway branch there to
+check that force-push is allowed. And `rite status` takes a lock file inside
+`.rite/` while it reads the coordinator pool — measured, not assumed: a
+`rite status --no-board` in a fresh project leaves `.rite/pool.json.lock`
+behind. Neither touches your code. `rite help` tours the rest.
 
 ## Install
 
@@ -243,7 +255,11 @@ rite update --files-only             # apply it
 
 It never overwrites your edits: a generated section you have changed is kept
 and reported, with the difference, and replaced only if you name it
-(`--take-rite "<section>"`). `rite doctor` says whether a project is behind.
+(`--take-rite "<section>"`). One section is derived rather than authored —
+`## Project spec` is rebuilt from `.rite/` every time, which is how an older
+worker receives a newer one — so notes of your own belong in
+`.rite/spec-notes.md`, which rite never generates and never rewrites.
+`rite doctor` says whether a project is behind.
 
 ## Planned — not built
 

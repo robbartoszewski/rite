@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from rite_ai.gate import gitleaks_runner
-from rite_ai.gate.gate import EXIT_CLEAN, EXIT_ERROR, EXIT_FAIL, EXIT_WARN, run_gate
+from rite_ai.gate.gate import EXIT_CLEAN, EXIT_ERROR, EXIT_FAIL, run_gate
 from rite_ai.gate.suppression import append as append_suppression
 from tests.gate_helpers import commit_all, init_repo, write
 
@@ -133,9 +133,15 @@ def test_stale_suppression_warns_without_blocking(tmp_path: Path):
         "no longer applies",
     )
     report = run_gate(tmp_path)
-    assert report.exit_code == EXIT_WARN
+
+    # Same defect, second symptom, verified rather than assumed to fall out
+    # of the other fix: ONE stale entry — a fingerprint matching nothing —
+    # stopped every push and every release run until somebody deleted it.
     assert len(report.stale_suppressions) == 1
     assert report.findings == []
+    assert report.exit_code == 0, "a stale suppression must not block a push"
+    assert report.outcome == "warn", "and must still be reported"
+    assert report.exit_code_for(strict=True) != 0, "--strict must block"
 
 
 def test_malformed_suppression_file_is_an_error_not_a_silent_pass(

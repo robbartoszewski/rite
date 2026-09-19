@@ -228,7 +228,12 @@ def remote_branch_exists(repo_dir: Path, branch: str, remote: str = "origin") ->
 
 
 def fetch(repo_dir: Path, remote: str = "origin") -> None | GitError:
-    if not _has_remote(repo_dir, remote):
+    present = _has_remote(repo_dir, remote)
+    if isinstance(present, GitError):
+        # Propagated, not swallowed. A module whose remote cannot even be
+        # listed is not a module that is up to date.
+        return present
+    if not present:
         return None  # local-only module, nothing to fetch — not an error
     try:
         proc = _run(["git", "fetch", remote, "--prune"], cwd=repo_dir, timeout=120)
@@ -244,8 +249,34 @@ def fetch(repo_dir: Path, remote: str = "origin") -> None | GitError:
     return None
 
 
-def _has_remote(repo_dir: Path, remote: str) -> bool:
-    proc = _run(["git", "remote"], cwd=repo_dir)
+def _has_remote(repo_dir: Path, remote: str) -> bool | GitError:
+    """True, False, or "could not tell" — THREE answers, not two.
+
+    It returned a bool built from stdout alone: `returncode` was never read
+    and `OSError` was never caught, so anything that stopped `git remote`
+    producing output — a locked index, a half-finished clone, a corrupt
+    repository, git missing — came back as an empty list and therefore as
+    "this module has no remote configured".
+
+    `fetch` reads that as "local-only module, nothing to fetch — not an
+    error" and returns success. `rite prepare` then reports **ready, up to
+    date** for a module it never contacted a remote about, and the Worker
+    builds on stale code believing it is current. Measured on a module with
+    a real GitHub URL whose checkout's remote was named `upstream`:
+    `status = ready | ok = True | message = up to date`.
+
+    "Could not check" is not "nothing to check". Every other function in this
+    module returns `None | GitError` for exactly this reason; this one was
+    the exception, and it was the one whose wrong answer was silent.
+    """
+    try:
+        proc = _run(["git", "remote"], cwd=repo_dir)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return GitError(f"'git remote' failed: {e}", kind="repo")
+    if proc.returncode != 0:
+        return GitError(
+            f"'git remote' failed: {summarise_stderr(proc.stderr)}", kind="repo"
+        )
     return remote in proc.stdout.splitlines()
 
 

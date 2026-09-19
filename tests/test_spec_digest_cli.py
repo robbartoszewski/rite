@@ -681,7 +681,25 @@ def _project_with_stale_spec_section(tmp_path: Path, monkeypatch) -> Path:
     text = worker.read_text()
     start = text.index("When your ticket cites a part of it")
     end = text.index("rite cannot tell whether this is current.")
-    worker.write_text(text[:start] + text[end:])
+    trimmed = text[:start] + text[end:]
+
+    # AND STRIP THE SPEC BLOCK'S HASH LINE, because a genuinely older rite
+    # did not write one — hashes on this block arrived in 0.5.0. Without
+    # this the fixture cuts text out of a block whose hash was written by
+    # TODAY's rite, which is textually identical to a user editing it, and
+    # refresh correctly declines to overwrite a human's work.
+    #
+    # That ambiguity is the real thing, not a test artefact: "an older rite
+    # wrote this" and "a person edited this" are the same bytes unless
+    # something recorded which. The hash is what records it, and a file
+    # predating the hash is refreshed — which is the upgrade path this test
+    # is about.
+    from rite_ai.project_spec import SPEC_HASH_PREFIX
+
+    trimmed = "\n".join(
+        line for line in trimmed.splitlines() if not line.startswith(SPEC_HASH_PREFIX)
+    )
+    worker.write_text(trimmed)
     assert "rite spec slice" not in worker.read_text()
     return root
 

@@ -117,4 +117,9 @@ jobs:
         run: pipx install "{{RITE_INSTALL_SPEC}}"
 
       - name: Run publish gate
-        run: rite publish check
+        # --strict: in CI, a finding that predates this push or a
+        # suppression matching nothing is worth failing the build over —
+        # nobody has looked at it. The pre-push hook deliberately does NOT
+        # pass this, because stopping someone's unrelated push is the
+        # behaviour the gate promises not to have.
+        run: rite publish check --strict

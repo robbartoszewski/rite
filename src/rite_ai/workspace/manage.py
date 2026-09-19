@@ -22,6 +22,7 @@ from rite_ai.config.models import (
     WorkerManifest,
 )
 from rite_ai.config.parse import parse_config, parse_modules
+from rite_ai.names import name_problem
 from rite_ai.project_spec import mark_spec_section
 from rite_ai.state import locked, write_atomic
 
@@ -129,6 +130,13 @@ def add_module(
     with `fatal: Remote branch main not found in upstream origin` — and
     the first thing a new project does is register its existing repos.
     """
+    # Same class: `add_module(root, "../../ESCAPED")` returned ok=True,
+    # created a directory outside the project tree and ran `git init`
+    # in it.
+    problem = name_problem(name, kind="module name")
+    if problem:
+        return AddModuleResult(False, f"refusing to add: {problem}")
+
     rite_dir = root / ".rite"
     if not rite_dir.is_dir():
         return AddModuleResult(False, "no .rite/ directory — run `rite init` first")
@@ -245,6 +253,13 @@ def add_worker(
     into its `CLAUDE.md`. It had neither a writer nor a reader before, so
     the documented key could only ever be set by hand and was then dropped
     on the next write."""
+    # Same boundary as `remove_worker`. Creating `workers/../x` is not
+    # destructive, but it writes a workspace outside the project that every
+    # later command then fails to find, and it is the same missing check.
+    problem = name_problem(name, kind="worker name")
+    if problem:
+        return AddWorkerResult(False, f"refusing to add: {problem}")
+
     rite_dir = root / ".rite"
     if not rite_dir.is_dir():
         return AddWorkerResult(False, "no .rite/ directory — run `rite init` first")
@@ -404,6 +419,17 @@ def remove_worker(root: Path, name: str, force: bool = False) -> RemoveWorkerRes
     that can be rebuilt — and this destroyed the first while leaving the
     second behind for the watchdog to complain about.
     """
+    # BEFORE ANY PATH IS BUILT. `rite remove worker ..` resolved to the
+    # project root, `.is_dir()` agreed, and `shutil.rmtree` emptied the
+    # repository — `.rite/`, `src/`, everything — before raising, so the
+    # user's first signal was a traceback about a directory that no longer
+    # existed. `unsaved_work` could not save them: it inspects the target's
+    # direct children that are git repos, and a project root has none, so it
+    # truthfully reported nothing at risk about a directory holding all of it.
+    problem = name_problem(name, kind="worker name")
+    if problem:
+        return RemoveWorkerResult(False, f"refusing to remove: {problem}")
+
     workers_dir = root / "workers"
     worker_dir = workers_dir / name
 

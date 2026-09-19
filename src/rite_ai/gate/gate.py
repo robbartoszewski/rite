@@ -17,14 +17,23 @@ from rite_ai.gate.builtin_rules import BUILTIN_PATH_PATTERNS
 from rite_ai.gate.findings import Finding
 from rite_ai.gate.suppression import DEFAULT_SUPPRESSION_PATH, Suppression
 
+# TWO QUESTIONS, TWO ANSWERS. `outcome` says what was found; the exit code
+# says whether to proceed. They were one integer, and that is why the gate
+# blocked pushes its own documentation promised not to block.
+#
 # Exit code contract — this is the interface the CLI wraps.
-#   0  clean:  no findings, no stale suppressions
-#   1  warn:   no blocking findings, but stale suppression entries exist
-#   2  fail:   at least one unsuppressed finding — blocks publish
-#   3  error:  the gate could not run at all (gitleaks missing, git failure,
-#              malformed config/suppression file) — NEVER conflated with a
-#              clean result. This code exists specifically so a broken gate
-#              cannot report exit 0.
+#   0  proceed: clean, OR warnings only (unless --strict)
+#   1  warn:    warnings, and the caller asked for --strict
+#   2  fail:    at least one unsuppressed finding — blocks publish
+#   3  error:   the gate could not run at all (gitleaks missing, git failure,
+#               malformed config/suppression file) — NEVER conflated with a
+#               clean result. This code exists specifically so a broken gate
+#               cannot report exit 0.
+#
+# A warning means "something here nobody has looked at": a finding that
+# predates this push, or a suppression entry that no longer matches anything.
+# Neither is a reason to stop someone pushing unrelated work, and both are a
+# reason to tell them. `--strict` is for callers who want it to stop them.
 EXIT_CLEAN = 0
 EXIT_WARN = 1
 EXIT_FAIL = 2
@@ -44,6 +53,10 @@ class GateReport:
     # findings one of them is covering.
     suppressions: list[Suppression] = field(default_factory=list)
     files_scanned: int = 0
+    # Paths `git ls-files` listed that could NOT be opened. Reported
+    # beside `files_scanned`, because "scanned 1 file(s)" about a file
+    # nothing could read is the gate's worst possible sentence.
+    unreadable_files: list[str] = field(default_factory=list)
     commits_scanned: int = 0
     errors: list[str] = field(default_factory=list)
     # What the sources that COULD run found, when another source could not.
@@ -54,28 +67,58 @@ class GateReport:
     partial_findings: list[Finding] = field(default_factory=list)
 
     @property
-    def exit_code(self) -> int:
+    def outcome(self) -> str:
+        """WHAT THE GATE FOUND — independent of whether anything should stop.
+
+        One integer used to answer two different questions: "did the gate
+        find something" and "should this push proceed". That conflation WAS
+        the bug. `EXIT_WARN` was 1, a pre-push hook exiting non-zero aborts
+        the push, and so the documented promise that a pre-existing finding
+        "is surfaced but does not block" blocked every push — as did a single
+        stale suppression entry, until somebody deleted it.
+
+        Separating them makes the documented sentence true rather than
+        aspirational: this property says what was found, `exit_code` says
+        whether to proceed, and neither has to lie to satisfy the other.
+        """
         if self.errors or self.partial_findings:
             # `partial_findings` is only ever populated beside an error. If
             # it is ever populated without one, the report is malformed and
             # the honest answer is still "this did not complete" — the one
             # thing this contract exists to stop is findings existing
             # somewhere the exit code cannot see.
-            return EXIT_ERROR
+            return "error"
         if self.findings:
-            return EXIT_FAIL
+            return "fail"
         if self.stale_suppressions or self.pre_existing:
-            return EXIT_WARN
+            return "warn"
+        return "clean"
+
+    def exit_code_for(self, *, strict: bool = False) -> int:
+        """SHOULD THIS PROCEED — 0 for yes.
+
+        `strict` promotes a warning to a blocking result, for callers that
+        want it: CI, typically, where "there is something here a human has
+        not looked at" is worth failing the build over. The pre-push hook
+        deliberately does not pass it, because blocking a push is the
+        behaviour its own documentation promises not to have.
+        """
+        outcome = self.outcome
+        if outcome == "error":
+            return EXIT_ERROR
+        if outcome == "fail":
+            return EXIT_FAIL
+        if outcome == "warn":
+            return EXIT_WARN if strict else EXIT_CLEAN
         return EXIT_CLEAN
 
     @property
+    def exit_code(self) -> int:
+        return self.exit_code_for()
+
+    @property
     def status(self) -> str:
-        return {
-            EXIT_CLEAN: "clean",
-            EXIT_WARN: "warn",
-            EXIT_FAIL: "fail",
-            EXIT_ERROR: "error",
-        }[self.exit_code]
+        return self.outcome
 
 
 def run_gate(
@@ -203,8 +246,11 @@ def _run_gate(
     declared_patterns = [p for p in config.publish_gate.scan_patterns]
     all_patterns = declared_patterns + BUILTIN_PATH_PATTERNS
 
+    unreadable: list[str] = []
     all_findings.extend(
-        pattern_scan.scan_content(root, tracked, all_patterns, source="rite-pattern")
+        pattern_scan.scan_content(
+            root, tracked, all_patterns, source="rite-pattern", unreadable=unreadable
+        )
     )
     all_findings.extend(
         pattern_scan.scan_filenames(tracked, all_patterns, source="rite-path")
@@ -239,6 +285,7 @@ def _run_gate(
         return GateReport(
             errors=errors,
             files_scanned=len(tracked),
+            unreadable_files=unreadable,
             partial_findings=partial,
             suppressed=suppressed,
             suppressions=entries,
@@ -262,6 +309,7 @@ def _run_gate(
         return GateReport(
             errors=[suppressions.message],
             files_scanned=len(tracked),
+            unreadable_files=unreadable,
             partial_findings=merged,
         )
 
@@ -277,6 +325,7 @@ def _run_gate(
         stale_suppressions=stale,
         suppressions=suppressions,
         files_scanned=len(tracked),
+        unreadable_files=unreadable,
     )
 
 
@@ -408,7 +457,24 @@ def format_report(report: GateReport) -> str:
         lines.extend(_partial_lines(report))
         return "\n".join(lines)
 
-    lines.append(f"scanned {report.files_scanned} tracked file(s)")
+    scanned = report.files_scanned - len(report.unreadable_files)
+    lines.append(f"scanned {scanned} tracked file(s)")
+    if report.unreadable_files:
+        # NOT a warning buried below the verdict. A gate that could not read
+        # a file has not cleared it, and the number that used to be printed
+        # counted those files as scanned — so "clean, scanned 1 file(s)" was
+        # said about a file nothing had opened.
+        shown = ", ".join(sorted(report.unreadable_files)[:5])
+        more = (
+            f" (+{len(report.unreadable_files) - 5} more)"
+            if len(report.unreadable_files) > 5
+            else ""
+        )
+        lines.append(
+            f"⚠ {len(report.unreadable_files)} tracked file(s) could NOT be "
+            f"read and were not scanned — this is not the same as clean: "
+            f"{shown}{more}"
+        )
     if report.findings:
         lines.append(f"\n{len(report.findings)} finding(s) — BLOCKING:")
         for f in report.findings:
@@ -458,6 +524,6 @@ def format_report(report: GateReport) -> str:
             report.suppressed, report.suppressions
         ):
             lines.append(f"  one entry covers {n} of them: {s.fingerprint}")
-    if report.exit_code == EXIT_CLEAN:
+    if report.outcome == "clean":
         lines.append("\nclean")
     return "\n".join(lines)

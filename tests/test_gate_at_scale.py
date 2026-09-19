@@ -33,7 +33,7 @@ from pathlib import Path
 
 import pytest
 
-from rite_ai.gate.gate import EXIT_FAIL, EXIT_WARN, run_gate
+from rite_ai.gate.gate import EXIT_FAIL, run_gate
 from rite_ai.gate.hook import compute_pre_push_ranges
 from rite_ai.gate.pattern_scan import files_touched_by
 
@@ -137,7 +137,15 @@ class TestPreExistingFindingsDoNotBlockAPush:
 
         assert report.findings == [], "blocked on something the push did not add"
         assert [f.file for f in report.pre_existing] == ["legacy.py"]
-        assert report.exit_code == EXIT_WARN
+
+        # THE OUTCOME, NOT THE ENUM. This asserted `exit_code == EXIT_WARN`,
+        # which is 1 — and a pre-push hook exiting non-zero ABORTS the push.
+        # So the test certifying "a clean push over a dirty repo is not
+        # blocked" passed while the push was blocked, for as long as the
+        # feature existed. Asserting the enum is what let that ship.
+        assert report.exit_code == 0, "a pre-existing finding must not block"
+        assert report.outcome == "warn", "and must still be reported"
+        assert report.exit_code_for(strict=True) != 0, "--strict must block"
 
     def test_a_secret_the_push_adds_still_blocks(self, tmp_path: Path):
         """The half that must not regress."""

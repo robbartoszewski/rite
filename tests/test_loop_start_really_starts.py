@@ -18,6 +18,7 @@ would reproduce exactly the hole it was written to close.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 
@@ -31,6 +32,28 @@ from rite_ai.loop.session import (
     start,
     status,
 )
+
+# SKIPPED WITHOUT TMUX LOCALLY, AND A HARD FAILURE IN CI.
+#
+# These 19 tests are the only success-path coverage of `loop.session.start`,
+# and they had NEVER run in CI: the runner had no tmux, so they skipped, and
+# a skip is green. `rite loop start` then shipped as a facade that printed
+# success while starting nothing — it passed every test it had, because the
+# tests that could have caught it either mocked tmux or silently did not run
+# on the machine that gates merges.
+#
+# CI now installs tmux. This makes that arrangement self-enforcing: delete
+# the install step and CI goes RED here rather than quietly returning to 19
+# invisible skips. Locally a skip is still right — a contributor without
+# tmux should not be blocked — because the property worth guarding is "the
+# machine that gates merges actually ran these", not "everyone has tmux".
+_IN_CI = os.environ.get("CI") == "true"
+if _IN_CI and shutil.which("tmux") is None:  # pragma: no cover - CI-only guard
+    raise RuntimeError(
+        "tmux is missing in CI, so the only real coverage of `rite loop "
+        "start` would skip silently — install it in the workflow rather "
+        "than letting these tests disappear"
+    )
 
 pytestmark = pytest.mark.skipif(
     shutil.which("tmux") is None, reason="needs real tmux; mocking it is the bug"

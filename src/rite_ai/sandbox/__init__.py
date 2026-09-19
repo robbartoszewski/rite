@@ -18,10 +18,33 @@ own prose:
    confirmed against `yoloai system backends` and accepted by `yoloai new
    --backend`, is `seatbelt`. `SandboxConfig.backend` carries this value;
    do not reintroduce `"sandbox-exec"` as a default.
-2. **Token delivery is `--env`, never a file or a CLI argument** (D-31,
-   §5.3.3) — a file persists inside the sandbox after the run, and a CLI
-   argument is visible to `ps`/process listings within the same sandbox
-   namespace.
+2. **Token delivery is `--env`** (D-31, §5.3.3) — rather than a file, which
+   would persist inside the sandbox after the run.
+
+   ⚠ **THIS RULE USED TO SAY "never a file or a CLI argument", AND `--env`
+   IS A CLI ARGUMENT.** The sentence contradicted the line that implements
+   it: `args += ["--env", f"{key}={delivered[key]}"]` puts every project
+   credential on the host process table for as long as `yoloai new` runs.
+
+   Measured on this machine rather than assumed, because the severity turns
+   entirely on it: a non-root user can read the FULL argument list of
+   processes owned by root, `_usbmuxd`, `_distnote` and `_windowserver`.
+   argv is not uid-restricted on macOS, so this is not "visible to the user
+   who already owns the credentials" — **any local account can read them**
+   from `ps -ww` during the seconds a Worker starts.
+
+   It is not fixable inside rite today: `yoloai new --help` offers `--env
+   strings (KEY=VAL, repeatable)` and no `--env-file`, so there is no
+   off-argv channel for a general secret. The one credential that avoids
+   this — `CLAUDE_CODE_OAUTH_TOKEN` — does so because yoloAI reads that
+   specific variable from its own environment, which is agent-specific and
+   not a mechanism rite can reuse for the rest.
+
+   Recorded as a real exposure with a known cause and no local fix, not as
+   a caveat: single-user machines are unaffected in practice, shared and
+   multi-user machines are not. The designed fix is credentials fetched
+   through a validated channel rather than injected as environment
+   variables, at which point there is nothing on argv to read.
 """
 
 from __future__ import annotations
@@ -1391,7 +1414,33 @@ def _work_only_in_sandbox(
     yoloAI then reports the missing sandbox itself. A copy that cannot be
     found is reported, not taken as safe.
     """
-    if root is None or not (_yoloai_sandboxes_dir() / name).is_dir():
+    if root is None:
+        # A library caller with no project root. It cannot be checked, so it
+        # is not cleared — `destroy_worker(worker, root=None)` used to skip
+        # the guard entirely and destroy unconditionally.
+        return (
+            f"cannot check sandbox '{name}' for unpushed work without the project root"
+        )
+
+    if not (_yoloai_sandboxes_dir() / name).is_dir():
+        # "" — rite has nothing to say — AND THAT IS ONLY SAFE BECAUSE
+        # `destroy` no longer passes `--abandon-unapplied` unless the caller
+        # asked for it. This test is weak by construction:
+        # `_yoloai_sandboxes_dir()` is hard-coded, and the comment on it says
+        # the layout "is yoloAI's, not an interface". A yoloAI upgrade or a
+        # non-default home makes every sandbox look absent, so this cannot be
+        # the only thing between the command and the work.
+        #
+        # It used to be. `--abandon-unapplied` was passed unconditionally,
+        # switching off yoloAI's own refusal, so rite's guess was the sole
+        # guard and it guessed "nothing at risk" whenever it could not look.
+        #
+        # An earlier version of this fix refused here instead. That was
+        # wrong in the other direction: on any machine where yoloAI has not
+        # created a sandbox yet the directory legitimately does not exist,
+        # and `destroy` would have refused forever with a message about
+        # rite's own blindness. Two checks that fail independently beats one
+        # check that tries to be certain.
         return ""
     copy = _sandbox_copy(name, Path(root) / "workers" / worker)
     if copy is None:
@@ -1460,7 +1509,14 @@ def destroy_worker(
         )
     try:
         proc = subprocess.run(
-            [binary, "destroy", name, "--abandon-unapplied"],
+            # `--abandon-unapplied` ONLY UNDER --force. It was passed
+            # unconditionally, which switched off yoloAI's own refusal to
+            # destroy a sandbox holding unapplied work on the ordinary
+            # `rite sandbox destroy alpha` path — leaving rite's guard above
+            # as the single thing between the command and the work, and that
+            # guard used to fail open. Two independent checks that both have
+            # to be wrong is the point; one of them being rite's own is not.
+            [binary, "destroy", name] + (["--abandon-unapplied"] if force else []),
             capture_output=True,
             text=True,
             errors="replace",
@@ -1490,7 +1546,23 @@ class PaneCapture:
 # yoloAI's own launch line on Seatbelt, as it is typed into the session's
 # shell: `export NAME='value'; ` per secret, with a single quote in a value
 # written as '\''. The value can wrap across screen lines.
-_EXPORT_STATEMENT = re.compile(r"(export [A-Za-z_][A-Za-z0-9_]*=')((?:[^']|'\\'')*)(')")
+#
+# ⚠ ANSI ESCAPES BREAK BOTH PASSES, AND `rite sandbox pane --ansi` IS A FLAG
+# THE GUIDE ADVERTISES. A terminal colours its own output, so a real screen
+# carries `\x1b[32mexport\x1b[0m GITHUB_TOKEN='ghp_AAAA\x1b[0mBBBB'` — the
+# statement pattern needed `export ` literally adjacent to the name, which a
+# colour reset breaks, and the value pattern below allowed a line break
+# between characters but not an escape. Either one leaked the token while
+# README and guide both promise these values are replaced.
+#
+# So both passes skip escapes wherever they may fall. `_SKIPPABLE` is a line
+# wrap or a CSI/OSC sequence: zero-width as far as the reader is concerned,
+# and therefore zero-width as far as matching is concerned.
+_SKIPPABLE = r"(?:\r?\n|\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\))*"
+_EXPORT_STATEMENT = re.compile(
+    r"(export" + _SKIPPABLE + r"\s+" + _SKIPPABLE + r"[A-Za-z_][A-Za-z0-9_]*"
+    r"" + _SKIPPABLE + r"=')((?:[^']|'\\'')*)(')"
+)
 
 
 def redact_secrets(text: str, secrets: Iterable[str] = ()) -> str:
@@ -1506,10 +1578,17 @@ def redact_secrets(text: str, secrets: Iterable[str] = ()) -> str:
 
     Two passes: every export statement's value, whatever its name, and then
     each known secret value anywhere else on screen. A screen wraps long
-    lines, so a value is matched with a line break allowed between any two
-    characters. Values shorter than eight characters are not searched for:
-    `false` and `5` are not secrets, and replacing every occurrence of them
-    would destroy the capture.
+    lines AND colours them, so both passes allow a line break or an ANSI
+    escape sequence between any two characters — see `_SKIPPABLE`. Values
+    shorter than eight characters are not searched for: `false` and `5` are
+    not secrets, and replacing every occurrence of them would destroy the
+    capture.
+
+    **A truncated value is still a hole**, and it is the known remaining one:
+    the second pass needs the whole secret, so a launch line whose start has
+    scrolled off the top of the pane leaves a token tail with no
+    `export NAME='` prefix for the first pass either. Partial disclosure,
+    recorded rather than hidden.
 
     ⚠ A mitigation, not the fix. It closes rite's own surface, the one that
     routes a screen into Claude sessions by design; `yoloai attach` still
@@ -1522,7 +1601,7 @@ def redact_secrets(text: str, secrets: Iterable[str] = ()) -> str:
     text = _EXPORT_STATEMENT.sub(lambda m: m.group(1) + "[redacted]" + m.group(3), text)
     searched = {s for s in secrets if s and len(s) >= 8}
     for value in sorted(searched, key=len, reverse=True):
-        pattern = r"(?:\r?\n)?".join(re.escape(ch) for ch in value)
+        pattern = _SKIPPABLE.join(re.escape(ch) for ch in value)
         text = re.sub(pattern, "[redacted]", text)
     return text
 

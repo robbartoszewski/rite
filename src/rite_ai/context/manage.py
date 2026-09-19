@@ -11,6 +11,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
+from rite_ai.names import name_problem
 from rite_ai.state import write_atomic
 
 
@@ -97,6 +98,16 @@ def add_context(
     ctx_dir.mkdir(parents=True, exist_ok=True)
     idx = _index_path(root)
 
+    # BEFORE ANY PATH IS BUILT. `rite context add ../../IMPORTANT.md`
+    # followed by `rite context remove ../../IMPORTANT.md` UNLINKED a
+    # file outside the project — the index-membership check in
+    # `remove_context` is satisfied by `add_context`, which also did not
+    # validate, so the two guarded each other and neither guarded the
+    # path. `names.py` names this call site in its own docstring.
+    problem = name_problem(filename, kind="context file name")
+    if problem:
+        return problem
+
     existing = list_context(root)
     if any(e.file == filename for e in existing):
         return f"'{filename}' already in index"
@@ -118,6 +129,10 @@ def remove_context(root: Path, filename: str) -> str | None:
     """Remove a context entry and its file. Returns None on success."""
     ctx_dir = _context_dir(root)
     idx = _index_path(root)
+
+    problem = name_problem(filename, kind="context file name")
+    if problem:
+        return problem
 
     existing = list_context(root)
     if not any(e.file == filename for e in existing):

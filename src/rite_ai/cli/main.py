@@ -3030,16 +3030,42 @@ def publish_install_ci(force: bool) -> None:
     raise SystemExit(1)
 
 
+def _warn_summary(report) -> str:
+    """What the warning is ABOUT, not just that there is one.
+
+    "warnings (stale suppressions)" was printed for both causes, including
+    when the cause was a pre-existing finding and no suppression was stale.
+    A reader then goes looking for a suppression file that has nothing wrong
+    with it.
+    """
+    parts = []
+    if report.pre_existing:
+        parts.append(f"{len(report.pre_existing)} finding(s) predating this push")
+    if report.stale_suppressions:
+        parts.append(f"{len(report.stale_suppressions)} stale suppression(s)")
+    return ", ".join(parts) or "nothing blocking"
+
+
 @publish.command("check")
 @click.option("--rev-range", default=None, help="Git revision range to scan")
-def publish_check(rev_range: str | None) -> None:
+@click.option(
+    "--strict",
+    is_flag=True,
+    help=(
+        "Treat warnings as blocking. A warning is something nobody has "
+        "looked at — a finding that predates this push, or a suppression "
+        "entry matching nothing. Off by default so unrelated work is not "
+        "stopped; on for CI, where an unexamined finding is worth failing."
+    ),
+)
+def publish_check(rev_range: str | None, strict: bool) -> None:
     """Dry-run the publish gate — scan for secrets and local paths.
 
     Examples:
       rite publish check
       rite publish check --rev-range origin/main..HEAD
     """
-    from rite_ai.gate import EXIT_CLEAN, EXIT_FAIL, EXIT_WARN, run_gate
+    from rite_ai.gate import run_gate
     from rite_ai.gate.gate import _partial_lines
 
     root = _gate_root()
@@ -3092,16 +3118,32 @@ def publish_check(rev_range: str | None) -> None:
         for line in _partial_lines(report):
             click.echo(line, err=True)
 
-    if report.exit_code == EXIT_CLEAN:
+    # BRANCHED ON `outcome`, NOT ON THE EXIT CODE. Now that a warning exits
+    # 0, branching on the code would make this line unreachable and the gate
+    # would report "clean" over a stale suppression — trading one conflation
+    # for another.
+    if report.outcome == "clean":
         click.echo("gate: clean")
-    elif report.exit_code == EXIT_WARN:
-        click.echo("gate: warnings (stale suppressions)")
-    elif report.exit_code == EXIT_FAIL:
+    elif report.outcome == "warn":
+        click.echo(f"gate: warnings ({_warn_summary(report)})")
+        if not strict:
+            click.echo("  not blocking — `--strict` makes warnings blocking")
+    elif report.outcome == "fail":
         click.echo(f"gate: FAIL ({len(report.findings)} finding(s))")
     else:
         click.echo("gate: ERROR (gate could not run)")
 
-    raise SystemExit(report.exit_code)
+    if report.unreadable_files:
+        # The command the runbook, the CI template and `verify-and-push.sh`
+        # all name. The skip report reached the hook and `python -m
+        # rite_ai.gate` and not this, which is where anyone would see it.
+        click.echo(
+            f"⚠ {len(report.unreadable_files)} tracked file(s) could NOT be "
+            "read and were not scanned — this is not the same as clean: "
+            + ", ".join(sorted(report.unreadable_files)[:5])
+        )
+
+    raise SystemExit(report.exit_code_for(strict=strict))
 
 
 @publish.command("pre-push")

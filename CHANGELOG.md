@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.5.0 (unreleased)
+## 0.5.0 (2026-09-20)
 
 **The headline, stated so it cannot be read as more than it is: rite now
 watches the queue and says why it is stopped. It still does not start
@@ -40,7 +40,7 @@ noticed the run had stalled"*, not *"nobody is doing the work"*.
   had picked up, so the next session picked it up and was refused in turn.
   A refusal is now written down with the path and the holder, and the loop can
   tell a queue (everyone busy) from a wall (nobody can proceed).
-- **rite refuses to hand a Worker a command whose failure it cannot see.**
+- **rite warns when a command's failure would be invisible.**
   `pytest | tail -3` reports `tail`'s exit code; so does anything ending in a
   filter, `|| true`, or `&`. `rite doctor` names these, and — because doctor
   is a command somebody chooses to run — the warning is also written into the
@@ -73,6 +73,56 @@ noticed the run had stalled"*, not *"nobody is doing the work"*.
 
 ### Fixes
 
+- **The publish gate blocked every push it promised not to block.** A finding
+  that predates your push, or a suppression entry that no longer matches
+  anything, was reported as "not blocking" and then returned exit code 1 —
+  which aborts a git push. So adopting rite on a repository with any
+  pre-existing finding made pushing impossible, and one stale suppression
+  entry stopped every push and every release run until someone deleted it.
+
+  The cause was one integer answering two different questions: *did the gate
+  find something* and *should this proceed*. They are now separate. A warning
+  exits 0 and is still reported; `rite publish check --strict` makes warnings
+  blocking for callers who want that, and the generated CI workflow uses it,
+  because in CI something nobody has looked at is worth failing over while
+  stopping an unrelated push is not.
+
+  **Two tests covered this and both asserted the exit-code constant rather
+  than the outcome, so they passed for the entire life of the bug.** They now
+  assert that the push proceeds, that the warning is still reported, and that
+  `--strict` blocks.
+- **Four commands accepted a path where they wanted a name, and three of
+  them escaped the project.** Demonstrated through the CLI, not inferred:
+  `rite context add ../../FILE.md …` followed by `rite context remove
+  ../../FILE.md` **deleted a file outside the project**; `rite heartbeat
+  --worker ../../NAME` overwrote an arbitrary `.json`; and `rite remove
+  worker ..` **emptied the entire repository** — `workers/..` is the project
+  root, and the unsaved-work guard could not help, because it inspects the
+  target's direct children that are git repositories and a project root has
+  none. It truthfully reported nothing at risk about a directory holding
+  everything, then `rmtree` ran and the traceback arrived after the files
+  were gone. Registering a module named `../../X` is the fourth: it creates a
+  directory outside the tree from the library, though the CLI happens to
+  refuse it for an unrelated reason.
+
+  All four are now validated in the library rather than at the command
+  layer, because a guard that only exists in the CLI leaves the same bad
+  state reachable from anything else that calls in.
+- **`rite update` destroyed anything you wrote under `## Project spec`**,
+  while `README.md` promised rite "never overwrites your edits". That section
+  is regenerated from `.rite/` on every refresh, which is what delivers a
+  newer spec section to a Worker an older rite created — so the rewrite is
+  correct and the promise was the thing that was wrong.
+  **`.rite/spec-notes.md` is now the place for notes of your own**: rite
+  never generates it and never rewrites it, and the generated section names
+  it. The promise is unconditional again because nothing of yours lives in
+  the derived half.
+- **19 tests had never run in CI.** They cover `rite loop start` for real
+  rather than against a mock, they skip when tmux is absent, and the runner
+  had no tmux — so a skip reported the same green as a pass. That is how
+  `rite loop start` shipped as a command printing success while starting
+  nothing: it passed every test it had. CI installs tmux now, and the tests
+  fail loudly instead of skipping if it ever goes missing there again.
 - **An unreadable heartbeat is no longer read as a dead Worker.** Missing,
   corrupt and unreadable all collapsed into one answer, and that answer was
   "maximally stalled" — the least safe reading of "I could not check".
@@ -102,6 +152,30 @@ noticed the run had stalled"*, not *"nobody is doing the work"*.
 - **The guide told readers that cross-machine failover was not built.** It
   shipped in 0.4.0. Three other documents contradicted themselves and are
   fixed; a fourth is flagged as a decision rather than quietly resolved.
+- **The publish gate reported "clean" on files it could not open.** Any path
+  outside ASCII came back from git quoted and octal-escaped, was used as a
+  path, failed to open, and was skipped with no error channel — while the
+  count beside it said the file had been scanned. A secret in `café.py` passed
+  where the same secret in `cafe.py` blocked. Worse in the "is this from this
+  push" check, where an escaped name meant a secret **this push added** was
+  demoted to "already in the repository". Fixed three ways: exact parsing,
+  skips are now reported rather than silent, and the scanned count no longer
+  includes files nothing read.
+- **`rite sandbox pane` leaked tokens when asked for colour.** Redaction
+  tolerated a line break between a value's characters but not an ANSI escape,
+  and a colour reset also broke the `export NAME=` match — so `--ansi`, a flag
+  the guide recommends, could print what README and the guide both promise it
+  replaces.
+- **`rite sandbox destroy` switched off yoloAI's own safety check** on the
+  ordinary path, not just under `--force`, leaving rite's guard as the only
+  thing between the command and unpushed work — and that guard answered
+  "nothing at risk" whenever it could not look. Two checks that fail
+  independently beats one check trying to be certain.
+- **`rite prepare` reported "up to date" without contacting a remote.** The
+  remote check read command output without reading its exit code, so a locked
+  index, a half-finished clone or a renamed remote all read as "this module
+  has no remote" — and a Worker then built on stale code believing it was
+  current.
 - **Lint was red in CI and nobody was running it locally.** Fixed in
   `7b023b5`, whose commit message records that it had been red since
   `8d19410`. That span is this repository's own note rather than something
@@ -124,8 +198,30 @@ One piece is already load-bearing: `rite doctor` probes a local Manager's
 engine, so it fails up front rather than on every subtask. It is described
 here because it is in the code, not because it is a feature.
 
+### Known, and not fixed in this release
+
+- **Credentials are visible to other local accounts while a Worker starts.**
+  rite passes each project credential to the sandbox as a command-line
+  argument, which puts it on the machine's process table for the few seconds
+  `yoloai new` runs. Measured rather than assumed: on macOS a non-root user
+  can read the full argument list of processes owned by other users, so this
+  is not limited to the account that already owns the credentials. **On a
+  single-user machine there is no practical exposure; on a shared or
+  multi-user machine, treat any credential given to rite as readable by every
+  local account.** There is no fix inside rite today — the sandbox tool offers
+  no way to pass a secret off the command line — and the designed remedy is
+  for Workers to fetch credentials through a validated channel instead of
+  having them injected. Recorded here because a release that knows this and
+  does not say it is worse than the defect itself.
+
 ### Notes for existing projects
 
+- **Suppression entries for non-ASCII filenames need rewriting.** The gate
+  used to record such paths in an escaped form; it now records them exactly.
+  An existing entry in `.rite/gitleaksignore` for a file whose name is not
+  plain ASCII will stop matching — the finding returns as blocking and the old
+  entry is reported as stale. Re-copy the line the gate prints. Entries for
+  ASCII filenames, which is almost all of them, are unaffected.
 - **Upgrading rite does not update your project's files.** `rite update
   --files-only --dry-run` shows what would change; `rite update --files-only`
   applies it.
@@ -146,6 +242,20 @@ CI is Linux-only, so macOS rests entirely on the local run; the local run is
 one Python, so 3.11–3.13 rest entirely on CI. Read either alone and you will
 overstate the coverage.
 
+**The split is asymmetric, and one concrete case shows why that matters more
+than the sentence above suggests.** A fix in this release parses file paths
+that are not valid UTF-8. Those names cannot exist on APFS — macOS refuses to
+create one — and are ordinary on ext4. So the author, working on a Mac, was
+*structurally incapable* of testing the case: not careless, not hurried,
+unable. A second reviewer found it by reading, and the first version of that
+fix would have turned a silently-skipped file into a crash on Linux.
+
+That is the argument for a second pair of eyes stated as a fact rather than a
+principle: there are defects the person who wrote the code cannot reach, and
+no amount of care by that person closes them. It is also the fourth
+platform-split defect in this release, and the third where the platform that
+would have caught it is not the platform the author was standing on.
+
 **Linux CI was red for six consecutive commits and is now green.**
 `tests/test_spec_5_3_4_is_what_the_cli_says.py` failed on a runner because
 its fixture called `rite init` and inherited whatever sandboxing default the
@@ -162,7 +272,7 @@ same claim — six commits is a run of luck until the tagged one is checked,
 and this section previously asserted a CI state that had stopped being true
 before anybody re-read it.
 
-The accurate sentence for the local half is "3434 passed, 1 skipped, on
+The accurate sentence for the local half is "3494 passed, 3 skipped, on
 macOS/py3.14", not "the suite is green" — the second implies a matrix, and
 this one has a platform that only CI covers.
 

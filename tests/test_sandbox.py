@@ -625,12 +625,53 @@ class TestStopAndDestroy:
 
     @patch("rite_ai.sandbox.shutil.which", return_value="/usr/local/bin/yoloai")
     @patch("rite_ai.sandbox.subprocess.run")
-    def test_destroy_worker_abandons_unapplied_changes(self, mock_run, mock_which):
+    def test_destroy_abandons_unapplied_only_when_forced(self, mock_run, mock_which):
+        """THIS TEST USED TO ASSERT THE DEFECT.
+
+        It called `destroy_worker("alpha")` — no root, no force — and
+        asserted `--abandon-unapplied` was passed, which is yoloAI's own
+        refusal to destroy a sandbox holding unapplied work being switched
+        off on the ORDINARY destroy path. That left rite's own guard as the
+        single thing between the command and the work, and that guard
+        returns "nothing at risk" whenever it cannot look.
+
+        Two checks that fail independently is the property. `--force` is
+        where a user says they accept the loss.
+        """
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-        destroy_worker("alpha")
+
+        destroy_worker("alpha", force=True)
+        forced = mock_run.call_args[0][0]
+        assert "rite-alpha" in forced
+        assert "--abandon-unapplied" in forced
+
+        mock_run.reset_mock()
+        destroy_worker("alpha", force=True, root=None)  # library path unchanged
+
+    @patch("rite_ai.sandbox.shutil.which", return_value="/usr/local/bin/yoloai")
+    @patch("rite_ai.sandbox.subprocess.run")
+    def test_destroy_without_force_leaves_yoloais_guard_armed(self, mock_run, _which):
+        """The half that closes the hole: unforced, yoloAI still gets to
+        refuse. Asserted on the argv rite builds, because that is the only
+        place the decision is visible."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+        # No root at all: refused before anything runs. `destroy_worker(w)`
+        # with root=None skipped the unpushed-work guard entirely — a
+        # library-callable unguarded destroy — and now cannot.
+        unguarded = destroy_worker("alpha", force=False)
+        assert not unguarded.ok
+        assert "without the project root" in unguarded.message
+        assert mock_run.call_args is None, "nothing should have been run"
+
+        # With a root, and no sandbox directory to inspect: rite has nothing
+        # to say, so it proceeds — and leaves yoloAI's own refusal armed.
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            destroy_worker("alpha", root=tmp, force=False)
         args = mock_run.call_args[0][0]
-        assert "rite-alpha" in args
-        assert "--abandon-unapplied" in args
+        assert "--abandon-unapplied" not in args
 
 
 class TestWorkOnlyInTheSandboxCopy:
