@@ -3865,7 +3865,19 @@ def loop() -> None:
     default=True,
     help="Print the cycle's decisions without acting. The only mode built.",
 )
-def loop_run(dry_run: bool) -> None:
+@click.option(
+    "--watch",
+    is_flag=True,
+    default=False,
+    help="Keep cycling until the queue empties or `rite loop stop` is run.",
+)
+@click.option(
+    "--interval",
+    default=120.0,
+    type=float,
+    help="Seconds between cycles with --watch. A Worker session takes minutes.",
+)
+def loop_run(dry_run: bool, watch: bool, interval: float) -> None:
     """Plan one cycle and print it.
 
     Exit code carries the verdict, so a caller can branch without parsing
@@ -3893,6 +3905,23 @@ def loop_run(dry_run: bool) -> None:
     board, _ = _ticket_backend("workers")
     from rite_ai.sandbox import worker_sandbox_status
 
+    if watch:
+        from rite_ai.loop import watch as watch_loop
+
+        why = watch_loop(
+            root,
+            interval=interval,
+            emit=click.echo,
+            board=board,
+            sandbox_status=worker_sandbox_status,
+        )
+        # The drain is the only exit a human asked for, so it is the only one
+        # that is a success. "Stopped because it could not tell" must not read
+        # as "finished" to whatever started it.
+        if why in ("drained", IDLE, "limit"):
+            return
+        raise SystemExit(1)
+
     cycle = plan_cycle(root, board=board, sandbox_status=worker_sandbox_status)
     for line in format_cycle(cycle):
         click.echo(line)
@@ -3901,6 +3930,64 @@ def loop_run(dry_run: bool) -> None:
         raise SystemExit(1)
     if cycle.verdict == IDLE:
         raise SystemExit(2)
+
+
+@loop.command("start")
+@click.option(
+    "--interval",
+    default=120.0,
+    type=float,
+    help="Seconds between cycles. A Worker session takes minutes.",
+)
+def loop_start(interval: float) -> None:
+    """Run the loop in a detached tmux session.
+
+    tmux because it is the only persistence rite already has — there is no
+    `Popen`, no `fork` and no `nohup` anywhere in the package. Two costs,
+    accepted rather than engineered around: it dies with this machine's tmux
+    server, and it does not survive a reboot. Nothing is registered with cron
+    or launchd, so `rite loop status` after a reboot says "not running"
+    instead of quietly having restarted.
+    """
+    from rite_ai.loop.session import Refused, start
+
+    result = start(_require_project_root(), interval=interval)
+    if isinstance(result, Refused):
+        click.echo(result.reason, err=True)
+        if result.remedy:
+            click.echo(result.remedy, err=True)
+        raise SystemExit(1)
+    click.echo(f"loop: started as {result.session} — {result.detail}")
+
+
+@loop.command("status")
+def loop_status() -> None:
+    """Whether a loop is running for this project, and whether it is
+    draining."""
+    from rite_ai.loop.session import status
+
+    for line in status(_require_project_root()).lines():
+        click.echo(line)
+
+
+@loop.command("stop")
+@click.option(
+    "--reason",
+    default="stop requested",
+    help="Why. Travels onto the board as 'shutting down: <reason>' on any "
+    "ticket handed back.",
+)
+def loop_stop(reason: str) -> None:
+    """Ask the loop to stop after the cycle it is in. Kills nothing.
+
+    A killed loop can leave a claim held by a process that no longer exists —
+    the failure §2.6 exists for, caused by the stop command. Asking costs at
+    most one cycle. `pool/` has no kill path either, for the same reason.
+    """
+    from rite_ai.loop.session import stop
+
+    result = stop(_require_project_root(), reason)
+    click.echo(f"loop: {result.detail}")
 
 
 @cli.group()

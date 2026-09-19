@@ -455,6 +455,73 @@ def _age(seconds: float) -> str:
     return f"{int(seconds // 3600)}h{int((seconds % 3600) // 60):02d}m"
 
 
+def watch(
+    root: Path,
+    *,
+    interval: float = 120.0,
+    emit=print,
+    sleep=None,
+    limit: int | None = None,
+    **cycle_kwargs,
+) -> str:
+    """Cycle until told to stop. Returns why it stopped.
+
+    Four ways out, and each says which:
+
+    - the drain signal, from `rite loop stop`. The only one a human asked for;
+    - `idle` — the board is empty and nothing is in flight. The one verdict
+      that IS a reason to stop (the plan's stop conditions; a bare section
+      number here would be read as a SPEC citation by the citation gate,
+      which is CGT-1);
+    - `unknown` — something could not be established. A loop's default on the
+      unknown is to stop, not to keep going on a guess;
+    - `limit` cycles, for tests and for a caller that wants a bounded run.
+
+    `saturated`, `blocked` and `closed` all sleep and go round. That is the
+    whole reason those verdicts exist as separate words: each one means the
+    work is real and somebody else is holding the capacity, the files, or the
+    clock, and stopping would turn a busy fleet into a stopped one with a
+    queue nobody can see.
+    """
+    import time as _time
+
+    from rite_ai.loop.session import draining, hold_lock, release_lock
+
+    sleep = _time.sleep if sleep is None else sleep
+
+    holder = hold_lock(root)
+    if holder is not None:
+        emit(f"loop: another loop holds this project (pid {holder}) — not starting")
+        return "locked"
+
+    try:
+        cycles = 0
+        while True:
+            reason = draining(root)
+            if reason:
+                emit(f"loop: draining — {reason}. Taking no new work.")
+                return "drained"
+
+            cycle = plan_cycle(root, **cycle_kwargs)
+            for line in format_cycle(cycle):
+                emit(line)
+
+            if cycle.verdict == UNKNOWN:
+                emit("loop: stopping — something could not be established")
+                return UNKNOWN
+            if cycle.is_reason_to_stop:
+                emit("loop: stopping — the queue is empty")
+                return IDLE
+
+            cycles += 1
+            if limit is not None and cycles >= limit:
+                return "limit"
+            emit(f"loop: {cycle.verdict}; sleeping {int(interval)}s")
+            sleep(interval)
+    finally:
+        release_lock(root)
+
+
 def format_cycle(cycle: Cycle) -> list[str]:
     """The dry run, written to be checked rather than admired.
 
