@@ -152,6 +152,24 @@ def plan_cycle(
         _look_at_worker(root, w.name, clock, sandbox_status) for w in project.workers
     ]
 
+    # The blind window: a Worker dispatched moments ago is observably free
+    # and is not. Observation is the better witness everywhere else, so the
+    # record is asked only about the seconds it cannot cover (L-3).
+    from rite_ai.loop.intents import reconcile
+
+    busy_now = {w.name for w in cycle.workers if not w.free}
+    settled = reconcile(root, observably_busy=busy_now, now=clock)
+    for intent in settled.holding:
+        for worker in cycle.workers:
+            if worker.name == intent.worker and worker.free:
+                worker.free = False
+                worker.verdict = "busy — a session was dispatched to it just now"
+                worker.evidence.append(
+                    f"dispatched {intent.ticket} {_age(clock - intent.timestamp)} "
+                    "ago; nothing visible yet, which is normal for a few seconds"
+                )
+    cycle.problems.extend(settled.problems)
+
     ledger_claims = _claims(root)
     if ledger_claims is None:
         cycle.verdict = UNKNOWN
@@ -186,8 +204,12 @@ def plan_cycle(
         cycle.problems.append(cycle.detail)
         return cycle
 
+    # Counted before and after, because `cycle.problems` already carries the
+    # lost-intent reports by now, and a leaked dispatch is something to say
+    # out loud — not a reason to call the whole cycle unknown.
+    before = len(cycle.problems)
     cycle.ready = _ready(board, cycle)
-    if cycle.problems:
+    if len(cycle.problems) > before:
         cycle.verdict = UNKNOWN
         cycle.detail = "the board could not be read"
         return cycle

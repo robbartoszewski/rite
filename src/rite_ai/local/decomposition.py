@@ -111,6 +111,21 @@ def problems(plan: Decomposition) -> list[str]:
     for sub in plan.subtasks:
         if not sub.verify.strip():
             found.append(f"{sub.id}: no verify command — nothing could say it is done")
+        else:
+            # The docstring above has promised this since RL-T4 and only an
+            # EMPTY verify was refused. A verify that cannot fail is not a
+            # smaller version of no verify; it is worse, because three gates
+            # read this artifact (RL-6, RL-7, RL-8) and a verify that always
+            # passes makes all three decorative while looking green.
+            from rite_ai.verdicts import cannot_fail
+
+            why = cannot_fail(sub.verify)
+            if why:
+                found.append(
+                    f"{sub.id}: the verify cannot fail — {why}. rite runs this "
+                    "itself rather than trusting a report (RL-7), which buys "
+                    "nothing if the command always exits 0"
+                )
         if not sub.scope:
             found.append(
                 f"{sub.id}: no scope — composition cannot tell a conflict from a "

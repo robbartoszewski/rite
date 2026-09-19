@@ -520,3 +520,36 @@ def test_a_granted_claim_records_no_contention(tmp_path):
     root = project(tmp_path)
     _claim(root, "alpha", "engine/parser.py")
     assert read_contention(root) == []
+
+
+# --- the blind window shows up in the cycle ---------------------------------------
+
+
+def test_a_just_dispatched_worker_is_not_offered_again(tmp_path):
+    """Observation says free about a Worker a session is booting into, and a
+    120s cycle would dispatch it again."""
+    from rite_ai.loop.intents import record_intent
+
+    root = project(tmp_path)
+    record_intent(root, "alpha", "BEN-1", now=NOW - 5)
+
+    cycle = plan_cycle(root, board=FakeBoard("BEN-2"), sandbox_status=_free, clock=NOW)
+
+    assert cycle.free_workers == []
+    assert not cycle.would_dispatch
+    assert any("dispatched BEN-1" in e for w in cycle.workers for e in w.evidence)
+
+
+def test_a_leaked_dispatch_is_reported_and_does_not_make_the_cycle_unknown(tmp_path):
+    """It is a problem to say out loud, not a reason to call the whole cycle
+    unreadable — the board was read fine."""
+    from rite_ai.loop.intents import BLIND_SECONDS, record_intent
+
+    root = project(tmp_path)
+    record_intent(root, "alpha", "BEN-1", now=NOW - BLIND_SECONDS - 60)
+
+    cycle = plan_cycle(root, board=FakeBoard("BEN-2"), sandbox_status=_free, clock=NOW)
+
+    assert any("nothing ever appeared" in p for p in cycle.problems)
+    assert cycle.verdict != UNKNOWN
+    assert cycle.would_dispatch == [("BEN-2", "alpha")]

@@ -925,6 +925,28 @@ def _doctor_report(problems: list[str]) -> None:
             else:
                 click.echo("generated files: current")
 
+        # EXC-2. The generated CLAUDE.md tells every Worker to run these "as
+        # written rather than inventing one", and warns in the next sentence
+        # that a command wrong in a way that still exits 0 is
+        # indistinguishable from a passing suite — while nothing checked
+        # these for exactly that. A recorded `pytest | tail -1` reports a
+        # green suite for ever, on every Worker, honestly.
+        with _doctor_check("recorded commands", problems):
+            from rite_ai.verdicts import command_problems
+
+            blind: list[str] = []
+            for module in modules:
+                recorded = {
+                    key: getattr(module.commands, key, "") or ""
+                    for key in ("build", "test", "lint")
+                }
+                blind.extend(command_problems(recorded, f"module {module.name}"))
+            for line in blind:
+                click.echo(line)
+                problems.append(line)
+            if not blind:
+                click.echo("recorded commands: each one can still fail")
+
         # Phase 2. Settings that cannot work are reported whether or not a
         # remote is set: half a `coordination:` block does not fail, it
         # silently never elects anybody.
