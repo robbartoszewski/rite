@@ -68,6 +68,11 @@ class ProjectStatus:
     modules: list[Module] = field(default_factory=list)
     workers: list[WorkerManifest] = field(default_factory=list)
     claims: list[Claim] = field(default_factory=list)
+    suspect_claims: list = field(default_factory=list)
+    """Claims whose HOLDER has gone quiet, not merely old ones. `STALE?`
+    below flags age alone; this crosses the claim against the heartbeat, which
+    is the difference between "this is old" and "nobody is coming back for
+    it". Never released automatically — see `claims/suspect.py`."""
     stalled_workers: list[StallReport] = field(default_factory=list)
     not_started_workers: list[str] = field(default_factory=list)
     handovers: list[HandoverSnapshot] = field(default_factory=list)
@@ -218,15 +223,25 @@ def collect_status(root: Path, board: bool = False) -> ProjectStatus:
     status.modules = project.modules
     status.workers = project.workers
 
+    threshold = (
+        project.config.heartbeat.interval_minutes
+        * 60
+        * project.config.heartbeat.stall_threshold
+    )
+    names = [w.name for w in project.workers]
     if project.workers:
-        threshold = (
-            project.config.heartbeat.interval_minutes
-            * 60
-            * project.config.heartbeat.stall_threshold
-        )
-        names = [w.name for w in project.workers]
         status.stalled_workers = detect_stalls(root, names, threshold_seconds=threshold)
         status.not_started_workers = not_started(root, names)
+
+    # Outside the `if`, deliberately: this walks the LEDGER rather than the
+    # roster, and the case it exists for is a claim held by a name nobody
+    # registered — which a project with zero configured Workers can still
+    # have, and which `detect_stalls` above can never see.
+    from rite_ai.claims.suspect import suspect_claims
+
+    status.suspect_claims = suspect_claims(
+        root, registered=names, threshold_seconds=threshold
+    )
 
     tz_name = project.config.schedule.timezone or "UTC"
     now = datetime.now(UTC)
@@ -384,6 +399,16 @@ def format_status(status: ProjectStatus) -> str:
             )
     else:
         lines.append("\nno active claims")
+
+    if status.suspect_claims:
+        # Age alone is `STALE?` above. This is age AND the holder having gone
+        # quiet, which is the difference between "old" and "nobody is coming
+        # back for it" — the state that silently narrows a continuous run
+        # until nothing can be claimed.
+        from rite_ai.claims.suspect import lines as suspect_lines
+
+        lines.append("")
+        lines.extend(suspect_lines(status.suspect_claims))
 
     if status.handovers:
         # One per worker. Rendering only the newest reported one worker's
