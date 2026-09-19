@@ -3551,6 +3551,21 @@ told a session to write a spec, and nothing would have registered one it wrote.
 Planning work from a spec, and turning a plan into tickets, are not built. `/spec`
 stops at the spec.
 
+⚠ **Still true as of 2026-09-19, and it now reads as though it were not.**
+`src/rite_ai/local/decomposition.py` exists and is easy to mistake for the
+second half of that sentence. It is a different thing at both ends: it starts
+from a TICKET, not a spec, and it produces SUBTASKS in the state layer, not
+tickets on a board. Nothing reads a spec and emits a plan, and nothing turns a
+plan into board tickets — `rite board create` is the only thing that makes a
+ticket and a human types it.
+
+Recorded because the failure mode here is the opposite of a stale claim and
+costs the same: a reader who finds `decomposition.py` concludes this sentence
+is out of date, "corrects" it, and puts a false claim into the spec while
+believing they are removing one. A claim that has become ambiguous because
+something adjacent shipped needs the distinction written down, not the claim
+withdrawn.
+
 #### 9.13.2. The spec digest: loading part of a spec
 
 Pointing a Worker at a 4000-line spec and telling it to read what it needs is a
