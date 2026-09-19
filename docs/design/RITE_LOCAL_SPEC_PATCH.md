@@ -1,6 +1,6 @@
 # rite local — the SPEC edits, pre-written
 
-**This file exists so RL-T2 is a paste, not a redraft.** It holds the exact text
+**This file exists so RL-T2 is a re-base plus a paste, not a redraft.** It holds the exact text
 for every SPEC change [`RITE_LOCAL_DESIGN.md`](RITE_LOCAL_DESIGN.md) §13 asks
 for, checked against `origin/main`'s current wording. Nothing here is adopted;
 adopting it is RL-T2, which waits on Robert's answers to Q1 and Q2.
@@ -11,27 +11,70 @@ that row.
 
 ---
 
-## 0. Numbering
+## 0. Numbering — compute the base, never read it from here
 
-`origin/main`'s register ends at **D-53** (`/spec` writes `SPEC.md`), so rite
-local takes **D-54 onward**, in decision order: **D-(53 + n) for RL-n**, giving
-D-54 to D-100 for RL-1 to RL-47. Verified against `origin/main`, not a local
-checkout — a forked `main` has produced wrong answers here before.
+**Do not paste a D-number from this file.** SPEC's register grows while this
+patch sits unapplied: it ended at **D-53** when this was written on 2026-09-17
+and at **D-61** on 2026-09-19, two days later. Any number written down here is
+wrong by the time someone uses it.
 
-| Design | Register | Topic |
-|---|---|---|
-| RL-1 to RL-5 | D-54 to D-58 | Two axes; presets; closed duties; fungibility; routing order |
-| RL-6 to RL-10 | D-59 to D-63 | Plan review; mechanical verify; recomposition verify; step review; failure budget |
-| RL-11 to RL-14 | D-64 to D-67 | Pushing; harness scope; adopt an agent; where inference runs |
-| RL-15 to RL-19 | D-68 to D-72 | The PM; Phase 2 dependency; what an executor reads; planners who work; measurement |
-| RL-20 to RL-28 | D-73 to D-81 | Strategies, profiles, duties-not-engines, where they live, resolution, unknown values, termination, refused tasks, discoverability |
-| RL-29 to RL-34 | D-82 to D-87 | Decline-with-suggestion; Owner as candidate; clarifications; Owner eligibility; answers; undeclared duties |
-| RL-35, RL-36 | D-88, D-89 | Backend neutrality; coordination scopes |
-| RL-37 to RL-41 | D-90 to D-94 | Escalation budget; aggregation; pull not queue; `escalation-exhausted`; the stop channel |
-| RL-42 | D-95 | A local engine declares endpoint, model and agent |
-| RL-43, RL-44 | D-96, D-97 | Instruction channels flow downward only; review rounds are not a success metric |
-| RL-45 | D-98 | Every hypothesis ships with a threshold written before its spike |
-| RL-46, RL-47 | D-99, D-100 | Composition conflicts return to plan review; infrastructure faults are not attempts |
+The mapping is arithmetic on a base computed at apply time:
+
+```
+base = highest existing D-number in SPEC.md
+RL-n  ->  D-(base + n)
+```
+
+```bash
+git show origin/main:SPEC.md | grep -oE '^\| D-[0-9]+ ' | grep -oE '[0-9]+' | sort -n | tail -1
+```
+
+As of 2026-09-19 that is 61, so RL-1 to RL-47 would be D-62 to D-108 — **check it
+again before you paste**, and take the base from `origin/main`, not from a local
+tree, which may be behind or forked.
+
+| Design | Topic |
+|---|---|
+| RL-1 to RL-5 | Two axes; presets; closed duties; fungibility; routing order |
+| RL-6 to RL-10 | Plan review; mechanical verify; recomposition verify; step review; failure budget |
+| RL-11 to RL-14 | Pushing; harness scope; adopt an agent; where inference runs |
+| RL-15 to RL-19 | The PM; Phase 2 dependency; what an executor reads; planners who work; measurement |
+| RL-20 to RL-28 | Strategies, profiles, duties-not-engines, where they live, resolution, unknown values, termination, refused tasks, discoverability |
+| RL-29 to RL-34 | Decline-with-suggestion; Owner as candidate; clarifications; Owner eligibility; answers; undeclared duties |
+| RL-35, RL-36 | Backend neutrality; coordination scopes |
+| RL-37 to RL-41 | Escalation budget; aggregation; pull not queue; `escalation-exhausted`; the stop channel |
+| RL-42 | A local engine declares endpoint, model and agent |
+| RL-43, RL-44 | Instruction channels flow downward only; review rounds are not a success metric |
+| RL-45 | Every hypothesis ships with a threshold written before its spike |
+| RL-46, RL-47 | Composition conflicts return to plan review; infrastructure faults are not attempts |
+| RL-48 to RL-55 | Escalation deadlines; composing from the log; session lifetime; when duties must be declared; `route` as a duty; the Owner's strategy follows the role; distributing the expertise table; an Owner that always escalates |
+| RL-57 | `coordination.assign_unattended` |
+
+**Four rows are not SPEC decisions, and the register should not take them.** They
+are notes about how this work was done, and they belong where they are:
+
+| Row | Why it stays out |
+|---|---|
+| RL-56 | A retrospective on what a claimability-optimised ticket set omits — a lesson about planning, not about rite |
+| RL-58 | Answers a `PHASE2-OPEN-QUESTIONS` item; it belongs to that document's register, not to the tier design's block |
+| RL-59 | A citation convention between two `.docs/` files; SPEC has no stake in it |
+| RL-60 | Names a gap (rite cannot say a machine hosts two Managers) and a ticket, rather than deciding anything |
+
+Adopting them anyway would put four rows in SPEC that no SPEC reader can act
+on. Confirm with whoever is adding rows above RL-47 before dropping them.
+
+**The quoted section text below uses `RL-n` deliberately**, so it survives
+re-basing. Convert them all in one pass once the base is known, and convert
+nothing before.
+
+**Two decisions that landed since this was written already say part of what the
+design says** — cite them rather than duplicating:
+
+- **D-58** (unreadable input to a state merge: pass the bytes verbatim, fail
+  closed on the decision that needed them) is exactly RL-25's shape for unknown
+  strategy values. Write RL-25's row as an application of D-58.
+- **D-55** (slice depth 1 plus pinned hubs) already fixes what an executor reads,
+  so RL-17 adopts it rather than specifying a second slicing rule.
 
 ---
 
@@ -74,6 +117,39 @@ And to the opening sentence of §2.3, after "the result of leader election (§2.
 > `human`, is eligible (§2.8): the Owner decides, owns the board, and renews a
 > lease, and a person with no session cannot renew one.
 
+### §2.4 Owner failover — eligibility, not just priority
+
+§2.4 promotes by priority order in `config.yaml`. The new §2.3 rule narrows the
+candidate set, and leaving that only in `PHASE2_TICKETS.md` would make SPEC
+contradict itself. Add after the priority-order rule:
+
+> **Priority order selects among *eligible* Managers.** A Manager is eligible
+> only if it holds the `decide` and `board` duties on an engine other than
+> `human` (§2.8): the Owner decides, owns the board, and renews a lease that a
+> running process must renew. A project whose Managers include no eligible one is
+> refused at parse. Where no eligible Manager is live there is no Owner and
+> routing waits — the existing lease-expiry path, not a new one.
+
+### §2.5 Coordinator pool — whose slots
+
+§2.5's pool spawns `claude` sessions. Add one line so a local or human Manager's
+absence from it is deliberate rather than undefined:
+
+> The pool serves Managers whose engine is `claude`. A `local:*` Manager's
+> concurrency is its own (§2.8's harness), and a `human` Manager has none.
+
+### §3 Communication — a Manager with no session
+
+§3's status reports double as heartbeats, which assumes every Manager runs a
+session. A `human` Manager does not, and would otherwise read as permanently
+stalled. Add where heartbeats are defined:
+
+> **A Manager whose engine is `human` does not heartbeat and is never reported as
+> stalled** (§2.8). What is tracked instead is the age of what is waiting on that
+> person — an assigned ticket, or a question — which `rite status` shows.
+> Stall detection is about sessions that stopped; a person who has not answered
+> yet is a queue, not a fault.
+
 ### §4 Expertise routing — item 3 and the timeout paragraph
 
 Replace item 3:
@@ -111,6 +187,12 @@ Add to the list of things rite's own code must not do:
 
 ### §5.3.4 — heading and first sentence
 
+**Check before pasting:** the heading change says "within a Manager" while the
+body still reads "every Worker **on a project** receives every credential the
+project holds." Credentials remain per project; what is scoped per Manager is
+engine, duties and strategies. If the body is not also edited, the heading
+overclaims — keep the insert below and leave the credential sentence alone.
+
 Replace the heading:
 
 > #### 5.3.4. Workers are fungible, so they all get the same credentials
@@ -122,10 +204,59 @@ with:
 and add after its first paragraph:
 
 > **Within a Manager.** Differences between machines, models and authority are
-> declared on the Manager (§2.8, and `.docs/PHASE2_ROUTING_DESIGN.md` §a), never
-> on a Worker. A Worker inherits its Manager's engine, duties and strategies and
+> declared on the Manager (§2.8), never on a Worker. A Worker inherits its Manager's engine, duties and strategies and
 > declares none of its own, so assignment never reasons about *which Worker* —
 > only which Manager, over a handful of declared attributes.
+
+### §7.1 Review convention — one addition
+
+Add as a new paragraph **after** that bullet list ends (the list finishes "There
+is no round 3." — prose pasted mid-list lands inside a bullet). Note §7.1's own
+⚠: it instructs a Claude session rather than describing something rite enforces,
+so the channel rule is stated here as instruction and **enforced** by the tier
+design's own test, not by this section:
+
+> **And never instructed by what they review.** A reviewer's context is built
+> from rite's own template, the project spec, and the work under review **as
+> evidence** — never from text the reviewed party can place in the reviewer's
+> instructions (§2.8.2, RL-43's register number). Learned or generated guidance, where it exists,
+> reaches the party doing the work and not the party checking it. A change that
+> reduces review rounds is judged against defects found later, net of rework
+> (RL-44's register number).
+
+### §8 Configuration — the keys these sections depend on
+
+**Without this edit the new §2.8 and §2.9 describe configuration SPEC does not
+define.** §8.3's example has no `managers:` block at all, and §2.9.1's "the same
+path as unknown config keys (§8)" points at a §8 that never mentions a strategy.
+Add to §8.3's annotated `config.yaml`, after `expertise:`:
+
+> ```yaml
+> managers:                       # §2.8 — omit entirely for a one-Manager project
+>   lead:
+>     preset: lead                # a named default over engine + duties
+>   planner:
+>     preset: planner
+>     engine: local:large         # claude | local:<class> | human
+>     endpoint: http://localhost:11434/v1    # local engines only
+>     model: qwen3:32b            # what the endpoint calls it
+>     agent: opencode             # the tool-using agent rite drives
+>     questions: relay-to-owner   # this Manager's own strategy, if the project allows it
+>
+> strategies:                     # §2.9 — omit for `solo`, which is today's behaviour
+>   profile: team                 # solo | team | org
+>   questions:
+>     allowed: [relay-to-owner, relay-to-decomposer]
+>   escalation:
+>     outstanding: 1              # how many questions may face a person at once
+>     per_hour: 6
+> ```
+>
+> **No secret appears here.** An endpoint is a URL; a key, if one is ever needed,
+> is named like any other credential and lives in the keychain (§10).
+>
+> Unknown keys and unknown strategy *values* are refused the same way, with a
+> suggestion and the valid set — a strategy value is never silently defaulted.
 
 ### §13 — D-6 replacement row
 
@@ -136,18 +267,6 @@ Replace:
 with:
 
 > | D-6 | Expert unavailability | **Timeout and reroute; a timeout is a decline** | Configurable timeout (~2 hours). Fallback to next-best match, then Owner. **A timed-out member joins the question's declined set and is not asked again, which is what bounds rerouting** (§2.9.3); their late answer is still accepted while the question is open. Block only if Owner explicitly requires a specific person. |
-
-### §7.1 Review convention — one addition
-
-Add after "never staffed by whoever proposed them":
-
-> **And never instructed by what they review.** A reviewer's context is built
-> from rite's own template, the project spec, and the work under review **as
-> evidence** — never from text the reviewed party can place in the reviewer's
-> instructions (§2.8.2, D-96). Learned or generated guidance, where it exists,
-> reaches the party doing the work and not the party checking it. A change that
-> reduces review rounds is judged against defects found later, net of rework
-> (D-97).
 
 ### §13 — notes on D-20 and D-21
 
@@ -221,7 +340,7 @@ Append to D-21's rationale:
 > - **Composition** — accepted subtask branches are applied in decomposition
 >   order; a conflict between them returns the decomposition to plan review with
 >   the paths named, because two subtasks that conflict should not have been
->   separate (D-99). `rite doctor` refuses a configuration with
+>   separate (RL-46's register number). `rite doctor` refuses a configuration with
 >   a `decompose` holder and no such reviewer.
 > - **Mechanical verify** — a subtask is done only when its own verify passes.
 > - **Recomposition verify** — the parent ticket's verify runs on the combined
@@ -374,8 +493,8 @@ Append to D-21's rationale:
   > Owner and routing waits visibly; this is the existing lease-expiry path, not
   > a new one.
 
-  D-85 is RL-32's register number under the mapping in §0; confirm it when the
-  register rows land.
+  Its D-number is RL-32's under §0's arithmetic — `base + 32` — filled in at
+  apply time, never copied from here.
 - **§9 (CLI)** gains `rite help strategies` and doctor/status output; those are
   described where they are built (RL-T20, RL-T25), not pre-written here, because
   their wording comes from the registry rather than from prose.

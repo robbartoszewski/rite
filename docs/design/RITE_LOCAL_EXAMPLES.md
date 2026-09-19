@@ -13,7 +13,7 @@ output they would read — and writing it found one gap in the spec already
 ```yaml
 # .rite/config.yaml — a solo developer, one Manager
 project:
-  name: example-app
+  name: bentora-lex
 managers:
   mbp: {}
 ```
@@ -74,7 +74,7 @@ Things this configuration already guarantees, without anyone asking for them:
 ```yaml
 managers:
   lead:      {preset: lead, expertise: [infrastructure]}
-  alice:       {preset: lead, expertise: [billing, compliance]}
+  ana:       {preset: lead, expertise: [billing, compliance]}
   pm:        {preset: pm, engine: human, expertise: [business]}
   planner:   {preset: planner, endpoint: http://gpu.local:8000/v1, model: qwen3:32b, agent: opencode}
   exec-1:    {preset: executor, endpoint: http://localhost:11434/v1, model: qwen3:4b, agent: opencode}
@@ -90,7 +90,7 @@ strategies:
 `team` sends questions to the Owner, who distributes by expertise. `pm` on a
 `human` engine answers business questions through the board and **cannot be
 Owner** (RL-32) — it holds no session to renew a lease, and `rite doctor` says so
-as a note rather than an error, because `lead` and `alice` are eligible.
+as a note rather than an error, because `lead` and `ana` are eligible.
 
 `escalate-to-user` is absent from `allowed`, so no Manager escalates to its own
 person; questions go through the Owner. That is a project's call, not rite's.
@@ -172,15 +172,15 @@ Owner.
 
 ```
 questions
-  #41  "Should retries be idempotent?"   with alice   2h   routed by expertise: billing
+  #41  "Should retries be idempotent?"   with ana   2h   routed by expertise: billing
   #44  "Which currency rounds?"          escalated  40m  outstanding — your answer needed
   #45  "Does #44 cover the tax table?"   escalated  38m  aggregated into #44
-  #47  "Is ABC-88's intent per-tenant?"  held       12m  waiting for budget — planner parked
+  #47  "Is BEN-88's intent per-tenant?"  held       12m  waiting for budget — planner parked
 
 escalations to you: 1 outstanding, 1 held, 3 of 6 this hour used
 ```
 
-`#41` is routed, not escalated: `alice` declared `billing` expertise and holds
+`#41` is routed, not escalated: `ana` declared `billing` expertise and holds
 `decide`, so it costs Robert nothing. `#45` aggregated into `#44` (RL-38) because
 they share a ticket, so they are one interruption rather than two. `#47` arrived
 past the ceiling and is **held for him to pull** rather than queued as a prompt
@@ -194,7 +194,7 @@ output can bury `rite stop`** (RL-41).
 A ticket through the three-tier configuration of §2, including the parts that go
 wrong — which is the half worth reading.
 
-1. **`lead` assigns** `ABC-88` to `planner` (duty routing: `decompose`).
+1. **`lead` assigns** `BEN-88` to `planner` (duty routing: `decompose`).
 2. **`planner` decomposes** it into four subtasks, each with a scope and a verify
    command, using the ticket's spec-digest slice.
 3. **`lead` reviews the plan** (RL-6 — different Manager, different engine). It
@@ -217,7 +217,7 @@ wrong — which is the half worth reading.
    is ambiguous. `planner` declines to the Owner (S3). `lead` holds
    `answer-or-escalate`, the spec does not settle it, so it escalates to Robert —
    **one outstanding escalation** (RL-37).
-10. **Two more questions arrive** while Robert is asleep. Both share `ABC-88`, so
+10. **Two more questions arrive** while Robert is asleep. Both share `BEN-88`, so
    they aggregate into one waiting item (RL-38) and are **held**, not prompted
    (RL-39). `escalation-exhausted: park` means both Managers mark their tickets
    blocked and take other work; nobody guesses (RL-40).

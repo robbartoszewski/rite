@@ -1,8 +1,18 @@
 # rite local — Manager tiers backed by local models
 
-**Status: design for approval. Nothing built.** Written 2026-09-17 against
-`origin/main` at `68fdc00`. Decisions are numbered `RL-n` here and take the next
-free numbers in SPEC's register (currently D-54 onward) on adoption. The
+**Status: approved in part and PARTLY BUILT.** Written 2026-09-17 as a design
+for approval; re-checked against `origin/main` on 2026-09-19, when the banner
+"nothing built" stopped being true. Verified on `origin/main`:
+`src/rite_ai/local/` carries `harness.py` (RL-T6), `duty_router.py` (RL-T5),
+`decomposition.py` (RL-T4), `engine_probe.py` and `runners.py`, landed over
+`cf14d6b`…`591e733`. This session wrote none of it and has not reviewed it
+against the tickets' done-when criteria. There is **no `manager` command group**
+in the CLI, so nothing starts, stops or counts a local Manager yet — which is
+RL-T32, and the reason a set of landed modules is not yet a working tier. Decisions are numbered `RL-n`
+here and take the next free numbers in SPEC's register **at the time of
+adoption** — D-62 onward as of 2026-09-19, and the register moves: it gained
+D-54 to D-61 in the two days this note took to write. Recompute before pasting;
+do not trust the number written here. The
 implementation plan is in [`RITE_LOCAL_TICKETS.md`](RITE_LOCAL_TICKETS.md).
 Revised the same day to add **strategies** (§8, RL-20 to RL-34), coordination-backend neutrality (§6.5, RL-35 to RL-36) and escalation budgets (§8.9, RL-37 to RL-41), with question
 routing by source (Robert's design) replacing a hop count.
@@ -53,7 +63,7 @@ rather than to answer. Terms below are defined in §3 (engines, duties) and §8
 | Q7 | `managers:` config and Manager schema (P2-0a, P2-0b), both `[NEEDS DECISION]` | RL-T3, and through it most of the plan | `engine:`, `duties:`, `preset:`, `questions:` per entry |
 | Q1 | One machine or several | Whether Phase 2's cross-machine core is a dependency, and how much §6.5's scope split buys | One machine |
 | Q2 | Does the PM run a Claude session | RL-T2, RL-T14 | Both expressible; `human` in the examples |
-| Q6 | Build SPEC §4 expertise routing now | `distribute-by-expertise`, the `team` and `org` profiles, the PM's business questions | Not built: only `solo` exists until it is |
+| ~~Q6~~ | **Answered** (RL-54): rite distributes the expertise table, no resolver in code | — | What remains is shipping the distribution, not a decision |
 | Q3 | Plan review on every decomposition | RL-T8 | Every one |
 | Q13 | Only a `decide` + `board` holder, not `human`, may be Owner | P2-2b election; RL-T21 | Yes |
 
@@ -95,7 +105,7 @@ Nothing here is a parallel model. Each piece extends something already designed.
 | Blast radius | SPEC §5.1.1, `test_blast_radius.py` | rite's own code never pushes or opens a PR. Decides who integrates. |
 | Context concentration | SPEC §2.5.9, D-29 | Local models have small context windows, which makes this worse; step review is stateless because of it. |
 | Phase 2 core tickets | `.docs/PHASE2_TICKETS.md` | State-layer interface + local backend (P2-1a), Manager schemas (P2-0b), unknown-key round-trip (P2-1d), heartbeat with in-flight count (P2-4a), refusal (P2-4c). |
-| Spec digest | `.docs/SPEC_DIGEST_DESIGN.md` | Per-ticket slices at a median 2.3% of the spec — the only spec form a small model can actually read. |
+| Spec digest | D-54 to D-57, `rite spec slice` | Per-ticket slices at a median 2.3% of the spec — the only spec form a small model can actually read. **Shipped since this note was started**, which removes a blocker from RL-T7 and RL-T9. |
 | yoloAI agents | `yoloai system agents` (0.11.0) | Ships `aider` and `opencode`, both able to drive local models. The sandbox path already exists. |
 
 ---
@@ -494,7 +504,8 @@ A first-class Manager with engine `human` and duties `decide` and `board`, no
 - **Business questions**, through SPEC §4 expertise routing, by declaring expertise
   `business`. This is the "questions sent to the person who owns the area" item
   in the README's Planned section — rite local does not re-implement it, and this
-  routing is only as built as SPEC §4 is (not built; see Q6). `blocked-work`
+  routing is as built as the distributed expertise table is (RL-54 decided the
+  mechanism; shipping it is what remains). `blocked-work`
   (§8.1) then applies to a Worker waiting on one of those questions.
 - **Decisions and board ownership**, through the PM's duties.
 
@@ -596,7 +607,7 @@ through `relay-to-owner` or a decline.
 | Value | Kind | Requires | Meaning |
 |---|---|---|---|
 | `answer-or-escalate` | terminal | `decide` | As above, asking the Owner's person |
-| `distribute-by-expertise` | route | SPEC §4 built (Q6) | Route it to the best SPEC §4 match among `decide` holders **that have not declined it**, preferring a suggestion made by a decline |
+| `distribute-by-expertise` | route | the published expertise table (RL-54) | Route it to the best expertise match among `decide` holders **that have not declined it**, preferring a suggestion made by a decline. Matching is judgement against a table rite distributes — **no resolver in code**, so two machines cannot disagree about who knows what |
 | `escalate-to-user` | terminal | — | Ask the Owner's person |
 
 **`expert-unavailable`** — a Manager a question was routed to does not answer
@@ -667,7 +678,7 @@ person otherwise. Adopting strategies changes nothing for an existing project.
 
 **`team` and `org` do not exist until SPEC §4 expertise routing does.** Both route
 the Owner's questions by expertise, and rite does not substitute (§8.5), so until
-SPEC §4 is built (Q6) choosing either is a **parse error**, and no override rescues
+the expertise table is distributed (RL-54) choosing either is a **parse error**, and no override rescues
 it — a profile that parses must mean its whole table. The error names the missing
 feature and the nearest configuration that works today: `profile: solo` with
 `questions: relay-to-owner`, which sends questions to the Owner without
@@ -1096,9 +1107,9 @@ provided every tier runs on one machine (Q1).
 | `managers:` in config (P2-0a) | Where a Manager is declared at all | `[NEEDS DECISION]` |
 | Heartbeat with in-flight count (P2-4a) | Free-capacity routing | not built |
 | Refusal (P2-4c) | A mis-routed subtask needs somewhere to go; `task-refused` | not built |
-| SPEC §4 expertise routing | `distribute-by-expertise`, the PM's business questions | designed, not built (Q6) |
+| The distributed expertise table | `distribute-by-expertise`, the PM's business questions | mechanism decided (RL-54); distribution not shipped |
 | Durable question record | Source and declined set must survive a session ending and an Owner changing; inter-machine scope once relayed (§6.5) | new; built on P2-1a (RL-T21) |
-| Spec digest slices | A small model cannot read the spec, or follow a pointer into it | parsing landed; command not installed |
+| Spec digest slices | A small model cannot read the spec, or follow a pointer into it | **built** — `rite spec index` / `slice` / `stamp`, specified in D-54 to D-57 |
 | Git CAS and leader election (P2-1b/c, P2-2) | **Only if tiers span machines** | not built |
 
 ---
@@ -1145,7 +1156,7 @@ show it wrong.
 | RL-14 | Where inference runs | **On the host, behind an OpenAI-compatible endpoint; tool execution sandboxed** | Keeps GPU access out of the sandbox problem, and requires an endpoint rather than a runtime. |
 | RL-15 | A non-coding Manager | **First-class: engine `human` (or `claude`), duties without `execute`. Business questions reach the PM through SPEC §4 expertise, not a duty** | "Who owns this area" is expertise; "what is this Manager for" is duties. The PM needs both and does not need a model. |
 | RL-16 | Phase 2 dependency | **Interface-level core only, if all tiers share a machine** | Several Managers must coordinate, which needs the state interface — but not git CAS or election unless machines differ. |
-| RL-17 | What an executor reads | **The spec-digest slice for its subtask — never the spec, and never a pointer into it** | D-52's pointer assumes a context large enough to read the file. A small model's does not. |
+| RL-17 | What an executor reads | **The spec-digest slice for its subtask — never the spec, and never a pointer into it. `rite spec slice <unit> --worker`, at D-55's depth 1 plus pinned hubs** | D-52's pointer assumes a context large enough to read the file; a small model's is not. D-55 already fixed the slice's shape and measured what it costs to widen it, so this decision adopts that rather than inventing a second rule. |
 | RL-18 | Planners who also do work | **Their work is reviewed by a different instance: Claude work gets a separate Claude terminating check; planner work gets step review from a different planner, or escalates. A planner never executes a subtask from its own decomposition** | SPEC §7.1's "never staffed by whoever proposed them", applied across tiers. |
 | RL-19 | Whether this pays off | **Measured per tier, net of rework (D-39) — not assumed** | "Local tiers save Claude quota without costing delivered work" is the whole claim, and it is a hypothesis. |
 | RL-20 | Recurring situations | **Named strategies, a closed set of values per subject. No strategy can disable a gate or a fail-closed property** | More than two answers per subject; booleans can state contradictions. Flexibility is in routing, never in safety. |
@@ -1153,7 +1164,7 @@ show it wrong.
 | RL-22 | Strategies and engines | **A value requires duties, never an engine; the engine decides only delivery** | The PM, a Claude session and a local model all hold `decide` differently. Keying on an engine would build in an assumption about what a model can do. |
 | RL-23 | Where a strategy lives | **Routing subjects in project config only. `questions` has a project default, an `allowed` set, and a Manager override within it** | A routing policy on the Owner's Manager would change silently on failover. What a Manager does with its own questions is a legitimate personal call, and `allowed` lets a project remove it. |
 | RL-24 | Resolution | **Manager override → project override → preset default → profile → `solo`: explicit before implicit. The result must be valid, satisfy its requirement and be allowed, whatever its source — otherwise an error, never a substitute** | A substituted value is a question going somewhere nobody chose. |
-| RL-25 | Unknown values | **Refused at parse through the same mechanism as unknown keys, with a suggestion and the valid set with meanings. On Manager records, preserved on write and refused when acting. A newer value in committed project config stops an older rite, which gives up the Owner lease if it holds it** | One failure shape for keys and values. Round-trip (P2-1d) and fail-loud are compatible once writing and acting are separated. |
+| RL-25 | Unknown values | **Refused at parse through the same mechanism as unknown keys, with a suggestion and the valid set with meanings. On Manager records, preserved on write and refused when acting. A newer value in committed project config stops an older rite, which gives up the Owner lease if it holds it** | One failure shape for keys and values. Round-trip (P2-1d) and fail-loud are compatible once writing and acting are separated — **the same shape SPEC already chose in D-58**: pass the bytes verbatim, fail closed on the decision that needed them. |
 | RL-26 | Termination | **By source, not hop count. Only an own question can be relayed, once, by its origin. A routed question is answered, escalated, or declined to the Owner. The Owner never routes to a Manager that declined** | A hop count approximates the rule; source is the rule, and a relayed-back question is wrong on the first attempt. Remembering declines is what makes the single router's re-routing finite. |
 | RL-27 | Refused tasks | **The same never-re-offer rule; with no eligible Manager left, hold and report** | One rule for both kinds of routed thing. |
 | RL-28 | Discoverability | **One registry renders parse errors, `rite help strategies`, doctor, the init question and CLAUDE.md** | A named value is better than a boolean only if a person can find what it means where they meet it. |
@@ -1170,7 +1181,7 @@ show it wrong.
 | RL-39 | Past the ceiling | **Escalations are held and pulled from `rite status`, never queued as prompts; a held escalation expires into held, never into discarded** | A hundred waiting prompts is the same lockout, deferred. Pull keeps the person in control of when they are interrupted; holding rather than discarding keeps the question. |
 | RL-40 | Wanting to escalate with no budget | **A sixth subject, `escalation-exhausted`: `park` (default), `stop`, or `proceed-with-assumption` — the last requires `decide`, records the assumption on the ticket, and marks the work provisional so plan review and `integrate` must see it** | "Ask anyway" is what the budget exists to refuse, and silence is worse. Proceeding is legitimate only when what was assumed is written where a reviewer has to read it. |
 | RL-41 | The stop channel | **rite never occupies the surface a person would use to stop it: one outstanding request plus a pullable list, never a stream that can bury `rite stop`. Not configurable** | The lockout was not caused by the number of prompts alone but by prompts owning the only channel back. Any future delivery mechanism inherits this. |
-| RL-42 | Declaring a local engine | **A `local:*` Manager declares `endpoint`, `model` and `agent`; `<class>` stays a label. `rite doctor` probes each. No secret in config — a key, if needed, is a keychain entry named by config (SPEC §10)** | `local:large` names a tier, not a runtime, and two projects' "large" differ. Probing rather than locating is what already makes `doctor` honest about sandboxes. |
+| RL-42 | Declaring a local engine | **A `local:*` Manager declares `endpoint`, `model` and `agent`; `<class>` stays a label. `rite doctor` probes each. No secret in config — a key, if needed, is a keychain entry named by config (SPEC §10)** | `local:large` names a tier, not a runtime, and two projects' "large" differ. Probing rather than locating is what already makes `doctor` honest about sandboxes. **Built 2026-09-18 (`8c19d45`)**, with one addition the writing did not anticipate: "could not ask" is never reported as "not there" — plenty of OpenAI-compatible servers do not serve `/v1/models`, and a 404 there means the question cannot be put, not that the model is missing. |
 | RL-43 | Instruction channels | **A tier may not write the instructions of a tier that reviews it. Reviewer context is built by rite from its own templates, the project spec and artifacts read as evidence; learned content, if it ever exists, reaches workers only** | The earlier prototype fed learned conventions to workers and reviewers through one channel, and a rule like "don't re-litigate style in review" cut review rounds by cutting review depth. Segregate the channel, not the wording. |
 | RL-44 | A metric that flatters | **Fewer review rounds is not a success measure. Any change that reduces them is judged against defects caught later, net of rework (D-39)** | A leaky instruction channel improves round counts first, which is exactly what a reviewer that stopped looking also does. |
 | RL-45 | Claims carry falsifiers | **Every hypothesis in this design ships with a threshold written down before the spike that tests it, and the action to take when it is missed (§12 of this note)** | A threshold chosen after the numbers arrive is a rationalisation. This is also the only defence against the sunk-cost version of "keep going because it is built". |
@@ -1189,6 +1200,44 @@ show it wrong.
 | RL-57 | Whether an unattended tick may write to the shared board | **One switch, `coordination.assign_unattended` (default false), covering BOTH board arms — the Owner assigning to a Manager and the Manager distributing to its Workers — with Q9's three unambiguity rules on whether or not the switch is** | Robert answered Q9 "yes, with the three rules"; the question's own recommendation is the middle option, and the middle is what a project that has not decided needs, because the off position now SAYS it is off. One key rather than two: they are the same act, and allowing the first while forbidding the second produces tickets that move one step and stop. Built 2026-09-18. |
 | RL-58 | Whether rule 3 needs a capacity field in the heartbeat | **No.** `schedule:` is committed config, so the Owner's `workers_at(schedule, minute)` is the same ceiling the receiving machine applies to itself. A published capacity becomes necessary only if machines may carry different schedules | The second time a claim about the heartbeat was made from inference rather than from the tree: first "`in_flight` does not exist" (it does), then "cross-machine still owes a capacity field" (it does not, at this config shape). Both were cheap to check and were not. `refusal.py`'s ⚠ about refusing "full" is still correct — that needs a Manager's OWN ceiling, which is a different number from the schedule's. |
 | RL-59 | Two documents, one identifier | **A question id is scoped to its document, and a design that cites another document's question says which.** `Q9` is "may an unattended tick assign work on the board" in `PHASE2-OPEN-QUESTIONS.md` and "the expertise tiebreak" in this one | Found by building: the instruction said "Q9 plus RL-T32/T33" and this document's Q9 is a different question entirely. Both are live, both are cited by bare number, and picking the wrong one is a whole piece of work aimed at the wrong target. Exactly the citation-gate defect (CGT-1) in prose rather than in code — an identifier that resolves by coincidence. |
+
+| RL-60 | A Manager is an identity on a machine — but rite has no way to say a machine hosts two | **RL-T32 is blocked on identity, not on process management, and the ticket says neither.** `.rite/machine` is one line and `this_manager()` returns one name; the scheduler runs one monitor and publishes one heartbeat. Q1's answer is "one machine", and RL-16 is "interface-level core only, if all tiers share a machine" — so this design's normal case is three Managers rite cannot name | Found by building RL-T32. The consequence is not a missing feature but a WRONG ANSWER: the Owner reads heartbeats for `lead`, `planner` and `executor`, two of which never publish, and `assign_to_manager` reports "no Manager can be given work" — correct, for a reason no reader would guess. And publishing a heartbeat for a Manager nothing runs would be worse: it advertises an idle machine that never moves the work. See §11.2. |
+
+---
+
+## 11.2. What RL-T32 is actually blocked on (RL-60)
+
+**The ticket reads "start, stop and count a `local:*` Manager". The blocker is
+one step earlier: nothing can BE one.**
+
+Measured on `origin/main` at `45cdda2`:
+
+| What the design assumes | What the code does |
+|---|---|
+| Several Managers, one machine (Q1: "one machine"; RL-16) | `.rite/machine` holds ONE name; `this_manager(root)` returns it or `None` |
+| Each Manager publishes its own heartbeat, and the Owner routes on them | `scheduler.run_tick` builds ONE `ManagerMonitor` for `this_manager` and publishes one heartbeat |
+| A ticket labelled `planner` is picked up by the planner | Nothing on the machine acts as `planner`; the tick acts as whatever `.rite/machine` says |
+
+**Two halves, and the second cannot be faked.** Making a machine host several
+names is cheap — `.rite/machine` becomes a list, `hosted_managers()` beside
+`this_manager()`, the tick publishes one heartbeat per hosted name. But a
+heartbeat for a Manager that nothing runs is a lie that costs more than the
+silence does: the Owner sees an idle Manager, assigns to it, and the ticket
+sits. So the identity change is only safe alongside something that actually
+runs as that Manager.
+
+**And that needs a concrete agent, which does not exist.**
+`local/harness.py` injects `Agent`, `Verifier` and `Committer` as Protocols —
+deliberately, because RL-T0 has not reported on which agent is adopted — and
+`src/` constructs none of them. Two of the three are rite's own code and need
+no model: running a declared verify, and committing a scope to a local branch.
+The third is the one waiting on RL-T0.
+
+**So the order is:** concrete `Verifier` and `Committer` → an agent adapter
+(RL-T0) → multi-Manager identity → start/stop/count. RL-T32 sits at the end of
+that chain, and its ticket names none of it. This is RL-56 for the third time:
+the seam between two mechanisms, unrepresented, because each ticket was
+written from inside one of them.
 
 ---
 

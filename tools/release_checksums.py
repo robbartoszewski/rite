@@ -5,7 +5,7 @@ README install option 2 tells a reader to run `shasum -a 256 install.sh` and
 compare the result "against the v0.1.0 release notes". That instruction is
 only worth anything if the release notes actually carry the digest, and carry
 the digest of the bytes GitHub will serve from the tag. Until now both halves
-were a step in `.docs/PUBLISH_RUNBOOK.md` that a human ran by hand and pasted
+were a step in `docs/private/PUBLISH_RUNBOOK.md` that a human ran by hand and pasted
 by hand, with nothing checking either.
 
     python3 tools/release_checksums.py            # the block to paste

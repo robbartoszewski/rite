@@ -235,7 +235,7 @@ def rite_install_spec(version: str | None = None) -> str:
     deliberately, because asking would mean `rite init` making a network
     call to GitHub to write a local file, and failing or hanging when it
     could not. So a release-shaped version pins `v<version>` whether or not
-    that tag has been pushed yet; `.docs/PUBLISH_RUNBOOK.md` step 7 is
+    that tag has been pushed yet; `docs/private/PUBLISH_RUNBOOK.md` step 7 is
     where that is checked, and until the tag lands the generated workflow
     fails loudly at install rather than scanning nothing quietly.
 

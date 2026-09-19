@@ -183,16 +183,26 @@ def test_it_publishes_the_command_the_readme_tells_the_reader_to_run():
 
 
 def test_the_runbook_points_at_the_tool_rather_than_a_manual_paste():
-    """Skipped where `.docs/` is absent, which is everywhere but a maintainer's
-    own checkout: `.gitignore` excludes it, so the runbook never ships.
+    """Skipped where the runbook is absent, which is everywhere but a
+    maintainer's own checkout: it is private, so it never ships.
 
     Without the skip this failed in every fresh clone — including the one the
     runbook's own step 4 tells you to make and run the suite in. A test that
     goes red on the instruction to run it teaches people to ignore red.
+
+    Two locations because the docs split moves private notes from `.docs/`
+    to `docs/private/` one machine at a time, and a maintainer whose copy has
+    not moved yet should keep getting the check rather than a silent skip —
+    a skip that starts firing for a new reason is indistinguishable from the
+    check still running.
     """
-    runbook = REPO_ROOT / ".docs" / "PUBLISH_RUNBOOK.md"
-    if not runbook.is_file():
-        pytest.skip("`.docs/` is gitignored and absent — maintainer-only check")
+    candidates = (
+        REPO_ROOT / "docs" / "private" / "PUBLISH_RUNBOOK.md",
+        REPO_ROOT / ".docs" / "PUBLISH_RUNBOOK.md",
+    )
+    runbook = next((c for c in candidates if c.is_file()), None)
+    if runbook is None:
+        pytest.skip("the runbook is private and absent — maintainer-only check")
     assert "tools/release_checksums.py" in runbook.read_text()
 
 

@@ -2,7 +2,32 @@
 
 Claimable tickets for [`RITE_LOCAL_DESIGN.md`](RITE_LOCAL_DESIGN.md), whose SPEC
 edits are pre-written in
-[`RITE_LOCAL_SPEC_PATCH.md`](RITE_LOCAL_SPEC_PATCH.md). **Nothing built.** Sized for one worker, one sitting. Tickets cite `RL-n` decisions and
+[`RITE_LOCAL_SPEC_PATCH.md`](RITE_LOCAL_SPEC_PATCH.md).
+
+**Two kinds of claim appear in this file, and they are not the same.**
+
+| Marker | Means | Who can write it |
+|---|---|---|
+| **✅ LANDED** + commits and a sentence on the behaviour | Someone checked the ticket's **done-when** and says it holds | The session that built it, or a reviewer |
+| **code exists — done-when outstanding** | A module or commit matching this ticket is on `origin/main`; nobody has checked it against the done-when | Anyone who can see the tree |
+
+A module existing is not a ticket satisfied. A commit title matching a ticket
+title is weaker still — it is the same shape as a check that did not run reading
+like a check that passed, which is the defect family this project keeps hitting.
+
+**Partly built as of 2026-09-19.** Verified on `origin/main`:
+`src/rite_ai/local/harness.py`, `duty_router.py`, `decomposition.py`,
+`engine_probe.py`, `runners.py` — so RL-T4, RL-T5 and RL-T6 have code, and
+RL-T16's engine probe does too — all **code exists, done-when outstanding**.
+The session maintaining this file wrote none of it and has checked none of it.
+No `manager` CLI group exists, so RL-T32 is the gap between landed modules and a
+tier that runs.
+
+**Five tickets are in that state: RL-T4, RL-T5, RL-T6, RL-T35, and RL-T16's
+probe.** RL-T33 is the one exception — it carries commits and a behavioural note
+from whoever built it. Worth Robert knowing: if the outstanding verification
+finds gaps, they arrive as **rework inside whatever release contains them**,
+which is the one way an estimate grows without the ticket count moving. Sized for one worker, one sitting. Tickets cite `RL-n` decisions and
 SPEC sections rather than restating them; if a ticket and a decision disagree,
 the decision wins and the ticket is the bug.
 
@@ -14,29 +39,32 @@ them in one import without a local-id collision.
 ## ⚠ Read first — almost nothing here can start today
 
 > ⚠ **CORRECTED 2026-09-19, against the tree rather than against this file.**
-> Three of its load-bearing claims are no longer true, and they are the ones
-> a reader acts on first:
+> Three of this document's load-bearing claims are no longer true, and they
+> are the three a reader acts on first:
 >
 > - **"Phase 2 interface-level core is not built"** — it shipped in v0.4.0.
 >   `src/rite_ai/coordination/` carries the state layer, both backends,
->   heartbeats, assignment, refusal and election. The "stuck at round 3"
->   simulation below rests on that premise and does not hold.
+>   heartbeats, assignment, refusal and election. The "completely stuck at
+>   round 3" simulation below rests on that premise and does not hold.
 > - **"Three tickets are startable now"** — RL-T0, RL-T3 and RL-T6 have
->   LANDED, with the duty router wired into assignment (27ba231), durable
->   decomposition (8d19410) and the harness body (4582bb8). `git log
->   v0.4.0..main` is the status; the per-ticket bodies below have NOT been
->   re-statused one by one, so read each as a description of the work.
+>   LANDED (see `git log v0.4.0..main`), along with the duty router wired
+>   into assignment (27ba231), durable decomposition (8d19410) and the
+>   harness body (4582bb8).
 > - **"Thirty-two tickets"** — there are thirty-six. RL-T32, RL-T33 and
->   RL-T34 (the missing start path, the router call, the integrate handoff)
->   were added on 2026-09-18 to a COPY of this file at
->   `~/AI/rite/.docs/RITE_LOCAL_TICKETS.md`, which is 904 lines to this
->   one's 765. `.docs/` is gitignored and these five `RITE_LOCAL_*` files
->   were force-added, so the working copy someone edits and the committed
->   copy a new session clones have drifted apart. **This file is the one a
->   stranger gets.** Reconciling them is a decision, not a merge: the other
->   copy has content this one lacks, and nobody has said which is canonical.
+>   RL-T34 were added on 2026-09-18, and for a day they existed only in an
+>   untracked working copy: `.docs/` was gitignored, five notes had been
+>   force-added into it, and git therefore stopped reporting drift on them.
+>   The committed copy a fresh clone received was 116 lines behind this one,
+>   and nothing ever said so. **The move that brought this file here fixes
+>   that** — `docs/` is tracked, `docs/private/` is the only ignored half,
+>   and an edit to this file is now a diff like any other.
+>
+> The per-ticket bodies below have NOT been re-statused one by one; treat
+> each as a description of the work, not as a claim about whether it is
+> done. `git log` is the status. A plan whose finished rows read as future
+> work is how the next session rebuilds something that exists.
 
-**Of thirty-two tickets, three are startable now, one more once Robert answers
+**Of thirty-six tickets, three are startable now, one more once Robert answers
 Q1 and Q2, two more behind those — and then the plan is completely stuck**
 (simulated at the end of this file).
 Everything that builds rite local sits behind Phase 2 interface-level core that
@@ -65,7 +93,7 @@ per RL-16, unless tiers span machines:
 | P2-1d unknown keys round-trip | RL-T3 |
 | P2-4a heartbeat with in-flight count | RL-T5, RL-T6 |
 | P2-4c a Manager can refuse | RL-T5 |
-| Spec digest slices (`/spec-digest` installed) | RL-T7, RL-T9 |
+| ~~Spec digest slices~~ | **cleared 2026-09-19** — `rite spec index` / `slice` / `stamp` shipped (D-54 to D-57) |
 | **P2-1b/c, P2-2a–P2-2e cross-machine core** | **Only if tiers span machines — Q1** |
 
 ### Where claims will collide
@@ -108,7 +136,7 @@ RL-T1 spike: endpoint ───┼───────────────�
                                                             RL-T17 measurement
 
 RL-T2 SPEC adoption            — independent, after Q1/Q2
-RL-T14 PM manager              — after RL-T3; business questions need SPEC §4 (Q6)
+RL-T14 PM manager              — after RL-T3; business questions need the expertise table (RL-54)
 RL-T15 planner idle work       — after RL-T5, RL-T9, RL-T10
 RL-T16 doctor/status           — after RL-T6
 RL-T24 backend neutrality test — after RL-T6
@@ -260,10 +288,11 @@ code (RL-35); git is used only to commit to the local task branch.
 
 Decisions: RL-11, RL-12, RL-13, RL-14, RL-35.
 
-### RL-T7 — Decompose duty  ·  blocked by: RL-T4, RL-T6, spec digest
+### RL-T7 — Decompose duty  ·  blocked by: RL-T4, RL-T6
 
-Given a ticket and its spec-digest slice, produce a decomposition (RL-T4) with a
-verify command per subtask and cited decisions. Released to nobody — it goes to
+Given a ticket and its spec-digest slice — `rite spec slice <unit> --worker`,
+which shipped while this plan was being written — produce a decomposition (RL-T4)
+with a verify command per subtask and cited decisions. Released to nobody — it goes to
 plan review.
 
 Decisions: RL-6, RL-7, RL-17.
@@ -285,7 +314,7 @@ that reaches a person (Q16, RL-T25).
 
 Decisions: RL-6, RL-7.
 
-### RL-T9 — Execute duty  ·  blocked by: RL-T6, RL-T8, spec digest  ⛔ critical path
+### RL-T9 — Execute duty  ·  blocked by: RL-T6, RL-T8  ⛔ critical path
 
 One approved subtask: run it with its slice, verify, commit locally. The
 executor reads the slice, never the spec or a pointer into it (RL-17).
@@ -339,11 +368,14 @@ Claude-authored work gets a **separate** Claude session's terminating check
 
 Decisions: RL-11, RL-18.
 
-### RL-T14 — Project manager Manager  ·  blocked by: RL-T3; business questions blocked by Q6
+### RL-T14 — Project manager Manager  ·  blocked by: RL-T3; business questions need the distributed expertise table (RL-54)
 
 Engine `human` (or `claude`, per Q2), duties `decide` and `board`, no `execute`.
-Declares expertise `business`. Board and decision duties work without SPEC §4; the
-business-question half needs SPEC §4 expertise routing, which is not built.
+Declares expertise `business`. Board and decision duties work on their own; the
+business-question half needs the expertise table rite distributes — **Q6 is
+answered** (RL-54: rite publishes the table, no resolver in code), so what
+remains is shipping the distribution, not a decision. Anyone excluding this from
+a release on "Q6 is open" should restate the reason.
 
 Decisions: RL-15.
 
@@ -469,7 +501,7 @@ no hand-maintained copy.
 
 Decisions: RL-28.
 
-### RL-T21 — Question routing by source, S1–S4  ·  blocked by: RL-T19, RL-T4, P2-1a; distribution also Q6 and Q9  ⛔ the composition ticket
+### RL-T21 — Question routing by source, S1–S4  ·  blocked by: RL-T19, RL-T4, P2-1a; distribution also needs the expertise table (RL-54) and Q9  ⛔ the composition ticket
 
 A question record in the state layer: origin, **source of each delivery (set by
 rite when it delivers, never by the Manager)**, declined set with each decline's
@@ -477,8 +509,9 @@ suggestion, status. No hop count.
 
 Implement the routed actions and S1–S4 (design §8.1, §8.7), `owner-questions`
 and `expert-unavailable`; a timeout is recorded as a decline. The Owner is a
-candidate like any Manager (§8.7.1). Without SPEC §4 (Q6), `distribute-by-expertise`
-is a parse error (RL-T18) rather than silently treated as `escalate-to-user`.
+candidate like any Manager (§8.7.1). Until the expertise table is distributed
+(RL-54), `distribute-by-expertise` is a parse error (RL-T18) rather than silently
+treated as `escalate-to-user`.
 
 Tests, **all required**:
 - every row of design §8.7's table, exactly, including the B→C→B suggestion
@@ -665,7 +698,76 @@ with a `local:*` Manager and no way to start it is the Phase 2 failure repeated
 **Done when** a project declaring one `claude` and one `local:small` Manager can
 be brought up and down with the ordinary commands, and `rite status` shows both.
 
-### RL-T33 — Assignment consults the duty router  ·  blocked by: RL-T5  ⛔ wiring
+> **⚠ Re-scoped 2026-09-18 by building it. This ticket's blockers are wrong,
+> and the work is not process management.** Measured at `origin/main`:
+> `.rite/machine` holds ONE name, `this_manager()` returns one, and the
+> scheduler tick builds one `ManagerMonitor` and publishes one heartbeat. This
+> design's Q1 answer is "one machine" and RL-16 is "interface-level core only,
+> if all tiers share a machine" — so the normal case is three Managers rite
+> has no way to name. The real chain, in order:
+>
+> 1. **RL-T35** — a machine hosts several Managers (below);
+> 2. an **agent adapter**, because a heartbeat for a Manager nothing runs is
+>    worse than silence: it advertises an idle machine that never moves the
+>    work. `local/harness.py` injects `Agent`, and RL-T0 decides which. The
+>    `Verifier` and `Committer` halves are built (`local/runners.py`);
+> 3. then start/stop/count, which is what this ticket describes.
+>
+> The reporting half IS done: the monitor is constructed with
+> `backend=`/`schedule=` and a tick now says why it did not distribute rather
+> than looking like a tick with nothing to hand out. See RL-60 and §11.2 of the
+> design.
+
+### RL-T35 — A machine can be more than one Manager  ·  blocked by: RL-T3  ⛔ wiring, and RL-T32 is behind it
+
+> **Code exists — done-when outstanding.** `40a4d5b` "Let a machine be more than
+> one Manager, and say which of them never started" is on `origin/main`, and it
+> added `tests/test_hosted_managers.py`; both verified in the tree on
+> 2026-09-19. That is a commit title matching this ticket's title, **not** a
+> check that the done-when holds. (The SHA was `edf4e38` before `main`'s history
+> was rewritten; same commit.) Whoever built it can promote this to ✅ LANDED
+> with the behaviour named, as RL-T33 has.
+
+**Added 2026-09-18, found by building RL-T32.** `.rite/machine` is one line
+because Q8 answered "which Manager is this machine" — the question assumed the
+answer was one. rite local's whole shape breaks that assumption: a lead, a
+planner and an executor on one machine (Q1), each needing its own heartbeat,
+because the Owner routes on heartbeats and a ticket labelled `planner` is
+picked up by whatever publishes as `planner`.
+
+Today the other two are permanently unreadable, so `assign_to_manager` reports
+"no Manager can be given work" — the right answer, for a reason no reader would
+guess from the message.
+
+**Not just a file format.** Anything that takes this machine's name — the lease,
+claims, the election — must keep taking ONE (a machine holds one lease, and two
+local Managers competing for the Owner role on the same box is nonsense). So the
+change is a *primary* identity plus the Managers it hosts, not a list that
+replaces the name.
+
+**Done when** one machine publishes a live heartbeat per Manager it hosts, the
+Owner can assign to each of them, and `rite doctor` refuses a hosted name that
+is not in `coordination.managers`. **Not done** until something actually runs as
+each hosted Manager — see RL-T32's note.
+
+> **Naming half landed 2026-09-18 (`edf4e38`).** `.rite/machine` takes one name
+> per line, first line still the primary (the lease, the claims and standing
+> for Owner stay with one name); a file this version cannot read fully is not
+> enrolled rather than enrolled as its first line; a hosted name that is not in
+> `coordination.managers` is its own doctor report, separate from the primary's.
+>
+> And the fourth answer that made this visible: `Liveness.never_seen` splits
+> "published nothing, ever" from "the store could not be read" — a
+> configuration a person fixes by starting something, and a fleet nobody can
+> see, which had been sharing one sentence. `overview.py` reports `never
+> started`; when it is a Manager THIS machine hosts, it is a problem a human is
+> shown, because work labelled for it waits for ever.
+>
+> **Still not publishing** a heartbeat per hosted Manager, deliberately: one
+> for a Manager nothing runs is worse than the silence — it advertises an idle
+> machine that never moves the work. That waits for the agent adapter.
+
+### RL-T33 — Assignment consults the duty router  ·  blocked by: RL-T5  ⛔ wiring  ✅ LANDED 2026-09-18
 
 RL-T5 builds routing. Nothing changes `coordination/assignment.py` or `rite
 claim` to call it, so tasks keep being assigned exactly as before and the router
@@ -674,6 +776,12 @@ is dead code with tests.
 **Done when** a task whose stage needs `decompose` cannot be assigned to a
 Manager that lacks it, proven through the assignment path rather than by calling
 the router directly.
+
+> Landed at `27ba231` and `45cdda2`. `choose_manager`/`assign_to_manager` route
+> duty-first and load-second, refuse rather than falling back when nobody holds
+> the duty, and the Owner's assignment path is called from the scheduler tick
+> behind Q9's switch with Q9's three rules. A project that declares no roles
+> behaves exactly as it did (RL-4).
 
 ### RL-T34 — The composed branch reaches the `integrate` holder  ·  blocked by: RL-T11, RL-T13  ⛔ wiring
 
@@ -719,13 +827,15 @@ Decisions: RL-21, RL-28.
 Walked with three workers, each round taking up to three ready tickets:
 critical path first, then whichever unblocks the most, then by number.
 
-**Today — Phase 2 prerequisites not built:**
+**As simulated when Phase 2 was unbuilt — kept as the record of why the plan
+was shaped this way, and no longer the situation (see the correction at the
+top):**
 
 | round | ready | taken |
 |---|---|---|
 | 1 | 4 | RL-T0, RL-T18, RL-T1 |
 | 2 | 3 | RL-T2, RL-T20, RL-T23 |
-| 3 | **0** | — **stuck: the other 26 tickets all wait on Phase 2** |
+| 3 | **0** | — **stuck: the other 30 tickets all wait on Phase 2** |
 
 **With Phase 2 prerequisites resolved**, three workers, critical path first, then
 whichever unblocks most — and **RL-T3 and RL-T18 never in the same round**, since
@@ -734,20 +844,34 @@ they collide on `config/parse.py`:
 | round | ready | taken |
 |---|---|---|
 | 1 | 6 | RL-T0, RL-T3, RL-T4 |
-| 2 | 7 | RL-T18, RL-T5, RL-T1 |
-| 3 | 10 | RL-T6, RL-T8, RL-T19 |
-| 4 | 12 | RL-T9, RL-T21, RL-T7 |
-| 5 | 13 | RL-T30, RL-T10, RL-T25 |
-| 6 | 13 | RL-T11, RL-T27, RL-T2 |
-| 7 | 13 | RL-T13, RL-T12, RL-T14 |
-| 8 | 11 | RL-T15, RL-T16, RL-T17 |
-| 9 | 8 | RL-T20, RL-T22, RL-T23 |
-| 10 | 5 | RL-T24, RL-T26, RL-T28 |
-| 11 | 2 | RL-T29, RL-T31 |
+| 2 | 8 | RL-T18, RL-T5, RL-T1 |
+| 3 | 12 | RL-T6, RL-T8, RL-T19 |
+| 4 | 15 | RL-T9, RL-T21, RL-T7 |
+| 5 | 16 | RL-T30, RL-T10, RL-T25 |
+| 6 | 16 | RL-T11, RL-T27, RL-T2 |
+| 7 | 16 | RL-T13, RL-T12, RL-T14 |
+| 8 | 15 | RL-T15, RL-T16, RL-T17 |
+| 9 | 12 | RL-T20, RL-T22, RL-T23 |
+| 10 | 9 | RL-T24, RL-T26, RL-T28 |
+| 11 | 6 | RL-T29, RL-T31, RL-T32 |
+| 12 | 3 | RL-T33, RL-T34, RL-T35 |
 
-Eleven rounds, one idle worker-round. **Three workers are the binding limit from
-round 3 onward** — ready counts sit at 10 to 13 while three get taken — so this
-plan is worker-bound, not dependency-bound, once Phase 2 is in.
+Twelve rounds, no idle worker-rounds. **Three workers are the binding limit
+from round 3 onward** — ready counts sit in double figures while three get
+taken — so this plan is worker-bound, not dependency-bound, once Phase 2 is in.
+
+**This table spans the whole rite-local programme — every ticket in this file,
+not one release.** A release is a subset chosen for a capability, and the two
+orderings disagree on purpose: a scoping session building v0.5.0 takes nine
+tickets (RL-T0 → T8 → T9 → T30 → T11 → T13, plus the wiring T32, T28, T34) and
+**pulls the wiring forward**, because without a `manager` command nothing runs
+the harness at all, while dependency order naturally puts wiring last. Read the
+rounds below as "what could proceed in parallel", never as a release timeline.
+
+**Recomputed 2026-09-19 against the file's own `blocked by:` lines**, which now
+include RL-T32 to RL-T35, added by whoever is building from this plan. The
+parser reads the ticket headers rather than a list kept beside them, so this
+table cannot drift from the tickets without the tickets changing.
 
 **Take these earlier than the ordering does:**
 

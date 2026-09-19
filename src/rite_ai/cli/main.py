@@ -3143,7 +3143,7 @@ def publish_pre_push() -> None:
 # label/link — never the end-to-end "claim -> work -> PR -> review" workflow,
 # which is the Dispatch slash command per D-40. Built ahead of the
 # questionnaire/workspace work per the sequencing override in
-# .docs/IMPLEMENTATION_PLAN.md: the owner's own ticket queue was living in a
+# docs/private/IMPLEMENTATION_PLAN.md: the owner's own ticket queue was living in a
 # session's memory, which had already stalled work three times.
 
 

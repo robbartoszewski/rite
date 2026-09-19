@@ -221,16 +221,25 @@ would settle it. It costs quota, so it is Robert's call.
 
 `RL-T32` ("start, stop and count a `local:*` Manager"), `RL-T33` ("assignment
 consults the duty router") and `RL-T34` are **filed** in
-`.docs/RITE_LOCAL_TICKETS.md`, each with a rationale, a scope and a "Done when".
+`docs/design/RITE_LOCAL_TICKETS.md`, each with a rationale, a scope and a
+"Done when".
 
-> ⚠ **That file is not in the repository.** `.docs/` is the first line of
-> `.gitignore`, and `RITE_LOCAL_TICKETS.md` has never been committed on any
-> branch — it exists only on Robert's machine. **A fresh clone does not get the
-> RL backlog.** It was left that way deliberately: `.docs/` is an intentionally
-> ignored scratch area, and force-adding its contents to a public repository is
-> Robert's decision, not a sweep's. He has made that call selectively before —
-> the `preregistration/phase1` branch carries three `.docs/` files that were
-> added with `git add -f`.
+> ⚠ **CORRECTED 2026-09-19 — and this paragraph is why the split happened.**
+> It used to say: "That file is not in the repository. `.docs/` is the first
+> line of `.gitignore` ... **A fresh clone does not get the RL backlog.**"
+>
+> That was true, and it was the problem rather than a policy. The resolution
+> was not to force-add more of `.docs/` — force-adding into an ignored
+> directory is precisely what made five notes drift 49-119 lines behind
+> their working copies with git reporting nothing. It was to split the
+> directory: `docs/design/` is tracked and scanned by the publish gate,
+> `docs/private/` is the only ignored half, and a note is now either
+> published or deliberately withheld rather than both at once.
+>
+> The reasoning the old paragraph gave still stands for the private half:
+> what goes public is Robert's decision, not a sweep's. What changed is that
+> the decision is now recorded by where a file lives, instead of by whether
+> somebody remembered to force-add it.
 They were excluded from an unattended run on dependencies, not on absence: T32
 needs RL-T3 and RL-T6, T33 needs RL-T5, T34 needs RL-T11 and RL-T13.
 
@@ -276,5 +285,5 @@ end to end and scanned before being committed to a public repo.
 | the three source writeups | `~/AI/rite-dogfood/*.md` — **local only**: `~/AI/rite-dogfood` is not a git repository, so nothing in it can be pushed. That is why this document was copied into the rite repo. |
 | sandbox probe scripts | `~/AI/rite-dogfood/phase2/probe_*.py` |
 | the board | `https://github.com/robbartoszewski/rite-dogfood-board` (private; default branch `main`, zero open issues) |
-| the backlog | `.docs/RITE_LOCAL_TICKETS.md` — **committed**, with the rest of `.docs/`. This row said "local only, ignored, never committed" and a commit 21 minutes later falsified it; the row is corrected rather than deleted, because "never" was a claim about the future and the shortest-lived one in this document. |
+| the backlog | `docs/design/RITE_LOCAL_TICKETS.md` — **committed and public**, with the rest of the design notes; `.docs/` was split into `docs/design/` (tracked, gate-scanned) and `docs/private/` (ignored) on 2026-09-19. This row said "local only, ignored, never committed" and a commit 21 minutes later falsified it; the row is corrected rather than deleted, because "never" was a claim about the future and the shortest-lived one in this document. |
 | Phase-1 pre-registration | branch `preregistration/phase1` — `.docs/rite-on-rite-phase1-preregistration.md`, `.docs/run-parameters.md`, `.docs/carried-limitations-register.md` |

@@ -28,7 +28,7 @@ because they fail in different directions and a single number hides that.
    would report most of the package as dead.
 
 2. DoD COVERAGE (`--dod`). The denominator is the Definition of Done for
-   Phase 1, `.docs/IMPLEMENTATION_PLAN.md` §P1.16 — the project's own
+   Phase 1, `docs/private/IMPLEMENTATION_PLAN.md` §P1.16 — the project's own
    statement of what "Phase 1 is finished" means. Each bullet becomes one
    item with a mechanical probe wherever a probe can exist.
 
@@ -71,7 +71,30 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 SRC = REPO / "src" / "rite_ai"
-PLAN = REPO / ".docs" / "IMPLEMENTATION_PLAN.md"
+
+
+def _plan_path():
+    """Wherever the plan actually is, during and after the docs split.
+
+    `.docs/` was ignored wholesale; the split moved public notes to
+    `docs/design/` and private ones to `docs/private/`, and
+    IMPLEMENTATION_PLAN.md is private — it names a real JIRA site, a cloud
+    id and `~/.bentora-coordination`. The two locations coexist while each
+    machine's untracked copy is moved by hand, so look in both rather than
+    reporting "not present" at whichever one is empty today. A tool that
+    says a file is missing when it has merely moved sends somebody looking
+    for the wrong thing.
+    """
+    for candidate in (
+        REPO / "docs" / "private" / "IMPLEMENTATION_PLAN.md",
+        REPO / ".docs" / "IMPLEMENTATION_PLAN.md",
+    ):
+        if candidate.is_file():
+            return candidate
+    return REPO / "docs" / "private" / "IMPLEMENTATION_PLAN.md"
+
+
+PLAN = _plan_path()
 
 ENTRY_POINTS = ["rite_ai.cli.main", "rite_ai.gate.__main__"]
 
@@ -1055,7 +1078,7 @@ def check_plan_drift() -> str:
     """The DoD table above is a transcription. Say so if the source moved."""
     if not PLAN.is_file():
         return (
-            "⚠ `.docs/IMPLEMENTATION_PLAN.md` not present (gitignored) — "
+            "⚠ `docs/private/IMPLEMENTATION_PLAN.md` not present (gitignored) — "
             "DoD table unverified against source."
         )
     text = PLAN.read_text(encoding="utf-8", errors="replace")
@@ -1064,7 +1087,8 @@ def check_plan_drift() -> str:
         return "⚠ §P1.16 not found in the plan — DoD table unverified against source."
     bullets = len(re.findall(r"^- ", m.group(0), re.M))
     return (
-        f"Denominator: `.docs/IMPLEMENTATION_PLAN.md` §P1.16, {bullets} bullets, "
+        f"Denominator: `docs/private/IMPLEMENTATION_PLAN.md` §P1.16, {bullets} "
+        f"bullets, "
         f"decomposed here into {len(ITEMS)} separately-checkable items (several "
         f"bullets name more than one behaviour). Re-transcribe if §P1.16 changes."
     )

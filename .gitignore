@@ -1,4 +1,16 @@
 .docs/
+
+# Private working notes. `docs/` is public by default and the publish gate
+# scans everything tracked in it (`git ls-files`), so anything carrying a
+# home path, a real namespace, a credential location or a client's
+# infrastructure goes here instead.
+#
+# ⚠ Never `git add -f` into this directory. Force-adding into an ignored
+# path is exactly how five design notes drifted 49-119 lines behind their
+# working copies with git reporting nothing: once a file is both tracked
+# and ignored, `git status` stops mentioning it.
+docs/private/
+
 .venv/
 *.pyc
 __pycache__/
