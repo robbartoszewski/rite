@@ -376,7 +376,12 @@ class StateLayerConformance:
                 attempts += 1
                 if outcome == "Unavailable":
                     unavailable += 1
-                    why[reason[:120]] = why.get(reason[:120], 0) + 1
+                    # 300, not 120: the first cut cut the rejection off
+                    # at "(incorrect o" and "(reference a" — one character
+                    # into the words that identified the cause — so the CI
+                    # output named the failure without naming it. A reason
+                    # worth logging is worth logging whole.
+                    why[reason[:300]] = why.get(reason[:300], 0) + 1
                 if outcome == "Written":
                     winners[version] = winners.get(version, 0) + 1
         assert attempts > self.MIN_CAS_ATTEMPTS, (

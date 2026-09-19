@@ -320,3 +320,80 @@ class TestLockContentionThatOutlastsTheInnerRetry:
         stale = layer.write_state("owner-lease.json", b"second", ABSENT)
 
         assert not isinstance(stale, Written), stale
+
+
+class TestTheRemotesOwnRejectionWording:
+    """A lost race the REMOTE rejected, in the words newer git uses.
+
+    This is what the Linux CI failure actually was, and it took adding the
+    reason to the conformance assertion to see it: 11 `Unavailable`, every
+    one reading
+
+        the remote refused the write: ! <sha>:refs/heads/state
+        [remote rejected] (incorrect old value)
+
+    or `(reference already exists)`. Both are the receiving end's ref
+    transaction saying the ref was not what the update expected — somebody
+    else won — and neither matched "stale info" or "non-fast-forward", so
+    both fell through to `refused`: "a protected branch or a declined hook:
+    permanent, not a race."
+
+    macOS git 2.50.1 reports the same two conditions as `[rejected] (stale
+    info)`, verified by provoking both against a bare repo on disk, which
+    is why this never appeared on a developer's machine and why the suite
+    was green here and red there.
+    """
+
+    @pytest.mark.parametrize(
+        "wording",
+        ["incorrect old value", "reference already exists"],
+        ids=["incorrect-old-value", "reference-already-exists"],
+    )
+    def test_it_is_a_conflict_not_a_refusal(self, tmp_path, wording):
+        """THE DEFECT, per wording. Classified through `_push`'s own
+        parser, from the porcelain line git really prints."""
+        from rite_ai.coordination.git_backend import GitStateLayer as G
+
+        remote = tmp_path / "remote.git"
+        _git("init", "--bare", "-q", str(remote))
+        layer = G(remote=str(remote), cache_dir=tmp_path / "cache")
+
+        class Proc:
+            returncode = 1
+            stdout = (
+                f"!\t0123456789abcdef:refs/heads/state\t[remote rejected] ({wording})\n"
+            ).encode()
+            stderr = b""
+
+        layer._git = lambda *a, **k: Proc()
+
+        outcome, _ = layer._push("x:refs/heads/state", "state", "")
+
+        assert outcome == "conflict", (
+            f"a lost race the remote reported as {wording!r} came back as "
+            f"{outcome!r} — `refused` means permanent, and this is a race"
+        )
+
+    def test_a_real_refusal_is_still_a_refusal(self, tmp_path):
+        """The half that must survive: a declined hook or a protected
+        branch is permanent, and telling the caller to retry for ever would
+        be worse than the bug this fixes."""
+        from rite_ai.coordination.git_backend import GitStateLayer as G
+
+        remote = tmp_path / "remote.git"
+        _git("init", "--bare", "-q", str(remote))
+        layer = G(remote=str(remote), cache_dir=tmp_path / "cache")
+
+        class Proc:
+            returncode = 1
+            stdout = (
+                b"!\t0123456789abcdef:refs/heads/state\t"
+                b"[remote rejected] (pre-receive hook declined)\n"
+            )
+            stderr = b""
+
+        layer._git = lambda *a, **k: Proc()
+
+        outcome, _ = layer._push("x:refs/heads/state", "state", "")
+
+        assert outcome == "refused", outcome

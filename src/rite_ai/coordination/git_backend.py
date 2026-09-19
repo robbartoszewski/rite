@@ -83,6 +83,34 @@ _PACK_LIMIT_KIB = 20 * 1024
 # for; reporting it as Conflict would say another Manager is Owner when none
 # is. Retrying the identical push is safe because the lease still guards it:
 # if someone else did win in between, the retry comes back "stale info".
+# Somebody else won. Four spellings of one condition, because WHICH end
+# refused and WHICH git is running both change the words:
+#
+#   "stale info"          — our `--force-with-lease` check, locally
+#   "non-fast-forward"    — the ordinary rejection
+#   "incorrect old value" — the REMOTE's ref transaction, newer git
+#   "reference already exists" — the remote's, when both writers read the
+#                           branch as absent and one created it first
+#
+# The last two are what CI was failing on. macOS git 2.50.1 reports the
+# same two conditions as "stale info" — verified by provoking both
+# locally — so they never appeared on a developer's machine, fell through
+# to `refused` ("a protected branch or a declined hook: permanent, not a
+# race"), and surfaced as `Unavailable: the remote refused the write ...
+# probes force-push permission` for what is simply a lost race. Eleven of
+# those in one Linux run, against a CAS that had not lost a single race.
+#
+# Checked BEFORE `_CONTENDED`, and that order is load-bearing: git's own
+# local phrasing is "cannot lock ref '...': reference already exists",
+# which contains a contention marker too. Retrying a lock will not make
+# an existing reference stop existing; re-reading and rebuilding will.
+_LOST_THE_RACE = (
+    "stale info",
+    "non-fast-forward",
+    "incorrect old value",
+    "reference already exists",
+)
+
 _CONTENDED = (
     "failed to update ref",
     "cannot lock ref",
@@ -230,7 +258,7 @@ class GitStateLayer(StateLayer):
         out = (proc.stdout + proc.stderr).decode("utf-8", "replace")
         rejected = [ln for ln in out.splitlines() if ln.startswith("!")]
         if rejected:
-            if any("stale info" in ln or "non-fast-forward" in ln for ln in rejected):
+            if any(m in ln for ln in rejected for m in _LOST_THE_RACE):
                 return "conflict", rejected[0].strip()
             if any(m in ln for ln in rejected for m in _CONTENDED):
                 return "contended", rejected[0].strip()
