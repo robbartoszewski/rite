@@ -57,6 +57,16 @@ one.
       the condition is a function of state the tool owns, put it on the
       shared path once rather than adding a reminder to each command — the
       per-command version is the one the next command forgets.
+- [ ] A test file the runner does not collect is indistinguishable from a
+      test file that passed. Check the name matches what the runner actually
+      collects, not what it looks like it should — a file of seven tests
+      shipped here as `tests/nt.py` after a stash-and-copy, never ran, and a
+      CLI message naming a command that does not exist reached users because
+      the test that would have caught it was never executed. Same family as a
+      gate that reports itself installed while inert: the report of a check
+      that did not run reads exactly like the report of a check that passed.
+      Mechanise it where the runner allows — a rule this specific should not
+      depend on a reviewer remembering it.
 - [ ] Exercised from the state a new user starts in — empty database, fresh
       clone, no config — not only from the state already on the developer's
       machine. A migration chain that has only ever been run forward from

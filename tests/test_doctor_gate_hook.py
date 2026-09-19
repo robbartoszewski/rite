@@ -51,7 +51,14 @@ def _project(tmp_path: Path) -> Path:
     rite.mkdir()
     (rite / "brief.yaml").write_text("project:\n  name: acme\n  role: owner\n")
     (rite / "modules.yaml").write_text("modules: {}\n")
-    (rite / "config.yaml").write_text("ticket_backend:\n  type: none\n")
+    # Sandboxing off: it defaults on (D-51), and a project configured to
+    # sandbox on a machine with no yoloAI is not healthy — doctor is right
+    # to say so. Leaving it on made "a healthy project exits 0" depend on
+    # yoloAI being installed on whatever machine ran the suite, which is
+    # green on a laptop and red on Linux CI.
+    (rite / "config.yaml").write_text(
+        "ticket_backend:\n  type: none\nsandbox:\n  enabled: false\n"
+    )
     # Arm the CI half of the gate too. `rite doctor` checks both layers
     # (SPEC §11.5.1 makes CI the load-bearing one), so a fixture with only a
     # hook is a project doctor is right to call unhealthy — and these tests
@@ -145,8 +152,6 @@ class TestDoctorReportsIt:
         root = _project(tmp_path)
         install_pre_push_hook(root)
         monkeypatch.chdir(root)
-        # Sandboxing defaults on; a passing doctor needs the sandbox login.
-        monkeypatch.setenv("RITE_CLAUDE_TOKEN", "sk-ant-oat-test")
 
         result = CliRunner().invoke(cli, ["doctor"])
 

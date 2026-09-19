@@ -54,11 +54,24 @@ def test_doctor_healthy_project(tmp_path, monkeypatch):
         "what:\n  kind: app\ntechnology:\n  languages:\n    - python\n"
     )
     (rite_dir / "modules.yaml").write_text("modules: {}\n")
-    (rite_dir / "config.yaml").write_text("ticket_backend:\n  type: none\n")
+    (rite_dir / "config.yaml").write_text(
+        "ticket_backend:\n  type: none\nsandbox:\n  enabled: false\n"
+    )
     monkeypatch.chdir(tmp_path)
-    # Sandboxing defaults on, and a sandboxed project without a Claude login
-    # for its sandboxes is not healthy.
-    monkeypatch.setenv("RITE_CLAUDE_TOKEN", "sk-ant-oat-test")
+    # Sandboxing off, DELIBERATELY. It defaults on (D-51), and a
+    # project configured to sandbox on a machine with no yoloAI is
+    # not healthy — `rite doctor` is right to say so, and SPEC
+    # §5.3.5 is explicit that such a machine should get "a row
+    # saying what is missing". So this fixture asserted "exit 0"
+    # while silently depending on yoloAI being INSTALLED on the
+    # machine running the suite: green on a developer laptop, red
+    # on Linux CI, where it has been red long enough that nobody
+    # could tell a real doctor failure from this one.
+    #
+    # A skip on "is yoloai present" would be worse: a test that
+    # does not run reads exactly like a test that passed. Saying
+    # `enabled: false` makes the fixture mean what the test says —
+    # a project with nothing wrong — on any machine.
 
     runner = CliRunner()
     result = runner.invoke(cli, ["doctor"])
