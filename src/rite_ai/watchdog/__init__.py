@@ -141,14 +141,20 @@ def run_watchdog_check(root: Path) -> WatchdogResult:
         )
     for s in stalled:
         ticket_note = f" (ticket {s.ticket})" if s.ticket else ""
-        if s.seconds_silent == float("inf"):
+        if not s.known:
+            # Never "no heartbeat ever recorded" for a file that could not
+            # be opened: that is the loudest thing this line says, and it
+            # would be asserting silence nobody observed.
+            when = s.detail or "heartbeat could not be read"
+        elif s.seconds_silent == float("inf"):
             when = "no heartbeat ever recorded"
         else:
             # Words, not raw seconds. This line is read unattended, hours
             # after the fact, and "3608s" is the same fact as "1h 0m" only
             # if you are willing to do the arithmetic.
             when = f"{format_duration(s.seconds_silent)} since last heartbeat"
-        reasons.append(f"worker '{s.worker}' stalled — {when}{ticket_note}")
+        verb = "stalled" if s.known else "cannot be checked"
+        reasons.append(f"worker '{s.worker}' {verb} — {when}{ticket_note}")
     for b in blockers:
         detail = b.payload.get("detail") or b.payload.get("reason") or ""
         reasons.append(f"{b.kind} in outbox" + (f": {detail}" if detail else ""))

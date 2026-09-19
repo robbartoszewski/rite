@@ -186,7 +186,9 @@ def _stall_records(result: WatchdogResult) -> list[tuple[str, str]]:
     records = []
     for s in result.stalled:
         ticket_note = f" (ticket {s.ticket})" if s.ticket else ""
-        if s.seconds_silent == float("inf"):
+        if not s.known:
+            when = s.detail or "heartbeat could not be read"
+        elif s.seconds_silent == float("inf"):
             when = "no heartbeat ever recorded"
         else:
             last_seen = datetime.fromtimestamp(s.last_seen, tz=UTC)
