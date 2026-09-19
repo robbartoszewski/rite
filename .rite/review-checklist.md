@@ -116,6 +116,15 @@ one.
       a hook, a CI step, a wrapper — has to be read for this, because the
       failure is invisible by construction: a check that never runs and a
       check that passes produce the same silence.
+- [ ] **Nothing edits the tree while a verification run is in flight.** A
+      suite reports on the files it read, and if they changed underneath it
+      the number it prints is about a tree that no longer exists — green on
+      code nobody will ship, or red on an edit that was never the defect.
+      Two sessions hit this independently within an hour on this repository,
+      each losing a run. It stays silent wherever nothing snapshots the
+      checkout, so the rule is the guard: start the run, then wait. If a
+      run must be abandoned, abandon the VERDICT with it rather than reading
+      the number.
 ## rite's own
 
 Everything above is the checklist `rite init` ships to every project, and every
