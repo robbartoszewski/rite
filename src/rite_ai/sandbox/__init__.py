@@ -693,8 +693,11 @@ def count_active_sandboxes(
     concurrency, and a cap that misses its own Workers bounds nothing.
 
     Without `root` it counts every `rite-` sandbox, which is what it always
-    did. That path has no caller in `src/` and exists so a test or a script
-    asking a machine-wide question still can.
+    did — and that is now a deliberate caller rather than a leftover: the
+    machine-wide bound (`machine.max_sandboxes`) asks exactly the question
+    this project-scoped count stopped answering, and asks it one call later
+    at the same site. Scoping the cap gave up an accidental machine-wide
+    bound; the rootless call is where it was given back on purpose.
 
     `--active` "includes idle" per yoloAI's own `--help`, so a stopped-but-not
     destroyed sandbox counts; only `destroy` removes one. ⚠ The `agent` field
