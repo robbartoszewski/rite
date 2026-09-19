@@ -618,7 +618,24 @@ def _archive_locked(
         if entry.released_claims:
             # Published too: an archived slot's claims must stop blocking
             # other machines, and nothing else will take them back.
-            ledger.release(entry.worker, layer=pool_layer, machine=pool_machine)
+            #
+            # `force_release` rather than `release`, so this lands in
+            # `force-releases.jsonl` with who did it and why. It did not, and
+            # the consequence was that "why did my claim disappear" depended
+            # on which subsystem removed it — a human release was in the
+            # audit trail and an automatic one was only in the pool archive.
+            #
+            # `worker=` is what makes the swap safe: `force_release` matches
+            # by path and would otherwise release whoever holds them, which
+            # in the window between reading the slot and releasing could be a
+            # live worker that claimed an identically-named path.
+            ledger.force_release(
+                worker=entry.worker,
+                by="rite pool archive",
+                reason=f"slot {entry.name} was unreachable and has been archived",
+                layer=pool_layer,
+                machine=pool_machine,
+            )
 
     if records:
         path = _archive_log_path(root)

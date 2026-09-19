@@ -657,3 +657,48 @@ class TestStateFileCompatibility:
 
         assert [a.worker for a in result.archived] == [name]
         assert ledger.list_claims() == []
+
+    def test_archiving_records_the_release_in_the_audit_trail(self, tmp_path: Path):
+        """The point of the change, tested where it actually happens.
+
+        An archived slot's claims went through plain `release()`, so an
+        automatic release left no trace in `force-releases.jsonl` while a
+        human one did — "why did my claim disappear" depended on which
+        subsystem removed it. The ledger unit test proves `force_release`
+        writes a record; only this proves `archive` reaches it.
+        """
+        dead = slot_name(tmp_path, 0)
+        now = time.time()
+        _write_pool_state(
+            tmp_path,
+            [
+                {
+                    "name": dead,
+                    "created_at": now - 60 * MINUTE,
+                    "last_live_at": now - 60 * MINUTE,
+                    "worker": dead,
+                    "unreachable_since": now - 45 * MINUTE,
+                }
+            ],
+        )
+        ledger = _ledger(tmp_path)
+        assert ledger.claim(["src/payments"], dead, "PAY-1").ok
+
+        with (
+            patch("rite_ai.pool.shutil.which", return_value=TMUX),
+            patch(
+                "rite_ai.pool.is_tmux_session_alive", side_effect=_alive_except(dead)
+            ),
+        ):
+            archive(
+                tmp_path,
+                PoolConfig(coordinator_standby=1, archive_after_minutes=30),
+                ledger=ledger,
+                now=now,
+            )
+
+        records = ledger.force_release_audit()
+        assert records, "an automatic release left no audit record"
+        assert records[0]["by"] == "rite pool archive"
+        assert records[0]["released"][0]["worker"] == dead
+        assert dead in records[0]["reason"]

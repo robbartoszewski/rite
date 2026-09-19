@@ -37,13 +37,18 @@ sent its first beat reports as stalled immediately. Without an age gate this
 line fires from day one on every healthy project, and a line people learn to
 scroll past is how this whole class of defect survives.
 
-⚠ **Two limits worth knowing.** A claim whose stored `timestamp` is missing or
-zero is reset to "now" when the ledger is read (`Claim.__post_init__`), so a
-corrupted timestamp reads as brand-new and is never suspected — this fails
-quiet rather than loud. And `read_heartbeat` collapses missing, corrupt and
-malformed into `None`, so an unreadable heartbeat is treated as "never beat";
-the third answer `worker_sandbox_status` gets right with `known=False` does not
-exist here.
+**"Cannot be checked" is not "never beat".** An ABSENT heartbeat says the
+holder never started; one that cannot be READ says nothing about the holder at
+all, and calling a claim abandoned on that basis is a guess wearing evidence's
+clothes. `read_heartbeat_status` carries that third answer (EXC-4), so an
+unreadable heartbeat suspends judgement, names the file, and offers a remedy
+that fixes the file rather than releasing somebody's path.
+
+⚠ **One limit left.** A claim whose stored `timestamp` is missing or zero is
+reset to "now" when the ledger is read (`Claim.__post_init__`), so a corrupted
+timestamp reads as brand-new and is never suspected. That fails quiet rather
+than loud — the safe direction — but it means this report cannot see a claim
+whose age was lost.
 """
 
 from __future__ import annotations
@@ -72,12 +77,26 @@ class Suspect:
     registered: bool
     """False when no Worker of this name is configured — the shape the
     motivating case had, and a hint that the claim outlived its project."""
+    unreadable: str = ""
+    """Why the holder's heartbeat could not be read, when it could not be.
+    Set means this row is a report of UNCERTAINTY rather than of abandonment,
+    and the two must not read alike."""
 
     @property
     def never_beat(self) -> bool:
         return self.silent_for == float("inf")
 
     def describe(self) -> str:
+        if self.unreadable:
+            # Uncertainty, and it must not read like abandonment. A heartbeat
+            # that is ABSENT says the holder never started; one that cannot be
+            # READ says nothing about the holder at all.
+            return (
+                f"{', '.join(self.paths)} held by {self.worker} for "
+                f"{_age(self.claim_age)} — its heartbeat CANNOT BE READ "
+                f"({self.unreadable}), so whether the holder is alive is "
+                "unknown rather than decided"
+            )
         silence = (
             "no heartbeat ever"
             if self.never_beat
@@ -91,6 +110,11 @@ class Suspect:
 
     @property
     def remedy(self) -> str:
+        if self.unreadable:
+            # Not a release. The problem is a file on this machine, and
+            # releasing on the strength of a heartbeat nobody could read is
+            # precisely the guess this module exists not to make.
+            return f"fix or remove .rite/heartbeats/{self.worker}.json, then look again"
         return f'rite release --worker {self.worker} --force --reason "holder gone"'
 
 
@@ -121,7 +145,7 @@ def suspect_claims(
     exists to point at a specific claim, and it has none to point at.
     """
     from rite_ai.claims.ledger import ClaimsLedger
-    from rite_ai.reporting.heartbeat import read_heartbeat
+    from rite_ai.reporting.heartbeat import read_heartbeat_status
 
     now = time.time() if now is None else now
     path = root / ".rite" / "claims.json"
@@ -140,8 +164,28 @@ def suspect_claims(
             # Still inside the window a healthy Worker is allowed to be quiet
             # for. Reporting here would fire on every project on day one.
             continue
-        beat = read_heartbeat(root, claim.worker)
-        silent = float("inf") if beat is None else max(0.0, now - beat.timestamp)
+        beat = read_heartbeat_status(root, claim.worker)
+        if not beat.known:
+            # Reported, because a claim whose holder cannot be checked is
+            # still one somebody may need to act on — but reported as
+            # uncertainty, with a remedy that fixes the file rather than
+            # releasing the path.
+            found.append(
+                Suspect(
+                    worker=claim.worker,
+                    paths=tuple(claim.paths),
+                    claim_age=age,
+                    silent_for=float("inf"),
+                    registered=claim.worker in known,
+                    unreadable=beat.detail or "reason unavailable",
+                )
+            )
+            continue
+        silent = (
+            float("inf")
+            if beat.record is None
+            else max(0.0, now - beat.record.timestamp)
+        )
         if silent <= threshold_seconds:
             continue
         found.append(

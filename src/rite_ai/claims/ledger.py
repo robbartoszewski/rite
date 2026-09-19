@@ -418,24 +418,66 @@ class ClaimsLedger:
 
     def force_release(
         self,
-        paths: list[str],
-        by: str,
-        reason: str,
+        paths: list[str] | None = None,
+        by: str = "",
+        reason: str = "",
         *,
+        worker: str | None = None,
         layer=None,
         machine: str = "",
     ) -> int:
-        """Force-release paths regardless of owner, with attribution and a
-        reason persisted to a durable audit trail (SPEC §5.2 — an earlier
-        version accepted `by` and silently discarded it, and had no
-        `reason` parameter at all)."""
+        """Force-release claims, with attribution and a reason persisted to a
+        durable audit trail (SPEC §5.2 — an earlier version accepted `by` and
+        silently discarded it, and had no `reason` parameter at all).
+
+        **`worker` narrows it to one holder, and exists because without it
+        this cannot express what every automatic caller needs.** By paths
+        alone it releases whoever holds them, which is right for a human
+        typing `rite release --force <path>` — they are saying "clear this
+        path, I do not care who has it". It is wrong for anything acting on
+        its own behalf: a reaper that knows a specific session died and
+        releases *its* paths must not also release a live worker that claimed
+        an identically-named path in the window since. That is the failure
+        the ledger exists to prevent, arriving as the fix for it.
+
+        So `pool.archive`, which knows exactly whose slot died, passes
+        `worker=` — and gets the audit trail it previously skipped by calling
+        plain `release()`, which is why "why did my claim disappear" used to
+        depend on which subsystem removed it.
+
+        `paths=None` with a `worker` means all of that worker's claims. One
+        of the two must be given: releasing everything, by nobody's request,
+        is not a thing this should be able to express by omission.
+
+        ⚠ Path matching is EXACT, not nesting-aware — `engine/` does not
+        release a claim on `engine/parser.py`, though `claim()` would have
+        refused that claim as overlapping. Left as it is deliberately:
+        widening it silently would make every existing `--force` call release
+        more than it used to, and that is a decision rather than a fix.
+        """
+        if paths is not None and not paths:
+            # An empty LIST is a caller that computed some paths and got none
+            # of them, then asked to release "those" — true with or without a
+            # worker, and in both cases it releases nothing and writes no
+            # audit line, which reads as success. `paths=None` is the way to
+            # say "no path filter"; `[]` is always a mistake.
+            raise ValueError(
+                "force_release was given an empty path list — pass paths=None "
+                "to mean 'all of this worker's claims'"
+            )
+        if paths is None and worker is None:
+            raise ValueError("force_release needs paths, a worker, or both")
         with self._locked():
             existing = self._read()
-            normalised = {normalise_path(p) for p in paths}
+            normalised = {normalise_path(p) for p in (paths or [])}
             released_claims = [
                 c
                 for c in existing
-                if any(normalise_path(cp) in normalised for cp in c.paths)
+                if (worker is None or c.worker == worker)
+                and (
+                    paths is None
+                    or any(normalise_path(cp) in normalised for cp in c.paths)
+                )
             ]
             after = [c for c in existing if c not in released_claims]
             self._write(after)

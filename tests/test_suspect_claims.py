@@ -171,3 +171,50 @@ def test_it_uses_wall_time_when_not_given_a_clock(tmp_path):
     (root / ".rite" / "claims.json").write_text(json.dumps(raw))
 
     assert [s.worker for s in suspect_claims(root)] == ["ghost"]
+
+
+# --- "cannot be checked" is not "never beat" (EXC-4) -------------------------------
+
+
+def test_an_unreadable_heartbeat_suspends_judgement(tmp_path):
+    """An ABSENT heartbeat says the holder never started. One that cannot be
+    READ says nothing about the holder — and calling the claim abandoned on
+    that basis is a guess wearing evidence's clothes."""
+    root = _project(tmp_path)
+    _claim(root, "alpha", "engine/parser.py", age=5 * HOUR)
+    beats = root / ".rite" / "heartbeats"
+    beats.mkdir(parents=True, exist_ok=True)
+    (beats / "alpha.json").mkdir()  # a directory: exists, cannot be read
+
+    (found,) = suspect_claims(root, registered=["alpha"], now=NOW)
+
+    assert found.unreadable
+    assert "CANNOT BE READ" in found.describe()
+    assert "no heartbeat ever" not in found.describe()
+
+
+def test_the_remedy_for_an_unreadable_heartbeat_is_not_a_release(tmp_path):
+    """The problem is a file on this machine. Releasing on the strength of a
+    heartbeat nobody could read is the guess this module exists not to make."""
+    root = _project(tmp_path)
+    _claim(root, "alpha", "engine/parser.py", age=5 * HOUR)
+    beats = root / ".rite" / "heartbeats"
+    beats.mkdir(parents=True, exist_ok=True)
+    (beats / "alpha.json").mkdir()
+
+    (found,) = suspect_claims(root, registered=["alpha"], now=NOW)
+
+    assert "rite release" not in found.remedy
+    assert ".rite/heartbeats/alpha.json" in found.remedy
+
+
+def test_a_genuinely_absent_heartbeat_still_reads_as_never_beat(tmp_path):
+    """The distinction only helps if the ordinary case is unchanged."""
+    root = _project(tmp_path)
+    _claim(root, "ghost", "engine/parser.py", age=9.3 * 86400)
+
+    (found,) = suspect_claims(root, registered=[], now=NOW)
+
+    assert not found.unreadable
+    assert found.never_beat
+    assert "rite release --worker ghost" in found.remedy
