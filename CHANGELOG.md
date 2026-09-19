@@ -13,12 +13,21 @@ CI is Linux-only, so macOS rests entirely on the local run; the local run is
 one Python, so 3.11–3.13 rest entirely on CI. Read either alone and you will
 overstate the coverage.
 
-⚠ **At the time of writing, CI is RED on Linux** and has been for several
-commits — `tests/test_spec_5_3_4_is_what_the_cli_says.py` fails there because
-`rite init` does not enable sandboxing on a runner (yoloAI's backends are
-macOS-only), so the credential list a test expects is empty. **Do not tag
-until the Linux run for the tagged commit is green.** That is a checkable
-instruction rather than a reminder to be careful.
+**Linux CI was red for six consecutive commits and is now green.**
+`tests/test_spec_5_3_4_is_what_the_cli_says.py` failed on a runner because
+its fixture called `rite init` and inherited whatever sandboxing default the
+machine produced — enabled on macOS, empty on Linux, where yoloAI's backends
+do not exist. The test asserted through a credential list that was therefore
+empty. Fixed in `6ea45ae` by having the fixture STATE the sandboxing it
+needs instead of accepting what the machine offers. Green since, on every
+commit: `6ea45ae`, `014044d`, `1738a7d`, `09393f4`, `6425916`, `67c113e`.
+
+**Do not tag until the Linux run for the tagged commit is green.** That
+instruction outlives the failure that prompted it and is kept for the same
+reason it was written: it is checkable. "CI was green recently" is not the
+same claim — six commits is a run of luck until the tagged one is checked,
+and this section previously asserted a CI state that had stopped being true
+before anybody re-read it.
 
 The accurate sentence for the local half is "3365 passed on macOS/py3.14",
 not "the suite is green" — the second implies a matrix, and here the matrix
