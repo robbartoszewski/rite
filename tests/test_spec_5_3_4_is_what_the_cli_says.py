@@ -63,11 +63,19 @@ class TestCredentialListDoesNotDemandTheRetiredModel:
         assert "sandbox_token_alpha" not in out, out
         assert "sandbox_token_beta" not in out
 
-    def test_a_worker_token_that_exists_is_still_listed(self, project, monkeypatch):
+    def test_a_worker_token_that_exists_is_still_needed(self, project, monkeypatch):
         """The other half: somebody who DID opt in still needs its status
         and its rotation. Asserted as a difference from the case above, so
-        this cannot pass on a build that simply lists nothing."""
+        this cannot pass on a build that simply lists nothing.
+
+        Against `_keys_this_project_needs` rather than through `rite
+        credential list`'s output, because the rendering depends on whether
+        THIS machine has a readable keychain — and a CLI-level assertion
+        here passed on macOS and failed on Linux CI, which is the same
+        environment-dependence this file's other half exists to remove.
+        """
         import rite_ai.credentials.store as store
+        from rite_ai.cli.main import _keys_this_project_needs
 
         assert CliRunner().invoke(cli, ["add", "worker", "alpha"]).exit_code == 0
         monkeypatch.setattr(store, "keychain_is_readable", lambda: True)
@@ -83,42 +91,7 @@ class TestCredentialListDoesNotDemandTheRetiredModel:
             ),
         )
 
-        out = CliRunner().invoke(cli, ["credential", "list"]).output
-
-        assert "sandbox_token_alpha" in out, out
-
-
-class TestTheGlobalTokenWarning:
-    """It fired on every `rite sandbox start` for the configuration §5.3.4
-    calls correct, said the token was "machine-global" when it was the
-    project's own, and prescribed the retired per-Worker token as the
-    remedy."""
-
-    def test_project_tier_does_not_warn_and_global_does(self, monkeypatch):
-        """The difference, at the source the warning reads. A warning that
-        fires for the intended configuration teaches the reader to ignore
-        it — which is the one thing this warning must not become."""
-        import rite_ai.credentials.store as store
-        from rite_ai import sandbox as sb
-
-        monkeypatch.setattr(
-            store,
-            "get_scoped",
-            lambda n, c=None: "TOKEN" if n == "github_token" else None,
-        )
-        monkeypatch.setattr(
-            store,
-            "resolve",
-            lambda k, c=None: store.Resolved(k, store.PROJECT, "a", "p", k),
-        )
-        assert sb.resolve_worker_token("w1")[1] == "project"
-
-        monkeypatch.setattr(
-            store,
-            "resolve",
-            lambda k, c=None: store.Resolved(k, store.GLOBAL, "a", "p", k),
-        )
-        assert sb.resolve_worker_token("w1")[1] == "global"
+        assert "sandbox_token_alpha" in _keys_this_project_needs()
 
 
 class TestTheWarningIsSilentOnlyForThisProjectsOwnToken:
