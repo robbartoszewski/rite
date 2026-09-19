@@ -969,16 +969,52 @@ class TestResolveWorkerToken:
         )
         assert sb.resolve_worker_token("w1") == ("SCOPED", "worker")
 
-    def test_falls_back_to_the_global_key(self, monkeypatch):
+    @staticmethod
+    def _shared_token_living_in(monkeypatch, tier: str):
+        """A `github_token` that exists, in a named tier.
+
+        Both halves have to be said. `get_scoped` supplies the VALUE and
+        walks project-then-machine, so on its own it cannot say which one
+        answered — which is exactly the conflation these tests exist for
+        now. `resolve` supplies the tier.
+        """
         import rite_ai.credentials.store as store
         from rite_ai import sandbox as sb
 
         monkeypatch.setattr(
             store,
             "get_scoped",
-            lambda n, c=None: "GLOBAL" if n == "github_token" else None,
+            lambda n, c=None: "TOKEN" if n == "github_token" else None,
         )
-        assert sb.resolve_worker_token("w1") == ("GLOBAL", "global")
+        monkeypatch.setattr(
+            store,
+            "resolve",
+            lambda k, c=None: store.Resolved(k, tier, "acct", "proj", k),
+        )
+        return sb
+
+    def test_this_projects_own_token_is_not_called_machine_global(self, monkeypatch):
+        """THE DEFECT. `get_scoped` tries this project's namespaced account
+        FIRST, so a token belonging to the project came back labelled
+        `global` — the label measured which NAME matched second, not
+        whether the token is bounded. The caller warns on `global`, so the
+        loud every-start warning fired for the configuration §5.3.4 calls
+        correct."""
+        from rite_ai.credentials.store import PROJECT
+
+        sb = self._shared_token_living_in(monkeypatch, PROJECT)
+
+        assert sb.resolve_worker_token("w1") == ("TOKEN", "project")
+
+    def test_a_machine_wide_token_is_still_called_global(self, monkeypatch):
+        """The half that must survive: a token belonging to the whole
+        machine reaches past this project's repos, and saying so is the
+        point of the tier."""
+        from rite_ai.credentials.store import GLOBAL
+
+        sb = self._shared_token_living_in(monkeypatch, GLOBAL)
+
+        assert sb.resolve_worker_token("w1") == ("TOKEN", "global")
 
     def test_no_token_reports_none_tier(self, monkeypatch):
         import rite_ai.credentials.store as store
@@ -989,17 +1025,14 @@ class TestResolveWorkerToken:
 
     def test_the_tier_is_returned_not_inferred(self, monkeypatch):
         """The caller must not have to re-derive which token it got — the
-        warning text depends on it."""
-        import rite_ai.credentials.store as store
-        from rite_ai import sandbox as sb
+        warning text depends on it, and now so does whether there is one."""
+        from rite_ai.credentials.store import GLOBAL, PROJECT
 
-        monkeypatch.setattr(
-            store,
-            "get_scoped",
-            lambda n, c=None: "GLOBAL" if n == "github_token" else None,
-        )
-        _, tier = sb.resolve_worker_token("anything")
-        assert tier == "global"
+        sb = self._shared_token_living_in(monkeypatch, GLOBAL)
+        assert sb.resolve_worker_token("anything")[1] == "global"
+
+        sb = self._shared_token_living_in(monkeypatch, PROJECT)
+        assert sb.resolve_worker_token("anything")[1] == "project"
 
 
 def test_gh_is_given_a_config_dir_the_sandbox_may_read():

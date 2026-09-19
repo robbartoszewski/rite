@@ -562,7 +562,10 @@ def resolve_worker_token(
        guided step, scoped to the PROJECT's repos (§5.3.3). Not to that
        Worker's own module subset: §5.3.4 records why workers are
        fungible and what that trade costs.
-    2. `github_token` — machine-global.
+    2. `github_token` — THIS PROJECT's, or the machine-wide one. Which of
+       those it was is the difference between the configuration §5.3.4
+       calls correct and the one worth warning about, so it is reported
+       rather than collapsed.
 
     ⚠ **Tier 2 exists because tier 2 was already advertised and did
     nothing.** `github_token` is in `credentials.store.KNOWN`, `rite
@@ -583,9 +586,21 @@ def resolve_worker_token(
     quietly using the broad token while `rite add worker` still appears
     to offer per-Worker scoping.
 
-    Returns `(token, tier)` where tier is `"worker"`, `"global"` or
-    `"none"` — the tier is returned rather than inferred by the caller so
-    that "which token did this Worker actually get?" has one answer.
+    Returns `(token, tier)` where tier is `"worker"`, `"project"`,
+    `"global"` or `"none"` — the tier is returned rather than inferred by
+    the caller so that "which token did this Worker actually get?" has one
+    answer.
+
+    ⚠ **`"project"` used to be reported as `"global"`, and that was the
+    bug.** `get_scoped` tries this project's namespaced account BEFORE the
+    machine-wide one, so a `github_token` belonging to this project came
+    back under the same label as a token belonging to the whole machine —
+    a label that measured which NAME matched second rather than whether
+    the token is bounded. The caller warned on it, so the loud,
+    every-start warning fired for the configuration §5.3.4 calls correct,
+    and told the reader to provision a per-Worker token that the same
+    section retired. `resolve()` has drawn this distinction all along and
+    says why; this asks it instead of guessing.
 
     `credentials` is this project's `CredentialsConfig` (§10.2). With one
     given, tier 1 looks under the project's scoped name first and only
@@ -600,7 +615,12 @@ def resolve_worker_token(
         return scoped, "worker"
     shared = get_scoped(GLOBAL_TOKEN_CREDENTIAL, credentials)
     if shared:
-        return shared, "global"
+        from rite_ai.credentials.store import GLOBAL, resolve
+
+        # The VALUE comes from `get_scoped`; where it came from comes from
+        # `resolve`, which walks the same tiers in the same order.
+        where = resolve(GLOBAL_TOKEN_CREDENTIAL, credentials)
+        return shared, "global" if where.tier == GLOBAL else "project"
     return None, "none"
 
 

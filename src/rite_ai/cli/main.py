@@ -1529,9 +1529,28 @@ def _keys_this_project_needs(config=None) -> list[str]:
         root = _find_project_root()
         workers_dir = root / "workers"
         if workers_dir.is_dir():
+            from rite_ai.credentials.store import resolve
+
+            creds = getattr(config, "credentials", None)
             for worker_dir in sorted(workers_dir.iterdir()):
-                if (worker_dir / "worker.yml").exists():
-                    keys.append(f"{SANDBOX_TOKEN_PREFIX}{worker_dir.name}")
+                if not (worker_dir / "worker.yml").exists():
+                    continue
+                key = f"{SANDBOX_TOKEN_PREFIX}{worker_dir.name}"
+                # ONLY IF IT EXISTS. A per-Worker token is `rite add worker
+                # --scoped-token`'s opt-in, and §5.3.4.1 is explicit that it
+                # is "an option a person chooses, not the model" — §5.3.4
+                # retired per-Worker scoping and gives every Worker the
+                # project's credentials. So a project that has not opted in
+                # is not MISSING one, and listing it under "missing — set
+                # each with:" told a new user to provision the thing the
+                # spec had just retired, one line per Worker.
+                #
+                # Listing it when it does exist is the other half: somebody
+                # who did opt in still needs its status and its rotation.
+                # This function's own rule, applied to itself — "driven by
+                # what the project is configured to do".
+                if resolve(key, creds).found:
+                    keys.append(key)
     return keys
 
 
@@ -5275,7 +5294,6 @@ def sandbox_start(
         GLOBAL_TOKEN_CREDENTIAL,
         resolve_worker_token,
         start_worker,
-        token_credential_name,
     )
 
     root, config = _load_config_for_write()
@@ -5325,15 +5343,23 @@ def sandbox_start(
     # Every credential this project holds, not just the git token (§5.3.4).
     env = worker_environment(config.credentials, worker_token=token)
     if tier == "global":
-        # Loud, every time. See `resolve_worker_token` for why this must
-        # not become a silent fallback.
+        # Loud, every time — but ONLY for a token belonging to the whole
+        # machine. It used to fire for this project's own `github_token`
+        # too, which is the configuration §5.3.4 calls correct, and the
+        # remedy it printed was to provision a per-Worker token that the
+        # same section retired. See `resolve_worker_token`.
+        #
+        # "not scoped to this worker's modules" is also gone: §5.3.4 says
+        # no token is, by design, and a warning that treats the intended
+        # model as the fault teaches the reader to ignore it.
         click.echo(
-            f"warning: no '{token_credential_name(worker)}' — falling back to "
-            f"the machine-global '{GLOBAL_TOKEN_CREDENTIAL}'. That token is "
-            f"not scoped to this worker's modules, and the sandbox does not "
-            f"bound what it can reach on GitHub (SPEC §5.3.2). Provision a "
-            f"scoped one with `rite credential set "
-            f"{token_credential_name(worker)}`.",
+            f"warning: '{GLOBAL_TOKEN_CREDENTIAL}' is set for this whole "
+            f"machine, not for this project, so this Worker is being given a "
+            f"token that reaches beyond the project's repos — which is the "
+            f"one bound §5.3.3 keeps and the sandbox does not (SPEC §5.3.2). "
+            f"Give the project its own: `rite credential adopt "
+            f"{GLOBAL_TOKEN_CREDENTIAL}`, or `rite credential set "
+            f"{GLOBAL_TOKEN_CREDENTIAL}` from inside it.",
             err=True,
         )
     result = start_worker(
