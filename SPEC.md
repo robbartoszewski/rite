@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.18.2 · **Date:** 2026-09-11
+**Version:** 0.19.0 · **Date:** 2026-09-19
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -3680,6 +3680,609 @@ is classified as an index and is not one). A spec with few explicit
 cross-references produces small slices whose dependencies are real and simply
 unwritten — the rate is what surfaces that, not the slice.
 
+---
+
+### 9.14. `rite start <provider>` — the session lifecycle, and its adapters
+
+**Status: the mechanism is specified; the adapter interface is NOT frozen.**
+§9.14.2 says why, and that instability is load-bearing rather than a
+disclaimer.
+
+`rite start <provider>` brings a project up and keeps it up: it starts the
+loop **and** a Manager session under the named provider, as one command. A
+human types it once; it runs until a stop condition or a budget ceiling ends
+it, and says which.
+
+#### 9.14.0. This AMENDS D-50. It does not inherit it
+
+⚠ **An earlier draft of this section said `rite start <provider>` starts the
+loop "(§9.10's `start` behaviour, unchanged)" and that it "subsumes" `rite
+start` with "none of that" changing. Both halves were false, and the second
+one hid a real conflict.**
+
+**§9.10 does not start the loop — it deliberately refuses to**, and the
+refusal is reasoned in `lifecycle/commands.py` in terms this section has to
+answer rather than ignore: the loop "is free — it spends no quota, because it
+starts no sessions (§9.12) — but it is a background tmux session that
+outlives the command, which fails the first test, not the third."
+
+D-50 says `start` performs what is **idempotent, local and free**, and
+reports the rest. A Manager session fails all three, where the loop failed
+only one. So this section does not extend D-50; **for `rite start
+<provider>` it amends it**, and the amendment is recorded rather than
+implied:
+
+**What buys the amendment** is not that a Manager session is cheap — it is
+the most expensive thing rite can start. It is that D-50's rule exists to
+stop `start` having surprising effects, and §5.1.1 states the actual
+principle: a command's surprising effects should be things the user asked
+for *by name*. `rite start claude` names the provider. The pool top-up was
+struck from `start` because `rite start` spent quota nobody mentioned; here
+the quota spend **is** what was typed.
+
+**What the amendment costs, and must therefore be paid for here:**
+
+- **Idempotence must be restored explicitly, because D-50's first test still
+  applies and this section is not exempting itself from it.** A project has
+  **at most one Manager session**, and a second `rite start <provider>`
+  against a live one is **refused, naming the running session and how to
+  reach it** — not silently joined, not started alongside. The loop enforces
+  one-per-project through two mechanisms because they fail differently; a
+  Manager session needs at least one, and refusing is the behaviour §2.5.1
+  and `check_worker_cap` already establish for this class.
+- **`rite start` with NO provider keeps its current behaviour exactly, and
+  that is load-bearing rather than a convenience.** `start` is the command a
+  session runs to orient itself — the generated `/rite-start` instructions
+  say so — so a bare `start` that began a session would spawn one every time
+  any session came up. `lifecycle/commands.py` names that recursion as its
+  reason for not starting even the free loop. **The provider argument is
+  what separates "orient me" from "start work", and nothing may collapse
+  them.**
+- **Starting the loop is itself a change to §9.10's behaviour** and is listed
+  here as one, not smuggled in as "unchanged".
+
+#### 9.14.1. What a provider adapter is for
+
+A provider is a thing that can hold a working session: today Claude Code,
+next a purely local engine, later Cursor. The adapter is the narrow piece
+that knows how to start one, notice it has ended, bring it back, and let a
+human talk to it.
+
+⚠ **An earlier draft claimed everything above the adapter — the loop, the
+verdicts, the budget, the stop conditions, the claims — was
+"provider-independent by construction, because it already exists". That is a
+non-sequitur and it is false in three places, measured:**
+
+- **The budget is a Claude transcript reader.** `rite_ai.budget` parses
+  `~/.claude/projects/**/*.jsonl` and has no other input. For a local
+  provider it does not return zero — it returns the machine's Claude spend
+  regardless of what the local session did.
+- **Worker freeness is "is a Claude sandbox running".** The loop asks
+  `worker_sandbox_status`, and the sandbox is launched `--agent claude`. A
+  provider with no sandbox reads every Worker free for ever, and the loop
+  dispatches against capacity that does not exist.
+- **The capacity model is one provider's billing.** `cycle.capacity` comes
+  from `sandbox.max_concurrent_workers` under §2.7's schedule, and §2.7
+  exists to ration a weekly quota. §9.14.8 says a local engine has neither.
+
+So cost accounting and capacity are **provider-specific and currently sit
+above the adapter, on the wrong side of the line.** Moving them is part of
+the work the `local` adapter forces, and it is the concrete reason §9.14.2
+refuses to freeze the interface. What IS genuinely provider-independent is
+narrower: the claims ledger, the verdict *vocabulary*, and the stop rules in
+§9.14.4.
+That is the test of whether a thing belongs in the adapter: **if two providers
+would need the IDENTICAL code, it is above the adapter; if it differs between
+them, it is in it.** (An earlier wording said "would have to be written
+twice" for the first half — the same condition as "differs", so it matched
+every input and classified nothing.)
+
+#### 9.14.2. The adapter interface is explicitly unstable until `local` exists
+
+⚠ **Do not treat the interface shipped with the Claude adapter as a contract.
+It will change when the second adapter is written, and that is the plan
+rather than a risk.**
+
+One implementation produces an interface shaped like that implementation.
+The names, the arguments and the lifecycle hooks will all be reasonable, and
+they will encode assumptions nobody noticed making — a session id exists, a
+session can be resumed, ending is distinguishable from crashing, tokens are
+the unit of cost — because for Claude Code every one of those is true.
+
+**rite already got this right once, and the precedent is worth citing
+precisely.** The state layer (§3.3) is genuinely backend-agnostic because git,
+a local filesystem and a key-value store all existed *before* the interface
+froze. Its compare-and-swap is per key with an opaque version token (D-61)
+rather than a whole-state swap, and it is that way because a git backend and a
+Redis backend disagreed about what a version is while the interface was still
+being written. An interface that had been designed against git alone would
+have had a commit sha in it.
+
+So: the adapter interface is **unstable until the `local` adapter exists and
+passes the same conformance suite.** Until then, changing it is a normal
+change rather than a breaking one, and nothing outside rite should depend on
+it.
+
+#### 9.14.3. The session must be attachable by a human
+
+**A Manager session a human cannot talk to is not a Manager session.** The
+human must be able to reach the running session, read what it is doing, and
+say something to it — the same relationship they have with a session they
+started by hand.
+
+This is stated here, at the interface, and not in the Claude adapter,
+**because it is the requirement most likely to be lost by an abstraction
+designed without it.** An adapter interface written from the mechanics alone
+arrives naturally at "start a process, capture its output, log it" — which
+satisfies every other requirement in this section and fails this one
+completely. A detached process whose output is merely logged is a report
+about a session, not a session.
+
+What it demands of an adapter:
+
+- a session must have a **name or handle a human can use** to reach it, and
+  the command that reaches it must be printed when the session starts —
+  §9.10's rule that a command's surprising effects should be things the user
+  asked for by name applies to the useful ones too;
+- the session's input must remain **live**, not replayed — the human types
+  into the running session, they do not queue a message for it;
+- attaching must be **read-write and non-destructive**: attaching must not
+  restart, interrupt or reconfigure the session, and detaching must leave it
+  running.
+
+For the Claude adapter tmux supplies all three nearly free, which is why the
+requirement is written at the interface rather than in the adapter.
+
+⚠ **An earlier draft added "it costs the first adapter nothing; it constrains
+the second and third, which is the point." That sentence is false and review
+caught it.** The escape hatch below exempts exactly the provider that would
+have been constrained: `local` has no input channel anywhere, so it takes the
+hatch, and a requirement waived by its own text in the only case where it
+bites constrains nothing. It is kept as a requirement because it is the right
+default and because declaring non-attachability should be a visible act — not
+because it currently costs anybody anything.
+
+⚠ **The local adapter is where this gets hard, and that is a reason to
+write the requirement now rather than discover it later.** A local engine may
+have no interactive surface at all, in which case the adapter either provides
+one or the provider is honestly declared non-attachable and `rite start
+local` says so at startup. **It must not silently degrade to a log file.**
+
+#### 9.14.4. Stop conditions come from the loop's verdicts
+
+The loop already decides what a project's state is, and its seven verdicts are a
+complete answer to "should this continue". The
+session lifecycle does not invent a second opinion:
+
+| verdict | lifecycle | why |
+|---|---|---|
+| `closed` | **stop** | the schedule authorises zero Workers in this window — the user has said "not now" |
+| `ready` | continue | work is ready and a Worker is free |
+| `saturated` | continue | a queue, not a fault |
+| `blocked` | continue | the work is real and the holder will let go — the loop's own text says stopping here is wrong |
+| `idle` | **stop** | the board has nothing ready; the work is done |
+| `deadlocked` | **stop** | nobody is coming back, so waiting is indefinite |
+| `unknown` | **stop** | something could not be established, and a loop's default on the unknown is to stop and say so |
+
+⚠ **`closed` was missing from the first draft of this table, which said
+"six verdicts" and listed six.** It is the row with the sharpest consequence
+and both review rounds found it independently: under a window the user
+configured to authorise zero Workers — typically overnight — the loop's own
+answer is "sleep and go round", so a lifecycle that simply followed the loop
+would keep a Manager session running, and spending, through the hours the
+user explicitly told rite to be idle. §2.7.3 hands the *Workers* back at that
+boundary and nothing was handing the Manager back.
+
+It stops. That also removes the case §9.14.6's failed argument conceded as
+its weakest, which is a good sign about the narrower design rather than a
+coincidence: the hour hardest to defend is the hour the user already said no
+to.
+
+⚠ **The loop itself is not specified in this document.** It is built
+(`rite loop run/start/status/stop`, shipped in 0.5.0) and its verdicts are
+load-bearing for the table above, but §9 has no section describing it. This
+section therefore depends on behaviour whose only specification is its
+source. That is a gap in this document, recorded here rather than papered
+over with a citation to a section that does not exist — and it should be
+closed before the adapter interface freezes, because a stop condition
+derived from an unspecified verdict set is a contract with no text.
+
+**`idle` is a different kind of stop from the other two and the exit must say
+so.** `idle` is completion: the session did what it was started for and there
+is nothing left. `deadlocked` and `unknown` are faults: the session stopped
+because the project is stuck or unreadable, and somebody has to look. A
+lifecycle that exits identically for all three tells a human "finished" when
+it means "jammed", which is the reporting defect this document keeps finding
+in other forms. Distinct exit codes and distinct final lines, per §9.11.
+
+⚠ **`closed` is an OVERRIDE, not a derivation, and saying otherwise would
+break D-66 in the same table that cites it.** The loop's own answer on
+`closed` is "sleep to the boundary, do not exit" (§2.7.3). This section
+diverges on exactly that row. The divergence is right — a window authorising
+zero Workers is the user saying "not now", and a Manager that kept spending
+through it would be ignoring them — but it is a second opinion, and D-66 says
+a second opinion needs a rule for when it may be held. **The rule: the
+lifecycle may override the loop only where the loop's answer is "keep
+waiting" and the user has already said not to.** That is one case and this is
+it.
+
+⚠ **`closed` needs its own exit class, and the two this section offers do not
+fit.** It is neither completion nor fault: it is "come back when the window
+opens". Reported as `idle` it reads as finished; as a fault it reads as
+jammed. A third class is required, its final line must say when the window
+opens and **that nothing will restart the session then**, and §9.11 has no
+exit-code row for this command at all — which the plan must resolve rather
+than inherit.
+
+⚠ **Stopping leaves the loop running.** On `idle`, `deadlocked` and
+`unknown` the loop's own watch returns, so both halves stop together. On
+`closed` the loop sleeps and continues while the lifecycle stops, leaving a
+detached loop alive with no Manager. Today that is harmless because the loop
+dispatches nothing. **It stops being harmless the moment the dispatching
+layer lands** — a loop started by `rite start <provider>` and orphaned by a
+terminal close would then be a thing rite runs unattended that starts
+sessions, which is the §9.12 breach §9.14.6 spent its length refusing. The
+lifecycle must state the loop's fate on every stop. It does not yet, and that
+is a required input to the plan.
+
+⚠ **The stop verdict must be evaluated BEFORE the first session starts.**
+§9.14.5 requires the ceiling checked before each start; the verdict needs the
+same treatment and for a sharper reason. Every cause of `unknown` is free to
+establish — config that did not load, a git worktree, an unresolvable
+timezone, no ticket backend, an unreadable claims ledger. As written, "it
+runs until a stop condition ends it" starts the most expensive thing rite can
+start and then fault-exits on something knowable for nothing.
+
+⚠ **No stop path is wired to a handover, and claims do not expire.** A
+Manager session holds claims; a session ended without a handover leaves a
+claim held by a process that no longer exists. Four stop conditions here,
+none of them connected to the handover path §2.7.3 requires at exactly this
+boundary. The plan must wire them or state why not.
+
+**Deriving the stop condition rather than configuring it is deliberate.** A
+separately configured stop condition is a second definition of "done" that
+can disagree with the loop's, and the first time they disagree there is no
+way to say which is right.
+
+#### 9.14.5. The budget ceiling is mandatory
+
+A `rite start <provider>` invocation **must** carry a ceiling on what it may
+spend, and the command refuses to start without one — no default that means
+"unlimited", and no default at all where the provider has a metered cost.
+
+Refused rather than defaulted, matching §2.5.1 and `check_worker_cap`:
+silently choosing a number the user did not choose is how `rite pool fill
+--count 500` became possible, and spent quota is the one kind of damage no
+cleanup reverses (§5.1.1).
+
+The ceiling is **checked before each session start, not only at the end**. A
+ceiling enforced after the fact is a report, not a ceiling.
+
+⚠ **The unit is a session COUNT, not spend, and the spec says so because
+rite cannot measure spend.** §2.6.1 establishes that no file under
+`~/.claude/` exposes the quota and `/usage` is reachable only inside an
+interactive session; `rite_ai.budget` is machine-wide by construction and
+states that per-project attribution is unavailable. D-38 goes further and
+forbids the path from burn-rate measurement back into concurrency control.
+
+A ceiling "checked before each session start" against spend would therefore
+be a check that cannot run — and §9.11's rule is that a check which could not
+run is never reported as one that passed. So until per-session accounting
+exists, **the mandatory ceiling is a maximum number of session starts, plus a
+wall-clock window**, both of which rite can enforce exactly. It is named as a
+count in the interface and in the command's output, never as a spend figure
+it cannot substantiate.
+
+⚠ **A count ceiling does not bound cost, and this section will not pretend
+otherwise.** Three sessions may run arbitrarily long and burn arbitrarily
+much. §9.14.5's own line — "a ceiling enforced after the fact is a report,
+not a ceiling" — applies to itself: a count checked at start time is a report
+about starts. **The wall-clock window is the bound that actually limits
+spend, and it is currently the least specified object in this section** — no
+unit, no statement of whether it is equally mandatory, no behaviour at
+expiry, no exit class, no interaction with `closed`. Specify it to the same
+depth as the count before implementing either.
+
+⚠ **Neither bound survives re-invocation unless it is persisted, and nothing
+here says it is.** Both live in a process designed to die with the terminal.
+What actually bounds a day's spend is §9.14.0's one-Manager refusal — a rule
+resting on a liveness check, which is the mechanism this project has just
+twice found to be a facade.
+
+⚠ **The unit is still provider-specific and the interface must not assume
+tokens.**
+For Claude Code the natural unit is the provider's own accounting; for a
+local engine there may be no metered cost at all, in which case the adapter
+declares the ceiling not applicable rather than pretending to a number.
+**"Not applicable" must be a distinct answer from "unlimited"** — the first
+is a property of the provider and the second is a decision nobody made.
+
+#### 9.14.6. §9.12, and the argument that FAILED
+
+§9.12 says: **"Nothing rite runs unattended starts a Claude session."**
+Sessions start only from a command a human types, in the foreground.
+
+**Two review rounds killed the first version of this subsection, and the
+rejected argument is kept because the rejection is the useful part.**
+
+**What was argued, and why it fails.** The first draft kept §9.12 unamended
+and defended unattended resumption on four legs. It had already discarded the
+weakest one — "a resume is a continuation, not a start" — on the ground that
+§9.12's reason is unattended token spend, which a resume incurs. Review
+removed the other three:
+
+1. **The `rite pool fill` precedent was quote-mined.** §9.12's sentence ends
+   "**Both are explicit and in the foreground.**" The draft cited the first
+   half — one command, N sessions — and dropped the clause that decides the
+   case. `fill`'s sessions all start *synchronously, inside the process the
+   human is watching*; the command does not return until they have. The
+   precedent establishes that one command may start many sessions **while it
+   runs**. It says nothing about starting sessions **after it returns**,
+   which is the only thing the draft needed from it.
+2. **"Bounded authorisation" does not distinguish anything.** A cron tick can
+   be given a ceiling and a terminating condition too — rite owns every piece
+   needed (`watch(limit=…)`, per-window caps, `max_concurrent_workers`). And
+   a cron tick also "traces to exactly one command a human typed": `rite
+   scheduler install`. §9.12 forbids it anyway. An argument which, if
+   accepted, would permit a bounded cron dispatcher dissolves the rule it
+   claims to satisfy.
+3. **"Attachable" was already rejected by §9.12 itself.** §9.12 makes the
+   scheduler log load-bearing *and calls it "a log nobody is watching live"*
+   while still classifying the tick as unattended. A log a human can read
+   afterwards is a strictly stronger artefact than a session they could have
+   attached to had they been awake. §9.12 has ruled on this class.
+
+**So the honest verdict is that the argument fails, and §9.12 wins.** Writing
+it up any other way would have produced a spec that papers over its own
+central question.
+
+**What survives, and it authorises materially less.** Resumption is permitted
+**only while the human's own invocation is still the live foreground process
+they started.** `rite start <provider>` does not return and then resume from
+somewhere else; it *is* the process, and every session it starts — first or
+resumed — begins inside a command the human launched and can see. That is the
+`pool fill` precedent applied honestly rather than stretched, and §9.12 needs
+no amendment for it.
+
+**The distinction that makes this coherent is between the SESSION and the
+RESUMER, and the first draft of this narrowing collapsed them.** Round 2
+caught it: §9.14.3 requires a session a second terminal can attach to and
+which survives detaching, and an earlier version of this subsection said
+"nothing that outlives the terminal". Those are mutually exclusive, and rite
+has exactly one persistence mechanism — tmux — which is detached by
+construction. As written, the two requirements denied each other.
+
+They separate cleanly:
+
+- **The session may outlive the terminal, and should.** A tmux session the
+  human started is precisely what §9.12 already permits: `rite sandbox start
+  <worker>` leaves one running and is named in §9.12 as compliant. Surviving
+  detach is what makes §9.14.3's attachability real rather than nominal.
+- **The RESUMER may not.** The thing that notices a session has ended and
+  starts another one is the human's own foreground invocation, and it dies
+  with their terminal. **No daemon, no scheduled re-entry, nothing that
+  brings a session back once the human's process is gone.**
+
+So after a terminal closes: a Manager session that is still running keeps
+running and stays attachable, and when it ends, nothing restarts it. That is
+the whole of the narrowing, and it is the half §9.12 actually speaks to —
+§9.12 forbids unattended *starts*, not sessions that continue.
+
+Consequently:
+
+- **When the human's process ends, the LIFECYCLE ends** — no further session
+  is started. The session already running is not killed, because rite has no
+  kill path and deliberately so: `loop/session.py` records that ending a
+  session without a handover "leaves a claim held by a process that no longer
+  exists".
+- **Resumption is bounded in COUNT and TIME, not in nominal spend** — see
+  §9.14.5, which now says why count is the only bound rite can currently
+  enforce.
+- **`closed` stops the lifecycle** (§9.14.4). A schedule window authorising
+  zero Workers is the user saying "not now", typically overnight — which was
+  exactly the case the failed argument conceded as its weakest. Stopping
+  there removes it rather than defending it.
+
+⚠ **What this gives up, stated so nobody re-derives it as a missing feature.**
+An unattended overnight Manager session is **out of scope**, not deferred.
+Anyone wanting one is asking for §9.12 to be amended, and that is a decision
+for the project owner, in public, with this subsection's failed argument in
+front of them — not something to be reached by a spec that defines its way
+around the rule.
+
+#### 9.14.7. Compliance constraints, as design requirements
+
+These come from Anthropic's terms and they bind the implementation. They are
+recorded here rather than in the adapter because an adapter is free to be
+replaced and these are not.
+
+1. **Never modify, patch, wrap or vendor the Claude Code binary.** Invoke the
+   installed one, found on `PATH`, as a user would.
+2. **Never alter how it identifies itself** to Anthropic's servers — no
+   spoofed client identifiers, no altered user agent, no interception of its
+   traffic.
+3. **Never read, persist, log or transmit the token.** It is consumed from
+   the environment and nowhere else.
+4. **No login flow.** The user mints their own token and puts it in their
+   environment. rite does not offer to obtain one.
+5. **"Claude" stays out of product and command names** beyond factual prose.
+   The provider argument names the provider — `rite start claude` — which is
+   a factual statement about what is being started, and the adapter is
+   described as "the Claude Code adapter". Nothing rite ships is *called*
+   Claude.
+6. **The budget ceiling and the stop condition are not optional.** They are
+   why §9.14.5 refuses to start without one.
+
+   ⚠ **An earlier draft called them "the evidence that this is ordinary
+   individual usage rather than automated resale of capacity". After D-69
+   narrowed the unit to a session COUNT, that claim rests on its weakest
+   support and is withdrawn**: a count of session starts is not evidence
+   about capacity consumed. What the constraints actually evidence is that
+   the run is bounded and terminating, which is a weaker and true statement.
+   The stronger one becomes available only if per-session accounting ever
+   exists.
+
+⚠ **Requirement 3 contradicts how rite delivers credentials today, in two
+places, and the spec records it rather than assuming the implementation will
+notice.** Measured 2026-09-19:
+
+- **rite reads the token.** `resolve_worker_token` takes it out of the macOS
+  keychain and hands the plaintext to `worker_environment`, so rite holds the
+  value in process memory. The whole per-project credential scoping (§10.2) is
+  built on rite reading and re-delivering secrets.
+- **rite then puts it on argv**, as `--env KEY=VAL` to `yoloai new`. **argv is
+  not uid-restricted on macOS**: measured, an unprivileged account read the
+  full argument lists of processes owned by root, `_usbmuxd`, `_distnote` and
+  `_windowserver`. So a credential passed that way is readable by *any local
+  account* for as long as the process lives.
+
+So the Claude adapter **cannot inherit the existing delivery mechanism**. The
+token must reach the provider process by being inherited from an environment
+rite never materialises into its own memory, or fetched by the adapter's
+child itself. That is a constraint on the adapter interface, not an
+implementation detail, and it is cheaper to state now than to retrofit.
+
+⚠ **A draft of this section held `CLAUDE_CODE_OAUTH_TOKEN` up as the
+compliant shape and said "it works". Review found that it is the clearest
+violation of requirement 3, not the exemplar of it.** The lift into the
+child's environment fixes **argv exposure only**. The rest of the chain is
+untouched and is exactly what requirement 3 forbids: `rite credential set
+claude` **prompts** for a token the user pastes from `claude setup-token`,
+`claude_token` is **persisted** to the OS keychain, and `worker_environment`
+**reads** it back into rite's memory on every start.
+
+That is **two** of requirement 3's four verbs — read and persist — plus a
+separate breach of requirement 4, whose territory "prompts for" is. An
+earlier draft said "three of the four verbs" by counting prompting and
+reading back as different ones. The argument survives the correction; the
+count did not, and a section that corrected "six verdicts" cannot keep it.
+
+⚠ **A draft of this paragraph called the contradiction "structural" on the
+ground that "injection is the only channel that reaches a sandboxed Worker".
+Review refuted it from the code, and the refutation matters because it turns
+an impossibility into a choice.**
+
+There is a second channel and rite already uses it: the Claude token is
+POPPED out of the `--env` set and placed in the environment of the `yoloai
+new` child process, which the sandbox tool reads from there. So a design
+satisfying requirement 3 exists today — the user exports the token, rite
+passes its environment through and never calls the keychain for it.
+
+**What that costs is one sentence of §10, not the section**: per-project
+scoping for this one credential, and the convenience of a sandbox started
+from any terminal rather than only from one where the token is exported.
+
+**And the irreconcilable pair is not 3 and 4.** Those two agree —
+requirement 4 *is* the design that satisfies requirement 3. The conflict is
+between **requirement 3 and §10's "a credential belongs to one project, held
+in rite's keychain"**: you cannot hold a per-project token and never read it,
+because reading it back is the whole point of holding it. An implementer told
+to "rewrite 3 and 4 together" would patch the two clauses that are consistent
+and leave the contradiction in §10 untouched.
+
+**The measurement that decides it** is one sandbox away and has not been
+taken: whether a token delivered by inheritance is persisted the way `--env`
+values are (§5.3.4 records that those are written to four files surviving
+`stop`). If inheritance persists it too, the design above buys nothing and
+requirement 3 must be narrowed. **Take that measurement before the plan, not
+after.**
+
+One measurement is missing and is the one that matters: §5.3.4 records that
+every credential injected by the sandbox tool is written to four files that
+survive `stop`, but the Claude token travels a different channel and **nobody
+has measured whether that channel persists it.** Under a requirement that
+says "never persist", that is the fact to establish before implementation,
+not after.
+
+#### 9.14.7a. The command name is not settled — `rite start <x>` is already taken twice
+
+⚠ **`rite start <provider>` collides with two existing meanings of the same
+positional argument and this section does not get to ignore it.**
+
+§8.9 defines `rite start <alias>`, resolved against the Dispatch registry,
+and promises that `rite start <dir>` is "unchanged for anyone not using the
+registry". §9.10 and §9.1 define `rite start [<dir>]`. A third meaning makes
+`rite start local` genuinely ambiguous — alias, directory, or provider — and
+nothing reserves provider names against the registry, so an alias called
+`claude` would silently win or silently lose depending on resolution order.
+
+**Resolve it before implementation, not after.** The options are a flag
+(`rite start --provider claude`), a subcommand (`rite session start
+claude`), or reserved provider names enforced at registration. This document
+does not pick one, because the choice is the project owner's and it is
+cheaper to make deliberately than to discover in a bug report. **What it
+does say is that `rite start <provider>` as a bare positional is not
+available**, and any implementation plan that assumes it has not read §8.9.
+
+#### 9.14.7b. ⚠ `local` is already built, in a shape this section does not fit
+
+**This is the largest unresolved finding of the two review rounds and it is
+recorded rather than papered over, because resolving it is a design decision
+and not a drafting one.**
+
+`src/rite_ai/local/` exists. It is not a stub. And it does not match the
+model this section assumes, in three ways that compound:
+
+1. **A provider is not a command argument in the built design; it is a
+   Manager attribute.** `engine` is a field on `ManagerRole`, beside
+   `endpoint`, `model`, `agent` and `credential`, matching `local:<class>`.
+2. **Providers are therefore not mutually exclusive.** The local design
+   presets an ordinary project as **three Managers running concurrently** —
+   `lead` on `claude`, `planner` on `local:large`, `executor` on
+   `local:small` — and `duty_router` exists to route between them.
+   `rite start <provider>` cannot express the configuration the project
+   already ships config for.
+3. **`local` is a family, not an adapter.** A `local:*` role is meaningful
+   only with its endpoint, model and agent; `probe_local_engines` iterates
+   several. An adapter keyed on the string `local` has nowhere to put them —
+   a fourth ambiguity for `rite start local` that none of §9.14.7a's three
+   proposed fixes resolves.
+
+**What this invalidates here.** §9.14.0's "at most one Manager session per
+project" — the concession that pays for the D-50 amendment — contradicts the
+tier model directly. Either it means one per Manager ROLE, in which case the
+idempotence argument needs redoing, or mixed-engine projects are out of scope
+and D-64's ordering is ordering something other than what is built.
+
+**And the built unit is not a session.** `run_subtask` is a synchronous call
+in rite's own process whose unit is one subtask, terminating on completion by
+design. Against §9.14.1's four duties: there is no process to start, ending
+is a `return` rather than an event, and "bring it back" is actively wrong —
+re-running an accepted subtask re-enters the commit path. The local design's
+own resumption story is at a different granularity: a durable record of
+subtask, branch, attempt count and last verify result. **§9.14.1 merges two
+different duties — resume a live session, and resume a plan from a record —
+and only the first is Claude's.**
+
+⚠ **`run_subtask` has no production caller.** The honest status is that
+`local` is a library with no driver, in a shape orthogonal to this section's,
+while §9.14.8 proposes writing "the local adapter" as though from zero.
+
+**Required before any implementation plan:** a decision on whether a provider
+is a command argument or a Manager attribute. That is a register row, and it
+is not mine to make.
+
+
+
+**`local` is second on purpose, and the order is not a priority ranking.**
+
+A local engine is the most *different* provider: no session concept, no
+session id to resume, no quota, no rate limits, possibly no interactive
+surface. Every assumption the Claude adapter will quietly bake in is one a
+local engine violates. Writing it second is what turns the interface from a
+description of Claude Code into an interface — **an interface that survives
+`local` survives anything, and one that has only ever met two hosted
+assistants has not been tested at all.**
+
+Cursor third is the easy case, and it is third because easy cases do not
+discover interface defects. Taking `cursor` second would produce two adapters
+that agree with each other and an interface that fails on the third, which is
+the same mistake as freezing the state layer against git alone.
+
+§9.14.2's instability ends when `local` lands, not when the second adapter
+lands.
+
+
 ## 10. Credentials
 
 **OS keychain via Python `keyring`** (macOS Keychain, Linux Secret Service, Windows
@@ -4186,6 +4789,18 @@ happened once already and left no trace until this review found it.
 | D-59 | A lease that expires implausibly far ahead | **Not credible beyond `owner_lease_minutes + skew_tolerance`, and therefore challengeable** | §2.4.1's tolerance protects an incumbent from a fast challenger; the reverse case had no rule, and read literally a Manager whose clock is a day ahead holds the role permanently — a wedge needing no malice, only a wrong clock. Nothing honest can write an expiry beyond the longest permitted lease plus the most drift tolerated, so anything past that ceiling is invalid. Derived from two values already in `coordination:` rather than a third number to keep in step: raising the lease duration moves the ceiling with it. Logged distinctly, because it means somebody's clock is wrong. §2.4.1. |
 | D-60 | The lease's `priority` field | **Written for audit, ignored on read; config order always wins** | `coordination.managers` is declared intent under version control; a lease is ephemeral runtime state. A stale lease written before someone reordered the list must not override that reorder, or a deliberate config change silently fails to take effect until a lease happens to expire. The field is kept because what the holder believed its priority was at acquisition is useful when reconstructing why a promotion went the way it did — but it never participates in the comparison. Both halves stated so the field is neither deleted as dead weight nor, worse, started being read. §2.4.1. |
 | D-61 | Granularity of the state layer's compare-and-swap | **Per key, not whole-state; the version is an opaque fingerprint of the value** | The interface must be substitutable (D-20, D-21) or the git-versus-Redis question has no answer but "rewrite it". The first cut made the version whole-state because that is what `--force-with-lease` compares, on the stated ground that per-key CAS was not implementable on git — which was wrong: a git backend compares the key's own value, merges, pushes with the lease, and re-merges when the ref moved for an unrelated key, absorbing §2.4.2(b)'s ref-level race instead of exporting it. Better for git (that race can no longer mark a live Manager falsely stalled) and necessary for anything else (a key-value store would otherwise funnel every write through one global version). A version fingerprints the VALUE, so no backend needs a durable counter and an A→B→A rewrite is harmless: a decision made on content stays sound when the content is what was read. Proven rather than argued — `tests/test_state_layer_kv.py` binds a socket-served key-value store with no trees, refs or merges to the conformance suite unchanged, and it passes, including the process-burst concurrency tests. |
+| D-62 | Whether `rite start <provider>` inherits D-50 | **No — it AMENDS D-50, and the amendment is recorded rather than implied** | A Manager session is not idempotent, local or free; it fails all three of D-50's tests where the loop failed only one, and §9.10 refuses to start even the free loop. What buys the amendment is §5.1.1 — a command's surprising effects should be things the user asked for BY NAME, and `rite start claude` names it. What it costs is paid here: at most one Manager session per project, a second invocation refused, and bare `rite start` unchanged because it is what a session runs to orient itself. §9.14.0. |
+| D-63 | When the provider adapter interface freezes | **When `local` binds UNCHANGED to an adapter conformance suite — and that suite is written WITH the `claude` adapter, against the contract, not deferred to the freeze** | §3.3's precedent is sharper than a draft of §9.14.2 read it: `tests/state_layer_conformance.py` was P2-1a, written with the FIRST backend against the contract, and the git backend had to bind to it unchanged. Deferring the suite to the freeze moment inverts the thing that made it work. No adapter suite, interface or code exists today, so as drafted this froze on an unwritten artifact. Writing it now is also where the §9.14.7b mismatch with the built `local` package would surface automatically. §9.14.2. |
+| D-64 | Provider order after `claude` | **`local` second, `cursor` third — the most DIFFERENT provider second, not the easiest** | A local engine has no session concept, no session id to resume, no quota and possibly no interactive surface, so it violates every assumption the first adapter will bake in. Two hosted assistants would agree with each other and fail on the third. §9.14.8. |
+| D-65 | Whether a Manager session may be detached with logged output | **No — attachability is an interface requirement, not a Claude implementation detail** | A session a human cannot talk to is a report about a session. Stated at the interface because an abstraction designed from the mechanics alone arrives at "start, capture, log", which satisfies everything else and fails this completely. tmux gives the first adapter all of it free, which is exactly why it constrains the second. §9.14.3. |
+| D-66 | Where the session's stop condition comes from | **Derived from the loop's verdicts, never separately configured** | A configured stop condition is a second definition of "done" that can disagree with the loop's, with no way to say which is right. `idle` is a completion stop; `deadlocked` and `unknown` are fault stops, and the exits must differ or a jam reports as a finish. §9.14.4. |
+| D-67 | Whether `claude --resume` breaches §9.12 | **The permissive argument FAILED review; §9.12 wins. Resumption only while the human's own foreground invocation is still live** | Two rounds killed three legs: the `rite pool fill` precedent was quote-mined (§9.12 ends "Both are explicit and **in the foreground**", and fill's sessions all start inside the process the human is watching); "bounded authorisation" does not distinguish, because a cron tick can be given a ceiling and also traces to one typed command (`rite scheduler install`); and "attachable" was already rejected by §9.12, which calls the scheduler log "a log nobody is watching live" and classifies the tick as unattended anyway. What survives authorises less: the lifecycle IS the human's process and dies with it. An unattended overnight Manager session is out of scope, not deferred. §9.14.6. |
+| D-68 | Whether the budget ceiling may have a default | **No — refused rather than defaulted, and "not applicable" is a distinct answer from "unlimited"** | Silently choosing a number the user did not choose is how `rite pool fill --count 500` became possible, and spent quota is the one damage no cleanup reverses (§5.1.1). A provider with no metered cost declares the ceiling inapplicable; that is a property of the provider, where "unlimited" is a decision nobody made. §9.14.5. |
+| D-69 | The unit of the mandatory ceiling | **A session-start COUNT plus a wall-clock window — never a spend figure** | §2.6.1: no file under `~/.claude/` exposes the quota and `/usage` is reachable only inside an interactive session; `budget` is machine-wide and states per-project attribution is unavailable; D-38 forbids the path from measurement back to control. A ceiling checked against spend is a check that cannot run, and §9.11 forbids reporting that as a pass. §9.14.5. |
+| D-70 | What the lifecycle does on the `closed` verdict | **Stops** | The schedule authorising zero Workers is the user saying "not now". The loop sleeps through it by design (§2.7.3), so a lifecycle that merely followed the loop would keep a Manager session spending through the hours the user told rite to be idle. Missing from the first draft, found independently by both review rounds. §9.14.4. |
+| D-71 | The command name `rite start <provider>` | **NOT settled — the positional is already taken twice and the choice is the owner's** | §8.9 defines `rite start <alias>` against the Dispatch registry and §9.10 defines `rite start [<dir>]`, so `rite start local` is ambiguous and nothing reserves provider names. A flag, a subcommand, or enforced reserved names — recorded as open rather than picked, because a plan that assumes the bare positional has not read §8.9. §9.14.7a. |
+| D-72 | Whether a provider is a command argument or a Manager attribute | **UNRESOLVED — and it blocks the implementation plan** | §9.14 models a provider as an argument selecting the project's one Manager session. The built design makes `engine` a field on `ManagerRole` and presets three Managers running CONCURRENTLY (`lead`=claude, `planner`=local:large, `executor`=local:small). The two are different designs; §9.14 picked the first without knowing the second existed. It also voids §9.14.0's one-Manager-per-project rule, which is what pays for the D-50 amendment. §9.14.7b. |
+| D-73 | Whether the session or the resumer dies with the terminal | **The SESSION may outlive it; the RESUMER may not** | Review found the two requirements denying each other: §9.14.3 needs a session that survives detaching, §9.14.6 said nothing outlives the terminal, and tmux — rite's only persistence — is detached by construction. They separate: a session the human started continuing is what §9.12 already permits (`rite sandbox start` leaves one running); what §9.12 forbids is an unattended START, so it is the resumer that must die. §9.14.6. |
 
 ---
 
@@ -4195,7 +4810,65 @@ Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
 
-**Changes in 0.18.2 — §5.3 measured against the installed sandbox.** Three
+**Changes in 0.19.0 — §9.14, `rite start <provider>` and its adapters.** A
+new section specifying the session lifecycle: one command that starts the
+loop and a Manager session, a mandatory ceiling, and stop conditions derived
+from the loop's verdicts rather than configured separately.
+
+**Two review rounds changed what this section says, not merely how it says
+it, and the changes are the reason to trust it.** The first draft argued that
+`claude --resume` does not breach §9.12. **That argument failed and is
+recorded as failed** (§9.14.6): it quote-mined §9.12, whose sentence ends
+"Both are explicit and **in the foreground**"; its "bounded authorisation"
+test would equally permit a bounded cron dispatcher, which §9.12 forbids; and
+its appeal to attachability was already rejected by §9.12, which calls the
+scheduler log "a log nobody is watching live" and classifies the tick as
+unattended regardless. What replaced it authorises materially less — the
+lifecycle IS the human's foreground process and dies with it, and an
+unattended overnight Manager session is **out of scope rather than
+deferred**.
+
+The draft also claimed to leave §9.10 "unchanged" while doing two things
+§9.10 refuses. **It amends D-50 and now says so** (§9.14.0), paying for the
+amendment with a one-Manager-per-project rule and a refusal on the second
+invocation, because D-50's idempotence test still applies.
+
+Three further corrections, each from a measurement rather than an opinion:
+the loop has **seven** verdicts and the draft listed six — the missing
+`closed` is the one that would have let a Manager session spend through a
+window the user configured to authorise zero Workers; the ceiling is a
+session COUNT, not spend, because §2.6.1 says rite cannot read the quota and
+D-38 forbids the path from measurement to control; and the claim that
+everything above the adapter is "provider-independent by construction" is
+false in three places, the budget being a reader of Claude's own transcripts.
+
+Two things are recorded as unsettled rather than decided: **`rite start
+<provider>` as a bare positional is not available**, because §8.9 and §9.10
+already define two meanings for it (§9.14.7a); and **the compliance
+requirement that rite never reads or persists the provider token is
+contradicted by rite's own credential design**, which prompts for the Claude
+token, keychains it, and reads it back — a contradiction §10.2 makes
+structural rather than incidental.
+
+Round 2 changed it again, and the largest finding is unresolved by design
+rather than by neglect. **`src/rite_ai/local/` is already built and does not
+fit this section's model**: `engine` is a field on `ManagerRole`, an ordinary
+project runs three Managers concurrently on different engines, and the built
+unit is a synchronous subtask call rather than a session. That voids
+§9.14.0's one-Manager-per-project rule — the concession paying for the D-50
+amendment — and it is recorded as **D-72, blocking the implementation plan**,
+because whether a provider is a command argument or a Manager attribute is
+the owner's decision.
+
+Round 2 also caught a contradiction round 1's fix introduced: §9.14.3 needs a
+session surviving detachment and the narrowed §9.14.6 said nothing outlives
+the terminal. **The session may; the resumer may not** (D-73). And it refuted
+this section's own claim that per-project keychain delivery is the only
+channel to a sandboxed Worker — rite already uses inheritance for exactly one
+token — which turns "structurally impossible" into a trade worth one sentence
+of §10, with the deciding measurement still untaken.
+
+One gap is recorded rather than closed: **the loop is not specified in this**Changes in 0.18.2 — §5.3 measured against the installed sandbox.** Three
 statements about worker sandboxing were checked against the installed yoloAI 0.11.0
 — its binary, its base image, and its own `help security`, which is documentation
 and is labelled as such where it is used — and all three needed correcting in the
