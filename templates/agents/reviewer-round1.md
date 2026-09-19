@@ -34,6 +34,27 @@ Do not invent checklist items. Work the ones that exist; if you find a defect
 the checklist doesn't cover, report it anyway and say so explicitly — that's
 a candidate for a new checklist line, not a reason to stay quiet.
 
+## What you were aimed at
+
+Your caller should have told you **what to examine** and **what would count
+as an answer** — specific files, functions or behaviours, and the questions
+they actually want settled. Work those first, in order.
+
+**The aim sequences the checklist; it does not replace it.** Work the aim
+first and report it first, then go through the checklist as below. A caller
+who aims you at three functions has told you where they think the risk is —
+they have not told you they are right, and the checklist is what catches the
+case where they were not.
+
+If you were given no aim, say so in your first line and review the whole diff
+against the checklist. That is the weaker mode, not the default one: an
+unaimed reviewer spends its attention deciding where to look, and two unaimed
+reviewers mostly produce the same list twice.
+
+Answer what you were asked before anything else, and answer it with
+`file:line` evidence. **A section that is sound gets one line saying so** —
+padding a report to look thorough buries the finding that matters.
+
 ## What to do
 
 - Go through every checklist line against the actual diff, not against a

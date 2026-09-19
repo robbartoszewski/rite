@@ -30,9 +30,35 @@ when either file changes.
 ## Round 1
 
 Spawn independent, fresh-eyes reviewers against that output using the
-`reviewer-round1` agent. Two agents for ordinary work; at least three for
+`reviewer-round1` agent. **One agent for ordinary work**; two or three for
 anything touching a gate, a shared contract, a migration, customer data, or
 user-facing copy — see `CLAUDE.md` for what counts.
+
+**One, not two — and what is measured is the saving, not the equivalence.**
+A run of aimed, single-reviewer rounds found defects that would otherwise
+have shipped, including two that killed a design outright before any code was
+written. That is evidence one aimed reviewer is *worth running*; it is not
+evidence it matches two. Nobody has run both on the same target. What
+appeared to do the work was the aim — told what to examine, told what would
+count as an answer, allowed to be short — rather than the headcount, and a
+second reviewer given the same unaimed brief mostly restates the first.
+
+**What you give up, and it is not only redundancy.** Two unaimed reviewers
+can disagree, and the disagreement is itself a finding: it marks a place the
+design is ambiguous, which neither checklist would surface alone. One aimed
+reviewer cannot produce that, and it can only be wrong in the direction its
+aim pointed — so a **mis-aimed** brief has no backstop. That risk is not
+covered by the exceptions below, which are about the *subject matter* being
+dangerous rather than about the caller having misjudged where the danger is.
+If you are not confident you know where the risk lies, that is itself a
+reason to run two.
+
+⚠ **This is a claim about round 1 only, and about count only.** Whether a
+narrow brief beats a broad one is untested — the comparison it came from
+changed the count, the model and the brief width at the same time, so the
+saving is attributable and the "narrow finds more" part is not. If you have
+budget to settle it: one broad and one narrow reviewer, same target, same
+model, compare findings.
 
 Also run `reviewer-decisions` once, briefed to the project spec's decision
 register (the paths under `spec:` in `.rite/config.yaml`) and any
@@ -51,7 +77,13 @@ the exact case shown closes that case and nothing else.
 ## The terminating check
 
 Two fresh `reviewer-terminating` agents, scoped to round 1's **fixes**, not
-its findings — and not staffed by whoever proposed those fixes. Give them the
+its findings — and not staffed by whoever proposed those fixes.
+
+**Still two, deliberately.** Round 1 came down to one because the evidence
+supported it; nothing in that evidence touches this stage. This is the last
+gate before something ships and it reviews fixes, which are written under
+more pressure and less context than the code they repair. Cutting the final
+check to save tokens is how a review stage becomes decorative. Give them the
 register and the diff, never round 1's transcripts.
 
 This is the last stage. If it finds something, fix it and record it in the
