@@ -1765,6 +1765,189 @@ is in force.
 
 ---
 
+### 5.4. Manager guardrails — containment without a sandbox
+
+§5.3 gives Workers a sandbox. Managers do not get one, and this section is
+the other half of the design rather than an exception to it.
+
+**yoloAI is the WORKER RUNTIME, not a provider.** It belongs on a different
+axis from `claude` / `cursor` / `local` (§9.14), which are the engines a
+*Manager* session runs on. Conflating them produces the reasonable-sounding
+and wrong conclusion that a Manager should be sandboxed the way a Worker is.
+
+**A Manager cannot be sandboxed, for three independent reasons**, any one of
+which would be sufficient:
+
+- it needs broad access to the project by its nature — that is what
+  distinguishes it from a Worker, which is handed one subtask and one
+  workspace;
+- it must be attachable by a human (§9.14.3), and a sandbox is the wrong
+  side of that boundary;
+- macOS may refuse a sandbox inside a sandbox, which would make a sandboxed
+  Manager **structurally unable to start sandboxed Workers** — the one thing
+  a Manager exists to do.
+
+So a Manager's containment comes from **what it is permitted to do**, not
+from where it runs.
+
+#### 5.4.1. The requirement
+
+**A misbehaving Manager must not be able to interfere with another Manager's
+internal working by accident.**
+
+This is §5.0's first case, and the wording is exact. **A Manager that fails
+to deliver its work** is §5.0's third case — a coordination matter between
+that Manager and the Owner, which rite reports and does not arbitrate.
+**A Manager that writes into another Manager's files** is an accident, and
+rite's bug to prevent. The requirement is containment, not fairness, and it
+does not extend to making Managers behave well.
+
+#### 5.4.2. Path boundaries are enforced at every name-to-path join
+
+**Every place a caller-supplied name becomes a path must validate that the
+result is inside the boundary it belongs to, at the join.** Not at the entry
+point, not by convention: at the join, because that is the only place a
+second caller cannot bypass.
+
+⚠ **Four joins in this codebase do not have it. They are OPEN, not fixed —
+an earlier draft of this section narrated them in the past tense and was
+wrong.** Measured on this tree while reviewing that draft:
+
+    write_heartbeat(project, "../../../pwned")
+    -> wrote /var/folders/.../T/pwned.json
+
+Three levels above the project root, from a worker name, with no error. The
+other three: `context add` and `context remove` resolving outside the project
+and unlinking; `add_module` creating a directory outside the tree and
+returning `ok=True`.
+
+A boundary by convention holds until the first unvalidated join, and four is
+the count from one review of a codebase that already believed it had this
+property.
+
+#### 5.4.3. Destructive operations must name what they are scoped to
+
+**Anything that removes or releases must name whose thing it is removing and
+refuse to act outside that scope.** Two current shapes fail it, both by
+omission rather than by hostility:
+
+- `destroy_worker(worker, root=None)` — `root` defaults to `None`, making it
+  a library-callable destroy with no project boundary. The module's own
+  docstring already says omitting `root` "should be treated as a bug in the
+  caller, not a supported mode"; the default stayed anyway.
+- `force_release(paths, by, reason, *, worker=None)` — `worker` is an
+  optional keyword, so the default match is by path across every holder.
+
+⚠ **Neither of those is a MANAGER boundary, and the heading of this
+subsection used to claim they were.** `destroy_worker`'s missing scope is the
+PROJECT, and two Managers on one project share a root, so fixing it buys
+nothing against Manager-on-Manager interference. `force_release`'s `worker=`
+is a WORKER scope. **`Claim` carries `paths`, `worker`, `ticket` and
+`timestamp` and has no manager field at all, so the ledger structurally
+cannot express "release only my own Manager's claims."** Both fixes are worth
+making and neither delivers §5.4.1 on its own.
+
+#### 5.4.4. Credentials are scoped to what the Manager needs
+
+A Manager running a local engine holding the Claude token is an exposure with
+no purpose. §5.3.4 argues that *Workers* are fungible and so all get every
+credential; **Managers are not fungible** — they differ by engine, by duty and
+by which services their work touches — so the argument does not carry across
+and should not be assumed to.
+
+⚠ In tension with §10's per-project credential model, which delivers a
+project's credentials as a set. The same open question §9.14.7 records, named
+here so the two are recognised as one problem rather than two.
+
+#### 5.4.5. ⚠ "The acting Manager's own directory" does not exist yet
+
+**An earlier draft of this section proposed the property "nothing is written
+outside the acting Manager's own directory except the enumerated shared
+files", and called it checkable. It is not, and the reason is structural
+rather than a matter of implementation effort.**
+
+**There is no per-Manager directory.** `.rite/` is flat. Of roughly twenty
+per-project state paths — claims, heartbeats, outbox, pool state and archive,
+the loop lock and log, dispatch intents, the scheduler lock, log and tick
+state, coordination cache and last-tick, `machine`, the three config files,
+context and kb indexes, spec index and units, telemetry — **exactly one is
+keyed by identity**, `handover/<name>.json`, and it defaults to the reserved
+name `_owner`, so two Managers calling it without a name collide on one file.
+Four more paths live in `~/.rite/`, outside the project root entirely, where
+the framing does not reach at all.
+
+**And there is no per-Manager identity to key a directory on.** `this_manager`
+returns the FIRST LINE of `.rite/machine`. The rite-local case this section
+exists to serve puts three Managers in one checkout with one such file, and
+there is no `RITE_MANAGER` in the environment. **A running process cannot
+answer "which Manager am I", so it could not compute its own directory even
+if one existed.**
+
+**And the property would be false anyway for the thing a Manager mainly
+does.** §5.4 opens by saying a Manager needs broad access by its nature; the
+`lead` preset holds EXECUTE and INTEGRATE. A Manager writes source files into
+the shared checkout and commits them, by design. **Any usable form of this
+property is scoped to rite's own state, not to project files.**
+
+So what §5.4.1 requires, in order:
+
+1. **a per-process Manager identity** that `.rite/machine` cannot currently
+   supply;
+2. **relocating per-project runtime state** from a flat `.rite/` into a
+   per-Manager subtree;
+3. **and only then** the boundary property, scoped to rite state.
+
+#### 5.4.6. The shared surface is enumerated — and the ledger is not the only one
+
+⚠ **An earlier draft said "the claim ledger is the one thing Managers must
+agree on" and enumerated exactly that. It is empirically wrong**: `pool.json`
+is a sandbox register two Managers must agree on exactly as they must agree
+on the ledger, and the loop and scheduler locks are mutual-exclusion
+primitives whose entire purpose is being shared.
+
+The enumeration must therefore split two kinds:
+
+- **Shared by decision** — the claim ledger, `pool.json`, the loop and
+  scheduler locks, the outbox, the coordination cache. Each stays shared and
+  each needs its reason written next to it.
+- **Shared by accident** — everything else in the flat `.rite/`, which is
+  shared because nothing gave it an owner, and which §5.4.5's step 2 moves.
+
+⚠ **A prose enumeration is not sufficient on its own, and this codebase has
+already proved it.** `state.py` records a claim of completeness — "every
+`.rite` state file" — that was not every state file; four writers were
+missed, and `tests/test_shared_state_locking.py` exists because of it. The
+enumeration needs a test behind it or it goes stale the same way.
+
+#### 5.4.7. The test, narrowed to one that can actually be written
+
+**Every rite CLI command, invoked with hostile arguments in a scratch
+project, must write nothing outside an explicit allowlist.**
+
+⚠ **An earlier draft said "one Manager attempts every write path available to
+it", which is not writable.** A Manager is a Claude session with a shell —
+§9.14.3 requires it be attachable and live — so its write paths are every
+command, plus arbitrary file writes by the agent, plus git. There is no
+interface to enumerate.
+
+What is enumerable is rite's own command surface, and the repository already
+has both halves: `tests/test_cli_help_text.py` walks the click command tree
+recursively, and `tests/test_blast_radius.py` establishes asserting a
+property over an enumerated surface rather than grepping text. The test
+builds a scratch project, snapshots the project root, its parent and `$HOME`,
+invokes every leaf command with `../`-bearing and absolute-path arguments,
+and asserts every path created, modified or deleted is in the allowlist.
+
+**That test would catch all four of §5.4.2's escapes today.** Until §5.4.5's
+first two steps land, **its allowlist is per-PROJECT, not per-Manager** —
+which is a weaker property than §5.4.1 asks for, and worth having now rather
+than waiting for the stronger one.
+
+A rule in this document is read once by whoever implements the thing it
+governs. The four escapes were all added by authors who would have endorsed
+the rule had they been asked, which is what makes a rule the wrong instrument
+here.
+
 ## 6. Ticket backend
 
 ### 6.1. Abstract interface
@@ -4922,6 +5105,8 @@ happened once already and left no trace until this review found it.
 | D-73 | Whether the session or the resumer dies with the terminal | **The SESSION may outlive it; the RESUMER may not** | Review found the two requirements denying each other: §9.14.3 needs a session that survives detaching, §9.14.6 said nothing outlives the terminal, and tmux — rite's only persistence — is detached by construction. They separate: a session the human started continuing is what §9.12 already permits (`rite sandbox start` leaves one running); what §9.12 forbids is an unattended START, so it is the resumer that must die. §9.14.6. |
 | D-74 | How the one-Manager refusal establishes liveness | **Fail CLOSED, against the INNER PROCESS, with the remedy printed** | The mechanism nearest to hand is tmux `has-session`, which answers "does a session exist" rather than "is the command running" — the facade fixed twice in one night in `loop.start` and `pool.fill` — and it returns false when tmux is missing or times out, so an unanswerable check would permit two PAID sessions. §5.1.1: a safety property may fail closed, never open. The remedy must be printed because this design's ordinary exit is an ungraceful terminal close, so a stale marker is the common morning state. Raised by a peer session at the stage where it is still free to fix. §9.14.0. |
 | D-75 | What rite may refuse a user | **Three cases, not two: an ACCIDENT rite makes impossible; a choice CONTRADICTING an earlier choice of the user's own, where rite honours the earlier one and refuses; and a free choice, whose cost rite makes visible and never refuses** | The two-case form was drafted first and review falsified it on rite's own behaviour: `rite pool fill --count 500` is typed explicitly, so the dichotomy calls it a choice and says never refuse — and rite refuses. The third case is what it was hiding, and it is not paternalism: refusing `--count 500` honours `sandbox.max_concurrent_workers`, a number the user wrote down, and clamping would be the paternalistic option because it substitutes rite's number while appearing to comply. §5.0. |
+| D-76 | Whether a Manager is sandboxed | **No — containment comes from what it is PERMITTED to do, not from where it runs** | Three independent reasons: it needs broad project access by its nature, it must be attachable by a human (§9.14.3), and macOS may refuse a sandbox inside a sandbox — which would leave a sandboxed Manager structurally unable to start sandboxed Workers, the one thing it exists to do. yoloAI is the WORKER RUNTIME and sits on a different axis from `claude`/`cursor`/`local`, which are Manager engines; conflating them produces the reasonable-sounding and wrong conclusion that a Manager should be sandboxed like a Worker. §5.4. |
+| D-77 | What blocks the Manager boundary property | **A per-process Manager IDENTITY, which does not exist — and it must land before any per-Manager path scoping** | Review falsified the draft property "nothing outside the acting Manager's own directory": `.rite/` is flat, roughly twenty per-project state paths are shared and exactly one is keyed by identity, four more live in `~/.rite/` outside the project entirely — and `this_manager` returns the FIRST LINE of `.rite/machine`, with no `RITE_MANAGER` anywhere, so a process cannot answer which Manager it is. `Claim` has no manager field either, so the ledger cannot express "my own claims". Order: identity, then relocate state, then the property — scoped to rite's own state, never to project files, since a Manager writes and commits those by design. §5.4.5. |
 
 ---
 
