@@ -19,6 +19,30 @@ The goal was **rite orchestrating its own Workers unattended**: the Owner picks
 a `scheduled` ticket and assigns it to a Manager, the Manager hands it to a free
 Worker, the Worker works, nobody watches.
 
+> ⚠ **CORRECTED 2026-09-19 against the tree. Both reasons below are now
+> false; the conclusion is mostly not.** Kept rather than rewritten, because
+> which half went stale is the useful part — the callers were built, and the
+> thing that still does not happen is a different thing from the thing that
+> had no caller.
+>
+> - **Owner → Manager HAS a caller.** `manager_views` and `assign_to_manager`
+>   are invoked from the scheduler tick (`scheduler/__init__.py:641,681`).
+>   It is gated, not absent: `coordination.assign_unattended` defaults to
+>   **false** (`config/models.py:295`), Q9's middle answer. A reader acting
+>   on the old text would build a caller that exists; the actual step is
+>   setting a config key and enrolling the machine in `.rite/machine`.
+> - **`ManagerMonitor` IS given a backend and a schedule** —
+>   `scheduler/__init__.py:468-476` passes `backend=board` and
+>   `schedule=project.config.schedule`.
+> - **What genuinely does not happen is the SPAWN, and it is deliberate.**
+>   `rite loop` reports what it would start and starts nothing: "Nothing in
+>   this module writes, spawns or spends", `would_dispatch`, "DRY RUN —
+>   nothing was started". §2.5's "nothing spawns a session automatically"
+>   still holds, and a session costs quota, which is the one damage no
+>   cleanup reverses. So the conclusion below — that a run needs a driver —
+>   survives; its reason changes from "unwired" to "wired, and deliberately
+>   stopping one step short of spending money".
+
 **That chain does not exist in running code.** Not slow, not misconfigured — it
 has no caller:
 
