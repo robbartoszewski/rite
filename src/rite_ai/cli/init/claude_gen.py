@@ -330,6 +330,22 @@ def _format_commands(cmds: ModuleCommands) -> list[str]:
         if value:
             where = " (recorded in modules.yaml)" if key in cmds.configured else ""
             lines.append(f"- {label}: `{value}`{where}")
+            # EXC-2, checked where the command is HANDED OVER rather than only
+            # in `rite doctor`. This file is what the session that runs the
+            # command loads, and the paragraph below it tells that session to
+            # run these as written. A `pytest | tail -1` recorded here reports
+            # a green suite for ever, on every Worker, honestly — and the
+            # warning two lines further down already describes that hazard
+            # while nothing checked for it.
+            from rite_ai.verdicts import cannot_fail
+
+            why = cannot_fail(value)
+            if why:
+                lines.append(
+                    f"  - ⚠ **this command cannot fail** — {why}. Running it "
+                    "proves nothing; tell your Manager rather than treating a "
+                    "pass as a pass."
+                )
         else:
             # `source` is "modules.yaml" alone when nothing was detected —
             # it names where the OTHER commands came from, not a manifest

@@ -79,6 +79,16 @@ class ProjectStatus:
     coordination_cost: CoordinationCostCounts = field(
         default_factory=CoordinationCostCounts
     )
+    loop: str = ""
+    """Whether a work-seeking loop is running for this project, and since
+    when. Empty when the question could not be asked at all (no tmux).
+
+    Here rather than only in `rite loop status`, because `rite status` is the
+    command people already run — and a loop is the one thing in a project
+    that keeps changing the answers below while nobody is watching. A reader
+    who cannot see it is reading a report with an author they do not know
+    about."""
+
     coordination: str = ""
     """What this machine's last coordination tick concluded, with its age —
     read from local state, never fetched. Empty when this machine does not
@@ -184,6 +194,8 @@ def collect_status(root: Path, board: bool = False) -> ProjectStatus:
         status.errors.append("no .rite/ directory — run `rite init`")
         status.boards_unreached = "no .rite/ directory"
         return status
+
+    status.loop = _loop_line(root)
 
     status.coordination_cost = read_counts(root)
 
@@ -348,6 +360,35 @@ def _format_boards(boards: list[BoardState] | None, unreached: str = "") -> list
     return lines
 
 
+def _loop_line(root: Path) -> str:
+    """Whether a loop is running, WITHOUT shelling out.
+
+    `rite loop status` asks tmux, which is authoritative — it knows what it is
+    running. This cannot: `collect_status` is the read-only path and must
+    never spawn a subprocess, which a test pins directly ("no liveness probe
+    subprocess call at all"). Asking tmux here put a process spawn into the
+    command people run most often, and the test caught it.
+
+    So this reads the loop's lock file and checks the pid with a signal, which
+    is a syscall rather than a process. The cost is a few seconds of lag at
+    startup — `start` releases its own lock before spawning, and the loop
+    takes it once running — during which this says "not running" and `rite
+    loop status` says the truth. That is the right way round: the cheap
+    overview may be briefly behind, the authoritative command never is.
+    """
+    from rite_ai.loop.session import draining, lock_path
+    from rite_ai.scheduler.lock import process_is_running
+
+    try:
+        pid = int(lock_path(root).read_text().split()[0])
+    except (OSError, ValueError, IndexError):
+        pid = 0
+    if not pid or not process_is_running(pid):
+        return "not running"
+    drain = " (draining)" if draining(root) else ""
+    return f"running (pid {pid}){drain} — `rite loop status` for detail"
+
+
 def format_status(status: ProjectStatus) -> str:
     # The header is the label: a status report scrolled back to, or pasted
     # into a message, has to say which project it describes.
@@ -437,6 +478,9 @@ def format_status(status: ProjectStatus) -> str:
             lines.append(f"    recorded: {snap.describe_age()}")
     else:
         lines.append("\nno handover snapshot recorded yet")
+
+    if status.loop:
+        lines.append(f"\nloop: {status.loop}")
 
     if status.coordination:
         # Above the cost counters, because "who is Owner" is the question

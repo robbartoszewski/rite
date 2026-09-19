@@ -162,3 +162,48 @@ def test_an_empty_verify_still_reports_the_original_problem():
     found = problems(plan)
     assert any("no verify command" in p for p in found)
     assert not any("cannot fail" in p for p in found)
+
+
+# --- EXC-2's other half: warn where the command is handed over --------------------
+
+
+def test_a_masked_command_is_flagged_in_the_file_the_worker_reads():
+    """`rite doctor` names these, but doctor is a command somebody chooses to
+    run. This is the file the session that runs the command actually loads,
+    and the paragraph beside it says to run them as written."""
+    from rite_ai.cli.init.claude_gen import _format_commands
+    from rite_ai.cli.init.detect import ModuleCommands
+
+    lines = _format_commands(
+        ModuleCommands(test="pytest | tail -1", lint="ruff check .", detected=True)
+    )
+    text = "\n".join(lines)
+
+    assert "this command cannot fail" in text
+    assert "ends in `tail`" in text
+
+
+def test_an_honest_command_gets_no_warning():
+    """A warning beside every command is one nobody reads."""
+    from rite_ai.cli.init.claude_gen import _format_commands
+    from rite_ai.cli.init.detect import ModuleCommands
+
+    lines = _format_commands(
+        ModuleCommands(test="pytest", lint="ruff check .", detected=True)
+    )
+
+    assert not any("cannot fail" in line for line in lines)
+
+
+def test_the_warning_tells_the_worker_what_to_do_about_it():
+    """ "This is broken" without "and here is what that means for you" leaves
+    a session to invent a response — usually running it anyway."""
+    from rite_ai.cli.init.claude_gen import _format_commands
+    from rite_ai.cli.init.detect import ModuleCommands
+
+    text = "\n".join(
+        _format_commands(ModuleCommands(test="make test || true", detected=True))
+    )
+
+    assert "tell your Manager" in text
+    assert "proves nothing" in text

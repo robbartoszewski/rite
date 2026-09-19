@@ -126,6 +126,64 @@ scheduler.
 Sessions start only when you type a command: `rite pool fill`, which is refused
 above `sandbox.max_concurrent_workers`, or `rite sandbox start <worker>`.
 
+## Watching the queue
+
+```
+rite loop start          # in a tmux session, a cycle every two minutes
+rite loop status         # is one running, since when, and what to type
+rite loop stop           # ask it to finish the cycle it is in and exit
+```
+
+**What it does: looks, and tells you what it sees.** Each cycle it reads the
+schedule, the claims ledger, your workers' checkouts and the board, then says
+what it would do. **What it does not do: start anything.** It spawns no
+session and spends no quota, which is why it can run unattended without
+contradicting the section above.
+
+That distinction is the point rather than a limitation. The thing this
+replaces is a person checking `rite status` every twenty minutes to find out
+whether the queue has stalled.
+
+### The verdicts, and why there are five of them
+
+A cycle ends in one word, and the difference between them is what makes the
+loop worth running:
+
+| | |
+|---|---|
+| `idle` | nothing on the board is waiting. **The only one that means stop** |
+| `saturated` | work is waiting and every worker is busy. A queue, not a fault |
+| `blocked` | work is waiting, a worker is free, and the paths it needs are held by someone still working |
+| `deadlocked` | same, except the holders look gone. **This will not clear on its own**, so the loop stops and prints what to release |
+| `closed` | your schedule allows no workers this hour (§2.7.3) |
+
+"Nothing happened" would have been an honest summary of four of those and a
+useless one. `saturated` and `blocked` are why it keeps going; `idle` and
+`deadlocked` are why it stops, for opposite reasons.
+
+### Two costs, stated rather than engineered around
+
+**It dies with your tmux server, and it does not survive a reboot.** Nothing
+is registered with cron or launchd, so after a restart `rite loop status`
+says "not running" rather than having quietly restarted itself. If you want
+it back, start it again.
+
+**`rite loop stop` does not kill it.** It writes a drain signal; the loop
+finishes the cycle it is in, takes no new work, and exits — up to one cycle,
+usually seconds. Killing it mid-cycle is what leaves a claim held by a
+process that no longer exists, which is the mess this whole area exists to
+prevent.
+
+One loop per project, enforced twice: tmux refuses a duplicate session name,
+and a pid lock catches anything that gets past that — a second terminal, a
+script, or `rite loop run --watch` by hand. A git worktree is refused
+outright, because `.rite/` is tracked and each worktree therefore has its own
+claims ledger while sharing one board.
+
+Its output goes to `.rite/loop.log`, rotated like the scheduler's. `rite loop
+run` on its own prints one cycle and exits, which is the way to see what it
+thinks without leaving anything running.
+
 ## Starting a sandboxed worker
 
 ### Before the first one

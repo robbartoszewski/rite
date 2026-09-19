@@ -208,3 +208,76 @@ def test_a_lock_held_by_someone_else_is_flagged_rather_than_preferred(
     text = "\n".join(status(project).lines())
 
     assert "the loop lock is held by pid 999999" in text
+
+
+# --- the loop is visible from the command people already run -----------------------
+
+
+def test_rite_status_says_when_a_loop_is_running(project):
+    """A loop is the one thing in a project that keeps changing the answers
+    in `rite status` while nobody is watching. A reader who cannot see it is
+    reading a report with an author they do not know about.
+
+    Driven through the LOCK rather than by starting a session, because
+    `collect_status` deliberately never shells out — it reads the lock and
+    checks the pid with a signal. Starting a real loop here would test tmux
+    instead of the thing this asserts."""
+    import os
+
+    from rite_ai.loop.session import lock_path
+    from rite_ai.reporting.status import collect_status, format_status
+
+    lock_path(project).write_text(f"{os.getpid()} 0\n")
+
+    text = format_status(collect_status(project, board=False))
+
+    assert f"loop: running (pid {os.getpid()})" in text
+
+
+def test_a_stale_lock_from_a_dead_process_is_not_a_running_loop(project):
+    """A loop killed by a reboot leaves its lock behind. Reporting that as
+    running is the same wrong answer `rite loop start` used to give."""
+    from rite_ai.loop.session import lock_path
+    from rite_ai.reporting.status import collect_status
+
+    lock_path(project).write_text("999999 0\n")
+
+    assert collect_status(project, board=False).loop == "not running"
+
+
+def test_rite_status_never_shells_out_to_ask(project):
+    """`collect_status` is the read-only path and a test already pins that it
+    spawns nothing. Asking tmux here put a process spawn into the command
+    people run most often."""
+    from unittest.mock import patch
+
+    from rite_ai.reporting.status import collect_status
+
+    with patch("rite_ai.loop.session.subprocess.run") as ran:
+        collect_status(project, board=False)
+
+    ran.assert_not_called()
+
+
+def test_rite_status_says_when_no_loop_is_running(project):
+    """ "Not running" is worth saying: silence would read the same as a
+    project that has never had one."""
+    from rite_ai.reporting.status import collect_status, format_status
+
+    text = format_status(collect_status(project, board=False))
+
+    assert "loop: not running" in text
+
+
+def test_rite_status_says_when_a_running_loop_is_draining(project):
+    import os
+
+    from rite_ai.loop.session import lock_path, request_drain
+    from rite_ai.reporting.status import collect_status, format_status
+
+    lock_path(project).write_text(f"{os.getpid()} 0\n")
+    request_drain(project, "going home")
+
+    text = format_status(collect_status(project, board=False))
+
+    assert "draining" in text
