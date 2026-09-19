@@ -947,6 +947,40 @@ def _doctor_report(problems: list[str]) -> None:
             if not blind:
                 click.echo("recorded commands: each one can still fail")
 
+        # Sandbox litter. The cap counts this project's sandboxes now, so
+        # leftovers no longer present as capacity — but they are still there,
+        # holding disk and, in four of the six measured, somebody's
+        # uncommitted changes. Named so the housekeeping is visible; never
+        # destroyed, because `agent: idle` does not distinguish abandoned
+        # from between-turns and a sandbox is the only copy of its own work.
+        if project.config.sandbox.enabled:
+            with _doctor_check("sandboxes", problems):
+                from rite_ai.label import project_digest
+                from rite_ai.sandbox import CountUnavailable, list_rite_sandboxes
+
+                found = list_rite_sandboxes()
+                if isinstance(found, CountUnavailable):
+                    click.echo(f"sandboxes: could not be listed — {found.reason}")
+                else:
+                    digest = project_digest(root)
+                    mine = [s for s in found if f"-{digest}-" in s.name]
+                    others = [s for s in found if s not in mine]
+                    click.echo(
+                        f"sandboxes: {len(mine)} for this project, "
+                        f"{len(others)} other `rite-` sandbox(es) on this machine"
+                    )
+                    for entry in others:
+                        where = f" ({entry.workdir})" if entry.workdir else ""
+                        click.echo(
+                            f"sandboxes:   {entry.name}{where} — "
+                            + (
+                                "holds unapplied changes, do NOT destroy"
+                                if entry.has_changes
+                                else "no changes; `yoloai destroy "
+                                f"{entry.name}` frees it"
+                            )
+                        )
+
         # Phase 2. Settings that cannot work are reported whether or not a
         # remote is set: half a `coordination:` block does not fail, it
         # silently never elects anybody.

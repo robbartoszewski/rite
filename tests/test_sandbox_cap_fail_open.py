@@ -165,8 +165,20 @@ class TestStartRefusesWhenTheCapCannotBeEnforced:
         self, mock_which, tmp_path: Path
     ):
         (tmp_path / "workers" / "alpha").mkdir(parents=True)
+        # THIS project's sandboxes, named the way §8.10 names them. They used
+        # to be `rite-w0…` — legacy names with no project in them — which
+        # counted only because the cap counted every `rite-` sandbox on the
+        # machine. The cap is per Manager (SPEC §2.5.9), so the fixture now
+        # says which project these belong to, as a real one would.
+        from rite_ai.sandbox import sandbox_name
+
         running = json.dumps(
-            {"sandboxes": [{"environment": {"name": f"rite-w{i}"}} for i in range(5)]}
+            {
+                "sandboxes": [
+                    {"environment": {"name": sandbox_name(f"w{i}", tmp_path)}}
+                    for i in range(5)
+                ]
+            }
         )
 
         def run(args, *a, **kw):
@@ -245,3 +257,105 @@ class TestSandboxEnabledDocstringDescribesWhatItGoverns:
         help_text = cli.commands["sandbox"].help or ""
         assert "--scoped-token" in help_text
         assert "provisions a\n    scoped sandbox token" not in help_text
+
+
+class TestTheCapCountsThisProjectsSandboxes:
+    """Measured: six `rite-` sandboxes consumed a cap of five and not one
+    belonged to the project that hit it — four leftover test probes and a
+    different project's live Worker. The run reported "at capacity" with
+    nothing of its own running, and the workaround was to raise the number.
+
+    `sandbox.max_concurrent_workers` is a per-project key and SPEC §2.5.9
+    caps "concurrent Workers per Manager"; D-47 puts cross-project totals in
+    the hub. Counting machine-wide was the wrong denominator.
+    """
+
+    def _ls(self, *names):
+        return json.dumps({"sandboxes": [{"environment": {"name": n}} for n in names]})
+
+    def _count(self, tmp_path, payload, workers=None):
+        from rite_ai.sandbox import count_active_sandboxes
+
+        def run(args, *a, **kw):
+            return MagicMock(returncode=0, stdout=payload, stderr="")
+
+        with (
+            patch("rite_ai.sandbox.shutil.which", return_value=YOLOAI),
+            patch("rite_ai.sandbox.subprocess.run", side_effect=run),
+        ):
+            return count_active_sandboxes(tmp_path, workers)
+
+    def test_another_projects_sandboxes_do_not_fill_this_cap(self, tmp_path):
+        from rite_ai.sandbox import sandbox_name
+
+        other = tmp_path / "elsewhere"
+        other.mkdir()
+        payload = self._ls(
+            sandbox_name("w1", tmp_path),
+            sandbox_name("w1", other),
+            "rite-kct-9303d6",  # a real leftover, from a third project
+        )
+
+        assert self._count(tmp_path, payload) == 1
+
+    def test_a_rename_does_not_orphan_this_projects_own_sandboxes(self, tmp_path):
+        """`project_slug`'s readable half comes from `brief.yaml` and changes
+        when somebody renames the project; the digest is over the resolved
+        path and does not. Matching the whole slug would stop counting this
+        project's own Workers after a rename — the under-count failure, which
+        is worse than the over-count it replaces."""
+        from rite_ai.label import project_digest
+
+        digest = project_digest(tmp_path)
+        payload = self._ls(f"rite-old-name-{digest}-w1", f"rite-new-name-{digest}-w2")
+
+        assert self._count(tmp_path, payload) == 2
+
+    def test_a_legacy_name_counts_when_it_is_one_of_our_workers(self, tmp_path):
+        """Pre-§8.10 `rite-<worker>` carries no project, so the roster is the
+        only evidence. Checked against configured Workers rather than any
+        string, or one project's `rite-w1` would count for another's."""
+        payload = self._ls("rite-w1", "rite-somebody-elses")
+
+        assert self._count(tmp_path, payload, workers=["w1"]) == 1
+
+    def test_the_agent_field_is_not_consulted(self, tmp_path):
+        """`agent: idle` reads the same for a sandbox nobody will return to
+        and one whose agent is between turns — measured on a live Worker with
+        unapplied changes whose Owner considered it busy. Excluding on it
+        would let the cap be exceeded."""
+        from rite_ai.sandbox import sandbox_name
+
+        payload = json.dumps(
+            {
+                "sandboxes": [
+                    {
+                        "environment": {"name": sandbox_name("w1", tmp_path)},
+                        "agent": "idle",
+                    }
+                ]
+            }
+        )
+
+        assert self._count(tmp_path, payload) == 1
+
+    def test_a_non_dict_entry_does_not_crash_the_cap(self, tmp_path):
+        """`entry.get(...)` was called straight on each list element, so one
+        bare string from yoloAI raised AttributeError out of the worker cap."""
+        payload = json.dumps({"sandboxes": ["a bare string", None, 7]})
+
+        assert self._count(tmp_path, payload) == 0
+
+    def test_without_a_root_it_counts_the_machine_as_it_always_did(self, tmp_path):
+        from rite_ai.sandbox import count_active_sandboxes
+
+        payload = self._ls("rite-a", "rite-b", "unrelated")
+
+        def run(args, *a, **kw):
+            return MagicMock(returncode=0, stdout=payload, stderr="")
+
+        with (
+            patch("rite_ai.sandbox.shutil.which", return_value=YOLOAI),
+            patch("rite_ai.sandbox.subprocess.run", side_effect=run),
+        ):
+            assert count_active_sandboxes() == 2

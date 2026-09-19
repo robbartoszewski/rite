@@ -627,13 +627,44 @@ class CountUnavailable:
     reason: str
 
 
-def count_active_sandboxes() -> int | CountUnavailable:
-    """How many `rite`-managed sandboxes yoloAI currently reports active
-    (`yoloai ls --active`, which "includes idle" per its own `--help` —
-    delegating that judgement to yoloAI rather than inventing a status-
-    string taxonomy of our own). Scoped to names starting with `rite-`
-    so an unrelated sandbox from manual `yoloai` use elsewhere on this
-    machine doesn't count against the cap.
+def count_active_sandboxes(
+    root: Path | None = None, workers: list[str] | None = None
+) -> int | CountUnavailable:
+    """How many of THIS PROJECT's sandboxes yoloAI currently reports active.
+
+    **Scoped to the project, because the cap is.**
+    `sandbox.max_concurrent_workers` lives in one project's `config.yaml` and
+    SPEC §2.5.9 caps "concurrent Workers **per Manager**"; D-47 puts
+    cross-project aggregation somewhere else entirely, in the hub. This
+    counted every `rite-` sandbox on the machine, so another project's
+    Workers and every leftover test probe filled a project's cap. Measured:
+    six sandboxes consuming a cap of five, not one of them belonging to the
+    project that hit it — so the run reported "at capacity" while the project
+    had nothing running, and the workaround was to raise the number.
+
+    **Matched on the path digest, not the whole slug.** A rename in
+    `brief.yaml` changes the readable half of `project_slug` and orphans
+    everything named under the old one — `label.project_slug` says so itself.
+    Matching `-<digest>-` instead survives it, because the digest is over the
+    resolved path. A project that MOVES is genuinely orphaned either way; its
+    old sandboxes show up in `list_rite_sandboxes` as litter, which is the
+    honest place for them.
+
+    **Legacy names still count.** `rite-<worker>`, from before §8.10, has no
+    slug at all; it counts when it matches one of this project's configured
+    Workers. Under-counting is the worse failure — the cap exists to bound
+    concurrency, and a cap that misses its own Workers bounds nothing.
+
+    Without `root` it counts every `rite-` sandbox, which is what it always
+    did. That path has no caller in `src/` and exists so a test or a script
+    asking a machine-wide question still can.
+
+    `--active` "includes idle" per yoloAI's own `--help`, so a stopped-but-not
+    destroyed sandbox counts; only `destroy` removes one. ⚠ The `agent` field
+    is NOT consulted. It reads `idle` both for a sandbox nobody will return to
+    and for one whose agent is between turns — measured on a live Worker with
+    unapplied changes whose Owner considered it busy — and yoloAI documents no
+    meaning for it. Excluding on it would let the cap be exceeded.
 
     Returns `CountUnavailable` — never a plausible-looking 0 — when the
     question cannot be answered. Each caller decides what that means;
@@ -676,11 +707,140 @@ def count_active_sandboxes() -> int | CountUnavailable:
             "`yoloai ls --active --json` returned unexpected JSON "
             f"({type(data).__name__}, expected an object)"
         )
-    return sum(
-        1
+    # `isinstance` before `.get`: this called `entry.get(...)` straight on
+    # each list element, so one non-dict entry from yoloAI — a bare string, a
+    # null — raised `AttributeError` out of the worker cap. `_count_named`
+    # two hundred lines up already guards exactly this way.
+    names = [
+        (entry.get("environment") or {}).get("name", "")
         for entry in data.get("sandboxes", [])
-        if entry.get("environment", {}).get("name", "").startswith("rite-")
-    )
+        if isinstance(entry, dict)
+    ]
+    return sum(1 for name in names if _belongs_to(name, root, workers))
+
+
+def _configured_workers(root: Path | str | None) -> list[str]:
+    """This project's Worker names, for the legacy-name match only.
+
+    Best-effort by design: an unreadable roster costs the legacy fallback and
+    nothing else, so it returns an empty list rather than becoming a third
+    failure mode inside the cap check. Every sandbox started since §8.10
+    carries the project digest and is matched without this.
+    """
+    if root is None:
+        return []
+    try:
+        from rite_ai.config.parse import load_project
+
+        project = load_project(Path(root))
+        if isinstance(project, list):
+            return []
+        return [w.name for w in project.workers]
+    except Exception:  # noqa: BLE001 - the cap must not fail on a roster read
+        return []
+
+
+def _belongs_to(name: str, root: Path | None, workers: list[str] | None) -> bool:
+    """Whether a sandbox name is this project's. No `root` means every
+    `rite-` name, which is the machine-wide question this used to answer."""
+    if not name.startswith("rite-"):
+        return False
+    if root is None:
+        return True
+    from rite_ai.label import project_digest
+
+    if f"-{project_digest(Path(root))}-" in name:
+        return True
+    # Pre-§8.10 `rite-<worker>`: no slug to match on, so the Worker's own name
+    # is the only evidence. Checked against the configured roster rather than
+    # against any string, or one project's `rite-w1` would count for another's.
+    return any(name == legacy_sandbox_name(w) for w in (workers or []))
+
+
+@dataclass(frozen=True)
+class SandboxEntry:
+    """One `rite-` sandbox as yoloAI describes it.
+
+    `agent` is reported and deliberately NOT used to decide anything. It is
+    `idle` for a sandbox nobody will return to and also for one whose agent
+    is merely between turns — measured: `~/PapugaAI`'s live Worker w1 reports
+    `agent: idle`, 15h old, with unapplied changes, while its Owner considers
+    it busy. yoloAI documents no meaning for the field (`yoloai help` has no
+    topic for it), so it cannot carry a liveness decision. It is shown to a
+    human, who can.
+    """
+
+    name: str
+    status: str = ""
+    agent: str = ""
+    has_changes: bool = False
+    workdir: str = ""
+
+    @property
+    def safe_to_destroy(self) -> bool:
+        """Only the absence of unapplied changes, never a liveness claim. A
+        sandbox is a copy-on-write workspace: `has_changes` means edits exist
+        there and nowhere else."""
+        return not self.has_changes
+
+
+def list_rite_sandboxes() -> list[SandboxEntry] | CountUnavailable:
+    """Every `rite-` sandbox on this machine, for a human to read.
+
+    Separate from `count_active_sandboxes` on purpose: that one answers a
+    question about capacity and this one answers "what is lying around". A
+    listing narrowed the way a cap is narrowed would hide the litter it exists
+    to show.
+    """
+    binary = _yoloai_binary()
+    if binary is None:
+        return CountUnavailable("yoloai not found on PATH")
+    try:
+        proc = subprocess.run(
+            [binary, "ls", "--active", "--json"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return CountUnavailable(f"`yoloai ls --active --json` could not run: {e}")
+    if proc.returncode != 0:
+        return CountUnavailable(f"`yoloai ls --active --json` exited {proc.returncode}")
+    try:
+        data = json.loads(proc.stdout)
+        entries = data["sandboxes"]
+    except (ValueError, KeyError, TypeError):
+        return CountUnavailable("`yoloai ls --active --json` did not return JSON")
+
+    found: list[SandboxEntry] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        environment = entry.get("environment") or {}
+        name = str(environment.get("name", ""))
+        if not name.startswith("rite-"):
+            continue
+        dirs = environment.get("dirs") or []
+        workdir = ""
+        for d in dirs:
+            if isinstance(d, dict) and d.get("mode") == "copy":
+                workdir = str(d.get("host_path", ""))
+                break
+        found.append(
+            SandboxEntry(
+                name=name,
+                status=str(entry.get("status", "")),
+                agent=str(entry.get("agent", "")),
+                # Anything that is not a plain "no" counts as holding work.
+                # The conservative direction: a sandbox wrongly called unsafe
+                # to destroy costs some disk, and one wrongly called safe
+                # costs somebody's uncommitted changes.
+                has_changes=str(entry.get("has_changes", "yes")).lower() != "no",
+                workdir=workdir,
+            )
+        )
+    return found
 
 
 def sandbox_environment(base: dict[str, str] | None = None) -> dict[str, str]:
@@ -773,7 +933,10 @@ def start_worker(
     # sandbox tooling on this machine is broken", and it breaks `rite
     # sandbox status` and sandbox cleanup too, so it needs fixing either
     # way. The message names the failing command so it can be.
-    active = count_active_sandboxes()
+    # Scoped to this project (SPEC §2.5.9 caps per Manager). Machine-wide
+    # counting let another project's Workers and old test probes fill this
+    # project's cap, which presents as capacity rather than as litter.
+    active = count_active_sandboxes(root, _configured_workers(root))
     if isinstance(active, CountUnavailable):
         return SandboxResult(
             False,

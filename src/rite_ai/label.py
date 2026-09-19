@@ -115,8 +115,20 @@ def project_slug(root: Path) -> str:
 
     name = project_name(root)
     slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:_SLUG_MAX].strip("-")
-    digest = hashlib.sha256(str(root.resolve()).encode("utf-8")).hexdigest()[:6]
-    return f"{slug or 'project'}-{digest}"
+    return f"{slug or 'project'}-{project_digest(root)}"
+
+
+def project_digest(root: Path) -> str:
+    """The path half of `project_slug`, on its own.
+
+    The readable half changes when somebody renames a project in
+    `brief.yaml`; this does not, because it is a digest of the resolved path.
+    Anything that needs to recognise a project's OWN sessions or sandboxes
+    across a rename matches on this rather than on the whole slug — otherwise
+    a rename orphans them silently, and a cap that counts them stops counting
+    the things it exists to bound.
+    """
+    return hashlib.sha256(str(root.resolve()).encode("utf-8")).hexdigest()[:6]
 
 
 def colour_for(name: str) -> str:
