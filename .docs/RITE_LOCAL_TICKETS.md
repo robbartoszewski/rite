@@ -13,6 +13,29 @@ them in one import without a local-id collision.
 
 ## ⚠ Read first — almost nothing here can start today
 
+> ⚠ **CORRECTED 2026-09-19, against the tree rather than against this file.**
+> Three of its load-bearing claims are no longer true, and they are the ones
+> a reader acts on first:
+>
+> - **"Phase 2 interface-level core is not built"** — it shipped in v0.4.0.
+>   `src/rite_ai/coordination/` carries the state layer, both backends,
+>   heartbeats, assignment, refusal and election. The "stuck at round 3"
+>   simulation below rests on that premise and does not hold.
+> - **"Three tickets are startable now"** — RL-T0, RL-T3 and RL-T6 have
+>   LANDED, with the duty router wired into assignment (27ba231), durable
+>   decomposition (8d19410) and the harness body (4582bb8). `git log
+>   v0.4.0..main` is the status; the per-ticket bodies below have NOT been
+>   re-statused one by one, so read each as a description of the work.
+> - **"Thirty-two tickets"** — there are thirty-six. RL-T32, RL-T33 and
+>   RL-T34 (the missing start path, the router call, the integrate handoff)
+>   were added on 2026-09-18 to a COPY of this file at
+>   `~/AI/rite/.docs/RITE_LOCAL_TICKETS.md`, which is 904 lines to this
+>   one's 765. `.docs/` is gitignored and these five `RITE_LOCAL_*` files
+>   were force-added, so the working copy someone edits and the committed
+>   copy a new session clones have drifted apart. **This file is the one a
+>   stranger gets.** Reconciling them is a decision, not a merge: the other
+>   copy has content this one lacks, and nobody has said which is canonical.
+
 **Of thirty-two tickets, three are startable now, one more once Robert answers
 Q1 and Q2, two more behind those — and then the plan is completely stuck**
 (simulated at the end of this file).
