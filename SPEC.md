@@ -3726,10 +3726,39 @@ the quota spend **is** what was typed.
   applies and this section is not exempting itself from it.** A project has
   **at most one Manager session**, and a second `rite start <provider>`
   against a live one is **refused, naming the running session and how to
-  reach it** — not silently joined, not started alongside. The loop enforces
-  one-per-project through two mechanisms because they fail differently; a
-  Manager session needs at least one, and refusing is the behaviour §2.5.1
-  and `check_worker_cap` already establish for this class.
+  reach it** — not silently joined, not started alongside.
+
+  ⚠ **The liveness check behind that refusal MUST FAIL CLOSED, and this
+  paragraph says so because a draft of it did not.** An earlier version said
+  a Manager session "needs at least one" of the loop's two mechanisms.
+  Review pointed out where that lands: the mechanism nearest to hand is tmux
+  `has-session`, which answers "does a session exist", not "is the command
+  inside it running" — the exact facade this project fixed twice in one night
+  in `loop.start` and in `pool.fill`. Worse, it returns false when tmux is
+  missing or the call times out, so under a refusal rule an unanswerable
+  check becomes **two paid Manager sessions**. §5.1.1's rule is that a safety
+  property may fail closed and never open.
+
+  So: the check must establish that the **inner process** is running, not
+  that a session exists; a check that cannot be run refuses the start rather
+  than permitting it; and the refusal must print the remedy, because this
+  design's ordinary exit is an ungraceful terminal close and a marker left by
+  a process killed without cleanup will be stale most mornings. A rule that
+  wedges on its own intended exit path, with no printed way out, is the
+  failure `loop/session.py` records: "a user who rebooted with a loop running
+  could not start another one again, ever, and nothing printed the one
+  command that would fix it."
+
+  ⚠ **"Per project" is undefined here and a tracked `.rite/` makes every git
+  worktree its own project root.** Two worktrees of one repository would get
+  two Managers against one board with neither refusing, unless the rule
+  inherits the loop's outright refusal to run in a worktree — which would be
+  a significant usability fact nobody has stated. The plan must settle it.
+
+  Refusing is the behaviour §2.5.1 and `check_worker_cap` establish — though
+  note they refuse against a **configured cap**, which is always readable,
+  where this refuses against **observed runtime state**, which is the part
+  that fails. The precedent supplies the verdict, not the mechanism.
 - **`rite start` with NO provider keeps its current behaviour exactly, and
   that is load-bearing rather than a convenience.** `start` is the command a
   session runs to orient itself — the generated `/rite-start` instructions
@@ -4801,6 +4830,7 @@ happened once already and left no trace until this review found it.
 | D-71 | The command name `rite start <provider>` | **NOT settled — the positional is already taken twice and the choice is the owner's** | §8.9 defines `rite start <alias>` against the Dispatch registry and §9.10 defines `rite start [<dir>]`, so `rite start local` is ambiguous and nothing reserves provider names. A flag, a subcommand, or enforced reserved names — recorded as open rather than picked, because a plan that assumes the bare positional has not read §8.9. §9.14.7a. |
 | D-72 | Whether a provider is a command argument or a Manager attribute | **UNRESOLVED — and it blocks the implementation plan** | §9.14 models a provider as an argument selecting the project's one Manager session. The built design makes `engine` a field on `ManagerRole` and presets three Managers running CONCURRENTLY (`lead`=claude, `planner`=local:large, `executor`=local:small). The two are different designs; §9.14 picked the first without knowing the second existed. It also voids §9.14.0's one-Manager-per-project rule, which is what pays for the D-50 amendment. §9.14.7b. |
 | D-73 | Whether the session or the resumer dies with the terminal | **The SESSION may outlive it; the RESUMER may not** | Review found the two requirements denying each other: §9.14.3 needs a session that survives detaching, §9.14.6 said nothing outlives the terminal, and tmux — rite's only persistence — is detached by construction. They separate: a session the human started continuing is what §9.12 already permits (`rite sandbox start` leaves one running); what §9.12 forbids is an unattended START, so it is the resumer that must die. §9.14.6. |
+| D-74 | How the one-Manager refusal establishes liveness | **Fail CLOSED, against the INNER PROCESS, with the remedy printed** | The mechanism nearest to hand is tmux `has-session`, which answers "does a session exist" rather than "is the command running" — the facade fixed twice in one night in `loop.start` and `pool.fill` — and it returns false when tmux is missing or times out, so an unanswerable check would permit two PAID sessions. §5.1.1: a safety property may fail closed, never open. The remedy must be printed because this design's ordinary exit is an ungraceful terminal close, so a stale marker is the common morning state. Raised by a peer session at the stage where it is still free to fix. §9.14.0. |
 
 ---
 
