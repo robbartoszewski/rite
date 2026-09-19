@@ -26,6 +26,25 @@ from click.testing import CliRunner
 from rite_ai.cli.main import cli
 
 
+def _enable_sandboxing(root: Path) -> None:
+    """Say it rather than inherit it — see the call site."""
+    config = root / ".rite" / "config.yaml"
+    text = config.read_text()
+    if "sandbox:" in text:
+        config.write_text(
+            "\n".join(
+                "  enabled: true"
+                if line.strip().startswith("enabled:")
+                and "sandbox:" in text[: text.index(line)][-200:]
+                else line
+                for line in text.splitlines()
+            )
+            + "\n"
+        )
+    else:
+        config.write_text(text.rstrip("\n") + "\nsandbox:\n  enabled: true\n")
+
+
 @pytest.fixture
 def project(tmp_path: Path, monkeypatch) -> Path:
     import subprocess
@@ -78,6 +97,13 @@ class TestCredentialListDoesNotDemandTheRetiredModel:
         from rite_ai.cli.main import _keys_this_project_needs
 
         assert CliRunner().invoke(cli, ["add", "worker", "alpha"]).exit_code == 0
+        # Sandboxing ON, explicitly. `rite init` decides it per platform —
+        # yoloAI's backends are macOS-only — so a project created on Linux
+        # has it off and needs no sandbox credential at all. Relying on the
+        # default made this assert about the platform instead of about the
+        # change: green here, `[]` on the Linux runner. Third time in this
+        # area, and the same lesson as the doctor fixtures.
+        _enable_sandboxing(project)
         monkeypatch.setattr(store, "keychain_is_readable", lambda: True)
         monkeypatch.setattr(
             store,
