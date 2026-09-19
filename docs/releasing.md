@@ -35,7 +35,19 @@ and both of them are about what existing projects receive.
    suite. Treat the tripwire as a backstop, not the reminder.
 6. **Publish the GitHub release** with the notes and the `install.sh` checksum
    (`uv run python tools/release_notes.py`).
-7. **Say what a tester has to run to upgrade**, in the release notes:
+7. **State how the release was verified, and where it was not.** Name the
+   platform and Python version the suite actually ran on, and say plainly
+   what is therefore unconfirmed — "3361 passed on macOS/py3.14" is a fact;
+   "the suite is green" implies a matrix that may not have run. If CI did not
+   run at all, say so and rank what is least confirmed.
+
+   This is a step rather than a courtesy because the failure it prevents has
+   already happened here: two defects shipped-adjacent this week were
+   invisible on macOS and caught only because CI went red, one of them a
+   platform split inside an error-string comparison. A release that implies
+   coverage it does not have is the same defect class as a check whose exit
+   code nobody reads — absence of a complaint standing in for evidence.
+8. **Say what a tester has to run to upgrade**, in the release notes:
    upgrading rite does not update a project's files, `rite update --files-only
    --dry-run` shows what would change, and `rite update --files-only` applies
    it.

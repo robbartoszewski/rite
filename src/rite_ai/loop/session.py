@@ -58,6 +58,16 @@ def session_name(root: Path) -> str:
     return f"rite-loop-{project_slug(root)}"
 
 
+def _age(seconds: float) -> str:
+    if seconds < 90:
+        return f"{int(seconds)}s"
+    if seconds < 5400:
+        return f"{int(seconds // 60)}m"
+    if seconds < 48 * 3600:
+        return f"{seconds / 3600:.0f}h"
+    return f"{seconds / 86400:.1f}d"
+
+
 def _drain_path(root: Path) -> Path:
     return root / ".rite" / DRAIN_FILENAME
 
@@ -97,13 +107,30 @@ class LoopStatus:
     running: bool = False
     session: str = ""
     pid: int = 0
+    """The process tmux is running, from tmux. What a person would kill."""
+    lock_holder: int = 0
+    """The pid in the lock file. Normally the same; different means something
+    else holds this project's loop lock, which is worth saying rather than
+    quietly preferring one of them."""
+    uptime: float = 0.0
     draining: str = ""
     detail: str = ""
 
     def lines(self) -> list[str]:
         if not self.running:
             return [f"loop: not running — {self.detail}"]
-        out = [f"loop: running as {self.session} (pid {self.pid or 'unknown'})"]
+        age = f", up {_age(self.uptime)}" if self.uptime else ""
+        out = [f"loop: running as {self.session} (pid {self.pid or 'unknown'}){age}"]
+        if self.lock_holder and self.pid and self.lock_holder != self.pid:
+            # Two processes think they are this project's loop, or one left a
+            # lock behind. Either way a reader deciding what to stop needs to
+            # know before they act, not after.
+            out.append(
+                f"loop: ⚠ the loop lock is held by pid {self.lock_holder}, not "
+                f"by the session's {self.pid} — check for a second loop"
+            )
+        out.append(f"loop:   watch it:  tmux attach -t {self.session}")
+        out.append("loop:   stop it:  rite loop stop")
         if self.draining:
             out.append(
                 f"loop: draining — {self.draining}. It will finish the cycle "
@@ -366,6 +393,24 @@ def _why_it_died(root: Path) -> str:
     return "Its last words: " + " / ".join(ln.strip()[:120] for ln in lines[-2:])
 
 
+def _ask_tmux(name: str, fmt: str) -> str:
+    """One `display-message` format string, or "" when it cannot be asked."""
+    binary = _tmux()
+    if binary is None:
+        return ""
+    try:
+        done = subprocess.run(
+            [binary, "display-message", "-p", "-t", name, fmt],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return (done.stdout or "").strip() if done.returncode == 0 else ""
+
+
 def status(root: Path) -> LoopStatus:
     name = session_name(root)
     drain = draining(root)
@@ -376,12 +421,37 @@ def status(root: Path) -> LoopStatus:
             detail="no tmux session for this project"
             + (" (a drain was requested)" if drain else "")
         )
+
+    # The pid comes from TMUX, not from the lock file. `start` releases its
+    # own lock before spawning — the lock belongs to the process that runs
+    # the loop — so between the spawn and that process taking it there is a
+    # window where the lock says nothing, and `status` used to answer "(pid
+    # unknown)" for a loop that was plainly running. tmux knows what it is
+    # running; ask the thing that knows.
     pid = 0
+    pane = _ask_tmux(name, "#{pane_pid}")
+    if pane.isdigit():
+        pid = int(pane)
+
+    holder = 0
     try:
-        pid = int(lock_path(root).read_text().split()[0])
+        holder = int(lock_path(root).read_text().split()[0])
     except (OSError, ValueError, IndexError):
-        pid = 0
-    return LoopStatus(running=True, session=name, pid=pid, draining=drain)
+        holder = 0
+
+    started = _ask_tmux(name, "#{session_created}")
+    uptime = 0.0
+    if started.isdigit():
+        uptime = max(0.0, time.time() - int(started))
+
+    return LoopStatus(
+        running=True,
+        session=name,
+        pid=pid,
+        lock_holder=holder,
+        uptime=uptime,
+        draining=drain,
+    )
 
 
 def stop(root: Path, reason: str = "stop requested"):

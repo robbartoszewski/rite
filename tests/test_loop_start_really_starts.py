@@ -155,3 +155,56 @@ def test_an_empty_log_is_reported_as_a_guess_not_a_fact(project):
     log_path(project).write_text("")
 
     assert "usually means" in _why_it_died(project)
+
+
+# --- status answers the 3am question ----------------------------------------------
+
+
+def test_status_reports_the_pid_of_what_is_actually_running(project, fake_rite):
+    """It said "(pid unknown)" for a loop that was plainly running, because it
+    read the lock file — and `start` releases its own lock before spawning, so
+    the lock belongs to a process that has not taken it yet. tmux knows what
+    it is running; ask the thing that knows."""
+    assert isinstance(start(project, command=fake_rite), Started)
+
+    live = status(project)
+
+    assert live.running
+    assert live.pid > 0, live
+    # And it is a real process, not a number off a file.
+    import os
+
+    os.kill(live.pid, 0)
+
+
+def test_status_tells_a_reader_how_to_watch_and_how_to_stop(project, fake_rite):
+    """Someone whose loop misbehaves at 3am should not have to remember the
+    session name or that `stop` is the verb rather than a kill."""
+    start(project, command=fake_rite)
+
+    text = "\n".join(status(project).lines())
+
+    assert "tmux attach -t" in text
+    assert "rite loop stop" in text
+
+
+def test_status_reports_how_long_it_has_been_up(project, fake_rite):
+    start(project, command=fake_rite)
+
+    assert status(project).uptime >= 0
+    assert "up " in "\n".join(status(project).lines())
+
+
+def test_a_lock_held_by_someone_else_is_flagged_rather_than_preferred(
+    project, fake_rite
+):
+    """Two processes thinking they are this project's loop is worth saying
+    before somebody acts, not after."""
+    from rite_ai.loop.session import lock_path
+
+    start(project, command=fake_rite)
+    lock_path(project).write_text("999999 0\n")
+
+    text = "\n".join(status(project).lines())
+
+    assert "the loop lock is held by pid 999999" in text

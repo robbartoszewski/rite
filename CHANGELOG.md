@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.5.0 (unreleased)
+
+### How this release was verified
+
+**Verified locally on macOS (darwin 25.2.0) with CPython 3.14.3. Not verified
+on Linux.** GitHub Actions minutes were exhausted for September, so from
+2026-09-19 there was no CI for roughly eleven days and every change below was
+checked by a local run and nothing else.
+
+The accurate sentence is "3361 passed on macOS/py3.14", not "the suite is
+green" — the second implies a matrix that did not run.
+
+**Why that distinction is not pedantry on this codebase.** The week before
+this release produced two defects that only a non-macOS run caught, both found
+because CI went red: the coordination state layer classified a lost ref race
+as a permanent refusal, because Linux git and macOS git report the same
+condition with different strings; and two doctor tests asserted exit 0 while
+their fixtures left sandboxing enabled, so they silently required yoloAI to be
+installed — true on the author's machine, false in a clean one.
+
+**Least confirmed, in order:** the tmux loop lifecycle (`rite loop
+start/status/stop`), which shells out to `tmux` and whose tests use the real
+binary and therefore *skip* where tmux is absent; claim exclusion, which rests
+on `flock` and varies by filesystem; and sandbox capacity counting, which
+parses `yoloai ls --json`. Most of the rest is filesystem and JSON handling
+with no platform surface — **which is a reason to expect it holds rather than
+evidence that it does.**
+
+Re-run the full matrix before anything else ships, and treat the first red as
+expected rather than as a regression: eleven days of Linux-invisible changes
+land at once.
+
 ## 0.4.0 (2026-09-18)
 
 ### Enhancements
