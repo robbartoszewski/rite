@@ -67,6 +67,19 @@ one.
       that did not run reads exactly like the report of a check that passed.
       Mechanise it where the runner allows — a rule this specific should not
       depend on a reviewer remembering it.
+- [ ] A test states what it depends on rather than asking the machine for
+      it. A fixture that inherits a platform default, an installed tool, a
+      readable keychain or a wall-clock throughput is asking a question
+      instead of stating an answer — **and on the author's machine the
+      machine gives the convenient reply.** Three of these shipped here in
+      one day: a doctor fixture that left sandboxing at its default and so
+      required yoloAI to be installed; a credential fixture that inherited
+      the same default and got an empty list on a runner where it is off;
+      and a concurrency harness that ran for a fixed 1.5s and then demanded
+      200 iterations, which a laptop clears and a shared runner does not.
+      Each was green for the author and red elsewhere, which is the worst
+      direction: it reads as "works here, broken there" rather than as a
+      test that was never about the thing it claimed.
 - [ ] Exercised from the state a new user starts in — empty database, fresh
       clone, no config — not only from the state already on the developer's
       machine. A migration chain that has only ever been run forward from

@@ -32,7 +32,7 @@ def test_default_template_has_verification_category_with_named_lessons():
     """
     items = load_checklist(TEMPLATE_PATH)
     verification_items = [i.text for i in items if i.category == "Verification"]
-    assert len(verification_items) == 9
+    assert len(verification_items) == 10
 
     joined = " ".join(verification_items).lower()
     assert "exits non-zero" in joined  # silent failures that exit zero
@@ -46,6 +46,8 @@ def test_default_template_has_verification_category_with_named_lessons():
     assert "a check nobody runs is a check that is not there" in joined
     # a test file the runner never collects, which reads as a pass
     assert "indistinguishable from a" in joined
+    # a fixture that inherits the machine's answer instead of stating one
+    assert "gives the convenient reply" in joined
 
 
 def test_the_proxy_line_is_not_scoped_to_tests_alone():
