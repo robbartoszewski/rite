@@ -252,5 +252,5 @@ end to end and scanned before being committed to a public repo.
 | the three source writeups | `~/AI/rite-dogfood/*.md` — **local only**: `~/AI/rite-dogfood` is not a git repository, so nothing in it can be pushed. That is why this document was copied into the rite repo. |
 | sandbox probe scripts | `~/AI/rite-dogfood/phase2/probe_*.py` |
 | the board | `https://github.com/robbartoszewski/rite-dogfood-board` (private; default branch `main`, zero open issues) |
-| the backlog | `.docs/RITE_LOCAL_TICKETS.md` — **local only, ignored, never committed** (see §7) |
+| the backlog | `.docs/RITE_LOCAL_TICKETS.md` — **committed**, with the rest of `.docs/`. This row said "local only, ignored, never committed" and a commit 21 minutes later falsified it; the row is corrected rather than deleted, because "never" was a claim about the future and the shortest-lived one in this document. |
 | Phase-1 pre-registration | branch `preregistration/phase1` — `.docs/rite-on-rite-phase1-preregistration.md`, `.docs/run-parameters.md`, `.docs/carried-limitations-register.md` |

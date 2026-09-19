@@ -129,8 +129,14 @@ SERVICES: dict[str, Service] = {
             ),
         ),
         note=(
-            "One token per worker, scoped to the project's repos — "
-            "`rite add worker` walks through it (§5.3.4)."
+            # This said "One token per worker, scoped to the project's repos"
+            # and cited §5.3.4 — the section that RETIRED per-Worker scoping.
+            # The citation pointed at its own refutation, which is the worst
+            # kind of stale reference: it reads as authority for the claim.
+            "The project's token, shared by every worker (§5.3.4 — Workers "
+            "are fungible). Scoped to the project's repos, not to a worker. "
+            "`rite add worker --scoped-token` provisions one worker its own "
+            "instead, if you want that."
         ),
     ),
     "claude": Service(

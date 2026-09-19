@@ -1546,25 +1546,51 @@ needed it.
 
 #### 5.3.4.1. Provisioning is `rite init` and `rite add worker`'s job, not chat's
 
-Creating or requesting the correctly scoped token per Worker is a **credential-
-provisioning responsibility** of `rite init` (§9.3) and `rite add worker` (§9.6) —
-the same commands that already generate a Worker's identity and configuration
-provision its token as part of the same flow. **The token must never pass through a
+**Corrected.** This subsection described "the correctly scoped token per
+Worker" — the per-Worker scoping its own parent section retired, and which
+§5.3.4 says in as many words would be "overclaiming a security property the
+tool does not have". A subsection contradicting its parent is worse than
+either version alone: a reader who stops at the more specific one comes away
+believing in a bound that is not there.
+
+What survives the correction is everything that was never about scoping.
+Provisioning the project's token is a **credential-provisioning
+responsibility** of `rite init` (§9.3) and `rite add worker` (§9.6) — the same
+commands that already generate a Worker's identity and configuration provision
+its credentials as part of the same flow. **A token must never pass through a
 chat window** — not typed into a Dispatch prompt, not pasted into a session
-transcript. It goes through the same OS-keychain path §10 already specifies for
-every other credential, or a GitHub device/App-install flow that hands rite the
-token directly without a human ever displaying it in chat.
+transcript. It goes through the same OS-keychain path §10 already specifies
+for every other credential, or a GitHub device/App-install flow that hands
+rite the token directly without a human ever displaying it in chat.
+
+`rite add worker --scoped-token` still provisions a token for one Worker
+alone, and it stays available; what changed is that it is an option a person
+chooses, not the model, and not something any other part of the design assumes
+is in force.
 
 #### 5.3.5. Practical constraints
 
-- **Optional, and off by default** — `SandboxConfig.enabled` is `False`
-  (`config/models.py`), `rite init` does not turn it on, and `rite doctor` treats a
-  missing `yoloai` as a note rather than a problem while it stays false. Another
-  dependency and a new failure surface shouldn't be forced on rite users who don't
-  want it.
+- **Optional, and ON by default since D-51** — `SandboxConfig.enabled` is
+  `True` (`config/models.py`). `rite init` asks, and `rite doctor` verifies by
+  starting a real sandbox, so a machine without `yoloai` gets a question it can
+  answer and a row saying what is missing rather than a failed first run. That
+  is the reasoning D-51 gives, and it is a good one.
 
-  **If that default is ever flipped, it is a product decision with prerequisites,
-  not a wording change.** Recorded here because the question has been raised:
+  ⚠ **It is not the reasoning this section asked for, and the prerequisites
+  below are still open.** The paragraph that follows was written as a gate —
+  "fix those first, then flip it, then reword. Do not reword first" — and the
+  flip happened against a different argument, about first-run friction, while
+  every item on the list stayed unfixed. Checked at `67b2631`: there is still
+  no network field in `SandboxConfig`, so no backend rite can request isolates
+  the network; and `docker` remains in the measured-not-to-work list because
+  `flock` is a no-op inside it, which is the property every claim rests on.
+
+  This is recorded rather than reworded away, and it is a **release question,
+  not a documentation one**: either the gate was wrong and should be retired
+  explicitly, or the default is ahead of it. Both are decisions; neither is a
+  wording change, which is precisely what this section already said.
+
+  The original list, unchanged, because it is what the gate was about:
   sandboxed-by-default would make `yoloai` a hard dependency, would make the §5.3.3
   token a hard requirement of `rite add worker`, and would ship every open problem
   in this section to everyone by default rather than to the people who opted in —
