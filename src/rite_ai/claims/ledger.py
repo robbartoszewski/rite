@@ -175,7 +175,30 @@ class ClaimsLedger:
     """The outcome of the last publish this ledger attempted (P2-5b), or None
     when it has never been asked to publish."""
 
+    last_released_workers: set[str]
+    """Workers whose claims the last `force_release` actually removed. Lets a
+    caller tell a holder nesting with its own released claim — ordinary —
+    from a different holder still standing in the way."""
+
+    last_skipped_overlaps: list[tuple[str, str]]
+    """`(worker, path)` for every claim the last `force_release` left in place
+    that nonetheless OVERLAPS what it was asked to clear.
+
+    `force_release` matches paths exactly; `claim()` refuses on nesting
+    overlap. So clearing `users/src` when somebody holds `users/src/auth.ts`
+    releases nothing and leaves the path blocked — "force-released 0 claim(s)"
+    and no explanation, which is the trap somebody hits while tidying orphans.
+
+    Computed inside the same lock as the release rather than by a second
+    query, for two reasons found in review: a separate call reacquires the
+    lock, so a claim created in the gap would be reported as "not released"
+    when it was never eligible; and a separate query has no access to the
+    `worker` filter, so it would name a live worker's deliberately-untouched
+    claim as something to force away."""
+
     def __init__(self, path: Path) -> None:
+        self.last_skipped_overlaps = []
+        self.last_released_workers = set()
         self._path = path
         self._path.parent.mkdir(parents=True, exist_ok=True)
         _warn_if_exclusion_is_decoration(self._path.parent)
@@ -455,6 +478,11 @@ class ClaimsLedger:
         widening it silently would make every existing `--force` call release
         more than it used to, and that is a decision rather than a fix.
         """
+        # Cleared before the guards, not after the lock: both raise before the
+        # lock is taken, and a caller that catches the ValueError would
+        # otherwise read the PREVIOUS call's overlaps and believe them current
+        # — the same trust-an-attribute-across-calls hazard the lock closed.
+        self.last_skipped_overlaps = []
         if paths is not None and not paths:
             # An empty LIST is a caller that computed some paths and got none
             # of them, then asked to release "those" — true with or without a
@@ -481,6 +509,29 @@ class ClaimsLedger:
             ]
             after = [c for c in existing if c not in released_claims]
             self._write(after)
+
+            # Only the paths that ACTUALLY overlap, not every path on a claim
+            # that happens to contain one. A claim of
+            # ["users/src/auth.ts", "unrelated/file.py"] must not report
+            # `unrelated/file.py` as overlapping `users/src`.
+            #
+            # And with `worker` set, only THAT worker's. A worker-scoped
+            # release leaves other holders alone deliberately; naming theirs
+            # would advise force-releasing a live worker's claim as though it
+            # were an orphan. An earlier version had `worker` in scope and
+            # never referenced it — the guard existed in the docstring only.
+            self.last_skipped_overlaps = [
+                (claim.worker, cp)
+                for claim in after
+                if worker is None or claim.worker == worker
+                for cp in claim.paths
+                if any(paths_overlap(cp, wanted) for wanted in normalised)
+            ]
+            # Which of those the caller has just been releasing from. A holder
+            # that nests with its OWN released claim is ordinary; a different
+            # holder is the one worth acting on, and the two need different
+            # advice.
+            self.last_released_workers = {c.worker for c in released_claims}
 
             if released_claims:
                 record = {

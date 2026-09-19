@@ -1277,6 +1277,30 @@ def release(
             list(paths), by=by, reason=reason, layer=layer, machine=machine
         )
         click.echo(f"force-released {released} claim(s), by {by}: {reason}")
+
+        # The exact/overlap gap, said out loud. `--force` matches paths
+        # exactly; `claim()` refuses on overlap. So clearing `users/src` can
+        # leave `users/src/auth.ts` held, and the path just "cleared" still
+        # cannot be claimed — which is precisely the trap somebody hits while
+        # tidying up orphans, when they are least inclined to re-read the
+        # semantics.
+        for holder, path in ledger.last_skipped_overlaps:
+            if holder in ledger.last_released_workers:
+                # The same worker holding a parent and a child: legal, since
+                # `claim()` only refuses overlaps BETWEEN workers. Advising a
+                # release here would nudge somebody into force-releasing their
+                # own still-legitimate claim.
+                click.echo(
+                    f"  note: {holder} also holds {path}, which nests with "
+                    "what you just released — same worker, ordinarily nothing "
+                    "to do"
+                )
+            else:
+                click.echo(
+                    f"  still held: {path} (by {holder}) overlaps what you "
+                    "asked for. `--force` matches paths exactly, so it was "
+                    "left alone — name it directly to release it too"
+                )
         _warn_if_unpublished(ledger)
         return
 

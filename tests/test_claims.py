@@ -224,3 +224,180 @@ def test_a_narrowed_force_release_is_still_audited(tmp_path: Path):
     (record,) = ledger.force_release_audit()
     assert record["by"] == "rite pool archive"
     assert record["released"][0]["worker"] == "alpha"
+
+
+def test_force_release_names_an_overlapping_claim_it_did_not_release(tmp_path: Path):
+    """The trap, and it is sharper than "released fewer than you meant".
+
+    `claim()` refuses overlaps, so the parent and child can never both be
+    held. What actually happens is: beta holds `users/src/auth.ts`, somebody
+    clearing orphans forces `users/src`, NOTHING matches exactly, and the
+    output is "force-released 0 claim(s)" — while the path they just tried to
+    clear is still blocked by a claim sitting right there. Hit while tidying
+    up, which is when nobody re-reads the semantics."""
+    ledger = ClaimsLedger(tmp_path / "claims.json")
+    ledger.claim(["users/src/auth.ts"], "beta", "T-2")
+
+    released = ledger.force_release(["users/src"], by="admin", reason="orphan")
+
+    assert released == 0
+    assert ledger.last_skipped_overlaps == [("beta", "users/src/auth.ts")]
+
+
+def test_nothing_is_reported_when_the_path_is_genuinely_clear(tmp_path: Path):
+    """A line that fires when there is nothing to say is one people learn to
+    scroll past."""
+    ledger = ClaimsLedger(tmp_path / "claims.json")
+    ledger.claim(["users/src"], "alpha", "T-1")
+
+    ledger.force_release(["users/src"], by="admin", reason="orphan")
+
+    assert ledger.last_skipped_overlaps == []
+
+
+def test_overlap_is_reported_in_both_nesting_directions(tmp_path: Path):
+    """`claim()` refuses either way round, so the report must see either way
+    round — a claim on the parent and a claim on the child both block."""
+    ledger = ClaimsLedger(tmp_path / "claims.json")
+    ledger.claim(["users/src/auth.ts"], "alpha", "T-1")
+    ledger.claim(["docs"], "beta", "T-2")
+
+    ledger.force_release(["users/src"], by="a", reason="r")
+    assert ledger.last_skipped_overlaps == [("alpha", "users/src/auth.ts")]
+
+    ledger.force_release(["docs/guide.md"], by="a", reason="r")
+    assert ledger.last_skipped_overlaps == [("beta", "docs")]
+
+
+def test_only_the_overlapping_path_of_a_multi_path_claim_is_named(tmp_path: Path):
+    """A claim holding several paths must not have all of them reported
+    because one overlapped — `unrelated/file.py` shares nothing with
+    `users/src` and saying otherwise sends somebody to release it."""
+    ledger = ClaimsLedger(tmp_path / "claims.json")
+    ledger.claim(["users/src/auth.ts", "unrelated/file.py"], "beta", "T-2")
+
+    ledger.force_release(["users/src"], by="admin", reason="orphan")
+
+    assert ledger.last_skipped_overlaps == [("beta", "users/src/auth.ts")]
+
+
+def test_a_worker_scoped_release_does_not_advise_taking_someone_elses_claim(
+    tmp_path: Path,
+):
+    """`worker=` leaves other holders alone on purpose, so reporting theirs
+    would advise force-releasing a LIVE worker's claim as though it were an
+    orphan.
+
+    ⚠ The first version of this test asserted the opposite and called it the
+    fix: `worker` was in scope and never referenced, so the filter existed in
+    the docstring only. A test that locks in the behaviour its own docstring
+    warns against is worse than no test — it certifies the bug."""
+    ledger = ClaimsLedger(tmp_path / "claims.json")
+    ledger.claim(["users/src/auth.ts"], "beta", "T-2")
+
+    ledger.force_release(
+        ["users/src"], by="reaper", reason="alpha died", worker="alpha"
+    )
+
+    assert ledger.last_skipped_overlaps == []
+
+
+def test_a_worker_scoped_release_still_reports_that_workers_own_overlap(
+    tmp_path: Path,
+):
+    """Narrowed, not silenced: the holder the caller IS acting on is still
+    worth naming, because its other claim still blocks the path."""
+    ledger = ClaimsLedger(tmp_path / "claims.json")
+    ledger.claim(["users/src/auth.ts"], "alpha", "T-1")
+
+    ledger.force_release(
+        ["users/src"], by="reaper", reason="alpha died", worker="alpha"
+    )
+
+    assert ledger.last_skipped_overlaps == [("alpha", "users/src/auth.ts")]
+
+
+def test_the_overlap_record_is_cleared_when_the_call_is_refused(tmp_path: Path):
+    """Both guards raise before the lock is taken, so a caller that catches
+    the ValueError would otherwise read the previous call's overlaps and
+    believe them current."""
+    ledger = ClaimsLedger(tmp_path / "claims.json")
+    ledger.claim(["users/src/auth.ts"], "beta", "T-2")
+    ledger.force_release(["users/src"], by="admin", reason="orphan")
+    assert ledger.last_skipped_overlaps
+
+    with pytest.raises(ValueError):
+        ledger.force_release(by="admin", reason="oops")
+
+    assert ledger.last_skipped_overlaps == []
+
+
+def test_the_cli_prints_the_skipped_claim_and_what_to_do(tmp_path, monkeypatch):
+    """The whole point is that a human reading the output knows the next
+    command rather than discovering the gap by being refused."""
+    import subprocess
+
+    from click.testing import CliRunner
+
+    import rite_ai.sandbox as sb
+    from rite_ai.cli.init import run_init
+    from rite_ai.cli.main import cli
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    monkeypatch.chdir(root)
+    monkeypatch.setattr(sb, "platform_can_sandbox", lambda: False)
+    run_init(root, yes=True)
+
+    ledger = ClaimsLedger(root / ".rite" / "claims.json")
+    ledger.claim(["users/src/auth.ts"], "beta", "T-2")
+
+    result = CliRunner().invoke(
+        cli,
+        ["release", "--force", "users/src", "--by", "admin", "--reason", "orphan"],
+    )
+
+    assert result.exit_code == 0, result.output
+    # "0 claim(s)" alone is what sent somebody away believing the path was
+    # clear. The next line is the one that stops them.
+    assert "force-released 0 claim(s)" in result.output
+    assert "still held: users/src/auth.ts (by beta)" in result.output
+    assert "name it directly" in result.output
+
+
+def test_a_workers_own_nested_claim_is_a_note_not_an_instruction(tmp_path, monkeypatch):
+    """`claim()` only refuses overlaps BETWEEN workers, so one worker holding
+    a parent and a child is legal. Telling them to "name it directly to
+    release it too" nudges them into force-releasing their own live claim."""
+    import subprocess
+
+    from click.testing import CliRunner
+
+    import rite_ai.sandbox as sb
+    from rite_ai.cli.init import run_init
+    from rite_ai.cli.main import cli
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    monkeypatch.chdir(root)
+    monkeypatch.setattr(sb, "platform_can_sandbox", lambda: False)
+    run_init(root, yes=True)
+
+    ledger = ClaimsLedger(root / ".rite" / "claims.json")
+    # TWO claims, not one holding both paths — a single claim matching
+    # `users/src` exactly is released whole, taking the nested path with it.
+    # The case worth reporting is a separate nested claim left standing.
+    ledger.claim(["users/src"], "alpha", "T-1")
+    ledger.claim(["users/src/auth.ts"], "alpha", "T-2")
+
+    result = CliRunner().invoke(
+        cli,
+        ["release", "--force", "users/src", "--by", "admin", "--reason", "tidy"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "note: alpha also holds users/src/auth.ts" in result.output
+    assert "ordinarily nothing to do" in result.output
+    assert "name it directly" not in result.output
