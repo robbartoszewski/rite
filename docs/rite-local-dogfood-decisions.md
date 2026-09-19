@@ -248,7 +248,7 @@ wiring now.
 | **Install from the remote SHA, not from a working tree** | `~/AI/rite` had live, uncommitted work in it; building from a tree nobody had committed would make "which code ran?" unanswerable. |
 | **Verify inside a sandbox, never from a shell** | The host shell and a sandboxed Worker resolved *different* `rite` binaries. A check run in the wrong place measures a proxy, not the property. |
 | **`idle` agent for every probe** | Proves the mechanism without spending quota and without leaving a Claude session running unattended. |
-| **Do not launch** | Three Workers overnight against a harness whose top half has no caller would produce nothing and could not be refunded. |
+| **Do not launch** | ⚠ *Reason corrected 2026-09-19; the decision stands.* The original — "a harness whose top half has no caller" — is the same stale claim as §1 above, and it was two screens away from it in this document. The callers exist. **The decision survives on the half that was never about wiring:** three Workers overnight spend quota, and spent quota is the one damage no cleanup reverses (§5.1.1). Launching is Robert's call and nothing here makes it. |
 | **Track `.rite/config.yaml`** | The repo's own `.gitignore` re-includes it (`!.rite/config.yaml`) and `rite credential list` says *"commit it: a name, never a value"*. It carries names and hostnames, no secret values, and a fresh clone otherwise has no idea the board exists. It is **not** a `PROJECT_MARKERS` file (those are `.rite/brief.yaml` and `.rite/modules.yaml`), so tracking it does not turn a fresh clone of rite into a rite project. |
 
 Its `site: example.atlassian.net` and `projects: {workers: ABC}` fields are

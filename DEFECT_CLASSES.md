@@ -291,7 +291,7 @@ that silently defeated load routing, `rite claim` passing no state layer so
 two machines could claim one path, release never publishing so a finished
 path blocked the fleet for ever, the stalled-Manager handover and the claim
 expiry both uncalled, the message log written and never read, a first
-election recording nothing, and the Owner's assignment path still dead. Each
+election recording nothing, and the Owner's assignment path dead. Each
 had passing tests, because every test supplied the missing argument or called
 the function itself. **The sentence to keep: the set specified mechanisms and
 nothing owned the integration.** Six things had to be built without tickets to
@@ -299,6 +299,23 @@ close it — something to run the loop, machine identity, fleet state for a
 human, the claim path's wiring, the Owner's duties on a stall, and the guard
 below. A ticket set that specifies mechanisms needs a wiring ticket per
 mechanism.
+
+**That list is the state Phase 2 was FOUND in, not the state today, and one
+word here said otherwise.** "The Owner's assignment path still dead" carried
+a present tense the rest of the paragraph does not: `manager_views` and
+`assign_to_manager` are called from the scheduler tick, gated on
+`coordination.assign_unattended`. The message log gained a reader, the
+stalled-Manager handover gained a caller, `in_flight` is computed. Claim
+expiry is the one still uncalled, deliberately — it reports and releases
+nothing, because releasing on a missed heartbeat throws away live work.
+
+Worth leaving the correction visible rather than quietly re-tensing it,
+because the guard below is what makes the claim checkable at all: a public
+function in `coordination/` that no production code outside its own module
+reaches fails the suite. **The document's own guard is why its sentence went
+out of date** — which is the outcome this class was written to produce, and
+the reason a defect-class document needs re-reading against the tree like
+any other.
 
 **Guarded by.** `tests/test_no_dead_wiring.py`, which is mechanical rather
 than conventional: a public function in `coordination/` must be reachable
