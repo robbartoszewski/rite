@@ -39,6 +39,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from rite_ai.config.models import Module, SandboxConfig
+from rite_ai.machine import max_sandboxes
 
 TOKEN_ENV_VAR = "GITHUB_TOKEN"
 CLAUDE_TOKEN_ENV_VAR = "CLAUDE_CODE_OAUTH_TOKEN"
@@ -985,6 +986,46 @@ def start_worker(
     cap_problem = check_worker_cap(active + 1, config.max_concurrent_workers)
     if cap_problem is not None:
         return SandboxResult(False, cap_problem)
+
+    # The MACHINE's bound, second and deliberately so. The project cap is
+    # the specific, actionable failure ("this project is at its limit"); a
+    # machine bound is environmental ("this box is full, possibly because
+    # of another project"), and someone who trips both should be told the
+    # one they can do something about.
+    #
+    # A different quantity from `max_concurrent_workers`, which §2.5.9 caps
+    # per Manager: four projects each correctly capped at five give twenty
+    # sessions on one laptop with nobody at fault. It cannot live in
+    # `config.yaml` — that file is committed and shared, so the same bytes
+    # are right on one machine and wrong on another, which is the argument
+    # `.rite/machine` already makes for identity.
+    #
+    # Nothing is counted when no bound is set, so an upgrade changes
+    # nothing for a fleet already running.
+    bound = max_sandboxes()
+    if bound is not None:
+        everywhere = count_active_sandboxes()
+        if isinstance(everywhere, CountUnavailable):
+            # Refuse, never treat as zero. `count_active_sandboxes` returns
+            # a union and the number is the easy half to read; a `yoloai
+            # ls` that cannot answer means the sandbox tooling here is
+            # broken, and starting anyway is the thing a bound exists to
+            # stop.
+            return SandboxResult(
+                False,
+                f"cannot count this machine's sandboxes, so the machine "
+                f"bound ({bound}) cannot be enforced — refusing to start "
+                f"'{worker}'. {everywhere.reason}",
+            )
+        if everywhere + 1 > bound:
+            return SandboxResult(
+                False,
+                f"this machine already runs {everywhere} sandbox(es) and its "
+                f"bound is {bound} — refusing to start '{worker}'. Some may "
+                f"belong to other projects, or be leftovers: `rite sandbox "
+                f"status` lists them. Raise it in ~/.rite/machine.json "
+                f'("max_sandboxes") or unset it for no bound.',
+            )
 
     args = [binary, "new", "--backend", config.backend, "--agent", "claude"]
     if allow_dirty:

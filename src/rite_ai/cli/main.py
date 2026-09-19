@@ -969,6 +969,20 @@ def _doctor_report(problems: list[str]) -> None:
                         f"sandboxes: {len(mine)} for this project, "
                         f"{len(others)} other `rite-` sandbox(es) on this machine"
                     )
+                    # Say the bound even when there isn't one. An absent
+                    # limit and a limit nothing reads produce identical
+                    # behaviour — no refusals — and telling them apart is
+                    # the whole subject of this week's defects.
+                    from rite_ai.machine import max_sandboxes
+
+                    bound = max_sandboxes()
+                    click.echo(
+                        f"sandboxes: machine bound {bound}, {len(found)} running"
+                        if bound is not None
+                        else "sandboxes: no machine bound set — this box will "
+                        "start as many as every project's cap allows "
+                        '(set "max_sandboxes" in ~/.rite/machine.json)'
+                    )
                     for entry in others:
                         where = f" ({entry.workdir})" if entry.workdir else ""
                         click.echo(
