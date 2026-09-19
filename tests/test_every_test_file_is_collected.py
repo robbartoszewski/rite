@@ -95,3 +95,58 @@ def test_every_named_helper_still_exists():
     missing = [name for name in HELPERS if not (TESTS / name).is_file()]
 
     assert not missing, f"HELPERS names files that do not exist: {missing}"
+
+
+def test_every_file_that_defines_tests_actually_yields_some():
+    """Naming is the visible form; silently collecting NOTHING is the same
+    defect. A conftest that skips a directory, an import guard, a
+    `collect_ignore` — each leaves a correctly named file producing zero
+    items, and the run stays green because nothing ran to go red.
+
+    Asserted per FILE rather than against a total, because a total is a
+    number that rots: it has to be edited every time a test is added, and
+    the edit that keeps it passing is indistinguishable from the edit that
+    hides a loss.
+    """
+    import subprocess
+    import sys
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "--collect-only",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+        ],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+    assert proc.returncode == 0, (
+        f"collection itself failed ({proc.returncode}):\n{proc.stdout[-2000:]}"
+    )
+
+    collected = {
+        line.split("::", 1)[0]
+        for line in proc.stdout.splitlines()
+        if "::" in line and line.startswith("tests/")
+    }
+    defines = {
+        str(path.relative_to(REPO))
+        for path in sorted(TESTS.rglob("*.py"))
+        if path.name not in HELPERS
+        and "__pycache__" not in path.parts
+        and DEFINES_TESTS.search(path.read_text(encoding="utf-8", errors="replace"))
+    }
+
+    silent = sorted(defines - collected)
+    assert not silent, (
+        f"these define tests and yielded no test items: {silent}. Something "
+        f"is skipping them — a conftest, an import guard, a collect_ignore — "
+        f"and a file that runs nothing reports exactly like a file that "
+        f"passed."
+    )
