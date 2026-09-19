@@ -42,6 +42,13 @@ IDLE = "idle"
 SATURATED = "saturated"
 """Work is ready and every Worker is busy. A queue, not a fault."""
 
+BLOCKED = "blocked"
+"""Work is ready, a Worker is FREE, and every ready ticket was last refused on
+paths somebody still holds. Measured next door: a queue short of uncontended
+files rather than of work, with the holders changing. Dispatching here burns a
+session to rediscover a collision rite already knows about — and stopping here
+is wrong too, because the work is real and the holder will let go."""
+
 READY = "ready"
 """Work is ready and a Worker is free. A later layer dispatches here."""
 
@@ -78,6 +85,9 @@ class Cycle:
     contention: list[str] = field(default_factory=list)
     """Claimed paths and who holds them — the surface that decides whether a
     ready ticket is actually takeable."""
+    blocked: dict[str, str] = field(default_factory=dict)
+    """ticket -> why it is not takeable right now. Populated only from
+    OBSERVED refusals, never from a guess about which files a ticket needs."""
     capacity: int = 0
     problems: list[str] = field(default_factory=list)
 
@@ -199,8 +209,21 @@ def plan_cycle(
         )
         return cycle
 
+    held = {p for w in cycle.workers for p in w.held_paths}
+    cycle.blocked = _blocked(root, cycle.ready, held, clock)
+    takeable = [t for t in cycle.ready if t not in cycle.blocked]
+
+    if not takeable:
+        cycle.verdict = BLOCKED
+        cycle.detail = (
+            f"{len(cycle.ready)} ticket(s) waiting and {len(free)} Worker(s) "
+            "free, but every one of them was last refused on paths somebody "
+            "still holds — NOT a reason to stop, and not a reason to dispatch"
+        )
+        return cycle
+
     slots = min(len(free), max(0, cycle.capacity - _busy(cycle)))
-    cycle.would_dispatch = list(zip(cycle.ready, free[:slots], strict=False))
+    cycle.would_dispatch = list(zip(takeable, free[:slots], strict=False))
     if not cycle.would_dispatch:
         cycle.verdict = SATURATED
         cycle.detail = (
@@ -273,6 +296,39 @@ def _contention(claims, clock: float) -> list[str]:
         ticket = f" for {claim.ticket}" if claim.ticket else ""
         lines.append(f"{claim.worker} holds {', '.join(claim.paths)}{ticket} ({age})")
     return lines
+
+
+def _blocked(
+    root: Path, ready: list[str], held: set[str], clock: float
+) -> dict[str, str]:
+    """Which waiting tickets are known to be blocked, and by whom.
+
+    **Only what was observed.** A ticket carries a label, not a file list, so
+    nothing here predicts a collision — it reads the ones a Worker already hit
+    and wrote down (`contention.jsonl`). A ticket nobody has tried is not
+    blocked; it is untried, and those are different enough that guessing would
+    park work nothing was holding.
+
+    A refusal only still counts while the paths that caused it are STILL held.
+    The holders change — that is what makes this a queue rather than a
+    deadlock — and a stale refusal would retire a ticket for ever over a
+    collision that cleared ten minutes ago.
+    """
+    from rite_ai.claims.ledger import read_contention
+
+    blocked: dict[str, str] = {}
+    for record in read_contention(root):
+        if not record.ticket or record.ticket not in ready:
+            continue
+        still = [p for p in record.paths if p in held]
+        if not still:
+            continue
+        holders = ", ".join(record.holders) or "another worker"
+        blocked[record.ticket] = (
+            f"{record.worker} was refused {', '.join(still)} "
+            f"({holders} still holds it, {_age(clock - record.timestamp)} ago)"
+        )
+    return blocked
 
 
 def _ready(board, cycle: Cycle) -> list[str]:
@@ -399,19 +455,26 @@ def format_cycle(cycle: Cycle) -> list[str]:
         lines.append(f"claimed paths ({len(cycle.contention)}):")
         lines.extend(f"  · {c}" for c in cycle.contention)
         lines.append(
-            "  (a ticket carries a label, not a file list, so rite cannot say "
-            "which of the waiting tickets these block — judge it against the "
-            "queue below)"
+            "  (a ticket carries a label, not a file list, so a ticket is "
+            "listed as blocked below only when a Worker ACTUALLY hit the "
+            "collision — untried tickets are untried, not blocked)"
         )
     else:
         lines.append("claimed paths: none")
 
     lines.append("")
-    lines.append(f"waiting on the board: {len(cycle.ready)}")
-    if cycle.ready:
+    takeable = [t for t in cycle.ready if t not in cycle.blocked]
+    lines.append(
+        f"waiting on the board: {len(cycle.ready)} "
+        f"({len(takeable)} takeable, {len(cycle.blocked)} blocked on held paths)"
+    )
+    if takeable:
         lines.append(
-            f"  {', '.join(cycle.ready[:12])}" + ("…" if len(cycle.ready) > 12 else "")
+            f"  takeable: {', '.join(takeable[:12])}"
+            + ("…" if len(takeable) > 12 else "")
         )
+    for ticket, why in cycle.blocked.items():
+        lines.append(f"  blocked: {ticket} — {why}")
 
     for problem in cycle.problems:
         lines.append(f"problem: {problem}")

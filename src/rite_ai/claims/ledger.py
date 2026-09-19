@@ -16,6 +16,65 @@ from rite_ai.state import (
     write_atomic,
 )
 
+CONTENTION_KEEP = 500
+"""Rows kept in `contention.jsonl`. The tail, because the question this file
+answers is "is that ticket still blocked" and never "was it blocked on
+Tuesday" — and because a Worker retrying every thirty seconds writes a row
+every thirty seconds. The scheduler already has the scar from an unattended
+record that only ever grew."""
+
+
+@dataclass
+class Contention:
+    """A claim that was refused, and by whom."""
+
+    timestamp: float
+    worker: str
+    ticket: str
+    paths: list[str]
+    overlaps: list[str]
+
+    @property
+    def holders(self) -> list[str]:
+        """The workers named in the overlap messages, deduplicated in order."""
+        found: list[str] = []
+        for line in self.overlaps:
+            _, _, tail = line.partition("(held by ")
+            name = tail.rstrip(")").strip()
+            if name and name not in found:
+                found.append(name)
+        return found
+
+
+def read_contention(root: Path, limit: int = CONTENTION_KEEP) -> list[Contention]:
+    """Refused claims, oldest first. Empty when nothing has been refused — and
+    empty, too, when the file cannot be read, because a missing record must
+    never make a contended ticket look takeable by louder means than silence.
+    """
+    path = root / ".rite" / "contention.jsonl"
+    try:
+        lines = path.read_text().splitlines()
+    except OSError:
+        return []
+    found: list[Contention] = []
+    for line in lines[-limit:]:
+        try:
+            data = json.loads(line)
+            found.append(
+                Contention(
+                    timestamp=float(data.get("timestamp", 0.0)),
+                    worker=str(data.get("worker", "")),
+                    ticket=str(data.get("ticket", "")),
+                    paths=list(data.get("paths", [])),
+                    overlaps=list(data.get("overlaps", [])),
+                )
+            )
+        except (json.JSONDecodeError, TypeError, ValueError):
+            # One unreadable row is not a reason to discard the rest; this is
+            # an advisory record, not an audit trail.
+            continue
+    return found
+
 
 @dataclass
 class Claim:
@@ -192,6 +251,7 @@ class ClaimsLedger:
                 overlaps += published
 
             if overlaps:
+                self._record_contention(paths, worker, ticket, overlaps)
                 return ClaimResult(
                     ok=False,
                     message="path contention",
@@ -275,6 +335,52 @@ class ClaimsLedger:
 
     def _audit_path(self) -> Path:
         return self._path.parent / "force-releases.jsonl"
+
+    def _contention_path(self) -> Path:
+        return self._path.parent / "contention.jsonl"
+
+    def _record_contention(
+        self, paths: list[str], worker: str, ticket: str, overlaps: list[str]
+    ) -> None:
+        """A refused claim, written down where something can read it back.
+
+        **This is the only place rite learns that a TICKET is blocked on a
+        path rather than on capacity.** A ticket carries a label, not a file
+        list, so nothing can predict the collision — it is discovered here,
+        by the Worker, after a session has already started. Without this
+        record the discovery dies with that session, and the next thing
+        looking at the queue sees a ticket that is ready and unblocked.
+
+        Measured next door: a dogfood queue was not short of work, it was
+        short of uncontended files — four tickets blocked by other live
+        sessions, holders changing. The Owner worked that out by hand, twice.
+
+        **Bounded, because the caller retries.** A Worker refused every thirty
+        seconds appends a row every thirty seconds, and the scheduler already
+        has the scar from that shape: an unattended stall grew one outbox file
+        per tick until it filled the disk. The tail is kept and the head is
+        dropped, because the useful question is "is this still contended
+        now", never "was it contended on Tuesday".
+
+        Never raises. A ledger must not fail a claim refusal because it could
+        not write a note about it.
+        """
+        record = {
+            "timestamp": time.time(),
+            "worker": worker,
+            "ticket": ticket,
+            "paths": [normalise_path(p) for p in paths],
+            "overlaps": overlaps,
+        }
+        path = self._contention_path()
+        try:
+            with path.open("a") as f:
+                f.write(json.dumps(record) + "\n")
+            lines = path.read_text().splitlines()
+            if len(lines) > CONTENTION_KEEP:
+                write_atomic(path, "\n".join(lines[-CONTENTION_KEEP:]) + "\n")
+        except OSError:
+            return
 
     def force_release(
         self,

@@ -383,3 +383,140 @@ def _free_view(_root, name, _clock, _status):
     from rite_ai.loop import WorkerView
 
     return WorkerView(name=name, free=True, verdict="free", evidence=["stub"])
+
+
+# --- contention, now observed rather than guessed ----------------------------------
+
+
+def test_a_ticket_refused_on_a_held_path_is_blocked_not_takeable(tmp_path):
+    """The dogfood's actual state: work is ready, a Worker is free, and the
+    files are held. Dispatching burns a session to rediscover a collision rite
+    already knows about; stopping abandons real work."""
+    from rite_ai.loop import BLOCKED
+
+    root = project(tmp_path, workers=("alpha", "beta"))
+    _claim(root, "beta", "engine/parser.py", ticket="BEN-9")
+    # alpha tries the same path for BEN-1 and is refused — the observation.
+    from rite_ai.claims.ledger import ClaimsLedger
+
+    refused = ClaimsLedger(root / ".rite" / "claims.json").claim(
+        ["engine/parser.py"], "alpha", "BEN-1"
+    )
+    assert not refused.ok
+
+    cycle = plan_cycle(root, board=FakeBoard("BEN-1"), sandbox_status=_free, clock=NOW)
+
+    assert cycle.verdict == BLOCKED
+    assert "BEN-1" in cycle.blocked
+    assert not cycle.would_dispatch
+    assert not cycle.is_reason_to_stop
+
+
+def test_a_blocked_ticket_says_who_is_holding_it(tmp_path):
+    from rite_ai.claims.ledger import ClaimsLedger
+
+    root = project(tmp_path, workers=("alpha", "beta"))
+    _claim(root, "beta", "engine/parser.py")
+    ClaimsLedger(root / ".rite" / "claims.json").claim(
+        ["engine/parser.py"], "alpha", "BEN-1"
+    )
+
+    cycle = plan_cycle(root, board=FakeBoard("BEN-1"), sandbox_status=_free, clock=NOW)
+
+    assert "beta" in cycle.blocked["BEN-1"]
+
+
+def test_a_refusal_stops_counting_once_the_holder_lets_go(tmp_path):
+    """The holders change — that is what makes this a queue rather than a
+    deadlock. A stale refusal would retire a ticket for ever."""
+    from rite_ai.claims.ledger import ClaimsLedger
+
+    root = project(tmp_path, workers=("alpha", "beta"))
+    ledger = ClaimsLedger(root / ".rite" / "claims.json")
+    _claim(root, "beta", "engine/parser.py")
+    ledger.claim(["engine/parser.py"], "alpha", "BEN-1")
+    ledger.release("beta")
+
+    cycle = plan_cycle(root, board=FakeBoard("BEN-1"), sandbox_status=_free, clock=NOW)
+
+    assert cycle.blocked == {}
+    assert cycle.would_dispatch == [("BEN-1", "alpha")]
+
+
+def test_an_untried_ticket_is_not_blocked(tmp_path):
+    """Untried and blocked are different. Guessing would park work nothing
+    was holding."""
+    root = project(tmp_path, workers=("alpha", "beta"))
+    _claim(root, "beta", "engine/parser.py")
+
+    cycle = plan_cycle(root, board=FakeBoard("BEN-7"), sandbox_status=_free, clock=NOW)
+
+    assert cycle.blocked == {}
+    assert cycle.would_dispatch
+
+
+def test_a_takeable_ticket_beside_a_blocked_one_still_goes(tmp_path):
+    """Four blocked tickets must not park the fifth."""
+    from rite_ai.claims.ledger import ClaimsLedger
+
+    root = project(tmp_path, workers=("alpha", "beta"))
+    _claim(root, "beta", "engine/parser.py")
+    ClaimsLedger(root / ".rite" / "claims.json").claim(
+        ["engine/parser.py"], "alpha", "BEN-1"
+    )
+
+    cycle = plan_cycle(
+        root, board=FakeBoard("BEN-1", "BEN-2"), sandbox_status=_free, clock=NOW
+    )
+
+    assert cycle.would_dispatch == [("BEN-2", "alpha")]
+
+
+def test_the_report_counts_takeable_separately_from_waiting(tmp_path):
+    """ "3 waiting" and "3 takeable" are different numbers and the difference
+    is the whole finding."""
+    from rite_ai.claims.ledger import ClaimsLedger
+
+    root = project(tmp_path, workers=("alpha", "beta"))
+    _claim(root, "beta", "engine/parser.py")
+    ClaimsLedger(root / ".rite" / "claims.json").claim(
+        ["engine/parser.py"], "alpha", "BEN-1"
+    )
+
+    text = "\n".join(
+        format_cycle(
+            plan_cycle(
+                root,
+                board=FakeBoard("BEN-1", "BEN-2"),
+                sandbox_status=_free,
+                clock=NOW,
+            )
+        )
+    )
+
+    assert "1 takeable, 1 blocked on held paths" in text
+    assert "blocked: BEN-1" in text
+
+
+def test_the_refusal_record_is_bounded(tmp_path):
+    """A Worker refused every thirty seconds appends a row every thirty
+    seconds. The scheduler already has the scar from a record that only grew."""
+    from rite_ai.claims.ledger import CONTENTION_KEEP, ClaimsLedger, read_contention
+
+    root = project(tmp_path)
+    ledger = ClaimsLedger(root / ".rite" / "claims.json")
+    _claim(root, "beta", "engine/parser.py")
+    for _ in range(CONTENTION_KEEP + 25):
+        ledger.claim(["engine/parser.py"], "alpha", "BEN-1")
+
+    rows = (root / ".rite" / "contention.jsonl").read_text().splitlines()
+    assert len(rows) <= CONTENTION_KEEP
+    assert read_contention(root)
+
+
+def test_a_granted_claim_records_no_contention(tmp_path):
+    from rite_ai.claims.ledger import read_contention
+
+    root = project(tmp_path)
+    _claim(root, "alpha", "engine/parser.py")
+    assert read_contention(root) == []
