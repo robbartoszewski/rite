@@ -1529,7 +1529,7 @@ def _keys_this_project_needs(config=None) -> list[str]:
         root = _find_project_root()
         workers_dir = root / "workers"
         if workers_dir.is_dir():
-            from rite_ai.credentials.store import resolve
+            from rite_ai.credentials.store import keychain_is_readable, resolve
 
             creds = getattr(config, "credentials", None)
             for worker_dir in sorted(workers_dir.iterdir()):
@@ -1549,7 +1549,13 @@ def _keys_this_project_needs(config=None) -> list[str]:
                 # who did opt in still needs its status and its rotation.
                 # This function's own rule, applied to itself — "driven by
                 # what the project is configured to do".
-                if resolve(key, creds).found:
+                # `or not keychain_is_readable()`: `.found` is False both
+                # for "never provisioned" and for "this process cannot
+                # look", and dropping the row in the second case deletes
+                # the very line the sandboxed-process note below exists to
+                # qualify. `keychain_is_readable` states the rule for
+                # itself — "a failure to CHECK is not a negative result".
+                if resolve(key, creds).found or not keychain_is_readable():
                     keys.append(key)
     return keys
 
@@ -5357,9 +5363,17 @@ def sandbox_start(
             f"machine, not for this project, so this Worker is being given a "
             f"token that reaches beyond the project's repos — which is the "
             f"one bound §5.3.3 keeps and the sandbox does not (SPEC §5.3.2). "
-            f"Give the project its own: `rite credential adopt "
-            f"{GLOBAL_TOKEN_CREDENTIAL}`, or `rite credential set "
-            f"{GLOBAL_TOKEN_CREDENTIAL}` from inside it.",
+            # `migrate`, which exists and copies the machine-wide entry
+            # into this project's namespace. The first cut said `adopt`,
+            # which is not a command — `rite credential adopt` exits 2 —
+            # and `rite credential list` already prints `migrate` for this
+            # same condition, so the two surfaces that diagnose one state
+            # disagreed, and the broken one was the one that fires while
+            # someone is starting work.
+            f"Give the project its own: `rite credential migrate "
+            f"{GLOBAL_TOKEN_CREDENTIAL}` moves the one you have, or `rite "
+            f"credential set {GLOBAL_TOKEN_CREDENTIAL}` from inside the "
+            f"project sets a new one.",
             err=True,
         )
     result = start_worker(

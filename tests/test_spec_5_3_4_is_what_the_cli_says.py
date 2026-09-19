@@ -8,6 +8,12 @@ force."
 
 Two places still assumed it was in force, and both spoke to a NEW user at
 the moment they were deciding how to set the project up.
+
+⚠ This file shipped once as `tests/nt.py`, which pytest never collects
+(`testpaths` with default `test_*.py`), so the `rite credential list` half
+had no running coverage and a REMEDY NAMING A COMMAND THAT DOES NOT EXIST
+went out in the warning text. Both are covered here, and the warning is
+now exercised rather than described.
 """
 
 from __future__ import annotations
@@ -113,3 +119,93 @@ class TestTheGlobalTokenWarning:
             lambda k, c=None: store.Resolved(k, store.GLOBAL, "a", "p", k),
         )
         assert sb.resolve_worker_token("w1")[1] == "global"
+
+
+class TestTheWarningIsSilentOnlyForThisProjectsOwnToken:
+    """The first cut asked "is the tier GLOBAL?" and called everything else
+    "project". `resolve` has four tiers, and two of the others — a
+    `RITE_GITHUB_TOKEN`, and the service's own `GITHUB_TOKEN` — are
+    machine-wide by construction. So a token exported in a shell profile,
+    which is the ordinary `gh` setup and usually reaches the whole account,
+    was handed to a Worker with nothing printed: a warning the change
+    REMOVED, on the case `resolve_worker_token`'s own docstring says must
+    never become silent."""
+
+    @staticmethod
+    def _tier_for(monkeypatch, resolved_tier: str) -> str:
+        import rite_ai.credentials.store as store
+        from rite_ai import sandbox as sb
+
+        monkeypatch.setattr(
+            store,
+            "get_scoped",
+            lambda n, c=None: "TOKEN" if n == "github_token" else None,
+        )
+        monkeypatch.setattr(
+            store,
+            "resolve",
+            lambda k, c=None: store.Resolved(k, resolved_tier, "a", "p", k),
+        )
+        return sb.resolve_worker_token("w1")[1]
+
+    def test_an_environment_token_is_not_treated_as_this_projects(self, monkeypatch):
+        """THE REGRESSION."""
+        import rite_ai.credentials.store as store
+
+        assert self._tier_for(monkeypatch, store.ENV) == "global"
+
+    def test_an_unknowable_tier_warns_rather_than_stays_quiet(self, monkeypatch):
+        """`get_scoped` and `resolve` are two separate lookups and do not
+        walk identically; a locked keychain makes `resolve` answer
+        NOT_FOUND while `get_scoped` still returns a value. Silence is the
+        wrong direction to be wrong in."""
+        import rite_ai.credentials.store as store
+
+        assert self._tier_for(monkeypatch, store.NOT_FOUND) == "global"
+
+    def test_the_projects_own_token_is_still_silent(self, monkeypatch):
+        """The difference — without this the two above pass on a build that
+        warns about everything, which is the state before the change."""
+        import rite_ai.credentials.store as store
+
+        assert self._tier_for(monkeypatch, store.PROJECT) == "project"
+
+
+class TestTheWarningTextNamesRealCommands:
+    """It named `rite credential adopt`, which does not exist. Nothing
+    executed the warning, so nothing noticed — and `rite credential list`
+    already printed the right command (`migrate`) for the same condition,
+    so the two surfaces that diagnose one state disagreed."""
+
+    def test_every_rite_command_it_suggests_exists(self, project, monkeypatch):
+        """Read off the EMITTED warning, not the source: a scan of the file
+        also picks up the comment explaining the old mistake, which is how
+        this test first failed."""
+        import re
+        from unittest.mock import patch
+
+        from rite_ai.cli.main import cli, credential
+        from rite_ai.sandbox import SandboxResult
+
+        assert CliRunner().invoke(cli, ["add", "worker", "w1"]).exit_code == 0
+        runner = CliRunner()
+
+        with (
+            patch(
+                "rite_ai.sandbox.resolve_worker_token",
+                return_value=("TOKEN", "global"),
+            ),
+            patch(
+                "rite_ai.sandbox.start_worker",
+                return_value=SandboxResult(True, "started"),
+            ),
+        ):
+            result = runner.invoke(cli, ["sandbox", "start", "w1"])
+
+        named = set(re.findall(r"rite credential ([a-z-]+)", result.output))
+        assert named, f"the warning suggested no command:\n{result.output}"
+        missing = named - set(credential.commands) - set(cli.commands)
+        assert not missing, (
+            f"the warning names {sorted(missing)}, which `rite credential` "
+            f"does not have: {sorted(credential.commands)}"
+        )

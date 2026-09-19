@@ -615,12 +615,28 @@ def resolve_worker_token(
         return scoped, "worker"
     shared = get_scoped(GLOBAL_TOKEN_CREDENTIAL, credentials)
     if shared:
-        from rite_ai.credentials.store import GLOBAL, resolve
+        from rite_ai.credentials.store import PROJECT, resolve
 
-        # The VALUE comes from `get_scoped`; where it came from comes from
-        # `resolve`, which walks the same tiers in the same order.
+        # ONLY a positively-confirmed PROJECT tier silences the warning.
+        #
+        # The first cut asked `tier == GLOBAL` and called everything else
+        # "project", which quietly widened the silent set to two tiers that
+        # are machine-wide by construction: `RITE_GITHUB_TOKEN` and the
+        # service's own `GITHUB_TOKEN`, both of which `resolve` reports as
+        # ENV. A `GITHUB_TOKEN` exported in a shell profile — the ordinary
+        # `gh` setup, and usually account-wide — was then handed to a Worker
+        # with nothing printed. That is a warning this commit REMOVED, on
+        # the exact case its own docstring says must never become silent.
+        #
+        # These are two separate lookups: `get_scoped` supplies the value,
+        # `resolve` the tier, and they do not walk identically (`resolve`
+        # consults `RITE_<account>` where `get_scoped` reads the keychain).
+        # They can disagree, and a locked keychain makes `resolve` answer
+        # NOT_FOUND while `get_scoped` still returns a value. Asking for
+        # PROJECT makes every disagreement fail loud instead of silent,
+        # which is the direction a credential warning has to be wrong in.
         where = resolve(GLOBAL_TOKEN_CREDENTIAL, credentials)
-        return shared, "global" if where.tier == GLOBAL else "project"
+        return shared, "project" if where.tier == PROJECT else "global"
     return None, "none"
 
 
