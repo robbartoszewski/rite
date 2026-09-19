@@ -155,6 +155,15 @@ class BudgetConfig:
 class ScheduleWindow:
     hours: str  # "HH:MM-HH:MM", end < start means "through midnight" (§2.7)
     workers: int
+    days: str = ""
+    """Which weekdays this window applies to. Empty means EVERY day, which
+    is what every window written before 0.5.0 meant — so an existing
+    schedule keeps its exact meaning and needs no migration.
+
+    "Mon-Fri", "Sat,Sun", "Mon,Wed,Fri". Ranges wrap ("Fri-Mon" is Fri, Sat,
+    Sun, Mon) for the same reason `hours` wraps at midnight: a week is a
+    cycle and refusing to wrap would make the user write two entries for one
+    idea."""
 
 
 @dataclass

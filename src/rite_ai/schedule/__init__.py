@@ -19,9 +19,11 @@ entries together cover exactly what the one did.
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from rite_ai.config.models import ScheduleConfig, ScheduleWindow
@@ -52,6 +54,142 @@ def current_minute_of_day(tz_name: str, now: datetime | None = None) -> int | No
 @dataclass
 class ScheduleError:
     message: str
+
+
+_DAY_NAMES = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+_DAYS_RE = re.compile(r"^[A-Za-z]{3}(-[A-Za-z]{3})?$")
+ALL_DAYS = frozenset(range(7))
+
+
+def parse_days(days: str) -> frozenset[int] | ScheduleError:
+    """Which weekdays a window covers, as Monday=0 .. Sunday=6.
+
+    Empty means EVERY day — the meaning every window had before this field
+    existed, so an existing schedule is unchanged by the field's arrival.
+
+    A range wraps ("Fri-Mon" is Fri, Sat, Sun, Mon), matching `hours`
+    wrapping at midnight: a week is a cycle, and refusing to wrap would
+    make a user write two entries for one idea.
+    """
+    text = days.strip()
+    if not text:
+        return ALL_DAYS
+    out: set[int] = set()
+    for piece in text.split(","):
+        piece = piece.strip()
+        if not _DAYS_RE.match(piece):
+            return ScheduleError(
+                f"invalid days: {piece!r} (expected e.g. Mon, Mon-Fri, Sat,Sun)"
+            )
+        if "-" in piece:
+            a, b = piece.split("-", 1)
+            if a.lower() not in _DAY_NAMES or b.lower() not in _DAY_NAMES:
+                return ScheduleError(f"invalid days: {piece!r} — unknown day name")
+            start, end = _DAY_NAMES.index(a.lower()), _DAY_NAMES.index(b.lower())
+            # Wraps, so a week is a cycle rather than a line.
+            day = start
+            out.add(day)
+            while day != end:
+                day = (day + 1) % 7
+                out.add(day)
+        else:
+            if piece.lower() not in _DAY_NAMES:
+                return ScheduleError(f"invalid days: {piece!r} — unknown day name")
+            out.add(_DAY_NAMES.index(piece.lower()))
+    return frozenset(out)
+
+
+def machine_zone_name() -> str:
+    """The machine's IANA zone name, as well as it can be established.
+
+    There is no stdlib call for this — `zoneinfo` reads zones, it does not
+    name the local one — so this reads the two places the answer actually
+    lives and falls back to the abbreviation. The name is REPORTED rather
+    than used for arithmetic: the arithmetic uses `astimezone()`, which is
+    correct whatever this returns.
+
+    ⚠ A container or CI runner with no zone configured resolves to UTC.
+    That is the case this function exists to make visible: an operator in
+    Warsaw who writes 09:00-17:00 gets a fleet running two hours off, with
+    nothing saying so, and the shift is invisible precisely because every
+    individual number looks right.
+    """
+    env = os.environ.get("TZ", "").strip()
+    if env:
+        return env
+    try:
+        parts = Path("/etc/localtime").resolve().parts
+        if "zoneinfo" in parts:
+            return "/".join(parts[parts.index("zoneinfo") + 1 :])
+    except OSError:
+        pass
+    return datetime.now().astimezone().tzname() or "UTC"
+
+
+@dataclass(frozen=True)
+class ResolvedZone:
+    """Which clock the schedule is being read against, and where it came
+    from — the second half being the point, since a wrong zone is silent."""
+
+    name: str
+    machine_local: bool
+
+    def describe(self) -> str:
+        where = "machine local" if self.machine_local else "from config"
+        return f"schedule in {self.name} ({where})"
+
+
+def resolve_zone(tz_name: str) -> ResolvedZone:
+    """`schedule.timezone` when set, otherwise the machine's own clock.
+
+    Machine-local is the default because a schedule expresses human working
+    hours: "nine to five" means the operator's day, and on a one-machine
+    project requiring them to name their own timezone is ceremony.
+
+    ⚠ This RELAXES D-48, which required the field once any window existed.
+    D-48 bought loudness — a machine that had not been configured failed
+    rather than guessed — and the replacement has to buy it back, which is
+    what `describe()` is for and why `rite start` prints it. A default that
+    is never stated is the same silent-wrong-clock D-48 was written against.
+    """
+    text = tz_name.strip()
+    if text:
+        try:
+            ZoneInfo(text)
+        except (ZoneInfoNotFoundError, ValueError):
+            return ResolvedZone(machine_zone_name(), machine_local=True)
+        return ResolvedZone(text, machine_local=False)
+    return ResolvedZone(machine_zone_name(), machine_local=True)
+
+
+@dataclass(frozen=True)
+class Moment:
+    """Where the clock is, in the terms the schedule is written in."""
+
+    minute_of_day: int
+    weekday: int  # Monday=0 .. Sunday=6
+    zone: ResolvedZone
+
+
+def current_moment(tz_name: str, now: datetime | None = None) -> Moment:
+    """The minute and weekday a schedule is evaluated against.
+
+    Unlike `current_minute_of_day`, this never returns None: an unset or
+    unrecognised timezone resolves to the machine's own clock rather than
+    to "skip the check". Skipping was defensible while the field was
+    mandatory; once it has a default, a caller that skips is a caller that
+    ignores the schedule.
+    """
+    zone = resolve_zone(tz_name)
+    try:
+        info = ZoneInfo(zone.name)
+    except (ZoneInfoNotFoundError, ValueError):
+        info = None
+    if info is not None:
+        moment = now.astimezone(info) if now is not None else datetime.now(info)
+    else:
+        moment = now.astimezone() if now is not None else datetime.now().astimezone()
+    return Moment(moment.hour * 60 + moment.minute, moment.weekday(), zone)
 
 
 def _parse_hours(hours: str) -> tuple[int, int] | ScheduleError:
@@ -138,15 +276,32 @@ def upsert_window(
     return [ScheduleWindow(hours=_format_range(s, e), workers=w) for s, e, w in result]
 
 
-def workers_at(schedule: ScheduleConfig, minute_of_day: int) -> int:
-    """The Worker count in effect at a given minute-of-day. Hours not
-    covered by any window default to 0 (§2.7's own fail-safe: a gap
-    behaves like an intentional off-window, not an inherited or undefined
-    count)."""
+def workers_at(
+    schedule: ScheduleConfig, minute_of_day: int, weekday: int | None = None
+) -> int:
+    """The Worker count in effect at a given minute and weekday.
+
+    **Time not covered by any window is 0**, and that is a decision rather
+    than a fallthrough: a gap behaves as an intentional off-window, not as
+    an inherited count and not as the flat `max_concurrent_workers`. It is
+    also the value most projects hit first and never configure, which is
+    why it is stated in the config documentation and not only here.
+
+    `weekday` is Monday=0 .. Sunday=6. **None means "ignore the day
+    dimension"**, which is what every caller meant before the dimension
+    existed and what a window with no `days` means anyway — but a caller
+    that omits it on a schedule that USES `days` silently gets the wrong
+    answer, so callers evaluating a real moment pass it. `current_moment`
+    returns both together for exactly that reason.
+    """
     for w in schedule.windows:
         parsed = _parse_hours(w.hours)
         if isinstance(parsed, ScheduleError):
             continue
+        if weekday is not None:
+            days = parse_days(w.days)
+            if isinstance(days, ScheduleError) or weekday not in days:
+                continue
         for start, end in _coverage(*parsed):
             if start <= minute_of_day < end:
                 return w.workers
@@ -201,3 +356,28 @@ def validate_schedule(
         )
 
     return problems
+
+
+def next_open(schedule: ScheduleConfig, moment: Moment, horizon_days: int = 8) -> str:
+    """When the schedule next allows at least one Worker, as "Mon 09:00".
+
+    Searched forward a minute at a time over a bounded horizon rather than
+    solved analytically: windows wrap at midnight AND at the week, may
+    overlap, and the first matching window wins — reproducing that ordering
+    in closed form is where an off-by-one would live, and this runs in
+    milliseconds on a week.
+
+    Returns "" when nothing in the horizon opens, which is a real answer:
+    a schedule of all-zero windows never opens, and saying "next open:"
+    with a guess would be worse than saying nothing.
+    """
+    minute, weekday = moment.minute_of_day, moment.weekday
+    for _ in range(horizon_days * MINUTES_PER_DAY):
+        minute += 1
+        if minute >= MINUTES_PER_DAY:
+            minute = 0
+            weekday = (weekday + 1) % 7
+        if workers_at(schedule, minute, weekday) > 0:
+            day = _DAY_NAMES[weekday].capitalize()
+            return f"{day} {minute // 60:02d}:{minute % 60:02d}"
+    return ""

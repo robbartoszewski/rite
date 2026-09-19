@@ -10,6 +10,48 @@ noticed the run had stalled"*, not *"nobody is doing the work"*.
 
 ### Enhancements
 
+**The schedule can express a working week, and something now enforces it.**
+`schedule.windows` entries take an optional `days` — `Mon-Fri`, `Sat,Sun`,
+`Fri-Mon` (day ranges wrap, as the hours already did at midnight). A window
+with no `days` means every day, which is what every window written before
+this release meant, so **an existing schedule keeps its exact meaning and
+needs no migration.**
+
+Robert's shape now parses and evaluates:
+
+```yaml
+schedule:
+  windows:
+    - {days: "Mon-Fri", hours: "09:00-17:00", workers: 3}
+    - {days: "Mon-Fri", hours: "17:00-09:00", workers: 1}
+    - {days: "Sat-Sun", hours: "00:00-23:59", workers: 0}
+```
+
+⚠ **The schedule was ADVISORY before this release, and if you set one and
+believed it was enforced, it was not.** `workers_at` was correct and was
+read by the loop's verdict and the scheduler tick; `rite sandbox start`
+checked the flat `sandbox.max_concurrent_workers` and never consulted it. So
+a project configured for zero Workers at the weekend started one anyway
+whenever anything asked, while `rite loop status` reported `closed` — the
+schedule allows nobody — about a Worker that was running. Two true sentences
+that disagreed. `start_worker` now refuses outside the window and names when
+it next opens.
+
+**`schedule.timezone` is now optional and defaults to the machine's own
+clock.** The hours express human working hours, and "nine to five" means the
+operator's day. ⚠ **A container or CI runner with no timezone configured
+resolves to UTC** — an operator in Warsaw writing 09:00-17:00 would get a
+fleet running two hours off with every individual number looking right — so
+`rite start` prints which clock it resolved: `schedule in Europe/Warsaw
+(machine local)`. Note also that the schedule is committed config
+interpreted locally, so a shared config gives each machine its own hours.
+That is intended — each operator works their own day — and is worth knowing
+the first time a colleague's fleet runs on a different schedule from yours.
+
+**Time not covered by any window is zero Workers**, not the flat cap and not
+unbounded. Unchanged behaviour, documented because it is the value most
+projects meet first and never configure.
+
 - **`rite loop` watches the queue and names why it is not moving.** A cycle
   reads the schedule, every Worker's checkout, the claim ledger and the board,
   and ends in one word: **idle** (nothing waiting), **saturated** (work

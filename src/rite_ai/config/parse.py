@@ -519,7 +519,11 @@ def parse_config(path: Path) -> ProjectConfig | ParseError:
             if not hours:
                 return ParseError(str(path), "schedule window missing 'hours'")
             windows.append(
-                ScheduleWindow(hours=hours, workers=int(w.get("workers", 0)))
+                ScheduleWindow(
+                    hours=hours,
+                    workers=int(w.get("workers", 0)),
+                    days=str(w.get("days", "") or ""),
+                )
             )
     schedule = ScheduleConfig(timezone=schedule_timezone, windows=windows)
 

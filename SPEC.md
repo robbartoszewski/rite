@@ -691,13 +691,34 @@ is the reasoning for why this is manual).
 
 ```yaml
 schedule:
-  timezone: Europe/Warsaw          # required — a schedule with no timezone is a
-                                    # trap the first time it's read somewhere else
+  timezone: Europe/Warsaw          # OPTIONAL since 0.5.0 — defaults to the
+                                   # machine's own clock, because "nine to
+                                   # five" means the operator's day. `rite
+                                   # start` prints which clock it resolved,
+                                   # since a container with no zone set
+                                   # silently becomes UTC and shifts the
+                                   # whole day with every number still
+                                   # looking right.
   windows:
-    - hours: "09:00-18:00"
+    - days: "Mon-Fri"              # OPTIONAL — omitted means EVERY day,
+                                   # which is what every window meant before
+                                   # 0.5.0. Ranges wrap: "Fri-Mon" is four
+                                   # days, as "18:00-09:00" wraps midnight.
+      hours: "09:00-17:00"
       workers: 3
-    - hours: "18:00-09:00"
-      workers: 0                   # off overnight — a clean stop, not a kill (§2.7.3)
+    - days: "Mon-Fri"
+      hours: "17:00-09:00"
+      workers: 1
+    - days: "Sat-Sun"
+      hours: "00:00-23:59"
+      workers: 0                   # off at weekends — a clean stop, not a
+                                   # kill (§2.7.3)
+
+# Time covered by NO window is 0 Workers — not the flat cap, not unbounded.
+# Documented here because it is the value most projects meet first and never
+# configure. Since 0.5.0 `rite sandbox start` REFUSES outside the window and
+# names when it next opens; before then the schedule informed the loop's
+# verdict and stopped nothing.
                                     # spans midnight: end < start means "through
                                     # midnight into the next day" (see parsing
                                     # rules below)
@@ -1809,21 +1830,45 @@ result is inside the boundary it belongs to, at the join.** Not at the entry
 point, not by convention: at the join, because that is the only place a
 second caller cannot bypass.
 
-⚠ **Four joins in this codebase do not have it. They are OPEN, not fixed —
-an earlier draft of this section narrated them in the past tense and was
-wrong.** Measured on this tree while reviewing that draft:
+**All four refuse as of `6a8a5b2`, at the library AND at the CLI.** Measured,
+with the invocations written out because a claim of this kind is not
+falsifiable without them:
 
-    write_heartbeat(project, "../../../pwned")
-    -> wrote /var/folders/.../T/pwned.json
+    $ rite context add ../../IMPORTANT.md trig desc
+      exit 1: a context file name is one path segment and '../../IMPORTANT.md' is not
+    $ rite context remove ../../IMPORTANT.md          exit 1, same refusal
+    $ rite heartbeat --worker ../../pwned             exit 1, nothing written
+    $ rite add module ../../escaped-mod               exit 1, nothing created
+      add_module(project, "../../escaped-lib")        ok=False, nothing created
 
-Three levels above the project root, from a worker name, with no error. The
-other three: `context add` and `context remove` resolving outside the project
-and unlinking; `add_module` creating a directory outside the tree and
-returning `ok=True`.
+The fix (`rite_ai.names.require_safe_name`) is called **inside** the library
+functions rather than at the command, which is what this subsection requires
+and what makes the last line above hold. Its own docstring states the rule:
+"the fix is at the boundary, not in the guard."
 
-A boundary by convention holds until the first unvalidated join, and four is
-the count from one review of a codebase that already believed it had this
-property.
+⚠ **Establishing that took three attempts across two sessions and the errors
+are worth more than the result.** One report said four boundaries escaped;
+a run said two; the run was wrong because `rite context add` takes POSITIONAL
+arguments and had been given flags, so the add failed on usage, nothing
+entered the index, and the subsequent remove reported `'../../IMPORTANT.md'
+not in index` and unlinked nothing. **The output of the test not running was
+indistinguishable from the output of it passing** — inside the verification of
+a path-traversal defect, which is the same shape as the defect.
+
+So: paste the invocation. "I ran it and it did not escape" is not a
+measurement, and one report was right for the wrong reason while one run was
+wrong by method, which is the more uncomfortable combination of the two.
+
+⚠ **The CLI and the library are separate surfaces, and a fix to one is not a
+fix to the other.** Before `6a8a5b2`, `add_module` was exactly that state —
+refused at the command, permitted in the library, returning `ok=True` and
+creating a directory outside the tree. **It looked safe from the command
+line.** That is the same shape as a check fixed at one entry point while the
+entry point people actually use goes on calling the unguarded one, and it is
+why this subsection requires validation at the join rather than at the
+command.
+
+A boundary by convention holds until the first unvalidated join.
 
 #### 5.4.3. Destructive operations must name what they are scoped to
 

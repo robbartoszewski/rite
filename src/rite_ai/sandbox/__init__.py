@@ -833,6 +833,60 @@ def count_active_sandboxes(
     return sum(1 for name in names if _belongs_to(name, root, workers))
 
 
+def _schedule_refusal(root: Path | str | None) -> str | None:
+    """Why the schedule forbids starting a Worker right now, or None.
+
+    ⚠ **The schedule was ADVISORY before 0.5.0 and this is what makes it
+    real.** `workers_at` existed, was correct, and was read only by the
+    loop's verdict and the scheduler tick; `start_worker` checked the flat
+    `sandbox.max_concurrent_workers` and nothing else. So a project
+    configured for zero Workers at the weekend started one anyway whenever
+    anything asked, while `rite loop status` reported `closed` — the
+    schedule allows nobody — about a Worker that was running. Two true
+    sentences that disagreed, which is what a computed-and-never-read value
+    always produces eventually.
+
+    Best-effort on an unreadable config, matching `_configured_workers`:
+    a project whose config will not parse has a louder problem than this,
+    and the flat cap above still applies. **A project with no windows is
+    unaffected** — `workers_at` returns 0 for an empty schedule, so the
+    check is skipped rather than refusing everything.
+
+    The refusal names when the window next opens. A refusal that tells you
+    when to come back is a different thing from one that only says no.
+    """
+    if root is None:
+        return None
+    try:
+        from rite_ai.config.parse import load_project
+
+        project = load_project(Path(root))
+        if isinstance(project, list):
+            return None
+        schedule = project.config.schedule
+    except Exception:  # noqa: BLE001 - an unreadable config is not this check's
+        return None
+
+    if not schedule.windows:
+        return None
+
+    from rite_ai.schedule import current_moment, next_open, workers_at
+
+    moment = current_moment(schedule.timezone)
+    allowed = workers_at(schedule, moment.minute_of_day, moment.weekday)
+    if allowed > 0:
+        return None
+
+    when = next_open(schedule, moment)
+    coming = f" Next open: {when}." if when else ""
+    return (
+        f"the schedule allows 0 Workers right now "
+        f"({moment.zone.describe()}).{coming} "
+        f"Refused rather than started — `rite schedule show` lists the "
+        f"windows, and raising the count is a config change."
+    )
+
+
 def _configured_workers(root: Path | str | None) -> list[str]:
     """This project's Worker names, for the legacy-name match only.
 
@@ -1063,6 +1117,15 @@ def start_worker(
     cap_problem = check_worker_cap(active + 1, config.max_concurrent_workers)
     if cap_problem is not None:
         return SandboxResult(False, cap_problem)
+
+    # The SCHEDULE, which until 0.5.0 nothing enforced at the spawn site.
+    # Checked after the flat cap because the cap is the more specific
+    # failure, and before anything is started because a ceiling applied
+    # afterwards is a report (§9.14.5 makes the same argument about a
+    # budget).
+    schedule_problem = _schedule_refusal(root)
+    if schedule_problem is not None:
+        return SandboxResult(False, schedule_problem)
 
     # The MACHINE's bound, second and deliberately so. The project cap is
     # the specific, actionable failure ("this project is at its limit"); a

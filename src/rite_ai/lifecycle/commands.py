@@ -274,6 +274,20 @@ def start(root: Path) -> StartResult:
     if schedule_problems:
         actions.append("run `rite doctor` for the full health check")
 
+    # WHICH CLOCK the schedule is being read against, stated whether or not
+    # anything is wrong with it. The hours are local, and a container or CI
+    # runner with no timezone configured resolves to UTC — so an operator in
+    # Warsaw writes 09:00-17:00 and the fleet runs two hours off, with every
+    # individual number looking correct and nothing saying otherwise. It is
+    # an invisible shift, which is the only kind worth printing a line for.
+    #
+    # Printed even when `schedule.timezone` IS set, because "from config" is
+    # the half that tells a reader the other case exists.
+    if project.config.schedule.windows:
+        from rite_ai.schedule import resolve_zone
+
+        actions.append(resolve_zone(project.config.schedule.timezone).describe())
+
     claims_path = rite_dir / "claims.json"
     if claims_path.exists():
         ledger = ClaimsLedger(claims_path)
