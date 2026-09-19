@@ -12,6 +12,21 @@ and both of them are about what existing projects receive.
    section first.
 3. **Suite, lint, format and `rite publish check` green**, on the commit that
    will be tagged, not on one near it.
+
+   ```sh
+   bash tools/verify-and-push.sh
+   ```
+
+   Use the script rather than typing the commands. It reads each exit code
+   directly; the hand-typed version of this step piped `pytest` to `tail`,
+   which made `tail`'s 0 the verdict, and would have pushed a red suite
+   under a summary line reading "3404 passed". On a rejected push it
+   rebases and re-runs the suite from the top, because the commits it
+   landed on are not the ones the suite just ran against.
+
+   **Green locally is half the answer.** The script says so when it
+   finishes: CI is Linux-only and the local run is macOS-only, so check the
+   Linux run for the tagged commit before step 4.
 4. **Tag and push the tag.**
 5. **Run the two history tools, after the tag exists, and commit what they
    write:**

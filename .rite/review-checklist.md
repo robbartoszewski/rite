@@ -106,6 +106,16 @@ one.
       status`) before either had a caller, and carried a CI workflow template
       that no Python, no test and no doc referenced. Grep for the caller;
       not finding one is the finding.
+- [ ] **The verdict is an exit code, read directly.** Not a summary line,
+      not a grep for the word "error", and never through a pipe — `cmd |
+      tail` replaces the check's exit code with `tail`'s, which is 0
+      whatever happened. Written after a push loop in this repository piped
+      `pytest` to `tail` and would have pushed a red suite under a line
+      reading "3404 passed"; it was itself the tooling written to stop that
+      class of defect. Anything that runs a check on your behalf — a script,
+      a hook, a CI step, a wrapper — has to be read for this, because the
+      failure is invisible by construction: a check that never runs and a
+      check that passes produce the same silence.
 ## rite's own
 
 Everything above is the checklist `rite init` ships to every project, and every
