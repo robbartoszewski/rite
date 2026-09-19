@@ -41,12 +41,19 @@ and both of them are about what existing projects receive.
    "the suite is green" implies a matrix that may not have run. If CI did not
    run at all, say so and rank what is least confirmed.
 
+   **Check the CI run for the tagged commit before tagging, and do not tag on
+   red.** `gh run list --repo <repo> --limit 5` answers it in one command.
+   This sentence exists because its absence cost something: an earlier draft
+   of the 0.5.0 notes asserted there was no CI at all — the repository is
+   public, so the Actions allowance was never consumed — and four commits went
+   onto a red `main` while the local run was reported as verification.
+
    This is a step rather than a courtesy because the failure it prevents has
-   already happened here: two defects shipped-adjacent this week were
-   invisible on macOS and caught only because CI went red, one of them a
-   platform split inside an error-string comparison. A release that implies
-   coverage it does not have is the same defect class as a check whose exit
-   code nobody reads — absence of a complaint standing in for evidence.
+   already happened here: three defects this week were invisible on macOS and
+   caught only by the Linux run, one of them a platform split inside an
+   error-string comparison. A release that implies coverage it does not have
+   is the same defect class as a check whose exit code nobody reads — absence
+   of a complaint standing in for evidence. So is a premise nobody checked.
 8. **Say what a tester has to run to upgrade**, in the release notes:
    upgrading rite does not update a project's files, `rite update --files-only
    --dry-run` shows what would change, and `rite update --files-only` applies

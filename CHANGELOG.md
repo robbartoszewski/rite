@@ -4,33 +4,42 @@
 
 ### How this release was verified
 
-**Verified locally on macOS (darwin 25.2.0) with CPython 3.14.3. Not verified
-on Linux.** GitHub Actions minutes were exhausted for September, so from
-2026-09-19 there was no CI for roughly eleven days and every change below was
-checked by a local run and nothing else.
+**Two platforms, and neither covers the other.**
 
-The accurate sentence is "3361 passed on macOS/py3.14", not "the suite is
-green" — the second implies a matrix that did not run.
+- **Linux, CPython 3.11–3.13**, by CI on every commit (`ubuntu-latest`).
+- **macOS 15 (darwin 25.2.0), CPython 3.14.3**, by a local run.
 
-**Why that distinction is not pedantry on this codebase.** The week before
-this release produced two defects that only a non-macOS run caught, both found
-because CI went red: the coordination state layer classified a lost ref race
-as a permanent refusal, because Linux git and macOS git report the same
-condition with different strings; and two doctor tests asserted exit 0 while
-their fixtures left sandboxing enabled, so they silently required yoloAI to be
-installed — true on the author's machine, false in a clean one.
+CI is Linux-only, so macOS rests entirely on the local run; the local run is
+one Python, so 3.11–3.13 rest entirely on CI. Read either alone and you will
+overstate the coverage.
+
+⚠ **At the time of writing, CI is RED on Linux** and has been for several
+commits — `tests/test_spec_5_3_4_is_what_the_cli_says.py` fails there because
+`rite init` does not enable sandboxing on a runner (yoloAI's backends are
+macOS-only), so the credential list a test expects is empty. **Do not tag
+until the Linux run for the tagged commit is green.** That is a checkable
+instruction rather than a reminder to be careful.
+
+The accurate sentence for the local half is "3365 passed on macOS/py3.14",
+not "the suite is green" — the second implies a matrix, and here the matrix
+exists and disagrees.
+
+**Why the two-platform split earns its place on this codebase.** Three
+defects this week were invisible on macOS and caught only by the Linux run:
+the coordination state layer classified a lost ref race as a permanent
+refusal, because Linux git and macOS git report the same condition with
+different strings; two doctor tests asserted exit 0 while their fixtures left
+sandboxing enabled; and the credential-list failure above. All three are the
+same shape — a value whose vocabulary you only know from the platform in
+front of you.
 
 **Least confirmed, in order:** the tmux loop lifecycle (`rite loop
-start/status/stop`), which shells out to `tmux` and whose tests use the real
-binary and therefore *skip* where tmux is absent; claim exclusion, which rests
-on `flock` and varies by filesystem; and sandbox capacity counting, which
-parses `yoloai ls --json`. Most of the rest is filesystem and JSON handling
-with no platform surface — **which is a reason to expect it holds rather than
-evidence that it does.**
-
-Re-run the full matrix before anything else ships, and treat the first red as
-expected rather than as a regression: eleven days of Linux-invisible changes
-land at once.
+start/status/stop`), whose tests use the real binary and therefore *skip*
+where tmux is absent, so on a runner without tmux they silently do not run;
+claim exclusion, which rests on `flock` and varies by filesystem; and sandbox
+capacity counting, which parses `yoloai ls --json` from a macOS-first tool.
+Most of the rest is filesystem and JSON handling with no platform surface —
+**which is a reason to expect it holds rather than evidence that it does.**
 
 ## 0.4.0 (2026-09-18)
 
