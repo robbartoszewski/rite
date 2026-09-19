@@ -42,6 +42,7 @@ from rite_ai.state import write_atomic
 
 DRAIN_FILENAME = "loop-drain"
 LOCK_FILENAME = "loop.lock"
+LOG_FILENAME = "loop.log"
 DEFAULT_INTERVAL = 120.0
 """A Worker session takes minutes to tens of minutes. A five-second cycle
 would re-read the same board twenty-four times per useful decision, and the
@@ -63,6 +64,20 @@ def _drain_path(root: Path) -> Path:
 
 def lock_path(root: Path) -> Path:
     return root / ".rite" / LOCK_FILENAME
+
+
+def log_path(root: Path) -> Path:
+    """Where a backgrounded loop's output goes.
+
+    Without it the only way to see what the loop said was `tmux attach`, and
+    the only way to see what a loop that DIED said was nothing at all — tmux
+    reaps the pane with the session, so by the time anything notices the exit
+    there is nothing left to read. That is how the first version of
+    `_why_it_died` came to report "it printed nothing, which usually means
+    the command was not executable" about a loop that had printed nine lines
+    explaining itself and exited for a perfectly good reason.
+    """
+    return root / ".rite" / LOG_FILENAME
 
 
 @dataclass
@@ -198,7 +213,30 @@ def is_alive(name: str) -> bool:
     return done.returncode == 0
 
 
-def start(root: Path, *, interval: float = DEFAULT_INTERVAL, command: str = "rite"):
+def rite_command() -> str | None:
+    """The rite that is running THIS process, not whichever one is on PATH.
+
+    Two reasons, and the first is why `start` used to be a facade. A tmux
+    session is handed a command string; if that string is not executable in
+    the session's environment the command dies instantly, tmux still reports
+    success because the SESSION was created, and `rite loop start` printed
+    "started" over nothing. Defaulting to the literal `rite` assumed a PATH
+    the caller might not have.
+
+    The second is that `rite` on PATH can be a different checkout entirely —
+    an older `uv tool install`, another worktree — so a loop started from
+    here could run a different rite than the one that started it, which is
+    the hardest kind of difference to notice afterwards.
+    """
+    import sys
+
+    argv0 = Path(sys.argv[0])
+    if argv0.name in ("rite", "rite-ai") and argv0.exists():
+        return str(argv0.resolve())
+    return shutil.which("rite")
+
+
+def start(root: Path, *, interval: float = DEFAULT_INTERVAL, command: str = ""):
     """Put `rite loop run --watch` in a detached tmux session.
 
     Refuses rather than clamping, the way `pool.fill` refuses above the worker
@@ -211,6 +249,15 @@ def start(root: Path, *, interval: float = DEFAULT_INTERVAL, command: str = "rit
             "running in the background",
             remedy="install tmux, or run `rite loop run --watch` in a terminal "
             "you leave open",
+        )
+
+    command = command or rite_command() or ""
+    if not command:
+        return Refused(
+            "the `rite` command could not be located, so a tmux session would "
+            "start it and it would die immediately",
+            remedy="run `rite loop run --watch` directly, or install rite so "
+            "`rite` is on PATH",
         )
 
     name = session_name(root)
@@ -241,7 +288,12 @@ def start(root: Path, *, interval: float = DEFAULT_INTERVAL, command: str = "rit
                 name,
                 "-c",
                 str(root),
-                f"{command} loop run --watch --interval {int(interval)}",
+                # Redirected to a file rather than left in the pane: a pane
+                # dies with its session, so the output of a loop that exited
+                # — exactly what somebody needs afterwards — is otherwise
+                # unreadable by the time anything notices it went.
+                f"{command} loop run --watch --interval {int(interval)} "
+                f">>{log_path(root)} 2>&1",
             ],
             capture_output=True,
             text=True,
@@ -255,6 +307,17 @@ def start(root: Path, *, interval: float = DEFAULT_INTERVAL, command: str = "rit
             f"tmux refused to start the session: "
             f"{(done.stderr or done.stdout or '').strip()[:200]}"
         )
+
+    # tmux exits 0 for a session it CREATED, even when the command inside it
+    # died on the first line — so its exit code answers "did a session get
+    # made", not "is the loop running". Asking the wrong one is how this
+    # command printed "started" over nothing, and reported it for hours.
+    if not _settled_alive(name):
+        return Refused(
+            f"the session started and exited immediately. {_why_it_died(root)}",
+            remedy=f"run `{command} loop run --watch` directly to see the error",
+        )
+
     return Started(
         name,
         detail=(
@@ -263,6 +326,44 @@ def start(root: Path, *, interval: float = DEFAULT_INTERVAL, command: str = "rit
             "`rite loop status` will say so rather than restarting itself"
         ),
     )
+
+
+def _settled_alive(name: str, tries: int = 10, pause: float = 0.2) -> bool:
+    """Is it STILL there after the window, not merely at some point during it.
+
+    The first version returned True on the first successful poll, so a session
+    that died at 0.3s was seen alive at 0.2s and reported as started — the
+    same defect it was written to catch, one layer in. A command that fails
+    fails in milliseconds; one that works outlives this. Polling rather than
+    sleeping once so a dead session is reported quickly rather than after the
+    whole window.
+    """
+    for _ in range(tries):
+        time.sleep(pause)
+        if not is_alive(name):
+            return False
+    return True
+
+
+def _why_it_died(root: Path) -> str:
+    """Whatever the dead loop wrote before it went.
+
+    Read from the log rather than from the tmux pane, because the pane is
+    gone by the time anybody asks.
+    """
+    try:
+        lines = [ln for ln in log_path(root).read_text().splitlines() if ln.strip()]
+    except OSError:
+        return (
+            "Nothing reached `.rite/loop.log`, which usually means the command "
+            "could not be run at all."
+        )
+    if not lines:
+        return (
+            "`.rite/loop.log` is empty, which usually means the command could "
+            "not be run at all."
+        )
+    return "Its last words: " + " / ".join(ln.strip()[:120] for ln in lines[-2:])
 
 
 def status(root: Path) -> LoopStatus:
