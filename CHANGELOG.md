@@ -2,6 +2,139 @@
 
 ## 0.5.0 (unreleased)
 
+**The headline, stated so it cannot be read as more than it is: rite now
+watches the queue and says why it is stopped. It still does not start
+sessions.** Every Worker begins because a human, or a Manager session a human
+is sitting with, typed a command. The gap this release closes is *"nobody
+noticed the run had stalled"*, not *"nobody is doing the work"*.
+
+### Enhancements
+
+- **`rite loop` watches the queue and names why it is not moving.** A cycle
+  reads the schedule, every Worker's checkout, the claim ledger and the board,
+  and ends in one word: **idle** (nothing waiting), **saturated** (work
+  waiting, everyone busy), **blocked** (work waiting, someone free, but the
+  files it needs are held), **deadlocked** (same, and the holders look gone),
+  **closed** (the schedule allows nobody this hour), plus **ready** and
+  **unknown** — the last meaning the board, ledger or schedule could not be
+  read, which is a state that needs a name rather than a silence. **Three of
+  them stop the run:** `idle` because there is nothing to do, and
+  `deadlocked` and `unknown` because continuing would reprint the same line
+  every two minutes until morning while nothing moves. The other four sleep
+  and look again. `rite loop run` answers once and exits with a code you can
+  branch on; `rite loop start` runs it in the background under tmux;
+  `rite loop status` asks tmux what is actually running and names any claim
+  whose holder has gone quiet; and `rite loop stop` asks it to drain rather
+  than killing it. **It starts nothing** — SPEC §9.12 forbids anything unattended from opening a Claude
+  session, so the loop prints the Worker it would start and does not start it.
+- **`/rite-start` in the Claude app, matching `rite start` in the terminal.**
+  A session had to be told what to work on, in a paragraph the user composed
+  from memory and differently every time. Now there is one thing to type: it
+  orients the session, reads the board and the claims, takes the next ready
+  ticket, and hands off to the standing instructions that keep it moving
+  across tickets. `rite start` prints the command, so finding either half
+  finds the other. **It does not make a session permanent** — it starts work,
+  and nothing restarts a session that stops.
+- **A blocked ticket stops looking takeable.** Until now, a ticket refused
+  because another Worker held its files was indistinguishable from one nobody
+  had picked up, so the next session picked it up and was refused in turn.
+  A refusal is now written down with the path and the holder, and the loop can
+  tell a queue (everyone busy) from a wall (nobody can proceed).
+- **rite refuses to hand a Worker a command whose failure it cannot see.**
+  `pytest | tail -3` reports `tail`'s exit code; so does anything ending in a
+  filter, `|| true`, or `&`. `rite doctor` names these, and — because doctor
+  is a command somebody chooses to run — the warning is also written into the
+  instructions file the session actually loads, beside the command, saying
+  what a green result there proves. This is in the release because it happened
+  here three times in one night, once pushing a commit to `main` with the
+  failing test named in the same output.
+- **A claim whose holder is gone is named, with the command to release it —
+  and is never released automatically.** rite could already detect this and
+  did nothing with it; a 9.3-day-old claim with no heartbeat ever was still
+  blocking a live Worker. Two review rounds killed automatic release: a Worker
+  heads-down for thirty minutes looks exactly like a dead one by this signal,
+  and guessing wrong puts two sessions on one file, which is the thing the
+  ledger exists to prevent. Reporting is correct on every input; releasing
+  stays a human decision.
+- **`rite release --force` says what it skipped and who holds it.** It matches
+  paths exactly, so a near-miss used to be silent. It now names the
+  overlapping claim it left behind and the Worker holding it. (`--worker` is
+  still ignored with `--force`, as its own help text says; narrowing a forced
+  release to one holder exists in the ledger and is not reachable from the
+  command line.)
+- **Two sandbox caps, because one machine can run several projects.** A
+  project's concurrent-Worker limit now counts that project's sandboxes rather
+  than every `rite-` sandbox on the machine, and a separate machine-wide limit
+  bounds the total whoever is asking. The old behaviour let an unrelated
+  project's Workers exhaust yours.
+- **`rite status` and `rite doctor` show the loop**, and doctor now probes
+  rather than assumes: it names a module that is itself a rite project, and
+  checks a local Manager's engine up front instead of failing every subtask.
+
+### Fixes
+
+- **An unreadable heartbeat is no longer read as a dead Worker.** Missing,
+  corrupt and unreadable all collapsed into one answer, and that answer was
+  "maximally stalled" — the least safe reading of "I could not check".
+- **A leftover loop lock could wedge the loop permanently, and said nothing
+  useful about it.** The symptom: `rite loop start` refuses with *"another
+  loop holds this project's lock"* while `rite loop stop` answers *"no loop is
+  running"* — two commands, two true-sounding answers, and no way to
+  reconcile them. The cause: `.rite/loop.lock` is a project file and survives
+  a reboot, the machine can hand that process number to something unrelated,
+  and rite treated "a process with that number exists" as "the loop is
+  running". The old remedy printed by `start` was `rite loop stop`, which
+  never touches the lock, so the one command that fixes it — deleting the
+  lock — appeared nowhere. Now both commands name the stale lock, say which
+  two things it could be, and print the exact path to remove. rite still
+  cannot tell a recycled number from a loop you started by hand, and says so
+  rather than guessing: deleting a live loop's lock is the worse error.
+- **`rite loop start` reported success when nothing was running.** It read
+  tmux's exit code, which answers "was a session created", not "is it still
+  there a second later". It now polls and reports why a session died.
+- **A lost-ref race on Linux was reported as a permanent refusal**, because
+  Linux git and macOS git describe the same condition in different words. Only
+  the Linux CI run could have caught this.
+- **The CLI advertised a credential model the spec retired**, and warned about
+  a token without checking it was this project's.
+- **A test file that collected nothing counted as passing.** The suite now
+  fails on a file that contributes no tests, not only on one named wrongly.
+- **The guide told readers that cross-machine failover was not built.** It
+  shipped in 0.4.0. Three other documents contradicted themselves and are
+  fixed; a fourth is flagged as a decision rather than quietly resolved.
+- **Lint was red in CI and nobody was running it locally.** Fixed in
+  `7b023b5`, whose commit message records that it had been red since
+  `8d19410`. That span is this repository's own note rather than something
+  re-checked for these release notes: the Actions history for that window has
+  since scrolled out of the API's reach, and an earlier draft of this line
+  asserted the span as though it had been verified. Saying which claims were
+  measured and which were inherited is the whole point of this section.
+
+### Groundwork, not a feature yet
+
+Work began on running subtasks through local models, to do cheap mechanical
+steps without spending Claude quota: a durable decomposition record, a router
+that sends a pipeline stage to whichever **Manager** holds the duty that stage
+needs, a verify runner and a committer, and one subtask taken start to finish
+without trusting what the agent says about it.
+
+**The pieces exist; the wiring does not.** Nothing calls the subtask runner
+and there is no command that drives the pipeline, so you cannot turn this on.
+One piece is already load-bearing: `rite doctor` probes a local Manager's
+engine, so it fails up front rather than on every subtask. It is described
+here because it is in the code, not because it is a feature.
+
+### Notes for existing projects
+
+- **Upgrading rite does not update your project's files.** `rite update
+  --files-only --dry-run` shows what would change; `rite update --files-only`
+  applies it.
+- **The loop is opt-in and starts nothing.** Nothing enables it for you, and
+  `coordination.assign_unattended` remains off by default.
+- **If you rely on the concurrent-Worker cap, re-check your number.** It now
+  counts this project's sandboxes rather than the machine's, so the effective
+  limit may be higher than it was.
+
 ### How this release was verified
 
 **Two platforms, and neither covers the other.**
@@ -29,9 +162,23 @@ same claim — six commits is a run of luck until the tagged one is checked,
 and this section previously asserted a CI state that had stopped being true
 before anybody re-read it.
 
-The accurate sentence for the local half is "3365 passed on macOS/py3.14",
-not "the suite is green" — the second implies a matrix, and here the matrix
-exists and disagrees.
+The accurate sentence for the local half is "3434 passed, 1 skipped, on
+macOS/py3.14", not "the suite is green" — the second implies a matrix, and
+this one has a platform that only CI covers.
+
+**And that local run did NOT exercise the macOS keychain.** It was run with
+`PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring`, because a test reaches
+the real keychain and macOS blocks it on an authorization dialog — at 0% CPU,
+with no output, indefinitely. Nulling the backend puts the run in the state a
+Linux runner is already in, which is why the suite passes there and why CI
+cannot see this at all. So the keychain path is covered by **neither** half of
+the two-platform split, and anything claiming otherwise would be wrong. Filed
+as `HRM-1`..`HRM-4`.
+
+The skip is `tests/test_release_checksums.py`'s two tag-dependent tests, which
+derive the tag they need from `VERSION` and so cannot run between bumping the
+version and creating the tag. They run again the moment the tag exists and
+must pass before the release is published.
 
 **Why the two-platform split earns its place on this codebase.** Three
 defects this week were invisible on macOS and caught only by the Linux run:

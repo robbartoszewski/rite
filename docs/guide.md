@@ -48,16 +48,33 @@ this order:
 4. **`rite status`** — claims, workers, what's blocked or stalled, again for
    **this machine**.
 
+**In the Claude app, `/rite-start` does 3 and 4 and then starts working.** It
+is the app half of `rite start`, and it exists because `CLAUDE.md` cannot
+start anything: it is context, loaded before the session reads anything, and
+something still has to be typed. Without the command the thing typed is a
+paragraph you compose from memory, differently every time.
+
+It takes the next ready ticket whose files nothing else holds and keeps going
+across tickets. **It does not make the session permanent.** Nothing restarts a
+session that stops — not the command, and not `rite loop`, which watches the
+queue and starts no sessions. When a session ends, you start the next one.
+
 **On a fresh clone, `rite handover show` is empty and `rite status`'s claims,
 workers and handover sections are — and that is not a bug.** (The rest of
 `rite status` still reports: the project, its modules, the coordinator pool,
 and this machine's burn rate.) Claims, heartbeats and handover snapshots are
 runtime state: gitignored by design
 (SPEC §8.11), never committed, meaningful only on the machine that wrote
-them. So `rite status` cannot see a colleague's claims and will not stop you
-claiming a path they are already working on — cross-machine coordination is
-designed and not built (see [Roadmap](#roadmap)). On a shared project, ask
-them. On your own machine across sessions, which is what rite is for today,
+them. So **until coordination is configured**, `rite status` cannot see a
+colleague's claims and will not stop you claiming a path they are already
+working on. Cross-machine claims *are* built — they shipped in 0.4.0 — but
+they stay inert until `coordination.managers` and `coordination.remote` are
+both set and this machine names itself in `.rite/machine`, so a single-machine
+project keeps claiming locally and offline. (This paragraph said "designed and
+not built" until 0.5.0, which was the third copy of that sentence in rite's
+own documents and the last one found. Fixing a wrong status in one document
+leaves it in the others, and nothing goes looking.) On a shared project that
+is not configured for it, ask them. On your own machine across sessions,
 both commands carry exactly what they say.
 
 ### Credentials
@@ -144,22 +161,29 @@ That distinction is the point rather than a limitation. The thing this
 replaces is a person checking `rite status` every twenty minutes to find out
 whether the queue has stalled.
 
-### The verdicts, and why there are five of them
+### The verdicts, and why there are seven of them
 
 A cycle ends in one word, and the difference between them is what makes the
 loop worth running:
 
 | | |
 |---|---|
-| `idle` | nothing on the board is waiting. **The only one that means stop** |
+| `idle` | nothing on the board is waiting. **Stops the loop** |
 | `saturated` | work is waiting and every worker is busy. A queue, not a fault |
 | `blocked` | work is waiting, a worker is free, and the paths it needs are held by someone still working |
-| `deadlocked` | same, except the holders look gone. **This will not clear on its own**, so the loop stops and prints what to release |
+| `deadlocked` | same, except the holders look gone. **This will not clear on its own**, so the loop **stops** and prints what to release |
 | `closed` | your schedule allows no workers this hour (§2.7.3) |
+| `ready` | a worker is free and there is safe work for one |
+| `unknown` | the board, the ledger or the schedule could not be read. **Stops the loop** — this is the state that must not be silent, because "could not check" and "nothing to do" look identical in a log |
 
 "Nothing happened" would have been an honest summary of four of those and a
-useless one. `saturated` and `blocked` are why it keeps going; `idle` and
-`deadlocked` are why it stops, for opposite reasons.
+useless one. `saturated`, `blocked`, `closed` and `ready` are why it keeps
+going; `idle`, `deadlocked` and `unknown` are why it stops, for three
+different reasons — finished, stuck, and could-not-tell.
+
+*This table said "five" and named `idle` as the only verdict that stops the
+loop until 0.5.0, which was wrong on both counts and contradicted its own
+`deadlocked` row two lines down.*
 
 ### Two costs, stated rather than engineered around
 
@@ -525,7 +549,9 @@ leader election was "designed but not implemented" — which is worth
 mentioning because it is the failure a stale guide actually causes: a reader
 believing a feature is absent does not go looking for it.
 
-And in 0.5.0: **the loop** ([Watching the queue](#watching-the-queue)), a
+And in 0.5.0: **the loop** ([Watching the queue](#watching-the-queue)),
+**`/rite-start`** — one thing to type in the Claude app to get a session
+oriented and working the board, matching `rite start` in the terminal — a
 **claims report** that names a claim whose holder has gone quiet rather than
 leaving it to be discovered when somebody is refused, and a **worker cap that
 counts this project's sandboxes** rather than every one on the machine.
@@ -543,10 +569,12 @@ otherwise:
   and config model doesn't need.
 - **The loop watches; it does not work the queue yet.** `rite loop` reads the
   board, your workers and the schedule every couple of minutes and tells you
-  what it would do. It starts nothing. Two layers are designed and unbuilt:
-  dispatching to a local-model tier, which would cost no Anthropic quota and
-  waits on a spike that has not reported; and dispatching Claude sessions,
-  which spends quota unattended and is a decision rather than a task. So the
+  what it would do. It starts nothing. Two layers would close that, and
+  neither is wired: dispatching to a local-model tier, whose pieces exist in
+  the code — a decomposition record, a duty router, a verify runner, a
+  committer — with nothing calling them and no command to drive them; and
+  dispatching Claude sessions, which spends quota unattended and is a
+  decision rather than a task. So the
   loop closes the "nobody noticed the queue stalled" gap and not the "nobody
   is doing the work" one.
 - **A claim whose holder died is reported, never released.** rite can tell

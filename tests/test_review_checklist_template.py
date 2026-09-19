@@ -32,7 +32,7 @@ def test_default_template_has_verification_category_with_named_lessons():
     """
     items = load_checklist(TEMPLATE_PATH)
     verification_items = [i.text for i in items if i.category == "Verification"]
-    assert len(verification_items) == 12
+    assert len(verification_items) == 13
 
     joined = " ".join(verification_items).lower()
     assert "exits non-zero" in joined  # silent failures that exit zero
@@ -44,6 +44,9 @@ def test_default_template_has_verification_category_with_named_lessons():
     assert "missing or undefined input" in joined  # silently plausible defaults
     assert "verdict is an exit code, read directly" in joined  # piped away
     assert "verification run is in flight" in joined  # tree moved mid-suite
+    # a liveness assertion satisfied by the test process's own liveness, so it
+    # holds with the logic deleted and asserts the bug as the feature
+    assert "measuring its own fixture" in joined
     # a condition that was detectable all along, by a command nobody ran
     assert "a check nobody runs is a check that is not there" in joined
     # a test file the runner never collects, which reads as a pass

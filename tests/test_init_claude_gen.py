@@ -133,12 +133,13 @@ def test_install_claude_config_writes_agents_and_commands(tmp_path: Path):
     assert commands == [
         "refine.md",
         "review.md",
+        "rite-start.md",
         "spec-digest.md",
         "spec.md",
         "ticket.md",
     ]
     assert counts["agents"] == 4
-    assert counts["commands"] == 5
+    assert counts["commands"] == 6
     # Nothing of the user's was moved aside: there was no CLAUDE.md here.
     assert counts["preserved"] == ""
 

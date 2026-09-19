@@ -116,6 +116,18 @@ one.
       a hook, a CI step, a wrapper — has to be read for this, because the
       failure is invisible by construction: a check that never runs and a
       check that passes produce the same silence.
+- [ ] **A test does not satisfy the property under test with the test process
+      itself.** A liveness check handed `os.getpid()` passes because pytest is
+      alive, not because the code is right — the assertion still holds with
+      the logic deleted, and the false positive it should have caught (a
+      recorded pid the OS recycled onto something unrelated) is the exact
+      defect the check exists for. The test then asserts the bug as the
+      feature, and reads as coverage. Substitute the fact instead: patch the
+      liveness probe, use a fixed identifier, supply the answer the code is
+      supposed to derive. The general form is that a test which hands the code
+      a genuine instance of the thing it is meant to detect is measuring its
+      own fixture. Written after this shipped twice in one night here, in
+      tests by someone actively hunting this class.
 - [ ] **Nothing edits the tree while a verification run is in flight.** A
       suite reports on the files it read, and if they changed underneath it
       the number it prints is about a tree that no longer exists — green on

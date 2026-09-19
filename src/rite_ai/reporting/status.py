@@ -376,14 +376,10 @@ def _loop_line(root: Path) -> str:
     loop status` says the truth. That is the right way round: the cheap
     overview may be briefly behind, the authoritative command never is.
     """
-    from rite_ai.loop.session import draining, lock_path
-    from rite_ai.scheduler.lock import process_is_running
+    from rite_ai.loop.session import draining, running_pid
 
-    try:
-        pid = int(lock_path(root).read_text().split()[0])
-    except (OSError, ValueError, IndexError):
-        pid = 0
-    if not pid or not process_is_running(pid):
+    pid = running_pid(root)
+    if not pid:
         return "not running"
     drain = " (draining)" if draining(root) else ""
     return f"running (pid {pid}){drain} — `rite loop status` for detail"

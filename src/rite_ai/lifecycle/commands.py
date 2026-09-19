@@ -313,6 +313,42 @@ def start(root: Path) -> StartResult:
     else:
         actions.append(f"scheduler ({sched.backend}): installed")
 
+    # The loop. REPORTED AND OFFERED, NOT STARTED — and this is the one place
+    # the request for it was to start it. `rite start`'s whole contract is the
+    # line in this function's docstring: perform what is idempotent, local and
+    # free; report what is persistent, networked or quota-spending. The loop
+    # is free — it spends no quota, because it starts no sessions (§9.12) —
+    # but it is a background tmux session that outlives the command, which
+    # fails the first test, not the third. `start` is also the command a
+    # session runs to orient itself, so starting the loop here would spawn one
+    # every time any session came up. Same reasoning that took the scheduler
+    # registration and the pool top-up out of `start`, reached from a
+    # different direction: the cost is not quota, it is a standing process
+    # nobody asked for.
+    #
+    # What `start` owes the caller is the pair of commands, because the two
+    # halves of working this project are a terminal and a Claude session and
+    # neither one names the other. `rite loop start` watches the queue;
+    # `/rite-start` is what a session is told to type. Printed together,
+    # here, because this is where someone is looking when they have just
+    # brought the project up and do not yet know what to do next.
+    from rite_ai.loop.session import running_pid
+
+    loop_pid = running_pid(root)
+    if loop_pid:
+        actions.append(
+            f"loop: running (pid {loop_pid}) — `rite loop status` for the last cycle"
+        )
+    else:
+        actions.append(
+            "loop: not running — `rite loop start` watches the queue and "
+            "says why it is stopped. It starts no sessions."
+        )
+    actions.append(
+        "in the Claude app, start the session with `/rite-start` — it takes "
+        "the next ticket rather than waiting to be told what to work on"
+    )
+
     # SPEC §9.10 setup phase, "populate cache". Also reported, not performed,
     # and here the spec contradicted itself rather than merely over-reaching:
     # §8.7 already said "a fresh clone gets no cache files — run `rite kb

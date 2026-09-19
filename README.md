@@ -163,6 +163,17 @@ the rest.
 When you come back, `rite status` lists each worker and the paths it has
 claimed; then read the PRs.
 
+If you would rather not come back to find out, `rite loop start` watches the
+queue in the background and writes what it sees to a log — every couple of
+minutes, one word for why the run is where it is: everyone busy, someone free
+but the files they need are held, the schedule allows nobody this hour, or
+nothing is waiting. One of those words is **deadlocked**: work waiting, nobody
+able to take it, and the holders look gone. That one will not clear on its
+own, so the loop stops and prints exactly what to release.
+
+**It starts nothing.** It tells you the run has stalled and what is holding
+it; you still start the next worker.
+
 ## Example
 
 ```console
@@ -212,7 +223,7 @@ installed anywhere else in your home directory, such as a project virtualenv,
 cannot run inside a sandbox.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/robbartoszewski/rite/v0.4.0/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/robbartoszewski/rite/v0.5.0/install.sh | sh
 ```
 
 *That is a `curl | sh` for a tool that scans your repo for secrets, so two
@@ -236,18 +247,50 @@ and reported, with the difference, and replaced only if you name it
 
 ## Planned — not built
 
-Nothing in this section exists yet. Each item is designed, the design is in
-[`SPEC.md`](SPEC.md), and the code is not written.
+**This section has been wrong before, in the direction that costs you most.**
+Until 0.5.0 it listed multi-machine coordination as unbuilt; that shipped in
+0.4.0, and somebody who believes a feature is absent does not go looking for
+it. What follows is what is genuinely not built, checked against the code.
 
-- **More than one machine on a project.** Planned: machines share claims and
-  the Owner role through a git repository, and if the Owner's machine goes
-  away, the highest-priority machine still running takes over. Designed in
-  SPEC §2.4 and §3.3.
-- **Questions sent to the person who owns the area.** Planned: you list people
-  and the areas they own, and rite matches each question to one of them,
-  breaks ties, and reroutes when that person's machine stops responding.
-  Designed in SPEC §4, which is written in the present tense; none of it is
-  built.
+- **The loop works the queue.** `rite loop` watches it and says why it is
+  stopped — it prints the Worker it would start and does not start one.
+  Two ways to close that, and neither is wired: dispatching mechanical
+  subtasks to local models — the pieces are in the code, nothing calls them,
+  and there is no command; and dispatching Claude sessions, which spends your
+  quota while nobody is watching and is therefore a decision rather than a
+  task. SPEC §9.12 forbids
+  the second today, on purpose. So the loop closes *"nobody noticed the queue
+  had stalled"* and not *"nobody is doing the work"*.
+- **Questions routed to whoever owns the area.** What is built: you list
+  people and their areas in the project config, and that table is printed
+  into the Owner's instructions — a heading and a list of names against
+  tags. What is not: any instruction telling the Owner to *use* it, and any
+  mechanism in rite that matches a question to a person, breaks ties, or
+  reroutes when that person's machine stops responding. SPEC §4 is written in
+  the present tense and describes that mechanism. So today the table is
+  reference material a session may or may not act on, which is less than
+  either "built" or "not built" suggests.
+
+  *Kept visible because how this line was arrived at is worth more than the
+  line. It read "not built" (false — the config and the table ship), was
+  corrected to "a duty the Owner carries out" (also false — the generated
+  file prints a heading and a list of names, with no sentence telling anyone
+  to use it), and only then to what is above. Three passes, each correction
+  made by someone opening the generated output instead of reading the source
+  or the previous description. The version that survived is weaker than
+  either confident claim, and that is the usual shape: the true answer to
+  "is this built?" is often "partly, and less usefully than it sounds".*
+- **Nothing notices a rejected push of a Worker's work.** (`rite doctor` does
+  probe whether the coordination remote accepts a push, by pushing and
+  deleting a throwaway branch — a different thing.) Practical consequence,
+  since this
+  is the moment people turn on branch protection: scope the rule to your
+  default branch. Blocking pushes to feature branches means a Worker's work
+  exists only inside a sandbox that is later destroyed.
+
+**Built since this list last claimed otherwise:** several machines on one
+project, with Owner election and failover (0.4.0 — see [the
+guide](docs/guide.md)); watching the queue (0.5.0, above).
 
 ## Why you might not want it
 
@@ -264,15 +307,22 @@ still held until you `rite release` it.
 
 **Nothing starts a session for you.** rite sets up the workspace and the
 config; starting Claude is your explicit action — opening a session, or typing
-`rite sandbox start`.
+`rite sandbox start`. This is still true with `rite loop` running: the loop
+watches the queue and reports, and the Worker it says it would start is one
+you start. Nothing rite runs unattended opens a Claude session, because
+anything scheduled that could would be spending your quota with nobody
+watching.
 
 **No gates on your code.** Your sessions run your tests and linters — that is
 what rite tells them to do — but rite does not read the results, so there is
 no coverage threshold, no accessibility pass, and no opinion on your test
 strategy.
 
-**One machine.** Coordinating across machines is not built; see
-[Planned](#planned--not-built).
+**Several machines work, and have not been run on several machines.** Owner
+election and failover shipped in 0.4.0 and are exercised by the suite,
+including against three interchangeable state backends. What has not happened
+is two physical machines on one project over a real network. Treat it as
+implemented and unproven rather than as either.
 
 **Claude only, deliberately.** `CLAUDE.md` and `.claude/agents/` are
 first-class here rather than behind a provider abstraction, and no other tool

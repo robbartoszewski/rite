@@ -28,12 +28,23 @@ _AGENT_FILES = [
     "reviewer-seam.md",
     "reviewer-decisions.md",
 ]
+# `rite-start.md`, not `start.md`: `/start` is a BUILT-IN Claude Code command,
+# and what a project-level file of the same name does to a built-in is
+# undocumented — shadow, lose, or something version-dependent. The prefix also
+# buys the symmetry that is the point of the command: `rite start` in the
+# terminal, `/rite-start` in the app, and each one prints the other's name.
+#
+# Worth knowing, since it is the same hazard one file along: `review.md`
+# shipped here long before this note and `/review` IS a built-in too. That
+# collision is older than this list and is left alone deliberately rather than
+# renamed under existing projects; it is filed, not fixed here.
 _COMMAND_FILES = [
     "ticket.md",
     "review.md",
     "refine.md",
     "spec.md",
     "spec-digest.md",
+    "rite-start.md",
 ]
 
 
@@ -589,6 +600,9 @@ def _commands_section() -> str:
     return """\
 ## Commands
 
+- `/rite-start` — start working this project: orient, read the board, take
+  the next ready ticket, keep going. The Claude-app half of `rite start`.
+  It starts work; it does not make this session permanent.
 - `/spec` — write this project's spec from the brief: follow-up questions,
   `SPEC.md` with a numbered decision register, registered with rite.
   Implements nothing, creates no tickets.

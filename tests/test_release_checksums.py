@@ -26,6 +26,45 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TOOL = REPO_ROOT / "tools" / "release_checksums.py"
 
+# THE BUMP-THEN-TAG WINDOW, and why two tests below skip inside it.
+#
+# `docs/releasing.md` step 1 bumps VERSION; step 4 creates the tag. Between
+# those, VERSION says 0.5.0 and the newest tag is v0.4.0 — and two tests here
+# derive the tag they need FROM VERSION, so they fail for the whole window.
+#
+# That is not a flaky test, it is a contradiction in the release process:
+# step 3 requires the suite green "on the commit that will be tagged, not on
+# one near it", and the commit that will be tagged is by definition one where
+# the tag does not exist yet. The instruction asked for a state the code made
+# unreachable, so a release could not both follow the checklist and be green.
+#
+# This has bitten before, in the other direction. These tests once hardcoded
+# `v0.3.0`; the bump to 0.4.0 broke them and "the suite shipped red with the
+# release" (see `_this_release_tag`). Deriving the tag from VERSION fixed
+# being wrong after a bump and introduced being red before a tag.
+#
+# Skipped rather than xfailed, and CONDITIONALLY so: once the tag exists the
+# tests run and must pass, so this cannot decay into a test nobody runs. The
+# reason string names the window, because a skip whose cause is not on screen
+# is indistinguishable from one nobody remembers the point of.
+_RELEASE_TAG = "v" + (REPO_ROOT / "VERSION").read_text().strip()
+_RELEASE_TAG_EXISTS = (
+    subprocess.run(
+        ["git", "rev-parse", "-q", "--verify", f"refs/tags/{_RELEASE_TAG}"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+    ).returncode
+    == 0
+)
+needs_release_tag = pytest.mark.skipif(
+    not _RELEASE_TAG_EXISTS,
+    reason=(
+        f"VERSION says {_RELEASE_TAG[1:]} and no {_RELEASE_TAG} tag exists yet "
+        "— the bump-then-tag window. This runs again the moment the tag is "
+        "created, and must pass before the release is published."
+    ),
+)
+
 
 def _run(*args: str, repo: Path | None = None) -> subprocess.CompletedProcess[str]:
     """Runs the copy of the tool INSIDE `repo`.
@@ -231,6 +270,7 @@ def test_check_accepts_the_right_digest_and_rejects_a_wrong_one(tmp_path):
     assert "MISMATCH" in bad.stderr
 
 
+@needs_release_tag
 def test_it_refuses_to_publish_a_digest_of_an_uncommitted_working_copy(tmp_path):
     """A reader's digest comes from the blob at the tag. Publishing one from
     an edited working tree guarantees every careful reader a mismatch."""
@@ -346,6 +386,7 @@ def _tagged_clone(tmp_path: Path, tag: str | None = None) -> Path:
     return clone
 
 
+@needs_release_tag
 def test_it_hashes_the_tag_not_head_once_the_tag_exists(tmp_path):
     """Hashing HEAD was wrong in both directions: after any post-release
     commit it published a digest no reader could ever compute, with exit 0,

@@ -116,6 +116,18 @@ one.
       a hook, a CI step, a wrapper — has to be read for this, because the
       failure is invisible by construction: a check that never runs and a
       check that passes produce the same silence.
+- [ ] **A test does not satisfy the property under test with the test process
+      itself.** A liveness check handed `os.getpid()` passes because pytest is
+      alive, not because the code is right — the assertion still holds with
+      the logic deleted, and the false positive it should have caught (a
+      recorded pid the OS recycled onto something unrelated) is the exact
+      defect the check exists for. The test then asserts the bug as the
+      feature, and reads as coverage. Substitute the fact instead: patch the
+      liveness probe, use a fixed identifier, supply the answer the code is
+      supposed to derive. The general form is that a test which hands the code
+      a genuine instance of the thing it is meant to detect is measuring its
+      own fixture. Written after this shipped twice in one night here, in
+      tests by someone actively hunting this class.
 - [ ] **Nothing edits the tree while a verification run is in flight.** A
       suite reports on the files it read, and if they changed underneath it
       the number it prints is about a tree that no longer exists — green on
@@ -125,6 +137,53 @@ one.
       checkout, so the rule is the guard: start the run, then wait. If a
       run must be abandoned, abandon the VERDICT with it rather than reading
       the number.
+
+## Security
+
+- [ ] No secrets, tokens, or credentials in committed content (source, docs,
+      comments, test fixtures, commit messages).
+- [ ] User input is validated at the boundary, not trusted downstream.
+- [ ] No obvious injection surface (SQL, shell, template) left unparameterised.
+- [ ] Dependencies added this change have no known critical advisories.
+
+## Correctness
+
+- [ ] The change does what the ticket asked, not more and not less. Where
+      there is no ticket, the commit message is the ask — hold it to the same
+      standard, and a change that does more than its own message claims is
+      the finding. (Three reviewers marked this line unevaluable on the same
+      diff for the same reason: no ticket existed and the line named no
+      fallback.)
+- [ ] Edge cases the diff touches are covered by a test that fails without
+      the fix.
+- [ ] No behaviour silently reversed or removed without the ticket saying so.
+- [ ] Anything this change found and did not do is a ticket, not a sentence
+      in the PR or the handover. The test is not "was it in scope" — it is
+      **would this ticket's definition of done still be met without it?**
+      Yes, file it unlinked; no, file it and link this ticket as blocked by
+      it (`rite board link <this> <new>`). Filed for something observed,
+      never something imagined: a follow-up nobody can point at the evidence
+      for is sprawl, not coverage.
+
+## Style
+
+- [ ] Follows this project's existing conventions, not the reviewer's
+      preference — meaning the code next to it and the vocabulary already in
+      use, not a rule you would have chosen. Where a declared convention and
+      the practised baseline disagree, say so and stop: that disagreement is
+      the finding, and resolving it is not the reviewer's call. (Three
+      reviewers returned three different verdicts on this line — one read it
+      as the enforced formatter, one as the surrounding code, one as the
+      repo's shared vocabulary, and the third found a real divergence the
+      other two did not look for.)
+- [ ] No dead code, no commented-out blocks, no leftover debug output.
+
+## Dependencies
+
+- [ ] New dependencies are the right size for the job — no heavy framework
+      for something a few lines would do.
+- [ ] Licence is compatible with this project.
+
 ## rite's own
 
 Everything above is the checklist `rite init` ships to every project, and every
