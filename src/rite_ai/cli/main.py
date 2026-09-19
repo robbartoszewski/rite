@@ -4095,8 +4095,46 @@ def loop_status() -> None:
     draining."""
     from rite_ai.loop.session import status
 
-    for line in status(_require_project_root()).lines():
+    root = _require_project_root()
+    for line in status(root).lines():
         click.echo(line)
+
+    # Suspect claims, here as well as in the cycle body.
+    #
+    # `plan_cycle` already finds them and `format_cycle` already prints them,
+    # so they reach `.rite/loop.log` — which is the right place for them and
+    # the wrong place to STOP. A loop meant to run for days writes a log
+    # nobody tails, and a claim whose holder died nine days ago is exactly
+    # what someone is looking for when they run this command: it is what
+    # they type to ask "is the loop all right?".
+    #
+    # Reported here rather than folded into `status()`: that answers "is a
+    # session running", from tmux and a lock file, and knows nothing about a
+    # project. Keeping it that way means this line cannot break the answer
+    # a person needs when the loop is NOT running.
+    try:
+        from rite_ai.claims.suspect import lines as suspect_lines
+        from rite_ai.claims.suspect import suspect_claims
+        from rite_ai.config.parse import load_project
+
+        project = load_project(root)
+        if not isinstance(project, list):
+            beat = project.config.heartbeat
+            suspects = suspect_claims(
+                root,
+                registered=[w.name for w in project.workers],
+                threshold_seconds=beat.interval_minutes * 60 * beat.stall_threshold,
+            )
+            for line in suspect_lines(suspects):
+                click.echo(line)
+    except (OSError, ValueError, KeyError, AttributeError) as e:  # noqa: BLE001
+        # Never fail `loop status` over the extra half — whether a loop is
+        # running is the question asked, and this is volunteered. But NOT a
+        # bare `except Exception`: the first draft had one, and it swallowed
+        # an ImportError from a wrong symbol name, so the line simply never
+        # appeared and the test failed with no clue why. A catch-all around
+        # a call you have just written hides your own mistake first.
+        click.echo(f"loop: could not check for dead claims — {e}", err=True)
 
 
 @loop.command("stop")
