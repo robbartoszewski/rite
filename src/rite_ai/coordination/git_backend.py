@@ -239,13 +239,34 @@ class GitStateLayer(StateLayer):
         return "unknown", _last(out)
 
     def _push_retrying_lock_contention(self, refspec: str, branch: str, expected: str):
+        """Absorb ref-lock contention; hand back what is left, as itself.
+
+        Exhausting these retries used to return `refused`, which is the
+        branch for a protected branch or a declined hook — permanent, and
+        not a race. A burst that lost every lock in a row therefore came
+        back as `Unavailable: the remote refused the write ... probes
+        force-push permission`: wrong about what happened (a push that never
+        took the lock definitely did not land, where `Unavailable` means it
+        may have) and wrong about what to do about it (contention is not a
+        permissions problem). Measured on Linux CI as ~23 of those in one
+        burst run, against a CAS that had not lost a single race.
+
+        **Why the bound is a policy and not a correctness threshold.** Every
+        attempt past this one re-reads the ref and rebuilds against it, and
+        every push carries `--force-with-lease`, so a writer that really did
+        win in between comes back "stale info" and the caller is told
+        Conflict. No value of `_LOCK_ATTEMPTS` can produce a double win or a
+        silent overwrite; it only decides how long a contended writer tries
+        before the caller is told it could not finish. That is why raising
+        it would not have been a fix and lowering it is not a risk.
+        """
         for attempt in range(_LOCK_ATTEMPTS):
             outcome, detail = self._push(refspec, branch, expected)
             if outcome != "contended":
                 return outcome, detail
             # Jittered so a burst of writers does not re-collide in lockstep.
             time.sleep(random.uniform(0.005, 0.02) * (attempt + 1))
-        return "refused", f"the remote could not lock {branch}: {detail}"
+        return "contended", f"the remote could not lock {branch}: {detail}"
 
     # --- StateLayer ---
 
@@ -279,6 +300,7 @@ class GitStateLayer(StateLayer):
         if not valid_key(key):
             return Unavailable(f"invalid state key: {key!r}")
 
+        contended = ""
         for _ in range(_MERGE_ATTEMPTS):
             head = self._fetch(self.state_branch, _STATE_TRACK)
             if isinstance(head, Unavailable):
@@ -320,6 +342,17 @@ class GitStateLayer(StateLayer):
                 # and it is also what §2.4.2 warns falsely marks a Manager
                 # stalled when its heartbeat keeps losing the ref race.
                 continue
+            if outcome == "contended":
+                # We never took the ref lock, so nothing of ours landed and
+                # the ref may have moved while we waited. That is the same
+                # situation as a conflict on somebody else's key, and it has
+                # the same answer: re-read, rebuild, push again. Returning
+                # here instead is what produced a spurious `Unavailable` —
+                # and `Unavailable` would tell the caller its write might
+                # have landed, which is the one thing that cannot be true of
+                # a push that was never allowed to update the ref.
+                contended = detail
+                continue
             if outcome == "refused":
                 return Unavailable(
                     f"the remote refused the write: {detail}. This is not a "
@@ -335,6 +368,14 @@ class GitStateLayer(StateLayer):
                 )
             return Written(blob)
 
+        if contended:
+            # Terminal, but say which wall was hit. "Kept moving under us"
+            # sends the reader looking for a writer that won; nobody did.
+            return Unavailable(
+                f"{key}: could not take the ref lock on {self.state_branch} "
+                f"after {_MERGE_ATTEMPTS} rounds of contention ({contended}). "
+                "Nothing was written — the push never updated the ref"
+            )
         return Unavailable(
             f"{key}: the state branch kept moving under us; "
             f"gave up after {_MERGE_ATTEMPTS} merges"

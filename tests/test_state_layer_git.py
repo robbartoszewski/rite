@@ -224,3 +224,99 @@ class TestGitSpecifics:
             text=True,
         )
         assert bare.stdout.strip() == "true"
+
+
+class TestLockContentionThatOutlastsTheInnerRetry:
+    """Contention exhausting `_LOCK_ATTEMPTS` is not a refusal, and not a
+    write that may have landed.
+
+    git updates a ref by CREATING `<ref>.lock` and failing if it exists — a
+    non-blocking lock, unlike the local backend's `flock` and the key-value
+    store's mutex, which WAIT. So "somebody else held the ref for a moment"
+    is an outcome only this backend has, and the one every writer against a
+    shared remote meets under load. `_push_retrying_lock_contention` already
+    retries it; the defect is where it goes when those retries run out.
+
+    It returned `("refused", ...)`, and `refused` is the branch for a
+    protected branch or a declined hook — permanent, not a race. So a burst
+    that lost eight lock races in a row surfaced as
+
+        Unavailable: the remote refused the write ... `rite doctor` probes
+        force-push permission
+
+    which is wrong twice over. `Unavailable` means the write MAY have landed;
+    a push that never took the lock definitely did not. And it sends the
+    reader to check permissions for a condition that is transient contention.
+
+    Under the Owner lease that is the expensive shape: a renewal reported as
+    maybe-landed cannot be safely retried, so an Owner that is merely
+    contended fails closed and the fleet churns — under exactly the load
+    coordination exists for.
+    """
+
+    def _layer_that_loses_locks(self, tmp_path, losses: int):
+        from rite_ai.coordination import git_backend
+
+        remote = tmp_path / "remote.git"
+        _git("init", "--bare", "-q", str(remote))
+        layer = GitStateLayer(remote=str(remote), cache_dir=tmp_path / "cache")
+        real = layer._push
+        state = {"left": losses}
+
+        def flaky(refspec, branch, expected):
+            if state["left"] > 0:
+                state["left"] -= 1
+                return "contended", "cannot lock ref 'refs/heads/state'"
+            return real(refspec, branch, expected)
+
+        layer._push = flaky
+        return layer, git_backend
+
+    def test_contention_past_the_bound_is_not_reported_as_a_refusal(self, tmp_path):
+        """THE DEFECT. One more loss than the inner retry absorbs."""
+        from rite_ai.coordination.git_backend import _LOCK_ATTEMPTS
+
+        layer, _ = self._layer_that_loses_locks(tmp_path, _LOCK_ATTEMPTS + 1)
+
+        result = layer.write_state("owner-lease.json", b"mine", ABSENT)
+
+        assert isinstance(result, Written), (
+            f"lock contention that outlasts the inner retry came back as "
+            f"{type(result).__name__}: {getattr(result, 'reason', '')}"
+        )
+
+    def test_it_does_not_send_the_reader_to_check_permissions(self, tmp_path):
+        """The diagnosis matters as much as the outcome: someone reading
+        this at 3am is told to go and look at force-push rights."""
+        from rite_ai.coordination.git_backend import _LOCK_ATTEMPTS
+
+        layer, _ = self._layer_that_loses_locks(tmp_path, _LOCK_ATTEMPTS + 1)
+
+        result = layer.write_state("owner-lease.json", b"mine", ABSENT)
+
+        assert "force-push permission" not in getattr(result, "reason", "")
+
+    def test_relentless_contention_still_terminates_and_says_so(self, tmp_path):
+        """The bound must still exist. A writer that can never take the lock
+        is told so — and told it is contention, not permissions, and not a
+        write that might have landed."""
+        layer, _ = self._layer_that_loses_locks(tmp_path, 10_000)
+
+        result = layer.write_state("owner-lease.json", b"mine", ABSENT)
+
+        assert isinstance(result, Unavailable), result
+        assert "lock" in result.reason or "contention" in result.reason
+        assert "may or may not have landed" not in result.reason
+
+    def test_a_genuine_race_is_still_a_conflict(self, tmp_path):
+        """The safety property this must not trade away. `--force-with-lease`
+        guards every retry, so if somebody really did win in between, the
+        retry comes back stale and the caller is told Conflict — never
+        Written."""
+        layer, _ = self._layer_that_loses_locks(tmp_path, 0)
+        first = layer.write_state("owner-lease.json", b"first", ABSENT)
+        assert isinstance(first, Written)
+
+        stale = layer.write_state("owner-lease.json", b"second", ABSENT)
+
+        assert not isinstance(stale, Written), stale

@@ -96,13 +96,20 @@ def _cas_actor(args):
         align()
         read = layer.read_state("owner-lease.json")
         if isinstance(read, Unavailable):
-            rows.append(["?", "Unavailable"])
+            # WITH ITS REASON. This logged the outcome alone, so a CI run
+            # could report "23 spurious Unavailable" and nothing about what
+            # they said — which is a count where a diagnosis was available
+            # for free, and it is the difference between reproducing a
+            # failure and guessing at it from another operating system.
+            rows.append(["?", "Unavailable", f"read: {read.reason}"])
             continue
         n += 1
         result = layer.write_state(
             "owner-lease.json", f"{actor}:{n}".encode(), read.version
         )
-        rows.append([read.version, type(result).__name__])
+        rows.append(
+            [read.version, type(result).__name__, getattr(result, "reason", "")]
+        )
     Path(log_path).write_text(json.dumps(rows))
     return len(rows)
 
@@ -361,16 +368,23 @@ class StateLayerConformance:
         )
         winners: dict[str, int] = {}
         attempts = unavailable = 0
+        why: dict[str, int] = {}
         for log in logs.glob("*.json"):
-            for version, outcome in json.loads(log.read_text()):
+            for row in json.loads(log.read_text()):
+                version, outcome = row[0], row[1]
+                reason = row[2] if len(row) > 2 else ""
                 attempts += 1
-                unavailable += outcome == "Unavailable"
+                if outcome == "Unavailable":
+                    unavailable += 1
+                    why[reason[:120]] = why.get(reason[:120], 0) + 1
                 if outcome == "Written":
                     winners[version] = winners.get(version, 0) + 1
         assert attempts > self.MIN_CAS_ATTEMPTS, (
             f"bursts barely ran ({attempts}) — not a test"
         )
-        assert unavailable == 0, f"{unavailable} spurious Unavailable under load"
+        assert unavailable == 0, (
+            f"{unavailable} spurious Unavailable under load, by reason: {why}"
+        )
         doubled = {v: n for v, n in winners.items() if n > 1}
         assert not doubled, f"versions won more than once (split brain): {doubled}"
         assert winners, "no write ever succeeded"
