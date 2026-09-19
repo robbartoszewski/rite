@@ -553,3 +553,218 @@ def test_a_leaked_dispatch_is_reported_and_does_not_make_the_cycle_unknown(tmp_p
     assert any("nothing ever appeared" in p for p in cycle.problems)
     assert cycle.verdict != UNKNOWN
     assert cycle.would_dispatch == [("BEN-2", "alpha")]
+
+
+# --- L-4: a queue and a wall are different --------------------------------------
+
+
+def _stale_claim(root, worker, *paths, days=9.3):
+    import json as _json
+
+    from rite_ai.claims.ledger import ClaimsLedger
+
+    ClaimsLedger(root / ".rite" / "claims.json").claim(list(paths), worker, "BEN-9")
+    path = root / ".rite" / "claims.json"
+    raw = _json.loads(path.read_text())
+    for entry in raw:
+        if entry["worker"] == worker:
+            entry["timestamp"] = NOW - days * 86400
+    path.write_text(_json.dumps(raw))
+
+
+def test_a_claim_whose_holder_looks_dead_is_reported_in_the_cycle(tmp_path):
+    """A claim nobody will release is the difference between a queue that
+    drains and one that never does. The loop is the thing watching."""
+    root = project(tmp_path)
+    _stale_claim(root, "ghost", "engine/parser.py")
+
+    cycle = plan_cycle(root, board=FakeBoard("BEN-1"), sandbox_status=_free, clock=NOW)
+
+    assert [s.worker for s in cycle.suspects] == ["ghost"]
+
+
+def test_blocked_by_a_dead_holder_is_deadlocked_not_blocked(tmp_path):
+    """`blocked` is a queue — the holder finishes and lets go. This one will
+    not clear, and sleeping on it prints the same thing until morning."""
+    from rite_ai.claims.ledger import ClaimsLedger
+    from rite_ai.loop import DEADLOCKED
+
+    root = project(tmp_path, workers=("alpha",))
+    _stale_claim(root, "ghost", "engine/parser.py")
+    ClaimsLedger(root / ".rite" / "claims.json").claim(
+        ["engine/parser.py"], "alpha", "BEN-1"
+    )
+
+    cycle = plan_cycle(root, board=FakeBoard("BEN-1"), sandbox_status=_free, clock=NOW)
+
+    assert cycle.verdict == DEADLOCKED
+    assert "will not clear on its own" in cycle.detail
+
+
+def test_blocked_by_a_live_holder_is_still_just_blocked(tmp_path):
+    """The holder is working. That is a wait, and stopping would abandon it."""
+    from rite_ai.claims.ledger import ClaimsLedger
+    from rite_ai.loop import BLOCKED
+
+    root = project(tmp_path, workers=("alpha", "beta"))
+    _claim(root, "beta", "engine/parser.py")
+    ClaimsLedger(root / ".rite" / "claims.json").claim(
+        ["engine/parser.py"], "alpha", "BEN-1"
+    )
+
+    cycle = plan_cycle(root, board=FakeBoard("BEN-1"), sandbox_status=_free, clock=NOW)
+
+    assert cycle.verdict == BLOCKED
+
+
+def test_the_loop_never_releases_a_suspect_claim(tmp_path):
+    """L-4 was planned as a reap. rite cannot tell a crashed session from a
+    session thinking hard, and the cost of being wrong is two sessions on one
+    path — so it reports, exactly as `rite status` does."""
+    root = project(tmp_path)
+    _stale_claim(root, "ghost", "engine/parser.py")
+    before = (root / ".rite" / "claims.json").read_text()
+
+    plan_cycle(root, board=FakeBoard("BEN-1"), sandbox_status=_free, clock=NOW)
+
+    assert (root / ".rite" / "claims.json").read_text() == before
+
+
+def test_the_report_prints_the_remedy(tmp_path):
+    root = project(tmp_path)
+    _stale_claim(root, "ghost", "engine/parser.py")
+
+    text = "\n".join(
+        format_cycle(
+            plan_cycle(root, board=FakeBoard("BEN-1"), sandbox_status=_free, clock=NOW)
+        )
+    )
+
+    assert "rite release --worker ghost --force" in text
+
+
+def test_a_nested_claim_still_blocks_the_ticket_it_refused(tmp_path):
+    """Claims nest: a claim on `engine/` is why a request for
+    `engine/parser.py` was refused. Comparing the path strings instead of
+    overlapping them reports the ticket takeable — and lets it suppress a
+    real deadlock by looking available."""
+    from rite_ai.claims.ledger import ClaimsLedger
+
+    root = project(tmp_path, workers=("alpha", "beta"))
+    _claim(root, "beta", "engine")
+    ClaimsLedger(root / ".rite" / "claims.json").claim(
+        ["engine/parser.py"], "alpha", "BEN-1"
+    )
+
+    cycle = plan_cycle(root, board=FakeBoard("BEN-1"), sandbox_status=_free, clock=NOW)
+
+    assert "BEN-1" in cycle.blocked, cycle.blocked
+    assert not cycle.would_dispatch
+
+
+def test_a_live_blocker_keeps_it_blocked_even_beside_an_unrelated_dead_holder(
+    tmp_path,
+):
+    """The first version asked "are all registered claim-holding Workers
+    dead?", so an unrelated stale claim elsewhere in the ledger turned a
+    queue into a false deadlock and stopped the loop."""
+    from rite_ai.claims.ledger import ClaimsLedger
+    from rite_ai.loop import BLOCKED
+
+    root = project(tmp_path, workers=("alpha", "beta"))
+    _claim(root, "beta", "engine/parser.py")  # live, and the real blocker
+    _stale_claim(root, "ghost", "unrelated/elsewhere.py")  # dead, irrelevant
+    ClaimsLedger(root / ".rite" / "claims.json").claim(
+        ["engine/parser.py"], "alpha", "BEN-1"
+    )
+
+    cycle = plan_cycle(root, board=FakeBoard("BEN-1"), sandbox_status=_free, clock=NOW)
+
+    assert cycle.suspects, "the unrelated stale claim should still be reported"
+    assert cycle.verdict == BLOCKED, cycle.detail
+
+
+def test_a_dead_blocker_deadlocks_even_beside_an_unrelated_live_worker(tmp_path):
+    """And the mirror: a live Worker holding something unrelated used to hide
+    a real deadlock, so the loop slept until morning."""
+    from rite_ai.claims.ledger import ClaimsLedger
+    from rite_ai.loop import DEADLOCKED
+
+    root = project(tmp_path, workers=("alpha", "beta"))
+    _stale_claim(root, "ghost", "engine/parser.py")  # dead, and the blocker
+    _claim(root, "beta", "unrelated/elsewhere.py")  # live, irrelevant
+    ClaimsLedger(root / ".rite" / "claims.json").claim(
+        ["engine/parser.py"], "alpha", "BEN-1"
+    )
+
+    cycle = plan_cycle(root, board=FakeBoard("BEN-1"), sandbox_status=_free, clock=NOW)
+
+    assert cycle.verdict == DEADLOCKED, cycle.detail
+
+
+def test_one_dead_holder_dooms_a_ticket_even_if_another_holder_is_alive(tmp_path):
+    """A ticket clears only when EVERY path in its refusal is free again, so
+    one dead holder dooms it whatever the others do. A union test let one
+    live holder anywhere suppress the verdict for every ticket — which is the
+    sleeping-until-morning the verdict exists to stop."""
+    from rite_ai.claims.ledger import ClaimsLedger
+    from rite_ai.loop import DEADLOCKED
+
+    root = project(tmp_path, workers=("alpha", "beta"))
+    _stale_claim(root, "ghost", "engine/parser.py")  # dead
+    _claim(root, "beta", "engine/lexer.py")  # alive
+    # One ticket needs both paths, so beta letting go is not enough.
+    ClaimsLedger(root / ".rite" / "claims.json").claim(
+        ["engine/parser.py", "engine/lexer.py"], "alpha", "BEN-1"
+    )
+
+    cycle = plan_cycle(root, board=FakeBoard("BEN-1"), sandbox_status=_free, clock=NOW)
+
+    assert cycle.verdict == DEADLOCKED, cycle.detail
+
+
+def test_an_unidentifiable_holder_is_not_counted_as_dead(tmp_path):
+    """Unknown is "not provably gone". A cross-machine overlap arrives as a
+    sentence with no claim object behind it, so no holder is recorded — and
+    being wrong in this direction costs a cycle, not a session."""
+    import json as _json
+
+    from rite_ai.loop import BLOCKED
+
+    root = project(tmp_path, workers=("alpha",))
+    _stale_claim(root, "ghost", "engine/parser.py")
+    # A refusal recorded the way a cross-machine one is: message, no held_by.
+    (root / ".rite" / "contention.jsonl").write_text(
+        _json.dumps(
+            {
+                "timestamp": NOW - 600,
+                "worker": "alpha",
+                "ticket": "BEN-1",
+                "paths": ["engine/parser.py"],
+                "overlaps": ["engine/parser.py overlaps it (held by w1 on other-box)"],
+            }
+        )
+        + "\n"
+    )
+
+    cycle = plan_cycle(root, board=FakeBoard("BEN-1"), sandbox_status=_free, clock=NOW)
+
+    assert cycle.verdict == BLOCKED, cycle.detail
+
+
+def test_the_holder_is_recorded_as_data_not_parsed_from_the_message(tmp_path):
+    """Identity came from string-partitioning a display sentence, so a
+    cross-machine overlap ("held by alpha on mac-studio") parsed to a name
+    matching nothing — silently disabling the verdict for exactly the case
+    it was needed. Recorded beside the sentence now."""
+    from rite_ai.claims.ledger import ClaimsLedger, read_contention
+
+    root = project(tmp_path, workers=("alpha", "beta"))
+    _claim(root, "beta", "engine/parser.py")
+    ClaimsLedger(root / ".rite" / "claims.json").claim(
+        ["engine/parser.py"], "alpha", "BEN-1"
+    )
+
+    (record,) = read_contention(root)
+    assert record.held_by == ["beta"]
+    assert record.holders == ["beta"]

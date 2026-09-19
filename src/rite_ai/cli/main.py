@@ -3945,7 +3945,7 @@ def loop_run(dry_run: bool, watch: bool, interval: float) -> None:
     only one of the three that is a reason to stop, and it is given its own
     code for exactly that reason.
     """
-    from rite_ai.loop import IDLE, UNKNOWN, format_cycle, plan_cycle
+    from rite_ai.loop import DEADLOCKED, IDLE, UNKNOWN, format_cycle, plan_cycle
 
     root = _require_project_root()
 
@@ -3977,9 +3977,14 @@ def loop_run(dry_run: bool, watch: bool, interval: float) -> None:
         # The drain is the only exit a human asked for, so it is the only one
         # that is a success. "Stopped because it could not tell" must not read
         # as "finished" to whatever started it.
+        # Only a drain, an empty queue or a reached limit are finishing.
+        # "Stopped because it could not tell" and "stopped because nothing
+        # can move" must not read as "finished" to whatever started it — and
+        # they must not read as each other either: one needs somebody to look
+        # at the machine, the other needs a specific claim released.
         if why in ("drained", IDLE, "limit"):
             return
-        raise SystemExit(1)
+        raise SystemExit(3 if why == DEADLOCKED else 1)
 
     cycle = plan_cycle(root, board=board, sandbox_status=worker_sandbox_status)
     for line in format_cycle(cycle):
@@ -3989,6 +3994,11 @@ def loop_run(dry_run: bool, watch: bool, interval: float) -> None:
         raise SystemExit(1)
     if cycle.verdict == IDLE:
         raise SystemExit(2)
+    if cycle.verdict == DEADLOCKED:
+        # A single cycle reported this too and exited 0, which is the same
+        # "nothing to see" a healthy cycle returns. The verdict a caller most
+        # needs to branch on was the one it could not see.
+        raise SystemExit(3)
 
 
 @loop.command("start")

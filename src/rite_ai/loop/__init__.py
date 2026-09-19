@@ -49,6 +49,14 @@ files rather than of work, with the holders changing. Dispatching here burns a
 session to rediscover a collision rite already knows about — and stopping here
 is wrong too, because the work is real and the holder will let go."""
 
+DEADLOCKED = "deadlocked"
+"""Ready work, a free Worker, and the paths that block it are held by holders
+that look dead. `blocked` is a queue — the holder finishes and lets go.
+This is not: nobody is coming back, so waiting is indefinite and the loop says
+so instead of sleeping on it for ever. It still does not RELEASE anything —
+rite cannot tell a crashed session from a session thinking hard, and the cost
+of being wrong is two sessions on one path."""
+
 READY = "ready"
 """Work is ready and a Worker is free. A later layer dispatches here."""
 
@@ -85,6 +93,10 @@ class Cycle:
     contention: list[str] = field(default_factory=list)
     """Claimed paths and who holds them — the surface that decides whether a
     ready ticket is actually takeable."""
+    suspects: list = field(default_factory=list)
+    """Claims whose holder looks dead (`claims.suspect`). Reported, never
+    released. The loop surfaces them because a claim nobody will release is
+    the difference between a queue that drains and one that never does."""
     blocked: dict[str, str] = field(default_factory=dict)
     """ticket -> why it is not takeable right now. Populated only from
     OBSERVED refusals, never from a guess about which files a ticket needs."""
@@ -180,6 +192,15 @@ def plan_cycle(
         )
         return cycle
     cycle.contention = _contention(ledger_claims, clock)
+    from rite_ai.claims.suspect import suspect_claims
+
+    heartbeat = project.config.heartbeat
+    cycle.suspects = suspect_claims(
+        root,
+        registered=[w.name for w in project.workers],
+        threshold_seconds=heartbeat.interval_minutes * 60 * heartbeat.stall_threshold,
+        now=clock,
+    )
 
     if window is None:
         cycle.verdict = UNKNOWN
@@ -231,11 +252,43 @@ def plan_cycle(
         )
         return cycle
 
-    held = {p for w in cycle.workers for p in w.held_paths}
-    cycle.blocked = _blocked(root, cycle.ready, held, clock)
+    # From the LEDGER, not from the registered Workers' views. A path held by
+    # a holder nobody registered — which is what the motivating ghost claim
+    # is — would otherwise read as free, and the ticket it blocks would read
+    # as takeable. The same roster-versus-ledger mistake `suspect_claims`
+    # exists to avoid, one layer up.
+    held = {p for c in ledger_claims for p in c.paths}
+    cycle.blocked, blockers = _blocked(root, cycle.ready, held, clock)
     takeable = [t for t in cycle.ready if t not in cycle.blocked]
 
     if not takeable:
+        # Whether this is a queue or a wall depends on whether anyone is
+        # coming back for THESE paths. The holders come from the contention
+        # records — the sessions that actually refused these tickets — not
+        # from the registered Worker list: a claim can be held by a name
+        # nobody registered, and the first version asked "are all registered
+        # claim-holding Workers dead?", which is wrong in both directions.
+        dead_holders = {s.worker for s in cycle.suspects}
+        # PER TICKET, not a union across tickets. A ticket clears only when
+        # EVERY path in its refusal is free again, so one dead holder dooms
+        # it whatever the others do — while a union test let one live holder
+        # anywhere suppress the verdict for every ticket, which is the
+        # sleeping-until-morning this exists to stop. A ticket whose holders
+        # could not be identified is NOT counted doomed: unknown is "not
+        # provably gone", and being wrong that way costs a cycle.
+        doomed = [
+            ticket
+            for ticket in cycle.blocked
+            if blockers.get(ticket) and (blockers[ticket] & dead_holders)
+        ]
+        if doomed and len(doomed) == len(cycle.blocked):
+            cycle.verdict = DEADLOCKED
+            cycle.detail = (
+                f"{len(cycle.ready)} ticket(s) waiting and {len(free)} "
+                "Worker(s) free, and every path blocking them is held by a "
+                "holder that looks dead — this will not clear on its own"
+            )
+            return cycle
         cycle.verdict = BLOCKED
         cycle.detail = (
             f"{len(cycle.ready)} ticket(s) waiting and {len(free)} Worker(s) "
@@ -322,7 +375,7 @@ def _contention(claims, clock: float) -> list[str]:
 
 def _blocked(
     root: Path, ready: list[str], held: set[str], clock: float
-) -> dict[str, str]:
+) -> tuple[dict[str, str], dict[str, set[str]]]:
     """Which waiting tickets are known to be blocked, and by whom.
 
     **Only what was observed.** A ticket carries a label, not a file list, so
@@ -336,13 +389,19 @@ def _blocked(
     deadlock — and a stale refusal would retire a ticket for ever over a
     collision that cleared ten minutes ago.
     """
-    from rite_ai.claims.ledger import read_contention
+    from rite_ai.claims.ledger import paths_overlap, read_contention
 
     blocked: dict[str, str] = {}
+    blockers: dict[str, set[str]] = {}
     for record in read_contention(root):
         if not record.ticket or record.ticket not in ready:
             continue
-        still = [p for p in record.paths if p in held]
+        # `paths_overlap`, not string equality: claims nest. A claim on
+        # `engine/` blocks a request for `engine/parser.py`, which is how
+        # `ClaimsLedger.claim` decided to refuse it in the first place —
+        # comparing the strings instead silently reports the ticket takeable
+        # and, worse, lets it suppress a real deadlock by looking available.
+        still = [p for p in record.paths if any(paths_overlap(p, h) for h in held)]
         if not still:
             continue
         holders = ", ".join(record.holders) or "another worker"
@@ -350,7 +409,8 @@ def _blocked(
             f"{record.worker} was refused {', '.join(still)} "
             f"({holders} still holds it, {_age(clock - record.timestamp)} ago)"
         )
-    return blocked
+        blockers[record.ticket] = set(record.holders)
+    return blocked, blockers
 
 
 def _ready(board, cycle: Cycle) -> list[str]:
@@ -509,6 +569,18 @@ def watch(
             if cycle.verdict == UNKNOWN:
                 emit("loop: stopping — something could not be established")
                 return UNKNOWN
+            if cycle.verdict == DEADLOCKED:
+                # Not a wait. Sleeping here prints the same thing every two
+                # minutes until morning while nothing moves — the silent
+                # narrowing this whole layer exists to make audible. The
+                # remedy is a human command and it is already on screen.
+                emit(
+                    "loop: stopping — the work is blocked by holders that "
+                    "look dead, and that will not clear on its own. Release "
+                    "the claims above, then `rite loop start` again; nothing "
+                    "resumes on its own, deliberately."
+                )
+                return DEADLOCKED
             if cycle.is_reason_to_stop:
                 emit("loop: stopping — the queue is empty")
                 return IDLE
@@ -564,6 +636,12 @@ def format_cycle(cycle: Cycle) -> list[str]:
         )
     for ticket, why in cycle.blocked.items():
         lines.append(f"  blocked: {ticket} — {why}")
+
+    if cycle.suspects:
+        from rite_ai.claims.suspect import lines as suspect_lines
+
+        lines.append("")
+        lines.extend(suspect_lines(cycle.suspects))
 
     for problem in cycle.problems:
         lines.append(f"problem: {problem}")

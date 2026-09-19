@@ -34,9 +34,25 @@ class Contention:
     paths: list[str]
     overlaps: list[str]
 
+    held_by: list[str] = field(default_factory=list)
+    """Who held the overlapping paths, as DATA.
+
+    `overlaps` is a sentence for a human — and a cross-machine one reads
+    "(held by alpha on mac-studio)", so parsing a name back out of it yields
+    `alpha on mac-studio`, which matches no worker anywhere. Anything
+    deciding anything reads this field; the parser below exists only for rows
+    written before it did."""
+
     @property
     def holders(self) -> list[str]:
-        """The workers named in the overlap messages, deduplicated in order."""
+        """The workers that held the overlapping paths, deduplicated in order.
+
+        Prefers the recorded field. Falls back to reading the message only
+        for older rows, and that fallback is best-effort by construction —
+        deriving identity from a display string is what this field replaced.
+        """
+        if self.held_by:
+            return list(dict.fromkeys(self.held_by))
         found: list[str] = []
         for line in self.overlaps:
             _, _, tail = line.partition("(held by ")
@@ -67,6 +83,7 @@ def read_contention(root: Path, limit: int = CONTENTION_KEEP) -> list[Contention
                     ticket=str(data.get("ticket", "")),
                     paths=list(data.get("paths", [])),
                     overlaps=list(data.get("overlaps", [])),
+                    held_by=[str(h) for h in data.get("held_by", [])],
                 )
             )
         except (json.JSONDecodeError, TypeError, ValueError):
@@ -228,6 +245,9 @@ class ClaimsLedger:
         with self._locked():
             existing = self._read()
             overlaps: list[str] = []
+            # Collected beside the sentence, from the claim object rather than
+            # from the sentence about it.
+            held_by: list[str] = []
             for p in paths:
                 np = normalise_path(p)
                 for claim in existing:
@@ -238,6 +258,7 @@ class ClaimsLedger:
                             overlaps.append(
                                 f"{np} overlaps {cp} (held by {claim.worker})"
                             )
+                            held_by.append(claim.worker)
 
             if not overlaps and layer is not None:
                 from rite_ai.coordination.claims_state import (
@@ -251,7 +272,12 @@ class ClaimsLedger:
                 overlaps += published
 
             if overlaps:
-                self._record_contention(paths, worker, ticket, overlaps)
+                # `held_by` is empty for a cross-machine overlap: those come
+                # back as sentences from `published_overlaps` and this ledger
+                # never sees the claim objects. An unknown holder is treated
+                # as "not provably gone" downstream, which is the safe way to
+                # be wrong.
+                self._record_contention(paths, worker, ticket, overlaps, held_by)
                 return ClaimResult(
                     ok=False,
                     message="path contention",
@@ -340,7 +366,12 @@ class ClaimsLedger:
         return self._path.parent / "contention.jsonl"
 
     def _record_contention(
-        self, paths: list[str], worker: str, ticket: str, overlaps: list[str]
+        self,
+        paths: list[str],
+        worker: str,
+        ticket: str,
+        overlaps: list[str],
+        held_by: list[str] | None = None,
     ) -> None:
         """A refused claim, written down where something can read it back.
 
@@ -371,6 +402,9 @@ class ClaimsLedger:
             "ticket": ticket,
             "paths": [normalise_path(p) for p in paths],
             "overlaps": overlaps,
+            # Identity as data, beside the sentence. Anything that decides
+            # reads this; the sentence is for a person.
+            "held_by": list(dict.fromkeys(held_by or [])),
         }
         path = self._contention_path()
         try:
