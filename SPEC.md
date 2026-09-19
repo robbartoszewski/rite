@@ -1187,6 +1187,96 @@ requiring a specific person.
 
 ## 5. Workspace isolation
 
+### 5.0. What rite may prevent, and what it may not
+
+The principle governing this section.
+
+**rite cannot prevent a user from making a bad choice, and should not try.**
+Someone may run five Claude Managers and exhaust a weekly quota in a day.
+Someone may point a Manager at a small local model and get results that do
+not clear the project's bar. Both are choices, and refusing them would be
+wrong for the person whose case is legitimate — deliberately spending a
+week's quota in a day because that is what the week needs, or deliberately
+running a small model because the task is small.
+
+**What rite owes is that nothing happens by accident.** That is narrower than
+safety and more achievable.
+
+#### Three questions, not one
+
+An earlier draft asked a single question — accident, or choice? — and claimed
+it settled the class. Review showed it does not: applied to `rite pool fill
+--count 500`, which the user typed explicitly, it says "choice, therefore
+never refuse", and rite refuses. The dichotomy was hiding a third case.
+
+**1. Is it an accident?** Then it is rite's, and rite's job is to make it
+impossible — not to warn about it. A Manager writing into another Manager's
+files is the clear case. The properties in §5.1.1 are mostly of this kind.
+
+**2. Does it contradict a choice the user already made?** Then rite honours
+the earlier one and refuses, and this is not paternalism: rite is not
+choosing for the user, it is declining to let an unstated intent silently
+override a stated one. `--count 500` is refused because it exceeds
+`sandbox.max_concurrent_workers`, a number the user wrote down. The remedy is
+always to change the earlier choice, and the refusal says so. Clamping would
+be the paternalistic option — it substitutes rite's number for the user's
+while appearing to comply.
+
+**3. Otherwise it is a free choice, and rite's job is to make its cost
+visible** — not to refuse it. Five Managers is this case. So is a weak
+engine.
+
+The containment requirement falls out of the first and third. **A Manager
+that fails to deliver its work** is the third case, and what follows is a
+coordination matter between that Manager and the Owner — rite reports it and
+does not arbitrate. **A Manager that writes into another Manager's files** is
+the first, and rite's bug. The one is fairness and belongs to the people
+involved; the other is containment and belongs to the tool.
+
+#### Costs that arrive late
+
+The third case needs care wherever the consequence is separated from the
+choice in time. Five Claude Managers do not produce a bill; they produce a
+result a week later, attributed to nothing. By then "it was your choice" is
+true and useless.
+
+**Where the cost of a choice arrives long after the choice, the equivalent of
+refusing is stating it at the moment of the decision.** A line at start time
+saying what this configuration is likely to consume stops nobody, and
+stopping people is not the goal. It stops them being surprised.
+
+This is why §9.14.5 refuses to default its ceiling. ⚠ Note what that refusal
+is and is not: it is the second case, not the third — rite declines to pick a
+number the user did not pick, and the number then bounds them. §9.14.5 also
+records that a count ceiling does not bound cost, so it is cited here as the
+right shape rather than a solved problem.
+
+#### When a choice stops being only the chooser's
+
+"Try a small local model and see" is a reasonable experiment. It stops being
+only the user's at the moment its output enters the codebase, because the
+cost then falls on later readers.
+
+**What keeps it an experiment rather than a quiet degradation is a
+terminating check that refuses work which is not good enough, whatever
+produced it.** A check that asks only whether the work meets the standard,
+and never which engine wrote it, lets anyone try a weak model freely: the
+worst outcome is wasted effort rather than a worse repository.
+
+**This is the argument for that check being structural rather than a
+setting.** ⚠ **Today it is not.** §7.1's review templates are plain Markdown
+that a project may rewrite, and rite reads none of it at runtime — it is
+instruction to a session, not behaviour rite enforces. A check that can be
+edited away will be edited away by exactly the configuration most likely to
+need it. Engine quality is the user's to choose; merged quality is not solely
+theirs, and that gap is unclosed.
+
+⚠ **This principle does not permit refusing something because the user might
+regret it.** If an argument for a refusal cannot name either the accident it
+prevents or the earlier choice it honours, it is an argument for a default, a
+warning, or a line of output — most often for stating a cost the user cannot
+otherwise see.
+
 ### 5.1. Physical isolation
 
 Each Worker has its own directory with its own repo checkouts. No two Workers share a
@@ -4831,6 +4921,7 @@ happened once already and left no trace until this review found it.
 | D-72 | Whether a provider is a command argument or a Manager attribute | **UNRESOLVED — and it blocks the implementation plan** | §9.14 models a provider as an argument selecting the project's one Manager session. The built design makes `engine` a field on `ManagerRole` and presets three Managers running CONCURRENTLY (`lead`=claude, `planner`=local:large, `executor`=local:small). The two are different designs; §9.14 picked the first without knowing the second existed. It also voids §9.14.0's one-Manager-per-project rule, which is what pays for the D-50 amendment. §9.14.7b. |
 | D-73 | Whether the session or the resumer dies with the terminal | **The SESSION may outlive it; the RESUMER may not** | Review found the two requirements denying each other: §9.14.3 needs a session that survives detaching, §9.14.6 said nothing outlives the terminal, and tmux — rite's only persistence — is detached by construction. They separate: a session the human started continuing is what §9.12 already permits (`rite sandbox start` leaves one running); what §9.12 forbids is an unattended START, so it is the resumer that must die. §9.14.6. |
 | D-74 | How the one-Manager refusal establishes liveness | **Fail CLOSED, against the INNER PROCESS, with the remedy printed** | The mechanism nearest to hand is tmux `has-session`, which answers "does a session exist" rather than "is the command running" — the facade fixed twice in one night in `loop.start` and `pool.fill` — and it returns false when tmux is missing or times out, so an unanswerable check would permit two PAID sessions. §5.1.1: a safety property may fail closed, never open. The remedy must be printed because this design's ordinary exit is an ungraceful terminal close, so a stale marker is the common morning state. Raised by a peer session at the stage where it is still free to fix. §9.14.0. |
+| D-75 | What rite may refuse a user | **Three cases, not two: an ACCIDENT rite makes impossible; a choice CONTRADICTING an earlier choice of the user's own, where rite honours the earlier one and refuses; and a free choice, whose cost rite makes visible and never refuses** | The two-case form was drafted first and review falsified it on rite's own behaviour: `rite pool fill --count 500` is typed explicitly, so the dichotomy calls it a choice and says never refuse — and rite refuses. The third case is what it was hiding, and it is not paternalism: refusing `--count 500` honours `sandbox.max_concurrent_workers`, a number the user wrote down, and clamping would be the paternalistic option because it substitutes rite's number while appearing to comply. §5.0. |
 
 ---
 
