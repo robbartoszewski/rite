@@ -61,3 +61,11 @@ jobs:
 
       - name: Test
         run: uv run pytest
+        env:
+          # The concurrency soak is clock-bound, and its default is
+          # calibrated for a developer laptop. A shared runner measured ~85x
+          # slower and did 31 rounds where a laptop does thousands, which
+          # put the suite red on a test whose properties had not been
+          # violated. Give it a budget that matches the machine it runs on
+          # rather than the machine it was written on.
+          RITE_SOAK_SECONDS: "20"
