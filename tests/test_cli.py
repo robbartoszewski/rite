@@ -416,9 +416,18 @@ def test_pool_fill_starts_sessions_up_to_target(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
     runner = CliRunner()
+    # `is_tmux_session_alive` is True because this asserts fill SUCCEEDS.
+    # It used to be False, which said "no session is alive" while asserting
+    # exit 0 and two sessions started — a contradiction `fill` satisfied,
+    # because it recorded slots on `tmux new-session` exiting 0 without ever
+    # asking whether the command in them survived. The test specified the
+    # facade rather than failing to catch it. `time.sleep` is patched for
+    # speed only; the real settle window is exercised against real tmux in
+    # tests/test_pool_fill_really_starts.py.
     with (
         patch("rite_ai.pool.shutil.which", return_value="/usr/local/bin/tmux"),
-        patch("rite_ai.pool.is_tmux_session_alive", return_value=False),
+        patch("rite_ai.pool.is_tmux_session_alive", return_value=True),
+        patch("rite_ai.pool.time.sleep"),
         patch("rite_ai.pool.subprocess.run") as mock_run,
     ):
         mock_run.return_value.returncode = 0

@@ -213,11 +213,18 @@ class TestPoolNamesTheSessionsItStarts:
         from rite_ai.config.models import PoolConfig
         from rite_ai.pool import fill
 
+        # True, and `time.sleep` stubbed for speed: this asserts the message
+        # names what fill STARTED, so the sessions have to be startable. It
+        # used to say nothing was alive while asserting two started —
+        # specifying the facade `fill` had, rather than catching it.
         with patch("rite_ai.pool._tmux_binary", return_value="/usr/bin/tmux"):
-            with patch("rite_ai.pool.is_tmux_session_alive", return_value=False):
-                with patch(
-                    "rite_ai.pool.subprocess.run",
-                    return_value=MagicMock(returncode=0, stderr="", stdout=""),
+            with patch("rite_ai.pool.is_tmux_session_alive", return_value=True):
+                with (
+                    patch("rite_ai.pool.time.sleep"),
+                    patch(
+                        "rite_ai.pool.subprocess.run",
+                        return_value=MagicMock(returncode=0, stderr="", stdout=""),
+                    ),
                 ):
                     result = fill(tmp_path, PoolConfig(coordinator_standby=2))
 
