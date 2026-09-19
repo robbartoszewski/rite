@@ -57,11 +57,23 @@ class TestFill:
         assert "tmux not found" in result.message
 
     @patch("rite_ai.pool.shutil.which", return_value="/usr/local/bin/tmux")
-    @patch("rite_ai.pool.is_tmux_session_alive", return_value=False)
+    @patch("rite_ai.pool.time.sleep")
+    @patch("rite_ai.pool.is_tmux_session_alive", return_value=True)
     @patch("rite_ai.pool.subprocess.run")
     def test_starts_up_to_target_depth(
-        self, mock_run, mock_alive, mock_which, tmp_path: Path
+        self, mock_run, mock_alive, mock_sleep, mock_which, tmp_path: Path
     ):
+        """⚠ This used to patch `is_tmux_session_alive` to FALSE and still
+        assert three sessions started successfully — which is a contradiction
+        the code was happy to satisfy, because nothing checked whether a
+        started session lived. It encoded the facade rather than the
+        behaviour, and it passed throughout.
+
+        True now, because the assertion is that fill starts three sessions
+        WHEN TMUX WORKS. `time.sleep` is patched only for speed: the settle
+        window is real and `tests/test_pool_fill_really_starts.py` exercises
+        it against the real binary, which is where a mocked test cannot go.
+        """
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
         result = fill(tmp_path, PoolConfig(coordinator_standby=3))
         assert result.ok

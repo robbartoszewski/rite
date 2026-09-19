@@ -228,6 +228,40 @@ class FillResult:
     started: list[str] = field(default_factory=list)
 
 
+def _settled_alive(name: str, tries: int = 10, pause: float = 0.2) -> bool:
+    """Is the session STILL there after the window, not merely at some point.
+
+    `tmux new-session -d -s <name> <command>` exits 0 when tmux managed to
+    CREATE the session. It says nothing about whether `<command>` then ran.
+    A command that is missing, unauthenticated or broken exits on its first
+    line, tmux tears the session down, and the exit code has already been
+    0 for some milliseconds.
+
+    Measured on this module before this existed: `fill(count=2)` with a
+    command that exits immediately returned `ok=True`, printed "pool at 2/2
+    — 2 session(s) started", and wrote both slots to `pool.json` with
+    `unreachable_since=None`. A second later `tmux ls` showed neither. The
+    state file recorded liveness that nothing had ever observed, and `rite
+    pool status` then read it back as fact — so the user got a closed loop:
+    status says run fill, fill says success, status says 0/2.
+
+    This is `loop/session.py`'s `_settled_alive`, arrived at there after the
+    same defect and the same fix, deliberately kept identical in shape. The
+    two modules do not share it because they check different liveness
+    primitives; if a third one appears, that is the moment to lift it out.
+
+    Polled rather than slept once, and required at EVERY poll rather than
+    any: the first version of the loop's check returned True on the first
+    successful poll, so a session that died at 0.3s was seen alive at 0.2s
+    and reported started — the defect it was written to catch, one layer in.
+    """
+    for _ in range(tries):
+        time.sleep(pause)
+        if not is_tmux_session_alive(name):
+            return False
+    return True
+
+
 def fill(
     root: Path,
     config: PoolConfig,
@@ -331,6 +365,25 @@ def _fill_locked(
             return FillResult(
                 False,
                 f"started {len(started)} of {target} needed, then failed: {detail}",
+                started,
+            )
+        if not _settled_alive(name):
+            # NOT recorded, and the name NOT burned. A slot is kept as dead
+            # so its name still links a departed session to the claims it
+            # left behind — but a session whose command never ran cannot
+            # have claimed anything, so there is nothing to link and
+            # reserving the name would cost a name per failed attempt for
+            # no benefit. Three failed runs would otherwise consume six.
+            _write_state(root, live + dead)
+            return FillResult(
+                False,
+                f"started {len(started)} of {target} needed. tmux created "
+                f"`{name}` and `{command}` exited immediately, so the session "
+                "was gone before it could be used — `tmux new-session` "
+                "reports whether a session was CREATED, not whether the "
+                "command in it is running.\n"
+                f"  check it with: {command}\n"
+                "  nothing was recorded for this slot",
                 started,
             )
         now = time.time()
