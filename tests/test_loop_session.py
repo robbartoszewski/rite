@@ -273,3 +273,56 @@ def test_stop_never_kills(tmp_path, monkeypatch):
             continue
         assert "kill-session" not in line, line
         assert "kill(" not in line, line
+
+
+# --- the log does not grow for ever ------------------------------------------------
+
+
+def test_the_loop_log_is_rotated_rather_than_growing(tmp_path):
+    """`rite loop run --watch` is the one command meant to run for days, its
+    output goes to a file through a shell redirect, and nothing trimmed it."""
+    from rite_ai.loop.session import log_path
+    from rite_ai.scheduler.logfile import MAX_BYTES
+
+    root = project(tmp_path)
+    log = log_path(root)
+    log.write_text("x" * (MAX_BYTES + 10))
+    said: list[str] = []
+
+    watch(root, emit=said.append, board=FakeBoard(), sandbox_status=_free)
+
+    assert log.stat().st_size < MAX_BYTES
+    assert log.with_suffix(log.suffix + ".1").is_file()
+    assert any("rotated loop.log" in line for line in said)
+
+
+def test_rotation_keeps_the_same_file_so_the_redirect_survives(tmp_path):
+    """Copy-and-truncate, not rename: the tmux session holds the file open
+    through `>>`, and a renamed file leaves it writing to an inode nobody
+    can find."""
+    from rite_ai.loop.session import log_path
+    from rite_ai.scheduler.logfile import MAX_BYTES
+
+    root = project(tmp_path)
+    log = log_path(root)
+    log.write_text("y" * (MAX_BYTES + 10))
+    before = log.stat().st_ino
+
+    watch(root, emit=lambda _l: None, board=FakeBoard(), sandbox_status=_free)
+
+    assert log.stat().st_ino == before
+
+
+def test_a_small_log_is_left_alone(tmp_path):
+    """Almost always the case, and rotation that fired every cycle would be
+    its own kind of noise."""
+    from rite_ai.loop.session import log_path
+
+    root = project(tmp_path)
+    log_path(root).write_text("a few lines\n")
+    said: list[str] = []
+
+    watch(root, emit=said.append, board=FakeBoard(), sandbox_status=_free)
+
+    assert not any("rotated" in line for line in said)
+    assert not log_path(root).with_suffix(".log.1").exists()

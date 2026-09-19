@@ -562,6 +562,19 @@ def watch(
                 emit(f"loop: draining — {reason}. Taking no new work.")
                 return "drained"
 
+            # Before the cycle writes, not after: this is the one command
+            # meant to run for days, its output goes to a file through a
+            # shell redirect, and nothing trimmed it. The scheduler solved
+            # exactly this — copy-and-truncate so the inode the redirect
+            # holds open stays valid — so this reuses it rather than
+            # inventing a second answer.
+            from rite_ai.loop.session import log_path
+            from rite_ai.scheduler.logfile import rotate_if_needed
+
+            rotated = rotate_if_needed(log_path(root))
+            if rotated:
+                emit(f"loop: {rotated}")
+
             cycle = plan_cycle(root, **cycle_kwargs)
             for line in format_cycle(cycle):
                 emit(line)

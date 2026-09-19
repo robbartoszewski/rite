@@ -43,8 +43,13 @@ def rotate_if_needed(
     path: Path, max_bytes: int = MAX_BYTES, keep: int = KEEP
 ) -> str | None:
     """Rotate when `path` is at or over `max_bytes`. Returns a one-line
-    description when rotation happened, so the tick can report it, or None
+    description when rotation happened, so the caller can report it, or None
     when there was nothing to do — which is almost always.
+
+    Generic despite living under `scheduler/`: `rite loop run --watch` writes
+    through a shell redirect held open for the life of the session, which is
+    the same constraint cron's `>>` has, and needs the same copy-and-truncate
+    rather than a rename.
 
     Never raises: a scheduler must not die because it could not tidy its own
     log. A failure here leaves the log oversized, which is the condition we
@@ -73,6 +78,10 @@ def rotate_if_needed(
         with open(path, "r+") as f:
             f.truncate(0)
 
-        return f"rotated scheduler.log ({size:,} bytes) to {first.name}"
+        # `path.name`, not a literal: the loop's own log rotates through
+        # here too, and a message naming the scheduler's file while trimming
+        # a different one is the kind of small lie that costs somebody ten
+        # minutes at the wrong moment.
+        return f"rotated {path.name} ({size:,} bytes) to {first.name}"
     except OSError:
         return None

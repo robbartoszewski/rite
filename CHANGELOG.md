@@ -33,6 +33,19 @@ sandboxing enabled; and the credential-list failure above. All three are the
 same shape — a value whose vocabulary you only know from the platform in
 front of you.
 
+**How this boundary was found, which is the part worth keeping.** It was not
+designed. An earlier draft of this section asserted there was no CI at all —
+the Actions allowance was exhausted for the private repositories in the same
+workspace, and nobody checked that this one is public and therefore
+unaffected. Four commits went onto a red `main` while a local macOS run was
+reported as verification, because a premise nobody checked reads exactly like
+a fact. The two-platform split above is what was found by getting it wrong.
+
+A release that documents how its verification boundary was discovered is more
+useful than one stating it as though it had always been known: the second
+invites you to trust the boundary, the first tells you what kind of mistake
+produced it and therefore what kind to look for next.
+
 **Least confirmed, in order:** the tmux loop lifecycle (`rite loop
 start/status/stop`), whose tests use the real binary and therefore *skip*
 where tmux is absent, so on a runner without tmux they silently do not run;
