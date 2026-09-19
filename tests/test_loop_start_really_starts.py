@@ -281,3 +281,33 @@ def test_rite_status_says_when_a_running_loop_is_draining(project):
     text = format_status(collect_status(project, board=False))
 
     assert "draining" in text
+
+
+def test_doctor_says_when_this_machine_cannot_run_a_loop(project, monkeypatch):
+    """`rite loop start` refuses clearly when tmux is missing — but only once
+    somebody reaches for it, and the loop is the thing a reader is most
+    likely to reach for last. A machine that can never run one should find
+    out from the command that exists to tell you what is wrong."""
+    from click.testing import CliRunner
+
+    import rite_ai.loop.session as session
+    from rite_ai.cli.main import cli
+
+    monkeypatch.setattr(session, "_tmux", lambda: None)
+    monkeypatch.chdir(project)
+    result = CliRunner().invoke(cli, ["doctor"])
+
+    assert "loop: tmux is not installed" in result.output
+    assert "rite loop run" in result.output
+
+
+def test_doctor_names_a_running_loop(project, fake_rite, monkeypatch):
+    from click.testing import CliRunner
+
+    from rite_ai.cli.main import cli
+
+    start(project, command=fake_rite)
+    monkeypatch.chdir(project)
+    result = CliRunner().invoke(cli, ["doctor"])
+
+    assert "loop: running as rite-loop-" in result.output

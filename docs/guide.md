@@ -517,6 +517,19 @@ sessions, and optional process sandboxing for Workers via
 `sandbox.enabled` on by default, and Workers are sandboxed only when started
 with `rite sandbox start` — read the caveats in [Roadmap](#roadmap) first).
 
+Since 0.4.0, **several machines can run one project**: they elect a single
+Owner through a coordination repository, the role moves on its own when a
+machine stops, and a returning higher-priority machine asks for it back
+rather than seizing it. This guide said the opposite until 0.5.0 — that
+leader election was "designed but not implemented" — which is worth
+mentioning because it is the failure a stale guide actually causes: a reader
+believing a feature is absent does not go looking for it.
+
+And in 0.5.0: **the loop** ([Watching the queue](#watching-the-queue)), a
+**claims report** that names a claim whose holder has gone quiet rather than
+leaving it to be discovered when somebody is refused, and a **worker cap that
+counts this project's sandboxes** rather than every one on the machine.
+
 ## Roadmap
 
 What this doesn't do yet — being straight about it rather than implying
@@ -528,11 +541,27 @@ otherwise:
   plan to add one — an abstraction layer would weaken every integration
   point to the lowest common denominator that Claude Code's actual session
   and config model doesn't need.
-- **Cross-machine failover is not built.** Everything above is single-
-  machine: one Owner process, its Managers, their Workers. If the machine
-  running the Owner goes down, there is no automatic promotion of a
-  replacement — a human restarts it. Multi-machine leader election and a
-  cross-machine coordination repo are designed but not implemented.
+- **The loop watches; it does not work the queue yet.** `rite loop` reads the
+  board, your workers and the schedule every couple of minutes and tells you
+  what it would do. It starts nothing. Two layers are designed and unbuilt:
+  dispatching to a local-model tier, which would cost no Anthropic quota and
+  waits on a spike that has not reported; and dispatching Claude sessions,
+  which spends quota unattended and is a decision rather than a task. So the
+  loop closes the "nobody noticed the queue stalled" gap and not the "nobody
+  is doing the work" one.
+- **A claim whose holder died is reported, never released.** rite can tell
+  that a worker has gone quiet; it cannot tell a crashed session from one
+  thinking hard, and releasing a path under a live worker is worse than
+  leaving a stale claim. So it names the claim, the holder, and the command —
+  and waits for you. The same applies to leftover sandboxes: `rite doctor`
+  lists them and says which hold unapplied changes, and destroys nothing.
+- **Nothing notices a rejected `git push`.** rite's own code never pushes; a
+  Worker's push is plain `git` inside its sandbox, and rite does not classify,
+  retry, or report the result. If a branch-protection rule starts refusing
+  pushes, the Worker's behaviour is whatever that session decides and rite
+  will not tell you. Scope any such rule to your default branch: blocking
+  feature-branch pushes means work exists only inside a sandbox that is later
+  destroyed.
 - **Burn-rate reporting is account-wide, not per-project.** It reads your
   own `~/.claude/projects/` transcripts across every project on the
   machine — because that's how Anthropic's weekly quota actually works —

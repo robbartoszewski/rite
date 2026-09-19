@@ -947,6 +947,28 @@ def _doctor_report(problems: list[str]) -> None:
             if not blind:
                 click.echo("recorded commands: each one can still fail")
 
+        # A machine that can never run a loop should find that out here
+        # rather than by trying. `rite loop start` refuses clearly when tmux
+        # is missing, but only once somebody reaches for it — and the loop is
+        # the one thing in 0.5.0 a reader is most likely to reach for last.
+        with _doctor_check("loop", problems):
+            from rite_ai.loop.session import _tmux
+            from rite_ai.loop.session import status as loop_status
+
+            if _tmux() is None:
+                click.echo(
+                    "loop: tmux is not installed, so `rite loop start` cannot "
+                    "run one here — `rite loop run` still works in a terminal "
+                    "you leave open"
+                )
+            else:
+                live = loop_status(root)
+                click.echo(
+                    f"loop: running as {live.session}"
+                    if live.running
+                    else "loop: not running (`rite loop start`)"
+                )
+
         # Sandbox litter. The cap counts this project's sandboxes now, so
         # leftovers no longer present as capacity — but they are still there,
         # holding disk and, in four of the six measured, somebody's
