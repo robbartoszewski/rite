@@ -134,9 +134,49 @@ one.
       code nobody will ship, or red on an edit that was never the defect.
       Two sessions hit this independently within an hour on this repository,
       each losing a run. It stays silent wherever nothing snapshots the
-      checkout, so the rule is the guard: start the run, then wait. If a
-      run must be abandoned, abandon the VERDICT with it rather than reading
-      the number.
+      checkout, so the rule is the guard: start the run, then wait.
+      **And if a run must be abandoned, abandon its VERDICT and clean up
+      what it started.** A killed run is not a no-op — it is a run that
+      stopped halfway through owning external state, and a `finally` does
+      not execute when a process is stopped by SIGTERM, which is what every
+      harness sends. Measured twice here: one killed run orphaned a tmux
+      session that silently blocked the next suite for fifteen minutes, and
+      another left a sandbox named `rite-selftest-4751-…`, where 4751 was
+      the pid of the process that had just been killed. Other suites hold
+      ports, containers, rows. The next run does not fail, it hangs, and a
+      hang under load is indistinguishable from slowness.
+
+- [ ] **When one assertion in a test always fires first, it IS the test and
+      the rest are decoration until proven otherwise.** Break the thing
+      deliberately and record WHICH assertion catches it, not merely that
+      one did. Found here on a concurrency soak: reinstating a real lock
+      defect failed it 6 times out of 6, and every one was the throughput
+      floor — never the two assertions that named the actual property. The
+      decisive checks were present, correct, and never the thing that fired,
+      so the test read as thorough while one proxy did all the work. That is
+      harder to see than a test that cannot fail, because this one can.
+- [ ] **Where the property has structure, assert it; where it is about the
+      meaning of prose, you get a tripwire and you say so.** A version is a
+      token with a shape and can be checked. "Was this release announced, or
+      merely mentioned in a caveat?" is a stance, and a substring test sees
+      vocabulary rather than stance — measured: a check for whether a
+      changelog named the commands it shipped PASSED on a section whose only
+      mention was a warning about what was least confirmed, and tightening
+      the pattern did not help because the warning contained every string it
+      looked for. Ship the tripwire if it catches the failure you actually
+      measured, and label it, because a tripwire mistaken for a proof is how
+      a real check gets deleted later as redundant.
+- [ ] **A test that patches a check to its FAILURE value and then asserts
+      success does not fail to catch the defect — it specifies it.** Three
+      files here patched a liveness probe to False and asserted that
+      starting sessions succeeded: nothing alive, three started, exit 0, all
+      true at once, and the code obliged because nothing looked. Anyone
+      hardening it would have found one, read it as the contract, and
+      stopped. One such test is a mistake; three, by three authors at three
+      times, is a process that manufactures them — each ran the suite, saw
+      green, and took the existing tests as the specification. When a test
+      mocks the thing under test into a state that contradicts its own
+      assertion, that contradiction is the finding.
 
 ## Security
 
