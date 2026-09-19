@@ -19,7 +19,13 @@ from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[1] / "tools" / "verify-and-push.sh"
 
-VERDICTS = ("uv run pytest", "rite publish check", "git push origin")
+VERDICTS = (
+    "uv run ruff check",
+    "uv run ruff format",
+    "uv run pytest",
+    "rite publish check",
+    "git push origin",
+)
 
 
 def _code_lines() -> list[str]:

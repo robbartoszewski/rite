@@ -60,6 +60,16 @@ packages = ["src/rite_ai"]
 [tool.ruff]
 target-version = "py311"
 src = ["src", "tests"]
+# `docs/` is prose plus the throwaway scripts that produced a measurement in
+# it. They are evidence, not source: reformatting somebody's one-off analysis
+# changes the artifact a document cites, and holding it to the package's line
+# length buys nothing. Excluded deliberately rather than by each script
+# carrying `# noqa`, which would be the same decision made 66 times.
+#
+# This does NOT weaken the publish gate, which is the thing that makes a
+# public `docs/` safe: the gate scans `git ls-files` and has no idea what
+# ruff excludes.
+extend-exclude = ["docs/"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]

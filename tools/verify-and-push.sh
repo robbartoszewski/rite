@@ -20,6 +20,14 @@
 # had modified underneath itself — but the distinction is the point: the
 # piped version would have pushed and said "3404 passed" while doing it.
 #
+# WHAT IT CHECKS. The four things `docs/releasing.md` step 3 names: ruff
+# check, ruff format --check, the suite, and `rite publish check` — the same
+# four CI runs, in the order that fails cheapest first. It originally ran
+# only two of them and still stood in for the whole step, which let a
+# lint-only failure reach `main` after a clean local run. A tool that covers
+# less than the sentence describing it is the defect this repository keeps
+# finding in its own documentation.
+#
 # WHAT IT REFUSES TO DO. It does not retry the suite, skip the gate, or push
 # with `--force`. A rejected push is rebased onto origin and RE-VERIFIED from
 # the top, because the commits it landed on are not the ones the suite just
@@ -29,6 +37,31 @@ set -u
 step() { printf '\n== %s\n' "$1"; }
 
 for attempt in 1 2 3 4 5; do
+  # Lint and format FIRST: they take a second where the suite takes six
+  # minutes, and CI runs them as their own steps. Leaving them out is how
+  # this script let a lint-only failure reach `main` after a green local
+  # run — `docs/` gained throwaway analysis scripts, ruff had 66
+  # complaints about them, and nothing here asked. The runbook step this
+  # script implements says "Suite, lint, format and `rite publish check`
+  # green"; it was doing two of the four while standing in for all of it.
+  step "lint (attempt $attempt)"
+  uv run ruff check . > /tmp/rite-verify-lint.log 2>&1; rc=$?
+  if [ $rc -ne 0 ]; then
+    echo "LINT FAILED (exit $rc) — not pushing"
+    tail -20 /tmp/rite-verify-lint.log
+    exit 1
+  fi
+  echo "ruff check: clean"
+
+  step "format"
+  uv run ruff format --check . > /tmp/rite-verify-format.log 2>&1; rc=$?
+  if [ $rc -ne 0 ]; then
+    echo "FORMAT FAILED (exit $rc) — not pushing"
+    tail -20 /tmp/rite-verify-format.log
+    exit 1
+  fi
+  tail -1 /tmp/rite-verify-format.log
+
   step "suite (attempt $attempt)"
   uv run pytest -q > /tmp/rite-verify-pytest.log 2>&1; rc=$?
   tail -1 /tmp/rite-verify-pytest.log
