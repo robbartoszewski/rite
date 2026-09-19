@@ -3823,6 +3823,65 @@ def scheduler_tick() -> None:
 
 
 @cli.group()
+def loop() -> None:
+    """Work the queue instead of stopping after one ticket.
+
+    Today this is `run --dry-run` and nothing else: it prints what a cycle
+    would do and does nothing. That ordering is the point — the loop's
+    judgement is policy, and policy is worth arguing with before it can
+    spend anything.
+
+    Nothing here starts a session, writes to a board, or spends quota, so
+    SPEC §9.12 is untouched. The layer that dispatches is a separate
+    decision and is not built.
+    """
+
+
+@loop.command("run")
+@click.option(
+    "--dry-run/--no-dry-run",
+    default=True,
+    help="Print the cycle's decisions without acting. The only mode built.",
+)
+def loop_run(dry_run: bool) -> None:
+    """Plan one cycle and print it.
+
+    Exit code carries the verdict, so a caller can branch without parsing
+    prose: 0 when there is work or work is in flight, 1 when something could
+    not be established, 2 when the board is genuinely empty. "Empty" is the
+    only one of the three that is a reason to stop, and it is given its own
+    code for exactly that reason.
+    """
+    from rite_ai.loop import IDLE, UNKNOWN, format_cycle, plan_cycle
+
+    root = _require_project_root()
+
+    if not dry_run:
+        # Refused rather than silently doing the dry run: a user who asked
+        # for the acting version and got the reporting one would believe
+        # work had been dispatched.
+        click.echo(
+            "`--no-dry-run` is not built. This command reports what a cycle "
+            "would do; nothing dispatches yet, and the layer that does spends "
+            "quota and needs its own decision.",
+            err=True,
+        )
+        raise SystemExit(1)
+
+    board, _ = _ticket_backend("workers")
+    from rite_ai.sandbox import worker_sandbox_status
+
+    cycle = plan_cycle(root, board=board, sandbox_status=worker_sandbox_status)
+    for line in format_cycle(cycle):
+        click.echo(line)
+
+    if cycle.verdict == UNKNOWN:
+        raise SystemExit(1)
+    if cycle.verdict == IDLE:
+        raise SystemExit(2)
+
+
+@cli.group()
 def scheduler() -> None:
     """Install, remove, or check the OS-level cron/launchd registration
     that calls `rite scheduler-tick` unattended. This changes a standing,
