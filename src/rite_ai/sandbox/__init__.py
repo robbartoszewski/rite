@@ -31,10 +31,12 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
 from collections.abc import Iterable
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -286,6 +288,52 @@ SELFTEST_AGENT = "idle"
 SELFTEST_PREFIX = "rite-selftest-"
 
 
+@contextmanager
+def _torn_down_on_sigterm():
+    """Make SIGTERM reach the `finally` that destroys the probe sandbox.
+
+    **A `finally` is not the guarantee it reads as.** Ctrl-C is fine —
+    SIGINT raises `KeyboardInterrupt`, so the teardown below runs. SIGTERM
+    does not raise anything: the interpreter stops where it stands and the
+    `finally` never executes. Every harness that stops a background job
+    sends SIGTERM, which makes "kill the run" the one way of ending it that
+    leaks.
+
+    Measured, and the evidence is in the name: a killed suite left
+    `rite-selftest-4751-d0775d81` behind, where 4751 was the pid of the
+    process that had just been killed. The orphan counts against
+    `machine.max_sandboxes` and holds disk until somebody reads `rite
+    doctor`'s litter report.
+
+    `SystemExit` rather than a custom error, because `finally` runs for it
+    and the process still exits — with 143, which is what a shell reports
+    for a SIGTERM'd child. Nothing here changes what the signal MEANS; it
+    only gives the teardown a chance to run first.
+
+    Restores the previous handler, and does nothing at all off the main
+    thread, where `signal.signal` cannot be called. A probe running in a
+    worker thread keeps exactly the behaviour it had.
+    """
+
+    def _raise(signum, frame):  # noqa: ARG001 - the signal API's shape
+        raise SystemExit(128 + signal.SIGTERM)
+
+    try:
+        previous = signal.signal(signal.SIGTERM, _raise)
+    except (ValueError, OSError):
+        # Not the main thread, or a platform without SIGTERM. The teardown
+        # still covers every ordinary exit and Ctrl-C.
+        yield
+        return
+    try:
+        yield
+    finally:
+        try:
+            signal.signal(signal.SIGTERM, previous)
+        except (ValueError, OSError):
+            pass
+
+
 def _why_it_failed(proc: subprocess.CompletedProcess) -> str:
     """The line of yoloAI's output that says what went wrong.
 
@@ -352,7 +400,10 @@ def verify_sandbox(backend: str = "", timeout: int = 120) -> SandboxCheck:
     def _elapsed() -> int:
         return int((time.monotonic() - started) * 1000)
 
-    with tempfile.TemporaryDirectory(prefix="rite-selftest-") as workdir:
+    with (
+        _torn_down_on_sigterm(),
+        tempfile.TemporaryDirectory(prefix="rite-selftest-") as workdir,
+    ):
         args = [binary, "new", "--agent", SELFTEST_AGENT]
         if backend:
             args += ["--backend", backend]
