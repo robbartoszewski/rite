@@ -4,14 +4,14 @@ SHA-256 of each CLAUDE.md section every tagged release wrote identically
 for every project, so a file written before markers existed can still be
 shown to be rite's own rather than a user's edit.
 
-From: v0.1.0 (15/23 static), v0.2.0 (16/24 static), v0.3.0 (16/26 static), v0.4.0 (13/26 static).
+From: v0.1.0 (15/23 static), v0.2.0 (16/24 static), v0.3.0 (16/26 static), v0.4.0 (13/26 static), v0.5.0 (16/29 static).
 """
 
 # ruff: noqa: E501 — these lines are the bytes a release wrote.
 
 # The releases read to build this file. Machine-readable on purpose:
 # `tests/test_update_refresh.py` asserts the newest tag is here.
-RELEASES: tuple[str, ...] = ("v0.1.0", "v0.2.0", "v0.3.0", "v0.4.0")
+RELEASES: tuple[str, ...] = ("v0.1.0", "v0.2.0", "v0.3.0", "v0.4.0", "v0.5.0")
 
 SECTIONS: dict[str, frozenset[str]] = {
     "Before anything else: read the handover snapshot": frozenset(
@@ -27,12 +27,14 @@ SECTIONS: dict[str, frozenset[str]] = {
     ),
     "Commands": frozenset(
         {
+            "8293dd7072da6b29e6ebd5dd186ca1beb705b73538944bfd69c5422b385d70a1",
             "9128f33b816e55ea173b2af5b405a7d2e3046d7783bf1ac31b39164f66b54ee3",
             "ce1412363c47c552d631897ea6c587cefccd6b9cfc459a1f48ffe87718e1f9be",
         }
     ),
     "Project knowledge": frozenset(
         {
+            "396fed1df8a0e14f3bfa83cc9db2a2fe7e4201e73f243e970cd736e0e386a7fa",
             "abe50ebbb80bcd7eff0242f85307646d70286d6084b44bebb913337b643ba8fd",
             "ae4fa6690fa507602191ed5913afe1e6ff061ffdee0646b5bf813a0dc62a53d4",
         }
@@ -61,9 +63,19 @@ SECTIONS: dict[str, frozenset[str]] = {
             "fb4fc0490f98d41d2acee58e8de0215eb6ef55d18811b49f87f592cf3258081a",
         }
     ),
+    "When this ticket is done": frozenset(
+        {
+            "ebb3e542519785410680fd95e13ba56864ad490b73675f15df58a61e2d74f018",
+        }
+    ),
     "Where this project is, and what to do next": frozenset(
         {
             "ea987dee4f97d28bb52264978f2aa218d25f777d132d6d95df1a19c2898e0ca0",
+        }
+    ),
+    "Working the queue": frozenset(
+        {
+            "9e26bd753ebe9152372a009e18eebc2fde60e693dc99d6ffb234b56d577b4c04",
         }
     ),
     "Your ticket": frozenset(
@@ -135,6 +147,24 @@ PATTERNS: dict[str, tuple[tuple[str | int, ...], ...]] = {
             "You dispatch work to your own Workers and defer to the Owner on project-wide",
             "matters (SPEC.md §2.2). You do not see or control another Manager's Workers.",
             "",
+            "**Workers are interchangeable, and a Worker is a workspace — not a module,",
+            "a component or a specialism** (SPEC.md §5.3.4). Assign by who is free, never",
+            "one Worker per module; `rite claim` on the paths is what keeps two Workers",
+            "out of each other's way.",
+            "",
+            "**Workers:** none yet. Add one with `rite add worker <name>` — it creates",
+            "`workers/<name>/` with its own checkouts and its own scoped instructions.",
+            "",
+            3,
+            "",
+            "<!-- rite:sha256=ead3415d285683ed -->",
+        ),
+        (
+            "## Role: Manager",
+            "",
+            "You dispatch work to your own Workers and defer to the Owner on project-wide",
+            "matters (SPEC.md §2.2). You do not see or control another Manager's Workers.",
+            "",
             "**Workers:** none yet. Add one with `rite add worker <name>` — it creates",
             "`workers/<name>/` with its own checkouts and its own scoped instructions.",
             "",
@@ -183,6 +213,28 @@ PATTERNS: dict[str, tuple[tuple[str | int, ...], ...]] = {
             4,
             "",
             "<!-- rite:sha256=944f0aec70c69048 -->",
+        ),
+        (
+            "## Role: Owner",
+            "",
+            "You own the board and the project-wide ticket queue (SPEC.md §2.3): assign",
+            "work, monitor blocked and stalled tickets, and make project-wide calls that",
+            "a Worker or Manager shouldn't make alone.",
+            "",
+            "**Workers are interchangeable, and a Worker is a workspace — not a module,",
+            "a component or a specialism** (SPEC.md §5.3.4). `workers/<name>/` holds its",
+            "own checkout of every module, and every Worker carries the same project",
+            "credentials, so any Worker can take any ticket. Assign by who is free, and",
+            "never keep one Worker per module: two Workers editing different files of the",
+            "same module at once is normal, and `rite claim` on the paths is what keeps",
+            "them apart. Naming Workers after modules is the mistake this note exists to",
+            "prevent — it makes half of them idle while the rest queue.",
+            "",
+            3,
+            "",
+            4,
+            "",
+            "<!-- rite:sha256=ead3415d285683ed -->",
         ),
         (
             "## Role: Owner",
@@ -268,6 +320,50 @@ PATTERNS: dict[str, tuple[tuple[str | int, ...], ...]] = {
             "7. Run `/review` (the review convention from the project root).",
             "8. Push your final commits, then open a PR, get it reviewed, and merge.",
             3,
+        ),
+        (
+            "## Workflow",
+            "",
+            3,
+            "   repos, right branches, no residue from a previous task (SPEC §2.1). A",
+            "   dirty tree blocks and is never discarded. In a sandbox, `rite sandbox",
+            "   start` already ran it before your session began, and it cannot run from",
+            "   inside: skip it.",
+            "2. Claim paths before touching them:",
+            3,
+            "   directories, never a whole module. If the claim is refused, another",
+            "   worker holds an overlapping path: do not work on those paths, and do not",
+            "   claim a narrower or wider path to get around the refusal.",
+            "3. While you hold a claim, beat every ten minutes or so:",
+            3,
+            "   liveness record `rite status` and the watchdog read — a worker that never",
+            "   beats is reported STALLED.",
+            "4. Work the ticket on its own branch: if a module is on its default branch,",
+            "   create one named for the ticket first (`git checkout -b <ticket-id>`).",
+            "   Push that branch after every commit, not only at the end —",
+            "   `git push -u origin <ticket-id>`. Your work exists outside this session",
+            "   only once it is pushed. In a sandbox this checkout is a copy that is",
+            "   discarded with the sandbox, and a session can stop at any moment, so a",
+            "   commit that was never pushed is gone.",
+            "5. Run the module's own **test and lint** commands. `rite prepare` prints",
+            "   them every time it runs, resolved at that moment — those are the ones to",
+            "   use. **Module commands** above lists them as `Test:` and `Lint:` as of",
+            "   when this Worker was created, and the module map in the",
+            "   project root's `CLAUDE.md` has them as of `rite init`; a command recorded",
+            "   in `modules.yaml` since then appears only in `rite prepare`'s output. In a",
+            "   sandbox `rite prepare` ran before you started and you cannot see its",
+            "   output, so use **Module commands** above. Run",
+            '   them as written; where an entry says "not detected", ask rather than',
+            "   inventing a command, because one that is wrong in a way that still exits",
+            "   0 looks exactly like a passing suite.",
+            "6. Verify your own fix before review. A green suite says the project still",
+            "   works, not that your change does anything — delete the fix and re-run",
+            "   whatever proves it.",
+            "7. Run `/review` (the review convention from the project root).",
+            "8. Push your final commits, then open a PR, get it reviewed, and merge.",
+            3,
+            "",
+            "<!-- rite:sha256=6fb2f4a2a49f2514 -->",
         ),
         (
             "## Workflow",
