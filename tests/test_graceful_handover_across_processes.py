@@ -59,6 +59,16 @@ def _manager(args):
 
     rows: list[dict] = []
     events: list[str] = []
+    # ⚠ WHAT THIS PROCESS SAW, every tick, so the next overlap failure is
+    # self-diagnosing instead of needing the conversation this one needed.
+    # An overlap has three possible causes and the rows alone separate none
+    # of them: a challenger promoting against a lease it read as VALID (a
+    # defect in `verdict`), a challenger promoting on a STALE read of a
+    # lease the incumbent had already renewed (a defect in the read), or two
+    # clocks disagreeing. Recording the observed lease beside this process's
+    # own `now` tells them apart. Costs nothing: `holder.current()` is
+    # already called once per tick below.
+    probes: list[dict] = []
     held: str = ""  # the `acquired` of the lease we currently believe is ours
     done = False  # this machine has seen the handover through its own eyes
     # Relative to this child's own start: see the note in the election test.
@@ -97,6 +107,26 @@ def _manager(args):
         current = holder.current()
         if isinstance(current, tuple):
             lease, _ = current
+            seen = clock().timestamp()
+            observed_expires = 0.0
+            if lease is not None:
+                parsed = parse_timestamp(lease.expires)
+                observed_expires = parsed.timestamp() if parsed else 0.0
+            probes.append(
+                {
+                    "by": name,
+                    "now": seen,
+                    "action": tick.action,
+                    "saw_owner": "" if lease is None else lease.owner,
+                    "saw_acquired": "" if lease is None else lease.acquired,
+                    "saw_expires": observed_expires,
+                    # The decisive field: at the moment this process acted,
+                    # was the lease it READ already expired BY ITS OWN CLOCK?
+                    "read_was_expired": bool(
+                        observed_expires and observed_expires <= seen
+                    ),
+                }
+            )
             if lease is not None and lease.owner == name:
                 expires = parse_timestamp(lease.expires)
                 held = lease.acquired
@@ -108,7 +138,9 @@ def _manager(args):
                         "expires": expires.timestamp() if expires else 0.0,
                     }
                 )
-    Path(log_path).write_text(json.dumps({"rows": rows, "events": events}))
+    Path(log_path).write_text(
+        json.dumps({"rows": rows, "events": events, "probes": probes})
+    )
     return name
 
 
@@ -157,9 +189,29 @@ def test_a_returning_manager_is_handed_the_role_without_a_lapse(tmp_path):
         for name, v in loaded.items():
             print(f"  {name}: {v['events']}")
 
-    assert not overlapping_owners(runs), (
-        "TWO OWNERS DURING A GRACEFUL HANDOVER — " + describe(runs)
-    )
+    if overlapping_owners(runs):
+        # The three-way split, printed with the failure so the next person
+        # does not have to reconstruct it from timestamps.
+        lines = ["TWO OWNERS DURING A GRACEFUL HANDOVER — " + describe(runs), ""]
+        for name, v in sorted(loaded.items()):
+            for pr in v.get("probes", []):
+                if pr["action"] in ("promoted", "handed over", "took over"):
+                    lines.append(
+                        f"  {pr['by']} {pr['action']}: now={pr['now']:.1f} "
+                        f"saw owner={pr['saw_owner']!r} "
+                        f"expires={pr['saw_expires']:.1f} "
+                        f"read_was_expired={pr['read_was_expired']}"
+                    )
+        lines.append("")
+        lines.append(
+            "  read_was_expired=False at a promotion means the challenger "
+            "promoted against a lease it read as VALID -> `verdict`."
+        )
+        lines.append(
+            "  read_was_expired=True means it acted correctly on a STALE "
+            "read -> the state layer read, or clock skew between processes."
+        )
+        raise AssertionError("\n".join(lines))
 
     # The protocol actually ran: beta held it, was asked, and gave it up;
     # alpha asked rather than seizing, and ended up Owner.

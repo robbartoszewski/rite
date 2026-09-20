@@ -263,6 +263,54 @@ third number to keep in step. **Log a lease rejected as not-credible distinctly*
 it means somebody's clock is wrong, which is worth knowing rather than silently
 recovering from, and it is the only signal that will say so.
 
+#### 2.4.1a. ⚠ OBSERVED ONCE: two simultaneous Owners under extreme load
+
+**The property this section exists to provide failed once, and the
+mechanism is not established.** Recorded here rather than closed, because a
+safety property that has been seen to break belongs in the spec even when
+it cannot be reproduced.
+
+`tests/test_graceful_handover_across_processes.py` asserts
+`not overlapping_owners(runs)`. On 2026-09-20 it failed inside a full-suite
+run:
+
+    beta's lease   ...0594.8 -> ...3644.8
+    alpha acquired ...3540.9
+    OVERLAP          103.9s
+
+⚠ **Note the direction: alpha acquired 103.9s BEFORE beta's lease
+expired.** `stand_for_owner` cannot promote against a lease its holder
+reads as `HELD` — it returns `StillOwner`/`NotOwner` and stops. So alpha
+did not take the role because beta was slow to yield. Either alpha read a
+lease that beta had already renewed past, or the two processes' clocks
+disagreed by more than `skew_tolerance_seconds`. **Which of those it was is
+unknown**, and the difference matters: one is a defect in the state layer's
+read, one is a defect in `verdict`, and one is an environment fact.
+
+**What is established, and what is not:**
+
+| | |
+|---|---|
+| The failure is the PROPERTY, not a timeout | established — the assertion is `overlapping_owners` |
+| It occurred at load average ~140, 1023 processes | established |
+| Reachable at ordinary CPU contention | **NO** — 10 consecutive passes at 14 hogs on 14 cores |
+| The mechanism | **NOT established** |
+
+⚠ **"It needs load 140" is not "it is not real".** A dogfood run on
+somebody else's machine is not a controlled environment, and this is the
+guarantee the whole coordination layer exists to provide. It is recorded as
+a **stated bound** — the Owner-lease guarantee has been observed to fail
+under load roughly ten times core saturation — rather than as a closed
+ticket.
+
+**The next occurrence is self-diagnosing.** The harness now records, every
+tick, the lease each process actually READ beside that process's own clock,
+and the failure message splits the three causes: a promotion where
+`read_was_expired=False` means the challenger promoted against a lease it
+read as VALID (`verdict`); `True` means it acted correctly on a stale read
+(the state layer, or clock skew). Neither could be told from the timestamps
+alone, which is why this took a conversation rather than a log line.
+
 #### 2.4.2. Atomic promotion via git push
 
 **Split brain — two Managers both believing they are Owner — is the critical failure
