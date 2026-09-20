@@ -380,7 +380,7 @@ def start(
         return StartResult(
             False,
             f"a tmux session named {name} is left over from an earlier run: "
-            f"its command is no longer running and the session is held open "
+            f"its command has finished and the session is held open "
             f"so its exit status could be read, but this project has no "
             f"record of it. Nothing is running in it, so it is safe to "
             f"clear — `rite manager stop {manager}` does it. Its "
