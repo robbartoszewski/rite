@@ -23,9 +23,9 @@ Not "I have stopped writing."
 | 3 | Duration bound on the CLI | **BUILT + verified** | §9.14.5, D-82 | `17d83ae` |
 | 4 | Alias-collision check | **BUILT + verified** | §9.14.7a | `5a9acac` |
 | 5 | Per-Manager identity | **BUILT** | §9.14.9, D-77 | pre-`1381bc1` |
-| 6 | Prompting the session on start | **SPECIFIED** (D-90) | §9.14.11a | — |
+| 6 | Prompting the session on start | **BUILT + mutation-checked** | §9.14.11a, D-90 | `a555091` |
 | 7 | Managers in `rite status` | **BUILT** (rite-dd) | — | `f803a10` |
-| 8 | Ctrl+C stops both; `rite stop` recovers | **SPECIFIED, not built** | §9.14.12–13, D-85 | — |
+| 8 | Ctrl+C stops both; `rite manager stop` recovers | **BUILT + mutation-checked** | §9.14.12–13, D-85 | `52b64c9` |
 | 9 | Issue recording (`--record-issues`) | **SPECIFIED, not built** — stays in 0.5.1 (D-88) | §9.15, D-83/84/86/87/88/89 | — |
 
 Found and fixed during refinement, not on the original list:
@@ -350,3 +350,48 @@ the owner. Three of the four findings in rite-dd's review of §9.15 were
 things re-reading my own text would not have produced, and one of them —
 that a journal entry cannot be re-included into git — was a factual claim I
 had made confidently and wrongly.
+
+---
+
+## Built state (2026-09-20, later)
+
+Eight of nine built and CI-green on Linux; issue recording is rite-dd's and
+in flight. Every acceptance test above that could be run has been run:
+**100 passed** across the seven files covering items 1–6 and 8.
+
+| item | landed |
+|---|---|
+| 1 resume passes the session id | verified by running |
+| 2 quit / finished / crashed | `a4d745a`, prefix fix `a80cb36` |
+| 3 both bounds on the CLI | `17d83ae` |
+| 4 alias collision | `5a9acac` |
+| 5 per-Manager identity | pre-`1381bc1` |
+| 6 prompting + delivery confirmed | `a555091` |
+| 7 Managers in `rite status` | rite-dd, `f803a10` |
+| 8 Ctrl+C stops both; `rite manager stop` | `52b64c9` |
+| 9 issue recording | rite-dd, in flight |
+
+**Q2 resolved and built.** `rite manager stop <name>` under a new `manager`
+noun; `rite stop [DIRECTORY]` untouched and still resolving aliases.
+Confirmed by running both `--help`s, not by reading the diff.
+
+### Two vacuous tests of my own, both found by mutation and not by reading
+
+Recorded because they are the honest cost of this stretch, and because the
+same technique found both.
+
+1. **`prompt.py`'s delivery confirmation.** Replacing the entire confirm
+   loop with `return Delivery(True, "sent")` left ten tests green. The
+   property §9.14.11a calls load-bearing was asserted by nothing. Closed
+   with a dead-pane fixture — the session exists so the checks pass and
+   nothing reads, which is "accepted but never observed" without a race.
+2. **The ceiling test in `test_manager_stop.py` never reached the
+   ceiling.** With `max_sessions=1` and a `quit` ending, `supervise` returns
+   on the ENDING first, so a mutation making a bound kill the session left
+   all nine green. It passed against correct code for a reason unrelated to
+   its property. Now asserts `"ceiling reached" in result.reason` before
+   asserting anything about the session.
+
+Both are instances of the rule this release arrived at: **a fix is reviewed
+by someone who did not write it, or by its author running it against input
+it should reject — never by its author re-reading it.**

@@ -3,7 +3,7 @@
 Seven rehearsal rounds against this tool, plus work on a second, unrelated codebase
 alongside it,
 produced roughly forty defects. Counting them is not useful. What is useful is
-that they fall into fourteen classes, most of which recurred — and that for each
+that they fall into fifteen classes, most of which recurred — and that for each
 class there is a question with a real answer: **what would a new instance have
 to look like to get past what now stops it?**
 
@@ -559,3 +559,50 @@ change are the suspects.
 **What still gets through.** A signature that did not change but whose
 *meaning* did — a function whose return value gains a case, or a string
 that gains a new possible value. Nothing here catches that.
+
+## 15. Absence is not an exception, and not a non-zero exit code
+
+**The shape.** A question is asked and the answer does not arrive. The
+failure is not a raise and not a failing return code — it is a **well-formed
+empty answer**, which every guard around it reads as data. `try/except`
+cannot see it. `if returncode != 0` cannot see it. The caller gets a value
+that is syntactically fine and means nothing, and proceeds.
+
+**This class was assembled on 2026-09-20 out of findings that had been filed
+separately all day**, because the same sentence explains all of them:
+
+| what was asked | what came back | what it was read as |
+|---|---|---|
+| `display-message -t <absent>` | rc 0, empty output | the session is ALIVE |
+| `#{pane_dead_status}` on a reaped pane | rc 0, empty string | an exit status of 0 |
+| `send-keys` to a shell not yet reading | rc 0, keystroke swallowed | the prompt was delivered |
+| `keyring.get_password()` with the OS prompting | nothing, for 20 minutes | a slow machine |
+| `Path.glob` on a renamed directory | an empty iterator | zero offenders, guard PASSES |
+| a regex over reformatted argv lists | no matches | zero offenders, guard PASSES |
+| `git add` on a path under an excluded dir | a hint on stderr | the file was staged |
+
+**Why `try/except Exception` is the wrong instinct**, and it is the first one
+everybody reaches for: it was already there in most of these. `store.py`
+wraps both credential reads in it, correctly, and a keychain PROMPT still
+hung the suite for 20 minutes — because a prompt is not an error, it is the
+absence of an answer. Correct exception handling around a question that is
+never answered changes nothing at all.
+
+**The tell.** Ask what the code does when the answer is EMPTY, separately
+from what it does when the call FAILS. If those two paths are the same
+branch, one of them is wrong. `Liveness` already carried the vocabulary —
+`known=False` for "could not ask" as distinct from "asked, and no" — and the
+bugs above are all places where that third state was collapsed back into
+two.
+
+**What catches it.** Not review: every one of these read as correct, and
+several were written by someone who had just filed a different instance of
+the same class. What catches it is **producing the empty answer on purpose**
+and asserting the caller refuses — a bystander tmux session, a renamed
+directory, a dead pane, an in-memory keyring backend. Each of those is a
+fixture that makes absence the condition rather than an accident.
+
+**What still gets through.** An answer that is present, well-formed and
+WRONG — a status that resolves to the wrong session, an anchor citing a SHA
+that never existed. Absence has a tell; plausible-but-false does not, which
+is why §9.15.3 requires anchors to be checkable rather than merely present.
