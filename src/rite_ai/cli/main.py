@@ -5980,9 +5980,9 @@ def _start_a_manager(
     )
     # Composed HERE because this layer is the one that knows what the user
     # asked for. `for_manager` takes an `extra` that the journal's
-    # instructions will fill when `--record-issues` is wired (D-93); it is
-    # empty until then, and the empty case is the same shape as the full
-    # one so this call site does not branch.
+    # instructions fill when `--record-issues` is on (D-93); it is the empty
+    # string when the flag is off, and the empty case is the same shape as
+    # the full one so this call site does not branch.
     # §9.15.3a. Printed HERE, beside the bounds, because a fact is cheapest
     # to learn at the moment it is actionable rather than in a log
     # afterwards — and because the entries are worth nothing to the person
@@ -6639,8 +6639,45 @@ def journal() -> None:
     """
 
 
+def _recording_manager(given: str) -> str:
+    """Which Manager an entry is being recorded for, or refuse.
+
+    ⚠ **This is the reason `RITE_MANAGER` exists rather than a nicety on
+    top of it.** `--manager` was `required=True` because nothing inside a
+    Manager session could answer the question: the name reached the model as
+    prompt text on the first session only, so after a resume the session had
+    it in its conversation and nowhere a command could read. Asking the model
+    to retype its own name is asking the thing being audited to supply the
+    key the audit is filed under.
+
+    An explicit `--manager` still wins — a human filing on a Manager's
+    behalf is a real case, and the flag is how `rite journal` is driven from
+    outside a session.
+    """
+    from rite_ai.managers import current_manager
+
+    chosen = (given or "").strip() or current_manager()
+    if not chosen:
+        click.echo(
+            "refusing to record: no --manager, and this process is not "
+            "running as one (no RITE_MANAGER in the environment).\n"
+            "  An entry filed under no Manager is an entry nobody can be "
+            "asked about — which is the whole of what the journal is for. "
+            "Pass --manager <name>, or run this inside the session "
+            "`rite start <name>` created.",
+            err=True,
+        )
+        raise SystemExit(1)
+    return chosen
+
+
 @journal.command("observe")
-@click.option("--manager", required=True, help="Which Manager is recording this.")
+@click.option(
+    "--manager",
+    default="",
+    help="Which Manager is recording this. Inside a Manager's own session "
+    "it defaults to that Manager and can be left out.",
+)
 @click.option(
     "--anchor",
     required=True,
@@ -6667,6 +6704,7 @@ def journal_observe(
     """
     from rite_ai.managers.journal import write_observation
 
+    manager = _recording_manager(manager)
     root = _require_project_root()
     result = write_observation(
         root,
@@ -6683,7 +6721,12 @@ def journal_observe(
 
 
 @journal.command("retrospective")
-@click.option("--manager", required=True, help="Which Manager is recording this.")
+@click.option(
+    "--manager",
+    default="",
+    help="Which Manager is recording this. Inside a Manager's own session "
+    "it defaults to that Manager and can be left out.",
+)
 @click.option("--anchor", required=True, help="What makes this checkable.")
 @click.option("--cost", required=True, help="What it cost: tokens, wall-clock, rounds.")
 @click.option(
@@ -6720,6 +6763,7 @@ def journal_retrospective(
     """
     from rite_ai.managers.journal import write_retrospective
 
+    manager = _recording_manager(manager)
     root = _require_project_root()
     result = write_retrospective(
         root,

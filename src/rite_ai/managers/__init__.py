@@ -11,8 +11,16 @@ somebody else's laptop is worse than saying nothing (SPEC §9.14.9 item 4).
 is what makes §5.4's containment property statable at all: before this there
 was no per-Manager path and no per-process identity to key one on, so
 "nothing outside the acting Manager's own directory" named a thing that did
-not exist (D-77). The identity arrives as the argument — a Manager started
-as `rite start planner` knows it is `planner`.
+not exist (D-77).
+
+⚠ **The identity is in the session's ENVIRONMENT, not in the prompt.** It
+used to be carried only by the prompt text `rite start` types in — "You are
+the Manager 'planner'" — which the supervisor sends on the FIRST session
+only, deliberately (D-90). So every resumed session had no readable identity
+at all: the name survived in the conversation a model could read back, and
+in nothing a process could. `current_manager()` reads `RITE_MANAGER`, which
+`session.start` sets on every session it creates — first and resumed alike,
+because both go through the same `new-session`.
 
 ⚠ **This is the shared-root model, and its cost is known rather than
 avoided.** `docs/design/V060_MULTI_MANAGER.md` argued for separate roots on
@@ -42,6 +50,43 @@ from rite_ai.state import write_atomic
 
 USER_DIRNAME = "user"
 MANAGERS_DIRNAME = "managers"
+
+MANAGER_ENV = "RITE_MANAGER"
+"""The Manager a process is running as, set on the tmux session itself.
+
+Named like `RITE_PROJECT_ROOT`, which `sandbox` already delivers into a
+Worker for the same reason: a fact a process cannot derive from its own
+surroundings is given to it rather than guessed at.
+"""
+
+
+def current_manager() -> str:
+    """Which Manager this process is, or "" if it is not one.
+
+    ⚠ **"" is a real answer, not a failure.** Every `rite` invocation from
+    a human's own shell is not a Manager, and that is the common case — so a
+    caller uses this to fill a DEFAULT, never to assert one.
+
+    ⚠ **The name is validated before it is returned, by the SAME rule the
+    rest of the Manager path uses.** An environment is inherited by anything
+    a session starts, and this value reaches `manager_dir` as a path segment
+    — which RAISES on a bad name. A default that tracebacks is worse than
+    one that is not there, so a value that could not be a Manager's name
+    reads as absent.
+
+    ⚠ `must_be_a_tmux_target=True` is not optional here, and leaving it off
+    is a live bug rather than a strictness preference: without it `.` is
+    admitted (context FILE names come through `name_problem` too), so
+    `RITE_MANAGER=v2.0` would be returned here and then raise in
+    `manager_dir`. Every other Manager-name caller — `start`, `manager_dir`,
+    `instance_path`, the journal's writer — passes it.
+    """
+    value = os.environ.get(MANAGER_ENV, "").strip()
+    if not value or name_problem(
+        value, kind="manager name", must_be_a_tmux_target=True
+    ):
+        return ""
+    return value
 
 
 def user_dir(root: Path) -> Path:

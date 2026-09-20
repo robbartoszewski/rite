@@ -172,7 +172,7 @@ loop worth running:
 | `saturated` | work is waiting and every worker is busy. A queue, not a fault |
 | `blocked` | work is waiting, a worker is free, and the paths it needs are held by someone still working |
 | `deadlocked` | same, except the holders look gone. **This will not clear on its own**, so the loop **stops** and prints what to release |
-| `closed` | your schedule allows no workers this hour (§2.7.3) |
+| `closed` | your schedule allows no workers at this hour **on this day** (§2.7.3). Since 0.5.1 a window can carry `days:`, so a whole day can be closed — this row said "this hour" when the hour was the only dimension |
 | `ready` | a worker is free and there is safe work for one |
 | `unknown` | the board, the ledger or the schedule could not be read. **Stops the loop** — this is the state that must not be silent, because "could not check" and "nothing to do" look identical in a log |
 

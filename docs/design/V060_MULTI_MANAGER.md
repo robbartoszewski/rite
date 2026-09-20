@@ -129,3 +129,72 @@ does not.
    (orphaned tmux sessions; a leaked `rite-selftest-*` sandbox), and
    `HRM-*` in the dogfood tickets is about the first. Same-machine being a
    special case of the protocol does not make it a special case of the host.
+
+---
+
+## Carried into 0.6.0 from 0.5.1 — engineering, not design
+
+Two items deferred out of 0.5.1 deliberately. Neither blocks the design
+above; both are things the next person to work in this area should know
+before they spend an afternoon rediscovering them.
+
+### 1. The real-tmux tests are load-sensitive and nondeterministic — OPEN
+
+Two files are affected, and **the nondeterminism is proven independent of
+any code change**:
+
+- `test_manager_endings_and_resume.py::TestLivenessUnderRemainOnExit::test_a_dead_pane_is_not_alive_even_though_the_session_exists`
+  — fails on `still_exists.returncode == 0`, "remain-on-exit did not hold
+  the session".
+- `test_loop_start_really_starts.py::test_doctor_names_a_running_loop` (and,
+  in one run, two of its siblings) — fails on
+  `"loop: running as rite-loop-" in result.output`: the loop session was
+  started and `rite doctor` did not see it.
+
+**What was measured on 2026-09-20, so the next person does not repeat it:**
+
+| run | tree | result |
+|---|---|---|
+| either file alone, 2–3× | both trees | passes every time |
+| full suite | pristine `origin/main` | 3757 passed, 0 failed |
+| full suite, run 1 | `origin/main` + Manager-identity | **3 failed** (loop file) |
+| full suite, run 2 | same, after test-cleanup fix | 3774 passed, 0 failed |
+| full suite, run 3 | run 2's tree **+ 172 lines of markdown** | **1 failed** (loop file) |
+
+⚠ **The last row is the control that matters.** Run 3's only difference
+from run 2 is five `.md` files. Markdown cannot change how `rite doctor`
+detects a tmux session, so the same code passed and failed across two runs.
+Whatever this is, it is not a code defect introduced by either change — it
+is timing, and it only appears under full-suite load.
+
+**For the first of the two, start at `_keep_pane_after_exit`.** It runs `set-window-option` with
+`check=False`, so a call that fails under load is silently ignored and the
+next assertion is the first thing that notices. `ec3199c` changed that
+function on the same day, and this module's own docstring already records
+that the capability probe beside it "has now got in its own way five times",
+one of which was *"the command died before the option was set"* — the same
+shape as a set-option that does not land in time.
+
+For the second, the common factor is that both tests assert on a session
+being *visible* shortly after `start` returns, and `settled_alive` gives
+that only a bounded number of tries. A shared root cause across both files
+is plausible and unproven.
+
+⚠ **Not cleared, and deliberately not called flaky-and-harmless.** What is
+established is that it is nondeterministic under load, not that it is
+harmless: both assertions are about rite failing to see a session that
+exists, which is the same shape as the `eu:west` defect — a confident,
+wrong answer about whether something is running. If that can happen under
+test load it can happen on a loaded laptop. Treat it as open, and start by
+making the silent failures loud rather than by re-running until green.
+
+### 2. `journal.instructions()` still spells out `--manager`
+
+Since 0.5.1 a Manager session carries `RITE_MANAGER` and `--manager` defaults
+to it, so the instruction text handed to a Manager now tells it to pass an
+argument it no longer needs. Harmless and redundant.
+
+Left alone because the wording is pinned by assertions in
+`tests/test_manager_journal.py`, and rewording text that other tests assert on
+is not worth doing for a redundancy. Do it with the next deliberate change to
+that text.
