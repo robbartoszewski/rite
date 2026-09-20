@@ -175,6 +175,27 @@ wrong Manager is worse than one that was refused.
 session still starts and `rite start` says that the identity is unavailable
 and that commands inside it need `--manager` spelled out.
 
+### Fixed: `rite schedule show` showed neither the days nor the clock
+
+The command whose job is to print your schedule printed `timezone: (not
+set)` for a machine-local schedule — reading the raw config field, which is
+empty exactly when the zone comes from the machine — and never printed
+`days` at all, so a `Mon-Fri` window and a `Sat-Sun` window looked
+identical.
+
+That matters because `rite sandbox start`'s refusal ends *"`rite schedule
+show` lists the windows"*. A user refused on a Saturday followed that
+instruction and saw two windows with no way to tell which one refused them.
+It now prints the same sentence `rite start` does, and the days beside each
+window:
+
+```console
+$ rite schedule show
+schedule in Europe/Warsaw (machine local)
+  Mon-Fri    09:00-17:00  workers=3
+  Sat-Sun    00:00-23:59  workers=0
+```
+
 ### Fixed: an anchor of invisible characters is no longer an anchor
 
 `str.strip()` removes Python-whitespace only, so U+200B ZERO WIDTH SPACE,

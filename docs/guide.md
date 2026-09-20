@@ -123,6 +123,95 @@ project's entry, and not its own. That is measured, not assumed (SPEC §10.3),
 and it is *why* a sandboxed Worker's token is handed to it through `--env`
 rather than fetched. Inside a sandbox, "not found" means "cannot check".
 
+## The schedule — when Workers may run
+
+`schedule.windows` in `.rite/config.yaml` says how many Workers may run at a
+given hour, on given days. From 0.5.1 it is **enforced**: `rite sandbox start`
+refuses outside a window and names when the next one opens. Before 0.5.1 it
+was advisory, and a project configured for zero Workers at the weekend
+started one anyway.
+
+```yaml
+schedule:
+  timezone: Europe/Warsaw        # optional; see below
+  windows:
+    - {days: "Mon-Fri", hours: "09:00-17:00", workers: 3}
+    - {days: "Mon-Fri", hours: "17:00-09:00", workers: 1}
+    - {days: "Sat-Sun", hours: "00:00-23:59", workers: 0}
+```
+
+**`days`** takes `Mon`, a range `Mon-Fri`, or a list `Sat,Sun`. Ranges wrap,
+so `Fri-Mon` is Friday, Saturday, Sunday and Monday — the same way `hours`
+already wrapped at midnight. A name it does not recognise is refused with
+what it expected, rather than being skipped.
+
+**A window with no `days` means every day**, which is what every window
+written before 0.5.1 meant, so an existing schedule keeps its exact meaning
+and needs no migration.
+
+**`hours`** is a half-open `HH:MM-HH:MM` range and may wrap midnight
+(`17:00-09:00` is the evening plus the following morning).
+
+**Time no window covers is zero Workers** — not the flat cap, not unbounded.
+This is the value most projects meet first and never configure: with the
+example above, Monday 20:00 is not in any window, so it is zero.
+
+**`workers` is checked against `sandbox.max_concurrent_workers`, and a
+window asking for more is REFUSED rather than quietly reduced.** There is no
+"lower of the two wins": `rite doctor` reports the window as a problem, so a
+schedule that cannot be honoured says so instead of running smaller than you
+wrote and letting you believe otherwise.
+
+### Which clock it is on
+
+**`timezone` is optional and defaults to your machine's own clock**, because
+a schedule expresses human working hours and "nine to five" means the
+operator's day.
+
+⚠ **A container or CI runner with no timezone configured resolves to UTC.**
+An operator in Warsaw writing `09:00-17:00` would get a fleet running two
+hours off with every individual number looking correct. So rite states the
+clock rather than assuming you know it. `rite schedule show`:
+
+```console
+$ rite schedule show
+schedule in Europe/Warsaw (machine local)
+  Mon-Fri    09:00-17:00  workers=3
+  Sat-Sun    00:00-23:59  workers=0
+```
+
+`(machine local)` means the field was unset and your machine answered;
+`(from config)` means you named it. A `timezone` that is not a known zone is
+**not silently replaced** — it falls back to machine-local and says which
+value it ignored:
+
+```console
+schedule in Europe/Warsaw (machine local — schedule.timezone 'Not/AZone' is
+not a known timezone and was ignored)
+```
+
+`rite start <manager>` prints the same sentence, so the clock is stated at
+the moment you spend something.
+
+⚠ **A committed schedule is interpreted on each machine separately.**
+`config.yaml` is shared, and with no `timezone` set each operator's fleet
+runs on their own local day. That is intended — each person works their own
+hours — and it is worth knowing the first time a colleague's Workers start
+three hours before yours. Set `timezone` explicitly if you want one clock
+for everybody.
+
+### When it refuses
+
+```console
+$ rite sandbox start alpha
+the schedule allows 0 Workers right now (schedule in Europe/Warsaw (machine
+local)). Next open: <when>. Refused rather than started — `rite schedule
+show` lists the windows, and raising the count is a config change.
+```
+
+A project with **no** schedule is unaffected: an empty schedule reports zero
+windows and the refusal is skipped rather than refusing everything.
+
 ## What runs on its own
 
 Nothing rite runs unattended starts a Claude session.
