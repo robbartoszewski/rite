@@ -1,8 +1,12 @@
 # v0.5.1 scope — is it ready to implement? (2026-09-20)
 
-**Short answer: seven of nine are ready, two are not, and one of those two
-has never been specified at all.** The gaps are named below rather than
-smoothed, and the estimate is for what remains.
+**READY — all nine items are specified, every open question is answered or
+routed, and one answer produced a defect that is fixed rather than noted.**
+
+Revised 2026-09-20 after the project owner answered Q1, Q2, Q5 and Q7, and
+after rite-dd's review of §9.15. The earlier revision of this document said
+"seven of nine"; what closed the other two is recorded below rather than
+edited away.
 
 "Ready" here means what was asked for: **someone else could pick this up
 and build it without asking anything that is not on the questions list.**
@@ -19,10 +23,10 @@ Not "I have stopped writing."
 | 3 | Duration bound on the CLI | **BUILT + verified** | §9.14.5, D-82 | `17d83ae` |
 | 4 | Alias-collision check | **BUILT + verified** | §9.14.7a | `5a9acac` |
 | 5 | Per-Manager identity | **BUILT** | §9.14.9, D-77 | pre-`1381bc1` |
-| 6 | **Prompting the session on start** | ⚠ **NOT SPECIFIED** | — | — |
+| 6 | Prompting the session on start | **SPECIFIED** (D-90) | §9.14.11a | — |
 | 7 | Managers in `rite status` | **BUILT** (rite-dd) | — | `f803a10` |
 | 8 | Ctrl+C stops both; `rite stop` recovers | **SPECIFIED, not built** | §9.14.12–13, D-85 | — |
-| 9 | Issue recording | **SPECIFIED, not built** — and the release's one scope lever, see Q7 | §9.15, D-83/84/86 | — |
+| 9 | Issue recording (`--record-issues`) | **SPECIFIED, not built** — stays in 0.5.1 (D-88) | §9.15, D-83/84/86/87/88/89 | — |
 
 Found and fixed during refinement, not on the original list:
 
@@ -102,9 +106,18 @@ command line; a running process determines it from its argument, not from
 anything it can read. That satisfies D-77 and it is what §5.4's boundary
 rests on, but a Manager that loses its argument has no way to recover it.
 
-### 6. Prompting — ⚠ NO TEST, BECAUSE NO SPEC
+### 6. Prompting — CONTRACT, not yet run
 
-See open question Q1.
+```
+$ rite start planner --sessions 1 --minutes 30
+starting Manager 'planner' ...
+# the pane receives the prompt, and delivery is CONFIRMED not assumed:
+$ tmux capture-pane -p -t =rite-mgr-<slug>-planner | head -1
+<the prompt text>
+```
+
+And on a resumed session the prompt is NOT re-sent (D-90) — assert the
+second cycle's pane does not receive it a second time.
 
 ### 7. Managers in `rite status` — rite-dd's, test theirs
 
@@ -160,7 +173,7 @@ the Manager is never prompted, not merely that no file appears.
 
 ## Open questions — these block, or change, implementation
 
-**Q1. What does "prompting the session on start" mean, and is it in 0.5.1?**
+**Q1. (ANSWERED — D-90, §9.14.11a.) Prompting on start.**
 Nothing in SPEC specifies it. The precedent is `rite sandbox start <worker>
 --prompt TEXT` (§9.6) and the `/rite-start` template v0.5.0 shipped. The
 obvious shape is `rite start <manager> --prompt TEXT`, sent with `send-keys`
@@ -170,8 +183,7 @@ template or empty, and whether a prompt is re-sent on each resumed session
 or only the first. The second matters — re-sending on resume would re-issue
 an instruction into a session that already has context.
 
-**Q2. `rite stop <manager>` collides with the existing `rite stop
-[DIRECTORY]`.** That command already means *shut down with handover —
+**Q2. (ROUTED — a CLI naming conflict, not an owner decision.) `rite stop <manager>` collides with `rite stop [DIRECTORY]`.** That command already means *shut down with handover —
 release claims, update the board*, and already resolves an alias. §9.14.13
 records this UNRESOLVED rather than assuming the `start` answer transfers,
 because the existing command has side effects on the board. Same-shape fix
@@ -190,7 +202,7 @@ clone of this repo. §9.15 now states the principle in its own words and
 carries no id. If those rules should be normative for rite, they need to
 arrive in SPEC with their own numbers.
 
-**Q7. Does item 9 stay in v0.5.1?** It is the only item not required for
+**Q7. (ANSWERED — YES, D-88, and the reason changed the build.)** It is the only item not required for
 "full-featured single Manager" to be true, so it is the natural thing to
 move if the release sheds weight — rite-dd raised this and was right to.
 The question is with Robert and unanswered. **Until it is answered it is
@@ -200,7 +212,7 @@ the scope statement is worth having whichever release carries it. If it
 moves to 0.6.0 nothing is wasted: §9.15 goes with it unchanged, and the
 estimate below drops by 3–4 sittings.
 
-**Q8. How does 0.6.0's gate reach entries that are never committed?**
+**Q8. (PARTLY CLOSED — §9.15.3a.) How does a reader reach entries that are never committed?**
 The journal is gitignored and per-Manager — machine-local, and inside a
 directory a torn-down sandbox takes with it. §9.15.4 says these entries are
 the QA gate's raw material. Nothing contradicts in 0.5.1 because nothing
@@ -211,7 +223,7 @@ than in 0.6.0 as a migration. Raised by rite-dd.
 into §9.15.3 and recorded as D-87. Left here so the answer is visible
 beside the question it closed.
 
-**Q5. What is the flag called?** §9.15 says it must read as diagnostic
+**Q5. (ANSWERED — `--record-issues`, D-89.)** §9.15 says it must read as diagnostic
 rather than as a feature everyone should enable. I have not named it, since
 naming is yours and the name is what users see.
 
@@ -231,10 +243,10 @@ their apparent size.
 
 | Work | Sittings | Why |
 |---|---|---|
-| Q1 answered, then item 6 | 1 | Small once decided; `send-keys` already exists in this module |
+| Item 6 — prompting | 1 | Specified now; `send-keys` exists, but delivery must be CONFIRMED, which is where the work is |
 | Item 8 — Ctrl+C / stop | **2** | The two paths share a teardown, and separating them means a signal handler plus `forget_instance` wiring. The idempotence requirement is where the second sitting goes |
 | Item 9 — journal | **3–4** | Flag, conditional `CLAUDE.md`, entry format with anchor enforcement, two entry kinds, and the "genuinely off" test. The conditional-template half is the underestimated part |
-| Q2 resolution + `rite stop` | 1 | Only if Q2 says implement it now |
+| Q2 resolution + `rite stop` | 1 | Routed, not yet answered |
 | **Total remaining** | **7–8** | ± the answer to Q2 |
 
 **Confidence: low on item 9 and I would not defend the number.** Every
@@ -287,3 +299,54 @@ Read against each other and against what was already there:
 - **Not checked:** §9.15 against §6 (ticket backends). The process/work
   distinction says work goes to the board, and I have not read §6 to confirm
   that boundary is drawn the same way there.
+
+---
+
+## What changed when the questions were answered (2026-09-20)
+
+Recorded rather than edited away, because one answer produced a defect and
+that is the more useful half of this document.
+
+**Q7 — the journal stays in 0.5.1, and the REASON changed the build.** It
+was kept not as a nice-to-have but because the next large unattended run is
+a Bentora dogfood **run by somebody who is not the owner, with the owner not
+watching.** Two things follow that were not in the spec an hour ago:
+
+1. **It must be discoverable by somebody who has not read the spec.** An
+   opt-in diagnostic nobody enables produces nothing, and the person at that
+   keyboard has no reason to know the flag exists. Now required in `rite
+   start --help` plus a docs line saying an unattended run is when to enable
+   it. Fourth instance this week of *a capability nobody is told about*.
+2. ⚠ **The entries could not leave the machine that wrote them** — §9.15.3a.
+   The journal is gitignored, under `.rite/managers/`, inside a directory a
+   torn-down sandbox takes with it. rite-dd raised this as a 0.6.0 design
+   question about a future gate; the answer to *who runs the dogfood* turned
+   the same gap into a live 0.5.1 defect, because the reader who cannot
+   reach them is now a person. **A diagnostic whose output never leaves the
+   host returns nothing to the one reader it exists for.** Closed with
+   documentation rather than machinery — including that `git add -f` is
+   REQUIRED, since a plain `git add` silently refuses.
+
+**Q1 — prompting was DECIDED and had never reached the spec**, which is why
+an implementation plan read it as unspecified. Now §9.14.11a. One
+sub-question the decision did not reach is recorded as a **stated default,
+not a decision**: the prompt is not re-sent to a resumed session.
+
+**Q5 — `--record-issues`**, named for what it does rather than what it is.
+
+**Q2 — routed, not escalated.** A naming conflict inside the CLI surface is
+not an owner decision.
+
+**Q6 — closed as not worth settling.** Whether tmux's target-matching
+behaviour changed between 3.4 and 3.7c is unestablished; both fixes assert
+the property directly on both versions, so nothing shipped depends on it,
+and the only thing a CI round would buy is a sentence better left unwritten.
+
+## Standing caveat on this document
+
+Its author wrote nearly all of the scope it assesses, which is the wrong
+arrangement for judging completeness. It goes to rite-dd before it goes to
+the owner. Three of the four findings in rite-dd's review of §9.15 were
+things re-reading my own text would not have produced, and one of them —
+that a journal entry cannot be re-included into git — was a factual claim I
+had made confidently and wrongly.

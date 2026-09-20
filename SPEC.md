@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.20.1 · **Date:** 2026-09-20
+**Version:** 0.21.0 · **Date:** 2026-09-20
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -4994,6 +4994,42 @@ of scope. The compliance contradiction in §9.14.7 stands. And §9.14.5's
 ceiling is still a count, because §2.6.1 has not changed.
 
 
+#### 9.14.11a. `rite start <manager>` prompts the session
+
+**Decided; it simply never reached this document, which is why an
+implementation plan read it as unspecified.** A Manager session that starts
+with an empty prompt waits for a human to type something — which is the
+behaviour `rite start` exists to remove, and it is the same gap
+`/rite-start` was added to paper over for the Claude app.
+
+The prompt is sent after `settled_alive` confirms the command survived, by
+the same `send-keys` path the capability probe uses, with the Manager's own
+name available to it (§9.14.9) so the session knows which Manager it is.
+
+⚠ **A keystroke can be swallowed by a shell that is not yet reading.** That
+is measured, not hypothetical: it is why the capability probe treats a lost
+`exit 3` as "no answer" rather than as evidence about the machine
+(§9.14.10). A prompt that vanishes leaves a Manager sitting idle and
+spending nothing while the supervisor waits for it to finish, so delivery
+is confirmed rather than assumed.
+
+##### One sub-question the decision did not reach, answered here as a stated default
+
+**Is the prompt re-sent to a RESUMED session?** The decision covers
+starting; §9.14.9's resume path is a second start of the same work.
+
+**Default taken: NO — the prompt is sent to the first session only.** A
+resumed session already carries the context the prompt would establish, and
+re-issuing an instruction into a conversation that is mid-task is the same
+class of error as restarting a session a human deliberately quit: the tool
+telling the agent to begin something it is in the middle of. The asymmetry
+decides it — a missing prompt on a resume costs a session that continues
+what it was doing, and a spurious one costs a session that starts over.
+
+**Marked as a default rather than as a decision**, because it is inferred
+from the resume design rather than stated by the project owner, and it is
+cheap to reverse if the dogfood shows a resumed Manager drifting.
+
 #### 9.14.12. Stopping: three outcomes, three behaviours
 
 ⚠ **A bound being reached and a human pressing Ctrl+C are not the same
@@ -5075,14 +5111,29 @@ leaves evidence instead of silence.
 ⚠ **It is OFF by default and it is a BETA feature.** §9.15.1 says why, what
 it costs, and what would make the default flip.
 
-⚠ **Release status, recorded because it is the one item here that is a
-scope lever.** This is the only part of v0.5.1 not required for
-"full-featured single Manager" to be true, so it is the natural thing to
-move if the release has to shed weight. That challenge is with the project
-owner and unanswered. **Until it is answered this is v0.5.1 scope and is
-specified as such** — a section written only once its release is confirmed
-is a section written under time pressure, and the scope statement is worth
-having in the repository whichever release carries it.
+⚠ **It is v0.5.1 scope, settled, and the REASON changes how it is built.**
+It was raised as the release's scope lever — the one item not needed for
+"full-featured single Manager" to be true — and kept, because the next
+large unattended run is a dogfood on Bentora **run by somebody who is not
+the project owner, with the owner not watching.** This diagnostic is how
+anything comes back from that run. It is not a nice-to-have in this
+release; it is the instrument for the only big unattended run currently
+planned, which is precisely the case §9.15 was written for.
+
+##### Two consequences that follow from WHO runs it
+
+**1. It must be discoverable by somebody who has not read this spec.** An
+opt-in diagnostic nobody enables produces nothing, and the person running
+the dogfood has no reason to know the flag exists. So `--record-issues`
+appears in `rite start --help`, where somebody starting a Manager will see
+it, and the docs say plainly that **an unattended or experimental run is
+exactly when to turn it on.** *A capability nobody is told about is a
+capability nobody uses* — the fourth instance of that class this week, and
+the one where the cost is the whole point of the feature.
+
+**2. The entries have to be able to LEAVE that machine.** See §9.15.3a,
+which was a 0.6.0 design question until the answer to "who runs it" made it
+a 0.5.1 one.
 
 #### 9.15.0. A process issue, not a work issue — and this is the load-bearing line
 
@@ -5104,7 +5155,11 @@ belongs on the board.
 
 #### 9.15.1. Opt-in, beta, and the flip that is conditional on quality
 
-Enabled by a flag on `rite start <manager>`, absent by default.
+Enabled by `--record-issues` on `rite start <manager>`, absent by default.
+
+**Named for what it DOES, not for what it is.** `--diagnostics` describes
+the category; `--record-issues` tells a user reading `--help` what will
+appear on disk, which is the thing they are deciding about.
 
 **Why off:** writing observations and retrospectives means a Manager
 spending tokens on reflection rather than on work. Most users will not want
@@ -5296,6 +5351,42 @@ instances where an explicit instruction to check carefully immediately
 preceded the error it warned against. **A format that makes an unanchored
 entry impossible to write beats any amount of exhortation.**
 
+#### 9.15.3a. ⚠ The entries must be able to leave the machine that wrote them
+
+**As specified in §9.15.3 they cannot, and that defeats the feature's only
+planned use.** The journal is gitignored, lives under `.rite/managers/`,
+and sits inside a directory a torn-down sandbox takes with it. The Bentora
+dogfood runs on somebody else's machine, and the person who needs to read
+the entries is not the person at that keyboard. A diagnostic whose output
+never leaves the host it was written on returns nothing to the one reader
+it exists for.
+
+**This is not the 0.6.0 gate problem wearing a different hat.** That one is
+a future consumer on another machine and can be designed for later. This
+one is a human being, in the next planned run, and the gap is live now.
+
+**The minimum that closes it is documentation, not machinery**, and it is
+specified as the minimum rather than as the design:
+
+1. **`rite start --record-issues` prints where entries will be written**,
+   as an absolute path, at start — beside the resolved timezone and the
+   engine line, for the same reason: a fact is cheapest to learn at the
+   moment it is actionable, not afterwards.
+2. **The docs say how to send them back**, naming both routes, because the
+   obvious one silently fails: `git add -f` is REQUIRED (§9.15.3 — `.rite/*`
+   excludes the parent directory, so a plain `git add` refuses), or archive
+   the directory.
+3. **Nothing collects, uploads or transmits them automatically.** §9.15.5's
+   inertness is not relaxed by this, and a diagnostic that phoned home
+   would be a worse feature than one that returns nothing.
+
+⚠ **An export command (`rite journal export`) was considered and is NOT
+specified here.** It is the better long-run answer and it is scope growth
+in a release already carrying nine items — and the run that needs this has
+a person at the keyboard who can copy a directory. **Recorded as the first
+thing to build if the dogfood shows the documentation route is not taken**,
+which is a question the dogfood itself answers.
+
 #### 9.15.4. Judging process efficacy, where the obvious metric is inverted
 
 Retrospectives cover whether the gates did anything: *did the bug get caught
@@ -5323,14 +5414,11 @@ was a waste"* is a conclusion the Manager is not positioned to draw — the
 round that changed nothing may be the round that killed a design which
 looked fine.
 
-⚠ **OPEN: the 0.6.0 consumer cannot reach these entries as specified.**
-§9.15.3 makes the journal gitignored and per-Manager, which is to say
-machine-local, uncommitted, and inside a directory that a torn-down sandbox
-takes with it. A gate running on another machine, in CI, or after that
-Manager is gone cannot read a file that was never committed. **Nothing
-contradicts in 0.5.1, because nothing reads them** — which is precisely why
-it is recorded now, while it is a design question, rather than in 0.6.0
-when it is a migration. Raised in review by rite-dd.
+⚠ **This was a 0.6.0 question until it became a 0.5.1 one. See §9.15.3a.**
+Raised in review by rite-dd as "the gate cannot reach these entries"; the
+answer to *who runs the dogfood* turned the same gap into a defect in this
+release, because the reader who cannot reach them is now a person rather
+than a future gate.
 
 **Connection to 0.6.0.** These entries are the raw material for the QA gate:
 *"a bug was not caught during testing"* is precisely the evidence that says
@@ -5906,6 +5994,9 @@ happened once already and left no trace until this review found it.
 | D-85 | What stops a Manager: Ctrl+C, a bound, or `rite stop` | **Ctrl+C stops BOTH supervisor and session; a bound stops supervision and leaves the session alive; `rite stop <manager>` is the orphan-recovery path only** | A bound is an accounting limit and the user may be mid-conversation, so the pane surviving is right and was verified deliberately. Ctrl+C is a human saying stop, and leaving a live session spending quota with only the restarts halted is not what they asked for — nor should it take two commands. The two paths currently share their teardown, so separating them is the work. Ctrl+C must also call `forget_instance` (zero callers today) or a stopped Manager leaves a record that makes the next `rite start` believe it is running, which is the stale-lock defect in a new place. §9.14.12. |
 | D-86 | How the journal is protected against invented events | **By the FORMAT — a required verifiable anchor and a syntactic observed/inferred split — never by instructing the Manager to be careful** | An issue log containing events that did not happen is worse than no log, and it would poison self-reflection later, which is the one thing eventually meant to read it. An entry with no anchor (commit SHA, file and line, command with output, ticket id, log timestamp) is not written; anchors are checked where checking is cheap; entries are written at the moment rather than reconstructed, because compaction is the specific enemy (this week: a session quoting SHAs stale after a history rewrite, and another reporting reviewers as running that were never launched — memory, not malice); and no entry may claim another agent's internal state, which is the form a hallucination naturally takes. Exhortation is explicitly rejected: this week has two instances where an instruction to check carefully immediately preceded the error it warned against. The same principle underlies the project's paste-the-invocation rule. (A draft cited that rule and a scenario-citation rule by id; neither reference existed in this repository, so the ids are an open question rather than a citation — the rule broken inside the section that states it.) §9.15.3. |
 | D-87 | Is the journal's anchor requirement enforced, or asked for? | **ENFORCED on the writing path — the writer refuses an unanchored entry and creates no file** | A requirement on the format is honoured by the Manager choosing to honour it, which is exhortation wearing a table — and §9.15.3 names two instances this week where an explicit instruction to check carefully immediately preceded the error it warned against. Both halves are required and fail for different reasons: a refusal that still writes means the check runs after the write, and a silent no-write means the caller cannot tell refusal from success. It costs one branch, not a subsystem, because the writer already has to open and name a file. Settled in review (rite-dd) against the section's own closing argument. §9.15.3. |
+| D-88 | Does the process journal stay in v0.5.1? | **YES — it is the instrument for the next unattended run, not a nice-to-have** | It was the release's scope lever, being the one item not required for "full-featured single Manager". Kept because the next large unattended run is a Bentora dogfood run by somebody who is not the project owner, with the owner not watching — so this diagnostic is the only channel by which anything comes back from it. That reason changes the build: the flag must be DISCOVERABLE by a person who has not read this spec (named in `rite start --help`, with the docs saying an unattended run is when to enable it), and the entries must be able to leave the machine that wrote them (§9.15.3a) — a gap that was a 0.6.0 design question until the answer to "who runs it" made it a 0.5.1 defect. §9.15.1. |
+| D-89 | The diagnostic flag's name | **`--record-issues`** | Named for what it DOES rather than what it IS. `--diagnostics` describes the category; `--record-issues` tells a user reading `--help` what will appear on disk, which is what they are actually deciding about. §9.15.1. |
+| D-90 | Does `rite start <manager>` prompt the session? | **YES, on the first session; NOT on a resume (the second half a stated default, not a decision)** | A Manager that starts with an empty prompt waits for a human to type, which is the behaviour the command exists to remove. The resume half was not covered by the decision and is inferred from the resume design: a resumed session already carries the context the prompt would establish, and re-issuing an instruction mid-task is the same class of error as restarting a session a human deliberately quit. The asymmetry decides it — a missing prompt on resume costs a session that continues, a spurious one costs a session that starts over. §9.14.11a. |
 
 ---
 
@@ -5914,6 +6005,10 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.21.0 — the open questions answered, and one answer that created a defect.** The process journal stays in v0.5.1 (D-88), its flag is `--record-issues` (D-89), and `rite start <manager>` prompts the session (D-90, with the resume half recorded as a stated default rather than as a decision). §9.14.11a is new for the prompting, which had been decided and had never reached this document.
+
+⚠ **The reason the journal was kept turns one of its properties into a defect.** The next unattended run is on somebody else's machine with the owner not watching, so the journal being gitignored and machine-local means its only reader cannot reach it — §9.15.3a, which was a 0.6.0 design question until the answer to "who runs it" arrived. Closed with documentation rather than machinery, and an export command is recorded as the first thing to build if the dogfood shows the documented route is not taken.
 
 **Changes in 0.20.1 — §9.15 after review.** The anchor requirement is enforced on the writing path rather than asked for (D-87); "a log timestamp" is no longer a permitted anchor on its own, because a bare timestamp is indistinguishable from an invented one and every permitted anchor must be checkable or the requirement leaks; and a claim that a journal entry could be re-included into git was FALSE and is corrected with the measurement — `.rite/*` excludes `.rite/managers` as a directory and git does not descend into an excluded directory, so a `!` negation three levels down has no effect. One gap is recorded rather than closed: the 0.6.0 gate that is meant to consume these entries cannot reach them, because they are machine-local and uncommitted. All four found by rite-dd in review.
 
