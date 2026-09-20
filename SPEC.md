@@ -4660,8 +4660,8 @@ Each Manager gets its own subdirectory inside the single project root, so
 `<root>/.rite/managers/<name>/`, and everything in §5.4.6's "shared by
 accident" list moves under it.
 
-⚠ **This CONFLICTS with `docs/design/V060_MULTI_MANAGER.md`, which records
-the opposite shape and attributes it to the same source.** That document says
+⚠ **`docs/design/V060_MULTI_MANAGER.md` recorded the OPPOSITE shape and is
+now marked superseded (D-79).** That document says
 "separate roots per Manager, coordinating through the shared state layer —
 each Manager owns its own project root and its own `.rite/`", and rejects a
 shared `.rite/` by name: "a second protocol that has to be kept in agreement
@@ -4672,13 +4672,18 @@ The two were written a day apart, neither cites the other, and this
 paragraph was written without knowledge of that one — which is the defect
 this document keeps recording, now committed inside its own resolution of it.
 
-**Not resolved here, because it is not a drafting question.** One root with
-per-Manager subdirectories and separate roots over the state layer are
-different coordination models with different failure modes, and picking one
-by which paragraph was edited last would be the worst available method. **It
-must be settled before anything builds a per-Manager path**, because the two
-answers do not differ by a relocation: under separate roots,
-`<root>/.rite/managers/<name>/` is not moved later, it is discarded.
+**Resolved in favour of this section, on 2026-09-20, by an explicit answer
+given with the counter-argument in hand.** What reversed it is a fact about
+the code rather than a preference: separate roots mean separate claim
+ledgers, and `claims_channel()` returns nothing unless BOTH
+`coordination.managers` and `coordination.remote` are set — so two Managers
+on one machine would silently not see each other'''s claims, which is the
+failure this project hit twice in one day, made the default.
+
+V060'''s cost is accepted rather than refuted: a shared root IS a second
+protocol that can drift from the state layer'''s, and whoever builds
+`<root>/.rite/managers/<name>/` should expect that drift and be looking for
+it. D-79.
 
 **4. Profiles are shared; instances are per-user.** A Manager's *profile* —
 its engine, duties, model — is committed config, because a team agrees on
@@ -5232,7 +5237,7 @@ happened once already and left no trace until this review found it.
 | D-76 | Whether a Manager is sandboxed | **No — containment comes from what it is PERMITTED to do, not from where it runs** | Three independent reasons: it needs broad project access by its nature, it must be attachable by a human (§9.14.3), and macOS may refuse a sandbox inside a sandbox — which would leave a sandboxed Manager structurally unable to start sandboxed Workers, the one thing it exists to do. yoloAI is the WORKER RUNTIME and sits on a different axis from `claude`/`cursor`/`local`, which are Manager engines; conflating them produces the reasonable-sounding and wrong conclusion that a Manager should be sandboxed like a Worker. §5.4. |
 | D-77 | What blocks the Manager boundary property | **UNBLOCKED 2026-09-20: identity is the name you started with** | A Manager started as `rite start planner` knows it is `planner`, so the identity `.rite/machine` could not supply arrives as the argument — which is why D-71 and D-77 are one decision. Each Manager gets its own subdirectory in the single project root, so §5.4's boundary becomes statable as `<root>/.rite/managers/<name>/`, and §5.4.6's shared-by-accident list moves under it. Profiles stay committed; instances live in `.rite/user/`, uncommitted, because a shared config must not claim a Manager is running on somebody else's laptop. §9.14.9. |
 | D-78 | `rite start` with no name, by Manager count | **0 fails, 1 works bare, 2+ refuses AND LISTS them** | Starting a default where none is configured invents a configuration the user did not write; requiring a name where there is one Manager is ceremony; picking among several is a guess about which engine spends which quota. The 2+ case must print the names — a refusal that says "several are configured" and stops sends the user to `rite doctor` to learn what they could have typed. §9.14.9. |
-| D-79 | One root with per-Manager subdirectories, or separate roots per Manager | **CONFLICTED — two recorded designs, both attributed to the owner, neither citing the other. Blocks any per-Manager path work** | §9.14.9 adopts subdirectories under one root; `docs/design/V060_MULTI_MANAGER.md` adopts separate roots coordinating over the state layer and rejects a shared `.rite/` as "a second protocol... the two would drift", calling that the load-bearing decision. Written a day apart in mutual ignorance. The answers do not differ by a relocation: under separate roots the subdirectory is discarded, not moved, so building either costs the other. §9.14.9. |
+| D-79 | One root with per-Manager subdirectories, or separate roots per Manager | **SUBDIRECTORIES UNDER ONE ROOT — settled 2026-09-20, with the counter-argument in front of the decider** | `docs/design/V060_MULTI_MANAGER.md` recorded separate roots and is now marked superseded rather than rewritten, because its cost — "a second protocol... the two would drift" — is real and is now accepted debt rather than an avoided one. What reversed it is a fact about the code: separate roots mean separate claim ledgers, and `claims_channel()` returns nothing unless BOTH `coordination.managers` and `coordination.remote` are set, so two Managers on one machine would silently not see each other's claims — the failure this project hit twice in one day, made the default. §9.14.9. |
 
 ---
 

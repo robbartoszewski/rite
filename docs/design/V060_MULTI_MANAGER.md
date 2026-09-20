@@ -1,5 +1,45 @@
 # Multi-Manager, 0.6.0 — Robert's design, recorded
 
+## ⚠ SUPERSEDED on 2026-09-20 — the shape below was reversed
+
+**This document records Robert's earlier position. He changed it, explicitly,
+later the same conversation, and the later answer is what SPEC §9.14.9 and
+D-79 carry.**
+
+Asked directly — "separate workspaces inside one root, or separate roots?" —
+he answered: **"subdirectories inside one root. Strictly separated — one
+misbehaving manager shouldn't be able to mess with others by accident."** He
+answered it having already been given the argument below, so this is a
+decision taken with its counter in front of him, not one taken without it.
+
+**What changed the reasoning, and it is a fact about the code rather than a
+preference.** Separate roots mean separate claim ledgers. Two Managers on one
+machine would then **silently not see each other's claims** — and the
+coordination layer cannot cover for that today: `claims_channel()`
+(`coordination/identity.py:167`) returns `(None, "")` unless BOTH
+`coordination.managers` and `coordination.remote` are set, so a project that
+has configured neither gets no cross-root claim visibility at all. Two
+sessions editing one path is the failure this project hit twice in
+twenty-four hours, and separate roots would have made it the default rather
+than the accident.
+
+**The argument below is not deleted, because it names a real cost that the
+decision accepts rather than refutes.** "A second protocol that has to be
+kept in agreement with the first, and the two would drift" is true of a
+shared root, and it is now a known debt rather than an avoided one. Whoever
+builds `<root>/.rite/managers/<name>/` should expect drift between the
+per-Manager boundary and the state layer's own protocol, and should be
+looking for it.
+
+**How the two documents came to disagree is worth recording too**, because it
+is this project's own recurring defect: SPEC §9.14.9 was written without its
+author having read this file, a day after this file was written. A conclusion
+drawn from what was in hand rather than from what exists — the same root as
+inferring absence from the calls you happen to make.
+
+---
+
+
 **Recorded, not derived.** This is Robert's shape for 0.6.0 multi-Manager,
 written down before it gets lost in a transcript. Nothing here is built, and
 nothing here has been reviewed yet — the open questions at the end are mine
