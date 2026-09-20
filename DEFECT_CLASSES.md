@@ -522,3 +522,40 @@ enumerate, and whether that enumeration can be derived rather than typed. If
 it cannot, say so in the third column and leave the class on the first list —
 an honest "nothing holds this" is worth more than a test that makes it look
 held.
+
+## 14. A default that was right becomes a default that is wrong, with no diff to notice
+
+**The shape.** A parameter is added to an existing function with a default
+that preserves the old behaviour. Every existing caller keeps working —
+that is the point, and it is why the change reviews clean. Then the
+parameter's default stops being the right answer for callers that are
+evaluating the new thing, and **nothing at those call sites changed**, so
+there is no diff to review and no test to fail.
+
+**The instance.** `workers_at(schedule, minute_of_day, weekday=None)` gained
+a day dimension. `None` means "ignore the day", which is exactly right for
+every caller written before `days:` existed. Four callers evaluating the
+current moment kept passing two arguments. Measured on `Mon-Fri → 3` and
+`Sat-Sun → 0` at Saturday noon: `rite sandbox start` refused a Worker while
+`rite loop` reported room for three.
+
+**Why it is NOT class 13.** Class 13 is *written, tested, called by
+nothing* — a thing that was never wired. This one **was** wired, correctly,
+and the meaning underneath it changed. The `--minutes` defect was class 13;
+this is its opposite, and the two arrived in the same release.
+
+**The symptom to recognise.** *One tool contradicting itself about the same
+config.* Two commands reading one value and reporting different answers has
+been the giveaway three times now — the advisory schedule, the machine-wide
+sandbox cap, and this. When two true sentences disagree, look for a value
+that is computed once and read in more than one place, where only some of
+the readers were updated.
+
+**How to find it.** Not by sweeping for unsupplied parameters — that finds
+class 13. Take the diff between two releases, list every function signature
+that CHANGED, and then visit every call site of each. The ones that did not
+change are the suspects.
+
+**What still gets through.** A signature that did not change but whose
+*meaning* did — a function whose return value gains a case, or a string
+that gains a new possible value. Nothing here catches that.

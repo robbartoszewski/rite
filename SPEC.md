@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.19.1 · **Date:** 2026-09-20
+**Version:** 0.20.0 · **Date:** 2026-09-20
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -4768,6 +4768,31 @@ cheaper to make deliberately than to discover in a bug report. **What it
 does say is that `rite start <provider>` as a bare positional is not
 available**, and any implementation plan that assumes it has not read §8.9.
 
+##### ⚠ RESOLVED (2026-09-20), and this subsection was stale against the shipped code
+
+The paragraph above says a bare positional "is not available". **What
+shipped uses one**, and the contradiction stood in this document while the
+code disagreed with it — which is the failure this section was written to
+prevent, committed by the section itself.
+
+What settled it is that the positional is no longer a PROVIDER. D-78 and
+D-79 made it a **Manager name** — a project-declared identity, not a
+vocabulary rite owns — and §9.14.9 fixed the resolution order: Manager names
+are matched BEFORE the Dispatch registry, so the ambiguity is decided rather
+than left to chance.
+
+The third option in the list above is what actually carries it, in the only
+form that works across machines. **Provider names cannot be "reserved" at
+registration, because `manager_roles` is committed and the registry is per
+machine** — the collision exists on one laptop, over a config that is
+correct and not that user's to change. So the check lives where somebody can
+act on it: `rite projects add` refuses a colliding alias, and `rite doctor`
+reports a collision that appeared later because a Manager role was committed
+(`managers.name_collisions`).
+
+`rite stop <manager>` inherits the same problem and is **NOT** resolved by
+this: see §9.14.13.
+
 #### 9.14.7b. ⚠ `local` is already built, in a shape this section does not fit
 
 **This is the largest unresolved finding of the two review rounds and it is
@@ -4968,6 +4993,313 @@ is the human's foreground process and an unattended overnight Manager is out
 of scope. The compliance contradiction in §9.14.7 stands. And §9.14.5's
 ceiling is still a count, because §2.6.1 has not changed.
 
+
+#### 9.14.12. Stopping: three outcomes, three behaviours
+
+⚠ **A bound being reached and a human pressing Ctrl+C are not the same
+event, and a tool that treats them alike fights its user.** This is the same
+shape as finished-versus-quit-versus-crashed in §9.14.10: three outcomes,
+and conflating any two produces the wrong default for one of them.
+
+| what happened | supervision | the Manager's session | why |
+|---|---|---|---|
+| **ceiling or window reached** | stops | **survives** | The user is mid-conversation and a ceiling is an accounting limit, not an instruction to stop talking. Verified: the pane outlives the supervisor. |
+| **Ctrl+C** | stops | **stops** | A human saying stop. Leaving a live session spending quota with only the restarts halted is not what they asked for, and it should not take two commands. |
+| **supervisor died unexpectedly** | already gone | still running | The orphan case. Nothing was there to stop it. §9.14.13. |
+
+**The default path is one action that stops both.** Ctrl+C on `rite start
+<manager>` ends the supervisor AND the Manager session.
+
+⚠ **These two paths must not share their teardown.** They currently reach
+the same place — the supervisor returns and the pane is left alone — and
+separating them is the work. The bound case keeps today's behaviour, which
+was a deliberate decision and is still right.
+
+##### Ctrl+C must be clean, not merely abrupt
+
+- **It releases the instance record.** `forget_instance` exists with **zero
+  callers**; this is its caller. A stop that leaves a record behind makes
+  the next `rite start` believe a Manager is still running — the stale-lock
+  defect in a new place, and that class wedged the loop earlier this week.
+- **It says what it did:** `stopped Manager 'planner' and its session`.
+  Silence after Ctrl+C is indistinguishable from a signal that did not land,
+  which is how a user ends up pressing it three times and killing something
+  mid-write.
+- **It is idempotent and survives a partial teardown.** A Ctrl+C arriving
+  while the session is already gone still clears the record and still
+  reports, because the failure being prevented is a phantom record, and a
+  teardown that only works on the happy path leaves exactly that.
+
+#### 9.14.13. `rite stop <manager>` is a recovery action, not the default
+
+For the orphan case only: the supervising process ended unexpectedly — a
+crash, a closed laptop, a killed terminal — and the Manager session is still
+running with nothing watching it.
+
+⚠ **It is not how a user ordinarily stops a Manager.** Ctrl+C is
+(§9.14.12). Documenting `rite stop <manager>` as the normal route would
+teach two commands where one is correct and would leave users who only press
+Ctrl+C with orphaned sessions, which is the state this command exists to
+clean up.
+
+⚠ **THE NAME IS NOT AVAILABLE AS A BARE POSITIONAL, for the same reason
+§9.14.7a gives about `start`.** `rite stop [DIRECTORY]` already exists — it
+means *shut down with handover: release claims, update the board* — and it
+already resolves a registered alias. So `rite stop planner` is ambiguous in
+exactly the way `rite start planner` was, and it is worse here because the
+existing command has side effects on the board.
+
+**This must be resolved before implementation, not discovered in a bug
+report.** §9.14.9 settled `start` by intercepting Manager names ahead of
+alias resolution and refusing a colliding alias at `rite projects add`; the
+same mechanism is available here and the collision check already exists.
+Whether it is the right answer for a command that also releases claims is an
+**open question for the project owner** — recorded rather than decided,
+because guessing at it is how the `start` collision became three meanings
+for one positional.
+
+### 9.15. The Manager's process journal — a diagnostic mode, off by default
+
+**Feedback about how rite is WORKING currently only exists where a human is
+watching.** This week's most valuable findings came from a session noticing
+something odd and saying so out loud — *"the mutant survived and the mutant
+never ran produce an identical report"*, *"a wrong CLI invocation produces
+output indistinguishable from the feature working"*, *"my forty minutes was
+a hang, not a slow machine"*. None of that survives an unattended run. It
+goes into a pane's scrollback and dies with the session.
+
+The journal gives the unsupervised part a voice: a Manager writes what it
+noticed to files, so that something going wrong at 3am with nobody attached
+leaves evidence instead of silence.
+
+⚠ **It is OFF by default and it is a BETA feature.** §9.15.1 says why, what
+it costs, and what would make the default flip.
+
+#### 9.15.0. A process issue, not a work issue — and this is the load-bearing line
+
+A ticket that fails is **work**. It goes to the board, which is what the
+board is for.
+
+A Manager unable to tell whether a Worker is alive, a command that reports
+success while doing nothing, a gate that passed on a file it could not open,
+forty minutes lost to a hang that looked like a slow machine — that is
+**process**. It is about the tool and the method, not about the product,
+and today it has nowhere to go.
+
+**This distinction is the whole defence against the journal becoming a
+dumping ground**, which is the ordinary fate of a write-only log. A Manager
+that records every failing test has produced noise; a Manager that records
+*"the test command exits 0 when the file is unreadable"* has produced a
+finding. Where an entry could plausibly be either, it is a work issue and
+belongs on the board.
+
+#### 9.15.1. Opt-in, beta, and the flip that is conditional on quality
+
+Enabled by a flag on `rite start <manager>`, absent by default.
+
+**Why off:** writing observations and retrospectives means a Manager
+spending tokens on reflection rather than on work. Most users will not want
+that burn, and the case for paying it is weak today because **nothing
+consumes the output**. Self-reflection — the thing that would make it pay
+for itself — is expected around v0.8.0.
+
+**What the user is told when they turn it on.** A statement, not a warning,
+printed at start alongside the resolved timezone and the engine line, for
+the same reason: a cost is cheapest to understand at the moment of the
+decision, not in a log afterwards.
+
+**Genuinely off when off.** Not "writes fewer files" — a Manager running
+without the flag is **not prompted to reflect at all**, and §9.15.6 makes
+the `CLAUDE.md` instructions conditional to guarantee it. A half-disabled
+diagnostic that still costs something is the worst of both, and it is the
+shape that turns up two releases later as *"why is this slower than it
+should be"*.
+
+**The stated trajectory, recorded so it is a plan rather than an accident of
+sequencing.** It ships opt-in and stays opt-in through 0.6.0 and 0.7.0,
+refined as it goes, so that by the time self-reflection lands it produces
+output worth reading.
+
+This is written down for two reasons:
+
+1. **It tells whoever maintains it what "refined" means.** For two releases
+   this will look exactly like dead weight, because nothing reads what it
+   writes. A stated destination — *"this becomes default-on when its output
+   is good enough, and until then we are improving what it writes"* — is
+   the difference between continued investment and deletion as cruft.
+2. **It sets the bar for the flip.** Default-on commits every Manager to
+   spending tokens reflecting, so the flip needs evidence the output earns
+   it.
+
+⚠ **The flip is conditional on QUALITY, not on self-reflection's arrival
+date.** The test: *are the entries good enough that a human reading them
+learns something they did not already know?* The findings quoted at the top
+of §9.15 are the benchmark. If a Manager's unattended entries reach that
+standard, the flip is earned. If they read as noise, it stays opt-in however
+long self-reflection has existed. Without this sentence *"self-reflection
+shipped, so turn it on"* becomes a calendar decision, which is how a beta
+becomes a default nobody validated.
+
+**Marked beta in the flag's help text and in the docs**, so a user enabling
+it knows the entry format may change. That is what beta buys, and it is the
+licence to keep refining without a compatibility argument.
+
+#### 9.15.2. Two kinds of entry, because the important judgements are not available in the moment
+
+**Observations** are written when something looks wrong, at the moment it
+looks wrong.
+
+**Retrospectives** are written at a boundary — a ticket closing, a review
+round finishing, a merge landing.
+
+The second kind exists because the most valuable process questions are not
+knowable when the work happens. *"A bug escaped testing"* is only visible
+when the bug turns up later. *"That review round produced nothing"* is only
+visible after seeing what it produced. An observation-only journal
+systematically misses exactly the class of finding that motivated the
+feature.
+
+#### 9.15.3. Entry format, and the anchor requirement that makes an entry checkable
+
+One file per entry, timestamped, under the Manager's own directory
+(§9.14.9): `.rite/managers/<name>/journal/<timestamp>-<kind>.md`.
+
+**One file per observation, not a running file per session.** A single
+appended file invites a stream, and separate files make promoting one to a
+ticket a copy rather than an extraction.
+
+**Gitignored by default,** which needs no new machinery: `.gitignore`
+already excludes `.rite/*` and re-includes only authored config, so a
+journal under `.rite/managers/` is ignored unless somebody deliberately
+re-includes it. It is a Manager's own observation, not a shared artefact,
+until a human promotes it.
+
+##### The required fields
+
+| field | rule |
+|---|---|
+| `anchor` | **Required. An entry without one is not written.** A commit SHA, a file path with a line, a command with its output, a ticket id, or a log timestamp. |
+| `observed` | What was seen. Factual, and tied to the anchor. |
+| `expected` | What the Manager expected instead. |
+| `inferred` | What the Manager concludes. **Separate from `observed`, syntactically.** |
+
+`expected` is required because *"X failed"* without it is unactionable the
+next morning. Every good finding this week had that shape: a claim about
+what happened and a claim about what should have happened, which is what
+lets a reader disagree with either half.
+
+##### Measures against invented events
+
+⚠ **An issue log containing events that did not happen is worse than no log
+at all.** It is the confidently-wrong document again, and it would poison
+self-reflection later — the one thing eventually meant to read it. These are
+requirements on the format, not guidance to the Manager.
+
+1. **Every entry carries a verifiable anchor** (above). This is the same
+   principle as *paste the invocation and its output* — the rule this
+   project adopted after a wrong CLI invocation produced output
+   indistinguishable from the feature working — and the same principle a
+   mandatory citation on a scenario would carry. **One principle, several
+   surfaces.**
+
+   ⚠ *Two of those surfaces were cited here by ticket id and section number
+   in a draft, and NEITHER reference existed in this repository.* They were
+   taken from a conversation rather than checked against the tree — which is
+   this very rule being broken inside the section that states it, and it is
+   left recorded rather than quietly deleted. If those rules live in an
+   external tracker, the ids belong here; until somebody confirms them,
+   this cites the principle and not a number.
+2. **Written at the moment, never reconstructed.** Observations when
+   observed; retrospectives at the boundary, while the evidence is still in
+   context. **Compaction is the specific enemy.** This week produced a
+   session quoting SHAs that were stale after a history rewrite, and another
+   reporting reviewers as running that had never been launched. Both were
+   memory, not malice.
+3. **Observed and inferred are separate fields.** This week's best findings
+   had exactly that shape, and its worst errors were conclusions presented
+   as observations — *"the mutant survived"*, when it had never run.
+4. **No claims about another agent's internal state.** A Manager may record
+   that a review produced no commits. It may **not** record that a reviewer
+   *"did not try"* or *"was not thorough"*: unobservable, and it is the form
+   a hallucination naturally takes.
+5. **Anchors are checked where checking is cheap.** If an entry cites a
+   commit, verify it exists. Mechanical, no judgement, and it catches the
+   worst class.
+
+⚠ **What does NOT work, named because it is the first thing anyone
+reaches for: instructing the Manager to be careful.** This week has two
+instances where an explicit instruction to check carefully immediately
+preceded the error it warned against. **A format that makes an unanchored
+entry impossible to write beats any amount of exhortation.**
+
+#### 9.15.4. Judging process efficacy, where the obvious metric is inverted
+
+Retrospectives cover whether the gates did anything: *did the bug get caught
+in testing, did that review round produce an improvement.*
+
+⚠ **The obvious measure is backwards, and this project has already measured
+it.** A round ending *"fix these three things"* produces a commit. A round
+ending *"this design would force-release live Workers, start again"*
+produces nothing. **Commit-based review value is biased toward cheap
+reviews by construction**, so a Manager judging by output would
+systematically rank bad reviewing above good. D-39 records the same shape
+for delivery — a raw merged-ticket count rewards bursting even when the work
+is wrong — and D-67 and D-70 are the instances: two review rounds that
+produced no commits, killed three legs of an argument and caught a stop
+condition whose absence would have spent money all night.
+
+**So an entry records three facts and does not draw a verdict:**
+
+- **what it cost** (tokens, wall-clock, rounds),
+- **what changed** as a result,
+- **whether the change would have been caught elsewhere.**
+
+*"Round 2 cost 150k and changed nothing"* is useful and checkable. *"Round 2
+was a waste"* is a conclusion the Manager is not positioned to draw — the
+round that changed nothing may be the round that killed a design which
+looked fine.
+
+**Connection to 0.6.0.** These entries are the raw material for the QA gate:
+*"a bug was not caught during testing"* is precisely the evidence that says
+whether the scenario gate (D-81, §7.3) is working. That is what the journal
+is being refined toward, and it is why the entries have to be checkable
+rather than merely present.
+
+#### 9.15.5. Nothing reads it — and the anchors are what make that safe
+
+**A file that triggers behaviour is a control channel. This is a notebook.**
+Nothing in rite reads the journal, parses it, or changes what it does
+because of it.
+
+⚠ **A Manager must not vary its own process on the strength of its own
+retrospectives.** A Manager recording that reviews seem unproductive is
+data. A Manager *skipping reviews* because it concluded they are
+unproductive is a catastrophe — and it is the natural next step the moment
+anything reads these files.
+
+**Inertness alone is not the whole protection.** A bad entry still misleads
+the human who reads it, and inertness only guarantees it misleads a person
+rather than steering the system. **The anchors are what make that person's
+check possible**, which is why §9.15.3 requires them rather than
+recommending them.
+
+#### 9.15.6. Two instructions in the generated `CLAUDE.md`, conditional on the flag
+
+**A capability nobody is told about is a capability nobody uses** — the
+third instance of that class this week. So the generated `CLAUDE.md` tells
+the Manager two things:
+
+1. **That the directory exists**, and where.
+2. **When to write:** *when something behaves differently from what the
+   docs, or the tool's own output, claimed.* That specific judgement is what
+   produced this week's findings, and it is far more useful than "record
+   problems", which produces a log of failing tests.
+
+⚠ **Both are present ONLY for a Manager started with the flag.** Telling
+every Manager about a facility it must not use is noise, and noise in
+`CLAUDE.md` is expensive: every Manager pays to read it on every start. This
+is also what makes §9.15.1's "genuinely off when off" true rather than
+aspirational.
 
 ## 10. Credentials
 
@@ -5496,6 +5828,10 @@ happened once already and left no trace until this review found it.
 | D-80 | Bare `rite start`: orient, or start the one Manager? | **BOTH, distinguished by whether one is already RUNNING rather than by the argument typed** | §9.14.0 said a bare start must never begin a session, because start is what a session runs to orient itself; D-78 said one Manager works bare. Direct contradiction. Resolved on the observable fact: no Manager running means start it, a Manager running means report it and exit 0. That answers §9.14.0's recursion fear with a mechanism rather than a convention — the orienting session finds the Manager it is running inside — and makes §9.14.0's idempotence rule load-bearing rather than incidental. §9.14.0. |
 | D-81 | Does a terminating review make a pre-merge behaviour gate redundant? | **NO — they answer different questions, and v0.5.0 is the evidence** | A terminating check on v0.5.0's source found its defects and the release still shipped without the features it was scoped for, because reviewing code asks "is this correct" and nobody was assigned to ask "is this what was asked for". Going through that release's findings one at a time, a requirements-derived scenario would have caught most of the behavioural defects — including every instance of the implemented-tested-called-by-nothing class, which a scenario surfaces as missing behaviour rather than as missing coverage — and none of the security-invisible, documentation or infrastructure ones. Adopted with the bound stated, because a gate sold as catching everything gets trusted where it should not be. Each condition carries a checkable artifact rather than an attestation — independence is enforced by ORDER (scenarios committed before the implementation branch, checkable with `git merge-base`) because authorship is unverifiable after the fact; and the single-operator case degrades visibly with `independent: false` rather than being silently skipped, since one operator is this tool's common case and not an exception. §7.3. |
 | D-82 | Should `--minutes` have a default, as `--sessions` has none? | **NO DEFAULT, for the same reason and with a measurement behind it** | The two bounds catch different runaways and neither suffices alone. Measured on the real supervisor: sessions that end instantly reached the COUNT (1000) with a one-second clock untouched, and sessions of realistic length reached the CLOCK after three with a ceiling of 1000 untouched. So a run bounded only by a count is unbounded in time, and one bounded only by time is unbounded in spend. A duration defaulting to forever is a bound in name only — and this is the command that spends quota unattended, which is the argument that made `--sessions` mandatory (D-69) applied unchanged. §9.14.5. |
+| D-83 | Does the Manager's process journal ship on by default? | **NO — opt-in, beta, and the flip is conditional on QUALITY rather than on a release date** | Writing observations and retrospectives means a Manager spending tokens reflecting instead of working, and nothing consumes the output yet; self-reflection, which would make it pay for itself, is expected around 0.8.0. It stays opt-in through 0.6.0 and 0.7.0 while what it writes is refined. The flip is earned when the entries are good enough that a human reading them learns something they did not know — not when self-reflection arrives, because "self-reflection shipped, so turn it on" is a calendar decision and that is how a beta becomes a default nobody validated. Recorded as a stated plan rather than left implicit, because for two releases this will look exactly like dead weight to anyone deciding whether to keep investing in it. §9.15.1. |
+| D-84 | How a Manager judges whether a review or a test round was worth it | **It records cost, what changed, and whether the change would have been caught elsewhere — and draws NO verdict** | The obvious metric is inverted and this project has already measured the shape: a round ending "fix these three things" produces a commit, a round ending "this design would force-release live Workers, start again" produces nothing, so commit-based review value is biased toward cheap reviews BY CONSTRUCTION and a Manager judging by output would rank bad reviewing above good. D-39 records the same inversion for delivery (a raw merged-ticket count rewards bursting even when the work is wrong); D-67 and D-70 are the instances — review rounds that produced no commits, killed three legs of an argument and caught a stop condition whose absence would have spent money all night. "Round 2 cost 150k and changed nothing" is checkable; "round 2 was a waste" is a conclusion the Manager is not positioned to draw. §9.15.4. |
+| D-85 | What stops a Manager: Ctrl+C, a bound, or `rite stop` | **Ctrl+C stops BOTH supervisor and session; a bound stops supervision and leaves the session alive; `rite stop <manager>` is the orphan-recovery path only** | A bound is an accounting limit and the user may be mid-conversation, so the pane surviving is right and was verified deliberately. Ctrl+C is a human saying stop, and leaving a live session spending quota with only the restarts halted is not what they asked for — nor should it take two commands. The two paths currently share their teardown, so separating them is the work. Ctrl+C must also call `forget_instance` (zero callers today) or a stopped Manager leaves a record that makes the next `rite start` believe it is running, which is the stale-lock defect in a new place. §9.14.12. |
+| D-86 | How the journal is protected against invented events | **By the FORMAT — a required verifiable anchor and a syntactic observed/inferred split — never by instructing the Manager to be careful** | An issue log containing events that did not happen is worse than no log, and it would poison self-reflection later, which is the one thing eventually meant to read it. An entry with no anchor (commit SHA, file and line, command with output, ticket id, log timestamp) is not written; anchors are checked where checking is cheap; entries are written at the moment rather than reconstructed, because compaction is the specific enemy (this week: a session quoting SHAs stale after a history rewrite, and another reporting reviewers as running that were never launched — memory, not malice); and no entry may claim another agent's internal state, which is the form a hallucination naturally takes. Exhortation is explicitly rejected: this week has two instances where an instruction to check carefully immediately preceded the error it warned against. The same principle underlies the project's paste-the-invocation rule. (A draft cited that rule and a scenario-citation rule by id; neither reference existed in this repository, so the ids are an open question rather than a citation — the rule broken inside the section that states it.) §9.15.3. |
 
 ---
 
@@ -5504,6 +5840,14 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.20.0 — the Manager's process journal (§9.15), stop semantics (§9.14.12–13), and a subsection that contradicted the code.**
+
+§9.15 specifies a diagnostic mode in which a Manager records process issues as files: observations when something looks wrong, retrospectives at a boundary, because *"a bug escaped testing"* is only visible later. Opt-in and beta (D-83), inert by design, and protected against invented events by the entry FORMAT rather than by instructing the Manager to be careful (D-86) — this week has two instances where an instruction to check carefully immediately preceded the error it warned against.
+
+§9.14.12 separates three stop outcomes that currently share one path: a bound reached leaves the session alive, Ctrl+C stops both, and the orphan case is what `rite stop <manager>` is for (D-85).
+
+⚠ **§9.14.7a was STALE AGAINST THE SHIPPED CODE and is corrected.** It said a bare positional "is not available" for `rite start`; what shipped uses one. The contradiction stood in this document while the code disagreed with it — the exact failure that subsection exists to prevent. What resolved it is that the positional became a Manager name rather than a provider, with the resolution order fixed and the cross-machine collision handled where somebody can act on it. `rite stop <manager>` inherits the same collision and is recorded as UNRESOLVED rather than quietly assumed (§9.14.13).
 
 **Changes in 0.19.1 — the second bound on `rite start`, and a race the exit status lost.** `--minutes` joins `--sessions` as a mandatory bound (D-82): the duration was already threaded through three modules and passed to the supervisor, by a call site that always passed zero because no flag set it. Written, tested, reached by nothing — the class the dead-wiring guard cannot see, because it asks whether a FUNCTION is called and never whether a PARAMETER is ever supplied.
 
