@@ -142,3 +142,55 @@ correct action the easy one.
   guarded because the Manager, not rite, put it there.
 - Option 1 is chosen and implemented with `tmux -e`, and the exposure
   already logged for sandbox credentials appears on the Manager path.
+
+---
+
+# Recorded for 0.6.0 — two traps, one of them helpful-looking
+
+Both found in the assessment above. Neither is built or fixed; both are
+here so the next person meets the reasoning before the code.
+
+## ⚠ Trap 1: `tmux -e CLAUDE_CODE_OAUTH_TOKEN` — needs no mechanism, needs a decision
+
+**Do not pass a credential with `tmux new-session -e`.** It is on the tmux
+command line and therefore readable by `ps -ww` from **any local account**
+for the life of that call — the exposure already logged for sandbox
+credentials, which reaches rite's Manager path only if somebody adds it.
+
+⚠ **The trap is that it looks helpful.** The precedent is already in the
+code:
+
+    session.py  argv = [binary, "new-session", "-d", "-e", f"{MANAGER_ENV}={manager}"]
+
+A Manager *name* there is harmless, so the line reads as an established,
+safe pattern — and "pass the token the same way" is a one-line change that
+looks like consistency. It is the single most likely way this leak gets
+introduced, by someone being tidy.
+
+**The correct answer needs no mechanism at all.** A tmux pane inherits the
+environment of the server, and `rite start` runs in the user's own shell.
+If the token is in rite's environment it reaches the engine by inheritance:
+rite never holds the value, never places it on a command line, and has
+nothing to redact. That also matches §9.14.7 — consume it from the
+environment only; never read, persist, log or transmit it.
+
+**It needs a deliberate decision, not silence**, because the safe answer is
+*absence of code* and absence of code is exactly what a later contributor
+will fill in.
+
+## Trap 2: three refusals embed raw tmux stderr
+
+`session.py` builds user-facing refusals from truncated subprocess output
+in three places:
+
+    detail = (done.stderr or done.stdout or "").strip()[:200]
+
+Harmless today: tmux's argv carries only a Manager name. It stops being
+harmless the moment Trap 1 is introduced — tmux can echo the command line
+in an error, and the refusal would carry the token into a message, a
+terminal, and whatever the user pastes.
+
+**They are coupled**: Trap 2 is a leak only if Trap 1 happens, which is an
+argument for closing Trap 1 by decision rather than relying on redaction
+downstream. If Trap 1 is ever taken anyway, these three sites are where the
+value surfaces.

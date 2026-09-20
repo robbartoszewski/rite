@@ -5192,6 +5192,24 @@ anything comes back from that run. It is not a nice-to-have in this
 release; it is the instrument for the only big unattended run currently
 planned, which is precisely the case §9.15 was written for.
 
+⚠ **REVERSED FOR v0.5.1 (owner's decision). The requirement below is NOT
+in force in that release.** Issue recording ships **undocumented**: it is
+absent from the README, the CHANGELOG's 0.5.1 section and the guide, and
+nothing invites a user to enable it. `--record-issues` keeps working
+exactly as specified — the machinery is untouched — but it is not
+advertised, and no operator is encouraged to send its output anywhere.
+
+The reason is scope, not doubt about the design: the journal applies **no
+redaction**, while §9.15.6 asks a Manager to record "a command with its
+output" and §9.15.3a tells an operator to zip the directory and send it.
+Redaction was assessed and deliberately deferred past 0.5.1
+(`docs/design/CREDENTIAL_HANDLING_FOR_UNATTENDED_RUNS.md`), so the
+feature is not promoted until the leak path is closed.
+
+**The discoverability argument below stands on its merits and returns with
+the feature.** It is recorded rather than deleted because it is the reason
+the requirement existed, and whoever re-advertises this needs it.
+
 ##### Two consequences that follow from WHO runs it
 
 **1. It must be discoverable by somebody who has not read this spec.** An

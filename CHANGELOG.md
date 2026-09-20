@@ -2,46 +2,6 @@
 
 ## 0.5.1 (unreleased)
 
-### A Manager can record what it noticed — `rite start --record-issues` (BETA)
-
-Feedback about how rite is *working* has only ever existed where a human
-was watching. An unattended run produced silence: whatever the session
-noticed went into a pane's scrollback and died with it.
-
-With `--record-issues`, a Manager writes what it noticed to files under
-`.rite/managers/<name>/journal/`, using two new commands:
-
-- `rite journal observe` — something behaved differently from what the
-  docs, or a tool's own output, claimed.
-- `rite journal retrospective` — what a ticket or a review round cost,
-  what changed, and whether the change would have been caught elsewhere.
-
-**Off by default, and genuinely off.** A Manager started without the flag
-is not told the journal exists, so it spends nothing reflecting. Marked
-beta because the entry format will change.
-
-**An entry without an anchor is refused** — a commit SHA, a file and line,
-a command with its output, a ticket id, or a named log file with a
-timestamp. An issue log containing events that did not happen is worse
-than no log, so the format makes an uncheckable entry impossible to write
-rather than asking for a careful one. `observed` and `inferred` are
-separate fields for the same reason.
-
-**A retrospective has nowhere to record a verdict**, deliberately. The
-obvious measure is inverted: a review round ending "fix these three
-things" produces a commit, one ending "this design would force-release
-live Workers, start again" produces nothing — so judging a round by its
-output ranks bad reviewing above good.
-
-**Nothing in rite reads these files**, and nothing collects, uploads or
-transmits them. `rite start --record-issues` prints the directory so
-whoever is running the session knows where to copy from; there is no
-export command and none is planned.
-
-**Known gap, stated rather than discovered:** an entry must *have* an
-anchor, and an anchor that is present is not verified to resolve — so a
-plausible but invented commit SHA is accepted today.
-
 ### Fixed before release: `days:` was parsed but ignored by the loop and scheduler
 
 The day dimension above is enforced at `rite sandbox start`, and four other
@@ -165,15 +125,10 @@ reached the session only as prompt text, which the supervisor sends on the
 **first** session and deliberately never again — so after a resume nothing
 on the machine could answer the question.
 
-`--manager` on `rite journal observe` and `rite journal retrospective` is
-therefore no longer required: inside a Manager's own session it defaults to
-that Manager. An explicit `--manager` still wins, and outside a session the
-command refuses rather than guessing a name — an entry filed under the
-wrong Manager is worse than one that was refused.
-
 ⚠ **Needs tmux 3.2 or newer** (for `new-session -e`). On an older tmux the
-session still starts and `rite start` says that the identity is unavailable
-and that commands inside it need `--manager` spelled out.
+session still starts and `rite start` says that the identity is
+unavailable, so anything running inside it that needs the Manager's name
+must be told it explicitly.
 
 ### Fixed: `rite schedule show` showed neither the days nor the clock
 
@@ -249,60 +204,6 @@ TMUX= tmux attach -t rite-mgr-acme-73053d-planner
 
 This is tmux's own behaviour, not rite's, but it is the first thing an
 operator who works inside tmux will hit.
-
-### Known: a journal entry does not record who wrote it
-
-A Manager session carries `RITE_MANAGER`, and `--manager` defaults to it, so
-anything run in that pane files under that Manager — **including what you
-type yourself while attached.** An entry a human wrote is indistinguishable
-from one the Manager wrote: the file has anchor, observed, expected and
-inferred, and no author field.
-
-Filing on a Manager's behalf is a real case and is why `--manager` became
-optional, so this is not simply a bug. But the journal exists as evidence
-about how rite is working, and *who noticed something* is load-bearing in
-evidence — a human's note carrying a Manager's authority is the wrong
-direction for that to fail. Recorded rather than fixed: the entry format is
-already marked beta and will change.
-
-### Fixed: an anchor of invisible characters is no longer an anchor
-
-`str.strip()` removes Python-whitespace only, so U+200B ZERO WIDTH SPACE,
-U+200C ZWNJ and U+2800 BRAILLE PATTERN BLANK all passed the anchor refusal
-— measured. An entry whose anchor renders blank is worse than the invented
-SHA the known gap below describes, because at least an invented SHA looks
-like something a reader will try to check.
-
-The rule is now positive rather than a blacklist: **an anchor must contain
-at least one ASCII letter or digit.** Two earlier attempts were rules about
-which characters count as blank, and each was beaten by a character its
-author had not met — a blacklist of Unicode categories missed U+2800
-(category `So`), and `str.isalnum()` missed U+3164 HANGUL FILLER and three
-other category-`Lo` characters that are alphanumeric *and* render as
-nothing.
-
-ASCII, because an anchor exists to be checked by a reader — a commit SHA, a
-`file:line`, a command with its output, a ticket id — and every one of those
-is ASCII. So the restriction costs nothing real and removes that whole
-family at once, rather than naming its members. Unicode cannot add a new
-ASCII alphanumeric.
-
-The test that guards it now DERIVES its cases from the Unicode database
-instead of listing them, so it would have caught U+3164 without anyone
-having heard of U+3164.
-
-**Why this release exists, stated plainly: v0.5.0 shipped a schedule that
-looks enforced and is not.** A user opens `config.yaml`, sees windows and
-worker counts, and has no way to discover that `rite sandbox start` ignores
-them — and v0.5.0's changelog says nothing, because the entry explaining it
-was written after the tag. That is the silent-wrong-belief defect v0.5.0's
-own notes are largely about, shipped inside the release that files it. It is
-the reason this is prompt rather than convenient.
-
-v0.5.0 was tagged against its release FINDINGS rather than against its
-assigned feature scope. `rite start <name>` and the refined schedule were
-both in scope and neither was in the tag. The schedule half is corrected
-here; `rite start <name>` is being planned and reviewed before it is built.
 
 ### Enhancements
 
@@ -562,27 +463,6 @@ engine, so it fails up front rather than on every subtask. It is described
 here because it is in the code, not because it is a feature.
 
 ### Known, and not fixed in this release
-
-- **A journal anchor must contain at least one ASCII letter or digit, and
-  that refuses some legitimate anchors.** `rite journal observe --anchor`
-  rejects a value with nothing ASCII-alphanumeric in it, so an anchor
-  written **entirely** in a non-Latin script — Cyrillic, Greek, Han, Arabic
-  — with no line number, commit SHA, path separator or ticket id is refused
-  even though a reader could check it perfectly well.
-
-  **The workaround is something you were probably citing anyway:** add the
-  line number, the commit, or the file path. `src/модуль.py:88`,
-  `6a8a5b2`, `RT-412` and `модуль.py:88` all pass — only a value with *no*
-  ASCII character at all is refused.
-
-  **Why it is this way, briefly:** the rule exists to stop an anchor that
-  renders as nothing getting past the refusal and into the journal as
-  evidence, and two earlier attempts to describe "blank" by character class
-  were each defeated by a character their author had not met. ASCII is a
-  floor that cannot be widened by a new codepoint. It is too blunt, it is
-  known, and it is being addressed in 0.6.0 —
-  `docs/design/V060_ANCHOR_LEGIBILITY.md` has the history and the
-  constraints on any replacement.
 
 - **Credentials are visible to other local accounts while a Worker starts.**
   rite passes each project credential to the sandbox as a command-line

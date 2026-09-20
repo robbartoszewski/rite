@@ -6100,10 +6100,10 @@ def manager_stop(name: str) -> None:
     "--record-issues",
     is_flag=True,
     default=False,
-    help="BETA. Record what this Manager notices about how rite is working "
-    "to a journal on disk — turn it on for an unattended or experimental "
-    "run, which is exactly when nobody is watching to see it (D-89, "
-    "\u00a79.15). Off by default; beta means the entry format may change.",
+    help="BETA, undocumented. Record what this Manager notices about how "
+    "rite is working to a journal on disk. Off by default. The entry "
+    "format may change, entries are NOT redacted, and nothing in this "
+    "release documents or supports it.",
 )
 def start_cmd(
     directory: str, sessions: int | None, minutes: float | None, record_issues: bool
