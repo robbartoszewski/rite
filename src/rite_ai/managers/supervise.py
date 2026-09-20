@@ -38,7 +38,13 @@ from pathlib import Path
 
 from rite_ai.managers import ManagerInstance, forget_instance, record_instance
 from rite_ai.managers.prompt import deliver as deliver_prompt
-from rite_ai.managers.session import StartResult, ending, liveness, was_attached
+from rite_ai.managers.session import (
+    StartResult,
+    ending,
+    liveness,
+    session_name,
+    was_attached,
+)
 from rite_ai.managers.session import start as start_session
 from rite_ai.managers.session import stop as stop_session
 
@@ -230,92 +236,107 @@ def supervise(
                     cycles,
                 )
 
-        result: StartResult = launch(
-            root,
-            manager,
-            engine=engine,
-            resume_id=resume_from,
-            max_sessions=max_sessions,
-            window_seconds=window_seconds,
-        )
-        if not result.ok:
-            return SuperviseResult(False, result.message, cycles)
-
-        live = result.session
-        live_pane = getattr(result, "pane", "")
-        cycle = Cycle(
-            number=len(cycles) + 1,
-            session=result.session,
-            resumed_from=resume_from,
-            started_at=clock(),
-        )
-        cycles.append(cycle)
-
-        # ⚠ THE FIRST SESSION ONLY (D-90). A resumed session already carries
-        # the context the prompt would establish, and re-issuing an
-        # instruction into a conversation that is mid-task is the same class
-        # of error as restarting a session a human deliberately quit: the
-        # tool telling the agent to begin something it is in the middle of.
-        # `resume_from` is the observable — empty means this is a fresh
-        # context — rather than `len(cycles) == 1`, which would also be true
-        # of a first cycle that was itself a resume.
-        if prompt and not resume_from:
-            handed = hand_over(result.session, prompt)
-            cycle.prompted = handed.ok
-            if not handed.ok:
-                # Reported, NOT fatal. A Manager whose prompt did not arrive
-                # is still a running session the human is paying for, and
-                # killing it to signal a delivery failure would destroy work
-                # to report a problem.
-                say(
-                    f"warning: the Manager's prompt may not have arrived — "
-                    f"{handed.detail}. Attach with `tmux attach -t "
-                    f"{result.session}` and check."
-                )
-
-        # Wait for it to end. The human can attach throughout — that is
-        # §9.14.3, and it is why "nobody is watching" is false here in a way
-        # it is not for a cron tick. Whether anybody DID attach is recorded
-        # while waiting, because attachment is a moment and the question
-        # `ending` asks is whether somebody was ever there.
-        attended = False
         try:
+            result: StartResult = launch(
+                root,
+                manager,
+                engine=engine,
+                resume_id=resume_from,
+                max_sessions=max_sessions,
+                window_seconds=window_seconds,
+            )
+            if not result.ok:
+                return SuperviseResult(False, result.message, cycles)
+
+            live = result.session
+            live_pane = getattr(result, "pane", "")
+            cycle = Cycle(
+                number=len(cycles) + 1,
+                session=result.session,
+                resumed_from=resume_from,
+                started_at=clock(),
+            )
+            cycles.append(cycle)
+
+            # ⚠ THE FIRST SESSION ONLY (D-90). A resumed session already carries
+            # the context the prompt would establish, and re-issuing an
+            # instruction into a conversation that is mid-task is the same class
+            # of error as restarting a session a human deliberately quit: the
+            # tool telling the agent to begin something it is in the middle of.
+            # `resume_from` is the observable — empty means this is a fresh
+            # context — rather than `len(cycles) == 1`, which would also be true
+            # of a first cycle that was itself a resume.
+            if prompt and not resume_from:
+                handed = hand_over(result.session, prompt)
+                cycle.prompted = handed.ok
+                if not handed.ok:
+                    # Reported, NOT fatal. A Manager whose prompt did not arrive
+                    # is still a running session the human is paying for, and
+                    # killing it to signal a delivery failure would destroy work
+                    # to report a problem.
+                    say(
+                        f"warning: the Manager's prompt may not have arrived — "
+                        f"{handed.detail}. Attach with `tmux attach -t "
+                        f"{result.session}` and check."
+                    )
+
+            # Wait for it to end. The human can attach throughout — that is
+            # §9.14.3, and it is why "nobody is watching" is false here in a way
+            # it is not for a cron tick. Whether anybody DID attach is recorded
+            # while waiting, because attachment is a moment and the question
+            # `ending` asks is whether somebody was ever there.
+            attended = False
             while liveness(result.session).alive:
                 if deadline is not None and clock() >= deadline:
                     break
                 attended = attended or was_attached(result.session)
                 time.sleep(poll)
+            cycle.ended_at = clock()
+            cycle.attended = attended
+
+            how = ending(result.session, human_was_present=attended, pane=live_pane)
+            cycle.ending = how.kind
+            if not how.resume:
+                return SuperviseResult(
+                    how.kind != "crashed",
+                    _stopped_because(how, len(cycles)),
+                    cycles,
+                )
+
+            # Only now, and only for a session that finished cleanly with
+            # nobody attached, is a resume the right thing.
+            resume_from = next_id(root, manager, cycle.started_at)
+            if not resume_from:
+                return SuperviseResult(
+                    True,
+                    f"stopped after {len(cycles)} session(s): the session "
+                    "finished but no transcript was found to resume from, so "
+                    "continuing would start a FRESH context rather than carry "
+                    "the work on. Refused rather than silently restarting.",
+                    cycles,
+                )
+
         except KeyboardInterrupt:
-            # ⚠ A HUMAN SAYING STOP, which is a different event from a bound
-            # being reached — §9.14.12. A bound leaves the session alive
+            # ⚠ A HUMAN SAYING STOP — a different event from a bound being
+            # reached (§9.14.12). A bound leaves the session alive
             # deliberately, because the user may be mid-conversation and a
-            # ceiling is an accounting limit. Ctrl-C is not an accounting
-            # limit, and leaving a live session spending quota with only the
-            # restarts halted is not what was asked for.
-            return _torn_down(root, manager, live, cycles, say)
-        cycle.ended_at = clock()
-        cycle.attended = attended
-
-        how = ending(result.session, human_was_present=attended, pane=live_pane)
-        cycle.ending = how.kind
-        if not how.resume:
-            return SuperviseResult(
-                how.kind != "crashed",
-                _stopped_because(how, len(cycles)),
-                cycles,
-            )
-
-        # Only now, and only for a session that finished cleanly with
-        # nobody attached, is a resume the right thing.
-        resume_from = next_id(root, manager, cycle.started_at)
-        if not resume_from:
-            return SuperviseResult(
-                True,
-                f"stopped after {len(cycles)} session(s): the session "
-                "finished but no transcript was found to resume from, so "
-                "continuing would start a FRESH context rather than carry "
-                "the work on. Refused rather than silently restarting.",
-                cycles,
+            # ceiling is an accounting limit. Ctrl-C is not.
+            #
+            # ⚠ THE GUARD COVERS THE WHOLE CYCLE, NOT JUST THE WAIT. A draft
+            # wrapped only the wait loop, so a Ctrl-C during `start`'s
+            # two-second settle window escaped `supervise` entirely: no
+            # teardown, a live paid session, and no instance record — after
+            # which `rite start` refuses to adopt or kill it and the user
+            # cleans up by hand. That window is two seconds of EVERY cycle,
+            # and it is exactly when a user who has just realised they
+            # started the wrong thing presses Ctrl-C.
+            #
+            # `live` is empty when the interrupt beat `start`'s return, so
+            # the name is derived instead: `start` creates the tmux session
+            # before it records anything, so the name is known even when
+            # the result is not.
+            return _torn_down(
+                root, manager, live or session_name(root, manager), cycles, say
             )
 
 
@@ -335,8 +356,43 @@ def _torn_down(root, manager: str, session: str, cycles, say) -> SuperviseResult
     Ordered so a failure to kill does not skip the record: both run, and
     the report names what actually happened rather than what was intended.
     """
-    gone = stop_session(session) if session else None
-    forget_instance(root, manager)
+    # ⚠ A SECOND Ctrl-C MUST NOT ORPHAN THE RECORD. A draft called these two
+    # in sequence unguarded, so an interrupt landing between them left the
+    # session killed and the record behind — the phantom this function
+    # exists to remove, produced by the function that removes it. §9.14.12
+    # already requires the teardown "survive a partial teardown"; this is
+    # that requirement enforced rather than stated.
+    gone = None
+    interrupted_again = False
+    try:
+        if session:
+            gone = stop_session(session)
+    except KeyboardInterrupt:
+        interrupted_again = True
+    finally:
+        # The record goes even if Ctrl-C keeps arriving. `forget_instance`
+        # is one unlink and swallows OSError, so this terminates on the
+        # first attempt that is not interrupted.
+        while True:
+            try:
+                forget_instance(root, manager)
+                break
+            except KeyboardInterrupt:
+                interrupted_again = True
+                continue
+    if interrupted_again:
+        say(
+            f"warning: interrupted again during teardown — the record is "
+            f"cleared, so `rite start` will not think {manager!r} is "
+            f"running. Check with `tmux has-session -t ={session}` and end "
+            f"it with `tmux kill-session -t {session}` if it is still there."
+        )
+        return SuperviseResult(
+            True,
+            f"stopped Manager {manager!r} — interrupted during teardown, so "
+            f"its session may still be running",
+            cycles,
+        )
     if gone is not None and not gone.ok:
         say(
             f"warning: could not stop {session} — {gone.detail}. The record "

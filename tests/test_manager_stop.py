@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 
 from rite_ai.managers import ManagerInstance, read_instance, record_instance
-from rite_ai.managers.session import StartResult, session_name, stop
+from rite_ai.managers.session import StartResult, Stopped, session_name, stop
 from rite_ai.managers.supervise import supervise
 
 tmux_only = pytest.mark.skipif(
@@ -324,3 +324,141 @@ class TestStopAgainstRealTmux:
             )
         finally:
             subprocess.run(["tmux", "kill-session", "-t", name], capture_output=True)
+
+
+class TestTheInterruptGuardCoversTheWholeCycle:
+    """⚠ Two findings from a third review, both "a guard around the wrong
+    span" — and both tested by actually raising `KeyboardInterrupt` at the
+    moment in question, not by asserting a handler exists.
+
+    §9.14.12 already required all of this; neither was enforced.
+    """
+
+    def _recorded(self, tmp_path):
+        (tmp_path / ".rite").mkdir(exist_ok=True)
+        record_instance(
+            tmp_path,
+            ManagerInstance(
+                name="lead",
+                session=session_name(tmp_path, "lead"),
+                pid=1,
+                engine="sh",
+                max_sessions=1,
+                window_seconds=0.0,
+            ),
+        )
+        return tmp_path
+
+    def test_an_interrupt_during_the_settle_window_is_handled(
+        self, tmp_path, monkeypatch
+    ):
+        """⚠ The guard wrapped only the wait loop, so a Ctrl-C during
+        `start`'s two-second settle escaped `supervise` entirely: no
+        teardown, a live paid session, and NO instance record — after which
+        `rite start` refuses to adopt or kill it. Two seconds of every
+        cycle, and the moment a user who started the wrong thing reaches
+        for Ctrl-C."""
+        import rite_ai.managers.supervise as sup
+
+        root = self._recorded(tmp_path)
+        monkeypatch.setattr(sup, "stop_session", lambda n: Stopped(True, True, "ok"))
+
+        def interrupted_start(r, m, *, engine, resume_id, max_sessions, window_seconds):
+            raise KeyboardInterrupt
+
+        result = sup.supervise(
+            root,
+            "lead",
+            engine="sh",
+            max_sessions=1,
+            window_seconds=0,
+            verdict=lambda _r: "ready",
+            starter=interrupted_start,
+        )
+        assert result.ok
+        assert "lead" in result.reason
+        assert read_instance(root, "lead") is None, (
+            "an interrupt during the settle window left a phantom record — "
+            "the next `rite start` would believe this Manager is running"
+        )
+
+    def test_the_session_name_is_derived_when_the_interrupt_beat_the_result(
+        self, tmp_path, monkeypatch
+    ):
+        """`start` creates the tmux session BEFORE it records anything, so
+        on an interrupt there is a session to stop and no result to name
+        it. The name is derived rather than skipped, or the teardown tears
+        down nothing."""
+        import rite_ai.managers.supervise as sup
+
+        root = self._recorded(tmp_path)
+        asked: list[str] = []
+        monkeypatch.setattr(
+            sup,
+            "stop_session",
+            lambda n: asked.append(n) or Stopped(True, True, "ok"),
+        )
+
+        def interrupted_start(r, m, *, engine, resume_id, max_sessions, window_seconds):
+            raise KeyboardInterrupt
+
+        sup.supervise(
+            root,
+            "lead",
+            engine="sh",
+            max_sessions=1,
+            window_seconds=0,
+            verdict=lambda _r: "ready",
+            starter=interrupted_start,
+        )
+        assert asked == [session_name(root, "lead")], (
+            f"the teardown did not try to stop the session it would have "
+            f"created: {asked}"
+        )
+
+    def test_a_SECOND_interrupt_during_teardown_still_clears_the_record(
+        self, tmp_path, monkeypatch
+    ):
+        """⚠ The phantom produced by the function that removes phantoms. A
+        draft called `stop_session` then `forget_instance` unguarded, so an
+        interrupt between them left the session killed and the record
+        behind. §9.14.12 requires the teardown survive a partial teardown."""
+        import rite_ai.managers.supervise as sup
+
+        root = self._recorded(tmp_path)
+
+        def interrupt_the_stop(_name):
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(sup, "stop_session", interrupt_the_stop)
+        monkeypatch.setattr(
+            sup, "liveness", lambda n: (_ for _ in ()).throw(KeyboardInterrupt())
+        )
+
+        def starter(r, m, *, engine, resume_id, max_sessions, window_seconds):
+            return StartResult(True, "ok", session="s1", attach="a", pane="%1")
+
+        said: list[str] = []
+        result = sup.supervise(
+            root,
+            "lead",
+            engine="sh",
+            max_sessions=1,
+            window_seconds=0,
+            verdict=lambda _r: "ready",
+            starter=starter,
+            note=said.append,
+        )
+        assert read_instance(root, "lead") is None, (
+            "a second Ctrl-C orphaned the record — the phantom this "
+            "teardown exists to prevent"
+        )
+        assert result.ok
+        assert "may still be running" in result.reason, (
+            "it cleared the record and claimed the session was stopped, "
+            "which it does not know"
+        )
+        assert said and "kill-session" in said[0], (
+            "the user was not told how to check for the session it could "
+            "not confirm it had stopped"
+        )
