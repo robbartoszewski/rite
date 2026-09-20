@@ -7,6 +7,13 @@ from `CLAUDE_CODE_OAUTH_TOKEN` in the environment — the keychain path does
 not work under `-p` — so choosing Option 1 makes a token a *requirement*
 for unattended runs, and a credential then passes through rite.
 
+⚠ **Option 1 created a second scope, recorded separately:**
+`PERMISSION_MODE_FOR_UNATTENDED_RUNS.md`. This document is about the token
+`-p` needs to AUTHENTICATE; that one is about the permission it needs to
+ACT — measured, a `-p` Manager has no tool permissions by default and the
+mode cannot be inherited from an interactive session. Same decision, two
+consequences; read them together.
+
 ---
 
 ## What is ALREADY true, because it shortens the work
