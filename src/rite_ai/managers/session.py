@@ -456,8 +456,8 @@ def ending(name: str, human_was_present: bool) -> Ending:
             UNCLEAR,
             detail=(
                 "the pane is dead but tmux reported no exit status "
-                f"({reported!r}) within a second, so whether it finished or "
-                "failed is unknown"
+                f"({reported!r}) within {STATUS_READS * STATUS_PAUSE:g}s, so "
+                "whether it finished or failed is unknown"
             ),
         )
 

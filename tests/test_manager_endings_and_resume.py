@@ -63,33 +63,48 @@ def project(tmp_path: Path) -> Path:
 
 
 def _what_tmux_showed(name: str, how) -> str:
-    """⚠ A diagnostic, because this failed on Linux three times and each
-    time the message said only `unclear` — which is the one word that does
-    not distinguish the four ways it is reached. Guessing at a platform you
-    cannot run is how a one-line race cost three CI cycles.
+    """⚠ A diagnostic, because this failed on Linux four times and the
+    message said only `unclear` — the one word that does not distinguish
+    the four ways it is reached.
+
+    ⚠ **Called BEFORE the test kills its session, and that is the whole
+    point.** The first version ran inside the assert message, which the
+    tests reach only after `kill-session` — and killing the last session
+    stops the tmux server, so every probe came back `no server running` and
+    a whole CI cycle produced no information. A diagnostic that runs after
+    the thing it measures is gone measures nothing.
     """
     bits = [f"ending={how.kind!r} status={how.status} detail={how.detail!r}"]
     for label, argv in (
         ("version", ["tmux", "-V"]),
         ("sessions", ["tmux", "list-sessions"]),
-        (
-            "raw",
-            [
-                "tmux",
-                "display-message",
-                "-p",
-                "-t",
-                name,
-                "dead=#{pane_dead} status=#{pane_dead_status} "
-                "remain=#{?pane_dead,yes,no}",
-            ],
-        ),
         ("option", ["tmux", "show-window-options", "-t", name, "remain-on-exit"]),
     ):
         got = subprocess.run(argv, capture_output=True, text=True)
         bits.append(
             f"{label}: rc={got.returncode} {(got.stdout or got.stderr).strip()!r}"
         )
+    # Does the status EVER arrive? Three more seconds of it, sampled, so the
+    # answer is "no, never" or "yes, at 4.1s" rather than another guess.
+    trail = []
+    for _ in range(15):
+        got = subprocess.run(
+            [
+                "tmux",
+                "display-message",
+                "-p",
+                "-t",
+                name,
+                "#{pane_dead}/#{pane_dead_status}",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        trail.append(
+            (got.stdout or got.stderr).strip() if got.returncode == 0 else "gone"
+        )
+        time.sleep(0.2)
+    bits.append(f"after: {trail}")
     return "\n  ".join(bits)
 
 
@@ -110,12 +125,11 @@ class TestTheThreeEndings:
                 break
             time.sleep(0.2)
         how = ending(result.session, human_was_present=False)
+        shown = "" if how.kind == FINISHED else _what_tmux_showed(result.session, how)
         subprocess.run(
             ["tmux", "kill-session", "-t", result.session], capture_output=True
         )
-        assert how.kind == FINISHED and how.resume, _what_tmux_showed(
-            result.session, how
-        )
+        assert how.kind == FINISHED and how.resume, shown
 
     def test_an_absent_exit_status_is_UNCLEAR_not_zero(self, monkeypatch):
         """⚠ Caught by Linux CI. A draft parsed an empty
@@ -148,12 +162,11 @@ class TestTheThreeEndings:
                 break
             time.sleep(0.2)
         how = ending(result.session, human_was_present=False)
+        shown = "" if how.kind == CRASHED else _what_tmux_showed(result.session, how)
         subprocess.run(
             ["tmux", "kill-session", "-t", result.session], capture_output=True
         )
-        assert how.kind == CRASHED and how.status == 9, _what_tmux_showed(
-            result.session, how
-        )
+        assert how.kind == CRASHED and how.status == 9, shown
         assert not how.resume, "a crash that repeats would repeat at the user's expense"
 
     @tmux_only
@@ -171,10 +184,11 @@ class TestTheThreeEndings:
                 break
             time.sleep(0.2)
         how = ending(result.session, human_was_present=True)
+        shown = "" if how.kind == QUIT else _what_tmux_showed(result.session, how)
         subprocess.run(
             ["tmux", "kill-session", "-t", result.session], capture_output=True
         )
-        assert how.kind == QUIT, _what_tmux_showed(result.session, how)
+        assert how.kind == QUIT, shown
         assert not how.resume, "the human said stop and it restarted anyway"
 
     def test_a_session_that_is_gone_is_UNCLEAR_and_does_not_resume(self):
