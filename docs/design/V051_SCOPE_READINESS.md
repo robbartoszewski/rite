@@ -26,7 +26,7 @@ Not "I have stopped writing."
 | 6 | Prompting the session on start | **BUILT + mutation-checked** | §9.14.11a, D-90 | `a555091` |
 | 7 | Managers in `rite status` | **BUILT** (rite-dd) | — | `f803a10` |
 | 8 | Ctrl+C stops both; `rite manager stop` recovers | **BUILT + mutation-checked** | §9.14.12–13, D-85 | `52b64c9` |
-| 9 | Issue recording (`--record-issues`) | **SPECIFIED, not built** — stays in 0.5.1 (D-88) | §9.15, D-83/84/86/87/88/89 | — |
+| 9 | Issue recording (`--record-issues`) | **BUILT** (rite-dd) | §9.15, D-83..D-93 | `93f87f9` |
 
 Found and fixed during refinement, not on the original list:
 
@@ -355,8 +355,7 @@ had made confidently and wrongly.
 
 ## Built state (2026-09-20, later)
 
-Eight of nine built and CI-green on Linux; issue recording is rite-dd's and
-in flight. Every acceptance test above that could be run has been run:
+**All nine built and CI-green on Linux.** Every acceptance test above that could be run has been run:
 **100 passed** across the seven files covering items 1–6 and 8.
 
 | item | landed |
@@ -369,7 +368,7 @@ in flight. Every acceptance test above that could be run has been run:
 | 6 prompting + delivery confirmed | `a555091` |
 | 7 Managers in `rite status` | rite-dd, `f803a10` |
 | 8 Ctrl+C stops both; `rite manager stop` | `52b64c9` |
-| 9 issue recording | rite-dd, in flight |
+| 9 issue recording | rite-dd, `93f87f9` |
 
 **Q2 resolved and built.** `rite manager stop <name>` under a new `manager`
 noun; `rite stop [DIRECTORY]` untouched and still resolving aliases.
@@ -395,3 +394,32 @@ same technique found both.
 Both are instances of the rule this release arrived at: **a fix is reviewed
 by someone who did not write it, or by its author running it against input
 it should reject — never by its author re-reading it.**
+
+### Item 9 reviewed by running it (2026-09-20)
+
+I wrote §9.15 and had reviewed only rite-dd's spec work, which made me the
+wrong reviewer for the words and the right one for whether the code matches
+them. Exercised end to end in a scratch project rather than read:
+
+| §9.15 requirement | result |
+|---|---|
+| anchor refused on the writing path, no file created | refused, `files after refusal: 0` |
+| `observed` / `inferred` separate fields | separate sections in the entry |
+| retrospective records cost / changed / caught-elsewhere, no verdict | three flags present, **no verdict flag** |
+| `instructions()` empty when disabled, same shape when not | `''`, and `on.startswith(off)` |
+| instructions name the COMMAND (item 3) | `rite journal observe` present |
+| nothing in rite reads the journal | no reader found |
+| start notice: copy primary, `git add -f` one way | matches D-91 |
+| `--record-issues` off by default, beta in help | both |
+
+**Beyond the spec:** a Manager name that is a path is refused, *including*
+the single-segment cases `.` and `..` that contain no separator. §9.15
+never required that and the entry path is built from a user-supplied name,
+so it is the right instinct.
+
+**One divergence, and the SPEC was wrong rather than the code.** §9.15.1
+said the help text carries the recommendation and the beta caveat "in that
+order"; the implementation leads with `BETA.` as a tag, which reads better.
+A spec that fixes the order of two clauses is legislating prose style.
+Relaxed to the property — neither hedges the other — with the order left to
+the implementer.

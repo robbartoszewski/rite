@@ -580,6 +580,7 @@ separately all day**, because the same sentence explains all of them:
 | `Path.glob` on a renamed directory | an empty iterator | zero offenders, guard PASSES |
 | a regex over reformatted argv lists | no matches | zero offenders, guard PASSES |
 | `git add` on a path under an excluded dir | a hint on stderr | the file was staged |
+| `importorskip` on an unimplemented module | `1 skipped` | a GREEN suite |
 
 **Why `try/except Exception` is the wrong instinct**, and it is the first one
 everybody reaches for: it was already there in most of these. `store.py`

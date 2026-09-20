@@ -5233,8 +5233,11 @@ does not: it is a statement about the stability of the ENTRY FORMAT, not
 about whether the feature works. The two say different things to the same
 reader — *use this when nobody is watching* and *do not build a parser
 against what it writes yet* — and both are true. So the help text carries
-the recommendation and the caveat in that order, and neither hedges the
-other.
+both, and **neither hedges the other** — which is the property; the order
+is the implementer's. A draft of this sentence mandated an order, and the
+implementation reads better with `BETA.` as a leading tag than as a
+trailing qualifier. A spec that fixes the order of two clauses is
+legislating prose style, and review caught it doing so.
 
 #### 9.15.2. Two kinds of entry, because the important judgements are not available in the moment
 
