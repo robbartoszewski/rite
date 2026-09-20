@@ -4651,6 +4651,29 @@ the same mistake as freezing the state layer against git alone.
 §9.14.2's instability ends when `local` lands, not when the second adapter
 lands.
 
+#### 9.14.10. A recorded value names the thing it claims to name
+
+**A value written into state must describe what is actually running, not
+what the recording process happened to know.** Stated as a rule because the
+first Manager implementation broke it four times in one function.
+
+`pid` recorded `os.getpid()` — the rite CLI's own process, which exits
+seconds later and whose number the OS then recycles. Measured: recorded
+41437 where the pane was 41470. `engine` recorded the configured engine
+while the thing launched was `command or engine or "claude"`, so an
+explicit command meant the field named something that was not running.
+
+⚠ **A recorded value that names a different thing than it claims is worse
+than no value, because it reads as evidence.** An absent pid makes a reader
+go and look; a wrong one makes them act. This is the same argument §3.5
+makes for heartbeats — a stale beat is worse than a missing one — applied
+to identity rather than to time.
+
+**So: ask the thing itself.** tmux knows its pane's pid (`#{pane_pid}`) and
+when the session was created (`#{session_created}`); the process that spawns
+it knows neither, and knowing a value at recording time is not the same as
+the value being true.
+
 #### 9.14.9. The shape settled (2026-09-20), and what it overturns
 
 **Three questions this section left open have been answered, and the answers

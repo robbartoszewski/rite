@@ -28,8 +28,53 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parent.parent / "src"
 COORDINATION = SRC / "rite_ai" / "coordination"
 
+# ⚠ WIDENED 2026-09-20, after the third instance in one week of something
+# that exists and is never invoked. `coordination/` was the scope because
+# that is where nine of them shipped at once — but `manager_to_start` was
+# written into SPEC as D-78, implemented, unit tested, and unreachable
+# because of one condition in the caller, and it sat outside this glob.
+#
+# The common thread across all three (`Claim.ticket`, `workers_at`,
+# `manager_to_start`) is that **unit tests prove a function correct and say
+# nothing about whether anything calls it** — so passing tests are what made
+# each of them look finished. This guard is the only check in the suite that
+# asks the other question, which is an argument for widening it rather than
+# for writing a second one.
+WATCHED = (
+    COORDINATION,
+    SRC / "rite_ai" / "managers",
+)
+
 # name -> why nothing calls it. A reason is required; "not yet" is not one.
 UNCALLED_ON_PURPOSE = {
+    # --- rite_ai/managers/, added when this guard was widened ---
+    "user_dir": (
+        "Called by `instance_path` in the same file. `called_outside` counts "
+        "callers in OTHER files, which is right for `coordination/` where "
+        "each file is a mechanism, and counts a package's internal API as "
+        "dead. Exempted rather than relaxing the rule, because relaxing it "
+        "would hide the nine-at-once case this guard was written for."
+    ),
+    "instance_path": (
+        "Same: called by `record_instance`, `read_instance` and "
+        "`forget_instance` in the same file."
+    ),
+    "pane_pid": (
+        "Called by `start` in the same file. It exists as a named function "
+        "because what it returns — tmux's pane pid rather than the CLI's own "
+        "— is the whole point, and a comment would not have carried that."
+    ),
+    "forget_instance": (
+        "Nothing removes an instance record yet because `rite stop <manager>` "
+        "is not built (v0.5.1 plan). A stale record does not wedge anything: "
+        "`running()` treats a dead session or a dead pid as absent, so the "
+        "cost of not calling this is a file, not a refusal."
+    ),
+    "running_instances": (
+        "For `rite status` to list running Managers, which is not built. "
+        "Kept rather than deferred because `_a_manager_is_running` needed "
+        "exactly this shape and asking per-name was the wrong one."
+    ),
     # `manager_views` and `assign_to_manager` were here, exempted because
     # "whether an unattended tick may [write to the board] is Q9, unanswered.
     # Wiring it is one call in `_owner_duties`." Q9 now has a switch
@@ -82,21 +127,23 @@ UNCONSTRUCTED_ON_PURPOSE = {
 def behavioural_classes() -> dict[str, Path]:
     """Public classes that DO something, as opposed to carrying a result."""
     found: dict[str, Path] = {}
-    for path in sorted(COORDINATION.glob("*.py")):
-        for node in ast.parse(path.read_text()).body:
-            if not isinstance(node, ast.ClassDef) or node.name.startswith("_"):
-                continue
-            is_dataclass = any(
-                (isinstance(d, ast.Name) and d.id == "dataclass")
-                or (isinstance(d, ast.Attribute) and d.attr == "dataclass")
-                or (
-                    isinstance(d, ast.Call) and getattr(d.func, "id", "") == "dataclass"
+    for directory in WATCHED:
+        for path in sorted(directory.glob("*.py")):
+            for node in ast.parse(path.read_text()).body:
+                if not isinstance(node, ast.ClassDef) or node.name.startswith("_"):
+                    continue
+                is_dataclass = any(
+                    (isinstance(d, ast.Name) and d.id == "dataclass")
+                    or (isinstance(d, ast.Attribute) and d.attr == "dataclass")
+                    or (
+                        isinstance(d, ast.Call)
+                        and getattr(d.func, "id", "") == "dataclass"
+                    )
+                    for d in node.decorator_list
                 )
-                for d in node.decorator_list
-            )
-            if is_dataclass:
-                continue
-            found[node.name] = path
+                if is_dataclass:
+                    continue
+                found[node.name] = path
     return found
 
 
@@ -126,10 +173,11 @@ def test_every_behavioural_class_is_constructed_or_explained():
 
 def public_functions() -> dict[str, Path]:
     found: dict[str, Path] = {}
-    for path in sorted(COORDINATION.glob("*.py")):
-        for node in ast.parse(path.read_text()).body:
-            if isinstance(node, ast.FunctionDef) and not node.name.startswith("_"):
-                found[node.name] = path
+    for directory in WATCHED:
+        for path in sorted(directory.glob("*.py")):
+            for node in ast.parse(path.read_text()).body:
+                if isinstance(node, ast.FunctionDef) and not node.name.startswith("_"):
+                    found[node.name] = path
     return found
 
 

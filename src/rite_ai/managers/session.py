@@ -27,6 +27,7 @@ from rite_ai.label import project_slug
 from rite_ai.managers import (
     ManagerInstance,
     manager_dir,
+    pid_alive,
     read_instance,
     record_instance,
 )
@@ -165,6 +166,12 @@ def running(root: Path, manager: str) -> ManagerInstance | None:
     if instance is None:
         return None
     if not liveness(instance.session).alive:
+        return None
+    if instance.pid and not pid_alive(instance.pid):
+        # The session is there and the process it recorded is not. That is a
+        # tmux pane whose command exited leaving a shell — which `has-session`
+        # reports as alive, because it is. Checking both is what distinguishes
+        # "the Manager is running" from "a window with its name still exists".
         return None
     return instance
 

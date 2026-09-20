@@ -3,7 +3,7 @@
 Seven rehearsal rounds against this tool, plus work on a second, unrelated codebase
 alongside it,
 produced roughly forty defects. Counting them is not useful. What is useful is
-that they fall into ten classes, most of which recurred — and that for each
+that they fall into thirteen classes, most of which recurred — and that for each
 class there is a question with a real answer: **what would a new instance have
 to look like to get past what now stops it?**
 
@@ -365,6 +365,103 @@ what was observed that prompted it, it is sprawl rather than coverage, and
 this project has an explicit rule against inventing work.
 
 ---
+
+## 11. A guard that fails open while something else quietly catches it
+
+Every guard that has never fired is either unnecessary or untested, and
+there is a third case that looks like the first: **a guard that fails open,
+where an unrelated property of something else catches the failure.**
+
+**Measured.** `managers/session.py`'s duplicate check answered a liveness
+question with a bare bool, so `tmux has-session` timing out read as "not
+running" and the check permitted a second PAID Manager session — exactly
+the fail-open its own docstring forbade. Nothing bad happened. The reason
+nothing bad happened is that `session_name()` is deterministic, so the
+second start collided on the name and **tmux refused it**.
+
+So the safety property was resting on a naming convention in a different
+function, which nobody had recorded as load-bearing. Somebody adding a
+disambiguating suffix — for perfectly good reasons, in a change that has
+nothing to do with safety — removes the protection, and no test and no
+reviewer would notice, because the guard still reads as if it works.
+
+**The rule: when a guard fails open and nothing breaks, find out what
+caught it, and write that down where the guard is.** "It did not cause a
+problem" is the beginning of the investigation, not the end of it. A
+docstring that says what is actually carrying a property is the cheapest
+durable fix; a second guard is not, because the second one has the same
+problem.
+
+**Guarded by** nothing mechanical, and probably nothing can be: the
+question is why a thing did NOT happen. The checklist line is the
+instrument.
+
+**What still gets through.** All of it, until somebody asks. The guard
+reads as working, the tests pass, and the thing actually holding the
+property is in another file with no comment tying the two together. The
+only signal is a guard that has never fired, which is also what a correct
+guard looks like.
+
+## 12. A fix that corrects the syntax of a defect and leaves its shape
+
+**A broad `except Exception` swallowed a parser's exception; it was
+narrowed; the same defect was still there one layer up, as a discarded
+return value.**
+
+`_manager_roles` caught everything and returned `[]`, so a `TypeError` in
+`parse_config` presented as "this Manager does not exist". That was found,
+narrowed to no catch at all, and reported as fixed — to a human, who
+relayed it. But `load_project` returns `list[ParseError]` on failure, and
+the caller still collapsed that list to `[]` with no message. The exception
+was no longer swallowed; the ANSWER still was.
+
+**Discarding a parser's answer is the same defect as catching its
+exception.** One is a `try` block and the other is an `if isinstance(...,
+list): return []`, and only the first looks like error handling.
+
+**Why it is its own entry rather than an instance of the broad-catch rule:**
+a fix of this kind gets reported as done twice, and the second report is
+believed because the first was true. The reviewer who finds it has to
+re-derive the whole path rather than reading a diff.
+
+**The test:** after fixing an error-handling defect, ask what the caller
+does with the ERROR VALUE, not only with the exception. If the answer is
+"returns a default", the shape survived.
+
+**What still gets through.** Every instance where the error travels as a
+value rather than an exception — a returned `None`, an empty list, a
+falsy result — because linters see error handling only in `try` blocks.
+`ruff` has a rule for a bare `except`; it has none for `if isinstance(x,
+list): return []`.
+
+## 13. Written, tested, and called by nothing
+
+Third instance in one week, which makes it a pattern rather than three
+mistakes: `Claim.ticket` (recorded, rendered, aggregated, never consulted
+for a decision), `workers_at` (correct, read by the loop's verdict, never
+by the thing that starts a Worker), and `manager_to_start` (specified as
+D-78, implemented, unit tested, unreachable because of one condition in its
+only caller).
+
+**The common thread is that unit tests prove a function correct and say
+nothing about whether anything calls it.** Passing tests are what made each
+of these look finished — the more thoroughly tested, the more finished it
+looked.
+
+**Guarded by** `tests/test_no_dead_wiring.py`, which reasons about callers
+rather than correctness and is the only check in the suite that asks the
+other question. It was scoped to `coordination/`, where nine of these
+shipped at once; `manager_to_start` sat outside that glob. **Widened to
+`rite_ai/managers/` when this entry was written**, which immediately found
+five more — three internal helpers the per-file caller rule counts as dead,
+and two awaiting commands that are not built. Widening a guard until it
+finds something is how you learn whether it was scoped or merely aimed.
+
+**What still gets through.** Everything outside the two watched
+directories, which is most of the package — and anything reachable from a
+caller that is itself dead, since the guard asks "is it called" rather
+than "is it reached". A chain of three uncalled functions calling each
+other satisfies it.
 
 ## The list that matters
 
