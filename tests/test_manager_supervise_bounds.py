@@ -47,7 +47,7 @@ def instant(monkeypatch):
     started: list[str] = []
 
     def starter(root, manager, *, engine, resume_id,
-            max_sessions, window_seconds, prompt="",
+            max_sessions, window_seconds, prompt="", permission="",
         ):
         started.append(resume_id)
         return StartResult(True, "ok", session=f"fake-{len(started)}", attach="")
@@ -117,7 +117,7 @@ class TestTheWindowBounds:
         alive_until: dict[str, float] = {}
 
         def starter(root, manager, *, engine, resume_id,
-            max_sessions, window_seconds, prompt="",
+            max_sessions, window_seconds, prompt="", permission="",
         ):
             name = f"s{len(alive_until) + 1}"
             alive_until[name] = time.time() + 0.3
@@ -331,7 +331,7 @@ class TestAnUnrecognisedVerdictStops:
         started: list[str] = []
 
         def starter(root, manager, *, engine, resume_id,
-            max_sessions, window_seconds, prompt="",
+            max_sessions, window_seconds, prompt="", permission="",
         ):
             started.append(manager)
             return StartResult(True, "started", session="s", attach="a")
@@ -358,7 +358,7 @@ class TestAnUnrecognisedVerdictStops:
         started: list[str] = []
 
         def starter(root, manager, *, engine, resume_id,
-            max_sessions, window_seconds, prompt="",
+            max_sessions, window_seconds, prompt="", permission="",
         ):
             started.append(manager)
             return StartResult(False, "stop here", session="", attach="")

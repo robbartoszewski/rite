@@ -80,7 +80,7 @@ class TestCtrlCStopsBothAndLeavesNoPhantom:
         killed, said = self._harness(monkeypatch)
 
         def starter(r, m, *, engine, resume_id,
-            max_sessions, window_seconds, prompt="",
+            max_sessions, window_seconds, prompt="", permission="",
         ):
             return StartResult(True, "ok", session="s1", attach="a")
 
@@ -108,7 +108,7 @@ class TestCtrlCStopsBothAndLeavesNoPhantom:
         killed, said = self._harness(monkeypatch)
 
         def starter(r, m, *, engine, resume_id,
-            max_sessions, window_seconds, prompt="",
+            max_sessions, window_seconds, prompt="", permission="",
         ):
             return StartResult(True, "ok", session="s1", attach="a")
 
@@ -135,7 +135,7 @@ class TestCtrlCStopsBothAndLeavesNoPhantom:
         killed, said = self._harness(monkeypatch)
 
         def starter(r, m, *, engine, resume_id,
-            max_sessions, window_seconds, prompt="",
+            max_sessions, window_seconds, prompt="", permission="",
         ):
             return StartResult(True, "ok", session="s1", attach="a")
 
@@ -192,7 +192,7 @@ class TestABoundLeavesTheSessionAlive:
         )
 
         def starter(r, m, *, engine, resume_id,
-            max_sessions, window_seconds, prompt="",
+            max_sessions, window_seconds, prompt="", permission="",
         ):
             return StartResult(True, "ok", session="s1", attach="a")
 
@@ -234,7 +234,7 @@ class TestABoundLeavesTheSessionAlive:
         )
 
         def starter(r, m, *, engine, resume_id,
-            max_sessions, window_seconds, prompt="",
+            max_sessions, window_seconds, prompt="", permission="",
         ):
             return StartResult(True, "ok", session="s1", attach="a")
 
@@ -371,7 +371,7 @@ class TestTheInterruptGuardCoversTheWholeCycle:
         monkeypatch.setattr(sup, "stop_session", lambda n: Stopped(True, True, "ok"))
 
         def interrupted_start(r, m, *, engine, resume_id,
-            max_sessions, window_seconds, prompt="",
+            max_sessions, window_seconds, prompt="", permission="",
         ):
             raise KeyboardInterrupt
 
@@ -409,7 +409,7 @@ class TestTheInterruptGuardCoversTheWholeCycle:
         )
 
         def interrupted_start(r, m, *, engine, resume_id,
-            max_sessions, window_seconds, prompt="",
+            max_sessions, window_seconds, prompt="", permission="",
         ):
             raise KeyboardInterrupt
 
@@ -447,7 +447,7 @@ class TestTheInterruptGuardCoversTheWholeCycle:
         )
 
         def starter(r, m, *, engine, resume_id,
-            max_sessions, window_seconds, prompt="",
+            max_sessions, window_seconds, prompt="", permission="",
         ):
             return StartResult(True, "ok", session="s1", attach="a", pane="%1")
 
@@ -471,7 +471,10 @@ class TestTheInterruptGuardCoversTheWholeCycle:
             "it cleared the record and claimed the session was stopped, "
             "which it does not know"
         )
-        assert said and "kill-session" in said[0], (
+        # Index-independent on purpose: rite also states the permission mode
+        # it launched with, so the warning is no longer the first thing said
+        # and the property is that it was said at all.
+        assert any("kill-session" in line for line in said), (
             "the user was not told how to check for the session it could "
             "not confirm it had stopped"
         )

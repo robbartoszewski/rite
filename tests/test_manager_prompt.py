@@ -73,7 +73,8 @@ class TestOnlyTheFirstSessionGetsTheOpeningPrompt:
         seen: list[tuple[str, str]] = []
 
         def starter(
-            root, manager, *, engine, resume_id, max_sessions, window_seconds, prompt=""
+            root, manager, *, engine, resume_id, max_sessions,
+            window_seconds, prompt="", permission="",
         ):
             seen.append((resume_id, prompt))
             return StartResult(True, "ok", session=f"s{len(seen)}", attach="a")

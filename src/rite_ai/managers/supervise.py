@@ -38,6 +38,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from rite_ai.managers import forget_instance, manager_dir
+from rite_ai.managers.permissions import permission_argument, permission_mode
 from rite_ai.managers.session import (
     PROMPT_FILE,
     StartResult,
@@ -102,7 +103,10 @@ asserts it, so an eighth cannot be added without classifying it."""
 
 
 def launch_command(
-    engine: str, resume_id: str = "", prompt_path: str = ""
+    engine: str,
+    resume_id: str = "",
+    prompt_path: str = "",
+    permission: str = "",
 ) -> str:
     """What to run in the pane.
 
@@ -139,6 +143,13 @@ def launch_command(
     # its command on tmux's argv, and a prompt quotes ticket text, paths and
     # internal names. Same reason the token is never an argument.
     base = f"{engine or 'claude'} -p"
+    if permission:
+        # ⚠ **EVERY cycle, not just the first.** Resuming with `-p` does not
+        # restore the mode a session was in — that restoration explicitly
+        # excludes `-p` — so a resumed cycle launched without this is a
+        # Manager that can no longer act AND still exits 0, which `ending`
+        # reads as a clean finish. D-90's shape exactly, in a second place.
+        base = f"{base} {permission}"
     if resume_id:
         # ⚠ **REFUSES rather than escapes, and raises rather than drops the
         # flag.** This string is handed to `tmux new-session`, which runs it
@@ -261,6 +272,15 @@ def supervise(
     launch = starter if callable(starter) else _default_starter
     next_id = resume_id_for if callable(resume_id_for) else _default_resume_id
 
+    # ⚠ Resolved ONCE and passed EVERY cycle. Once because a user's
+    # choice about what this Manager may do should not change mid-run;
+    # every cycle because nothing carries it between invocations.
+    chosen = permission_mode(root, manager)
+    if chosen.problem:
+        return SuperviseResult(False, f"refusing to start: {chosen.problem}", [])
+    say(chosen.announcement)
+    permission = permission_argument(chosen.mode)
+
     cycles: list[Cycle] = []
     resume_from = ""
     live = ""
@@ -361,6 +381,7 @@ def supervise(
                 engine=engine,
                 resume_id=resume_from,
                 prompt=cycle_prompt,
+                permission=permission,
                 max_sessions=max_sessions,
                 window_seconds=window_seconds,
             )
@@ -540,14 +561,25 @@ def _why(answer: str, started: int) -> str:
 
 
 def _default_starter(
-    root, manager, *, engine, resume_id, max_sessions, window_seconds, prompt=""
+    root,
+    manager,
+    *,
+    engine,
+    resume_id,
+    max_sessions,
+    window_seconds,
+    prompt="",
+    permission="",
 ):
     result = start_session(
         root,
         manager,
         engine=engine,
         command=launch_command(
-            engine, resume_id, str(manager_dir(root, manager) / PROMPT_FILE)
+            engine,
+            resume_id,
+            str(manager_dir(root, manager) / PROMPT_FILE),
+            permission,
         ),
         prompt=prompt,
         max_sessions=max_sessions,

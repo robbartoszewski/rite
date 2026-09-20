@@ -336,7 +336,7 @@ class TestTheSupervisorRefusesToResumeIntoNothing:
         seen: list[str] = []
 
         def starter(root, manager, *, engine, resume_id,
-            max_sessions, window_seconds, prompt="",
+            max_sessions, window_seconds, prompt="", permission="",
         ):
             seen.append(resume_id)
             return StartResult(True, "ok", session=f"s{len(seen)}")
@@ -854,7 +854,7 @@ class TestTheDefaultResumeIdIsCalled:
 
     def _run(self, project, monkeypatch, seen):
         def starter(root, manager, *, engine, resume_id,
-            max_sessions, window_seconds, prompt="",
+            max_sessions, window_seconds, prompt="", permission="",
         ):
             seen.append(resume_id)
             return StartResult(True, "ok", session=f"s{len(seen)}")
