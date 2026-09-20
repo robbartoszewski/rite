@@ -205,6 +205,105 @@ def test_a_workspace_that_is_not_a_repository_is_named(tmp_path):
     assert "not a git repository" in commit.error
 
 
+# --- the sha is the whole point of returning a Commit -------------------------------
+
+
+def test_a_commit_without_a_sha_is_an_error_not_a_success(tmp_path, monkeypatch):
+    """`rev-parse` failing must not be reported as a successful commit.
+
+    `commit_to_branch` checked the return code of `git commit` and then ran
+    `git rev-parse HEAD` without checking anything, returning
+    `Commit(sha=(sha.stdout or "").strip())`. A failed `rev-parse` therefore
+    produced `Commit(sha="", error="")` — and `harness.run_subtask` decides
+    on `if commit.error:`, so an empty error meant the subtask was marked
+    ACCEPTED with `outcome.commit = ""`. The branch is what composition
+    later applies, and it would be applying a reference to nothing.
+
+    The trigger is not the interesting part and is hard to stage honestly —
+    `rev-parse HEAD` does not fail after a commit that just succeeded except
+    under a damaged repository. The gap is unconditional, so it is tested
+    where it lives: the function must not treat an unread exit code as
+    success.
+    """
+    from rite_ai.local import runners
+
+    repo = _repo(tmp_path)
+    (repo / "parser.py").write_text("ok\n")
+    real_git = runners._git
+
+    def fail_only_rev_parse(args: list[str], cwd: str):
+        if args[:1] == ["rev-parse"]:
+            return subprocess.CompletedProcess(
+                args=["git", *args], returncode=128, stdout="", stderr="fatal: bad HEAD"
+            )
+        return real_git(args, cwd)
+
+    monkeypatch.setattr(runners, "_git", fail_only_rev_parse)
+    commit = runners.GitCommitter(scope=("parser.py",)).commit_to_branch(
+        str(repo), "rite-local/ABC-1/s1", "ABC-1 s1: add the parser"
+    )
+
+    assert commit.error, (
+        "a commit whose sha could not be read reported SUCCESS — the harness "
+        "decides on `if commit.error:`, so this subtask is ACCEPTED with an "
+        "empty commit reference"
+    )
+    assert not commit.sha, "an errored commit must not also carry a sha"
+    assert "bad HEAD" in commit.error or "rev-parse" in commit.error, (
+        f"the error must say what failed, not merely that something did: "
+        f"{commit.error!r}"
+    )
+
+
+def test_an_empty_sha_is_refused_even_when_rev_parse_succeeds(tmp_path, monkeypatch):
+    """Exit code 0 and nothing printed is the same non-answer.
+
+    Guarding only the return code would leave the other half of the shape
+    open — a check that reads the exit code for failure and the text for the
+    value still has no branch for "succeeded, said nothing".
+    """
+    from rite_ai.local import runners
+
+    repo = _repo(tmp_path)
+    (repo / "parser.py").write_text("ok\n")
+    real_git = runners._git
+
+    def empty_rev_parse(args: list[str], cwd: str):
+        if args[:1] == ["rev-parse"]:
+            return subprocess.CompletedProcess(
+                args=["git", *args], returncode=0, stdout="  \n", stderr=""
+            )
+        return real_git(args, cwd)
+
+    monkeypatch.setattr(runners, "_git", empty_rev_parse)
+    commit = runners.GitCommitter(scope=("parser.py",)).commit_to_branch(
+        str(repo), "rite-local/ABC-1/s2", "ABC-1 s2: add the parser"
+    )
+
+    assert commit.error and not commit.sha, (
+        "`rev-parse` exited 0 and printed nothing, and that was accepted as "
+        "a commit reference"
+    )
+
+
+def test_the_ordinary_commit_still_returns_a_real_sha(tmp_path):
+    """So the fix cannot be 'always return an error'."""
+    repo = _repo(tmp_path)
+    (repo / "parser.py").write_text("ok\n")
+
+    commit = GitCommitter(scope=("parser.py",)).commit_to_branch(
+        str(repo), "rite-local/ABC-1/s3", "ABC-1 s3: add the parser"
+    )
+
+    assert not commit.error and len(commit.sha) == 40, (
+        f"expected a full sha and no error, got {commit!r}"
+    )
+    shown = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True
+    )
+    assert commit.sha == shown.stdout.strip(), "the sha is not the commit that landed"
+
+
 # --- what this module must not be able to do ---------------------------------------
 
 

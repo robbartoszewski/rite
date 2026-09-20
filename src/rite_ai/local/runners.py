@@ -193,4 +193,18 @@ class GitCommitter:
         if done.returncode != 0:
             return Commit(error=f"commit failed: {(done.stderr or '').strip()}")
         sha = _git(["rev-parse", "HEAD"], workspace)
-        return Commit(sha=(sha.stdout or "").strip())
+        # The exit code of this one went unread, and the sha is the entire
+        # reason a `Commit` is returned. A failed or silent `rev-parse` gave
+        # `Commit(sha="", error="")`, and `harness.run_subtask` decides on
+        # `if commit.error:` — so the subtask was marked ACCEPTED carrying an
+        # empty reference, and composition later applies the branch that
+        # reference was supposed to name. Both halves are checked: a non-zero
+        # exit, and exiting 0 having printed nothing.
+        recorded = (sha.stdout or "").strip()
+        if sha.returncode != 0 or not recorded:
+            detail = (sha.stderr or "").strip() or "it printed nothing"
+            return Commit(
+                error=f"the commit was made but `git rev-parse HEAD` "
+                f"could not say which: {detail}"
+            )
+        return Commit(sha=recorded)
