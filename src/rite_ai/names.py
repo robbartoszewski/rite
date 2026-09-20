@@ -17,7 +17,19 @@ was nothing to lose, about a directory containing everything.
 THE FIX IS AT THE BOUNDARY, not in the guard. Making `unsaved_work` smarter
 would leave the next caller that joins a user string onto a path exposed —
 and there are several: `add_worker`, the heartbeat file, the context index.
-A name is either one ordinary path segment or it is not a name.
+
+⚠ AND A PATH IS NOT THE ONLY THING A NAME BECOMES. This module was written
+for the path case and enforced only that, while a Manager name is also a
+tmux TARGET and a shell ARGUMENT. `eu:west` is a perfectly good path
+segment and a broken tmux target, and it produced a live paid session that
+rite reported as failed to start, could not see, and could not stop. The
+measurement is in `name_problem`.
+
+So the rule is now an ALLOWLIST — letters, digits, `.`, `-`, `_` — rather
+than a longer list of characters to reject. A blacklist is a list of the
+failures somebody already thought of, and `:` was on nobody's. The
+consumers are not fixed either: the next one added inherits the rule
+without anyone remembering to widen it.
 
 Deliberately strict rather than clever. No normalisation, no stripping, no
 "did you mean" — those turn a refusal into a guess, and a guess about which
@@ -64,6 +76,45 @@ def name_problem(name: str, *, kind: str = "name") -> str:
         return f"a {kind} cannot start with '-' ({name!r})"
     if any(ch == "\0" or ord(ch) < 32 for ch in name):
         return f"a {kind} cannot contain control characters"
+    # ⚠ AN ALLOWLIST, AND EVERYTHING ABOVE IS ONLY FOR BETTER MESSAGES.
+    #
+    # This function was written to stop a name becoming a path it should not
+    # be, and it did that correctly — while a Manager name is ALSO a tmux
+    # target, and nothing enforced that. Measured, with `eu:west`:
+    #
+    #     name_problem('eu:west') -> ''           accepted
+    #     start().ok              -> False        "exited immediately"
+    #     tmux actually has       -> rite-mgr-...-eu:west   (running)
+    #     liveness()              -> alive=False, known=True
+    #     stop()                  -> ok=True, "no session named ..."
+    #
+    # `:` is tmux's window separator, so the session is created under a name
+    # no later `-t` lookup resolves. In production that pane runs `claude`:
+    # rite reports a failure while a real paid session runs detached with no
+    # record, and the recovery command reports success having done nothing.
+    #
+    # ⚠ It is an allowlist rather than a longer list of bad characters
+    # because `:` would not have been on that list either. A blacklist is a
+    # list of the failures somebody already thought of; the first fix for a
+    # related defect today enumerated invisible Unicode categories and
+    # missed U+2800 on its first run. A name has several consumers — a path
+    # segment, a tmux target, a shell argument — and the only rule that
+    # holds for all of them, including the ones added later, is one that
+    # says what a name MAY contain.
+    #
+    # `.` is permitted because context FILE names come through here too
+    # (`database.md`), and `..` is already refused above.
+    bad = sorted(
+        {ch for ch in name if not (ch.isascii() and (ch.isalnum() or ch in "._-"))}
+    )
+    if bad:
+        shown = " ".join(repr(ch) for ch in bad)
+        return (
+            f"a {kind} may contain letters, digits, '.', '-' and '_' — "
+            f"{name!r} also contains {shown}. A name becomes a directory, a "
+            "tmux session target and a shell argument, and characters "
+            "outside that set break at least one of them silently"
+        )
     return ""
 
 
