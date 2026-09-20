@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.19.0 · **Date:** 2026-09-19
+**Version:** 0.19.1 · **Date:** 2026-09-20
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -4519,6 +4519,38 @@ declares the ceiling not applicable rather than pretending to a number.
 **"Not applicable" must be a distinct answer from "unlimited"** — the first
 is a property of the provider and the second is a decision nobody made.
 
+
+##### Two bounds, because neither one suffices (D-82)
+
+`--sessions` caps how many provider sessions a run may START. `--minutes`
+caps how long it may go on starting them. **Both are mandatory and neither
+has a default.**
+
+They are not two spellings of one bound, and the supervisor was measured to
+establish that rather than argued about:
+
+| the run | `--sessions` | `--minutes` | what actually stopped it |
+|---|---|---|---|
+| sessions that end instantly | 1000 | 1 second | **the count**, at 1000 — the clock was never reached |
+| sessions of realistic length | 1000 | short | **the clock**, after 3 — the count was never approached |
+
+So a run bounded only by a count is unbounded in time, and a run bounded
+only by time is unbounded in spend. Which one binds depends on how the
+provider behaves in that particular run, which is not knowable in advance —
+a crash loop and a working Manager are the two rows of that table.
+
+⚠ **`--minutes` existed before this and did nothing.** The value was
+recorded on the instance, threaded through three modules and passed to
+`supervise` — by a call site that always passed zero, because no flag set
+it. Every piece reviewed clean, and the feature was reported as done. The
+dead-wiring guard cannot see this: it asks whether a FUNCTION is called,
+never whether a PARAMETER is ever supplied.
+
+A duration that defaults to forever is a bound in name only, which is why
+this one is mandatory rather than defaulted. That is D-69's reasoning about
+`--sessions` — silently choosing a number the user did not choose is how
+`rite pool fill --count 500` became possible — applied to the other axis.
+
 #### 9.14.6. §9.12, and the argument that FAILED
 
 §9.12 says: **"Nothing rite runs unattended starts a Claude session."**
@@ -5447,11 +5479,11 @@ happened once already and left no trace until this review found it.
 | D-63 | When the provider adapter interface freezes | **When `local` binds UNCHANGED to an adapter conformance suite — and that suite is written WITH the `claude` adapter, against the contract, not deferred to the freeze** | §3.3's precedent is sharper than a draft of §9.14.2 read it: `tests/state_layer_conformance.py` was P2-1a, written with the FIRST backend against the contract, and the git backend had to bind to it unchanged. Deferring the suite to the freeze moment inverts the thing that made it work. No adapter suite, interface or code exists today, so as drafted this froze on an unwritten artifact. Writing it now is also where the §9.14.7b mismatch with the built `local` package would surface automatically. §9.14.2. |
 | D-64 | Provider order after `claude` | **`local` second, `cursor` third — the most DIFFERENT provider second, not the easiest** | A local engine has no session concept, no session id to resume, no quota and possibly no interactive surface, so it violates every assumption the first adapter will bake in. Two hosted assistants would agree with each other and fail on the third. §9.14.8. |
 | D-65 | Whether a Manager session may be detached with logged output | **No — attachability is an interface requirement, not a Claude implementation detail** | A session a human cannot talk to is a report about a session. Stated at the interface because an abstraction designed from the mechanics alone arrives at "start, capture, log", which satisfies everything else and fails this completely. tmux gives the first adapter all of it free, which is exactly why it constrains the second. §9.14.3. |
-| D-66 | Where the session's stop condition comes from | **Derived from the loop's verdicts, never separately configured** | A configured stop condition is a second definition of "done" that can disagree with the loop's, with no way to say which is right. `idle` is a completion stop; `deadlocked` and `unknown` are fault stops, and the exits must differ or a jam reports as a finish. §9.14.4. |
+| D-66 | Where the session's stop condition comes from | **Derived from the loop's verdicts, never separately configured** | A configured stop condition is a second definition of "done" that can disagree with the loop's, with no way to say which is right. `idle` is a completion stop; `deadlocked` and `unknown` are fault stops, and the exits must differ or a jam reports as a finish. §9.14.5. |
 | D-67 | Whether `claude --resume` breaches §9.12 | **The permissive argument FAILED review; §9.12 wins. Resumption only while the human's own foreground invocation is still live** | Two rounds killed three legs: the `rite pool fill` precedent was quote-mined (§9.12 ends "Both are explicit and **in the foreground**", and fill's sessions all start inside the process the human is watching); "bounded authorisation" does not distinguish, because a cron tick can be given a ceiling and also traces to one typed command (`rite scheduler install`); and "attachable" was already rejected by §9.12, which calls the scheduler log "a log nobody is watching live" and classifies the tick as unattended anyway. What survives authorises less: the lifecycle IS the human's process and dies with it. An unattended overnight Manager session is out of scope, not deferred. §9.14.6. |
 | D-68 | Whether the budget ceiling may have a default | **No — refused rather than defaulted, and "not applicable" is a distinct answer from "unlimited"** | Silently choosing a number the user did not choose is how `rite pool fill --count 500` became possible, and spent quota is the one damage no cleanup reverses (§5.1.1). A provider with no metered cost declares the ceiling inapplicable; that is a property of the provider, where "unlimited" is a decision nobody made. §9.14.5. |
 | D-69 | The unit of the mandatory ceiling | **A session-start COUNT plus a wall-clock window — never a spend figure** | §2.6.1: no file under `~/.claude/` exposes the quota and `/usage` is reachable only inside an interactive session; `budget` is machine-wide and states per-project attribution is unavailable; D-38 forbids the path from measurement back to control. A ceiling checked against spend is a check that cannot run, and §9.11 forbids reporting that as a pass. §9.14.5. |
-| D-70 | What the lifecycle does on the `closed` verdict | **Stops** | The schedule authorising zero Workers is the user saying "not now". The loop sleeps through it by design (§2.7.3), so a lifecycle that merely followed the loop would keep a Manager session spending through the hours the user told rite to be idle. Missing from the first draft, found independently by both review rounds. §9.14.4. |
+| D-70 | What the lifecycle does on the `closed` verdict | **Stops** | The schedule authorising zero Workers is the user saying "not now". The loop sleeps through it by design (§2.7.3), so a lifecycle that merely followed the loop would keep a Manager session spending through the hours the user told rite to be idle. Missing from the first draft, found independently by both review rounds. §9.14.5. |
 | D-71 | What `rite start <name>` names | **A MANAGER — settled 2026-09-20** | Not a provider, not a directory, not a registry alias. §8.9's `rite start <alias>` and §9.10's `rite start <dir>` still exist, so the resolution order must be stated and a Manager name colliding with a registered alias is refused AT REGISTRATION rather than resolved by precedence — a precedence rule is a silent winner. §9.14.9. |
 | D-72 | Whether a provider is a command argument or a Manager attribute | **A Manager ATTRIBUTE — settled 2026-09-20, in favour of what `local/` already built** | `engine` is a field on a Manager and a project may run several on different engines at once, so §9.14's original model — one argument selecting the project's single Manager — is withdrawn. It was written without knowledge of the built design; §9.14.7b recorded that as the largest unresolved finding and this resolves it. §9.14.9. |
 | D-73 | Whether the session or the resumer dies with the terminal | **The SESSION may outlive it; the RESUMER may not** | Review found the two requirements denying each other: §9.14.3 needs a session that survives detaching, §9.14.6 said nothing outlives the terminal, and tmux — rite's only persistence — is detached by construction. They separate: a session the human started continuing is what §9.12 already permits (`rite sandbox start` leaves one running); what §9.12 forbids is an unattended START, so it is the resumer that must die. §9.14.6. |
@@ -5463,6 +5495,7 @@ happened once already and left no trace until this review found it.
 | D-79 | One root with per-Manager subdirectories, or separate roots per Manager | **SUBDIRECTORIES UNDER ONE ROOT — settled 2026-09-20, with the counter-argument in front of the decider** | `docs/design/V060_MULTI_MANAGER.md` recorded separate roots and is now marked superseded rather than rewritten, because its cost — "a second protocol... the two would drift" — is real and is now accepted debt rather than an avoided one. What reversed it is a fact about the code: separate roots mean separate claim ledgers, and `claims_channel()` returns nothing unless BOTH `coordination.managers` and `coordination.remote` are set, so two Managers on one machine would silently not see each other's claims — the failure this project hit twice in one day, made the default. §9.14.9. |
 | D-80 | Bare `rite start`: orient, or start the one Manager? | **BOTH, distinguished by whether one is already RUNNING rather than by the argument typed** | §9.14.0 said a bare start must never begin a session, because start is what a session runs to orient itself; D-78 said one Manager works bare. Direct contradiction. Resolved on the observable fact: no Manager running means start it, a Manager running means report it and exit 0. That answers §9.14.0's recursion fear with a mechanism rather than a convention — the orienting session finds the Manager it is running inside — and makes §9.14.0's idempotence rule load-bearing rather than incidental. §9.14.0. |
 | D-81 | Does a terminating review make a pre-merge behaviour gate redundant? | **NO — they answer different questions, and v0.5.0 is the evidence** | A terminating check on v0.5.0's source found its defects and the release still shipped without the features it was scoped for, because reviewing code asks "is this correct" and nobody was assigned to ask "is this what was asked for". Going through that release's findings one at a time, a requirements-derived scenario would have caught most of the behavioural defects — including every instance of the implemented-tested-called-by-nothing class, which a scenario surfaces as missing behaviour rather than as missing coverage — and none of the security-invisible, documentation or infrastructure ones. Adopted with the bound stated, because a gate sold as catching everything gets trusted where it should not be. Each condition carries a checkable artifact rather than an attestation — independence is enforced by ORDER (scenarios committed before the implementation branch, checkable with `git merge-base`) because authorship is unverifiable after the fact; and the single-operator case degrades visibly with `independent: false` rather than being silently skipped, since one operator is this tool's common case and not an exception. §7.3. |
+| D-82 | Should `--minutes` have a default, as `--sessions` has none? | **NO DEFAULT, for the same reason and with a measurement behind it** | The two bounds catch different runaways and neither suffices alone. Measured on the real supervisor: sessions that end instantly reached the COUNT (1000) with a one-second clock untouched, and sessions of realistic length reached the CLOCK after three with a ceiling of 1000 untouched. So a run bounded only by a count is unbounded in time, and one bounded only by time is unbounded in spend. A duration defaulting to forever is a bound in name only — and this is the command that spends quota unattended, which is the argument that made `--sessions` mandatory (D-69) applied unchanged. §9.14.5. |
 
 ---
 
@@ -5471,6 +5504,10 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.19.1 — the second bound on `rite start`, and a race the exit status lost.** `--minutes` joins `--sessions` as a mandatory bound (D-82): the duration was already threaded through three modules and passed to the supervisor, by a call site that always passed zero because no flag set it. Written, tested, reached by nothing — the class the dead-wiring guard cannot see, because it asks whether a FUNCTION is called and never whether a PARAMETER is ever supplied.
+
+Separately, §9.14.10's exit-status reading was wrong about tmux and had been wrong in four different ways. `#{pane_dead}` and `#{pane_dead_status}` do not arrive together — a pane is marked dead when its descriptor closes and the status is filled in when the child is reaped, and nothing orders those two. Reading once turned that window into a permanent `unclear`, so CLEAN exits failed to resume on Linux while crashes passed, and the capability probe reported the feature present because it polled where production did not. The probe now answers through the production function itself, so there is nothing left for it to disagree with.
 
 **Changes in 0.19.0 — §9.14, `rite start <provider>` and its adapters.** A
 new section specifying the session lifecycle: one command that starts the

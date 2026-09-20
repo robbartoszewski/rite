@@ -2,6 +2,25 @@
 
 ## 0.5.1 (unreleased)
 
+### `rite start <Manager>` takes two bounds, and both are required
+
+`--sessions` caps how many provider sessions a run may start; `--minutes`
+caps how long it may keep starting them. Neither has a default, because
+measurement showed neither suffices alone: sessions that end instantly
+reach the count with the clock untouched, and sessions of realistic length
+reach the clock after three with the count untouched (SPEC D-82).
+
+`--minutes` is new. The duration bound was already recorded and passed to
+the supervisor before this release — by a call site that always passed
+zero, because nothing set it.
+
+### Fixed: a clean Manager exit could not be told from a crash on Linux
+
+`#{pane_dead}` and `#{pane_dead_status}` do not arrive together, so a
+session that finished normally read as "unknown" and the supervisor
+stopped rather than resuming. The check now waits for the status; if it
+never arrives the answer is still unknown, which still does not resume.
+
 **Why this release exists, stated plainly: v0.5.0 shipped a schedule that
 looks enforced and is not.** A user opens `config.yaml`, sees windows and
 worker counts, and has no way to discover that `rite sandbox start` ignores

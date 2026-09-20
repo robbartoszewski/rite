@@ -5834,7 +5834,7 @@ def _loop_verdict(root: Path) -> str:
 
 
 def _start_a_manager(
-    root: Path, role, sessions: int | None, window: float = 0.0
+    root: Path, role, sessions: int | None, minutes: float | None
 ) -> None:
     """Start one Manager, refusing without a ceiling (D-68)."""
     if sessions is None:
@@ -5846,6 +5846,20 @@ def _start_a_manager(
             "  Silently choosing a number you did not choose is how `rite "
             "pool fill --count 500` became possible, and spent quota is the "
             "one damage no cleanup reverses.",
+            err=True,
+        )
+        raise SystemExit(1)
+
+    if minutes is None:
+        click.echo(
+            "refusing to start: --minutes is required and has no default.\n"
+            "  It caps how LONG this run may keep starting sessions. The two "
+            "bounds are not interchangeable and neither suffices alone — "
+            "measured: sessions that end instantly hit the count with the "
+            "clock untouched, and sessions of realistic length hit the clock "
+            "after three with the count untouched (D-82).\n"
+            "  A duration that defaults to forever is a bound in name only, "
+            "and this is the command that spends quota unattended.",
             err=True,
         )
         raise SystemExit(1)
@@ -5867,15 +5881,17 @@ def _start_a_manager(
         )
 
     click.echo(
-        f"starting Manager '{role.name}' — up to {sessions} session(s). "
-        "Ctrl-C ends the run; a session already started keeps running."
+        f"starting Manager '{role.name}' — up to {sessions} session(s), "
+        f"for up to {minutes:g} minute(s). Whichever bound is reached first "
+        "ends the run. Ctrl-C ends it too; a session already started keeps "
+        "running."
     )
     outcome = supervise(
         root,
         role.name,
         engine=role.engine,
         max_sessions=sessions,
-        window_seconds=window,
+        window_seconds=minutes * 60.0,
         verdict=_loop_verdict,
     )
     click.echo(outcome.reason)
@@ -5892,12 +5908,20 @@ def _start_a_manager(
     help="Ceiling on provider sessions this run may start. Required when "
     "starting a Manager; a COUNT, not spend (D-69).",
 )
-def start_cmd(directory: str, sessions: int | None) -> None:
+@click.option(
+    "--minutes",
+    type=float,
+    default=None,
+    help="Ceiling on how long this run may keep starting sessions. Required "
+    "when starting a Manager: the two bounds catch different runaways and "
+    "neither suffices alone (D-82).",
+)
+def start_cmd(directory: str, sessions: int | None, minutes: float | None) -> None:
     """Bring rite up — assess state and act.
 
     Examples:
       rite start
-      rite start planner --sessions 3   # start a declared Manager
+      rite start planner --sessions 3 --minutes 90   # a declared Manager
       rite start /path/to/project
       rite start acme               # resolves a registered alias (§8.9)
     """
@@ -5948,14 +5972,14 @@ def start_cmd(directory: str, sessions: int | None) -> None:
             if not chosen.ok:
                 click.echo(chosen.problem, err=True)
                 raise SystemExit(1)
-            _start_a_manager(here, chosen.role, sessions)
+            _start_a_manager(here, chosen.role, sessions, minutes)
             return
     elif roles:
         from rite_ai.managers import manager_to_start
 
         chosen = manager_to_start(roles, directory)
         if chosen.ok:
-            _start_a_manager(here, chosen.role, sessions)
+            _start_a_manager(here, chosen.role, sessions, minutes)
             return
         # Not a Manager name: fall through to directory/alias resolution,
         # which is what `rite start /path` and `rite start <alias>` need.
