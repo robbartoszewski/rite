@@ -25,6 +25,7 @@ from rite_ai.managers.session import (
     CRASHED,
     FINISHED,
     QUIT,
+    STATUS_READS,
     UNCLEAR,
     Ending,
     Liveness,
@@ -61,6 +62,37 @@ def project(tmp_path: Path) -> Path:
     return tmp_path
 
 
+def _what_tmux_showed(name: str, how) -> str:
+    """⚠ A diagnostic, because this failed on Linux three times and each
+    time the message said only `unclear` — which is the one word that does
+    not distinguish the four ways it is reached. Guessing at a platform you
+    cannot run is how a one-line race cost three CI cycles.
+    """
+    bits = [f"ending={how.kind!r} status={how.status} detail={how.detail!r}"]
+    for label, argv in (
+        ("version", ["tmux", "-V"]),
+        ("sessions", ["tmux", "list-sessions"]),
+        (
+            "raw",
+            [
+                "tmux",
+                "display-message",
+                "-p",
+                "-t",
+                name,
+                "dead=#{pane_dead} status=#{pane_dead_status} "
+                "remain=#{?pane_dead,yes,no}",
+            ],
+        ),
+        ("option", ["tmux", "show-window-options", "-t", name, "remain-on-exit"]),
+    ):
+        got = subprocess.run(argv, capture_output=True, text=True)
+        bits.append(
+            f"{label}: rc={got.returncode} {(got.stdout or got.stderr).strip()!r}"
+        )
+    return "\n  ".join(bits)
+
+
 class TestTheThreeEndings:
     """A restart is right for exactly one of them."""
 
@@ -81,7 +113,9 @@ class TestTheThreeEndings:
         subprocess.run(
             ["tmux", "kill-session", "-t", result.session], capture_output=True
         )
-        assert how.kind == FINISHED and how.resume, how.detail
+        assert how.kind == FINISHED and how.resume, _what_tmux_showed(
+            result.session, how
+        )
 
     def test_an_absent_exit_status_is_UNCLEAR_not_zero(self, monkeypatch):
         """⚠ Caught by Linux CI. A draft parsed an empty
@@ -117,7 +151,9 @@ class TestTheThreeEndings:
         subprocess.run(
             ["tmux", "kill-session", "-t", result.session], capture_output=True
         )
-        assert how.kind == CRASHED and how.status == 9
+        assert how.kind == CRASHED and how.status == 9, _what_tmux_showed(
+            result.session, how
+        )
         assert not how.resume, "a crash that repeats would repeat at the user's expense"
 
     @tmux_only
@@ -138,7 +174,7 @@ class TestTheThreeEndings:
         subprocess.run(
             ["tmux", "kill-session", "-t", result.session], capture_output=True
         )
-        assert how.kind == QUIT, how.detail
+        assert how.kind == QUIT, _what_tmux_showed(result.session, how)
         assert not how.resume, "the human said stop and it restarted anyway"
 
     def test_a_session_that_is_gone_is_UNCLEAR_and_does_not_resume(self):
@@ -351,7 +387,7 @@ class TestTheStatusArrivesAfterTheDeath:
         how = ending("any-session", human_was_present=False)
         assert how.kind == UNCLEAR
         assert not how.resume, "waiting was allowed to invent a clean exit"
-        assert len(seen) == 10, "it gave up before it had waited"
+        assert len(seen) == STATUS_READS, "it gave up before it had waited"
 
     def test_a_pane_that_is_not_dead_is_not_waited_for(self, monkeypatch):
         """Only the dead-without-status window is a race. A live pane is an

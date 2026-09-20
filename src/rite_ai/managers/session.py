@@ -328,6 +328,13 @@ QUIT = "quit"
 CRASHED = "crashed"
 UNCLEAR = "unclear"
 
+STATUS_READS = 30
+STATUS_PAUSE = 0.1
+"""How long `ending` waits for a reap: 30 reads, 0.1s apart. Named because a
+test pins it, and a test that hardcodes the number drifts silently from the
+code the moment the number is tuned — which is how the first version of this
+wait was widened with its own regression test still asserting the old one."""
+
 _EXIT_STATUS_ANSWER: bool | None = None
 """Cached: whether this tmux reports an exit status is a property of the
 machine, not of the moment, so asking once per process is enough — and
@@ -412,13 +419,17 @@ def ending(name: str, human_was_present: bool) -> Ending:
 
     reported = ""
     status: int | None = None
-    # Ten reads over a second. Long enough for the reap to land, short
-    # enough that a supervisor cycle does not notice; and if the status
-    # never arrives the answer is still UNCLEAR, so waiting can only turn
-    # an unknown into a known and never the other way.
-    for attempt in range(10):
+    # Thirty reads over three seconds. A loaded CI runner reaps later than
+    # a quiet laptop and the first attempt at this waited one second, which
+    # was enough for two of the three endings and not the third — the same
+    # race, landing on a different test. Only the dead-WITHOUT-status window
+    # waits: a live pane and a vanished session both answer immediately, so
+    # no ordinary caller pays this. And if the status never arrives the
+    # answer is still UNCLEAR, so waiting can only turn an unknown into a
+    # known and never the other way.
+    for attempt in range(STATUS_READS):
         if attempt:
-            time.sleep(0.1)
+            time.sleep(STATUS_PAUSE)
         answer = ask()
         if answer is None:
             return Ending(UNCLEAR, detail="could not read the exit status")
