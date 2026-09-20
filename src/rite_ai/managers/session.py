@@ -112,14 +112,72 @@ class Liveness:
 
 
 def liveness(name: str) -> Liveness:
+    """Two questions, asked in this order, because neither answers alone.
+
+    ⚠ THE ORDER IS THE SAFETY PROPERTY. It reads like belt and braces and
+    it is not; each call answers something the other gets wrong.
+
+    `has-session` cannot answer this on its own. With `remain-on-exit on` —
+    which `start` sets so the exit status survives — a session whose command
+    has exited still EXISTS, so `has-session` says yes about a dead pane.
+
+    `display-message` cannot answer it on its own either, for two reasons
+    measured on tmux 3.7c, both of which made this function report that a
+    session nobody had started was alive:
+
+      1. A target it cannot resolve is NOT an error. With a server running,
+         `display-message -p -t no-such-session '#{pane_dead}'` exits 0 and
+         prints an empty expansion. This function read the exit code for
+         absence and the text for deadness, so an empty reply fell through
+         both: `"" != "1"` is True, and absent read as ALIVE AND KNOWN.
+         Because `start`'s duplicate check refuses on alive, `rite start
+         <manager>` then refused every Manager on any machine where a tmux
+         server happened to be running — which is every machine whose owner
+         uses tmux, i.e. everyone this command is for.
+
+      2. `-t` resolves by exact match, then fnmatch, then PREFIX. With only
+         `leader` running, `-t lead` answers ABOUT `leader` (measured). So a
+         Manager named `lead` reads a different Manager's pane. `name_problem`
+         accepts both names and `session_name` puts a project's Managers
+         adjacent by design, so this is reachable by naming two of them
+         sensibly.
+
+    `=` is tmux's exact-match prefix and it is why existence is asked first:
+    `has-session -t =lead` correctly fails when only `leader` exists, where
+    `has-session -t lead` prefix-matches and succeeds. It works ONLY here —
+    `display-message` wants a pane target and answers `-t =lead` with an
+    empty expansion even for a session that exists, so putting `=` on the
+    second call would reintroduce defect 1. Once existence is established
+    exactly, the unprefixed `-t` on the second call cannot prefix-match
+    elsewhere: tmux tries exact first, and we know an exact match exists.
+
+    Residual, deliberately not widened here: a non-zero `has-session` is
+    still read as absent, so a tmux that fails for some *other* reason reads
+    absent rather than unanswerable — a fail-open in the duplicate check.
+    The three shapes seen in practice (`can't find session`, `no server
+    running`, `error connecting to <socket>`) are all genuinely absent, and
+    whitelisting stderr wording would refuse to start on any tmux that
+    phrases an ordinary miss differently. Named rather than silently kept.
+    """
     binary = _tmux()
     if binary is None:
         return Liveness(False, known=False, detail="tmux not found")
-    # ⚠ NOT `has-session`. With `remain-on-exit on` — which `start` sets so
-    # the exit status survives — a session whose command has exited still
-    # EXISTS, so `has-session` returns 0 for a pane that is dead. The
-    # question here is whether the command is running, and `#{pane_dead}`
-    # is the only thing that answers it.
+    try:
+        exists = subprocess.run(
+            [binary, "has-session", "-t", f"={name}"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        return Liveness(False, known=False, detail="`tmux has-session` timed out")
+    except (OSError, subprocess.SubprocessError) as e:
+        return Liveness(False, known=False, detail=f"`tmux has-session` failed: {e}")
+    if exists.returncode != 0:
+        # No session of exactly this name — a KNOWN answer, and not the same
+        # as being unable to ask.
+        return Liveness(False, known=True)
     try:
         done = subprocess.run(
             [binary, "display-message", "-p", "-t", name, "#{pane_dead}"],
@@ -134,11 +192,20 @@ def liveness(name: str) -> Liveness:
         return Liveness(
             False, known=False, detail=f"`tmux display-message` failed: {e}"
         )
-    if done.returncode != 0:
-        # No such session at all — a KNOWN answer, and not the same as
-        # being unable to ask.
-        return Liveness(False, known=True)
-    return Liveness((done.stdout or "").strip() != "1", known=True)
+    reply = (done.stdout or "").strip()
+    if done.returncode != 0 or reply not in ("0", "1"):
+        # The session is there and tmux will not say what its pane is doing.
+        # Refuse rather than guess: a wrong "not alive" here starts a second
+        # PAID Manager session (§5.1.1).
+        return Liveness(
+            False,
+            known=False,
+            detail=(
+                f"the session exists but `tmux display-message` gave no "
+                f"readable pane state ({reply!r})"
+            ),
+        )
+    return Liveness(reply != "1", known=True)
 
 
 def is_alive(name: str) -> bool:

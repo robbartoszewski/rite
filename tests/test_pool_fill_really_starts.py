@@ -26,6 +26,7 @@ realistic success.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 
@@ -33,6 +34,26 @@ import pytest
 
 from rite_ai.config.models import PoolConfig
 from rite_ai.pool import _read_state, fill, is_tmux_session_alive
+
+# THE HARD FAIL ITS SIBLING HAS, AND THIS FILE DID NOT.
+#
+# `test_loop_start_really_starts.py` carries a CI-only guard so that removing
+# tmux from the workflow goes RED rather than returning its tests to silent
+# skips. This file copied that file's `skipif` and not its guard — so two
+# thirds of the "prove it against real tmux" family could have vanished from
+# CI while the third went red, and the ones that vanished cover `rite pool
+# fill` and `rite start <manager>` ACTUALLY STARTING SOMETHING: the exact
+# behaviour both commands once reported without doing.
+#
+# Locally a skip is still right — a contributor without tmux should not be
+# blocked. The property guarded is "the machine that gates merges ran these".
+_IN_CI = os.environ.get("CI") == "true"
+if _IN_CI and shutil.which("tmux") is None:  # pragma: no cover - CI-only guard
+    raise RuntimeError(
+        "tmux is missing in CI, so the only real coverage of this command "
+        "would skip silently — install it in the workflow rather than "
+        "letting these tests disappear"
+    )
 
 pytestmark = pytest.mark.skipif(
     shutil.which("tmux") is None, reason="needs real tmux; mocking it is the bug"
