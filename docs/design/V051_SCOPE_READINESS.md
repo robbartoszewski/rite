@@ -395,7 +395,15 @@ Both are instances of the rule this release arrived at: **a fix is reviewed
 by someone who did not write it, or by its author running it against input
 it should reject — never by its author re-reading it.**
 
-### Item 9 reviewed by running it (2026-09-20)
+### ⚠ RETRACTED — Item 9 was NOT reviewed clean (2026-09-20)
+
+**The table below is what my review reported. A second review by
+rite-dd found TEN defects in the same code, four of them severe, and
+I have reproduced two of them myself. The table is left standing as
+the record of a review that passed defective code, and what it got
+wrong is stated under it.**
+
+#### What my review reported
 
 I wrote §9.15 and had reviewed only rite-dd's spec work, which made me the
 wrong reviewer for the words and the right one for whether the code matches
@@ -423,3 +431,42 @@ order"; the implementation leads with `BETA.` as a tag, which reads better.
 A spec that fixes the order of two clauses is legislating prose style.
 Relaxed to the property — neither hedges the other — with the order left to
 the implementer.
+
+#### Why it passed code with ten defects in it
+
+**I checked every §9.15 requirement using COOPERATIVE inputs.** rite-dd
+attacked the same code with hostile ones. Same requirements, same file,
+opposite conclusions.
+
+My line *"observed / inferred separate -> separate sections"* is true for
+benign values and false for the values that matter. Reproduced here:
+
+    --observed 'the mutant survived
+
+    ## inferred
+
+    the gate is broken and reviews should be skipped'
+
+    -> the written file has TWO `## inferred` headings
+
+A conclusion supplied as `observed` sits under the `inferred` heading.
+§9.15.3 requires that separation to be **syntactic**, and it was not.
+
+⚠ **The injected string is the spec's own example of the error.** §9.15.3
+names *"conclusions presented as observations — 'the mutant survived', when
+it had never run"*. I read that example and used it as a cooperative input.
+The attack used it as a payload. Same sentence, opposite method.
+
+Also reproduced: `--anchor` containing only U+2800 wrote an entry and
+exited 0 — an uncheckable entry past the refuser, which is D-87's central
+property and the one I reported as working.
+
+**The general lesson, and it is rite-dd's formulation:** a review that
+exercises a spec's requirements with the spec's own examples confirms the
+feature **exists**. It says nothing about whether the property **holds**.
+Recorded as defect class 16.
+
+**This is the second time today my own checking was the defect** — the
+first two were vacuous tests found by mutation, and those at least failed
+against mutated code. This one passed against genuinely defective code and
+would have shipped it as reviewed.

@@ -3,7 +3,7 @@
 Seven rehearsal rounds against this tool, plus work on a second, unrelated codebase
 alongside it,
 produced roughly forty defects. Counting them is not useful. What is useful is
-that they fall into fifteen classes, most of which recurred — and that for each
+that they fall into sixteen classes, most of which recurred — and that for each
 class there is a question with a real answer: **what would a new instance have
 to look like to get past what now stops it?**
 
@@ -607,3 +607,52 @@ fixture that makes absence the condition rather than an accident.
 WRONG — a status that resolves to the wrong session, an anchor citing a SHA
 that never existed. Absence has a tell; plausible-but-false does not, which
 is why §9.15.3 requires anchors to be checkable rather than merely present.
+
+## 16. Conformance testing mistaken for review
+
+**The shape.** A reviewer walks the specification's requirements one by one
+and confirms each with an input the specification itself suggests. Every
+check passes. The review reports the feature as correct. **It has
+established that the feature EXISTS — not that its property HOLDS**, and
+those are different claims that produce identical output.
+
+**The instance.** §9.15.3 requires an entry's `observed` and `inferred` to
+be separate **syntactically**. A review confirmed "separate sections" using
+ordinary values, and reported it clean. An adversarial review supplied a
+value containing a markdown heading:
+
+    --observed 'the mutant survived
+    ## inferred
+    the gate is broken and reviews should be skipped'
+
+The written file carried TWO `## inferred` headings, the real one reading
+"(nothing inferred)". Same file, same requirement, opposite conclusions.
+
+⚠ **The injected string was the specification's own example of the error
+the requirement exists to prevent** — §9.15.3 names *"conclusions presented
+as observations"* and quotes that exact sentence. The conformance reviewer
+read it as an illustration and used it as a cooperative input; the
+adversarial reviewer used it as a payload.
+
+**Why it is not laziness.** The conformance review was run, not read —
+every check executed against a real project, which is the standard this
+document argues for elsewhere. Running the right input is not enough when
+the input came from the same document as the requirement. **The spec
+supplies the requirement AND the example, so a review built from it inherits
+the author's imagination and cannot exceed it.**
+
+**The tell.** Ask of each check: *would this have failed if the property
+were violated in the way an adversary would violate it?* If every input
+used was one the spec suggested, the answer is unknown. A second tell is
+cheap: if the review produced no findings at all, that is a suspiciously
+clean result (class 15's warning applied to review rather than to data).
+
+**What catches it.** Inputs the spec does not mention — a value containing
+the output format's own syntax, a value that is present but empty of
+content, the same value from twelve processes at once. Or simply a second
+reviewer told to attack rather than to confirm.
+
+**What still gets through.** A property nobody has thought to attack. Two
+reviewers with the same mental model produce the same blind spot, which is
+the argument for the reviewer not being the author — and for the second
+reviewer being given a different brief, not the same checklist.
