@@ -212,7 +212,7 @@ the scope statement is worth having whichever release carries it. If it
 moves to 0.6.0 nothing is wasted: §9.15 goes with it unchanged, and the
 estimate below drops by 3–4 sittings.
 
-**Q8. (PARTLY CLOSED — §9.15.3a.) How does a reader reach entries that are never committed?**
+**Q8. (CLOSED — D-91. rite builds nothing for retrieval.) How does a reader reach entries that are never committed?**
 The journal is gitignored and per-Manager — machine-local, and inside a
 directory a torn-down sandbox takes with it. §9.15.4 says these entries are
 the QA gate's raw material. Nothing contradicts in 0.5.1 because nothing
@@ -317,7 +317,7 @@ watching.** Two things follow that were not in the spec an hour ago:
    keyboard has no reason to know the flag exists. Now required in `rite
    start --help` plus a docs line saying an unattended run is when to enable
    it. Fourth instance this week of *a capability nobody is told about*.
-2. ⚠ **The entries could not leave the machine that wrote them** — §9.15.3a.
+2. **The entries' retrieval — escalated, then WITHDRAWN (D-91).** §9.15.3a.
    The journal is gitignored, under `.rite/managers/`, inside a directory a
    torn-down sandbox takes with it. rite-dd raised this as a 0.6.0 design
    question about a future gate; the answer to *who runs the dogfood* turned

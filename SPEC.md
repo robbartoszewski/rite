@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.21.0 · **Date:** 2026-09-20
+**Version:** 0.21.1 · **Date:** 2026-09-20
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -5148,9 +5148,10 @@ exactly when to turn it on.** *A capability nobody is told about is a
 capability nobody uses* — the fourth instance of that class this week, and
 the one where the cost is the whole point of the feature.
 
-**2. The entries have to be able to LEAVE that machine.** See §9.15.3a,
-which was a 0.6.0 design question until the answer to "who runs it" made it
-a 0.5.1 one.
+**2. Somebody has to know WHERE the entries are**, because the operator is
+the one who copies them off. That is one printed line and nothing more —
+rite builds no retrieval. §9.15.3a, including why an earlier revision
+escalated this and was wrong to.
 
 #### 9.15.0. A process issue, not a work issue — and this is the load-bearing line
 
@@ -5378,73 +5379,58 @@ instances where an explicit instruction to check carefully immediately
 preceded the error it warned against. **A format that makes an unanchored
 entry impossible to write beats any amount of exhortation.**
 
-#### 9.15.3a. ⚠ The entries must be able to leave the machine that wrote them
+#### 9.15.3a. Getting entries off the machine is the operator's business, not rite's
 
-**As specified in §9.15.3 they cannot, and that defeats the feature's only
-planned use.** The journal is gitignored, lives under `.rite/managers/`,
-and sits inside a directory a torn-down sandbox takes with it. The Bentora
-dogfood runs on somebody else's machine, and the person who needs to read
-the entries is not the person at that keyboard. A diagnostic whose output
-never leaves the host it was written on returns nothing to the one reader
-it exists for.
+**Decided: rite builds nothing for retrieval.** The entries are files on
+disk in a known directory. Whoever runs an unattended session copies that
+directory and sends it on.
 
-**This is not the 0.6.0 gate problem wearing a different hat.** That one is
-a future consumer on another machine and can be designed for later. This
-one is a human being, in the next planned run, and the gap is live now.
+⚠ **An earlier revision of this section called that a DEFECT and escalated
+it**, on the grounds that a diagnostic whose output never leaves the host
+returns nothing to the reader it exists for. The observation is true and
+the escalation was wrong, and the correction is worth more than the
+conclusion: **the journal's reader, in the run this was written for, is a
+person the operator will speak to directly.** They will zip the directory
+and send it. A mechanism was being designed for a problem that two people
+who talk to each other do not have.
 
-**The minimum that closes it is documentation, not machinery**, and it is
-specified as the minimum rather than as the design:
+**What is kept, and why the PATH is now the load-bearing part:**
 
-1. **`rite start --record-issues` prints, at start, the absolute path AND
-   the exact command that gets the entries out** — beside the resolved
-   timezone and the engine line, for the same reason: a fact is cheapest to
-   learn at the moment it is actionable.
+1. **The start line prints the journal's absolute path.** Somebody has to
+   know where to copy from, and that line is the only thing that tells
+   them. This is the whole of the mechanism.
+2. **The `git add -f` note stays, demoted to ONE WAY of doing it rather
+   than THE route.** It costs a line, it is true, and it is measured
+   against this repository (below) — but committing entries is now an
+   option a user might take, not the path rite recommends.
 
-   ⚠ **The COMMAND, not just the path, and this is the whole of the
-   difference.** A draft printed the path and left the route in the docs —
-   which is an instruction to a human who may never read them, and §9.15.3
-   closes by saying a format that makes the wrong thing impossible beats
-   any amount of exhortation. Documenting a route is exhortation. Printing
-   it hands it to the operator, in their scrollback, without their having
-   gone looking:
+**What is explicitly NOT built:** no `rite journal export`, no archive
+step, no sync, no upload. Not deferred pending a better design — not
+wanted. §9.15.5's inertness already forbade transmitting them; this says
+rite does not package them either.
 
-       recording issues to <project>/.rite/managers/lead/journal
-         to send them back:  git add -f .rite/managers/lead/journal && git commit
-         (the -f is REQUIRED — a plain `git add` silently refuses here)
+⚠ **This also deflates the alarm the earlier revision raised about the
+journal being gitignored and inside a directory a torn-down sandbox takes
+with it.** The entries survive exactly as long as the directory does, and
+the operator copies them before tearing anything down. That is an ordinary
+sequence, not a race.
 
-   One f-string, not a subsystem. Raised in review by rite-dd against the
-   section's own closing argument, which is the second time that argument
-   has been turned on a draft of this section and won.
+**What would make this wrong, since it is a decision and not a law:** a
+user whose journal's reader is NOT somebody they can hand a zip file to —
+a team, a CI pipeline, a future gate (§9.15.4). **The honest statement is
+"the path is printed; how it reaches its reader is the operator's
+business", and that stops being adequate the moment the reader is not a
+person in the same conversation.** A later release may want a real route.
+Building one now would be solving a problem this run does not have.
 
-   ⚠ **The printed command is measured against THIS repository, not against
-   a reproduction of its rule.** A draft of this section rested on a
-   scratch repo with a hand-written two-line `.gitignore` mimicking rite's
-   — which is evidence about git, not about rite — and a command printed
-   for an operator to paste has to be right about the tree they are in.
-   Re-measured against rite's own `.gitignore`, at a real journal path, in
-   the exact directory form printed above:
+The measurement behind the `git add -f` line, kept because the line is
+printed for somebody to paste — and measured against THIS repository
+rather than against a reproduction of its rule, which an earlier draft did:
 
-       check-ignore  .rite/managers/lead/journal/<entry>.md
-         -> ignored by .gitignore:55  `.rite/*`
-       git add       .rite/managers/lead/journal      -> REFUSED (.rite/managers)
-       git add -f    .rite/managers/lead/journal      -> adds the entry
-
-   The distinction was drawn by rite-dd about their own measurement, and it
-   applies equally to mine: I ran the same scratch-repo test and reported
-   it as though it settled the question.
-2. **The docs say the same thing** for somebody who reads them first, and
-   name the archive route as well — but the printed line is what the
-   operator actually gets, and the docs are the backup.
-3. **Nothing collects, uploads or transmits them automatically.** §9.15.5's
-   inertness is not relaxed by this, and a diagnostic that phoned home
-   would be a worse feature than one that returns nothing.
-
-⚠ **An export command (`rite journal export`) was considered and is NOT
-specified here.** It is the better long-run answer and it is scope growth
-in a release already carrying nine items — and the run that needs this has
-a person at the keyboard who can copy a directory. **Recorded as the first
-thing to build if the dogfood shows the documentation route is not taken**,
-which is a question the dogfood itself answers.
+    check-ignore  .rite/managers/lead/journal/<entry>.md
+      -> ignored by .gitignore:55  `.rite/*`
+    git add       .rite/managers/lead/journal   -> REFUSED (.rite/managers)
+    git add -f    .rite/managers/lead/journal   -> adds the entry
 
 #### 9.15.4. Judging process efficacy, where the obvious metric is inverted
 
@@ -6056,6 +6042,7 @@ happened once already and left no trace until this review found it.
 | D-88 | Does the process journal stay in v0.5.1? | **YES — it is the instrument for the next unattended run, not a nice-to-have** | It was the release's scope lever, being the one item not required for "full-featured single Manager". Kept because the next large unattended run is a Bentora dogfood run by somebody who is not the project owner, with the owner not watching — so this diagnostic is the only channel by which anything comes back from it. That reason changes the build: the flag must be DISCOVERABLE by a person who has not read this spec (named in `rite start --help`, with the docs saying an unattended run is when to enable it), and the entries must be able to leave the machine that wrote them (§9.15.3a) — a gap that was a 0.6.0 design question until the answer to "who runs it" made it a 0.5.1 defect. §9.15.1. |
 | D-89 | The diagnostic flag's name | **`--record-issues`** | Named for what it DOES rather than what it IS. `--diagnostics` describes the category; `--record-issues` tells a user reading `--help` what will appear on disk, which is what they are actually deciding about. §9.15.1. |
 | D-90 | Does `rite start <manager>` prompt the session? | **YES, on the first session; NOT on a resume (the second half a stated default, not a decision)** | A Manager that starts with an empty prompt waits for a human to type, which is the behaviour the command exists to remove. The resume half was not covered by the decision and is inferred from the resume design: a resumed session already carries the context the prompt would establish, and re-issuing an instruction mid-task is the same class of error as restarting a session a human deliberately quit. The asymmetry decides it — a missing prompt on resume costs a session that continues, a spurious one costs a session that starts over. §9.14.11a. |
+| D-91 | Does rite provide a way to get journal entries off the machine? | **NO — the path is printed and retrieval is the operator's business** | An earlier revision called this a defect and escalated it: a diagnostic whose output never leaves the host returns nothing to the reader it exists for. True, and the escalation was still wrong — the journal's reader in the run this was written for is a person the operator will speak to directly, who will be sent a zip. A mechanism was being designed for a problem that two people who talk to each other do not have. What is kept is the start line printing the absolute path, because somebody has to know where to copy from; the `git add -f` note is demoted from THE route to one way of doing it. No export command, no archive step, no sync — not deferred, not wanted. This also deflates the same revision's alarm about a torn-down sandbox: the entries survive as long as the directory does and are copied before anything is torn down. **It stops being adequate the moment the reader is not a person in the same conversation** — a team, a CI pipeline, or §9.15.4's future gate — which is the condition to watch rather than a reason to build now. §9.15.3a. |
 
 ---
 
@@ -6064,6 +6051,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.21.1 — an escalation withdrawn.** §9.15.3a said the journal's entries "must be able to leave the machine that wrote them" and treated their being gitignored as a defect in this release. Withdrawn (D-91): rite builds no retrieval, the start line prints the path, and how the entries reach their reader is the operator's business — in the run this was written for, a zip file between two people who talk to each other. The observation was sound and the escalation was not, and the section keeps both rather than reading as though it had always said this. The condition that would make it wrong is stated instead: a reader who is not a person in the same conversation.
 
 **Changes in 0.21.0 — the open questions answered, and one answer that created a defect.** The process journal stays in v0.5.1 (D-88), its flag is `--record-issues` (D-89), and `rite start <manager>` prompts the session (D-90, with the resume half recorded as a stated default rather than as a decision). §9.14.11a is new for the prompting, which had been decided and had never reached this document.
 
