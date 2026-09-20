@@ -113,6 +113,28 @@ def _unreleased_section() -> str:
     return body[1] if len(body) > 1 else text
 
 
+# ⚠ COMMANDS DELIBERATELY NOT ANNOUNCED. An entry here is a DECISION, not a
+# convenience, and it must say whose and why — a silent exemption is how
+# this guard would stop meaning anything.
+#
+# The rule this suspends is real and stays in force for everything else: a
+# reader upgrading finds out what a release gave them from its changelog.
+UNANNOUNCED_ON_PURPOSE = {
+    "journal observe": (
+        "Issue recording ships UNDOCUMENTED in 0.5.1 by the project owner's "
+        "decision. It is absent from the README, the guide and the 0.5.1 "
+        "changelog section on purpose: the journal applies NO redaction "
+        "while the spec asks a Manager to record 'a command with its "
+        "output' and tells an operator to zip the directory and send it. "
+        "The machinery works and is not advertised until that leak path is "
+        "closed — see docs/design/CREDENTIAL_HANDLING_FOR_UNATTENDED_RUNS.md. "
+        "Delete this entry when the feature is announced; it is not "
+        "permanent."
+    ),
+    "journal retrospective": "See `journal observe` above — same decision.",
+}
+
+
 def test_every_command_added_since_the_last_tag_is_named_in_the_changelog():
     tag = _latest_tag()
     if tag is None:
@@ -138,7 +160,8 @@ def test_every_command_added_since_the_last_tag_is_named_in_the_changelog():
     missing = sorted(
         cmd
         for cmd in added
-        if f"rite {cmd}" not in section
+        if cmd not in UNANNOUNCED_ON_PURPOSE
+        and f"rite {cmd}" not in section
         and not (
             f"rite {cmd.split()[0]}" in section
             and re.search(rf"\b{re.escape(cmd.split()[-1])}\b", section)

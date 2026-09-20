@@ -475,41 +475,6 @@ than inside a module is not visible to the worker. If a clone fetches from a
 directory that contains the worker's own, such as the project root itself,
 start says it cannot be mounted.
 
-## Recording what went wrong when nobody is watching (beta)
-
-Feedback about how rite itself is working has only ever existed where a
-human was watching. An unattended run produces silence: whatever the
-session noticed goes into a pane's scrollback and dies with it.
-
-**An unattended or experimental run is exactly when to turn this on:**
-
-    rite start <manager> --sessions 3 --minutes 90 --record-issues
-
-The Manager then writes what it noticed to `.rite/managers/<name>/journal/`,
-one file per entry, and `rite start` prints the directory so you know where
-to copy from. Two commands write entries — `rite journal observe` when
-something behaved differently from what the docs or a tool's own output
-claimed, and `rite journal retrospective` at a boundary, recording what it
-cost, what changed, and whether anything else would have caught it.
-
-**Off by default, and genuinely off.** Without the flag the Manager is not
-told the journal exists, so it spends nothing on reflection.
-
-**Getting the entries back is yours to do.** Nothing collects, uploads or
-transmits them, and there is no export command. Copy the directory and send
-it on. To commit them instead, `git add -f` is needed — the entries live
-under `.rite/`, which is ignored, so a plain `git add` refuses.
-
-**Beta means the entry format will change**, so read the entries rather
-than building anything that parses them.
-
-⚠ **An entry must carry an anchor** — a commit SHA, a file and line, a
-command with its output, a ticket id, or a named log file with a timestamp
-— and one without is refused rather than written. An issue log containing
-events that did not happen is worse than no log. Note that an anchor which
-is present is *not* yet verified to resolve, so a plausible but invented
-commit SHA is accepted today.
-
 ## Keeping a project's generated files current
 
 `rite init` writes `CLAUDE.md`, `.claude/commands/`, `.claude/agents/`, the
