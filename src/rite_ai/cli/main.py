@@ -1032,6 +1032,38 @@ def _doctor_report(problems: list[str]) -> None:
             click.echo(not_enrolled)
             problems.append(not_enrolled)
 
+        with _doctor_check("manager names", problems):
+            # Reported, never refused. The Manager name is committed and
+            # shared; the alias is this machine's alone. So the
+            # collision exists on ONE laptop and the fix is a choice
+            # between two names only its owner can make.
+            from rite_ai.dispatch import default_dispatch_dir, load_registry
+            from rite_ai.managers import name_collisions
+
+            registry = load_registry(default_dispatch_dir())
+            shadowed = name_collisions(
+                [r.name for r in coordination.manager_roles], registry.projects
+            )
+            for name in shadowed:
+                where = registry.projects[name].path
+                # ECHOED, not merely appended. `problems` is COUNTED at the
+                # end and never printed, so a remedy that goes only in there
+                # is a remedy nobody reads: the user sees the collision
+                # named and no way out of it. Caught by its own test.
+                trouble = (
+                    f"'{name}' is both a Manager here and your alias for "
+                    f"{where}. `rite start {name}` starts the Manager — "
+                    f"Manager names are matched first — so that alias "
+                    f"never resolves. Rename the alias "
+                    f"(`rite projects remove {name}`, then add it under "
+                    f"another name), or rename the Manager in "
+                    f"config.yaml if the team agrees."
+                )
+                click.echo(f"manager names: {trouble}")
+                problems.append(trouble)
+            if not shadowed:
+                click.echo("manager names: no alias shadowed")
+
         # RL-42. `local:large` names a tier, not a runtime, and two projects'
         # "large" are different machines — so the endpoint is probed rather
         # than assumed. An engine that is not there fails every subtask routed
@@ -5710,6 +5742,27 @@ def projects_add(alias: str, path: str, role: str) -> None:
         aggregate_load_warning,
         default_dispatch_dir,
     )
+    from rite_ai.managers import name_collisions
+
+    # BEFORE registering. `rite start <word>` tries Managers first, so an
+    # alias that collides is unreachable by name from the moment it exists
+    # — and this is the one point where the colliding name is the user's to
+    # change at no cost. See `name_collisions` for why it cannot be a
+    # refusal at `rite start` instead.
+    clashes = _manager_names_across(default_dispatch_dir(), Path(path))
+    for root, names in clashes.items():
+        if name_collisions(names, [alias]):
+            click.echo(
+                f"refusing to register '{alias}': {root} declares a Manager "
+                f"of that name.\n"
+                f"  `rite start {alias}` starts that Manager — Manager names "
+                f"are matched before aliases — so this alias would never "
+                f"resolve, silently.\n"
+                f"  Pick another alias. The Manager name is committed in "
+                f"that project's config and is not yours to change here.",
+                err=True,
+            )
+            raise SystemExit(1)
 
     result = add_project(default_dispatch_dir(), alias, Path(path), role=role)
     if not result.ok:
@@ -5737,6 +5790,28 @@ def projects_remove(alias: str) -> None:
         click.echo(result.message, err=True)
         raise SystemExit(1)
     click.echo(result.message)
+
+
+def _manager_names_across(dispatch_dir: Path, extra: Path | None = None) -> dict:
+    """Every declared Manager name this machine can reach, by project path.
+
+    Reads each REGISTERED project plus one not yet registered (the argument
+    to `rite projects add`). A project whose config will not parse
+    contributes nothing rather than raising: this runs inside `doctor`,
+    which has its own check for unparseable config and must not be
+    hijacked by it.
+    """
+    from rite_ai.dispatch import load_registry
+
+    found: dict = {}
+    roots = [Path(e.path) for e in load_registry(dispatch_dir).projects.values()]
+    if extra is not None:
+        roots.append(extra)
+    for root in roots:
+        names, _problems = _manager_roles(root)
+        if names:
+            found[root] = [role.name for role in names]
+    return found
 
 
 def _resolve_directory_or_alias(directory: str) -> Path:

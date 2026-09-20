@@ -2,6 +2,17 @@
 
 ## 0.5.1 (unreleased)
 
+### A project alias and a Manager can no longer silently be the same word
+
+`rite start <word>` matches Manager names before aliases, so an alias that
+shares a name with a declared Manager never resolved — the Manager started
+instead, with no message. `rite projects add` now refuses such an alias,
+and `rite doctor` reports collisions that appeared later because somebody
+committed a Manager role, naming both ways out. It is not refused at `rite
+start`: the Manager name is committed and shared, the alias is local, so
+the collision lives on one machine and the config it would reject is
+correct.
+
 ### `rite start <Manager>` takes two bounds, and both are required
 
 `--sessions` caps how many provider sessions a run may start; `--minutes`

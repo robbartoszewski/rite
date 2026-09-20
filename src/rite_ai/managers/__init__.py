@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -232,3 +233,32 @@ def manager_to_start(roles: list, requested: str = "") -> Chosen:
             f"{names[0]}`."
         )
     )
+
+
+def name_collisions(
+    manager_names: Iterable[str], alias_names: Iterable[str]
+) -> list[str]:
+    """Names that are BOTH a declared Manager and a registered project alias.
+
+    ⚠ **`rite start <word>` tries Managers FIRST**, so a collision is not a
+    tie — the Manager wins and the alias becomes unreachable by name, with
+    no message. The user typed a project and started a session.
+
+    **This cannot be a runtime refusal, and that is the whole difficulty.**
+    `manager_roles` is committed: everyone on the project has it. The alias
+    registry is per machine: nobody else has it. So the collision exists on
+    ONE person's laptop, and refusing `rite start` there would reject a
+    config that is correct, shared, and unchangeable by them. A check that
+    fires where the fault is not is a check people learn to route around.
+
+    It is therefore reported at the two points where it is actionable:
+
+    - `rite projects add`, which is where the machine-local name is being
+      chosen right now and another one costs nothing — so it refuses;
+    - `rite doctor`, for collisions that appeared afterwards because
+      somebody committed a Manager role — so it reports, with both names,
+      because the fix is the user's choice of which to rename.
+
+    Sorted, so the same machine reports the same order twice running.
+    """
+    return sorted(set(manager_names) & set(alias_names))
