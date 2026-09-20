@@ -46,6 +46,28 @@ POLL_SECONDS = 2.0
 # window authorising zero Workers is the user saying "not now", and a Manager
 # that kept spending through it would be ignoring them.
 STOP_VERDICTS = frozenset({"idle", "deadlocked", "unknown", "closed"})
+CONTINUE_VERDICTS = frozenset({"ready", "saturated", "blocked"})
+"""⚠ **Stated, so that continuing is a DECISION rather than a fallthrough.**
+
+A draft had only `STOP_VERDICTS` and `if answer in STOP_VERDICTS: return` —
+so everything else launched a session, including everything that is not a
+verdict at all. Measured with a captured starter: `None`, `""`, `"Idle"`
+with the wrong case, and `"error: cannot read"` each started one. **A
+verdict function that could not answer spent a session.**
+
+Not reachable today, which is the argument for fixing it now rather than
+later: `_loop_verdict` coerces with `or "unknown"`, wraps in `str()` and
+catches everything, so production can only produce a real verdict. That is
+the same shape as the duplicate guard that failed open while deterministic
+session naming quietly did the work — protection nobody had recorded as
+load-bearing, one refactor from live, in the code that spends money.
+
+The asymmetry decides the default for anything in NEITHER set: an
+unrecognised verdict that stops costs a restart, and one that continues
+costs quota. §5.1.1 — a safety property may fail closed, never open.
+
+Together they are exhaustive over `loop`'s seven verdicts, and a test
+asserts it, so an eighth cannot be added without classifying it."""
 
 
 def launch_command(engine: str, resume_id: str = "") -> str:
@@ -183,6 +205,18 @@ def supervise(
                 return SuperviseResult(
                     True,
                     _why(answer, len(cycles)),
+                    cycles,
+                )
+            if answer not in CONTINUE_VERDICTS:
+                # NOT a fallthrough to "carry on". Whatever this is, it is
+                # not an answer, and the next step spends money.
+                return SuperviseResult(
+                    True,
+                    f"stopped after {len(cycles)} session(s): the loop "
+                    f"returned {answer!r}, which is not one of its verdicts. "
+                    f"Refusing to start another session on an answer nobody "
+                    f"recognises — an unrecognised verdict that stops costs a "
+                    f"restart, one that continues costs quota.",
                     cycles,
                 )
 

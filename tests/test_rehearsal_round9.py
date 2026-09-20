@@ -136,10 +136,10 @@ class TestTheDefectClassesCountIsCountable:
         # a guard that fails open while something else catches it; a fix that
         # corrects a defect's syntax and leaves its shape; and written,
         # tested, called by nothing.
-        assert len(self._classes()) == 13, (
-            f"the document says thirteen classes and has {len(self._classes())}"
+        assert len(self._classes()) == 14, (
+            f"the document says fourteen classes and has {len(self._classes())}"
         )
-        assert "thirteen classes" in self._document()
+        assert "fourteen classes" in self._document()
 
     def test_the_new_class_carries_its_own_third_column(self):
         """Every class owes the question this file exists for: what still

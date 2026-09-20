@@ -279,3 +279,114 @@ def test_the_engine_string_is_used_as_an_executable_name():
     assert launch_command("", "") == "claude"
     # The defect this pins: a non-Claude engine gets Claude's flag.
     assert launch_command("some-other-engine", "id") == "some-other-engine --resume id"
+
+
+class TestAnUnrecognisedVerdictStops:
+    """⚠ Continuing used to be the FALLTHROUGH, not a decision.
+
+    With only `STOP_VERDICTS` and `if answer in STOP_VERDICTS: return`,
+    everything else launched a session — including everything that is not a
+    verdict at all. Found by rite-dd, measured with a captured starter:
+    `None`, `""`, `"Idle"` with the wrong case and `"error: cannot read"`
+    each started one. A verdict function that could not answer spent a
+    session.
+
+    Unreachable in production today, because `_loop_verdict` coerces with
+    `or "unknown"`, wraps in `str()` and catches everything — which is the
+    argument for fixing it rather than deferring it. That is the same shape
+    as the duplicate guard that failed open while deterministic session
+    naming quietly did the work: protection nobody had recorded as
+    load-bearing, one refactor from live, in the code that spends money.
+    """
+
+    @pytest.mark.parametrize(
+        "answer",
+        [None, "", "Idle", "IDLE", "error: cannot read the board", "ready ", 0],
+        ids=[
+            "none",
+            "empty",
+            "wrong-case",
+            "shouting",
+            "error-string",
+            "trailing-space",
+            "zero",
+        ],
+    )
+    def test_it_starts_nothing(self, tmp_path, answer):
+        (tmp_path / ".rite").mkdir()
+        started: list[str] = []
+
+        def starter(root, manager, *, engine, resume_id, max_sessions, window_seconds):
+            started.append(manager)
+            return StartResult(True, "started", session="s", attach="a")
+
+        result = supervise(
+            tmp_path,
+            "lead",
+            engine="sh",
+            max_sessions=5,
+            window_seconds=0,
+            verdict=lambda _root: answer,
+            starter=starter,
+        )
+        assert started == [], (
+            f"an unrecognised verdict {answer!r} started a session — an "
+            f"answer nobody recognises must not spend quota"
+        )
+        assert result.ok
+        assert "not one of its verdicts" in result.reason
+
+    def test_a_real_continue_verdict_still_continues(self, tmp_path):
+        """The guard must not have closed the door on the ordinary case."""
+        (tmp_path / ".rite").mkdir()
+        started: list[str] = []
+
+        def starter(root, manager, *, engine, resume_id, max_sessions, window_seconds):
+            started.append(manager)
+            return StartResult(False, "stop here", session="", attach="")
+
+        supervise(
+            tmp_path,
+            "lead",
+            engine="sh",
+            max_sessions=1,
+            window_seconds=0,
+            verdict=lambda _root: "ready",
+            starter=starter,
+        )
+        assert started == ["lead"]
+
+
+def test_the_two_verdict_sets_are_exhaustive_over_the_loop():
+    """⚠ So an EIGHTH verdict cannot silently continue.
+
+    This is the guard that makes the split maintainable rather than a
+    snapshot: whoever adds a verdict to `loop/` has to classify it here, at
+    the point they add it, instead of discovering the behaviour when it is
+    produced at 3am.
+    """
+    from rite_ai import loop as loop_mod
+    from rite_ai.managers.supervise import CONTINUE_VERDICTS, STOP_VERDICTS
+
+    verdicts = {
+        getattr(loop_mod, n)
+        for n in (
+            "CLOSED",
+            "IDLE",
+            "SATURATED",
+            "BLOCKED",
+            "DEADLOCKED",
+            "READY",
+            "UNKNOWN",
+        )
+    }
+    classified = STOP_VERDICTS | CONTINUE_VERDICTS
+    assert not (verdicts - classified), (
+        f"these loop verdicts are in neither set, so they would be refused "
+        f"as unrecognised: {sorted(verdicts - classified)}"
+    )
+    assert not (classified - verdicts), (
+        f"these are classified but are not loop verdicts: "
+        f"{sorted(classified - verdicts)}"
+    )
+    assert not (STOP_VERDICTS & CONTINUE_VERDICTS), "a verdict is in both sets"

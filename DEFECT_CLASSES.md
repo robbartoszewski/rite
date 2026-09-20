@@ -3,7 +3,7 @@
 Seven rehearsal rounds against this tool, plus work on a second, unrelated codebase
 alongside it,
 produced roughly forty defects. Counting them is not useful. What is useful is
-that they fall into thirteen classes, most of which recurred — and that for each
+that they fall into fourteen classes, most of which recurred — and that for each
 class there is a question with a real answer: **what would a new instance have
 to look like to get past what now stops it?**
 
