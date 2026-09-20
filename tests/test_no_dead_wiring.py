@@ -255,3 +255,66 @@ def test_every_exemption_gives_a_real_reason():
     assert not thin, (
         f'these exemptions do not say why: {thin} — "not yet" is a plan, not a reason'
     )
+
+
+# --- the guard's own floor ----------------------------------------------------------
+#
+# ⚠ EVERY CHECK IN THIS FILE ITERATES A COMPUTED SET. `public_functions`
+# and `behavioural_classes` both walk `WATCHED` and glob `*.py`; `dead` is
+# then whatever survives filtering. `Path.glob` on a directory that does
+# not exist returns NOTHING and raises NOTHING — so renaming or moving
+# `coordination/` or `managers/` makes the set empty, `dead` empty, and
+# every test here pass while checking no functions at all.
+#
+# That is not hypothetical rot: this guard exists because nine functions
+# shipped dead at once, and it was WIDENED on 2026-09-20 by adding a second
+# directory to `WATCHED` — the exact edit that can silently misspell a path.
+#
+# A vacuous pass and a real pass are byte-identical in pytest's output, so
+# the floor has to be asserted explicitly.
+
+
+def test_the_watched_directories_actually_exist():
+    """A renamed package must go RED here, not quietly empty the guard."""
+    missing = [str(d) for d in WATCHED if not d.is_dir()]
+    assert not missing, (
+        f"WATCHED names directories that do not exist: {missing}. Every "
+        "check in this file would pass over an empty set"
+    )
+    barren = [str(d) for d in WATCHED if not list(d.glob("*.py"))]
+    assert not barren, (
+        f"WATCHED names directories with no Python files: {barren} — the "
+        "guard would report no dead wiring because it examined nothing"
+    )
+
+
+def test_the_guard_examines_a_plausible_number_of_subjects():
+    """The floor. Deliberately loose: this asserts the machinery RAN, not
+    how much code exists, so ordinary growth and deletion never touch it."""
+    functions = public_functions()
+    classes = behavioural_classes()
+    assert len(functions) >= 10, (
+        f"only {len(functions)} public functions discovered across "
+        f"{len(WATCHED)} directories. Either the AST walk is broken or "
+        "WATCHED no longer points at the code — either way every other "
+        "test in this file is now vacuous"
+    )
+    assert len(classes) >= 1, (
+        f"no behavioural classes discovered across {len(WATCHED)} "
+        "directories; the dataclass filter or the walk is broken"
+    )
+
+
+def test_every_exemption_names_something_that_still_exists():
+    """An exemption for a deleted symbol is the other way this list rots.
+
+    `UNCALLED_ON_PURPOSE` only ever suppresses; an entry naming a symbol
+    that no longer exists suppresses nothing and reads as documentation of
+    a decision that is no longer in force.
+    """
+    known = set(public_functions()) | set(behavioural_classes())
+    stale = sorted(name for name in UNCALLED_ON_PURPOSE if name not in known)
+    assert not stale, (
+        f"these exemptions name symbols that no longer exist: {stale} — "
+        "remove them, so the list says what is actually exempt today"
+    )
