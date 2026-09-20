@@ -1,4 +1,23 @@
-"""No test may reach this machine's login keychain.
+"""No test PROCESS reaches this machine's login keychain.
+
+⚠ **Named for what it proves, which is narrower than this file was first
+called.** It was `test_the_suite_cannot_reach_the_real_keychain`. A review
+pointed out that every test here checks the backend in THIS process, while
+the fixture that substitutes it is in-process only:
+
+    parent backend: _InMemoryKeyring
+    child backend:  Keyring          <- the real macOS keychain
+
+99 test files spawn subprocesses, and `test_module_entry_point.py` runs
+`python -m rite_ai.cli.main` for real — so a subprocess that reads a
+credential reaches the OS keychain and can raise the dialog this fixture
+exists to prevent, with nothing here noticing.
+
+**The gap is recorded rather than closed**; covering subprocesses is 0.6.0
+work. What changed is the CLAIM, because a file named for the suite while
+testing one process is the documented-claim-versus-behaviour gap this
+project keeps filing — and naming it after the whole suite is how the gap
+stays invisible.
 
 WHY THIS EXISTS. Twice in one session a verification run stopped dead for
 half an hour. `SecurityAgent` — the macOS keychain authorisation dialog —
