@@ -563,6 +563,27 @@ here because it is in the code, not because it is a feature.
 
 ### Known, and not fixed in this release
 
+- **A journal anchor must contain at least one ASCII letter or digit, and
+  that refuses some legitimate anchors.** `rite journal observe --anchor`
+  rejects a value with nothing ASCII-alphanumeric in it, so an anchor
+  written **entirely** in a non-Latin script — Cyrillic, Greek, Han, Arabic
+  — with no line number, commit SHA, path separator or ticket id is refused
+  even though a reader could check it perfectly well.
+
+  **The workaround is something you were probably citing anyway:** add the
+  line number, the commit, or the file path. `src/модуль.py:88`,
+  `6a8a5b2`, `RT-412` and `модуль.py:88` all pass — only a value with *no*
+  ASCII character at all is refused.
+
+  **Why it is this way, briefly:** the rule exists to stop an anchor that
+  renders as nothing getting past the refusal and into the journal as
+  evidence, and two earlier attempts to describe "blank" by character class
+  were each defeated by a character their author had not met. ASCII is a
+  floor that cannot be widened by a new codepoint. It is too blunt, it is
+  known, and it is being addressed in 0.6.0 —
+  `docs/design/V060_ANCHOR_LEGIBILITY.md` has the history and the
+  constraints on any replacement.
+
 - **Credentials are visible to other local accounts while a Worker starts.**
   rite passes each project credential to the sandbox as a command-line
   argument, which puts it on the machine's process table for the few seconds
