@@ -524,8 +524,14 @@ def exit_status_available() -> bool:
     # got in its own way. Found by the suite, where it fires more than once.
     name = f"rite-probe-exit-{os.getpid()}-{uuid.uuid4().hex[:8]}"
     try:
+        # ⚠ A LONG-LIVED command, then the option, then make it exit — the
+        # same order `start` uses. A draft launched `sh -c 'exit 3'`, which
+        # died before `remain-on-exit` could be set, so on some tmux the
+        # session was already gone and the probe reported the capability
+        # ABSENT on a machine that has it. A probe that gets in its own way
+        # answers about itself rather than about the machine.
         made = subprocess.run(
-            [binary, "new-session", "-d", "-s", name, "sh -c 'exit 3'"],
+            [binary, "new-session", "-d", "-s", name, "sh"],
             capture_output=True,
             text=True,
             errors="replace",
@@ -539,23 +545,35 @@ def exit_status_available() -> bool:
             timeout=30,
             check=False,
         )
-        # It has already exited; re-run it so the option is in force.
         subprocess.run(
-            [binary, "respawn-pane", "-k", "-t", name, "sh -c 'exit 3'"],
+            [binary, "send-keys", "-t", name, "exit 3", "Enter"],
             capture_output=True,
             timeout=30,
             check=False,
         )
-        time.sleep(0.5)
-        asked = subprocess.run(
-            [binary, "display-message", "-p", "-t", name, "#{pane_dead_status}"],
-            capture_output=True,
-            text=True,
-            errors="replace",
-            timeout=30,
-        )
-        _EXIT_STATUS_ANSWER = (asked.stdout or "").strip() == "3"
-        return _EXIT_STATUS_ANSWER
+        for _ in range(20):
+            time.sleep(0.1)
+            asked = subprocess.run(
+                [
+                    binary,
+                    "display-message",
+                    "-p",
+                    "-t",
+                    name,
+                    "#{pane_dead}|#{pane_dead_status}",
+                ],
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=30,
+            )
+            if asked.returncode != 0:
+                break
+            parts = (asked.stdout or "").strip().split("|")
+            if parts and parts[0] == "1":
+                _EXIT_STATUS_ANSWER = len(parts) > 1 and parts[1].strip() == "3"
+                return _EXIT_STATUS_ANSWER
+        return False
     except (OSError, subprocess.SubprocessError):
         return False
     finally:
