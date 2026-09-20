@@ -55,7 +55,7 @@ def instant(monkeypatch):
     )
     monkeypatch.setattr(supervise_mod, "was_attached", lambda _n: False)
     monkeypatch.setattr(
-        supervise_mod, "ending", lambda _n, human_was_present: Ending(FINISHED)
+        supervise_mod, "ending", lambda _n, human_was_present, pane="": Ending(FINISHED)
     )
     return starter, started
 
@@ -126,7 +126,9 @@ class TestTheWindowBounds:
         )
         monkeypatch.setattr(supervise_mod, "was_attached", lambda _n: False)
         monkeypatch.setattr(
-            supervise_mod, "ending", lambda _n, human_was_present: Ending(FINISHED)
+            supervise_mod,
+            "ending",
+            lambda _n, human_was_present, pane="": Ending(FINISHED),
         )
         result = supervise(
             project,

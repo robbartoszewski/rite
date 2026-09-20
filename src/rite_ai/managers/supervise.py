@@ -242,6 +242,7 @@ def supervise(
             return SuperviseResult(False, result.message, cycles)
 
         live = result.session
+        live_pane = getattr(result, "pane", "")
         cycle = Cycle(
             number=len(cycles) + 1,
             session=result.session,
@@ -295,7 +296,7 @@ def supervise(
         cycle.ended_at = clock()
         cycle.attended = attended
 
-        how = ending(result.session, human_was_present=attended)
+        how = ending(result.session, human_was_present=attended, pane=live_pane)
         cycle.ending = how.kind
         if not how.resume:
             return SuperviseResult(

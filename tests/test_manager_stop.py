@@ -180,7 +180,7 @@ class TestABoundLeavesTheSessionAlive:
         monkeypatch.setattr(
             sup,
             "ending",
-            lambda n, human_was_present: type(
+            lambda n, human_was_present, pane="": type(
                 "E",
                 (),
                 {"kind": "finished", "resume": True, "status": 0, "detail": ""},
@@ -223,7 +223,7 @@ class TestABoundLeavesTheSessionAlive:
         monkeypatch.setattr(
             sup,
             "ending",
-            lambda n, human_was_present: type(
+            lambda n, human_was_present, pane="": type(
                 "E", (), {"kind": "quit", "resume": False, "status": 0, "detail": ""}
             )(),
         )
