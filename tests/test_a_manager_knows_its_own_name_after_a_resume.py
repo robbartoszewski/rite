@@ -299,3 +299,118 @@ class TestTheJournalIsWhatUsesIt:
         result = self._observe()
         assert result.exit_code == 1
         assert "refusing to record" in result.output
+
+
+@needs_tmux
+class TestAnInheritedNameDoesNotTravel:
+    """⚠ **A WRONG name is worse than no name, and the fallback used to
+    produce one.**
+
+    `rite start` is routinely run from inside another Manager's session, so
+    this process's environment already carries that Manager's name. When
+    `-e` is refused (tmux < 3.2) the session starts without it — and a
+    `new-session` that has to START the tmux server forks one that inherits
+    this environment, after which every pane on that server reads the
+    INHERITED name.
+
+    Measured before the fix: starting Manager `builder` from a process
+    holding `RITE_MANAGER=planner` produced a session that read `planner`,
+    while the message told the user the session "cannot read
+    RITE_MANAGER" — false in both halves, and `rite journal observe` inside
+    `builder` filed under `planner`. An audit record attributed to the
+    wrong Manager is the one outcome this feature exists to prevent.
+
+    The narrower true statement, also measured: a pane takes its
+    environment from the tmux SERVER, not from the client that asked, so a
+    nested `new-session` against an ALREADY-RUNNING server does not leak.
+    The exposure is exactly the invocation that starts the server.
+    """
+
+    @pytest.fixture
+    def engine(self, tmp_path: Path) -> Path:
+        script = tmp_path / "engine.sh"
+        script.write_text(
+            f'#!/bin/sh\necho "MGR=${{{MANAGER_ENV}:-NONE}}"\nsleep 20\n'
+        )
+        script.chmod(0o755)
+        return script
+
+    @pytest.fixture
+    def project(self, tmp_path: Path):
+        """Asks tmux what this project left behind rather than guessing."""
+        (tmp_path / ".rite").mkdir(exist_ok=True)
+        yield tmp_path
+        mine = session_name(tmp_path, "")
+        listed = subprocess.run(
+            ["tmux", "list-sessions", "-F", "#{session_name}"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+        )
+        for line in (listed.stdout or "").splitlines():
+            if line.startswith(mine):
+                subprocess.run(
+                    ["tmux", "kill-session", "-t", line], capture_output=True
+                )
+
+    def _pane(self, session: str) -> str:
+        import time
+
+        for _ in range(40):
+            time.sleep(0.1)
+            seen = subprocess.run(
+                ["tmux", "capture-pane", "-p", "-t", session],
+                capture_output=True,
+                text=True,
+                errors="replace",
+            )
+            if "MGR=" in (seen.stdout or ""):
+                return seen.stdout
+        return seen.stdout or ""
+
+    def test_the_fallback_does_not_hand_on_another_managers_name(
+        self, project, engine, monkeypatch
+    ):
+        """Force the `-e`-refused path from inside Manager `planner`."""
+        import rite_ai.managers.session as session_mod
+
+        monkeypatch.setenv(MANAGER_ENV, "planner")
+        monkeypatch.setattr(session_mod, "_rejected_the_flag", lambda _done: True)
+
+        real_run = subprocess.run
+
+        def refuses_dash_e(argv, **kwargs):
+            if isinstance(argv, list) and "new-session" in argv and "-e" in argv:
+
+                class Refused:
+                    returncode = 1
+                    stderr = "command new-session: unknown flag -e"
+                    stdout = ""
+
+                return Refused()
+            return real_run(argv, **kwargs)
+
+        monkeypatch.setattr(session_mod.subprocess, "run", refuses_dash_e)
+
+        result = start(
+            project, "builder", command=str(engine), max_sessions=2
+        )
+        assert result.ok, result.message
+        pane = self._pane(result.session)
+        assert "MGR=planner" not in pane, (
+            "the session inherited the STARTING Manager's name and would "
+            "file journal entries under it"
+        )
+        assert "MGR=NONE" in pane, pane
+        # And the message must describe what actually happened, rather than
+        # offering a default that an inherited name would have defeated.
+        assert "will REFUSE there" in result.message, result.message
+
+    def test_the_ordinary_path_still_sets_the_right_name(
+        self, project, engine, monkeypatch
+    ):
+        """Stripping the inherited value must not strip the real one."""
+        monkeypatch.setenv(MANAGER_ENV, "planner")
+        result = start(project, "builder", command=str(engine), max_sessions=2)
+        assert result.ok, result.message
+        assert "MGR=builder" in self._pane(result.session)
