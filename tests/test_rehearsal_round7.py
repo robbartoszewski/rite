@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from rite_ai.claims.ledger import ClaimsLedger
+from rite_ai.schedule import Moment, ResolvedZone
 from rite_ai.scheduler import run_tick
 
 
@@ -62,7 +63,10 @@ class TestTheWindowOpeningIsReported:
         root = _project(tmp_path, _DAY)
         (root / ".rite" / "schedule-state.json").write_text("0")
 
-        with patch("rite_ai.scheduler.current_minute_of_day", return_value=600):
+        with patch(
+            "rite_ai.scheduler.current_moment",
+            return_value=Moment(600, 2, ResolvedZone("UTC", machine_local=False)),
+        ):
             result = run_tick(root)  # 10:00, inside the 3-worker window
 
         assert result.messages, (
@@ -78,7 +82,10 @@ class TestTheWindowOpeningIsReported:
         root = _project(tmp_path, _DAY)
         (root / ".rite" / "schedule-state.json").write_text("0")
 
-        with patch("rite_ai.scheduler.current_minute_of_day", return_value=600):
+        with patch(
+            "rite_ai.scheduler.current_moment",
+            return_value=Moment(600, 2, ResolvedZone("UTC", machine_local=False)),
+        ):
             result = run_tick(root)
 
         joined = " ".join(result.messages)
@@ -92,7 +99,10 @@ class TestTheWindowOpeningIsReported:
         (root / ".rite" / "schedule-state.json").write_text("0")
 
         with (
-            patch("rite_ai.scheduler.current_minute_of_day", return_value=600),
+            patch(
+                "rite_ai.scheduler.current_moment",
+                return_value=Moment(600, 2, ResolvedZone("UTC", machine_local=False)),
+            ),
             patch("rite_ai.pool.fill") as fill,
         ):
             run_tick(root)
@@ -105,7 +115,10 @@ class TestTheWindowOpeningIsReported:
         root = _project(tmp_path, _DAY)
         (root / ".rite" / "schedule-state.json").write_text("3")
 
-        with patch("rite_ai.scheduler.current_minute_of_day", return_value=600):
+        with patch(
+            "rite_ai.scheduler.current_moment",
+            return_value=Moment(600, 2, ResolvedZone("UTC", machine_local=False)),
+        ):
             result = run_tick(root)
 
         assert not any("window boundary" in m for m in result.messages), result.messages
@@ -117,7 +130,10 @@ class TestTheWindowOpeningIsReported:
         ledger.claim(["src/a.ts"], "alpha", ticket="ABC-1")
         (root / ".rite" / "schedule-state.json").write_text("3")
 
-        with patch("rite_ai.scheduler.current_minute_of_day", return_value=1200):
+        with patch(
+            "rite_ai.scheduler.current_moment",
+            return_value=Moment(1200, 2, ResolvedZone("UTC", machine_local=False)),
+        ):
             result = run_tick(root)  # 20:00, outside the window
 
         assert any("handed over worker 'alpha'" in m for m in result.messages)
@@ -127,7 +143,10 @@ class TestTheWindowOpeningIsReported:
         """No prior state is not a transition in either direction."""
         root = _project(tmp_path, _DAY)
 
-        with patch("rite_ai.scheduler.current_minute_of_day", return_value=600):
+        with patch(
+            "rite_ai.scheduler.current_moment",
+            return_value=Moment(600, 2, ResolvedZone("UTC", machine_local=False)),
+        ):
             result = run_tick(root)
 
         assert not any("window boundary" in m for m in result.messages), result.messages

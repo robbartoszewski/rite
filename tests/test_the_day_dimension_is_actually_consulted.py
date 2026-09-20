@@ -44,7 +44,39 @@ SRC = Path(__file__).resolve().parents[1] / "src" / "rite_ai"
 WEEKDAY_NOT_NEEDED: dict[tuple[str, int], str] = {}
 
 
-def _workers_at_calls() -> list[tuple[str, int, int]]:
+# ⚠ COUNTING ARGUMENTS WAS A PROXY, and `None` satisfied it.
+#
+# This returned `len(node.args) + keywords named weekday` and asked whether
+# that reached 3. `workers_at(schedule, minute, None)` reaches 3 — and
+# `None` is exactly the value that means "ignore the day", so the guard
+# passed on the one input it exists to forbid. Measured: replacing the
+# weekday with `None` at the scheduler, distribution and sandbox call sites
+# left 44, 30 and 25 tests green respectively.
+#
+# So it now reports what was PASSED, and a literal `None` is a violation
+# rather than a satisfied count.
+ABSENT = "absent"
+EXPLICIT_NONE = "None"
+SUPPLIED = "supplied"
+
+
+def _weekday_of(node: ast.Call) -> str:
+    """What this call passes as `weekday`: absent, a literal None, or a value."""
+    arg = None
+    if len(node.args) >= 3:
+        arg = node.args[2]
+    else:
+        for k in node.keywords:
+            if k.arg == "weekday":
+                arg = k.value
+    if arg is None:
+        return ABSENT
+    if isinstance(arg, ast.Constant) and arg.value is None:
+        return EXPLICIT_NONE
+    return SUPPLIED
+
+
+def _workers_at_calls() -> list[tuple[str, int, str]]:
     found = []
     for path in sorted(SRC.rglob("*.py")):
         tree = ast.parse(path.read_text())
@@ -55,10 +87,7 @@ def _workers_at_calls() -> list[tuple[str, int, int]]:
             name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", "")
             if name != "workers_at":
                 continue
-            supplied = len(node.args) + len(
-                [k for k in node.keywords if k.arg == "weekday"]
-            )
-            found.append((str(path.relative_to(SRC)), node.lineno, supplied))
+            found.append((str(path.relative_to(SRC)), node.lineno, _weekday_of(node)))
     return found
 
 
@@ -67,12 +96,23 @@ def test_every_workers_at_call_supplies_a_weekday():
     assert found, "no `workers_at` calls found — this guard stopped guarding"
     missing = [
         f"{mod}:{line}"
-        for mod, line, supplied in found
-        if supplied < 3 and (mod, line) not in WEEKDAY_NOT_NEEDED
+        for mod, line, passed in found
+        if passed == ABSENT and (mod, line) not in WEEKDAY_NOT_NEEDED
     ]
     assert not missing, (
         "these `workers_at` calls omit the weekday, so they ignore `days:` "
         "and silently answer for the wrong day: " + ", ".join(missing)
+    )
+    nulled = [
+        f"{mod}:{line}"
+        for mod, line, passed in found
+        if passed == EXPLICIT_NONE and (mod, line) not in WEEKDAY_NOT_NEEDED
+    ]
+    assert not nulled, (
+        "these `workers_at` calls pass `weekday=None`, which MEANS ignore "
+        "the day — the argument is present and the `days:` config is not "
+        "consulted, which is the failure this guard exists to catch and "
+        "which counting arguments could not see: " + ", ".join(nulled)
     )
 
 
@@ -142,3 +182,59 @@ class TestTheLoopAgreesWithEnforcement:
         wednesday = datetime(2026, 9, 16, 12, 0, tzinfo=UTC)
         count, _when = _capacity(Project(), wednesday)
         assert count == 3
+
+
+class TestDistributionAgreesWithTheDay:
+    """⚠ THIS TEST COULD NOT BE WRITTEN BEFORE, and that is the finding.
+
+    `distribute()` took the MINUTE from the caller's `now` and the WEEKDAY
+    from `current_moment(...)` with no `now` at all — two halves of one
+    instant, from two clocks. Measured on a schedule open Sundays only,
+    asked about a Saturday:
+
+        capacity reported: 3      expected: 0
+
+    So the day could not be pinned by a test, which is exactly why this
+    call site had no behavioural coverage to lose: mutating its weekday to
+    `None` left 30 tests green.
+
+    Both now come from one `current_moment(schedule.timezone, now)`.
+    """
+
+    class _Backend:
+        def list_tickets(self, *_a, **_k):
+            return []
+
+    def _schedule(self) -> ScheduleConfig:
+        # Open on SUNDAY only, so the day is the whole of the answer.
+        return ScheduleConfig(
+            timezone="Europe/Warsaw",
+            windows=[ScheduleWindow(hours="00:00-24:00", workers=3, days="Sun")],
+        )
+
+    def _capacity(self, tmp_path, when):
+        from rite_ai.coordination.distribution import distribute
+
+        (tmp_path / ".rite").mkdir(exist_ok=True)
+        result = distribute(
+            tmp_path,
+            self._Backend(),
+            manager="m",
+            workers=["w1"],
+            schedule=self._schedule(),
+            now=when,
+            busy=set(),
+            modules=set(),
+        )
+        return getattr(result, "capacity", None)
+
+    def test_a_closed_saturday_distributes_nothing(self, tmp_path):
+        saturday = datetime(2026, 9, 19, 12, 0, tzinfo=UTC)
+        assert self._capacity(tmp_path, saturday) == 0, (
+            "distribution reported capacity on a day the schedule closed — "
+            "the weekday is not coming from the moment it was asked about"
+        )
+
+    def test_the_open_day_is_unaffected(self, tmp_path):
+        sunday = datetime(2026, 9, 20, 12, 0, tzinfo=UTC)
+        assert self._capacity(tmp_path, sunday) == 3

@@ -126,12 +126,31 @@ class TestTheResolvedClockIsReported:
         assert "machine local" in zone.describe()
 
     def test_an_unrecognised_zone_does_not_silently_become_utc(self):
-        """It falls back to the machine, and the description says machine
-        local rather than naming the zone that was asked for — the operator
-        needs to see that what they wrote is not what is being used."""
+        """It falls back to the machine, and says so — and now also says
+        WHICH zone it rejected.
+
+        ⚠ This assertion was inverted, and the docstring said why it should
+        be: "the operator needs to see that what they wrote is not what is
+        being used". It asserted the rejected name was ABSENT from the
+        description, which made a typo indistinguishable from an unset
+        field — measured, `Europe/Lodnon` and `""` produced byte-identical
+        output. The property is that the description must not present the
+        rejected zone as the one IN USE; naming it as rejected serves the
+        stated intent rather than defeating it.
+        """
         zone = resolve_zone("Mars/Olympus_Mons")
         assert zone.machine_local
-        assert "Mars/Olympus_Mons" not in zone.describe()
+        described = zone.describe()
+        assert "machine local" in described
+        assert described != resolve_zone("").describe(), (
+            "a rejected zone reads exactly like an unconfigured one"
+        )
+        assert "Mars/Olympus_Mons" in described, (
+            "the operator cannot find their own typo from this message"
+        )
+        assert "schedule in Mars/Olympus_Mons (" not in described, (
+            "the rejected zone is presented as the one in use"
+        )
 
 
 class TestStartWorkerRefusesOutsideTheWindow:
@@ -156,10 +175,21 @@ class TestStartWorkerRefusesOutsideTheWindow:
         from rite_ai import sandbox
         from rite_ai.schedule import Moment, ResolvedZone
 
+        # ⚠ THE WEEKDAY WINDOW COMES FIRST, and the order is the test.
+        #
+        # This previously listed `Sat-Sun / 00:00-23:59 / 0` first, so at
+        # 10:00 on a Saturday the first window matched on HOURS alone and
+        # returned 0 whether or not the day was consulted. The test asserted
+        # a refusal and got one for the wrong reason: measured, `workers_at`
+        # returned 0 for weekday=SAT and 0 for weekday=None.
+        #
+        # With `Mon-Fri / 09:00-17:00 / 3` first, the day decides: 0 when
+        # Saturday is known, 3 when it is ignored. The test now fails if the
+        # enforcement point stops consulting the day.
         root = self._project(
             "schedule:\n  timezone: Europe/Warsaw\n  windows:\n"
-            '    - {days: "Sat-Sun", hours: "00:00-23:59", workers: 0}\n'
             '    - {days: "Mon-Fri", hours: "09:00-17:00", workers: 3}\n'
+            '    - {days: "Sat-Sun", hours: "00:00-23:59", workers: 0}\n'
         )
         zone = ResolvedZone("Europe/Warsaw", machine_local=False)
         monkeypatch.setattr(

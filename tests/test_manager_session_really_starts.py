@@ -241,6 +241,26 @@ class TestTheAuthMessageDoesNotAssertWhatRiteCannotKnow:
             "false about a valid credential"
         )
 
+    def test_it_names_the_left_over_session_the_retry_will_hit(self, monkeypatch):
+        """⚠ The two messages are ONE story, thirty seconds apart.
+
+        An engine that dies in the settle window leaves its tmux session
+        behind — `new-session` succeeded and `remain-on-exit` holds it — so
+        the user's retry ALWAYS meets the left-over-session refusal. A
+        first draft of this message never mentioned it, which made the two
+        read as separate systems: diagnose the credential, retry, get told
+        about something else entirely.
+        """
+        import rite_ai.managers.session as s
+
+        monkeypatch.setattr(s, "_pane_text", lambda _n: "failed to authenticate")
+        msg = s._why_the_engine_died("rite-mgr-x-planner", "claude", "planner")
+        assert "still there holding the name" in msg
+        assert "rite manager stop planner" in msg, (
+            "the auth message did not name the command that clears the "
+            "session the retry will collide with"
+        )
+
     def test_a_NON_auth_death_keeps_the_ordinary_message(self, monkeypatch):
         """The narrow case must stay narrow: a command that simply is not
         installed should not be described as an authentication problem."""

@@ -36,7 +36,7 @@ from rite_ai.claims.ledger import ClaimsLedger
 from rite_ai.config.parse import load_project
 from rite_ai.duration import format_duration as _format_duration
 from rite_ai.reporting.outbox import enqueue, list_pending
-from rite_ai.schedule import current_minute_of_day, current_moment, workers_at
+from rite_ai.schedule import current_moment, workers_at
 from rite_ai.scheduler import lock
 from rite_ai.scheduler.logfile import KEEP, log_path, rotate_if_needed
 from rite_ai.state import write_atomic
@@ -352,12 +352,13 @@ def _run_tick_locked(root: Path, outcome: lock.LockAcquired) -> TickResult:
         return TickResult(ok=False, messages=messages, needs_attention=True)
 
     schedule = project.config.schedule
-    minute = current_minute_of_day(schedule.timezone)
-    if minute is not None and schedule.windows:
-        # With the weekday, or `days:` is ignored here and the handover at a
-        # transition into zero never fires on the day it was configured for.
-        weekday = current_moment(schedule.timezone).weekday
-        current_count = workers_at(schedule, minute, weekday)
+    moment = current_moment(schedule.timezone)
+    if schedule.windows:
+        # One moment, so the minute and the weekday cannot come from
+        # different clocks. With the weekday, or `days:` is ignored here and
+        # the handover at a transition into zero never fires on the day it
+        # was configured for.
+        current_count = workers_at(schedule, moment.minute_of_day, moment.weekday)
         state_path = root / ".rite" / STATE_FILENAME
         last_count = _read_last_worker_count(state_path)
 
@@ -598,7 +599,7 @@ def _assign_the_pool(layer, config, project, name: str, board, now) -> list[str]
     from rite_ai.coordination.refusal import refusal_still_applies, refusals_by_ticket
     from rite_ai.coordination.state_layer import Unavailable
     from rite_ai.coordination.ticket_labels import SCHEDULED
-    from rite_ai.schedule import current_minute_of_day, current_moment, workers_at
+    from rite_ai.schedule import current_moment, workers_at
     from rite_ai.tickets import BackendError, TicketFilter
 
     waiting = board.list_tickets(TicketFilter(label=SCHEDULED))
@@ -624,15 +625,8 @@ def _assign_the_pool(layer, config, project, name: str, board, now) -> list[str]
 
     # Rule 3's ceiling, from the committed schedule every machine shares.
     schedule = project.config.schedule
-    minute = current_minute_of_day(schedule.timezone, now)
-    if minute is None:
-        return [
-            f"coordination: assigned nothing — the schedule's timezone "
-            f"{schedule.timezone!r} could not be resolved"
-        ]
-    capacity = workers_at(
-        schedule, minute, current_moment(schedule.timezone, now).weekday
-    )
+    moment = current_moment(schedule.timezone, now)
+    capacity = workers_at(schedule, moment.minute_of_day, moment.weekday)
     if capacity == 0:
         # §2.7.3's clean stop, and the schedule's own answer rather than a
         # failure: the user scheduled nobody for this hour.

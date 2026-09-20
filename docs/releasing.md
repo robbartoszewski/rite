@@ -10,6 +10,25 @@ and both of them are about what existing projects receive.
 2. **Write the changelog entry.** Both halves — what is new and what was
    fixed — and never bury the fixes, because a tester upgrading reads that
    section first.
+
+   ⚠ **Diff against the last TAG, not against the last time somebody wrote
+   in the changelog.** Run it:
+
+   ```sh
+   git log --oneline "$(git describe --tags --abbrev=0)"..HEAD
+   git log --oneline "$(git log --format=%H -1 -- CHANGELOG.md)"..HEAD
+   ```
+
+   The second list is the one nobody looks at, and on 2026-09-20 it held
+   **twelve commits** — a name-validation rule that changed which Manager
+   names are accepted, three fixes to how a session's ending is determined,
+   and a new environment variable. All shipped, none announced.
+
+   `tests/test_changelog_names_the_commands_it_ships.py` does not catch
+   this and is not meant to: it compares against the last tag and asks only
+   whether new **commands** are named. A release that adds no command and
+   changes behaviour in five places passes it silently. That test is a
+   tripwire for one failure mode; this step is the other one.
 3. **Re-check the README's load-bearing claims, one by one.** Not "read the
    README" — a reviewer handed that will skim it. Check these, each against
    the code:

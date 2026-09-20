@@ -27,6 +27,7 @@ from pathlib import Path
 
 from rite_ai.label import project_slug
 from rite_ai.managers import (
+    MANAGER_ENV,
     ManagerInstance,
     manager_dir,
     pid_alive,
@@ -266,6 +267,18 @@ def running(root: Path, manager: str) -> ManagerInstance | None:
     return instance
 
 
+def _rejected_the_flag(done: subprocess.CompletedProcess) -> bool:
+    """Whether tmux refused because it does not KNOW `-e`, not because the
+    session could not start.
+
+    Matched on tmux's own wording for an unknown option rather than on any
+    nonzero exit: falling back on every failure would retry a genuine
+    refusal without the identity and report success for it.
+    """
+    said = ((done.stderr or "") + (done.stdout or "")).lower()
+    return "unknown flag" in said or "unknown option" in said or "usage:" in said
+
+
 def start(
     root: Path,
     manager: str,
@@ -339,18 +352,99 @@ def start(
             f"has no record of it. Look at it (`tmux attach -t {name}`) and "
             f"either use it or remove it — rite will not adopt or kill it.",
         )
+    if session_exists(name):
+        # ⚠ **THE SAME SHAPE, AND IT NEEDS THE OPPOSITE ADVICE.** Not alive
+        # and still there means the agent exited and `remain-on-exit` — which
+        # `start` itself sets, so the exit status survives for `ending` — is
+        # holding the session open under a deterministic name.
+        #
+        # Both guards above pass on it, each correctly: `liveness` says not
+        # alive because nothing is running, and `running` says None because
+        # there is no record. So this fell through to `tmux new-session` and
+        # the operator was handed tmux's own words — "duplicate session:
+        # rite-mgr-…" — for a situation one command clears.
+        #
+        # ⚠ **Reached without any crash, by the likeliest first run there
+        # is.** An engine that exits at once (no Claude login, a missing
+        # binary) fails `settled_alive`, and that path returns BEFORE
+        # anything is recorded while the session stays. So the operator saw
+        # "the session started and exited immediately", fixed the login, ran
+        # `rite start` again and got "duplicate session" — two errors in a
+        # row, the second explaining neither itself nor the first.
+        #
+        # The advice is deliberately NOT the sentence above it. A live
+        # leftover is somebody's work and rite must not adopt or kill it; a
+        # dead one is a finished session held for its exit status, and
+        # saying which of the two this is what lets the operator act rather
+        # than guess.
+        return StartResult(
+            False,
+            f"a tmux session named {name} is left over from an earlier run: "
+            f"its command is no longer running and the session is held open "
+            f"so its exit status could be read, but this project has no "
+            f"record of it. Nothing is running in it, so it is safe to "
+            f"clear — `rite manager stop {manager}` does it. Its "
+            f"conversation is readable first with `tmux attach -t {name}`.",
+        )
 
     manager_dir(root, manager).mkdir(parents=True, exist_ok=True)
     launch = command or engine or "claude"
+    # ⚠ **`cwd` stays the PROJECT ROOT and the identity travels separately.**
+    # The alternative considered was launching in `manager_dir` so a process
+    # could read its own name off `Path.cwd()`. That cwd is load-bearing: the
+    # prompt tells the Manager to "Read `.rite/`" as a relative path, `rite`
+    # walks UP from cwd for the project marker, and git resolves the worktree
+    # from it. Moving it would have traded a missing identity for three silent
+    # breakages, so the environment carries the name and cwd is left alone.
+    #
+    # `-e` needs tmux 3.2 (2021). Measured here on 3.7c and in CI on 3.4, but
+    # a hard failure on an older tmux would mean the Manager does not start AT
+    # ALL — losing the session to gain the name — so a refusal that names the
+    # flag falls back and says the identity is missing.
+    argv = [binary, "new-session", "-d", "-e", f"{MANAGER_ENV}={manager}"]
+    identified = True
+    # ⚠ **THE NAME WE INHERITED MUST NOT TRAVEL WITH US.** `rite start` is
+    # routinely run from inside another Manager's session, where this
+    # process's own environment already carries that Manager's name — and a
+    # `tmux new-session` that has to START the server forks one that
+    # inherits this environment, after which EVERY pane on that server
+    # reads the inherited name.
+    #
+    # Measured on 3.7c, and the distinction matters because the obvious
+    # version of this claim is wrong: a pane takes its environment from the
+    # tmux SERVER, not from the client that asked. A nested `new-session`
+    # against an already-running server does NOT leak (verified: the child
+    # pane read empty). The leak is exactly the case where this invocation
+    # is what starts the server.
+    #
+    # Stripped on BOTH calls. On the fallback it is the whole fix — without
+    # it the new session reads the PARENT's name and files journal entries
+    # under it, which is worse than having no name at all. On the `-e` call
+    # the session's own value wins for its own panes, but a server this
+    # call started would keep the inherited name for every LATER session on
+    # it, so the poisoning outlives the command that caused it.
+    uninherited = {k: v for k, v in os.environ.items() if k != MANAGER_ENV}
     try:
         done = subprocess.run(
-            [binary, "new-session", "-d", "-s", name, launch],
+            [*argv, "-s", name, launch],
             capture_output=True,
             text=True,
             errors="replace",
             timeout=120,
             cwd=str(root),
+            env=uninherited,
         )
+        if done.returncode != 0 and _rejected_the_flag(done):
+            identified = False
+            done = subprocess.run(
+                [binary, "new-session", "-d", "-s", name, launch],
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=120,
+                cwd=str(root),
+                env=uninherited,
+            )
     except (OSError, subprocess.SubprocessError) as e:
         return StartResult(False, f"could not start a session: {e}")
     if done.returncode != 0:
@@ -370,7 +464,7 @@ def start(
     if not settled_alive(name):
         return StartResult(
             False,
-            _why_the_engine_died(name, launch),
+            _why_the_engine_died(name, launch, manager),
         )
 
     pane = _pane_id(name)
@@ -390,9 +484,24 @@ def start(
         ),
     )
     attach = f"tmux attach -t {name}"
+    # Said, not swallowed. A Manager that cannot read its own name still
+    # works — `--manager` is explicit on every command that needs it — but
+    # the person who sees a journal entry refused for a missing default
+    # should already know why.
+    blind = (
+        ""
+        if identified
+        else (
+            f"\n  this tmux does not support `new-session -e` (3.2+), so "
+            f"nothing inside this session can read {MANAGER_ENV}: `rite "
+            f"journal observe` and `retrospective` will REFUSE there until "
+            f"they are given `--manager {manager}` explicitly. Upgrading "
+            f"tmux to 3.2+ is what makes the default work."
+        )
+    )
     return StartResult(
         True,
-        f"Manager '{manager}' started as {name}.\n  reach it with: {attach}",
+        f"Manager '{manager}' started as {name}.\n  reach it with: {attach}{blind}",
         session=name,
         attach=attach,
         pane=pane,
@@ -597,7 +706,14 @@ def ending(name: str, human_was_present: bool, pane: str = "") -> Ending:
             UNCLEAR,
             detail=(
                 "the pane is dead but tmux reported no exit status "
-                f"({reported!r}) within {STATUS_READS * STATUS_PAUSE:g}s, so "
+                # ⚠ READS, not seconds. `STATUS_READS * STATUS_PAUSE` is the
+                # sleeping only — it omits 30 subprocess round-trips, so the
+                # message said "within 3s" for a wait measured at 4.4s
+                # against an instant tmux and 10.9s at 0.2s per call. A
+                # number nobody measured, in the sentence a human reads to
+                # judge whether tmux is sick. Reads are what this loop
+                # actually counts.
+                f"({reported!r}) across {STATUS_READS} reads, so "
                 "whether it finished or failed is unknown"
             ),
         )
@@ -615,7 +731,23 @@ def ending(name: str, human_was_present: bool, pane: str = "") -> Ending:
     # client on a real tty. The information was available and discarded.
     # OR, not replace: the sampled flag answers "was anybody EVER there",
     # which this call cannot see, and this answers "is anybody there NOW".
-    if human_was_present or was_attached(name):
+    here = attachment(name)
+    if not here.known and not human_was_present:
+        # ⚠ **NOT "nobody was there".** The sampled flag says nobody was
+        # seen, and the live probe could not answer — so the one signal
+        # separating a human typing `exit` from an agent finishing is
+        # missing, and both produce this exact exit status. FINISHED would
+        # resume; refusing costs one command. §5.1.1: a safety property may
+        # fail closed, never open.
+        return Ending(
+            UNCLEAR,
+            detail=(
+                "it exited cleanly, but whether anybody was attached could "
+                f"not be determined ({here.detail}) — and a human typing "
+                "`exit` looks exactly like this"
+            ),
+        )
+    if human_was_present or here.attached:
         # A clean exit with somebody attached at some point. `exit` typed by
         # a human and an agent finishing are the SAME exit status, so this
         # cannot be told apart — and the safe reading is that the human
@@ -705,11 +837,50 @@ def was_attached(name: str) -> bool:
     nested attach and the client silently never appears, which is what made
     the first measurement look like another failure.
     """
+    return attachment(name).attached
+
+
+@dataclass(frozen=True)
+class Attachment:
+    """Whether a client is attached, and whether we could find out.
+
+    ⚠ **Three answers, for `Liveness`'s reason.** `was_attached` returned a
+    bare bool and answered False for *every* way of failing — tmux missing,
+    the session gone, a timeout, a refusal, an unparseable reply. In
+    `ending` that False is not neutral: it is the difference between QUIT
+    and FINISHED, and FINISHED is the one verdict that RESUMES. So a probe
+    that merely could not run restarted a session a human had quit, which
+    is the behaviour `was_attached` was added to prevent, reached through
+    its error path instead of its answer.
+
+    That is the same conflation as the original `liveness` bug — an
+    unanswerable question read as a confident negative — and `Ending`'s own
+    docstring already forbids it: **`resume` is False whenever the answer
+    is not certain.**
+    """
+
+    attached: bool
+    known: bool
+    detail: str = ""
+
+
+def attachment(name: str) -> Attachment:
+    """Is a client attached right now, and could we tell?
+
+    Every failure is `known=False` and carries why. The only real negative
+    is tmux answering with a number that is not positive.
+    """
     binary = _tmux()
     if binary is None:
-        return False
+        return Attachment(False, known=False, detail="tmux not found")
     if not session_exists(name):
-        return False
+        # Not "nobody is attached". `ending` establishes that the session
+        # exists before it asks, so a session that has since vanished means
+        # something changed underneath — and whether anybody was there when
+        # it did is exactly what cannot now be observed.
+        return Attachment(
+            False, known=False, detail=f"no session named {name} to ask about"
+        )
     try:
         done = subprocess.run(
             [binary, "display-message", "-p", "-t", name, "#{session_attached}"],
@@ -718,14 +889,22 @@ def was_attached(name: str) -> bool:
             errors="replace",
             timeout=30,
         )
-    except (OSError, subprocess.SubprocessError):
-        return False
+    except (OSError, subprocess.SubprocessError) as e:
+        return Attachment(False, known=False, detail=f"could not ask tmux: {e}")
     if done.returncode != 0:
-        return False
+        detail = (done.stderr or done.stdout or "").strip()[:200]
+        return Attachment(False, known=False, detail=f"tmux refused: {detail}")
+    raw = (done.stdout or "").strip()
     try:
-        return int((done.stdout or "0").strip()) > 0
+        return Attachment(int(raw) > 0, known=True)
     except ValueError:
-        return False
+        # ⚠ An empty or unreadable expansion is NOT zero. That parse is the
+        # `#{pane_dead_status}` defect in the other field of the same call.
+        return Attachment(
+            False,
+            known=False,
+            detail=f"tmux answered {raw!r}, which is not a client count",
+        )
 
 
 # Shapes an engine prints when it cannot authenticate. Matched to DETECT,
@@ -741,7 +920,7 @@ _AUTH_SHAPES = (
 )
 
 
-def _why_the_engine_died(name: str, launch: str) -> str:
+def _why_the_engine_died(name: str, launch: str, manager: str = "") -> str:
     """The message when the engine did not survive its settle window.
 
     ⚠ **rite does not know whether the credential is bad or the engine
@@ -776,7 +955,12 @@ def _why_the_engine_died(name: str, launch: str) -> str:
             f"problem is the way it was launched, not your login.\n"
             f"  (rite deliberately does not repeat the engine's message "
             f"here: it has been measured saying 'expired' about a "
-            f"credential with a year left on it.)"
+            f"credential with a year left on it.)\n"
+            f"  ⚠ The tmux session is still there holding the name — "
+            f"`remain-on-exit` keeps it so the exit status can be read. "
+            f"Clear it with `rite manager stop {manager or '<manager>'}` "
+            f"before you try again, or the next `rite start` will refuse "
+            f"on the left-over session rather than on this."
         )
     return (
         f"the session started and exited immediately, so `{launch}` is "

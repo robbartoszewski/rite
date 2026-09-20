@@ -129,3 +129,134 @@ does not.
    (orphaned tmux sessions; a leaked `rite-selftest-*` sandbox), and
    `HRM-*` in the dogfood tickets is about the first. Same-machine being a
    special case of the protocol does not make it a special case of the host.
+
+---
+
+## Carried into 0.6.0 from 0.5.1 — engineering, not design
+
+Four items deferred out of 0.5.1 deliberately. None blocks the design
+above; all are things the next person to work in this area should know
+before they spend an afternoon rediscovering them.
+
+### 1. The real-tmux tests are load-sensitive and nondeterministic — OPEN
+
+Two files are affected, and **the nondeterminism is proven independent of
+any code change**:
+
+- `test_manager_endings_and_resume.py::TestLivenessUnderRemainOnExit::test_a_dead_pane_is_not_alive_even_though_the_session_exists`
+  — fails on `still_exists.returncode == 0`, "remain-on-exit did not hold
+  the session".
+- `test_loop_start_really_starts.py::test_doctor_names_a_running_loop` (and,
+  in one run, two of its siblings) — fails on
+  `"loop: running as rite-loop-" in result.output`: the loop session was
+  started and `rite doctor` did not see it.
+
+**What was measured on 2026-09-20, so the next person does not repeat it:**
+
+| run | tree | result |
+|---|---|---|
+| either file alone, 2–3× | both trees | passes every time |
+| full suite | pristine `origin/main` | 3757 passed, 0 failed |
+| full suite, run 1 | `origin/main` + Manager-identity | **3 failed** (loop file) |
+| full suite, run 2 | same, after test-cleanup fix | 3774 passed, 0 failed |
+| full suite, run 3 | run 2's tree **+ 172 lines of markdown** | **1 failed** (loop file) |
+
+⚠ **The last row is the control that matters.** Run 3's only difference
+from run 2 is five `.md` files. Markdown cannot change how `rite doctor`
+detects a tmux session, so the same code passed and failed across two runs.
+Whatever this is, it is not a code defect introduced by either change — it
+is timing, and it only appears under full-suite load.
+
+**For the first of the two, start at `_keep_pane_after_exit`.** It runs `set-window-option` with
+`check=False`, so a call that fails under load is silently ignored and the
+next assertion is the first thing that notices. `ec3199c` changed that
+function on the same day, and this module's own docstring already records
+that the capability probe beside it "has now got in its own way five times",
+one of which was *"the command died before the option was set"* — the same
+shape as a set-option that does not land in time.
+
+For the second, the common factor is that both tests assert on a session
+being *visible* shortly after `start` returns, and `settled_alive` gives
+that only a bounded number of tries. A shared root cause across both files
+is plausible and unproven.
+
+⚠ **Not cleared, and deliberately not called flaky-and-harmless.** What is
+established is that it is nondeterministic under load, not that it is
+harmless: both assertions are about rite failing to see a session that
+exists, which is the same shape as the `eu:west` defect — a confident,
+wrong answer about whether something is running. If that can happen under
+test load it can happen on a loaded laptop. Treat it as open, and start by
+making the silent failures loud rather than by re-running until green.
+
+### 2. `journal.instructions()` still spells out `--manager`
+
+Since 0.5.1 a Manager session carries `RITE_MANAGER` and `--manager` defaults
+to it, so the instruction text handed to a Manager now tells it to pass an
+argument it no longer needs. Harmless and redundant.
+
+Left alone because the wording is pinned by assertions in
+`tests/test_manager_journal.py`, and rewording text that other tests assert on
+is not worth doing for a redundancy. Do it with the next deliberate change to
+that text.
+
+### 3. The test suite and a live Manager share one tmux server — OPEN
+
+**This is a candidate mechanism for item 1, and it is testable.** Every
+`tmux` invocation in the suite (65 of them) and every one in the product
+uses the DEFAULT socket, because both call the bare binary with no `-S`.
+So `pytest` and a Manager started by `rite start` land on the same server,
+as do two suites running at once on a developer's machine.
+
+**Evidence that this is not hypothetical:**
+
+- A stray `rite-loop-looptest-*` session was found on the shared server
+  during a run of `test_manager_endings_and_resume.py`, which creates no
+  such session — it belonged to another suite running concurrently.
+- A control run elsewhere had a **five-file markdown-only diff flip a
+  tmux-detection test**. A documentation change cannot affect tmux; a
+  neighbour on the same server can.
+
+Item 1 says the nondeterminism is "proven independent of any code change"
+and that a shared root cause is "plausible and unproven". This is the
+most likely shared root cause, and it explains the shape item 1 names —
+rite failing to see a session that exists, or seeing one it should not.
+
+**The fix is one autouse fixture and no call-site changes.** `TMUX_TMPDIR`
+relocates the socket directory and tmux resolves it itself, so setting it
+once for the pytest process covers the tests AND the code under test,
+which inherit it. Measured: a session created under a private
+`TMUX_TMPDIR` is invisible to `tmux ls` on the default socket, and a bare
+`subprocess.run(["tmux", "ls"])` with only the variable set reaches the
+private server. `conftest.py` already isolates `RITE_CLAUDE_PROJECTS_DIR`,
+git config, the OS keychain and network credentials this way; tmux is the
+one shared global on that list that is not isolated.
+
+⚠ **One constraint that will cost an hour if it is rediscovered.** A Unix
+socket path is capped near 104 bytes, and the path becomes
+`$TMUX_TMPDIR/tmux-<uid>/default`. pytest's `tmp_path_factory` basetemp is
+far too long — measured, it fails with `error connecting to … (File name
+too long)`. Use a short dedicated `mkdtemp`, not `tmp_path`.
+
+**Deferred from 0.5.1 on purpose:** it has no user-visible effect and its
+blast radius is every real-tmux test, which is not a change to land hours
+before a tag.
+
+### 4. `session_exists` is not a general tmux predicate
+
+`session_exists("eu:west")` is **False for a session that exists**.
+`has-session -t =eu:west` reads `eu:west` as session `eu`, window `west`,
+so the exact-match prefix does not save it.
+
+This costs nothing today, and the reason is worth stating rather than
+assuming: a Manager name containing `:` is refused by `name_problem`
+(`must_be_a_tmux_target=True`) — the same check that made `eu:west` and
+`v2.0` stop being accepted names in 0.5.1 — so rite never creates one and
+never has reason to ask about a stranger's.
+
+**It is a landmine for the next caller.** The function reads like "does a
+tmux session with this name exist", and it is only sound for names rite
+itself validated. Anything that asks it about a name from outside rite —
+an adoption feature, a doctor check that enumerates the server, a
+multi-Manager view — gets a confident wrong answer of exactly the shape
+item 1 warns about. Either document the precondition at the function, or
+make it take a validated name type.

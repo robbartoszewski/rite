@@ -36,7 +36,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from rite_ai.managers import ManagerInstance, forget_instance, record_instance
+from rite_ai.managers import forget_instance
 from rite_ai.managers.prompt import deliver as deliver_prompt
 from rite_ai.managers.session import (
     StartResult,
@@ -47,6 +47,7 @@ from rite_ai.managers.session import (
 )
 from rite_ai.managers.session import start as start_session
 from rite_ai.managers.session import stop as stop_session
+from rite_ai.managers.transcripts import session_id_problem
 
 POLL_SECONDS = 2.0
 
@@ -90,6 +91,27 @@ def launch_command(engine: str, resume_id: str = "") -> str:
     """
     base = engine or "claude"
     if resume_id:
+        # ⚠ **REFUSES rather than escapes, and raises rather than drops the
+        # flag.** This string is handed to `tmux new-session`, which runs it
+        # through `sh -c` — so an unchecked id is a shell command. Measured
+        # before `session_id_problem` existed: a transcript whose
+        # `sessionId` was `abc$(touch FILE)` created the file when the
+        # session started.
+        #
+        # Dropping a bad id and returning `base` would start a FRESH context
+        # with the ticket half-done — the silent failure this whole path
+        # exists to prevent — so a caller that reaches here with one has a
+        # defect and is told, loudly, at the boundary that touches the
+        # shell. `latest_session_id` already filters, which makes this the
+        # second of two checks rather than the only one: the filter keeps
+        # the supervisor working, and this keeps a future caller from
+        # reintroducing the hole.
+        problem = session_id_problem(resume_id)
+        if problem:
+            raise ValueError(
+                f"refusing to build a launch command with a resume id that "
+                f"{problem}. This string is run by a shell."
+            )
         return f"{base} --resume {resume_id}"
     return base
 
@@ -237,6 +259,50 @@ def supervise(
                 )
 
         try:
+            # ⚠ **THE PREVIOUS SESSION IS ENDED HERE, and the position is the
+            # point.** `start` sets `remain-on-exit on` so the exit status
+            # survives for `ending` to read (§9.14.4) — which leaves the
+            # finished session ALIVE, holding the name, and `session_name` is
+            # deterministic. So `tmux new-session` answered `duplicate session`
+            # and every resume died there. The two halves of this release were
+            # mutually exclusive:
+            #
+            #     remain-on-exit on   -> FINISHED reachable, the name is taken
+            #     remain-on-exit off  -> the name is free, ending() only ever
+            #                            says `unclear`
+            #
+            # No test saw it because every multi-cycle test injected `starter`,
+            # so `new-session` was never called a second time in the suite — and
+            # the one test that did drive real tmux twice performed this stop
+            # ITSELF, under a comment saying it was doing what the loop does.
+            #
+            # ⚠ **AFTER the bounds and the verdict, not on the resume path.**
+            # Reaching the ceiling, running out of window, or being told to stop
+            # must leave the pane where it is: its conversation is what a human
+            # attaching afterwards reads, and a bound is an accounting limit
+            # rather than an instruction to tidy up. Ending it as soon as the
+            # resume was decided took that away from every run that stopped on a
+            # bound, and `test_reaching_the_ceiling_does_not_stop_the_session`
+            # caught it. Here, the only session ended is one about to be
+            # REPLACED by its own continuation.
+            #
+            # `_torn_down`'s order, for `_torn_down`'s reason: the record goes
+            # even if the kill fails, or the next `rite start` believes this
+            # Manager is still running.
+            if live:
+                closed = stop_session(live)
+                forget_instance(root, manager)
+                if closed is not None and not closed.ok:
+                    return SuperviseResult(
+                        False,
+                        f"stopped after {len(cycles)} session(s): it finished "
+                        f"and was ready to resume, but its tmux session could "
+                        f"not be ended — {closed.detail}. The next cycle would "
+                        f"collide with it under the same name, so nothing was "
+                        f"started. End it with `tmux kill-session -t {live}` "
+                        f"and run `rite start` again.",
+                        cycles,
+                    )
             result: StartResult = launch(
                 root,
                 manager,
@@ -443,15 +509,14 @@ def _default_starter(root, manager, *, engine, resume_id, max_sessions, window_s
         max_sessions=max_sessions,
         window_seconds=window_seconds,
     )
-    if result.ok:
-        record_instance(
-            root,
-            ManagerInstance(
-                name=manager,
-                session=result.session,
-                engine=launch_command(engine, resume_id),
-                max_sessions=max_sessions,
-                window_seconds=window_seconds,
-            ),
-        )
+    # ⚠ NO SECOND `record_instance` HERE. `start_session` has already
+    # written the record, with tmux's pane pid and the command that
+    # actually ran. This function used to re-record the same instance
+    # immediately afterwards, without a pid and with the CONFIGURED engine
+    # string — overwriting both fields §9.14.10 exists to keep honest, and
+    # making `rite status` report every live Manager as dead.
+    #
+    # The second write was not merely wrong, it was redundant: every value
+    # it set is already set by `start_session`, which receives the same
+    # arguments.
     return result

@@ -5,6 +5,8 @@ from rite_ai.schedule import (
     ScheduleError,
     check_worker_cap,
     current_minute_of_day,
+    current_moment,
+    resolve_zone,
     upsert_window,
     validate_schedule,
     workers_at,
@@ -141,11 +143,36 @@ class TestCheckWorkerCap:
 
 
 class TestCurrentMinuteOfDay:
-    def test_empty_timezone_returns_none(self):
-        assert current_minute_of_day("") is None
+    """⚠ THIS CONTRACT CHANGED IN 0.5.1 (D-48 relaxed).
 
-    def test_unknown_timezone_returns_none(self):
-        assert current_minute_of_day("Not/A_Real_Zone") is None
+    These asserted `None` for an empty or unresolvable zone, so a caller
+    could "skip the check rather than evaluate against the wrong clock".
+    That was one of TWO live policies: `current_moment`, written later for
+    the same question, fell back to the machine's clock. Which applied
+    depended on which function a caller reached for, so on the documented
+    default of an unset timezone `sandbox.start_worker` enforced the
+    schedule normally while `coordination.distribution` assigned nothing.
+
+    Machine-local won, and this delegates rather than holding a second
+    opinion. An unusable zone is reported through `ResolvedZone.rejected`
+    and `rite doctor`, not by refusing to answer what time it is.
+    """
+
+    def test_an_empty_timezone_reads_the_machine_clock(self):
+        assert current_minute_of_day("") == current_moment("").minute_of_day
+
+    def test_an_unknown_timezone_reads_the_machine_clock(self):
+        assert (
+            current_minute_of_day("Not/A_Real_Zone")
+            == current_moment("Not/A_Real_Zone").minute_of_day
+        )
+
+    def test_an_unknown_timezone_is_still_reported_as_rejected(self):
+        """The fallback is not silent — that distinction is the whole of
+        finding B, and it is what makes returning a number safe here."""
+        zone = resolve_zone("Not/A_Real_Zone")
+        assert zone.rejected == "Not/A_Real_Zone"
+        assert zone.describe() != resolve_zone("").describe()
 
     def test_utc_reads_directly(self):
         now = datetime(2026, 1, 1, 14, 30, tzinfo=UTC)

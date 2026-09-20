@@ -123,6 +123,95 @@ project's entry, and not its own. That is measured, not assumed (SPEC §10.3),
 and it is *why* a sandboxed Worker's token is handed to it through `--env`
 rather than fetched. Inside a sandbox, "not found" means "cannot check".
 
+## The schedule — when Workers may run
+
+`schedule.windows` in `.rite/config.yaml` says how many Workers may run at a
+given hour, on given days. From 0.5.1 it is **enforced**: `rite sandbox start`
+refuses outside a window and names when the next one opens. Before 0.5.1 it
+was advisory, and a project configured for zero Workers at the weekend
+started one anyway.
+
+```yaml
+schedule:
+  timezone: Europe/Warsaw        # optional; see below
+  windows:
+    - {days: "Mon-Fri", hours: "09:00-17:00", workers: 3}
+    - {days: "Mon-Fri", hours: "17:00-09:00", workers: 1}
+    - {days: "Sat-Sun", hours: "00:00-23:59", workers: 0}
+```
+
+**`days`** takes `Mon`, a range `Mon-Fri`, or a list `Sat,Sun`. Ranges wrap,
+so `Fri-Mon` is Friday, Saturday, Sunday and Monday — the same way `hours`
+already wrapped at midnight. A name it does not recognise is refused with
+what it expected, rather than being skipped.
+
+**A window with no `days` means every day**, which is what every window
+written before 0.5.1 meant, so an existing schedule keeps its exact meaning
+and needs no migration.
+
+**`hours`** is a half-open `HH:MM-HH:MM` range and may wrap midnight
+(`17:00-09:00` is the evening plus the following morning).
+
+**Time no window covers is zero Workers** — not the flat cap, not unbounded.
+This is the value most projects meet first and never configure: with the
+example above, Monday 20:00 is not in any window, so it is zero.
+
+**`workers` is checked against `sandbox.max_concurrent_workers`, and a
+window asking for more is REFUSED rather than quietly reduced.** There is no
+"lower of the two wins": `rite doctor` reports the window as a problem, so a
+schedule that cannot be honoured says so instead of running smaller than you
+wrote and letting you believe otherwise.
+
+### Which clock it is on
+
+**`timezone` is optional and defaults to your machine's own clock**, because
+a schedule expresses human working hours and "nine to five" means the
+operator's day.
+
+⚠ **A container or CI runner with no timezone configured resolves to UTC.**
+An operator in Warsaw writing `09:00-17:00` would get a fleet running two
+hours off with every individual number looking correct. So rite states the
+clock rather than assuming you know it. `rite schedule show`:
+
+```console
+$ rite schedule show
+schedule in Europe/Warsaw (machine local)
+  Mon-Fri    09:00-17:00  workers=3
+  Sat-Sun    00:00-23:59  workers=0
+```
+
+`(machine local)` means the field was unset and your machine answered;
+`(from config)` means you named it. A `timezone` that is not a known zone is
+**not silently replaced** — it falls back to machine-local and says which
+value it ignored:
+
+```console
+schedule in Europe/Warsaw (machine local — schedule.timezone 'Not/AZone' is
+not a known timezone and was ignored)
+```
+
+`rite start <manager>` prints the same sentence, so the clock is stated at
+the moment you spend something.
+
+⚠ **A committed schedule is interpreted on each machine separately.**
+`config.yaml` is shared, and with no `timezone` set each operator's fleet
+runs on their own local day. That is intended — each person works their own
+hours — and it is worth knowing the first time a colleague's Workers start
+three hours before yours. Set `timezone` explicitly if you want one clock
+for everybody.
+
+### When it refuses
+
+```console
+$ rite sandbox start alpha
+the schedule allows 0 Workers right now (schedule in Europe/Warsaw (machine
+local)). Next open: <when>. Refused rather than started — `rite schedule
+show` lists the windows, and raising the count is a config change.
+```
+
+A project with **no** schedule is unaffected: an empty schedule reports zero
+windows and the refusal is skipped rather than refusing everything.
+
 ## What runs on its own
 
 Nothing rite runs unattended starts a Claude session.
@@ -172,7 +261,7 @@ loop worth running:
 | `saturated` | work is waiting and every worker is busy. A queue, not a fault |
 | `blocked` | work is waiting, a worker is free, and the paths it needs are held by someone still working |
 | `deadlocked` | same, except the holders look gone. **This will not clear on its own**, so the loop **stops** and prints what to release |
-| `closed` | your schedule allows no workers this hour (§2.7.3) |
+| `closed` | your schedule allows no workers at this hour **on this day** (§2.7.3). Since 0.5.1 a window can carry `days:`, so a whole day can be closed — this row said "this hour" when the hour was the only dimension |
 | `ready` | a worker is free and there is safe work for one |
 | `unknown` | the board, the ledger or the schedule could not be read. **Stops the loop** — this is the state that must not be silent, because "could not check" and "nothing to do" look identical in a log |
 
@@ -207,6 +296,55 @@ claims ledger while sharing one board.
 Its output goes to `.rite/loop.log`, rotated like the scheduler's. `rite loop
 run` on its own prints one cycle and exits, which is the way to see what it
 thinks without leaving anything running.
+
+## Which clock your schedule runs on
+
+A schedule says when Workers may run:
+
+```yaml
+schedule:
+  timezone: Europe/Warsaw     # optional
+  windows:
+    - days: "Mon-Fri"
+      hours: "09:00-17:00"
+      workers: 3
+```
+
+**The timezone is optional.** Leave it out and the hours mean your own
+machine's local time — "nine to five" is your working day, and on a project
+you run from one machine you should not have to name your own timezone.
+
+**rite tells you which clock it picked.** `rite start` prints a line like:
+
+    schedule in Europe/Warsaw (machine local)
+
+`machine local` means no timezone was configured and this machine's clock is
+being used. `from config` means the schedule named a zone and that zone is
+in use.
+
+⚠ **Set a timezone when more than one machine reads the schedule.** The
+schedule lives in `.rite/config.yaml`, which is committed — so everyone
+gets the same file, and without a timezone each machine reads it against
+its own clock. The same window then means different hours in different
+places. At Friday 23:00 UTC, a `09:00-17:00 Mon-Fri` schedule with no
+timezone allows 3 Workers in Los Angeles (Friday 16:00) and 0 in Tokyo
+(Saturday 08:00) — the day itself is different. One IANA name in the config
+removes that entirely.
+
+⚠ **A timezone that is set but misspelled is an error, not a fallback.**
+`Europe/Lodnon` is not a timezone. rite does not stop, but it says so
+loudly rather than quietly using your machine's clock:
+
+    schedule in Europe/Warsaw (machine local — schedule.timezone
+    'Europe/Lodnon' is not a known timezone and was ignored)
+
+`rite doctor` reports it too. This is deliberately different from leaving
+the field out: an empty field is a choice, a misspelled one is a mistake,
+and before 0.5.1 the two printed the same sentence.
+
+**A typo in `days:` behaves the same way** — `Mon-Fry` is not a day range,
+so that window is ignored entirely and contributes no Workers. `rite
+doctor` names the typo and says the window was dropped.
 
 ## Starting a sandboxed worker
 

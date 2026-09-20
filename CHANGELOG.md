@@ -119,6 +119,109 @@ session that finished normally read as "unknown" and the supervisor
 stopped rather than resuming. The check now waits for the status; if it
 never arrives the answer is still unknown, which still does not resume.
 
+### Fixed: a Manager name is now checked against what it BECOMES, not just where it goes
+
+A Manager name is a path segment *and* a tmux target, and only the first
+was checked. `eu:west` and `v2.0` both passed — `:` is tmux's window
+separator and `.` its pane separator — so tmux created a session under a
+name no later lookup could resolve. Measured: `rite start` reported that
+the session "started and exited immediately" **while a real session was
+running**, `rite manager stop` reported success having killed nothing, and
+the liveness check answered confidently that it was not alive. In
+production that pane runs `claude`, so the failure mode was a paid,
+detached session with no instance record and a recovery command that could
+not see it.
+
+Names are now validated by an **allowlist** — ASCII letters, digits, `.`,
+`_`, `-` — rather than a list of characters to reject, because `:` would
+not have been on a reject list either. The stricter tmux-target rule, which
+additionally refuses `.`, is passed explicitly at every call site that
+takes a Manager name, rather than being the default for every caller —
+context *file* names come through the same function, and `database.md`
+must keep its dot. A name that was accepted before and is refused now was
+already broken; it just failed later and less visibly.
+
+### Fixed: the ending path asks the Manager's own pane, and reads the kill signal
+
+Three defects from a hostile review of how a session's ending is
+determined, each reproduced against real tmux before the fix:
+
+- **`-t <session>` answers about the session's *active* pane.** Attach and
+  run `tmux split-window`, exit that scratch shell, and `ending` reported
+  `finished` while the Manager's own pane was still running its process.
+  `start` now records the Manager's `#{pane_id}` and every later question
+  names that pane.
+- **`#{pane_dead_signal}` carries `kill` in the same call that leaves
+  `#{pane_dead_status}` empty**, so an OOM-killed or externally killed
+  Manager read as "cannot tell" rather than as a fault.
+- **Whether a human was attached** is asked of the session rather than
+  inferred.
+
+### A Manager can read its own name — `RITE_MANAGER`
+
+`rite start <manager>` now sets `RITE_MANAGER` on the tmux session, so a
+process inside it can determine which Manager it is. Previously the name
+reached the session only as prompt text, which the supervisor sends on the
+**first** session and deliberately never again — so after a resume nothing
+on the machine could answer the question.
+
+`--manager` on `rite journal observe` and `rite journal retrospective` is
+therefore no longer required: inside a Manager's own session it defaults to
+that Manager. An explicit `--manager` still wins, and outside a session the
+command refuses rather than guessing a name — an entry filed under the
+wrong Manager is worse than one that was refused.
+
+⚠ **Needs tmux 3.2 or newer** (for `new-session -e`). On an older tmux the
+session still starts and `rite start` says that the identity is unavailable
+and that commands inside it need `--manager` spelled out.
+
+### Fixed: `rite schedule show` showed neither the days nor the clock
+
+The command whose job is to print your schedule printed `timezone: (not
+set)` for a machine-local schedule — reading the raw config field, which is
+empty exactly when the zone comes from the machine — and never printed
+`days` at all, so a `Mon-Fri` window and a `Sat-Sun` window looked
+identical.
+
+That matters because `rite sandbox start`'s refusal ends *"`rite schedule
+show` lists the windows"*. A user refused on a Saturday followed that
+instruction and saw two windows with no way to tell which one refused them.
+It now prints the same sentence `rite start` does, and the days beside each
+window:
+
+```console
+$ rite schedule show
+schedule in Europe/Warsaw (machine local)
+  Mon-Fri    09:00-17:00  workers=3
+  Sat-Sun    00:00-23:59  workers=0
+```
+
+### Fixed: an anchor of invisible characters is no longer an anchor
+
+`str.strip()` removes Python-whitespace only, so U+200B ZERO WIDTH SPACE,
+U+200C ZWNJ and U+2800 BRAILLE PATTERN BLANK all passed the anchor refusal
+— measured. An entry whose anchor renders blank is worse than the invented
+SHA the known gap below describes, because at least an invented SHA looks
+like something a reader will try to check.
+
+The rule is now positive rather than a blacklist: **an anchor must contain
+at least one ASCII letter or digit.** Two earlier attempts were rules about
+which characters count as blank, and each was beaten by a character its
+author had not met — a blacklist of Unicode categories missed U+2800
+(category `So`), and `str.isalnum()` missed U+3164 HANGUL FILLER and three
+other category-`Lo` characters that are alphanumeric *and* render as
+nothing.
+
+ASCII, because an anchor exists to be checked by a reader — a commit SHA, a
+`file:line`, a command with its output, a ticket id — and every one of those
+is ASCII. So the restriction costs nothing real and removes that whole
+family at once, rather than naming its members. Unicode cannot add a new
+ASCII alphanumeric.
+
+The test that guards it now DERIVES its cases from the Unicode database
+instead of listing them, so it would have caught U+3164 without anyone
+having heard of U+3164.
+
 **Why this release exists, stated plainly: v0.5.0 shipped a schedule that
 looks enforced and is not.** A user opens `config.yaml`, sees windows and
 worker counts, and has no way to discover that `rite sandbox start` ignores

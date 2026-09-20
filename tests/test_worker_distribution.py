@@ -182,9 +182,33 @@ class TestTheScheduleDecidesHowMany:
         assert backend.writes == []
         assert "0 Workers in this window" in got.held_back["ABC-1"]
 
-    def test_an_unresolvable_timezone_refuses_rather_than_guessing(self, root):
-        """§2.7 calls a schedule with no timezone a trap. Defaulting to "all
-        hours" or "no hours" would be a silent wrong answer either way."""
+    def test_an_unresolvable_timezone_falls_back_LOUDLY_not_silently(self, root):
+        """⚠ THIS TEST'S POLICY CHANGED, deliberately, and the old one is
+        worth reading before changing it back.
+
+        It asserted `NotDistributed` — refuse rather than guess — citing
+        §2.7's "a schedule with no timezone is a trap". The concern is
+        right; refusing here was not, because **only this subsystem did
+        it.** `resolve_zone` had already relaxed D-48 to a machine-local
+        default, so on the documented default of an unset timezone
+        `sandbox.start_worker` enforced the schedule against the machine
+        clock while distribution assigned nothing at all. Two subsystems,
+        opposite behaviour, one config — and the half that refused was the
+        half nobody was watching.
+
+        The trap is now closed by LOUDNESS rather than by refusal: a
+        rejected zone is named in `ResolvedZone.describe()` and reported by
+        `validate_schedule`, so `rite doctor` says which zone it could not
+        use and which clock it fell back to. An unset one is still reported
+        too. Nothing is silently on the wrong clock; the difference is that
+        work continues while the operator is told.
+
+        ⚠ SPEC D-48 still reads "Required field, no default" and §2.7 still
+        calls a timezone-less schedule a trap, while `resolve_zone`'s
+        docstring says it RELAXES D-48. The code is now consistent with
+        itself; the spec has not been updated to match and that is somebody
+        else's decision, recorded here rather than resolved quietly.
+        """
         backend = FakeBackend([ticket("ABC-1", "beta")])
         got = distribute(
             root,
@@ -194,8 +218,18 @@ class TestTheScheduleDecidesHowMany:
             schedule=schedule(timezone="Mars/Olympus"),
             now=NOON,
         )
-        assert isinstance(got, NotDistributed)
-        assert backend.writes == []
+        assert not isinstance(got, NotDistributed), (
+            "distribution refused on an unresolvable timezone while "
+            "`start_worker` enforces the schedule against the machine clock "
+            "— the same config, two behaviours"
+        )
+
+        from rite_ai.schedule import resolve_zone
+
+        described = resolve_zone("Mars/Olympus").describe()
+        assert "Mars/Olympus" in described and "machine local" in described, (
+            f"the fallback is silent, which is the trap §2.7 names: {described!r}"
+        )
 
 
 class TestWhenAWriteFails:

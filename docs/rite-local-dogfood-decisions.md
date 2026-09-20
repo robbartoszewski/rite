@@ -271,9 +271,36 @@ end to end and scanned before being committed to a public repo.
 > Git refuses a pull that would write over an untracked file **even when the
 > bytes are identical** — tested: *"untracked working tree files would be
 > overwritten by merge … Aborting"*. So the next `git pull` in an existing
-> `~/AI/rite` will abort once until someone runs `rm .rite/config.yaml` first.
-> Nothing is lost: what lands is byte-identical to what is deleted. A **fresh
-> clone is unaffected**.
+> `~/AI/rite` will abort until that untracked file is moved out of the way. A
+> **fresh clone is unaffected**.
+>
+> ⚠ **Corrected 2026-09-20 — BACK THE FILE UP; the two are not identical.**
+> This block used to say to run `rm .rite/config.yaml`, and that "nothing is
+> lost: what lands is byte-identical to what is deleted". **That reassurance
+> was false for the one checkout this block is about**, and it was never
+> measured — the two files were compared for the first time on 2026-09-20,
+> and they differ in exactly the two fields §8 above describes as sanitized
+> leftovers: the JIRA `site:` and the `projects:` key. The tracked copy
+> carries the placeholders §8 says it carries. The untracked copy in that
+> checkout carries the live values, which are deliberately not reproduced
+> here because this document is public.
+>
+> So the remedy as written destroyed live configuration. Move it aside
+> instead, and pull only once the copy exists:
+>
+> ```sh
+> mkdir -p ~/rite-config-backup
+> mv .rite/config.yaml ~/rite-config-backup/config.yaml   # outside the worktree
+> git pull
+> diff ~/rite-config-backup/config.yaml .rite/config.yaml  # reconcile by hand
+> ```
+>
+> The `diff` is the point: what lands is the sanitized copy, so any live
+> value the local file held has to be put back deliberately or consciously
+> dropped. **This is the second stale claim found in this document** — see
+> the `RITE_LOCAL_TICKETS.md` row in §9 and the *Do not launch* row in §8 —
+> and like those it is corrected in place rather than deleted, because what
+> it got wrong is the useful part.
 
 ---
 
