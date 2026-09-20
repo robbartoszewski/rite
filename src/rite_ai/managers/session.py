@@ -369,6 +369,27 @@ def start(
     # flag falls back and says the identity is missing.
     argv = [binary, "new-session", "-d", "-e", f"{MANAGER_ENV}={manager}"]
     identified = True
+    # ⚠ **THE NAME WE INHERITED MUST NOT TRAVEL WITH US.** `rite start` is
+    # routinely run from inside another Manager's session, where this
+    # process's own environment already carries that Manager's name — and a
+    # `tmux new-session` that has to START the server forks one that
+    # inherits this environment, after which EVERY pane on that server
+    # reads the inherited name.
+    #
+    # Measured on 3.7c, and the distinction matters because the obvious
+    # version of this claim is wrong: a pane takes its environment from the
+    # tmux SERVER, not from the client that asked. A nested `new-session`
+    # against an already-running server does NOT leak (verified: the child
+    # pane read empty). The leak is exactly the case where this invocation
+    # is what starts the server.
+    #
+    # Stripped on BOTH calls. On the fallback it is the whole fix — without
+    # it the new session reads the PARENT's name and files journal entries
+    # under it, which is worse than having no name at all. On the `-e` call
+    # the session's own value wins for its own panes, but a server this
+    # call started would keep the inherited name for every LATER session on
+    # it, so the poisoning outlives the command that caused it.
+    uninherited = {k: v for k, v in os.environ.items() if k != MANAGER_ENV}
     try:
         done = subprocess.run(
             [*argv, "-s", name, launch],
@@ -377,6 +398,7 @@ def start(
             errors="replace",
             timeout=120,
             cwd=str(root),
+            env=uninherited,
         )
         if done.returncode != 0 and _rejected_the_flag(done):
             identified = False
@@ -387,6 +409,7 @@ def start(
                 errors="replace",
                 timeout=120,
                 cwd=str(root),
+                env=uninherited,
             )
     except (OSError, subprocess.SubprocessError) as e:
         return StartResult(False, f"could not start a session: {e}")
@@ -438,9 +461,11 @@ def start(
         ""
         if identified
         else (
-            f"\n  this tmux does not support `new-session -e` (3.2+), so the "
-            f"session cannot read {MANAGER_ENV} and commands inside it need "
-            f"`--manager {manager}` spelled out."
+            f"\n  this tmux does not support `new-session -e` (3.2+), so "
+            f"nothing inside this session can read {MANAGER_ENV}: `rite "
+            f"journal observe` and `retrospective` will REFUSE there until "
+            f"they are given `--manager {manager}` explicitly. Upgrading "
+            f"tmux to 3.2+ is what makes the default work."
         )
     )
     return StartResult(
