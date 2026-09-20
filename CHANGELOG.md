@@ -2,6 +2,46 @@
 
 ## 0.5.1 (unreleased)
 
+### A Manager can record what it noticed — `rite start --record-issues` (BETA)
+
+Feedback about how rite is *working* has only ever existed where a human
+was watching. An unattended run produced silence: whatever the session
+noticed went into a pane's scrollback and died with it.
+
+With `--record-issues`, a Manager writes what it noticed to files under
+`.rite/managers/<name>/journal/`, using two new commands:
+
+- `rite journal observe` — something behaved differently from what the
+  docs, or a tool's own output, claimed.
+- `rite journal retrospective` — what a ticket or a review round cost,
+  what changed, and whether the change would have been caught elsewhere.
+
+**Off by default, and genuinely off.** A Manager started without the flag
+is not told the journal exists, so it spends nothing reflecting. Marked
+beta because the entry format will change.
+
+**An entry without an anchor is refused** — a commit SHA, a file and line,
+a command with its output, a ticket id, or a named log file with a
+timestamp. An issue log containing events that did not happen is worse
+than no log, so the format makes an uncheckable entry impossible to write
+rather than asking for a careful one. `observed` and `inferred` are
+separate fields for the same reason.
+
+**A retrospective has nowhere to record a verdict**, deliberately. The
+obvious measure is inverted: a review round ending "fix these three
+things" produces a commit, one ending "this design would force-release
+live Workers, start again" produces nothing — so judging a round by its
+output ranks bad reviewing above good.
+
+**Nothing in rite reads these files**, and nothing collects, uploads or
+transmits them. `rite start --record-issues` prints the directory so
+whoever is running the session knows where to copy from; there is no
+export command and none is planned.
+
+**Known gap, stated rather than discovered:** an entry must *have* an
+anchor, and an anchor that is present is not verified to resolve — so a
+plausible but invented commit SHA is accepted today.
+
 ### Fixed before release: `days:` was parsed but ignored by the loop and scheduler
 
 The day dimension above is enforced at `rite sandbox start`, and four other
