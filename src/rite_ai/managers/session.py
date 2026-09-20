@@ -352,6 +352,40 @@ def start(
             f"has no record of it. Look at it (`tmux attach -t {name}`) and "
             f"either use it or remove it — rite will not adopt or kill it.",
         )
+    if session_exists(name):
+        # ⚠ **THE SAME SHAPE, AND IT NEEDS THE OPPOSITE ADVICE.** Not alive
+        # and still there means the agent exited and `remain-on-exit` — which
+        # `start` itself sets, so the exit status survives for `ending` — is
+        # holding the session open under a deterministic name.
+        #
+        # Both guards above pass on it, each correctly: `liveness` says not
+        # alive because nothing is running, and `running` says None because
+        # there is no record. So this fell through to `tmux new-session` and
+        # the operator was handed tmux's own words — "duplicate session:
+        # rite-mgr-…" — for a situation one command clears.
+        #
+        # ⚠ **Reached without any crash, by the likeliest first run there
+        # is.** An engine that exits at once (no Claude login, a missing
+        # binary) fails `settled_alive`, and that path returns BEFORE
+        # anything is recorded while the session stays. So the operator saw
+        # "the session started and exited immediately", fixed the login, ran
+        # `rite start` again and got "duplicate session" — two errors in a
+        # row, the second explaining neither itself nor the first.
+        #
+        # The advice is deliberately NOT the sentence above it. A live
+        # leftover is somebody's work and rite must not adopt or kill it; a
+        # dead one is a finished session held for its exit status, and
+        # saying which of the two this is what lets the operator act rather
+        # than guess.
+        return StartResult(
+            False,
+            f"a tmux session named {name} is left over from a run that "
+            f"ended: its command has finished and the session is held open "
+            f"so its exit status could be read, but this project has no "
+            f"record of it. Nothing is running in it, so it is safe to "
+            f"clear — `rite manager stop {manager}` does it. Its "
+            f"conversation is readable first with `tmux attach -t {name}`.",
+        )
 
     manager_dir(root, manager).mkdir(parents=True, exist_ok=True)
     launch = command or engine or "claude"

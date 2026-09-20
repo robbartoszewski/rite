@@ -990,3 +990,161 @@ def _clean_exit_ending(monkeypatch, answer, human_was_present=False):
     monkeypatch.setattr(session_mod.subprocess, "run", lambda *a, **k: _Reply())
     monkeypatch.setattr(session_mod, "attachment", lambda _n: answer)
     return session_mod.ending("mgr", human_was_present=human_was_present)
+
+
+@tmux_only
+@reports_exit_status
+class TestALeftoverFromARunThatEndedBadly:
+    """⚠ **The state a crashed run leaves, reached the way a user reaches
+    it.**
+
+    `start` sets `remain-on-exit on` so the exit status survives for
+    `ending` to read — which means a session OUTLIVES the agent inside it.
+    If the supervisor is then killed without running its teardown (a closed
+    terminal, a SIGKILL, a reboot — anything that is not Ctrl-C, which
+    `_torn_down` handles), what is left behind is a session holding the
+    Manager's deterministic name with a DEAD pane and no instance record.
+
+    Both of `start`'s guards pass on that state, correctly and for good
+    reasons: `liveness` says not alive, because nothing is running, and
+    `running` says None, because there is no record. So it fell through to
+    `tmux new-session` and the operator got
+
+        tmux refused to start the session: duplicate session: rite-mgr-…
+
+    which names no remedy, for a situation one `rite manager stop` clears.
+
+    ⚠ **Reached by the SEQUENCE, not by building the condition.** A fixture
+    that hand-makes a dead session proves the guard fires on something
+    shaped like the state; this starts a real Manager, lets its agent exit,
+    and drops the record, which is what actually happens.
+    """
+
+    def _agent_that_exits(self, tmp_path: Path) -> Path:
+        agent = tmp_path / "exits.sh"
+        agent.write_text("#!/bin/sh\nsleep 3\nexit 0\n")
+        agent.chmod(0o755)
+        return agent
+
+    def _leftover(self, project: Path, tmp_path: Path) -> str:
+        """Start a Manager for real, let it end, then lose the record."""
+        from rite_ai.managers import forget_instance
+        from rite_ai.managers.session import ending, liveness
+
+        first = start(
+            project,
+            "lead",
+            command=str(self._agent_that_exits(tmp_path)),
+            max_sessions=1,
+            window_seconds=0,
+        )
+        assert first.ok, first.message
+        for _ in range(60):
+            if not liveness(first.session).alive:
+                break
+            time.sleep(0.2)
+        how = ending(first.session, human_was_present=False, pane=first.pane)
+        _platform_supplied_a_status(first.session, how)
+        assert how.kind == FINISHED, (
+            f"the agent did not end cleanly, so this is not the state under "
+            f"test: {how.kind} — {how.detail}"
+        )
+        # The supervisor is killed here: no teardown, so the session stays
+        # and the record goes with the process that would have cleared it.
+        forget_instance(project, "lead")
+        return first.session
+
+    def test_the_refusal_names_the_remedy(self, project, tmp_path):
+        from rite_ai.managers.session import stop
+
+        session = self._leftover(project, tmp_path)
+        try:
+            again = start(
+                project, "lead", command="sh", max_sessions=1, window_seconds=0
+            )
+            assert not again.ok, "a leftover session was silently taken over"
+            assert "duplicate session" not in again.message, (
+                "the operator got tmux's own words, which name no remedy: "
+                f"{again.message!r}"
+            )
+            assert "rite manager stop lead" in again.message, (
+                "the refusal does not name the command that clears this — "
+                f"{again.message!r}"
+            )
+            # It must say the session is FINISHED, not imply work is at risk:
+            # this is the case that is safe to clear, unlike a live one.
+            assert "finished" in again.message.lower(), again.message
+        finally:
+            stop(session)
+
+    def test_a_LIVE_leftover_still_refuses_to_adopt_or_kill(self, project, tmp_path):
+        """The other half of the same guard, and it must NOT be told to run
+        `rite manager stop`: a live session is somebody's work, and the
+        existing advice — look at it, then decide — is right for it."""
+        from rite_ai.managers import forget_instance
+        from rite_ai.managers.session import stop
+
+        alive = start(
+            project, "lead", command="sleep 120", max_sessions=1, window_seconds=0
+        )
+        assert alive.ok, alive.message
+        forget_instance(project, "lead")
+        try:
+            again = start(
+                project, "lead", command="sh", max_sessions=1, window_seconds=0
+            )
+            assert not again.ok
+            assert "rite will not adopt or kill it" in again.message, again.message
+            assert "rite manager stop" not in again.message, (
+                "a LIVE leftover was offered a command that would end it"
+            )
+        finally:
+            stop(alive.session)
+
+
+@tmux_only
+class TestAStartThatFailedLeavesTheSameLeftover:
+    """⚠ **The likeliest way a dogfood operator meets this, and it needs no
+    crash at all.**
+
+    `start` creates the session, then `settled_alive` finds the command
+    already gone and reports failure — but the SESSION is still there, held
+    by `remain-on-exit` with a dead pane and no record, because the failure
+    path returns before anything is recorded. So an engine that exits at
+    once — no Claude login, a missing binary, a bad flag — produces this
+    state on the first run.
+
+    Before the guard below, the operator then saw two unrelated errors in a
+    row: "the session started and exited immediately" and, on the retry
+    after fixing it, "duplicate session: rite-mgr-…". The second told them
+    nothing about the first, and named no remedy.
+    """
+
+    def test_the_retry_after_an_immediate_exit_explains_itself(
+        self, project, tmp_path
+    ):
+        from rite_ai.managers.session import session_name, stop
+
+        engine = tmp_path / "not-logged-in.sh"
+        engine.write_text("#!/bin/sh\necho 'not logged in'\nexit 1\n")
+        engine.chmod(0o755)
+        name = session_name(project, "lead")
+        stop(name)
+        try:
+            first = start(
+                project, "lead", command=str(engine), max_sessions=1, window_seconds=0
+            )
+            assert not first.ok, "this engine was supposed to exit immediately"
+            assert "exited immediately" in first.message, first.message
+
+            second = start(
+                project, "lead", command=str(engine), max_sessions=1, window_seconds=0
+            )
+            assert not second.ok
+            assert "duplicate session" not in second.message, (
+                "the retry after a failed start handed the operator tmux's "
+                f"own words: {second.message!r}"
+            )
+            assert "rite manager stop lead" in second.message, second.message
+        finally:
+            stop(name)

@@ -134,8 +134,8 @@ does not.
 
 ## Carried into 0.6.0 from 0.5.1 — engineering, not design
 
-Two items deferred out of 0.5.1 deliberately. Neither blocks the design
-above; both are things the next person to work in this area should know
+Four items deferred out of 0.5.1 deliberately. None blocks the design
+above; all are things the next person to work in this area should know
 before they spend an afternoon rediscovering them.
 
 ### 1. The real-tmux tests are load-sensitive and nondeterministic — OPEN
@@ -198,3 +198,65 @@ Left alone because the wording is pinned by assertions in
 `tests/test_manager_journal.py`, and rewording text that other tests assert on
 is not worth doing for a redundancy. Do it with the next deliberate change to
 that text.
+
+### 3. The test suite and a live Manager share one tmux server — OPEN
+
+**This is a candidate mechanism for item 1, and it is testable.** Every
+`tmux` invocation in the suite (65 of them) and every one in the product
+uses the DEFAULT socket, because both call the bare binary with no `-S`.
+So `pytest` and a Manager started by `rite start` land on the same server,
+as do two suites running at once on a developer's machine.
+
+**Evidence that this is not hypothetical:**
+
+- A stray `rite-loop-looptest-*` session was found on the shared server
+  during a run of `test_manager_endings_and_resume.py`, which creates no
+  such session — it belonged to another suite running concurrently.
+- A control run elsewhere had a **five-file markdown-only diff flip a
+  tmux-detection test**. A documentation change cannot affect tmux; a
+  neighbour on the same server can.
+
+Item 1 says the nondeterminism is "proven independent of any code change"
+and that a shared root cause is "plausible and unproven". This is the
+most likely shared root cause, and it explains the shape item 1 names —
+rite failing to see a session that exists, or seeing one it should not.
+
+**The fix is one autouse fixture and no call-site changes.** `TMUX_TMPDIR`
+relocates the socket directory and tmux resolves it itself, so setting it
+once for the pytest process covers the tests AND the code under test,
+which inherit it. Measured: a session created under a private
+`TMUX_TMPDIR` is invisible to `tmux ls` on the default socket, and a bare
+`subprocess.run(["tmux", "ls"])` with only the variable set reaches the
+private server. `conftest.py` already isolates `RITE_CLAUDE_PROJECTS_DIR`,
+git config, the OS keychain and network credentials this way; tmux is the
+one shared global on that list that is not isolated.
+
+⚠ **One constraint that will cost an hour if it is rediscovered.** A Unix
+socket path is capped near 104 bytes, and the path becomes
+`$TMUX_TMPDIR/tmux-<uid>/default`. pytest's `tmp_path_factory` basetemp is
+far too long — measured, it fails with `error connecting to … (File name
+too long)`. Use a short dedicated `mkdtemp`, not `tmp_path`.
+
+**Deferred from 0.5.1 on purpose:** it has no user-visible effect and its
+blast radius is every real-tmux test, which is not a change to land hours
+before a tag.
+
+### 4. `session_exists` is not a general tmux predicate
+
+`session_exists("eu:west")` is **False for a session that exists**.
+`has-session -t =eu:west` reads `eu:west` as session `eu`, window `west`,
+so the exact-match prefix does not save it.
+
+This costs nothing today, and the reason is worth stating rather than
+assuming: a Manager name containing `:` is refused by `name_problem`
+(`must_be_a_tmux_target=True`) — the same check that made `eu:west` and
+`v2.0` stop being accepted names in 0.5.1 — so rite never creates one and
+never has reason to ask about a stranger's.
+
+**It is a landmine for the next caller.** The function reads like "does a
+tmux session with this name exist", and it is only sound for names rite
+itself validated. Anything that asks it about a name from outside rite —
+an adoption feature, a doctor check that enumerates the server, a
+multi-Manager view — gets a confident wrong answer of exactly the shape
+item 1 warns about. Either document the precondition at the function, or
+make it take a validated name type.
