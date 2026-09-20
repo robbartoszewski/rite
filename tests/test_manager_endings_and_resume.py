@@ -312,7 +312,9 @@ class TestTheSupervisorRefusesToResumeIntoNothing:
         )
         monkeypatch.setattr(supervise_mod, "was_attached", lambda _n: False)
         monkeypatch.setattr(
-            supervise_mod, "ending", lambda _n, human_was_present: Ending(FINISHED)
+            supervise_mod,
+            "ending",
+            lambda _n, human_was_present, pane="": Ending(FINISHED),
         )
         result = supervise(
             project,
@@ -339,7 +341,9 @@ class TestTheSupervisorRefusesToResumeIntoNothing:
         )
         monkeypatch.setattr(supervise_mod, "was_attached", lambda _n: False)
         monkeypatch.setattr(
-            supervise_mod, "ending", lambda _n, human_was_present: Ending(FINISHED)
+            supervise_mod,
+            "ending",
+            lambda _n, human_was_present, pane="": Ending(FINISHED),
         )
         supervise(
             project,
@@ -429,6 +433,10 @@ class TestTheStatusArrivesAfterTheDeath:
         # known to exist. Stubbed rather than scripted so the read counts
         # below stay about the status polling and nothing else.
         monkeypatch.setattr(session_mod, "session_exists", lambda _n: True)
+        # `ending` now asks `was_attached` itself rather than trusting only
+        # the sampled flag, which is another subprocess call; stubbed so the
+        # read counts below stay about the status polling.
+        monkeypatch.setattr(session_mod, "was_attached", lambda _n: False)
         return seen
 
     def test_a_status_that_arrives_late_is_waited_for(self, monkeypatch):
@@ -627,3 +635,92 @@ class TestOneNameIsNotAnotherNamesPrefix:
 
     def test_was_attached_does_not_answer_about_a_neighbour(self, only_leader):
         assert was_attached(only_leader[:-1]) is False
+
+
+@tmux_only
+class TestEndingAsksAboutTheManagersOwnPane:
+    """⚠ Three defects found by a hostile review, each verified against real
+    tmux before and after.
+
+    All three share a shape: **the oracle knew and the caller had stopped
+    listening.** `-t <session>` answers about the session's ACTIVE pane, not
+    the Manager's; `#{pane_dead_signal}` carries `kill` in the same call
+    that leaves `#{pane_dead_status}` empty; and `was_attached` fires while
+    the sampled flag has already been read away.
+
+    None was caught by 100 acceptance tests, because every multi-cycle test
+    monkeypatches `ending`, `liveness` and `was_attached` at once — so the
+    composition never ran.
+    """
+
+    def test_a_scratch_pane_exiting_is_not_the_manager_finishing(self, tmp_path):
+        """A human attaches, runs `tmux split-window`, and that shell exits
+        0. Before: `finished`, `resume=True` — the supervisor would have
+        resumed a Manager that was still working."""
+        (tmp_path / ".rite").mkdir(exist_ok=True)
+        made = start(tmp_path, "m", command="sh", max_sessions=1)
+        assert made.ok and made.pane, made.message
+        try:
+            subprocess.run(
+                ["tmux", "split-window", "-t", made.session, "-d", "sh"],
+                capture_output=True,
+            )
+            time.sleep(0.4)
+            panes = subprocess.run(
+                ["tmux", "list-panes", "-t", made.session, "-F", "#{pane_id}"],
+                capture_output=True,
+                text=True,
+            ).stdout.split()
+            other = [x for x in panes if x != made.pane]
+            if not other:
+                pytest.skip("could not create a second pane")
+            subprocess.run(
+                ["tmux", "send-keys", "-t", other[0], "exit 0", "Enter"],
+                capture_output=True,
+            )
+            time.sleep(1.0)
+            how = ending(made.session, human_was_present=False, pane=made.pane)
+            assert how.kind != FINISHED, (
+                "a scratch pane exiting 0 read as the Manager finishing — the "
+                "supervisor would resume a Manager that is still working"
+            )
+            assert not how.resume
+        finally:
+            subprocess.run(
+                ["tmux", "kill-session", "-t", made.session], capture_output=True
+            )
+
+    def test_a_killed_manager_is_a_crash_not_an_ambiguity(self, tmp_path):
+        """⚠ `#{pane_dead_status}` is empty for a signalled death and
+        `#{pane_dead_signal}` says `kill`. Before: UNCLEAR, and because
+        `_stopped_because` treats anything but `crashed` as success, `rite
+        start` exited 0 on an OOM-killed Manager. §9.14.4 requires a fault
+        be distinguishable from a completion."""
+        import os
+        import signal as signals
+
+        (tmp_path / ".rite").mkdir(exist_ok=True)
+        made = start(tmp_path, "k", command="sh", max_sessions=1)
+        assert made.ok and made.pane, made.message
+        try:
+            pid = subprocess.run(
+                ["tmux", "display-message", "-p", "-t", made.pane, "#{pane_pid}"],
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            os.kill(int(pid), signals.SIGKILL)
+            for _ in range(30):
+                time.sleep(0.1)
+                if not liveness(made.session).alive:
+                    break
+            how = ending(made.session, human_was_present=False, pane=made.pane)
+            assert how.kind == CRASHED, (
+                f"a SIGKILLed Manager reported {how.kind!r} — tmux knew, and "
+                f"the caller did not ask: {how.detail}"
+            )
+            assert not how.resume
+            assert "SIGKILL" in how.detail
+        finally:
+            subprocess.run(
+                ["tmux", "kill-session", "-t", made.session], capture_output=True
+            )

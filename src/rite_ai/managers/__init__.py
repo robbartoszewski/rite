@@ -91,14 +91,14 @@ def manager_dir(root: Path, name: str) -> Path:
     Validated rather than joined: a name reaching a path unchecked is the
     defect `rite_ai.names` exists for, and this is a new join.
     """
-    problem = name_problem(name, kind="manager name")
+    problem = name_problem(name, kind="manager name", must_be_a_tmux_target=True)
     if problem:
         raise ValueError(problem)
     return root / ".rite" / MANAGERS_DIRNAME / name
 
 
 def instance_path(root: Path, name: str) -> Path:
-    problem = name_problem(name, kind="manager name")
+    problem = name_problem(name, kind="manager name", must_be_a_tmux_target=True)
     if problem:
         raise ValueError(problem)
     return user_dir(root) / f"{name}.json"

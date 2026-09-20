@@ -87,6 +87,12 @@ class StartResult:
     message: str
     session: str = ""
     attach: str = ""
+    pane: str = ""
+    """⚠ The Manager's OWN pane, not the session's active one. A human who
+    attaches and runs `tmux split-window` makes a second pane active, and
+    every `-t <session>` question is then answered about THAT pane — so a
+    scratch shell exiting 0 read as the Manager finishing cleanly. The id
+    is stable for the pane's life and unambiguous."""
 
 
 def _tmux() -> str | None:
@@ -288,7 +294,7 @@ def start(
     session starts, not spend — §2.6.1 says rite cannot read the quota and
     D-38 forbids the path from measurement back to control (D-69).
     """
-    problem = name_problem(manager, kind="manager name")
+    problem = name_problem(manager, kind="manager name", must_be_a_tmux_target=True)
     if problem:
         return StartResult(False, f"refusing to start: {problem}")
 
@@ -407,6 +413,7 @@ def start(
             f"`{launch}` directly to see why.",
         )
 
+    pane = _pane_id(name)
     record_instance(
         root,
         ManagerInstance(
@@ -441,6 +448,7 @@ def start(
         f"Manager '{manager}' started as {name}.\n  reach it with: {attach}{blind}",
         session=name,
         attach=attach,
+        pane=pane,
     )
 
 
@@ -525,7 +533,7 @@ def session_exists(name: str) -> bool:
     return done.returncode == 0
 
 
-def ending(name: str, human_was_present: bool) -> Ending:
+def ending(name: str, human_was_present: bool, pane: str = "") -> Ending:
     """Why a session's command stopped.
 
     Needs `remain-on-exit on`, which `start` sets: without it tmux destroys
@@ -557,8 +565,12 @@ def ending(name: str, human_was_present: bool) -> Ending:
         # healthy neighbour, on FINISHED, which resumes.
         return Ending(UNCLEAR, detail="the session is gone, with its exit status")
 
-    def ask() -> tuple[bool, str, str] | None:
-        """(reachable, pane_dead, pane_dead_status), or None if unreadable."""
+    # ⚠ The MANAGER'S pane, not the session's active one. Falls back to the
+    # session name when the id was unreadable, which is the old behaviour.
+    target = pane or name
+
+    def ask() -> tuple[bool, str, str, str] | None:
+        """(reachable, pane_dead, pane_dead_status, pane_dead_signal)."""
         try:
             done = subprocess.run(
                 [
@@ -566,8 +578,8 @@ def ending(name: str, human_was_present: bool) -> Ending:
                     "display-message",
                     "-p",
                     "-t",
-                    name,
-                    "#{pane_dead}|#{pane_dead_status}",
+                    target,
+                    "#{pane_dead}|#{pane_dead_status}|#{pane_dead_signal}",
                 ],
                 capture_output=True,
                 text=True,
@@ -577,11 +589,17 @@ def ending(name: str, human_was_present: bool) -> Ending:
         except (OSError, subprocess.SubprocessError):
             return None
         if done.returncode != 0:
-            return (False, "", "")
+            return (False, "", "", "")
         raw = (done.stdout or "").strip().split("|")
-        return (True, raw[0] if raw else "", raw[1] if len(raw) > 1 else "")
+        return (
+            True,
+            raw[0] if raw else "",
+            raw[1] if len(raw) > 1 else "",
+            raw[2] if len(raw) > 2 else "",
+        )
 
     reported = ""
+    signal = ""
     status: int | None = None
     # Thirty reads over three seconds. A loaded CI runner reaps later than
     # a quiet laptop and the first attempt at this waited one second, which
@@ -597,7 +615,7 @@ def ending(name: str, human_was_present: bool) -> Ending:
         answer = ask()
         if answer is None:
             return Ending(UNCLEAR, detail="could not read the exit status")
-        reachable, dead, reported = answer
+        reachable, dead, reported, signal = answer
         if not reachable:
             # The session is gone entirely — `remain-on-exit` did not hold
             # it, or something removed it. No status to read, so no restart.
@@ -615,6 +633,18 @@ def ending(name: str, human_was_present: bool) -> Ending:
             continue
         break
 
+    if status is None and signal:
+        # ⚠ tmux KNEW. `#{pane_dead_signal}` carries `kill`, `term`, `segv`
+        # where `#{pane_dead_status}` is empty, and a draft read only the
+        # second — so an OOM-killed or externally killed Manager was a FAULT
+        # reported as "cannot tell", and `rite start` exited 0 on it because
+        # `_stopped_because` treats anything but `crashed` as success.
+        # The information was in the same call and was not asked for.
+        return Ending(
+            CRASHED,
+            status=-1,
+            detail=f"the command was killed by SIG{signal.upper()}",
+        )
     if status is None:
         return Ending(
             UNCLEAR,
@@ -631,7 +661,14 @@ def ending(name: str, human_was_present: bool) -> Ending:
             status=status,
             detail=f"the command exited {status}",
         )
-    if human_was_present:
+    # ⚠ ASKED HERE, not only sampled. `supervise` polls `was_attached` every
+    # `poll` seconds and only while the session is alive, so a human who
+    # attaches and types `exit` can still be attached AT THE MOMENT of the
+    # ending while the sampled flag says False — measured, with a real
+    # client on a real tty. The information was available and discarded.
+    # OR, not replace: the sampled flag answers "was anybody EVER there",
+    # which this call cannot see, and this answers "is anybody there NOW".
+    if human_was_present or was_attached(name):
         # A clean exit with somebody attached at some point. `exit` typed by
         # a human and an agent finishing are the SAME exit status, so this
         # cannot be told apart — and the safe reading is that the human
@@ -742,6 +779,29 @@ def was_attached(name: str) -> bool:
         return int((done.stdout or "0").strip()) > 0
     except ValueError:
         return False
+
+
+def _pane_id(name: str) -> str:
+    """The id of the session's pane at the moment it was created.
+
+    Empty if it cannot be read, and every caller falls back to the session
+    name — which is the old behaviour, so an unreadable id degrades to the
+    previous correctness rather than to a crash.
+    """
+    binary = _tmux()
+    if binary is None:
+        return ""
+    try:
+        done = subprocess.run(
+            [binary, "display-message", "-p", "-t", name, "#{pane_id}"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return (done.stdout or "").strip() if done.returncode == 0 else ""
 
 
 def _keep_pane_after_exit(binary: str, name: str) -> None:
