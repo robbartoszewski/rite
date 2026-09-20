@@ -22,6 +22,120 @@ sections.
 
 ---
 
+## What the relay is for: a Manager has no channel
+
+**Recorded because it reframes the role, not just the transport.** The rest
+of this note described a relay for questions. This is what the relay is
+FOR, and the document was written without it.
+
+### The observation
+
+This project's own Dispatch thread has been run all evening by something
+acting as a Manager: taking scope from Robert in chat, spawning and
+directing Workers, judging their reports, escalating what it could not
+decide, answering what it could, and reporting unprompted when something
+mattered.
+
+**A rite Manager can do none of that, and the difference is one thing.**
+rite gives the User a tmux pane to attach to — a viewing window, not a
+conversation. Attaching shows you what a Manager did; it does not let the
+Manager ask you anything and wait. **A Manager that can only be watched
+cannot escalate**, so every mechanism in this note downstream of
+escalation has had nothing upstream of it.
+
+### The requirement, in Robert's words
+
+The User needs a continuous chat that reaches the Manager, with control
+over it, able to discuss scope and new specs with it. And explicitly:
+*"we augment the standard chat flow rather than replacing it."*
+
+### Four properties, written so something could be tested against them
+
+**1. Continuous — the conversation outlives any single Manager session.**
+A Manager ends and resumes; the chat does not restart. Testable: send a
+message, let the Manager's session end and a new one resume, and the
+Manager can still refer to what was said before the resume.
+
+⚠ **This is the one a naive implementation breaks first, and it is coupled
+to the resume path.** A resumed cycle is a *new tmux session* and a new
+provider session continued by `--resume` — so a design that keys the
+conversation on either of those identifiers gets a fresh conversation
+every cycle, and looks identical from outside to one that worked. That is
+this project's recurring shape, and it is the same failure
+`_default_resume_id` already had: a resume that resumes nothing. **The
+conversation's identity must be the MANAGER**, which is the durable name,
+not the session, which is deliberately not.
+
+**2. Reaches the Manager — a message arrives while it is working, without
+stopping it.** Testable: with a Manager mid-task, a message posted to the
+channel becomes visible to it within a bounded interval, and the task it
+was already doing still completes. This rules out any design where
+delivery requires the Manager to be idle, or restarts it to deliver.
+
+The cost is named rather than discovered: §3.1.1 measures ~500K tokens
+re-read per turn in this project's coordinator session, and every message
+delivered into a Manager's context is re-read on every subsequent turn.
+
+**3. Control — the Manager can be redirected mid-flight, not merely
+observed.** Testable: a message that changes scope changes what the
+Manager does next, and the change shows up in its next report. This is
+the property the pane does not have — a human can type into a pane, but
+nothing downstream treats what they typed as an instruction with standing.
+
+**4. Augments rather than replaces — rite does not build a chat client.**
+Testable negatively: no rite command opens a chat UI, and the surface the
+User talks in is one they already had. This is the strongest argument for
+the Slack/Discord direction the rest of this note assumes, and it bounds
+the feature: **adapters, not a product.**
+
+### The channel carries authority, not status
+
+**If the User agrees new scope with a Manager in chat, that agreement must
+become durable or the next session loses it.** Robert has already
+specified that the spec is derived, with User amendments that survive
+regeneration. **Chat-agreed scope is one of those amendments.**
+
+Two things follow, and they connect this note to `V070_MEMORY.md` from
+opposite ends:
+
+- Analysis 3 below argues an *answer* must produce a recorded decision
+  rather than a reply in a thread. This is the same requirement arriving
+  from the other direction: it is not only answers to escalations that
+  must be written down, it is **anything the channel settles.**
+- `V070_MEMORY.md` asks what a Manager may answer directly and what it
+  must escalate. **That is the same question as what the channel is
+  allowed to settle**, and it was being treated as two.
+
+Robert's own refinement of the test: *"do you have all the information
+necessary to answer it straight away?"* Record it beside Analysis 2's
+decision-versus-fact rule rather than instead of it, because they fail
+differently. His test asks about the Manager's own state, which is the
+thing actually able to answer; Analysis 2's asks about the question's
+category, which is inspectable. His is a **self-report** — the instrument
+Analysis 2 exists because it already failed once today.
+
+### What this does to Finding B
+
+Finding B held that the pane must stay attachable because it is the
+User's only way in. **If control arrives through a channel, the pane
+needs only to be READABLE**, which is a strictly weaker constraint and one
+that is already measured: after the engine exits, `remain-on-exit` holds
+the pane and its conversation stays readable through `tmux attach`, which
+the left-over refusal now tells the operator in as many words.
+
+**Not a decision — Robert has not made one.** What is established is that
+the constraint is weaker than it was taken to be, and that "there is no
+other way in" has stopped being an argument for keeping the pane
+attachable. Whether it should stay attachable for other reasons is open.
+
+⚠ **Finding B is not written down anywhere in this repository.** Searched
+every tracked file, every branch, and gitignored `.docs/`: no hits. It
+lives in the Dispatch thread. That is Analysis 3's own subject happening
+one level up — this note can restate the finding but cannot cite it, and
+a reader six weeks from now has only this paragraph.
+
+---
+
 ## The shape
 
 **Dispatch is no longer the relay, so questions need a transport, and the
@@ -336,3 +450,44 @@ Not objections. Several of these are Robert's.
    the gate rather than a finding against it, and chat channels are frequently
    wider than the repository's read access. Same class of question as
    `V070_MEMORY.md` open question 3, and the harder instance of it.
+
+8. **What happens to a message that arrives while no Manager is running?**
+   The common case overnight, not an edge one. Queue it and deliver on the
+   next start; answer in the channel that nothing is running; or start a
+   Manager on receipt — which turns a message into spend and needs a bound
+   before it is even considered. Unresolved, and it interacts with
+   property 1: a queue that does not survive a restart is not continuous.
+
+9. **Does the Manager own the conversation, or something in front of it?**
+   **Robert called this semantics and declined to pick, so it is recorded
+   open with the tradeoff rather than decided here.**
+
+   | | Manager owns it | A front owns it |
+   |---|---|---|
+   | Who replies | The thing that did the work — no translation layer | A process that can answer when no Manager is up |
+   | When nothing runs | The conversation is dead | The channel still answers, and queues |
+   | Cost | Every message is an LLM turn (§3.1.1, D-1) | Cheap, always-on |
+   | Risk | Nothing answers the User for hours | A second thing that can speak, which must never appear to speak FOR a Manager it is not |
+
+   The second column is close to §3.5's watchdog in shape — a zero-token
+   process that wakes the expensive one only when judgement is required —
+   which is an argument for it, not a decision.
+
+10. **How is a chat-agreed amendment written down, and by whom?** Open
+    question 4 already asks WHERE a recorded decision lives. This asks who
+    writes it, and the two are not the same: a Manager that writes its own
+    scope amendment is editing what it will later be reviewed against,
+    which is exactly the channel `RITE_LOCAL_DESIGN.md` section 5.4 closes
+    — *"instructions flow from a reviewer to what it reviews, never the
+    other way."* If the Manager writes it, that rule needs an explicit
+    carve-out for User-agreed scope and a way to tell the two apart.
+
+11. **What stops the channel becoming a way for a Manager to ask the User
+    things it should have worked out itself?** Analysis 2 is about
+    escalating too little. This is the opposite failure, and **the same
+    filter cannot be tuned for both** — loosening it to catch confident
+    wrong answers is exactly what invites questions a file would have
+    answered. Robert's *"do you have all the information necessary to
+    answer it straight away?"* is the candidate test and currently has no
+    mechanism: nothing measures whether the Manager looked.
+
