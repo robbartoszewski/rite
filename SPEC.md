@@ -2767,6 +2767,23 @@ The knowledge base is exactly where proprietary and niche material will live —
 internal algorithms, competitive analysis, domain expertise that is the user's edge.
 And rite publishes things.
 
+##### The gate scans COMMIT MESSAGES, not only the diff
+
+⚠ **This is the more important half of what the gate does, not a curiosity
+— and gitleaks does not do it on its own**, which is why rite relays
+messages through it deliberately (`scan_commit_messages`).
+
+The asymmetry is what makes it matter: **a secret in a FILE is fixed by a
+commit; a secret in a commit MESSAGE is fixed only by rewriting history.**
+rite is forbidden from rewriting history — `tests/test_blast_radius.py`
+asserts rite's own source contains no `filter-branch`, no `reset --hard`,
+no force push — so the remedy is one the human has to perform by hand, on a
+published repo, after the fact.
+
+Observed while writing §9.15.3a: the gate refused a path in a file, the
+path was corrected, and the gate then refused **the same string quoted in
+the commit message explaining the correction.** Both refusals were right.
+
 **Explicit rule: shared with the team, never published.** The `kb/` directory is
 committed to the project repo (so all team members have it) but the publish gate
 (§11) scans it **hardest**. "Our internal algorithm for X" is more damaging in a
@@ -5398,6 +5415,23 @@ specified as the minimum rather than as the design:
    One f-string, not a subsystem. Raised in review by rite-dd against the
    section's own closing argument, which is the second time that argument
    has been turned on a draft of this section and won.
+
+   ⚠ **The printed command is measured against THIS repository, not against
+   a reproduction of its rule.** A draft of this section rested on a
+   scratch repo with a hand-written two-line `.gitignore` mimicking rite's
+   — which is evidence about git, not about rite — and a command printed
+   for an operator to paste has to be right about the tree they are in.
+   Re-measured against rite's own `.gitignore`, at a real journal path, in
+   the exact directory form printed above:
+
+       check-ignore  .rite/managers/lead/journal/<entry>.md
+         -> ignored by .gitignore:55  `.rite/*`
+       git add       .rite/managers/lead/journal      -> REFUSED (.rite/managers)
+       git add -f    .rite/managers/lead/journal      -> adds the entry
+
+   The distinction was drawn by rite-dd about their own measurement, and it
+   applies equally to mine: I ran the same scratch-repo test and reported
+   it as though it settled the question.
 2. **The docs say the same thing** for somebody who reads them first, and
    name the archive route as well — but the printed line is what the
    operator actually gets, and the docs are the backup.
