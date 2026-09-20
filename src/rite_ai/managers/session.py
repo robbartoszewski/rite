@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import signal
 import subprocess
 import time
 import uuid
@@ -699,7 +700,7 @@ def ending(name: str, human_was_present: bool, pane: str = "") -> Ending:
         return Ending(
             CRASHED,
             status=-1,
-            detail=f"the command was killed by SIG{signal.upper()}",
+            detail=f"the command was killed by {_signal_name(signal)}",
         )
     if status is None:
         return Ending(
@@ -968,6 +969,31 @@ def _why_the_engine_died(name: str, launch: str, manager: str = "") -> str:
         f"CREATED, not whether the command in it survived. Run "
         f"`{launch}` directly to see why."
     )
+
+
+def _signal_name(raw: str) -> str:
+    """A signal's name, from whatever this tmux spells it as.
+
+    ⚠ **PLATFORM VOCABULARY, and it turned CI red for nine commits.**
+    `#{pane_dead_signal}` is `kill` on macOS and `9` on Linux for the same
+    death, so a message built from the raw value read "killed by SIGKILL"
+    on one machine and "killed by SIG9" on the other — and a test asserting
+    the macOS spelling failed on Linux from the moment it landed.
+
+    This is the same split that produced three defects earlier in this
+    release. The lesson each time: normalise at the boundary where the
+    platform's word arrives, never compare the platform's word downstream.
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return ""
+    if raw.isdigit():
+        try:
+            return signal.Signals(int(raw)).name
+        except ValueError:
+            return f"SIG{raw}"
+    upper = raw.upper()
+    return upper if upper.startswith("SIG") else f"SIG{upper}"
 
 
 def _authentication_looks_broken(pane_text: str) -> bool:

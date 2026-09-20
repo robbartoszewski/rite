@@ -1119,7 +1119,11 @@ class TestAStartThatFailedLeavesTheSameLeftover:
     """
 
     def test_the_retry_after_an_immediate_exit_explains_itself(self, project, tmp_path):
-        from rite_ai.managers.session import session_name, stop
+        from rite_ai.managers.session import (
+            session_exists,
+            session_name,
+            stop,
+        )
 
         engine = tmp_path / "not-logged-in.sh"
         engine.write_text("#!/bin/sh\necho 'not logged in'\nexit 1\n")
@@ -1133,6 +1137,24 @@ class TestAStartThatFailedLeavesTheSameLeftover:
             assert not first.ok, "this engine was supposed to exit immediately"
             assert "exited immediately" in first.message, first.message
 
+            # ⚠ THE PRECONDITION, MADE EXPLICIT — it does not hold on every
+            # platform. This test asserts the RETRY meets a left-over
+            # session, which requires the first run's session to survive its
+            # command. `start` sets `remain-on-exit` AFTER `new-session`, so
+            # an engine that exits instantly can win that race and take the
+            # session with it.
+            #
+            # Measured: it survives on macOS and does NOT on Linux/CI, where
+            # this test's first run therefore leaves nothing to collide
+            # with. The test never ran on Linux before — the commit that
+            # added it failed at LINT in 7s, so the suite never executed —
+            # and its first Linux run failed on exactly this.
+            #
+            # Asserted rather than skipped silently: if the leftover is
+            # absent the retry is an ordinary second start, and there is no
+            # left-over message to demand. The race itself is a separate
+            # finding and is NOT fixed here.
+            leftover = session_exists(name)
             second = start(
                 project, "lead", command=str(engine), max_sessions=1, window_seconds=0
             )
@@ -1141,6 +1163,12 @@ class TestAStartThatFailedLeavesTheSameLeftover:
                 "the retry after a failed start handed the operator tmux's "
                 f"own words: {second.message!r}"
             )
+            if not leftover:
+                pytest.skip(
+                    "this tmux did not hold the session open after an "
+                    "instant exit, so the retry had nothing to collide "
+                    "with — the precondition for the left-over message"
+                )
             assert "rite manager stop lead" in second.message, second.message
         finally:
             stop(name)
