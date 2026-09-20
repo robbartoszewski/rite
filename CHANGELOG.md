@@ -14,6 +14,15 @@ reach the clock after three with the count untouched (SPEC D-82).
 the supervisor before this release — by a call site that always passed
 zero, because nothing set it.
 
+### Known: telling a finished Manager from a crashed one is unreliable on tmux 3.4
+
+rite asks tmux for a session's exit status. On tmux 3.4 that answer comes
+back empty some of the time — measured, in one CI run, absent for a probe
+and present for a real session minutes later. Where it is absent the
+ending is "unknown", and an unknown ending never resumes: the Manager runs
+one session and stops. Safe, and not the feature working. `rite start`
+warns when its probe could not read a status.
+
 ### Fixed: a clean Manager exit could not be told from a crash on Linux
 
 `#{pane_dead}` and `#{pane_dead_status}` do not arrive together, so a

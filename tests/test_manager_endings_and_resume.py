@@ -323,28 +323,32 @@ def test_was_attached_is_false_for_an_unattached_session(project):
 
 
 @tmux_only
-def test_a_tmux_without_exit_status_makes_every_ending_unclear():
-    """The consequence, asserted rather than left to be discovered.
+def test_a_tmux_that_cannot_report_a_status_is_warned_about_not_asserted():
+    """⚠ **This test used to assert something that was never true**, and
+    Linux CI eventually caught it out.
 
-    Where `#{pane_dead_status}` is empty the supervisor starts one session
-    and stops for ever — safe, and not a working feature. `rite start` warns
-    about it at startup using this same probe, so the warning and this test
-    cannot drift apart."""
-    if exit_status_available():
-        pytest.skip("this tmux does report exit status; nothing to assert")
-    import tempfile
+    It read `exit_status_available() is False` as "then every ending here
+    will be unclear" and drove a real session to prove it. On tmux 3.4 the
+    probe answered NO and a real session in the SAME RUN, seconds later,
+    reported its status perfectly: the capability is INTERMITTENT there,
+    not absent. A one-shot probe cannot characterise intermittent
+    behaviour, so a universal derived from one sample is a false property
+    — and the test failed for being wrong, not for finding a defect.
 
-    root = Path(tempfile.mkdtemp())
-    (root / ".rite").mkdir()
-    result = start(root, "lead", command="sh", max_sessions=1)
-    subprocess.run(
-        ["tmux", "send-keys", "-t", result.session, "exit 0", "Enter"],
-        capture_output=True,
-    )
-    time.sleep(1.0)
-    how = ending(result.session, human_was_present=False)
-    subprocess.run(["tmux", "kill-session", "-t", result.session], capture_output=True)
-    assert how.kind == UNCLEAR and not how.resume
+    What IS true, and is what the supervisor rests on, is the fail-safe
+    direction: an ending that cannot be read never resumes. That is
+    asserted by the scripted tests below, which hold on every platform
+    because they do not depend on winning a race.
+
+    What remains here is the honest claim: the probe is a sample, and where
+    it says no, the user is WARNED rather than promised anything.
+    """
+    answer = exit_status_available()
+    assert isinstance(answer, bool), "a probe must answer, not raise"
+    # Cached, so a second call cannot contradict the first within a run —
+    # which is what makes the startup warning and the supervisor's own
+    # behaviour consistent with each other even on a flaky tmux.
+    assert exit_status_available() is answer
 
 
 class TestTheStatusArrivesAfterTheDeath:

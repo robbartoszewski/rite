@@ -5873,10 +5873,15 @@ def _start_a_manager(
 
     if not exit_status_available():
         click.echo(
-            "warning: this tmux does not report why a session ended "
-            "(#{pane_dead_status} is empty), so finished, quit and crashed "
-            "cannot be told apart. The Manager will run ONE session and "
-            "stop rather than resume into an unknown state.",
+            "warning: this tmux did not report why a probe session ended "
+            "(#{pane_dead_status} came back empty), so finished, quit and "
+            "crashed may not be tellable apart. Where they are not, the "
+            "Manager runs ONE session and stops rather than resume into an "
+            "unknown state.\n"
+            "  Measured as a SAMPLE, not a verdict on the machine: on tmux "
+            "3.4 this has come back empty for a probe and populated for a "
+            "real session minutes later. The run may do better than this "
+            "warning; it will not do worse.",
             err=True,
         )
 

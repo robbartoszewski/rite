@@ -554,30 +554,45 @@ def _keep_pane_after_exit(binary: str, name: str) -> None:
 def exit_status_available() -> bool:
     """Can this tmux report why a session's command ended?
 
-    ⚠ **Not everywhere, and the consequence is severe enough to probe for
-    rather than assume.** `ending` needs `#{pane_dead_status}`; with it
-    unavailable every ending is `unclear`, which does not resume — so on
-    such a tmux the supervisor starts one session and stops, for ever.
+    ⚠ **A SAMPLE, not a law about the machine, and the difference is not
+    pedantry.** Measured on tmux 3.4 under CI: a probe answered NO while a
+    real session in the same run, seconds later, reported its status
+    perfectly. The capability is INTERMITTENT there, not absent. A test
+    that concluded "then every ending will be unclear" from one `False`
+    asserted something that was never true and failed accordingly.
 
-    **That is the safe direction and it is not a working feature.** Better
-    to say so at start than to have a user watch `rite start` do one cycle
-    and call it a bug in their project.
+    So this answers "when asked, did a session report its status" — enough
+    to warn a user that their supervisor may stop after one session, and
+    NOT enough to claim any particular ending will be unreadable.
 
-    ⚠ **The answer comes from `ending` itself.** Four earlier probes
-    imitated it instead and each disagreed with it differently: the name
-    collided with itself, the command died before the option was set, an
-    absent status parsed as zero, and the setup call diverged. The last one
-    reported the capability PRESENT on Linux while real sessions answered
-    `unclear`, because the probe polled for the status and `ending` did not
-    — a capability check disagreeing with the thing it checks, which turns
-    "this does not work here" into "this is broken". **Nothing is left to
-    imitate: the probe runs the production sequence and reads the
-    production verdict.**
+    ⚠ **Asked more than once, because a probe that loses its own race
+    answers about itself.** This function has now got in its own way five
+    times: the name collided with itself, the command died before the
+    option was set, an absent status parsed as zero, the setup call
+    diverged from production's, and a single `send-keys` could be swallowed
+    by a shell not yet reading. Three attempts, and only a run in which
+    EVERY attempt failed is reported as a No.
+
+    The answer comes from `ending` itself. Four earlier probes imitated it
+    and each diverged differently; there is nothing left to imitate.
     """
     global _EXIT_STATUS_ANSWER
     if _EXIT_STATUS_ANSWER is not None:
         return _EXIT_STATUS_ANSWER
 
+    if _tmux() is None:
+        return False
+    for _ in range(3):
+        if _probe_once():
+            _EXIT_STATUS_ANSWER = True
+            return True
+    _EXIT_STATUS_ANSWER = False
+    return False
+
+
+def _probe_once() -> bool:
+    """One sample: start a session the way `start` does, end it, ask
+    `ending`. True only for the exact status sent."""
     binary = _tmux()
     if binary is None:
         return False
@@ -614,11 +629,14 @@ def exit_status_available() -> bool:
             time.sleep(0.1)
             if not liveness(name).alive:
                 break
+        else:
+            # The shell never took the keystroke. That says nothing about
+            # whether this tmux reports a status, so it is not an answer.
+            return False
         # 3, not "any answer": a tmux that reports a status but the wrong
         # one is not a tmux `ending` can tell finishing from crashing on.
         how = ending(name, human_was_present=False)
-        _EXIT_STATUS_ANSWER = how.kind == CRASHED and how.status == 3
-        return _EXIT_STATUS_ANSWER
+        return how.kind == CRASHED and how.status == 3
     except (OSError, subprocess.SubprocessError):
         return False
     finally:
