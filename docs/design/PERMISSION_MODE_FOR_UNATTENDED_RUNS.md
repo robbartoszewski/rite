@@ -1,7 +1,15 @@
 # What a `-p` Manager may DO — the permission mode is rite's parameter now
 
-**Status: FINDING recorded. Robert's decision is PENDING.** Nothing is
-built and no launch path was touched.
+**Status: DECIDED by Robert, 2026-09-21.** Recorded, not proposed. Nothing
+is built and no launch path was touched.
+
+> `--permission-mode acceptEdits` as default,
+> `--dangerously-skip-permissions` as opt-in
+
+— and the opt-in is configured **per Manager**.
+
+⚠ **`acceptEdits` has NOT been observed working.** See "The gap that
+matters now" below. The decision is made; the verification is not done.
 
 Second scope created by Finding B's Option 1, and a sibling of
 `CREDENTIAL_HANDLING_FOR_UNATTENDED_RUNS.md`: that one is about the token
@@ -88,45 +96,103 @@ unattended Manager that must stop and ask is not unattended. It is an
 argument that the choice must be **stated and owned**, not defaulted into by
 whoever writes the launch line.
 
-## Recommended, not decided — this is mine, and it is Robert's call
+## The decision, and what a builder needs with it
 
-**1. The mode belongs in the per-Manager gitignored configuration**, beside
-the other per-Manager attributes in `.rite/user/` (see
-`V060_SESSION_CONTINUITY.md`), **not as a rite-wide constant.**
+**Safe by default, dangerous by deliberate act.** `acceptEdits` lets a
+Manager do the work it was started for — editing files in the repository it
+was pointed at — without anybody having to think about it first. The mode
+that lets it do *anything* is a separate, knowing choice.
 
-- Different Managers doing different work warrant different trust. A
-  `planner` that reads and proposes and a Manager that edits and pushes are
-  not the same risk, and today `ManagerRole` carries `duties` precisely
-  because they differ.
-- A rite-wide constant makes **every user inherit whatever we would have
-  picked tonight**, which is the wrong way round for a security decision
-  with no sandbox under it.
-- It belongs on the **gitignored** side rather than in committed
-  `manager_roles`, for the reason that split already exists: a trust level
-  is per-person and per-machine. A committed
-  `--dangerously-skip-permissions` would impose one operator's risk appetite
-  on every clone of the project, which is the same objection as a committed
-  session id — worse, because it is not merely wrong elsewhere, it is
-  dangerous elsewhere.
+### 1. `--permission-mode acceptEdits` is the default
 
-**2. rite should STATE the mode it launched with**, rather than leaving it
-invisible. Same reasoning as the loud timezone fallback: D-48 was relaxed to
-let the zone default, and that was acceptable only because the default is
-announced — *"a default that is never stated is the same silent-wrong-clock
-D-48 was written against"* (`schedule/__init__.py`). A permission mode is a
-larger fact about a run than a timezone, and a user who cannot see which one
-they got cannot tell a Manager that chose not to act from one that was not
-allowed to.
+Passed on every `-p` invocation, every cycle, because nothing carries it
+between them (see "What settles it"). A Manager that can edit the repo it
+was aimed at is a Manager that can do its job; that is the ordinary case
+and it needs no ceremony.
 
-Both are recorded as open. Robert has been consistent about wanting
-fallbacks and defaults loud, so I expect agreement on the second, but
-neither is decided here.
+### 2. `--dangerously-skip-permissions` is opt-in
+
+⚠ **The opt-in must be a deliberate act, not a convenience**, and that is a
+constraint on whatever mechanism implements it rather than a detail of it.
+A key a user copies out of an example and forgets is not a decision they
+made. Whatever the shape — config key, flag — the test is whether somebody
+who has it switched on would say so if asked.
+
+The asymmetry above is the whole reason: a Worker granted broad permission
+is bounded by its sandbox, and **a Manager is bounded by nothing but the
+user's own filesystem permissions.** The dangerous mode is a decision about
+the user's own machine, and it should read like one.
+
+### 3. The opt-in is configured per Manager
+
+**Not a rite-wide setting.** Different Managers doing different work warrant
+different trust — a `planner` that reads and proposes and a Manager that
+edits and pushes are not the same risk, which is why `ManagerRole` already
+carries `duties`.
+
+It lives with the other per-Manager attributes in the gitignored
+per-Manager configuration (`V060_SESSION_CONTINUITY.md`), not in committed
+`manager_roles`. A trust level is per-person and per-machine: a committed
+`--dangerously-skip-permissions` would impose one operator's risk appetite
+on every clone of the project. That is the same objection as a committed
+session id and a worse one, because it is not merely wrong elsewhere — it is
+dangerous elsewhere.
+
+## Recommended, not decided — this one is mine
+
+**rite should STATE the mode it launched with, every run.**
+
+A user should never be unsure what their Manager was permitted to do. Same
+reasoning as the loud timezone fallback: D-48 was relaxed to let the zone
+default, and that was acceptable only because the default is announced —
+*"a default that is never stated is the same silent-wrong-clock D-48 was
+written against"* (`schedule/__init__.py`). A permission mode is a larger
+fact about a run than a timezone.
+
+It also does work that nothing else does. Without it, a Manager that
+*chose* not to act and a Manager that was *not allowed* to act produce the
+same visible result — which is precisely the confusion the acceptance run
+below took a night to resolve.
+
+Recorded as a recommendation rather than a decision because Robert set the
+default, the opt-in and where it lives; he has not ruled on this.
+
+## ⚠ The gap that matters now: `acceptEdits` is unverified
+
+**Nobody has watched a Manager write a file under `acceptEdits` and have
+the cycle end cleanly.**
+
+Tonight's acceptance run measured the **absence** of permissions — a Manager
+that said it could not write and exited 0. It did not measure the presence
+of them. The decision above is a well-reasoned answer to what that run
+found; it is not evidence that the answer works.
+
+That is the same gap as everything else tonight, in its final form: **a
+mechanism existing is not a mechanism observed.** `window_seconds` was
+passed and never enforced. `running_instances` and `pid_alive` existed with
+zero callers. `forget_instance` existed with zero callers. The resume path
+was tested only through an injected starter, so no test ever created a
+second real tmux session and the duplicate-session collision survived to be
+found by hand. Each was correct-looking code that nothing had watched do
+its job.
+
+**What would close it**, and it is one run: a Manager launched with
+`--permission-mode acceptEdits`, given a prompt that requires writing a
+file in the project, observed to have written it, with the cycle ending
+`finished` and the supervisor resuming. Until somebody has seen that, "the
+Manager can act" is a claim about a flag rather than about the Manager.
 
 ## What would show this wrong
 
 - A permission mode that **does** survive into `-p` by some path not in the
   documentation Robert supplied. That would collapse the finding, and it is
   the first thing to try to falsify.
-- Evidence that a Manager with no tool permissions is still useful for some
-  duty — a reviewer that only reads, say. That would not change the finding
-  but would change whether one mode can serve every Manager.
+- `acceptEdits` not being sufficient for ordinary Manager work — a duty
+  that needs to run a command or push, say, and stalls under it exactly as
+  the acceptance run stalled with no permissions at all. That would not
+  reopen the default; it would mean the opt-in is reached more often than
+  "deliberate act" suggests, and that is worth knowing early.
+- Evidence that a Manager with NO tool permissions is still useful for some
+  duty — a reviewer that only reads, say. Per-Manager configuration already
+  allows for that, so this would be a case for a third mode rather than an
+  objection to the two.
