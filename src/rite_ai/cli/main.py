@@ -5974,13 +5974,22 @@ def _start_a_manager(
         "ends the run. Ctrl-C ends it too; a session already started keeps "
         "running."
     )
+    # Composed HERE because this layer is the one that knows what the user
+    # asked for. `for_manager` takes an `extra` that the journal's
+    # instructions will fill when `--record-issues` is wired (D-93); it is
+    # empty until then, and the empty case is the same shape as the full
+    # one so this call site does not branch.
+    from rite_ai.managers.prompt import for_manager
+
     outcome = supervise(
         root,
         role.name,
         engine=role.engine,
         max_sessions=sessions,
         window_seconds=minutes * 60.0,
+        prompt=for_manager(role.name),
         verdict=_loop_verdict,
+        note=lambda m: click.echo(m, err=True),
     )
     click.echo(outcome.reason)
     if not outcome.ok:

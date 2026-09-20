@@ -5520,13 +5520,27 @@ recommending them.
 
 **A capability nobody is told about is a capability nobody uses** — the
 third instance of that class this week. So a Manager started with
-`--record-issues` is told two things:
+`--record-issues` is told three things:
 
 1. **That the directory exists**, and where.
 2. **When to write:** *when something behaves differently from what the
    docs, or the tool's own output, claimed.* That specific judgement is what
    produced this week's findings, and it is far more useful than "record
    problems", which produces a log of failing tests.
+3. **HOW to write — the `rite journal observe` command.**
+
+⚠ **The third item exists because D-92 created the need for it.** While the
+Manager was assumed to compose markdown itself, telling it *where* and
+*when* was enough. Now that the anchor refusal lives behind `rite journal
+observe` (D-92), **a Manager told where and when but not how will write a
+markdown file by hand into that directory** — bypassing the refusal
+entirely and producing exactly the unanchored entries D-87 exists to
+prevent. The command is part of the instruction, or the mechanism is
+optional.
+
+That is a defect introduced by a fix, one step removed from the fix — the
+shape this project files as class 12. Raised by rite-dd while implementing
+against the two-item version.
 
 ⚠ **A draft put both in the generated `CLAUDE.md` and that CANNOT BE
 IMPLEMENTED.** `CLAUDE.md` is project-level: written by `rite init`,

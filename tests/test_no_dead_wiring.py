@@ -60,15 +60,6 @@ UNCALLED_ON_PURPOSE = {
         "a private `_launch_command` would make the limit harder to cite than "
         "to keep."
     ),
-    "session_exists": (
-        "Called by `ending`, `was_attached` and `pane_pid` in the same file, "
-        "and `liveness` asks the same question. Public because it is the one "
-        "place tmux's target-matching rule is encoded — `-t <name>` falls "
-        "back to PREFIX matching, so `lead` is answered about `leader` — and "
-        "tests assert that property against it by name. A private "
-        "`_session_exists` would move the assertion into a test of something "
-        "else, which is the same reason `project_transcript_dir` is here."
-    ),
     # --- rite_ai/managers/, added when this guard was widened ---
     "user_dir": (
         "Called by `instance_path` in the same file. `called_outside` counts "

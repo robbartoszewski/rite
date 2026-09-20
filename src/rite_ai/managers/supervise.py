@@ -37,6 +37,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from rite_ai.managers import ManagerInstance, record_instance
+from rite_ai.managers.prompt import deliver as deliver_prompt
 from rite_ai.managers.session import StartResult, ending, liveness, was_attached
 from rite_ai.managers.session import start as start_session
 
@@ -132,6 +133,7 @@ class Cycle:
     number: int
     session: str
     resumed_from: str = ""
+    prompted: bool = False
     started_at: float = 0.0
     ended_at: float = 0.0
     attended: bool = False
@@ -156,7 +158,9 @@ def supervise(
     engine: str = "",
     max_sessions: int,
     window_seconds: float,
+    prompt: str = "",
     verdict: object = None,
+    note: object = None,
     starter: object = None,
     resume_id_for: object = None,
     poll: float = POLL_SECONDS,
@@ -171,6 +175,10 @@ def supervise(
     know a ceiling bounds anything.
     """
     clock = now if callable(now) else time.time
+    # Injectable so a test can read what a human would have been told,
+    # and a no-op by default so nothing prints from a library call.
+    say = note if callable(note) else (lambda _m: None)
+    hand_over = deliver_prompt
     begin = clock()
     deadline = begin + window_seconds if window_seconds > 0 else None
     launch = starter if callable(starter) else _default_starter
@@ -238,6 +246,28 @@ def supervise(
             started_at=clock(),
         )
         cycles.append(cycle)
+
+        # ⚠ THE FIRST SESSION ONLY (D-90). A resumed session already carries
+        # the context the prompt would establish, and re-issuing an
+        # instruction into a conversation that is mid-task is the same class
+        # of error as restarting a session a human deliberately quit: the
+        # tool telling the agent to begin something it is in the middle of.
+        # `resume_from` is the observable — empty means this is a fresh
+        # context — rather than `len(cycles) == 1`, which would also be true
+        # of a first cycle that was itself a resume.
+        if prompt and not resume_from:
+            handed = hand_over(result.session, prompt)
+            cycle.prompted = handed.ok
+            if not handed.ok:
+                # Reported, NOT fatal. A Manager whose prompt did not arrive
+                # is still a running session the human is paying for, and
+                # killing it to signal a delivery failure would destroy work
+                # to report a problem.
+                say(
+                    f"warning: the Manager's prompt may not have arrived — "
+                    f"{handed.detail}. Attach with `tmux attach -t "
+                    f"{result.session}` and check."
+                )
 
         # Wait for it to end. The human can attach throughout — that is
         # §9.14.3, and it is why "nobody is watching" is false here in a way
