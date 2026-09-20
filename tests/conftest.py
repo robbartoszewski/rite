@@ -54,7 +54,9 @@ which serves a real bare repo out of `tmp_path`).
 import os
 from pathlib import Path
 
+import keyring
 import pytest
+from keyring.backend import KeyringBackend
 
 
 @pytest.fixture(autouse=True)
@@ -102,6 +104,70 @@ def _no_network_credentials(monkeypatch):
     monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
     monkeypatch.setenv("GIT_CONFIG_KEY_0", "credential.helper")
     monkeypatch.setenv("GIT_CONFIG_VALUE_0", "")
+
+
+class _InMemoryKeyring(KeyringBackend):
+    """A keyring backend that is a dict, installed for the whole suite.
+
+    ⚠ THIS SUBSTITUTES THE OS, NOT RITE. It sits BELOW
+    `rite_ai.credentials.store` and above nothing — `store.py` still runs
+    its own resolution order, its env-var fallback, its exception handling
+    and its "which store did we use" reporting, and the tests still
+    exercise all of it. What they no longer do is reach the login keychain
+    of whoever is running them.
+
+    That distinction is the whole design. Mocking `store.get_credential`
+    would remove the code under test; replacing the backend removes only
+    the machine.
+    """
+
+    priority = 1000  # above every real backend, so `keyring` picks this one
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._values: dict[tuple[str, str], str] = {}
+
+    def get_password(self, service: str, username: str) -> str | None:
+        return self._values.get((service, username))
+
+    def set_password(self, service: str, username: str, password: str) -> None:
+        self._values[(service, username)] = password
+
+    def delete_password(self, service: str, username: str) -> None:
+        self._values.pop((service, username), None)
+
+
+@pytest.fixture(autouse=True)
+def _no_os_keychain():
+    """The keychain half of `_no_network_credentials`, and it was missing.
+
+    ⚠ MEASURED, TWICE IN ONE SESSION, half an hour each time. A test
+    reaching `keyring.get_password` on macOS raises a GUI authorisation
+    dialog. The suite then BLOCKS on a window nobody is looking at: no
+    output, no timeout, no failure. `SecurityAgent` up at 12:21, the
+    pytest log's last write at 12:21, still nothing at 12:53. A verify run
+    that takes 440 seconds took 1946.
+
+    `store.py` wraps both its reads in `try/except Exception` — correctly,
+    and it does not help: **a prompt is not an exception.** It is the
+    absence of an answer, which is the shape this project keeps meeting.
+
+    The fixture above already establishes the principle for git ("no git
+    subprocess may ask a human for credentials... this converts a hang
+    into a named failure"). The OS keychain is the same hazard by the same
+    argument and was simply not covered.
+
+    ⚠ Function-scoped, not session-scoped, so the store starts empty for
+    every test. A shared dict would leak a credential written by one test
+    into another's resolution order, which is the kind of coupling this
+    file exists to remove, reintroduced by the fix for it.
+    """
+    previous = keyring.get_keyring()
+    keyring.set_keyring(_InMemoryKeyring())
+    try:
+        yield
+    finally:
+        keyring.set_keyring(previous)
 
 
 def _checkout_state() -> str | None:
