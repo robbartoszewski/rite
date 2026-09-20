@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.21.1 · **Date:** 2026-09-20
+**Version:** 0.22.0 · **Date:** 2026-09-20
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -5350,12 +5350,39 @@ requirements on the format, not guidance to the Manager.
    commit, verify it exists. Mechanical, no judgement, and it catches the
    worst class.
 
+   ⚠ **NOT IMPLEMENTED as of v0.5.1, and named rather than left to be
+   assumed.** An entry must HAVE an anchor — that is enforced (D-87). An
+   anchor that is present is not yet verified to resolve, so a plausible
+   but invented SHA is accepted today. Reported by rite-dd rather than
+   quietly shipped as done.
+
    ⚠ **Every permitted anchor must be checkable, or the requirement leaks.**
    A draft allowed "a log timestamp", and a bare timestamp has nothing to
    check against — it is indistinguishable from an invented one, which is
    the exact failure this subsection exists to prevent. It now has to name
    the log FILE as well, so there is something to open. The other four were
    already verifiable. Found in review by rite-dd.
+
+##### The refusal is a branch in the writer, and RITE OWNS THE WRITER
+
+⚠ **D-87 was unenforceable as first written, and rite-dd found it while
+implementing.** This section required a refusal on the writing path and
+never said who writes. If a Manager composes markdown with its own file
+tools, rite is nowhere near that path, and "refused before any file is
+created" degrades into asking the agent nicely — which is what the closing
+line of this subsection says beats nothing. **A refusal requirement implies
+a refuser**, and the refuser has to be rite.
+
+So entries are written through rite — `rite journal observe` and `rite
+journal retrospective` — and that is what turns the anchor rule from a
+convention into a rule. Measured, not asserted:
+
+    rite journal observe --manager lead --anchor "" ...
+      -> refusing to write a journal entry with no anchor
+      -> files written: 0
+
+    rite journal observe --manager lead --anchor <sha> ...
+      -> recorded: .../lead/journal/<timestamp>-observation.md
 
 ##### The refusal is a branch in the writer, not a rule the writer is asked to follow
 
@@ -5489,11 +5516,11 @@ rather than steering the system. **The anchors are what make that person's
 check possible**, which is why §9.15.3 requires them rather than
 recommending them.
 
-#### 9.15.6. Two instructions in the generated `CLAUDE.md`, conditional on the flag
+#### 9.15.6. Two instructions, delivered in the START PROMPT — not in `CLAUDE.md`
 
 **A capability nobody is told about is a capability nobody uses** — the
-third instance of that class this week. So the generated `CLAUDE.md` tells
-the Manager two things:
+third instance of that class this week. So a Manager started with
+`--record-issues` is told two things:
 
 1. **That the directory exists**, and where.
 2. **When to write:** *when something behaves differently from what the
@@ -5501,11 +5528,30 @@ the Manager two things:
    produced this week's findings, and it is far more useful than "record
    problems", which produces a log of failing tests.
 
-⚠ **Both are present ONLY for a Manager started with the flag.** Telling
-every Manager about a facility it must not use is noise, and noise in
-`CLAUDE.md` is expensive: every Manager pays to read it on every start. This
-is also what makes §9.15.1's "genuinely off when off" true rather than
-aspirational.
+⚠ **A draft put both in the generated `CLAUDE.md` and that CANNOT BE
+IMPLEMENTED.** `CLAUDE.md` is project-level: written by `rite init`,
+refreshed by `rite update`, and never touched by `rite start`.
+`--record-issues` is per-START. Two Managers in one project started
+differently would need two versions of one shared file, and neither start
+writes it. Found by rite-dd while implementing, reported rather than worked
+around.
+
+⚠ **The consequence while the gap was open is the exact class this
+subsection exists to prevent**: a Manager started with `--record-issues` was
+told where the journal is and was never told to write anything to it. *A
+capability nobody is told about*, reinstated by the section written to
+prevent it.
+
+**They go in the prompt sent at start (§9.14.11a),** which is per-session by
+construction — so "genuinely off when off" (§9.15.1) becomes exact rather
+than aspirational. A Manager started without the flag does not receive the
+instructions because they were never composed, not because a shared file
+was filtered. **This is a stronger guarantee than the `CLAUDE.md` route
+could have given**, and it is the one case this week where a gap improved
+the design rather than costing something.
+
+It also makes §9.14.11a's prompt load-bearing rather than a convenience:
+the prompt is the only per-session channel to the Manager that rite owns.
 
 ## 10. Credentials
 
@@ -6043,6 +6089,8 @@ happened once already and left no trace until this review found it.
 | D-89 | The diagnostic flag's name | **`--record-issues`** | Named for what it DOES rather than what it IS. `--diagnostics` describes the category; `--record-issues` tells a user reading `--help` what will appear on disk, which is what they are actually deciding about. §9.15.1. |
 | D-90 | Does `rite start <manager>` prompt the session? | **YES, on the first session; NOT on a resume (the second half a stated default, not a decision)** | A Manager that starts with an empty prompt waits for a human to type, which is the behaviour the command exists to remove. The resume half was not covered by the decision and is inferred from the resume design: a resumed session already carries the context the prompt would establish, and re-issuing an instruction mid-task is the same class of error as restarting a session a human deliberately quit. The asymmetry decides it — a missing prompt on resume costs a session that continues, a spurious one costs a session that starts over. §9.14.11a. |
 | D-91 | Does rite provide a way to get journal entries off the machine? | **NO — the path is printed and retrieval is the operator's business** | An earlier revision called this a defect and escalated it: a diagnostic whose output never leaves the host returns nothing to the reader it exists for. True, and the escalation was still wrong — the journal's reader in the run this was written for is a person the operator will speak to directly, who will be sent a zip. A mechanism was being designed for a problem that two people who talk to each other do not have. What is kept is the start line printing the absolute path, because somebody has to know where to copy from; the `git add -f` note is demoted from THE route to one way of doing it. No export command, no archive step, no sync — not deferred, not wanted. This also deflates the same revision's alarm about a torn-down sandbox: the entries survive as long as the directory does and are copied before anything is torn down. **It stops being adequate the moment the reader is not a person in the same conversation** — a team, a CI pipeline, or §9.15.4's future gate — which is the condition to watch rather than a reason to build now. §9.15.3a. |
+| D-92 | Who writes a journal entry — the Manager, or rite? | **RITE, through `rite journal observe` / `rite journal retrospective`** | D-87 required the anchor refusal to happen on the writing path and never said who writes. If a Manager composes markdown with its own file tools, rite is nowhere near that path and the requirement degrades into asking the agent nicely — which §9.15.3's own closing line says beats nothing. A refusal requirement implies a refuser. Found by rite-dd while implementing D-87, which is a decision I argued for and adopted while it had no mechanism under it. The dead-wiring guard caught the same thing from the other side: `write_observation` and `write_retrospective` read as uncalled until the commands existed. §9.15.3. |
+| D-93 | Where the journal instructions reach the Manager | **The START PROMPT (§9.14.11a), not the generated `CLAUDE.md`** | `CLAUDE.md` is project-level — written by `rite init`, refreshed by `rite update`, never touched by `rite start` — while `--record-issues` is per-START, so two Managers in one project started differently would need two versions of one shared file that neither start writes. Unimplementable as specified; found by rite-dd while implementing. The prompt is per-session by construction, so "genuinely off when off" becomes exact rather than aspirational: a Manager without the flag does not receive the instructions because they were never composed, not because a shared file was filtered. A stronger guarantee than the `CLAUDE.md` route could have given, and it makes §9.14.11a's prompt load-bearing rather than a convenience — it is the only per-session channel to the Manager that rite owns. §9.15.6. |
 
 ---
 
@@ -6051,6 +6099,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.22.0 — two things §9.15 required that could not be built.** Both found by rite-dd while implementing, and both reported rather than worked around. D-87's anchor refusal named no refuser, so it was a rule the Manager was asked to follow rather than one the tool enforced; rite now owns the writing path (D-92). And §9.15.6 put the journal instructions in the generated `CLAUDE.md`, which is project-level while the flag is per-start — unimplementable, and its consequence while open was a Manager told where the journal is and never told to write to it, which is the class the subsection exists to prevent. They move to the start prompt (D-93), which is per-session by construction and a stronger guarantee than the file could have given. §9.15.3's fifth measure — verifying that a present anchor RESOLVES — is marked unimplemented rather than left to read as done.
 
 **Changes in 0.21.1 — an escalation withdrawn.** §9.15.3a said the journal's entries "must be able to leave the machine that wrote them" and treated their being gitignored as a defect in this release. Withdrawn (D-91): rite builds no retrieval, the start line prints the path, and how the entries reach their reader is the operator's business — in the run this was written for, a zip file between two people who talk to each other. The observation was sound and the escalation was not, and the section keeps both rather than reading as though it had always said this. The condition that would make it wrong is stated instead: a reader who is not a person in the same conversation.
 
