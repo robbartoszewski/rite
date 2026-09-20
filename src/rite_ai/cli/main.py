@@ -5917,7 +5917,11 @@ def _loop_verdict(root: Path) -> str:
 
 
 def _start_a_manager(
-    root: Path, role, sessions: int | None, minutes: float | None
+    root: Path,
+    role,
+    sessions: int | None,
+    minutes: float | None,
+    record_issues: bool = False,
 ) -> None:
     """Start one Manager, refusing without a ceiling (D-68)."""
     if sessions is None:
@@ -5979,8 +5983,18 @@ def _start_a_manager(
     # instructions will fill when `--record-issues` is wired (D-93); it is
     # empty until then, and the empty case is the same shape as the full
     # one so this call site does not branch.
+    # §9.15.3a. Printed HERE, beside the bounds, because a fact is cheapest
+    # to learn at the moment it is actionable rather than in a log
+    # afterwards — and because the entries are worth nothing to the person
+    # who needs them if they never leave the machine that wrote them. Empty
+    # string when the flag is off: a Manager that will not write a journal
+    # is not told where one would go (§9.15.1).
+    from rite_ai.managers.journal import start_notice
     from rite_ai.managers.prompt import for_manager
 
+    notice = start_notice(root, role.name, enabled=record_issues)
+    if notice:
+        click.echo(notice)
     outcome = supervise(
         root,
         role.name,
@@ -6067,7 +6081,18 @@ def manager_stop(name: str) -> None:
     "when starting a Manager: the two bounds catch different runaways and "
     "neither suffices alone (D-82).",
 )
-def start_cmd(directory: str, sessions: int | None, minutes: float | None) -> None:
+@click.option(
+    "--record-issues",
+    is_flag=True,
+    default=False,
+    help="BETA. Record what this Manager notices about how rite is working "
+    "to a journal on disk — turn it on for an unattended or experimental "
+    "run, which is exactly when nobody is watching to see it (D-89, "
+    "\u00a79.15). Off by default; beta means the entry format may change.",
+)
+def start_cmd(
+    directory: str, sessions: int | None, minutes: float | None, record_issues: bool
+) -> None:
     """Bring rite up — assess state and act.
 
     Examples:
@@ -6123,14 +6148,14 @@ def start_cmd(directory: str, sessions: int | None, minutes: float | None) -> No
             if not chosen.ok:
                 click.echo(chosen.problem, err=True)
                 raise SystemExit(1)
-            _start_a_manager(here, chosen.role, sessions, minutes)
+            _start_a_manager(here, chosen.role, sessions, minutes, record_issues)
             return
     elif roles:
         from rite_ai.managers import manager_to_start
 
         chosen = manager_to_start(roles, directory)
         if chosen.ok:
-            _start_a_manager(here, chosen.role, sessions, minutes)
+            _start_a_manager(here, chosen.role, sessions, minutes, record_issues)
             return
         # Not a Manager name: fall through to directory/alias resolution,
         # which is what `rite start /path` and `rite start <alias>` need.
@@ -6567,3 +6592,122 @@ def help() -> None:  # noqa: A001 - deliberately shadows builtin, it's the comma
 # reasonably try it here too.
 if __name__ == "__main__":  # pragma: no cover - see tests/test_module_entry_point.py
     cli()
+
+
+@cli.group()
+def journal() -> None:
+    """Record a process issue to this Manager's journal (BETA, §9.15).
+
+    ⚠ WHY THIS COMMAND EXISTS AT ALL, since a Manager is an agent that can
+    write a file by itself. D-87 requires that an entry with no anchor is
+    REFUSED on the writing path, before any file is created. A Manager
+    writing markdown with its own tools puts rite nowhere near that path,
+    and the requirement collapses back into asking the agent nicely —
+    which §9.15.3 closes by saying beats nothing.
+
+    So rite owns the writing path. That is what makes the anchor rule a
+    rule rather than an instruction.
+
+    A process issue, not a work issue (§9.15.0): a failing ticket goes to
+    the board. "The gate reported clean on a file it could not open" goes
+    here. Where it could plausibly be either, it is work.
+    """
+
+
+@journal.command("observe")
+@click.option("--manager", required=True, help="Which Manager is recording this.")
+@click.option(
+    "--anchor",
+    required=True,
+    help="What makes this checkable: a commit SHA, a file and line, a "
+    "command with its output, a ticket id, or a named log file with a "
+    "timestamp. An entry without one is refused.",
+)
+@click.option(
+    "--observed", required=True, help="What was seen. Factual, tied to the anchor."
+)
+@click.option("--expected", required=True, help="What should have happened instead.")
+@click.option(
+    "--inferred", default="", help="What you conclude. Kept separate from what you saw."
+)
+def journal_observe(
+    manager: str, anchor: str, observed: str, expected: str, inferred: str
+) -> None:
+    """Record something that behaved differently from what was claimed.
+
+    Examples:
+      rite journal observe --manager lead --anchor 6a8a5b2 \\
+        --observed "publish check exited 0 on an unreadable file" \\
+        --expected "a gate that cannot read a file does not report clean"
+    """
+    from rite_ai.managers.journal import write_observation
+
+    root = _require_project_root()
+    result = write_observation(
+        root,
+        manager=manager,
+        anchor=anchor,
+        observed=observed,
+        expected=expected,
+        inferred=inferred,
+    )
+    if not result.ok:
+        click.echo(result.message, err=True)
+        raise SystemExit(1)
+    click.echo(f"recorded: {result.path}")
+
+
+@journal.command("retrospective")
+@click.option("--manager", required=True, help="Which Manager is recording this.")
+@click.option("--anchor", required=True, help="What makes this checkable.")
+@click.option("--cost", required=True, help="What it cost: tokens, wall-clock, rounds.")
+@click.option(
+    "--changed",
+    required=True,
+    help='What changed as a result. "nothing" is a legitimate and useful answer.',
+)
+@click.option(
+    "--caught-elsewhere",
+    "caught_elsewhere",
+    required=True,
+    help="Whether the change would have been caught by something else.",
+)
+@click.option("--inferred", default="", help="What you conclude, kept separate.")
+def journal_retrospective(
+    manager: str,
+    anchor: str,
+    cost: str,
+    changed: str,
+    caught_elsewhere: str,
+    inferred: str,
+) -> None:
+    """Record what a boundary cost and what it changed — with NO verdict.
+
+    ⚠ There is deliberately nowhere to put "that round was a waste"
+    (§9.15.4). The obvious measure is inverted: a round ending "fix these
+    three things" produces a commit, a round ending "this design would
+    force-release live Workers" produces nothing, so judging by output
+    ranks bad reviewing above good. "Round 2 cost 150k and changed
+    nothing" is checkable and is the entry worth having.
+
+    Examples:
+      rite journal retrospective --manager lead --anchor RT-14 \\
+        --cost "150k tokens, 2 rounds" --changed "nothing" \\
+        --caught-elsewhere "no — no test covers this path"
+    """
+    from rite_ai.managers.journal import write_retrospective
+
+    root = _require_project_root()
+    result = write_retrospective(
+        root,
+        manager=manager,
+        anchor=anchor,
+        cost=cost,
+        changed=changed,
+        caught_elsewhere=caught_elsewhere,
+        inferred=inferred,
+    )
+    if not result.ok:
+        click.echo(result.message, err=True)
+        raise SystemExit(1)
+    click.echo(f"recorded: {result.path}")

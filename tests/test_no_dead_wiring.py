@@ -60,6 +60,18 @@ UNCALLED_ON_PURPOSE = {
         "a private `_launch_command` would make the limit harder to cite than "
         "to keep."
     ),
+    "journal_dir": (
+        "Called by `start_notice`, `write_observation` and "
+        "`write_retrospective` in the same file, and by nothing outside it "
+        "BY DESIGN — that is asserted as a property in "
+        "`test_manager_journal.py`, not merely left true. §9.15.5 requires "
+        "the journal be inert, and a module that can locate the directory "
+        "is one line from reading it, so every caller goes through the "
+        "writing API instead. Public because the path layout is §9.15.3's "
+        "and the tests pin it by name; a private `_journal_dir` would move "
+        "that assertion onto a literal string, which is the same reason "
+        "`user_dir` is here."
+    ),
     # --- rite_ai/managers/, added when this guard was widened ---
     "user_dir": (
         "Called by `instance_path` in the same file. `called_outside` counts "
