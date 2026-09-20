@@ -390,7 +390,12 @@ def parse_config(path: Path) -> ProjectConfig | ParseError:
         # work belongs.
         parsed_roles = parse_managers(coord_raw.get("manager_roles", []))
         if parsed_roles.error:
-            return ParseError(f"config.yaml: {parsed_roles.error}")
+            # Two arguments, not one. `ParseError(file, message)` — a
+            # single-argument call here raised TypeError instead of
+            # returning the error, so an invalid `manager_roles` entry
+            # tracebacked every command that loads config rather than
+            # reporting the line the user got wrong.
+            return ParseError(str(path), parsed_roles.error)
         coordination = CoordinationConfig(
             managers=_str_list(coord_raw.get("managers", [])),
             manager_roles=parsed_roles.roles,

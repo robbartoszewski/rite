@@ -4085,6 +4085,28 @@ the quota spend **is** what was typed.
   reason for not starting even the free loop. **The provider argument is
   what separates "orient me" from "start work", and nothing may collapse
   them.**
+
+  ⚠ **D-78 contradicts the sentence above, and the contradiction is resolved
+  in D-78's favour on a better distinction.** D-78 says bare `rite start`
+  with exactly one Manager configured starts it; this bullet says a bare
+  `start` must never begin a session. Both cannot hold.
+
+  **What separates orientation from starting work is not the ARGUMENT, it is
+  whether a Manager is already running** — which is observable, where the
+  argument relies on the caller remembering which form to type. So:
+
+  - bare `rite start`, no Manager running → D-78 applies (0 fails, 1 starts,
+    2+ refuses and lists);
+  - bare `rite start`, a Manager already running → reports it and exits 0.
+    **Orientation, not a refusal**, because the session doing the orienting
+    is usually the Manager itself and an orientation command that exits 1 on
+    success is useless.
+
+  This answers the recursion this bullet was written to prevent — a session
+  that runs `start` to orient finds the Manager it is running inside and does
+  not spawn a second — and it answers it with a fact rather than a
+  convention. The §9.14.0 idempotence rule is what makes it safe, so the two
+  are one mechanism rather than two.
 - **Starting the loop is itself a change to §9.10's behaviour** and is listed
   here as one, not smuggled in as "unchanged".
 
@@ -5238,6 +5260,7 @@ happened once already and left no trace until this review found it.
 | D-77 | What blocks the Manager boundary property | **UNBLOCKED 2026-09-20: identity is the name you started with** | A Manager started as `rite start planner` knows it is `planner`, so the identity `.rite/machine` could not supply arrives as the argument — which is why D-71 and D-77 are one decision. Each Manager gets its own subdirectory in the single project root, so §5.4's boundary becomes statable as `<root>/.rite/managers/<name>/`, and §5.4.6's shared-by-accident list moves under it. Profiles stay committed; instances live in `.rite/user/`, uncommitted, because a shared config must not claim a Manager is running on somebody else's laptop. §9.14.9. |
 | D-78 | `rite start` with no name, by Manager count | **0 fails, 1 works bare, 2+ refuses AND LISTS them** | Starting a default where none is configured invents a configuration the user did not write; requiring a name where there is one Manager is ceremony; picking among several is a guess about which engine spends which quota. The 2+ case must print the names — a refusal that says "several are configured" and stops sends the user to `rite doctor` to learn what they could have typed. §9.14.9. |
 | D-79 | One root with per-Manager subdirectories, or separate roots per Manager | **SUBDIRECTORIES UNDER ONE ROOT — settled 2026-09-20, with the counter-argument in front of the decider** | `docs/design/V060_MULTI_MANAGER.md` recorded separate roots and is now marked superseded rather than rewritten, because its cost — "a second protocol... the two would drift" — is real and is now accepted debt rather than an avoided one. What reversed it is a fact about the code: separate roots mean separate claim ledgers, and `claims_channel()` returns nothing unless BOTH `coordination.managers` and `coordination.remote` are set, so two Managers on one machine would silently not see each other's claims — the failure this project hit twice in one day, made the default. §9.14.9. |
+| D-80 | Bare `rite start`: orient, or start the one Manager? | **BOTH, distinguished by whether one is already RUNNING rather than by the argument typed** | §9.14.0 said a bare start must never begin a session, because start is what a session runs to orient itself; D-78 said one Manager works bare. Direct contradiction. Resolved on the observable fact: no Manager running means start it, a Manager running means report it and exit 0. That answers §9.14.0's recursion fear with a mechanism rather than a convention — the orienting session finds the Manager it is running inside — and makes §9.14.0's idempotence rule load-bearing rather than incidental. §9.14.0. |
 
 ---
 

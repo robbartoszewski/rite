@@ -5778,17 +5778,83 @@ def _resolve_directory_or_alias(directory: str) -> Path:
 # --- Lifecycle ---
 
 
+def _manager_roles(root: Path) -> list:
+    """This project's declared Managers, or none.
+
+    An unreadable config returns none and falls through to the
+    directory/alias path, which already reports the error.
+
+    ⚠ **Narrow on purpose.** A draft of this caught `Exception` and returned
+    `[]`, which silently masked a real defect: `parse_config` called
+    `ParseError` with one argument where it takes two, so an invalid
+    `manager_roles` entry raised TypeError — and this swallowed it, so the
+    Manager was simply never found and `rite start planner` reported
+    "neither a directory nor an alias". A broad catch here turns a bug in
+    the parser into a missing feature, which is the harder thing to find.
+    """
+    from rite_ai.config.parse import load_project
+
+    project = load_project(root)
+    if isinstance(project, list):
+        return []
+    return list(project.config.coordination.manager_roles)
+
+
+def _start_a_manager(root: Path, role, sessions: int | None) -> None:
+    """Start one Manager, refusing without a ceiling (D-68)."""
+    from rite_ai.managers.session import start as start_manager
+
+    if sessions is None:
+        click.echo(
+            "refusing to start: --sessions is required and has no default.\n"
+            "  It caps how many provider sessions this run may START — a "
+            "COUNT, not spend, because rite cannot read the quota (§2.6.1, "
+            "D-69).\n"
+            "  Silently choosing a number you did not choose is how `rite "
+            "pool fill --count 500` became possible, and spent quota is the "
+            "one damage no cleanup reverses.",
+            err=True,
+        )
+        raise SystemExit(1)
+
+    result = start_manager(root, role.name, engine=role.engine, max_sessions=sessions)
+    if not result.ok:
+        click.echo(result.message, err=True)
+        raise SystemExit(1)
+    click.echo(result.message)
+
+
 @cli.command("start")
 @click.argument("directory", default=".")
-def start_cmd(directory: str) -> None:
+@click.option(
+    "--sessions",
+    type=int,
+    default=None,
+    help="Ceiling on provider sessions this run may start. Required when "
+    "starting a Manager; a COUNT, not spend (D-69).",
+)
+def start_cmd(directory: str, sessions: int | None) -> None:
     """Bring rite up — assess state and act.
 
     Examples:
       rite start
+      rite start planner --sessions 3   # start a declared Manager
       rite start /path/to/project
       rite start acme               # resolves a registered alias (§8.9)
     """
     from rite_ai.lifecycle import start
+
+    # MANAGER NAMES ARE INTERCEPTED HERE, before `_resolve_directory_or_alias`
+    # — which tries an alias, then a path, and then EXITS 1. A Manager name
+    # reaching it becomes "neither an existing directory nor a registered
+    # alias", which is true and useless.
+    here = _find_project_root()
+    roles = _manager_roles(here)
+    if directory != "." and roles:
+        for role in roles:
+            if role.name == directory:
+                _start_a_manager(here, role, sessions)
+                return
 
     root = _resolve_directory_or_alias(directory)
     result = start(root)
