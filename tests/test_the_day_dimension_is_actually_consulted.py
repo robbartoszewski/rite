@@ -182,3 +182,59 @@ class TestTheLoopAgreesWithEnforcement:
         wednesday = datetime(2026, 9, 16, 12, 0, tzinfo=UTC)
         count, _when = _capacity(Project(), wednesday)
         assert count == 3
+
+
+class TestDistributionAgreesWithTheDay:
+    """⚠ THIS TEST COULD NOT BE WRITTEN BEFORE, and that is the finding.
+
+    `distribute()` took the MINUTE from the caller's `now` and the WEEKDAY
+    from `current_moment(...)` with no `now` at all — two halves of one
+    instant, from two clocks. Measured on a schedule open Sundays only,
+    asked about a Saturday:
+
+        capacity reported: 3      expected: 0
+
+    So the day could not be pinned by a test, which is exactly why this
+    call site had no behavioural coverage to lose: mutating its weekday to
+    `None` left 30 tests green.
+
+    Both now come from one `current_moment(schedule.timezone, now)`.
+    """
+
+    class _Backend:
+        def list_tickets(self, *_a, **_k):
+            return []
+
+    def _schedule(self) -> ScheduleConfig:
+        # Open on SUNDAY only, so the day is the whole of the answer.
+        return ScheduleConfig(
+            timezone="Europe/Warsaw",
+            windows=[ScheduleWindow(hours="00:00-24:00", workers=3, days="Sun")],
+        )
+
+    def _capacity(self, tmp_path, when):
+        from rite_ai.coordination.distribution import distribute
+
+        (tmp_path / ".rite").mkdir(exist_ok=True)
+        result = distribute(
+            tmp_path,
+            self._Backend(),
+            manager="m",
+            workers=["w1"],
+            schedule=self._schedule(),
+            now=when,
+            busy=set(),
+            modules=set(),
+        )
+        return getattr(result, "capacity", None)
+
+    def test_a_closed_saturday_distributes_nothing(self, tmp_path):
+        saturday = datetime(2026, 9, 19, 12, 0, tzinfo=UTC)
+        assert self._capacity(tmp_path, saturday) == 0, (
+            "distribution reported capacity on a day the schedule closed — "
+            "the weekday is not coming from the moment it was asked about"
+        )
+
+    def test_the_open_day_is_unaffected(self, tmp_path):
+        sunday = datetime(2026, 9, 20, 12, 0, tzinfo=UTC)
+        assert self._capacity(tmp_path, sunday) == 3

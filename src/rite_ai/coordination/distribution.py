@@ -43,7 +43,7 @@ from pathlib import Path
 from rite_ai.config.models import ScheduleConfig
 from rite_ai.coordination.refusal import Refused, refusal_reason, refuse_assignment
 from rite_ai.coordination.ticket_labels import SCHEDULED, module_required_by
-from rite_ai.schedule import current_minute_of_day, current_moment, workers_at
+from rite_ai.schedule import current_moment, workers_at
 from rite_ai.tickets import BackendError, TicketFilter
 
 
@@ -96,16 +96,25 @@ def distribute(
     Without it a refusal exists only as a board comment, and the Owner hands
     the same ticket to the same Manager on its next tick, for ever.
     """
-    minute = current_minute_of_day(schedule.timezone, now)
-    if minute is None:
-        # A schedule whose timezone cannot be resolved must not silently
-        # become "all hours" or "no hours" — both are wrong and neither is
-        # visible. §2.7 calls a timezone-less schedule a trap for exactly
-        # this reason.
-        return NotDistributed(
-            f"the schedule's timezone {schedule.timezone!r} could not be resolved"
-        )
-    capacity = workers_at(schedule, minute, current_moment(schedule.timezone).weekday)
+    # ⚠ ONE MOMENT, taken once. This read the minute from `now` and the
+    # weekday from `current_moment(...)` with no `now` at all — so the two
+    # halves of the same instant came from different clocks. Measured, on a
+    # schedule open Sundays only, asked about a Saturday:
+    #
+    #     capacity reported: 3      expected: 0
+    #
+    # because the weekday was the real day of the week rather than the one
+    # asked about. Near a day boundary that is wrong in production, and it
+    # made the day dimension untestable here, which is why this call site
+    # had no behavioural test to lose.
+    #
+    # The `minute is None` branch is gone with it: `current_moment` resolves
+    # an unusable timezone to the machine's clock and reports that through
+    # `ResolvedZone.rejected`, rather than refusing to answer. Refusing left
+    # this subsystem assigning nothing while `start_worker` enforced the
+    # schedule normally, on the documented default of an unset timezone.
+    moment = current_moment(schedule.timezone, now)
+    capacity = workers_at(schedule, moment.minute_of_day, moment.weekday)
 
     if busy is None:
         busy = _busy_workers(root)

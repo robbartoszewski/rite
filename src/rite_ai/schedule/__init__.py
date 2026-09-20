@@ -33,24 +33,6 @@ MINUTES_PER_DAY = 1440
 _HOURS_RE = re.compile(r"^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})$")
 
 
-def current_minute_of_day(tz_name: str, now: datetime | None = None) -> int | None:
-    """The schedule's hours are LOCAL to `schedule.timezone` (D-48) — a
-    window meant as "09:00-18:00 in Warsaw" is wrong if evaluated against
-    the machine's own local clock or against UTC. Returns `None` when
-    `tz_name` is empty or unrecognised, so a caller (the scheduler tick)
-    can skip the boundary check entirely rather than silently evaluating
-    against the wrong clock. `now`, if given, overrides the real current
-    time — for tests; production callers omit it."""
-    if not tz_name:
-        return None
-    try:
-        zone = ZoneInfo(tz_name)
-    except ZoneInfoNotFoundError:
-        return None
-    moment = now.astimezone(zone) if now is not None else datetime.now(zone)
-    return moment.hour * 60 + moment.minute
-
-
 @dataclass
 class ScheduleError:
     message: str
@@ -133,8 +115,28 @@ class ResolvedZone:
 
     name: str
     machine_local: bool
+    rejected: str = ""
+    """What `schedule.timezone` asked for, when it could not be resolved.
+
+    ⚠ Without this, a TYPO and an UNSET field were the same answer.
+    Measured: `Europe/Lodnon` and `""` both produced "schedule in
+    Europe/Warsaw (machine local)", byte for byte. The user who mistyped
+    their own timezone was told the schedule was running normally, on a
+    clock they did not choose.
+
+    `resolve_zone` relaxed D-48, which used to FAIL when the field was
+    absent, and its docstring says the loudness that bought "has to be
+    bought back, which is what `describe()` is for". It bought it back for
+    the default and not for the rejection, which is the half that is wrong
+    rather than merely unconfigured."""
 
     def describe(self) -> str:
+        if self.rejected:
+            return (
+                f"schedule in {self.name} (machine local — "
+                f"schedule.timezone {self.rejected!r} is not a known "
+                "timezone and was ignored)"
+            )
         where = "machine local" if self.machine_local else "from config"
         return f"schedule in {self.name} ({where})"
 
@@ -157,7 +159,11 @@ def resolve_zone(tz_name: str) -> ResolvedZone:
         try:
             ZoneInfo(text)
         except (ZoneInfoNotFoundError, ValueError):
-            return ResolvedZone(machine_zone_name(), machine_local=True)
+            # Carry what was asked for: falling back silently is the
+            # silent-wrong-clock D-48 was written against.
+            return ResolvedZone(
+                machine_zone_name(), machine_local=True, rejected=text
+            )
         return ResolvedZone(text, machine_local=False)
     return ResolvedZone(machine_zone_name(), machine_local=True)
 
@@ -335,6 +341,39 @@ def validate_schedule(
     if schedule.windows and not schedule.timezone:
         problems.append("schedule.timezone is required once any window exists (D-48)")
 
+    # A timezone that was SET and could not be resolved is a different
+    # fault from one that was never set, and it is the dangerous one: the
+    # schedule runs on a clock the operator did not choose and nothing
+    # else says so.
+    zone = resolve_zone(schedule.timezone)
+    if zone.rejected:
+        problems.append(
+            f"schedule.timezone {zone.rejected!r} is not a known timezone — "
+            f"the schedule is being read against {zone.name}, this machine's "
+            "own clock. Use an IANA name such as 'Europe/Warsaw'."
+        )
+
+    # ⚠ A MALFORMED `days:` SILENTLY MEANS ZERO WORKERS.
+    #
+    # `workers_at` skips a window whose `days` will not parse (`continue`),
+    # and time no window covers is 0 — so `days: "Mon-Fry"` does not fail,
+    # it quietly removes the window. Measured: a schedule configured for 3
+    # Workers on weekdays produced 0 at Tuesday 10:00, and the only
+    # complaint was a generic "960 minute(s) not covered by any window",
+    # which names neither the window nor the typo.
+    #
+    # Skipping is the right RUNTIME behaviour — refusing to parse a day
+    # must not start Workers outside the hours somebody meant — but it has
+    # to be said out loud somewhere, and this is what `rite doctor` shows.
+    for w in schedule.windows:
+        days = parse_days(w.days)
+        if isinstance(days, ScheduleError):
+            problems.append(
+                f"{days.message} — the window {w.hours!r} is ignored "
+                "entirely, so it contributes 0 Workers rather than the "
+                f"{w.workers} it names"
+            )
+
     covered = [False] * MINUTES_PER_DAY
     for w in schedule.windows:
         parsed = _parse_hours(w.hours)
@@ -381,3 +420,25 @@ def next_open(schedule: ScheduleConfig, moment: Moment, horizon_days: int = 8) -
             day = _DAY_NAMES[weekday].capitalize()
             return f"{day} {minute // 60:02d}:{minute % 60:02d}"
     return ""
+
+
+def current_minute_of_day(tz_name: str, now: datetime | None = None) -> int:
+    """The minute of day the schedule is evaluated against.
+
+    ⚠ THIS USED TO RETURN `None` for an empty or unrecognised timezone,
+    while `current_moment` — added later, for the same question — fell back
+    to the machine's clock. Both policies were live at once and which one
+    applied depended on which function a caller happened to reach for.
+
+    Measured consequence on the DOCUMENTED DEFAULT (no timezone set):
+    `sandbox.start_worker` enforced the schedule against the machine clock
+    while `coordination.distribution` refused to assign anything at all,
+    reporting "the schedule's timezone '' could not be resolved". Two
+    subsystems, opposite behaviour, one config.
+
+    `resolve_zone` decided the policy — machine-local is the default,
+    because a schedule expresses the operator's working hours — so this
+    delegates rather than keeping a second opinion. A rejected timezone is
+    reported through `ResolvedZone.rejected`, not by refusing to answer.
+    """
+    return current_moment(tz_name, now).minute_of_day
