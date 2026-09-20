@@ -424,6 +424,11 @@ class TestTheStatusArrivesAfterTheDeath:
 
         monkeypatch.setattr(session_mod.subprocess, "run", fake_run)
         monkeypatch.setattr(session_mod.time, "sleep", lambda _s: None)
+        # Existence is a SEPARATE question, answered by its own call, and
+        # these tests are about what `ending` does once the session is
+        # known to exist. Stubbed rather than scripted so the read counts
+        # below stay about the status polling and nothing else.
+        monkeypatch.setattr(session_mod, "session_exists", lambda _n: True)
         return seen
 
     def test_a_status_that_arrives_late_is_waited_for(self, monkeypatch):
@@ -562,3 +567,63 @@ def test_was_attached_is_TRUE_for_a_real_attached_client():
     finally:
         tx("kill-session", "-t", target)
         tx("kill-session", "-t", host)
+
+
+@tmux_only
+class TestOneNameIsNotAnotherNamesPrefix:
+    """⚠ tmux `-t <name>` is NOT an exact match — it falls back to fnmatch
+    and then to PREFIX matching.
+
+    With only `leader` running, measured on tmux 3.7c:
+
+        tmux display-message -p -t lead '#{session_name}'  ->  'leader'
+
+    So every `-t` question about a Manager called `lead` was answered about
+    `leader`. For `ending` that means reading ANOTHER session's exit status
+    and, if that neighbour finished cleanly and unattended, returning
+    FINISHED — the one verdict that resumes. `pm` beside `pm2` is enough,
+    and Manager names are chosen by users, not by rite.
+
+    `=` is tmux's exact-match prefix and works on `has-session`. It must NOT
+    be used on `display-message`, which wants a pane target and expands
+    EMPTY for a session that genuinely exists — pinning it there would
+    reintroduce the bug. Hence existence and content are two calls.
+    """
+
+    @pytest.fixture
+    def only_leader(self):
+        name = f"leader-{uuid.uuid4().hex[:6]}"
+        subprocess.run(
+            ["tmux", "new-session", "-d", "-s", name, "sh"], capture_output=True
+        )
+        time.sleep(0.5)
+        yield name
+        subprocess.run(["tmux", "kill-session", "-t", name], capture_output=True)
+
+    def test_a_prefix_of_a_live_session_does_not_exist(self, only_leader):
+        from rite_ai.managers.session import session_exists
+
+        assert session_exists(only_leader)
+        assert not session_exists(only_leader[:-1]), (
+            "a prefix of a running session reported as existing, so every "
+            "`-t` question about it is answered about the other session"
+        )
+
+    def test_ending_does_not_read_a_neighbours_exit_status(self, only_leader):
+        how = ending(only_leader[:-1], human_was_present=False)
+        assert how.kind == UNCLEAR, (
+            f"a Manager whose name is a prefix of a LIVE neighbour read that "
+            f"neighbour's ending as {how.kind!r}"
+        )
+        assert not how.resume, "and it would have been resumed"
+
+    def test_pane_pid_does_not_record_a_neighbours_pid(self, only_leader):
+        from rite_ai.managers.session import pane_pid
+
+        assert pane_pid(only_leader) > 0
+        assert pane_pid(only_leader[:-1]) == 0, (
+            "a recorded value naming the wrong thing — §9.14.10"
+        )
+
+    def test_was_attached_does_not_answer_about_a_neighbour(self, only_leader):
+        assert was_attached(only_leader[:-1]) is False

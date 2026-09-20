@@ -58,6 +58,10 @@ def pane_pid(name: str) -> int:
     binary = _tmux()
     if binary is None:
         return 0
+    if not session_exists(name):
+        # Or this records ANOTHER session's pid against this Manager — a
+        # recorded value naming the wrong thing, which §9.14.10 exists for.
+        return 0
     try:
         done = subprocess.run(
             [binary, "display-message", "-p", "-t", name, "#{pane_pid}"],
@@ -433,6 +437,44 @@ class Ending:
         return self.kind == FINISHED
 
 
+def session_exists(name: str) -> bool:
+    """Does a session with EXACTLY this name exist?
+
+    ⚠ **`-t <name>` is not an exact match.** tmux falls back to fnmatch and
+    then to PREFIX matching, so with only `leader` running:
+
+        tmux display-message -p -t lead '#{session_name}'  ->  'leader'
+
+    Every `-t` question about `lead` is then answered about `leader` — and
+    for `ending` that means reading another session's exit status and
+    landing on FINISHED, the one verdict that resumes. A Manager named `pm`
+    beside `pm2` is enough.
+
+    `=` is tmux's exact-match prefix and it works HERE, on `has-session`:
+
+        only 'leader' exists:  has-session -t =lead   -> rc 1
+                               has-session -t =leader -> rc 0
+
+    ⚠ **It must NOT be put on `display-message`**, which wants a pane
+    target: `-t =lead '#{pane_dead}'` expands EMPTY for a session that
+    genuinely exists, so pinning it there reintroduces the bug it is meant
+    to fix. Measured on tmux 3.7c. Hence two calls — existence here,
+    content there — which also makes them fail independently.
+    """
+    binary = _tmux()
+    if binary is None:
+        return False
+    try:
+        done = subprocess.run(
+            [binary, "has-session", "-t", f"={name}"],
+            capture_output=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return done.returncode == 0
+
+
 def ending(name: str, human_was_present: bool) -> Ending:
     """Why a session's command stopped.
 
@@ -459,6 +501,11 @@ def ending(name: str, human_was_present: bool) -> Ending:
     binary = _tmux()
     if binary is None:
         return Ending(UNCLEAR, detail="tmux not found, so the exit status is gone")
+    if not session_exists(name):
+        # Exactly this name, or none. Without the check `-t` prefix-matches
+        # and this reads ANOTHER session's exit status — landing, for a
+        # healthy neighbour, on FINISHED, which resumes.
+        return Ending(UNCLEAR, detail="the session is gone, with its exit status")
 
     def ask() -> tuple[bool, str, str] | None:
         """(reachable, pane_dead, pane_dead_status), or None if unreadable."""
@@ -577,6 +624,8 @@ def was_attached(name: str) -> bool:
     """
     binary = _tmux()
     if binary is None:
+        return False
+    if not session_exists(name):
         return False
     try:
         done = subprocess.run(
