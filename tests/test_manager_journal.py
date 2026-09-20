@@ -611,3 +611,113 @@ def test_a_manager_name_too_long_is_refused_not_a_traceback(tmp_path):
         expected="e",
     )
     assert not result.ok and "too long" in result.message
+
+
+class TestNoInvisibleCharacterCanBeAnAnchor:
+    """⚠ The cases are DERIVED, not listed, and that is the whole point.
+
+    Three rules have now guarded the anchor and two were defeated:
+
+      `str.strip()`        -> beaten by U+200B, U+200C, U+2800
+      a category blacklist -> beaten by U+2800 (category So, not Cf/Zs/Cc)
+      `str.isalnum()`      -> beaten by U+3164, U+115F, U+1160, U+FFA0
+                              (category Lo: alphanumeric AND invisible)
+
+    Each replacement was tested against the characters that beat its
+    predecessor, so each test could only confirm the new rule disagreed
+    with the old one. **A curated list of blank characters cannot find the
+    blank character nobody thought of** — and the third rule shipped with
+    seven parametrised cases, every one of which `isalnum()` already
+    rejected, so not one of them could distinguish "requires an
+    alphanumeric" from "requires something visible".
+
+    These sweep Unicode by a criterion INDEPENDENT of the rule — what the
+    standard NAMES a character — so they would have caught U+3164 without
+    anyone having heard of U+3164.
+    """
+
+    # Independent of `_is_blank`: these come from the Unicode database's own
+    # names, not from any property the rule tests.
+    _BLANK_IN_NAME = ("FILLER", "BLANK", "SPACE", "INVISIBLE", "ZERO WIDTH", "EMPTY")
+    # Categories that cannot render a glyph a reader could check.
+    _UNRENDERABLE = {"Cc", "Cf", "Cs", "Co", "Zl", "Zp", "Zs", "Mn", "Me"}
+
+    def _sweep(self, keep) -> list[tuple[int, str]]:
+        import unicodedata
+
+        out = []
+        for cp in range(0x110000):
+            ch = chr(cp)
+            try:
+                name = unicodedata.name(ch)
+            except ValueError:
+                continue
+            if keep(ch, name):
+                out.append((cp, name))
+        return out
+
+    def test_the_sweep_finds_characters_to_test(self):
+        """⚠ A generated test whose generator returns nothing passes while
+        asserting over an empty set — the vacuous-pass shape this project
+        files as its own class. So the floor is asserted before the
+        property that rests on it."""
+        by_name = self._sweep(lambda ch, n: any(m in n for m in self._BLANK_IN_NAME))
+        assert len(by_name) > 50, f"the name sweep found only {len(by_name)}"
+
+    def test_no_character_the_standard_calls_blank_is_a_valid_anchor(self):
+        """The name sweep. U+3164 HANGUL FILLER and U+2800 BRAILLE PATTERN
+        BLANK are both caught by this without being named."""
+        from rite_ai.managers.journal import _is_blank
+
+        leaked = [
+            (cp, n)
+            for cp, n in self._sweep(
+                lambda ch, n: any(m in n for m in self._BLANK_IN_NAME)
+            )
+            if not _is_blank(chr(cp))
+        ]
+        assert not leaked, (
+            "these render as nothing and were accepted as anchors: "
+            + ", ".join(f"U+{cp:04X} {n}" for cp, n in leaked[:10])
+        )
+
+    def test_no_unrenderable_category_is_a_valid_anchor(self):
+        """The category sweep, as a second independent criterion — a
+        character can be invisible without saying so in its name."""
+        import unicodedata
+
+        from rite_ai.managers.journal import _is_blank
+
+        leaked = [
+            (cp, n)
+            for cp, n in self._sweep(
+                lambda ch, n: unicodedata.category(ch) in self._UNRENDERABLE
+            )
+            if not _is_blank(chr(cp))
+        ]
+        assert not leaked, (
+            "these cannot render a glyph and were accepted as anchors: "
+            + ", ".join(f"U+{cp:04X} {n}" for cp, n in leaked[:10])
+        )
+
+    @pytest.mark.parametrize(
+        "anchor",
+        [
+            "6a8a5b2",
+            "src/rite_ai/managers/journal.py:127",
+            "rite journal observe --manager lead",
+            "RT-412",
+            "verify.log 2026-09-20T12:01:58Z",
+            "a",
+            "0",
+        ],
+        ids=["sha", "file-line", "command", "ticket", "log", "one-letter", "one-digit"],
+    )
+    def test_a_real_anchor_is_still_accepted(self, anchor):
+        """⚠ The control. A rule that refuses everything passes both sweeps
+        above, so the sweeps alone cannot tell a correct rule from a broken
+        one. Every form §9.15.3 permits is here, and every one is ASCII —
+        which is why the ASCII floor costs nothing real."""
+        from rite_ai.managers.journal import _is_blank
+
+        assert not _is_blank(anchor), f"a legitimate anchor was refused: {anchor!r}"

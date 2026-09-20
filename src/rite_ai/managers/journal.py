@@ -75,6 +75,7 @@ capability is reachable and unannounced to the agent — the same class as
 from __future__ import annotations
 
 import os
+import string
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -115,16 +116,39 @@ OBSERVATION_FIELDS = ("anchor", "observed", "expected", "inferred")
 # the miss was found only because the check was run against the exact
 # characters the review named.
 #
-# So the rule is POSITIVE: a value must contain something legible. Every
-# anchor §9.15.3 permits — a commit SHA, a file path with a line, a command
-# with its output, a ticket id, a log file with a timestamp — contains an
-# alphanumeric character, and so does any prose worth reading. A rule about
-# what must be PRESENT cannot be widened by a new codepoint.
+# ⚠ THE SECOND FIX WAS ALSO A RULE ABOUT CHARACTERS, and a third review
+# defeated it. `str.isalnum()` is a property of the Unicode character CLASS,
+# and category Lo contains characters that are alphanumeric AND render as
+# nothing: U+3164 HANGUL FILLER, U+115F and U+1160 the CHOSEONG/JUNGSEONG
+# FILLERS, U+FFA0 HALFWIDTH HANGUL FILLER. All four passed `isalnum()`, all
+# four were written, and the `## anchor` section rendered blank — the exact
+# bypass the blacklist had, reached through the allowlist instead.
+#
+# So the rule stops describing characters and describes THE ANCHOR'S JOB.
+# An anchor exists to be CHECKED BY A READER: a commit SHA, a `file:line`,
+# a command with its output, a ticket id, a log file with a timestamp.
+# **Every one of those is ASCII**, so requiring an ASCII alphanumeric costs
+# nothing real and removes the whole Lo-category family at once — not by
+# naming its members, which is what the previous two rules tried, but by
+# not admitting them in the first place.
+#
+# ⚠ This is a FLOOR, not a verification. §9.15.3's fifth measure — that a
+# present anchor RESOLVES — is still unimplemented, and this does not
+# change that: `deadbeef` is still accepted. What it guarantees is that the
+# anchor section contains something a reader can see and try.
+
+_LEGIBLE = frozenset(string.ascii_letters + string.digits)
 
 
 def _is_blank(value: str) -> bool:
-    """True when nothing legible is present."""
-    return not any(ch.isalnum() for ch in value)
+    """True when nothing a reader could check is present.
+
+    ASCII deliberately. See the note above: two previous rules described
+    which characters are blank, and each was defeated by a character its
+    author had not met. This describes what an anchor must CONTAIN, and the
+    set is closed — Unicode cannot add a new ASCII alphanumeric.
+    """
+    return not any(ch in _LEGIBLE for ch in value)
 
 
 _ANCHOR_HELP = (
