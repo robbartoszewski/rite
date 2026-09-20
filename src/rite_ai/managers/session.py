@@ -281,7 +281,7 @@ def start(
     session starts, not spend — §2.6.1 says rite cannot read the quota and
     D-38 forbids the path from measurement back to control (D-69).
     """
-    problem = name_problem(manager, kind="manager name")
+    problem = name_problem(manager, kind="manager name", must_be_a_tmux_target=True)
     if problem:
         return StartResult(False, f"refusing to start: {problem}")
 

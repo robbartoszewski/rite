@@ -50,7 +50,9 @@ class UnsafeName(ValueError):
     """A user-supplied name that must not be joined onto a path."""
 
 
-def name_problem(name: str, *, kind: str = "name") -> str:
+def name_problem(
+    name: str, *, kind: str = "name", must_be_a_tmux_target: bool = False
+) -> str:
     """Why `name` must not become a path segment, or "" if it may.
 
     Returns a sentence rather than a bool: every caller here reports to a
@@ -107,6 +109,29 @@ def name_problem(name: str, *, kind: str = "name") -> str:
     bad = sorted(
         {ch for ch in name if not (ch.isascii() and (ch.isalnum() or ch in "._-"))}
     )
+    if must_be_a_tmux_target and "." in name:
+        # ⚠ THE ALLOWLIST ALONE WAS THE WRONG SHAPE, and this is the
+        # correction to it. `.` is admitted above because context FILE
+        # names come through this function (`database.md`) — and `.` is
+        # tmux's PANE separator, so a Manager named `v2.0` creates a
+        # session nothing can address. Measured:
+        #
+        #     tmux new-session -d -s rvw-dot.name  -> created
+        #     tmux has-session -t =rvw-dot.name    -> can't find pane: name
+        #     tmux kill-session -t =rvw-dot.name   -> can't find pane: name
+        #
+        # Reachable only by `#{session_id}` — the same unstoppable-orphan
+        # shape as the `:` defect this allowlist was written for, through a
+        # character that fix deliberately allowed.
+        #
+        # So the allowed set depends on what the name BECOMES. One rule for
+        # every consumer was the mistake: a context file is never a tmux
+        # target, a Manager always is.
+        return (
+            f"a {kind} cannot contain '.' ({name!r}) — it becomes a tmux "
+            "session name, and tmux reads '.' as the pane separator, so the "
+            "session would be created and then be unreachable by name"
+        )
     if bad:
         shown = " ".join(repr(ch) for ch in bad)
         return (
@@ -118,13 +143,15 @@ def name_problem(name: str, *, kind: str = "name") -> str:
     return ""
 
 
-def require_safe_name(name: str, *, kind: str = "name") -> None:
+def require_safe_name(
+    name: str, *, kind: str = "name", must_be_a_tmux_target: bool = False
+) -> None:
     """Raise `UnsafeName` unless `name` is safe to join onto a path.
 
     For call sites with no result type to carry a message. Callers that report
     rather than raise should use `name_problem` and put the sentence in the
     result the user reads.
     """
-    problem = name_problem(name, kind=kind)
+    problem = name_problem(name, kind=kind, must_be_a_tmux_target=must_be_a_tmux_target)
     if problem:
         raise UnsafeName(problem)

@@ -154,7 +154,7 @@ def journal_dir(root: Path, manager: str) -> Path:
     path. A guard that works only because a different function runs first
     is not a guard.
     """
-    require_safe_name(manager, kind="manager name")
+    require_safe_name(manager, kind="manager name", must_be_a_tmux_target=True)
     return Path(root) / ".rite" / "managers" / manager / "journal"
 
 
@@ -254,7 +254,7 @@ def _field_problem(manager: str, anchor: str, required: dict[str, str]) -> str:
     refusal on the writing path, and a check that runs after the write is
     not a check on the writing path.
     """
-    bad_name = name_problem(manager, kind="manager name")
+    bad_name = name_problem(manager, kind="manager name", must_be_a_tmux_target=True)
     if bad_name:
         return bad_name
     # ⚠ Length is a path rule, not a name rule, which is why `name_problem`

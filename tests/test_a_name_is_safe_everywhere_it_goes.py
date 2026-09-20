@@ -48,7 +48,6 @@ STILL_VALID = [
     "eu-west",
     "api_gateway",
     "database.md",  # context FILE names go through this too
-    "v2.0",
     "backend",
     "Manager2",
 ]
@@ -80,6 +79,32 @@ def test_the_names_rite_actually_uses_are_still_accepted(name):
     )
 
 
+def test_a_dot_is_fine_in_a_file_name_and_not_in_a_tmux_target():
+    """⚠ ONE RULE FOR EVERY CONSUMER WAS THE WRONG SHAPE, and this is the
+    correction to my own fix.
+
+    The allowlist admitted `.` because context FILE names come through the
+    same function (`database.md`). But `.` is tmux's PANE separator, so a
+    Manager named `v2.0` creates a session nothing can address. Measured:
+
+        tmux new-session -d -s rvw-dot.name   -> created
+        tmux has-session -t =rvw-dot.name     -> can't find pane: name
+        tmux kill-session -t =rvw-dot.name    -> can't find pane: name
+
+    The session exists and is reachable only by `#{session_id}` — the same
+    unstoppable-orphan shape as the `:` defect this file was written for,
+    through a character the fix for that one deliberately allowed.
+
+    So the allowed set depends on what the name BECOMES. A context file is
+    never a tmux target; a Manager always is.
+    """
+    assert name_problem("database.md", kind="context file name") == ""
+    assert name_problem("v2.0", kind="context file name") == ""
+    problem = name_problem("v2.0", kind="manager name", must_be_a_tmux_target=True)
+    assert problem, "a Manager name containing '.' was accepted"
+    assert "tmux" in problem, f"the refusal does not say why: {problem!r}"
+
+
 @pytest.mark.parametrize("name,why", MUST_BE_REFUSED)
 def test_a_name_that_breaks_a_consumer_is_refused(name, why):
     problem = name_problem(name, kind="manager name")
@@ -109,7 +134,7 @@ def test_a_manager_name_survives_a_tmux_round_trip():
     if not shutil.which("tmux"):
         pytest.skip("tmux is not installed")
 
-    for name in ("lead", "eu-west", "v2.0", "api_gateway"):
+    for name in ("lead", "eu-west", "api_gateway"):
         session = f"rite-nm-{uuid.uuid4().hex[:6]}-{name}"
         subprocess.run(
             ["tmux", "new-session", "-d", "-s", session, "sleep 60"],
