@@ -288,14 +288,7 @@ def start(
     # exit status goes with it, leaving finished, quit and crashed
     # indistinguishable. It also leaves the conversation readable after the
     # supervisor stops, which is what a human attaching afterwards wants.
-    subprocess.run(
-        [binary, "set-option", "-t", name, "remain-on-exit", "on"],
-        capture_output=True,
-        text=True,
-        errors="replace",
-        timeout=30,
-        check=False,
-    )
+    _keep_pane_after_exit(binary, name)
 
     if not settled_alive(name):
         return StartResult(
@@ -493,6 +486,28 @@ def was_attached(name: str) -> bool:
         return False
 
 
+def _keep_pane_after_exit(binary: str, name: str) -> None:
+    """Set `remain-on-exit` so a pane survives its command.
+
+    ⚠ **ONE function, used by both `start` and the probe, and that is the
+    point.** They set it separately before, with `set-option`; on Linux CI
+    the probe then reported the capability present while real sessions
+    behaved as if it were absent. **A probe that does not use the production
+    call measures something else** — and a capability check that disagrees
+    with the thing it is checking is worse than no check.
+
+    `set-window-option` because that is what `remain-on-exit` is. macOS
+    accepted the session form and appeared to honour it; that is the
+    platform telling you what you want to hear.
+    """
+    subprocess.run(
+        [binary, "set-window-option", "-t", name, "remain-on-exit", "on"],
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+
+
 def exit_status_available() -> bool:
     """Can this tmux report why a session's command ended?
 
@@ -539,12 +554,7 @@ def exit_status_available() -> bool:
         )
         if made.returncode != 0:
             return False
-        subprocess.run(
-            [binary, "set-option", "-t", name, "remain-on-exit", "on"],
-            capture_output=True,
-            timeout=30,
-            check=False,
-        )
+        _keep_pane_after_exit(binary, name)
         subprocess.run(
             [binary, "send-keys", "-t", name, "exit 3", "Enter"],
             capture_output=True,
