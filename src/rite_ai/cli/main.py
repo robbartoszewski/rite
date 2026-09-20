@@ -5731,8 +5731,16 @@ def projects_list() -> None:
 @click.argument("path", type=click.Path(exists=True))
 @click.option("--role", default="manager", help="This machine's role for this project")
 def projects_add(alias: str, path: str, role: str) -> None:
-    """Register a project under an alias — warns (does not refuse) if the
-    aggregate scheduled load across all registered projects looks high.
+    """Register a project under an alias.
+
+    Refuses an alias that collides with a Manager name declared by any
+    registered project: `rite start <word>` matches Manager names before
+    aliases, so such an alias would never resolve and would fail silently.
+    Pick another alias — the Manager name is committed in that project's
+    config and is not yours to change here.
+
+    Warns, without refusing, if the aggregate scheduled load across all
+    registered projects looks high.
 
     Examples:
       rite projects add acme ~/work/acme
