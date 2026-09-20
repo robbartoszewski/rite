@@ -227,3 +227,62 @@ class TestStaleClaimsAreVisible:
         claim = Claim(paths=["a.ts"], worker="alice")
         claim.timestamp = 0.0
         assert format_claim_age(claim) == "age unknown"
+
+
+# --- the floor under every guard above ----------------------------------------------
+
+
+class TestTheseGuardsActuallyReadSomething:
+    """⚠ Every test in this file scans a COMPUTED set: `SRC.rglob("*.py")`.
+
+    `Path.rglob` on a directory that does not exist returns nothing and
+    raises nothing. So if the package is renamed, or the tests directory
+    moves relative to it, `offenders` is empty, `source` is empty, and every
+    guard above PASSES — including the ones asserting rite has no path to a
+    remote and cannot rewrite history.
+
+    A vacuous pass and a real pass are byte-identical in pytest's output.
+    These are the cheapest possible checks that the machinery ran, and the
+    stakes here are the highest in the suite: the failure mode is a safety
+    guard that silently stops guarding while continuing to report success.
+
+    Floors are deliberately far below the real figures (125 files, 30 `git`
+    argv lists at the time of writing) so that ordinary growth and deletion
+    never touch them. A check people edit to keep it quiet has stopped
+    being a check.
+    """
+
+    def test_the_package_directory_resolves(self):
+        assert SRC.is_dir(), (
+            f"{SRC} is not a directory — every guard in this file is "
+            "scanning nothing and reporting success"
+        )
+
+    def test_a_plausible_number_of_source_files_is_scanned(self):
+        files = sorted(SRC.rglob("*.py"))
+        assert len(files) >= 50, (
+            f"only {len(files)} Python files found under {SRC}. The guards "
+            "above are running against almost nothing"
+        )
+
+    def test_the_git_argv_scanner_still_matches_real_invocations(self):
+        """The floor that matters most, because it tests the PARSER.
+
+        The history/remote guard finds offenders with a regex over
+        `["git", ...]` argument lists. If that regex stopped matching — a
+        formatter rewrapping the lists, a helper replacing them — it would
+        find no offenders and pass, having checked nothing, while the file
+        count stayed healthy. So assert it still finds the invocations rite
+        legitimately makes.
+        """
+        import re as _re
+
+        text = "\n".join(p.read_text() for p in sorted(SRC.rglob("*.py")))
+        found = _re.findall(r'\[\s*"git"\s*,([^\]]*)\]', text)
+        assert len(found) >= 5, (
+            f"the git argv regex matched {len(found)} invocations across the "
+            "package. rite runs git in many places, so a near-zero count "
+            "means the pattern no longer matches how they are written — and "
+            "the history-and-remote guard is passing because it finds "
+            "nothing, not because there is nothing to find"
+        )
