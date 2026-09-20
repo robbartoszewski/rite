@@ -5778,26 +5778,44 @@ def _resolve_directory_or_alias(directory: str) -> Path:
 # --- Lifecycle ---
 
 
-def _manager_roles(root: Path) -> list:
+def _manager_roles(root: Path) -> tuple[list, list[str]]:
     """This project's declared Managers, or none.
 
-    An unreadable config returns none and falls through to the
-    directory/alias path, which already reports the error.
+    Returns `(roles, problems)`. **Both halves matter and an earlier version
+    had only the first.**
 
-    ⚠ **Narrow on purpose.** A draft of this caught `Exception` and returned
-    `[]`, which silently masked a real defect: `parse_config` called
-    `ParseError` with one argument where it takes two, so an invalid
-    `manager_roles` entry raised TypeError — and this swallowed it, so the
-    Manager was simply never found and `rite start planner` reported
-    "neither a directory nor an alias". A broad catch here turns a bug in
-    the parser into a missing feature, which is the harder thing to find.
+    ⚠ **The broad `except Exception` was narrowed and the bug came back one
+    layer up, structurally rather than syntactically.** `load_project`
+    returns `list[ParseError]` when any config file fails, and a draft
+    collapsed that list to `[]` with no message — so an invalid engine gave
+    `rite start planner` → "neither an existing directory nor a registered
+    alias", while `rite doctor` reported the real cause. The docstring
+    claimed the directory/alias path "already reports the error". It does
+    not: it reports a different error, about a directory the user never
+    mentioned.
+
+    Discarding a parser's answer is the same defect as catching its
+    exception. Narrowing the catch fixed the syntax and left the shape.
     """
     from rite_ai.config.parse import load_project
 
     project = load_project(root)
     if isinstance(project, list):
-        return []
-    return list(project.config.coordination.manager_roles)
+        return [], [str(getattr(e, "message", e)) for e in project]
+    return list(project.config.coordination.manager_roles), []
+
+
+def _a_manager_is_running(root: Path, roles: list) -> bool:
+    """Is any declared Manager live right now? (D-80)
+
+    What separates orientation from starting work is not the argument, it is
+    whether a Manager is already running — observable, where the argument
+    relies on the caller remembering which form to type. A session that runs
+    `start` to orient finds the Manager it is running inside.
+    """
+    from rite_ai.managers.session import running
+
+    return any(running(root, role.name) is not None for role in roles)
 
 
 def _start_a_manager(root: Path, role, sessions: int | None) -> None:
@@ -5849,12 +5867,57 @@ def start_cmd(directory: str, sessions: int | None) -> None:
     # reaching it becomes "neither an existing directory nor a registered
     # alias", which is true and useless.
     here = _find_project_root()
-    roles = _manager_roles(here)
-    if directory != "." and roles:
-        for role in roles:
-            if role.name == directory:
-                _start_a_manager(here, role, sessions)
-                return
+    roles, config_problems = _manager_roles(here)
+
+    # A config that will not parse is reported HERE rather than becoming a
+    # Manager that silently does not exist. The directory/alias path below
+    # would say "neither a directory nor an alias", which is true of the
+    # word and says nothing about the reason.
+    # Only when there IS a project here to misread. A draft fired on "file
+    # not found" — which means no project in the cwd, not a broken one — and
+    # so refused `rite start <alias>` run from anywhere outside a project,
+    # which is the ordinary way that command is used.
+    # `.rite/config.yaml` alone is NOT the test — rite's own repository has
+    # one, tracked for the gate, and is not a rite project. `PROJECT_MARKERS`
+    # is the property, which is the same distinction `_find_project_root`'s
+    # own docstring makes. A draft used config.yaml and so refused
+    # `rite start <alias>` run from inside rite's checkout.
+    here_is_a_project = _is_project(here)
+    if config_problems and here_is_a_project:
+        click.echo("cannot read this project's Managers:", err=True)
+        for problem in config_problems[:3]:
+            click.echo(f"  {problem}", err=True)
+        click.echo("  `rite doctor` shows the full picture.", err=True)
+        raise SystemExit(1)
+
+    # D-78/D-80. A draft gated this on `directory != "."`, so bare
+    # `rite start` never reached it and "one works bare" / "2+ refuses and
+    # lists" were written in SPEC, implemented in `manager_to_start`, unit
+    # tested — and called by nothing. The policy existed and the wiring did
+    # not, which reviews clean in every individual piece.
+    if directory == "." and not roles:
+        pass  # no Managers declared: the ordinary bring-up below
+    elif directory == "." and roles:
+        if _a_manager_is_running(here, roles):
+            pass  # orientation (D-80): report below, do not start a second
+        else:
+            from rite_ai.managers import manager_to_start
+
+            chosen = manager_to_start(roles, "")
+            if not chosen.ok:
+                click.echo(chosen.problem, err=True)
+                raise SystemExit(1)
+            _start_a_manager(here, chosen.role, sessions)
+            return
+    elif roles:
+        from rite_ai.managers import manager_to_start
+
+        chosen = manager_to_start(roles, directory)
+        if chosen.ok:
+            _start_a_manager(here, chosen.role, sessions)
+            return
+        # Not a Manager name: fall through to directory/alias resolution,
+        # which is what `rite start /path` and `rite start <alias>` need.
 
     root = _resolve_directory_or_alias(directory)
     result = start(root)

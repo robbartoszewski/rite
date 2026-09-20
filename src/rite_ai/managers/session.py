@@ -43,6 +43,36 @@ def session_name(root: Path, manager: str) -> str:
     return f"rite-mgr-{project_slug(root)}-{manager}"
 
 
+def pane_pid(name: str) -> int:
+    """The pid of the process tmux is actually running, not ours.
+
+    ⚠ A draft recorded `os.getpid()` — the rite CLI's own pid, which is dead
+    seconds later and recyclable. Measured: recorded 41437 where the pane was
+    41470. `loop/session.py` asks tmux, and so does this. A recorded value
+    that names a different process than the one it claims to name is worse
+    than no value, because it reads as evidence.
+    """
+    binary = _tmux()
+    if binary is None:
+        return 0
+    try:
+        done = subprocess.run(
+            [binary, "display-message", "-p", "-t", name, "#{pane_pid}"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return 0
+    if done.returncode != 0:
+        return 0
+    try:
+        return int((done.stdout or "").strip())
+    except ValueError:
+        return 0
+
+
 @dataclass
 class StartResult:
     ok: bool
@@ -55,10 +85,33 @@ def _tmux() -> str | None:
     return shutil.which("tmux")
 
 
-def is_alive(name: str) -> bool:
+@dataclass(frozen=True)
+class Liveness:
+    """Whether a session is running, and whether we could find out.
+
+    ⚠ **Three answers, not two, and the third is why this type exists.**
+    A draft of this module returned a bare bool: `has-session` timing out or
+    failing to run returned False, so "could not ask" read as "not running"
+    — and the duplicate check then let a second PAID Manager session start.
+    That is the conflation `worker_sandbox_status` already fixed with
+    `known=False`, reintroduced here.
+
+    Nothing bad happened in practice, and the reason is worth writing down
+    because it is load-bearing and was nobody's intention: `session_name` is
+    deterministic, so a second start collides on the name and tmux refuses
+    it. **The safety property was resting on naming.** Add a disambiguating
+    suffix or a retry and the protection disappears with nothing to notice.
+    """
+
+    alive: bool
+    known: bool
+    detail: str = ""
+
+
+def liveness(name: str) -> Liveness:
     binary = _tmux()
     if binary is None:
-        return False
+        return Liveness(False, known=False, detail="tmux not found")
     try:
         done = subprocess.run(
             [binary, "has-session", "-t", name],
@@ -67,9 +120,21 @@ def is_alive(name: str) -> bool:
             errors="replace",
             timeout=30,
         )
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return done.returncode == 0
+    except subprocess.TimeoutExpired:
+        return Liveness(False, known=False, detail="`tmux has-session` timed out")
+    except (OSError, subprocess.SubprocessError) as e:
+        return Liveness(False, known=False, detail=f"`tmux has-session` failed: {e}")
+    return Liveness(done.returncode == 0, known=True)
+
+
+def is_alive(name: str) -> bool:
+    """Alive, treating "could not ask" as not alive.
+
+    ⚠ Safe ONLY where a false negative is cheap. The duplicate check must
+    use `liveness()` instead, because there a false negative starts a second
+    paid session — §5.1.1: a safety property may fail closed, never open.
+    """
+    return liveness(name).alive
 
 
 def settled_alive(name: str, tries: int = SETTLE_TRIES, pause: float = SETTLE_PAUSE):
@@ -99,7 +164,7 @@ def running(root: Path, manager: str) -> ManagerInstance | None:
     instance = read_instance(root, manager)
     if instance is None:
         return None
-    if not is_alive(instance.session):
+    if not liveness(instance.session).alive:
         return None
     return instance
 
@@ -123,6 +188,14 @@ def start(
     if problem:
         return StartResult(False, f"refusing to start: {problem}")
 
+    if max_sessions <= 0:
+        return StartResult(
+            False,
+            f"refusing to start: a ceiling of {max_sessions} permits no "
+            "sessions at all, so the Manager would start and immediately "
+            "have nothing it may do. Pass a positive --sessions.",
+        )
+
     binary = _tmux()
     if binary is None:
         # FAIL CLOSED: without tmux the duplicate check cannot run, and a
@@ -135,6 +208,20 @@ def start(
         )
 
     name = session_name(root, manager)
+
+    # FAIL CLOSED before anything else: if we cannot establish whether a
+    # session is already running, refuse. A draft of this checked `is_alive`,
+    # which answers False when it cannot ask, so a timeout permitted a second
+    # PAID session (D-74, §5.1.1).
+    here = liveness(name)
+    if not here.known:
+        return StartResult(
+            False,
+            f"cannot tell whether Manager '{manager}' is already running "
+            f"({here.detail}), so starting one could make two — refused. "
+            f"Check with `tmux ls` and try again.",
+        )
+
     existing = running(root, manager)
     if existing is not None:
         return StartResult(
@@ -145,7 +232,7 @@ def start(
             session=existing.session,
             attach=f"tmux attach -t {existing.session}",
         )
-    if is_alive(name):
+    if here.alive:
         # A session under our name with no usable record. Refuse rather than
         # adopt: recording it would claim this project started something it
         # did not, and killing it would destroy work nobody asked about.
@@ -170,7 +257,10 @@ def start(
     except (OSError, subprocess.SubprocessError) as e:
         return StartResult(False, f"could not start a session: {e}")
     if done.returncode != 0:
-        detail = (done.stderr or done.stdout or "").strip()
+        # Truncated, as `loop/session.py` truncates: tmux can emit a great
+        # deal on failure and a refusal nobody can read is a refusal nobody
+        # acts on.
+        detail = (done.stderr or done.stdout or "").strip()[:200]
         return StartResult(False, f"tmux refused to start the session: {detail}")
 
     if not settled_alive(name):
@@ -182,15 +272,17 @@ def start(
             f"`{launch}` directly to see why.",
         )
 
-    import os
-
     record_instance(
         root,
         ManagerInstance(
             name=manager,
             session=name,
-            pid=os.getpid(),
-            engine=engine,
+            # tmux's pane pid, not ours. See `pane_pid`.
+            pid=pane_pid(name),
+            # What actually ran, not what was configured: `launch` is
+            # `command or engine or "claude"`, so an explicit command means
+            # the configured engine is not what is running.
+            engine=launch,
             max_sessions=max_sessions,
             window_seconds=window_seconds,
         ),
