@@ -175,3 +175,78 @@ class TestTheDuplicateCheckFailsClosed:
         non-zero means NOT RUNNING; failing to run means NOT KNOWN."""
         gone = liveness("rite-mgr-definitely-not-a-real-session-xyz")
         assert gone.known and not gone.alive
+
+
+class TestTheAuthMessageDoesNotAssertWhatRiteCannotKnow:
+    """⚠ Measured on this project's own machine, and the measurement is the
+    reason this exists.
+
+    `claude` started INTERACTIVELY in a tmux pane authenticates and runs.
+    `claude -p` in the SAME pane, same keychain item, with a TTY, dies
+    saying *"OAuth session expired and could not be refreshed"* — with the
+    credential valid, eleven days from its last write, against a one-year
+    lifetime. The engine named a refusal for a read it never completed.
+
+    Relaying that verbatim would make rite repeat a false claim in the
+    first place a new user sees something go wrong. A dogfood operator told
+    her credential expired would re-authenticate, fail again, and have no
+    way to know why.
+    """
+
+    def test_it_says_what_it_cannot_tell(self, monkeypatch):
+        import rite_ai.managers.session as s
+
+        monkeypatch.setattr(
+            s,
+            "_pane_text",
+            lambda _n: (
+                "Failed to authenticate: OAuth session expired and "
+                "could not be refreshed"
+            ),
+        )
+        msg = s._why_the_engine_died("sess", "claude")
+        assert "cannot tell" in msg, "rite asserted a cause it cannot establish"
+        assert "look identical" in msg or "identical" in msg
+
+    def test_it_gives_the_command_that_discriminates(self, monkeypatch):
+        """A message that names a problem without the one command that
+        separates its two causes leaves the user to guess, and the obvious
+        guess — re-authenticate — is the wrong one here."""
+        import rite_ai.managers.session as s
+
+        monkeypatch.setattr(s, "_pane_text", lambda _n: "failed to authenticate")
+        msg = s._why_the_engine_died("sess", "claude")
+        assert "run `claude` on its own" in msg
+        assert "credential is FINE" in msg
+
+    def test_it_does_NOT_relay_the_engine_s_own_words(self, monkeypatch):
+        """⚠ Two reasons, and the second is the one that matters. A pane can
+        carry secrets — an injected token on a launch line is the measured
+        case elsewhere in this project. And repeating the engine's CLAIM
+        would make rite assert it."""
+        import rite_ai.managers.session as s
+
+        poisoned = (
+            "Failed to authenticate: OAuth session expired\n"
+            "TOKEN=sk-ant-oat01-SHOULD-NEVER-APPEAR-IN-OUTPUT"
+        )
+        monkeypatch.setattr(s, "_pane_text", lambda _n: poisoned)
+        msg = s._why_the_engine_died("sess", "claude")
+        assert "SHOULD-NEVER-APPEAR-IN-OUTPUT" not in msg, (
+            "rite echoed pane contents back to the user — a pane can carry "
+            "an injected credential"
+        )
+        assert "OAuth session expired" not in msg, (
+            "rite repeated the engine's claim, which has been measured "
+            "false about a valid credential"
+        )
+
+    def test_a_NON_auth_death_keeps_the_ordinary_message(self, monkeypatch):
+        """The narrow case must stay narrow: a command that simply is not
+        installed should not be described as an authentication problem."""
+        import rite_ai.managers.session as s
+
+        monkeypatch.setattr(s, "_pane_text", lambda _n: "bash: nosuchthing: not found")
+        msg = s._why_the_engine_died("sess", "nosuchthing")
+        assert "authentication" not in msg.lower()
+        assert "started and exited immediately" in msg

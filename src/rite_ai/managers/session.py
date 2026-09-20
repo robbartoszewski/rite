@@ -370,10 +370,7 @@ def start(
     if not settled_alive(name):
         return StartResult(
             False,
-            f"the session started and exited immediately, so `{launch}` is "
-            f"not running. `tmux new-session` reports whether a session was "
-            f"CREATED, not whether the command in it survived. Run "
-            f"`{launch}` directly to see why.",
+            _why_the_engine_died(name, launch),
         )
 
     pane = _pane_id(name)
@@ -729,6 +726,98 @@ def was_attached(name: str) -> bool:
         return int((done.stdout or "0").strip()) > 0
     except ValueError:
         return False
+
+
+# Shapes an engine prints when it cannot authenticate. Matched to DETECT,
+# never to relay: see `_authentication_looks_broken`.
+_AUTH_SHAPES = (
+    "failed to authenticate",
+    "oauth",
+    "not authenticated",
+    "please run /login",
+    "invalid api key",
+    "authentication_error",
+    "401",
+)
+
+
+def _why_the_engine_died(name: str, launch: str) -> str:
+    """The message when the engine did not survive its settle window.
+
+    ⚠ **rite does not know whether the credential is bad or the engine
+    could not read one, and it must not assert either.** Measured on this
+    project's own machine: `claude` started interactively in a tmux pane
+    authenticates and runs, while `claude -p` in the SAME pane, with the
+    same keychain item and a TTY, dies saying "OAuth session expired and
+    could not be refreshed" — with the credential valid and eleven days
+    from its last write, against a one-year lifetime. The engine's message
+    named a refusal for what was a read it never completed.
+
+    Relaying that verbatim would make rite say the same false thing, in the
+    first place a new user ever sees something go wrong — and a dogfood
+    operator told her credential expired would re-authenticate, fail again,
+    and have no way to know why.
+
+    So this says what rite OBSERVED, says what rite CANNOT TELL, and gives
+    the one command that discriminates: the engine, run on its own. If it
+    starts, the credential is fine and the failure is in how rite invoked
+    it.
+    """
+    if _authentication_looks_broken(_pane_text(name)):
+        return (
+            f"the session started and exited immediately, and `{launch}` "
+            f"printed something about authentication before it died.\n"
+            f"  ⚠ rite cannot tell whether your credential is invalid or "
+            f"the engine failed to read one — from here those look "
+            f"identical, and the engine's own wording does not "
+            f"distinguish them.\n"
+            f"  The command that tells you apart: run `claude` on its own, "
+            f"interactively. If it starts, your credential is FINE and the "
+            f"problem is the way it was launched, not your login.\n"
+            f"  (rite deliberately does not repeat the engine's message "
+            f"here: it has been measured saying 'expired' about a "
+            f"credential with a year left on it.)"
+        )
+    return (
+        f"the session started and exited immediately, so `{launch}` is "
+        f"not running. `tmux new-session` reports whether a session was "
+        f"CREATED, not whether the command in it survived. Run "
+        f"`{launch}` directly to see why."
+    )
+
+
+def _authentication_looks_broken(pane_text: str) -> bool:
+    """Did the engine die complaining about credentials?
+
+    ⚠ **Matched to DETECT, and the pane is never relayed.** Two reasons,
+    and the second is the one that matters. A pane can carry secrets — a
+    launch line with an injected token is the measured case elsewhere in
+    this project — so echoing it back is a leak waiting for the right
+    engine. And rite must not repeat the engine's CLAIM as if it were
+    rite's own finding; what rite knows is that the engine said something
+    about authentication and then died, which is a fact about the output,
+    not about the credential.
+    """
+    low = pane_text.lower()
+    return any(shape in low for shape in _AUTH_SHAPES)
+
+
+def _pane_text(name: str) -> str:
+    """What the pane shows, for DETECTION only. Never returned to a user."""
+    binary = _tmux()
+    if binary is None:
+        return ""
+    try:
+        done = subprocess.run(
+            [binary, "capture-pane", "-p", "-t", name],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return (done.stdout or "") if done.returncode == 0 else ""
 
 
 def _pane_id(name: str) -> str:
