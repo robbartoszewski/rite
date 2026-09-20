@@ -14,7 +14,7 @@ def test_version():
     result = runner.invoke(cli, ["--version"])
     assert result.exit_code == 0
     assert "rite" in result.output
-    assert "0.5.0" in result.output
+    assert "0.5.1" in result.output
 
 
 def test_doctor_with_no_project(tmp_path, monkeypatch):

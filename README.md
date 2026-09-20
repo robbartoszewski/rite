@@ -235,7 +235,7 @@ installed anywhere else in your home directory, such as a project virtualenv,
 cannot run inside a sandbox.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/robbartoszewski/rite/v0.5.0/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/robbartoszewski/rite/v0.5.1/install.sh | sh
 ```
 
 *That is a `curl | sh` for a tool that scans your repo for secrets, so two
@@ -270,13 +270,16 @@ it. What follows is what is genuinely not built, checked against the code.
 
 - **The loop works the queue.** `rite loop` watches it and says why it is
   stopped — it prints the Worker it would start and does not start one.
-  Two ways to close that, and neither is wired: dispatching mechanical
-  subtasks to local models — the pieces are in the code, nothing calls them,
-  and there is no command; and dispatching Claude sessions, which spends your
-  quota while nobody is watching and is therefore a decision rather than a
-  task. SPEC §9.12 forbids
-  the second today, on purpose. So the loop closes *"nobody noticed the queue
-  had stalled"* and not *"nobody is doing the work"*.
+  Two ways to close that. Dispatching mechanical subtasks to local models is
+  still unwired: the pieces are in the code, nothing calls them, and there is
+  no command. Dispatching Claude sessions **unattended** remains forbidden by
+  SPEC §9.12, on purpose, because it spends your quota while nobody is
+  watching. *Attended* dispatch arrived in 0.5.1 as `rite start <manager>`,
+  which keeps a Manager session going in your own foreground terminal under
+  two ceilings you typed — so the gap is now narrower than this section used
+  to claim, and it is the loop that still starts nothing. So the loop closes
+  *"nobody noticed the queue had stalled"* and not *"nobody is doing the
+  work"*.
 - **Questions routed to whoever owns the area.** What is built: you list
   people and their areas in the project config, and that table is printed
   into the Owner's instructions — a heading and a list of names against
@@ -321,13 +324,23 @@ exhausts sooner than Max. Nor does it end gracefully: rite never reads a
 session's exit status, so a worker that runs out stops where it stands, claim
 still held until you `rite release` it.
 
-**Nothing starts a session for you.** rite sets up the workspace and the
-config; starting Claude is your explicit action — opening a session, or typing
-`rite sandbox start`. This is still true with `rite loop` running: the loop
-watches the queue and reports, and the Worker it says it would start is one
-you start. Nothing rite runs unattended opens a Claude session, because
-anything scheduled that could would be spending your quota with nobody
-watching.
+**Nothing opens a session unless you are there.** rite sets up the workspace
+and the config; starting Claude is your explicit action — opening a session,
+typing `rite sandbox start`, or `rite start <manager>`. This is still true
+with `rite loop` running: the loop watches the queue and reports, and the
+Worker it says it would start is one you start. Nothing rite runs
+*unattended* opens a Claude session, because anything scheduled that could
+would be spending your quota with nobody watching.
+
+*This paragraph said "nothing starts a session for you" until 0.5.1, and
+`rite start <manager>` made that false.* That command starts a Manager
+session and starts the next one when the last finishes cleanly — so it opens
+sessions you did not individually type. What keeps the promise above true is
+that it runs in the **foreground**, in your own terminal: it is your process,
+you can attach to the session and watch it, Ctrl-C ends the run, and it stops
+at two ceilings you had to type — `--sessions` (how many) and `--minutes`
+(how long), neither of which has a default. Nothing about it is scheduled and
+nothing survives your shell.
 
 **No gates on your code.** Your sessions run your tests and linters — that is
 what rite tells them to do — but rite does not read the results, so there is
