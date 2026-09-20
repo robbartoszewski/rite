@@ -2,6 +2,17 @@
 
 ## 0.5.1 (unreleased)
 
+### Fixed before release: `days:` was parsed but ignored by the loop and scheduler
+
+The day dimension above is enforced at `rite sandbox start`, and four other
+places that evaluate "how many Workers right now" did not pass the day at
+all. On a schedule of `Mon-Fri → 3` and `Sat-Sun → 0`, at Saturday noon,
+`rite loop` and the scheduler reported capacity for **3** while
+`start_worker` correctly refused — the same kind of disagreement the
+advisory schedule produced, one layer up. Found and fixed before the
+release, and there is now a check that fails if any caller evaluating a
+real moment omits the day again.
+
 ### Telling a human quitting from an agent finishing is now measured, not reasoned
 
 A Manager session exits with status 0 whether the agent finished or a

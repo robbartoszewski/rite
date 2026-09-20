@@ -325,13 +325,21 @@ def _worktree_problem(root: Path) -> str:
 
 
 def _capacity(project, now: datetime) -> tuple[int, str | None]:
-    from rite_ai.schedule import current_minute_of_day, workers_at
+    from rite_ai.schedule import current_minute_of_day, current_moment, workers_at
 
     schedule = project.config.schedule
     minute = current_minute_of_day(schedule.timezone, now)
     if minute is None:
         return 0, None
-    return workers_at(schedule, minute), f"{minute // 60:02d}:{minute % 60:02d}"
+    # THE WEEKDAY TOO. Omitting it silently ignores `days:`, so a Saturday
+    # configured for 0 Workers reported the weekday window's count — while
+    # `start_worker` correctly refused. Two true sentences that disagree,
+    # which is the same failure the advisory schedule produced before 0.5.1.
+    weekday = current_moment(schedule.timezone, now).weekday
+    return (
+        workers_at(schedule, minute, weekday),
+        f"{minute // 60:02d}:{minute % 60:02d}",
+    )
 
 
 def _claims(root: Path):

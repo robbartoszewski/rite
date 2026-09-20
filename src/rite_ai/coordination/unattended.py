@@ -39,7 +39,7 @@ module holds the switch.
 `in_flight` and no ceiling, and `refusal.py` flags the cost — "'full' cannot be
 refused safely until the Owner can see capacity". But the ceiling needs no new
 field: `schedule:` lives in the committed `config.yaml`, so every machine reads
-the same windows, and `workers_at(schedule, minute)` gives the Owner exactly
+the same windows, and `workers_at(schedule, minute, weekday)` gives the Owner exactly
 the number the receiving machine will apply to itself. A published capacity
 becomes necessary the day machines may carry different schedules, and that is
 not a shape this config has.

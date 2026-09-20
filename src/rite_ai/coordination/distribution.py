@@ -43,7 +43,7 @@ from pathlib import Path
 from rite_ai.config.models import ScheduleConfig
 from rite_ai.coordination.refusal import Refused, refusal_reason, refuse_assignment
 from rite_ai.coordination.ticket_labels import SCHEDULED, module_required_by
-from rite_ai.schedule import current_minute_of_day, workers_at
+from rite_ai.schedule import current_minute_of_day, current_moment, workers_at
 from rite_ai.tickets import BackendError, TicketFilter
 
 
@@ -105,7 +105,7 @@ def distribute(
         return NotDistributed(
             f"the schedule's timezone {schedule.timezone!r} could not be resolved"
         )
-    capacity = workers_at(schedule, minute)
+    capacity = workers_at(schedule, minute, current_moment(schedule.timezone).weekday)
 
     if busy is None:
         busy = _busy_workers(root)
