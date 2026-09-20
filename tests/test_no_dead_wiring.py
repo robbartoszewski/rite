@@ -47,6 +47,12 @@ WATCHED = (
 
 # name -> why nothing calls it. A reason is required; "not yet" is not one.
 UNCALLED_ON_PURPOSE = {
+    "project_transcript_dir": (
+        "Called by `latest_session_id` in the same file. Public because it "
+        "is the one place a provider's private directory layout is encoded, "
+        "and a test asserts the naming rule against it — a private helper "
+        "would move that assertion into a test of something else."
+    ),
     "launch_command": (
         "Called by `_default_starter` in the same file. Public because it is "
         "the one place the engine string becomes a command line, and SPEC "

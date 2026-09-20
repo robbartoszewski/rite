@@ -23,7 +23,7 @@ from pathlib import Path
 import pytest
 
 import rite_ai.managers.supervise as supervise_mod
-from rite_ai.managers.session import Liveness, StartResult
+from rite_ai.managers.session import FINISHED, Ending, Liveness, StartResult
 from rite_ai.managers.supervise import STOP_VERDICTS, launch_command, supervise
 
 
@@ -35,7 +35,15 @@ def project(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def instant(monkeypatch):
-    """Sessions that end the moment they start. No provider is ever run."""
+    """Sessions that FINISH the moment they start. No provider is ever run.
+
+    `ending` and `was_attached` are stubbed because a fake session name has
+    no tmux pane, so the real `ending` answers `unclear` and the supervisor
+    correctly stops after one cycle. These tests are about the BOUNDS, and
+    a bound that is never reached because the run stopped for another reason
+    proves nothing — so the stubs say "each session finished cleanly with
+    nobody attached", which is the case where the bounds are what stops it.
+    """
     started: list[str] = []
 
     def starter(root, manager, *, engine, resume_id, max_sessions, window_seconds):
@@ -44,6 +52,10 @@ def instant(monkeypatch):
 
     monkeypatch.setattr(
         supervise_mod, "liveness", lambda _n: Liveness(False, known=True)
+    )
+    monkeypatch.setattr(supervise_mod, "was_attached", lambda _n: False)
+    monkeypatch.setattr(
+        supervise_mod, "ending", lambda _n, human_was_present: Ending(FINISHED)
     )
     return starter, started
 
@@ -58,7 +70,7 @@ class TestTheCeilingBounds:
             max_sessions=3,
             window_seconds=0,
             starter=starter,
-            resume_id_for=lambda _r, _m: "sess-abc",
+            resume_id_for=lambda _r, _m, _s=0.0: "sess-abc",
             poll=0,
         )
         assert result.sessions_started == 3, "the ceiling did not bound"
@@ -75,6 +87,7 @@ class TestTheCeilingBounds:
             max_sessions=1,
             window_seconds=0,
             starter=starter,
+            resume_id_for=lambda _r, _m, _s=0.0: "sid",
             poll=0,
         )
         assert "COUNT, not a spend limit" in result.reason
@@ -88,7 +101,7 @@ class TestTheCeilingBounds:
             max_sessions=3,
             window_seconds=0,
             starter=starter,
-            resume_id_for=lambda _r, _m: "sess-abc",
+            resume_id_for=lambda _r, _m, _s=0.0: "sess-abc",
             poll=0,
         )
         assert started[0] == "", "the first session resumed something"
@@ -111,6 +124,10 @@ class TestTheWindowBounds:
             "liveness",
             lambda n: Liveness(time.time() < alive_until.get(n, 0), known=True),
         )
+        monkeypatch.setattr(supervise_mod, "was_attached", lambda _n: False)
+        monkeypatch.setattr(
+            supervise_mod, "ending", lambda _n, human_was_present: Ending(FINISHED)
+        )
         result = supervise(
             project,
             "lead",
@@ -118,6 +135,7 @@ class TestTheWindowBounds:
             max_sessions=1000,
             window_seconds=0.9,
             starter=starter,
+            resume_id_for=lambda _r, _m, _s=0.0: "sid",
             poll=0.05,
         )
         assert result.sessions_started < 1000, "the window did not bound"
@@ -135,6 +153,7 @@ class TestTheWindowBounds:
             max_sessions=5,
             window_seconds=60,
             starter=starter,
+            resume_id_for=lambda _r, _m, _s=0.0: "sid",
             poll=0,
         )
         assert result.sessions_started == 5
@@ -153,6 +172,7 @@ class TestTheStopConditionComesFromTheLoop:
             window_seconds=0,
             starter=starter,
             verdict=lambda _r: verdict,
+            resume_id_for=lambda _r, _m, _s=0.0: "sid",
             poll=0,
         )
         assert result.sessions_started == 0, (
@@ -170,6 +190,7 @@ class TestTheStopConditionComesFromTheLoop:
             window_seconds=0,
             starter=starter,
             verdict=lambda _r: verdict,
+            resume_id_for=lambda _r, _m, _s=0.0: "sid",
             poll=0,
         )
         assert result.sessions_started == 2
@@ -186,6 +207,7 @@ class TestTheStopConditionComesFromTheLoop:
             window_seconds=0,
             starter=starter,
             verdict=lambda _r: "idle",
+            resume_id_for=lambda _r, _m, _s=0.0: "sid",
             poll=0,
         )
         jammed = supervise(
@@ -196,6 +218,7 @@ class TestTheStopConditionComesFromTheLoop:
             window_seconds=0,
             starter=starter,
             verdict=lambda _r: "deadlocked",
+            resume_id_for=lambda _r, _m, _s=0.0: "sid",
             poll=0,
         )
         assert done.reason.startswith("done:")
@@ -211,6 +234,7 @@ class TestTheStopConditionComesFromTheLoop:
             window_seconds=0,
             starter=starter,
             verdict=lambda _r: "closed",
+            resume_id_for=lambda _r, _m, _s=0.0: "sid",
             poll=0,
         )
         assert "Nothing restarts it" in result.reason
@@ -237,6 +261,7 @@ class TestAFailedStartEndsTheRun:
             max_sessions=9,
             window_seconds=0,
             starter=refuses,
+            resume_id_for=lambda _r, _m, _s=0.0: "sid",
             poll=0,
         )
         assert not result.ok

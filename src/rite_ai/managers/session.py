@@ -113,19 +113,30 @@ def liveness(name: str) -> Liveness:
     binary = _tmux()
     if binary is None:
         return Liveness(False, known=False, detail="tmux not found")
+    # ⚠ NOT `has-session`. With `remain-on-exit on` — which `start` sets so
+    # the exit status survives — a session whose command has exited still
+    # EXISTS, so `has-session` returns 0 for a pane that is dead. The
+    # question here is whether the command is running, and `#{pane_dead}`
+    # is the only thing that answers it.
     try:
         done = subprocess.run(
-            [binary, "has-session", "-t", name],
+            [binary, "display-message", "-p", "-t", name, "#{pane_dead}"],
             capture_output=True,
             text=True,
             errors="replace",
             timeout=30,
         )
     except subprocess.TimeoutExpired:
-        return Liveness(False, known=False, detail="`tmux has-session` timed out")
+        return Liveness(False, known=False, detail="`tmux display-message` timed out")
     except (OSError, subprocess.SubprocessError) as e:
-        return Liveness(False, known=False, detail=f"`tmux has-session` failed: {e}")
-    return Liveness(done.returncode == 0, known=True)
+        return Liveness(
+            False, known=False, detail=f"`tmux display-message` failed: {e}"
+        )
+    if done.returncode != 0:
+        # No such session at all — a KNOWN answer, and not the same as
+        # being unable to ask.
+        return Liveness(False, known=True)
+    return Liveness((done.stdout or "").strip() != "1", known=True)
 
 
 def is_alive(name: str) -> bool:
@@ -270,6 +281,20 @@ def start(
         detail = (done.stderr or done.stdout or "").strip()[:200]
         return StartResult(False, f"tmux refused to start the session: {detail}")
 
+    # `remain-on-exit on` so the pane survives its command and carries
+    # `#{pane_dead_status}` — without it tmux destroys the session and the
+    # exit status goes with it, leaving finished, quit and crashed
+    # indistinguishable. It also leaves the conversation readable after the
+    # supervisor stops, which is what a human attaching afterwards wants.
+    subprocess.run(
+        [binary, "set-option", "-t", name, "remain-on-exit", "on"],
+        capture_output=True,
+        text=True,
+        errors="replace",
+        timeout=30,
+        check=False,
+    )
+
     if not settled_alive(name):
         return StartResult(
             False,
@@ -301,3 +326,145 @@ def start(
         session=name,
         attach=attach,
     )
+
+
+FINISHED = "finished"
+QUIT = "quit"
+CRASHED = "crashed"
+UNCLEAR = "unclear"
+
+
+@dataclass(frozen=True)
+class Ending:
+    """How a session ended, and whether restarting it is right.
+
+    ⚠ **Three outcomes, and a restart is correct for exactly one.** A draft
+    of the supervisor had only "the pane is gone", which is what finishing,
+    quitting and crashing all look like — so it restarted a session the
+    human had deliberately exited, measured, and would have restarted a
+    crash loop too.
+
+    **`resume` is False whenever the answer is not certain.** The asymmetry
+    decides the default: a supervisor that stops when unsure costs a human
+    one command, and one that restarts when unsure fights them and spends
+    money doing it.
+    """
+
+    kind: str
+    status: int = 0
+    detail: str = ""
+
+    @property
+    def resume(self) -> bool:
+        return self.kind == FINISHED
+
+
+def ending(name: str, human_was_present: bool) -> Ending:
+    """Why a session's command stopped.
+
+    Needs `remain-on-exit on`, which `start` sets: without it tmux destroys
+    the session when its command exits and the exit status is gone with it.
+    With it, the pane persists as dead and carries `#{pane_dead_status}` —
+    which is also why the conversation is still there for a human to read
+    after the supervisor has stopped.
+    """
+    binary = _tmux()
+    if binary is None:
+        return Ending(UNCLEAR, detail="tmux not found, so the exit status is gone")
+    try:
+        done = subprocess.run(
+            [
+                binary,
+                "display-message",
+                "-p",
+                "-t",
+                name,
+                "#{pane_dead}|#{pane_dead_status}",
+            ],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        return Ending(UNCLEAR, detail=f"could not read the exit status: {e}")
+    if done.returncode != 0:
+        # The session is gone entirely — `remain-on-exit` did not hold it,
+        # or something removed it. No status to read, so no restart.
+        return Ending(UNCLEAR, detail="the session is gone, with its exit status")
+
+    raw = (done.stdout or "").strip().split("|")
+    dead = raw[0] if raw else ""
+    try:
+        status = int(raw[1]) if len(raw) > 1 and raw[1] else 0
+    except ValueError:
+        status = 0
+
+    if dead != "1":
+        return Ending(UNCLEAR, detail="the pane is not dead")
+    if status != 0:
+        return Ending(
+            CRASHED,
+            status=status,
+            detail=f"the command exited {status}",
+        )
+    if human_was_present:
+        # A clean exit with somebody attached at some point. `exit` typed by
+        # a human and an agent finishing are the SAME exit status, so this
+        # cannot be told apart — and the safe reading is that the human
+        # meant it.
+        return Ending(
+            QUIT,
+            detail=(
+                "it exited cleanly while somebody was attached, which is what "
+                "both a finished agent and a human typing `exit` look like"
+            ),
+        )
+    return Ending(FINISHED, detail="the command exited cleanly, unattended")
+
+
+def was_attached(name: str) -> bool:
+    """Is a client attached to this session right now?
+
+    Polled rather than asked once, because attachment is a moment: the
+    supervisor records whether anybody was EVER attached during a session,
+    which is the question `ending` needs.
+
+    ⚠ **UNVERIFIED IN THE TRUE DIRECTION.** The query works and returns `0`
+    correctly for an unattached session, confirmed. Nothing has observed it
+    return True, because creating a genuinely attached client needs a real
+    terminal and every attempt from a test harness — including a `pty.fork`
+    — produced `list-clients: (none)`. So the FALSE branch is measured and
+    the TRUE branch is reasoned.
+
+    **That matters because this signal is load-bearing.** It is what tells
+    a human typing `exit` apart from an agent finishing, and both produce
+    exit status 0. If it never fires in practice, a human quitting reads as
+    FINISHED and the supervisor resumes — the exact behaviour it was added
+    to stop. The transcript check in `supervise` catches the case where no
+    transcript exists, which is defence in depth and NOT a substitute: a
+    real provider session leaves a transcript, so that backstop would not
+    fire where it is most needed.
+
+    **Verify this on a real terminal before trusting it**, and treat the
+    fix as incomplete until somebody has.
+    """
+    binary = _tmux()
+    if binary is None:
+        return False
+    try:
+        done = subprocess.run(
+            [binary, "display-message", "-p", "-t", name, "#{session_attached}"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if done.returncode != 0:
+        return False
+    try:
+        return int((done.stdout or "0").strip()) > 0
+    except ValueError:
+        return False

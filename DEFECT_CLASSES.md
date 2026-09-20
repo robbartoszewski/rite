@@ -475,6 +475,18 @@ caller that is itself dead, since the guard asks "is it called" rather
 than "is it reached". A chain of three uncalled functions calling each
 other satisfies it.
 
+⚠ **And the blind spot found by this class catching itself: the guard asks
+whether a FUNCTION is called, not whether a PARAMETER is ever supplied.**
+`supervise(resume_id_for=...)` defaulted to a callable returning `""`, so
+the resume path ran, passed the check, and resumed nothing — every cycle
+began a fresh context. The function was called; the feature was not.
+
+**A default that silently means "do nothing" is an uncalled function
+wearing a different hat**, and it is strictly harder to see: no grep finds
+it, the guard passes, and the call site reads as complete. The only signal
+is asking what the value IS at runtime, which is the same detection rule as
+above — ask what the thing can see, not whether it passes.
+
 ## The list that matters
 
 Classes held **only** by someone noticing — no mechanism, or a mechanism that

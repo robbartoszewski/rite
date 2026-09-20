@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from rite_ai.managers import ManagerInstance, record_instance
-from rite_ai.managers.session import StartResult, liveness
+from rite_ai.managers.session import StartResult, ending, liveness, was_attached
 from rite_ai.managers.session import start as start_session
 
 POLL_SECONDS = 2.0
@@ -64,6 +64,45 @@ def launch_command(engine: str, resume_id: str = "") -> str:
     return base
 
 
+def _default_resume_id(root: Path, manager: str, since: float = 0.0) -> str:
+    """The provider session to carry on from.
+
+    ⚠ **A draft defaulted this to `lambda: ""`**, so `launch_command` got no
+    id, every "resume" ran a bare `claude`, and each cycle began a FRESH
+    context with the ticket half-done and no memory of it — identical from
+    outside to a resume that worked. A default that silently means "do
+    nothing" is an uncalled function wearing a different hat.
+
+    `since` scopes it to transcripts touched after this cycle began, so the
+    supervisor resumes the session IT started rather than the newest file on
+    disk, which could be last week's.
+    """
+    from rite_ai.managers.transcripts import latest_session_id
+
+    return latest_session_id(root, since=since)
+
+
+def _stopped_because(how, started: int) -> str:
+    """Say which of the three happened, because a restart is right for
+    exactly one and a human needs to know which they are looking at."""
+    if how.kind == "quit":
+        return (
+            f"stopped after {started} session(s): {how.detail}. NOT restarted "
+            "— if you meant to keep going, run `rite start` again."
+        )
+    if how.kind == "crashed":
+        return (
+            f"stopped after {started} session(s): {how.detail}. Not restarted "
+            "— a crash that repeats would repeat at your expense. The pane is "
+            "still there to read."
+        )
+    return (
+        f"stopped after {started} session(s): {how.detail}, so whether it "
+        "finished or was ended cannot be told. Not restarted — refusing when "
+        "unsure costs you one command; restarting when unsure spends money."
+    )
+
+
 @dataclass
 class Cycle:
     """One session's life, for the report."""
@@ -73,6 +112,8 @@ class Cycle:
     resumed_from: str = ""
     started_at: float = 0.0
     ended_at: float = 0.0
+    attended: bool = False
+    ending: str = ""
 
 
 @dataclass
@@ -111,7 +152,7 @@ def supervise(
     begin = clock()
     deadline = begin + window_seconds if window_seconds > 0 else None
     launch = starter if callable(starter) else _default_starter
-    next_id = resume_id_for if callable(resume_id_for) else (lambda _r, _m: "")
+    next_id = resume_id_for if callable(resume_id_for) else _default_resume_id
 
     cycles: list[Cycle] = []
     resume_from = ""
@@ -164,16 +205,41 @@ def supervise(
         )
         cycles.append(cycle)
 
-        # Wait for it to end. The human can attach to it throughout — that
-        # is §9.14.3, and it is why "nobody is watching" is false here in a
-        # way it is not for a cron tick.
+        # Wait for it to end. The human can attach throughout — that is
+        # §9.14.3, and it is why "nobody is watching" is false here in a way
+        # it is not for a cron tick. Whether anybody DID attach is recorded
+        # while waiting, because attachment is a moment and the question
+        # `ending` asks is whether somebody was ever there.
+        attended = False
         while liveness(result.session).alive:
             if deadline is not None and clock() >= deadline:
                 break
+            attended = attended or was_attached(result.session)
             time.sleep(poll)
         cycle.ended_at = clock()
+        cycle.attended = attended
 
-        resume_from = next_id(root, manager)
+        how = ending(result.session, human_was_present=attended)
+        cycle.ending = how.kind
+        if not how.resume:
+            return SuperviseResult(
+                how.kind != "crashed",
+                _stopped_because(how, len(cycles)),
+                cycles,
+            )
+
+        # Only now, and only for a session that finished cleanly with
+        # nobody attached, is a resume the right thing.
+        resume_from = next_id(root, manager, cycle.started_at)
+        if not resume_from:
+            return SuperviseResult(
+                True,
+                f"stopped after {len(cycles)} session(s): the session "
+                "finished but no transcript was found to resume from, so "
+                "continuing would start a FRESH context rather than carry "
+                "the work on. Refused rather than silently restarting.",
+                cycles,
+            )
 
 
 def _why(answer: str, started: int) -> str:
