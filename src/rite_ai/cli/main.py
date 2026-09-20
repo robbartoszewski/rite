@@ -5996,6 +5996,60 @@ def _start_a_manager(
         raise SystemExit(1)
 
 
+@cli.group()
+def manager() -> None:
+    """A declared Manager's session — start it with `rite start <manager>`."""
+
+
+@manager.command("stop")
+@click.argument("name")
+def manager_stop(name: str) -> None:
+    """End a Manager's session when its supervisor is gone — RECOVERY, not
+    the ordinary way to stop one.
+
+    Ctrl-C on `rite start <manager>` stops the supervisor AND the session,
+    which is the normal case and takes one action (§9.14.12). This is for
+    the ORPHAN: the supervising process died — a crash, a closed laptop, a
+    killed terminal — and the session is still running with nothing
+    watching it.
+
+    \b
+    ⚠ It is a separate command rather than `rite stop <manager>` because
+    `rite stop [DIRECTORY]` already exists, resolves registered aliases,
+    and has side effects on the board. A command meaning two different
+    things depending on whether its argument happens to match a Manager
+    name is the ambiguity rite refuses elsewhere (§9.14.7a, D-78).
+
+    Examples:
+      rite manager stop planner
+    """
+    from rite_ai.managers import forget_instance
+    from rite_ai.managers.session import session_name
+    from rite_ai.managers.session import stop as stop_session
+
+    root = _find_project_root()
+    session = session_name(root, name)
+    gone = stop_session(session)
+    # The record goes either way. A stop that clears the session and leaves
+    # the record makes the next `rite start` believe a Manager is running —
+    # the phantom this command exists to remove.
+    forget_instance(root, name)
+    if not gone.ok:
+        click.echo(
+            f"{gone.detail}\n"
+            f"  the record is cleared, so `rite start` will not think it is "
+            f"running; `tmux kill-session -t {session}` ends it by hand.",
+            err=True,
+        )
+        raise SystemExit(1)
+    if gone.killed:
+        click.echo(f"stopped Manager '{name}' and its session")
+    else:
+        # Idempotent, and reported as a success: this command's job is to
+        # make "no Manager is running" true, and it is.
+        click.echo(f"no session was running for Manager '{name}' — record cleared")
+
+
 @cli.command("start")
 @click.argument("directory", default=".")
 @click.option(

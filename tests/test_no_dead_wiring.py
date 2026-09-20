@@ -77,12 +77,6 @@ UNCALLED_ON_PURPOSE = {
         "because what it returns — tmux's pane pid rather than the CLI's own "
         "— is the whole point, and a comment would not have carried that."
     ),
-    "forget_instance": (
-        "Nothing removes an instance record yet because `rite stop <manager>` "
-        "is not built (v0.5.1 plan). A stale record does not wedge anything: "
-        "`running()` treats a dead session or a dead pid as absent, so the "
-        "cost of not calling this is a file, not a refusal."
-    ),
     # `running_instances` was here — "for `rite status` to list running
     # Managers, which is not built". It is built now, and THIS TEST IS HOW
     # THAT WAS NOTICED: the push that wired it was refused with "these are

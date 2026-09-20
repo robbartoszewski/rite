@@ -36,10 +36,11 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from rite_ai.managers import ManagerInstance, record_instance
+from rite_ai.managers import ManagerInstance, forget_instance, record_instance
 from rite_ai.managers.prompt import deliver as deliver_prompt
 from rite_ai.managers.session import StartResult, ending, liveness, was_attached
 from rite_ai.managers.session import start as start_session
+from rite_ai.managers.session import stop as stop_session
 
 POLL_SECONDS = 2.0
 
@@ -186,6 +187,7 @@ def supervise(
 
     cycles: list[Cycle] = []
     resume_from = ""
+    live = ""
 
     while True:
         # BOTH bounds before starting. A ceiling checked afterwards reports
@@ -239,6 +241,7 @@ def supervise(
         if not result.ok:
             return SuperviseResult(False, result.message, cycles)
 
+        live = result.session
         cycle = Cycle(
             number=len(cycles) + 1,
             session=result.session,
@@ -275,11 +278,20 @@ def supervise(
         # while waiting, because attachment is a moment and the question
         # `ending` asks is whether somebody was ever there.
         attended = False
-        while liveness(result.session).alive:
-            if deadline is not None and clock() >= deadline:
-                break
-            attended = attended or was_attached(result.session)
-            time.sleep(poll)
+        try:
+            while liveness(result.session).alive:
+                if deadline is not None and clock() >= deadline:
+                    break
+                attended = attended or was_attached(result.session)
+                time.sleep(poll)
+        except KeyboardInterrupt:
+            # ⚠ A HUMAN SAYING STOP, which is a different event from a bound
+            # being reached — §9.14.12. A bound leaves the session alive
+            # deliberately, because the user may be mid-conversation and a
+            # ceiling is an accounting limit. Ctrl-C is not an accounting
+            # limit, and leaving a live session spending quota with only the
+            # restarts halted is not what was asked for.
+            return _torn_down(root, manager, live, cycles, say)
         cycle.ended_at = clock()
         cycle.attended = attended
 
@@ -304,6 +316,47 @@ def supervise(
                 "the work on. Refused rather than silently restarting.",
                 cycles,
             )
+
+
+def _torn_down(root, manager: str, session: str, cycles, say) -> SuperviseResult:
+    """Ctrl-C: end the session, drop the record, and SAY SO.
+
+    ⚠ **The record must go or the next `rite start` believes this Manager
+    is still running** — the stale-lock defect in a new place, and that
+    class wedged the loop earlier this week. `forget_instance` existed with
+    zero callers until this one; a decision with no mechanism under it is
+    indistinguishable from a feature nothing calls.
+
+    ⚠ **It must say what it did.** Silence after Ctrl-C is
+    indistinguishable from a signal that did not land, which is how a user
+    ends up pressing it three times and killing something mid-write.
+
+    Ordered so a failure to kill does not skip the record: both run, and
+    the report names what actually happened rather than what was intended.
+    """
+    gone = stop_session(session) if session else None
+    forget_instance(root, manager)
+    if gone is not None and not gone.ok:
+        say(
+            f"warning: could not stop {session} — {gone.detail}. The record "
+            f"is cleared, so `rite start` will not think it is running; "
+            f"`tmux kill-session -t {session}` ends it by hand."
+        )
+        return SuperviseResult(
+            False,
+            f"stopped supervising Manager {manager!r}, but its session "
+            f"{session} may still be running — {gone.detail}",
+            cycles,
+        )
+    if gone is not None and gone.killed:
+        return SuperviseResult(
+            True, f"stopped Manager {manager!r} and its session", cycles
+        )
+    return SuperviseResult(
+        True,
+        f"stopped Manager {manager!r} — its session had already ended",
+        cycles,
+    )
 
 
 def _why(answer: str, started: int) -> str:

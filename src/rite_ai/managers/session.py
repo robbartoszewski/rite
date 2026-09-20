@@ -596,6 +596,55 @@ def ending(name: str, human_was_present: bool) -> Ending:
     return Ending(FINISHED, detail="the command exited cleanly, unattended")
 
 
+@dataclass(frozen=True)
+class Stopped:
+    """What a stop actually did, because "stopped" has three meanings.
+
+    `killed` False with `ok` True is the IDEMPOTENT case — there was
+    nothing there. That is a success for a recovery command whose whole job
+    is to make "no Manager is running" true, and reporting it as a failure
+    would train users to ignore the failure.
+    """
+
+    ok: bool
+    killed: bool
+    detail: str = ""
+
+
+def stop(name: str) -> Stopped:
+    """End a Manager's tmux session.
+
+    ⚠ **Idempotent, and that is a requirement rather than a nicety.** This
+    is reached from two directions — a human pressing Ctrl-C, and `rite
+    manager stop` cleaning up a session whose supervisor died — and both
+    can arrive when the session is already gone. A teardown that only works
+    on the happy path leaves exactly the phantom it exists to remove.
+
+    ⚠ **Exact name only.** `-t` prefix-matches, so without
+    `session_exists` a stop aimed at `lead` kills `leader` — and unlike a
+    misread exit status, that one destroys somebody's work.
+    """
+    binary = _tmux()
+    if binary is None:
+        return Stopped(True, False, "tmux not found, so no session to stop")
+    if not session_exists(name):
+        return Stopped(True, False, f"no session named {name}")
+    try:
+        done = subprocess.run(
+            [binary, "kill-session", "-t", name],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        return Stopped(False, False, f"could not stop {name}: {e}")
+    if done.returncode != 0:
+        detail = (done.stderr or done.stdout or "").strip()[:200]
+        return Stopped(False, False, f"tmux refused to stop {name}: {detail}")
+    return Stopped(True, True, f"stopped {name}")
+
+
 def was_attached(name: str) -> bool:
     """Is a client attached to this session right now?
 

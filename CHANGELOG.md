@@ -34,6 +34,23 @@ start`: the Manager name is committed and shared, the alias is local, so
 the collision lives on one machine and the config it would reject is
 correct.
 
+### Ctrl-C stops a Manager and its session; `rite manager stop` recovers an orphan
+
+Ctrl-C on `rite start <manager>` now ends the supervisor **and** the
+Manager's session, in one action — previously it halted the restarts and
+left a live session spending quota. Reaching `--sessions` or `--minutes`
+still leaves the session alive on purpose: a ceiling is an accounting
+limit and you may be mid-conversation.
+
+`rite manager stop <name>` is for the orphan case only — the supervising
+process died (a crash, a closed laptop, a killed terminal) and the session
+is still running with nothing watching it. It is a separate command rather
+than `rite stop <manager>` because `rite stop [DIRECTORY]` already exists,
+resolves registered aliases, and acts on the board.
+
+Both clear the Manager's instance record, so a stopped Manager no longer
+leaves a phantom that makes the next `rite start` think it is running.
+
 ### `rite start <Manager>` takes two bounds, and both are required
 
 `--sessions` caps how many provider sessions a run may start; `--minutes`
