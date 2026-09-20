@@ -99,9 +99,13 @@ whoever writes the launch line.
 ## The decision, and what a builder needs with it
 
 **Safe by default, dangerous by deliberate act.** `acceptEdits` lets a
-Manager do the work it was started for — editing files in the repository it
-was pointed at — without anybody having to think about it first. The mode
-that lets it do *anything* is a separate, knowing choice.
+Manager do the work it was started for without anybody having to think
+about it first; the broader mode is a separate, knowing choice.
+
+⚠ Deliberately not phrased as "the mode that lets it do anything". **The
+delta between the two is not established** — see "Why the opt-in exists" —
+and a justification resting on that delta being large would be resting on
+something nobody has measured.
 
 ### 1. `--permission-mode acceptEdits` is the default
 
@@ -138,6 +142,42 @@ on every clone of the project. That is the same objection as a committed
 session id and a worse one, because it is not merely wrong elsewhere — it is
 dangerous elsewhere.
 
+## Why the opt-in exists, when nobody has inventoried what it adds
+
+Robert's reasoning, and the point is that it does not depend on knowing the
+delta:
+
+> a project may include some custom acceptance gates
+
+A project's own hooks or gates can block things the default does not cover.
+The escape hatch earns its place because *a project can need one*, not
+because the extra permissions have been enumerated and found large. **He was
+explicit that he does not need to know what they are at this stage**, and
+that is a coherent position rather than a deferral: the opt-in exists for a
+case that is real whether or not the delta is ever measured.
+
+This is why nothing in this note argues from the size of the delta. If
+somebody later inventories it and finds it small, the opt-in is unaffected —
+a custom gate that blocks a Manager is still a custom gate that blocks a
+Manager.
+
+## Objection raised and closed: shell execution under `acceptEdits`
+
+**Raised:** that `acceptEdits` may permit shell execution, not only file
+edits, and that this would be a surprise hiding inside a safe-sounding
+default.
+
+**Closed by Robert, and the reasoning is stronger than the objection:** a
+Manager that cannot run `git`, tests or a build **is not a Manager**. Shell
+execution is a **requirement of the role**, not an unexpected extra that
+came along with the mode.
+
+That inverts what the verification below means. If a Manager under
+`acceptEdits` turns out to run commands as well as write files, that is the
+decision working rather than a complication in it — the run would be
+confirming the mode does what the role needs. Recorded so the objection is
+not re-raised as though it were open: it was raised, and it was answered.
+
 ## Recommended, not decided — this one is mine
 
 **rite should STATE the mode it launched with, every run.**
@@ -156,6 +196,17 @@ below took a night to resolve.
 
 Recorded as a recommendation rather than a decision because Robert set the
 default, the opt-in and where it lives; he has not ruled on this.
+
+**Open documentation item, also mine: this note should state plainly what
+`acceptEdits` actually permits.** The name says "edits", and a reader could
+reasonably conclude their Manager is confined to writing files — which, per
+the objection closed above, it is not. An earlier draft of this very
+document made that assumption in its own opening sentence and had to be
+corrected, which is the argument for writing it down rather than trusting
+the name.
+
+A docs-accuracy point, not a reason to revisit anything. It needs somebody
+to establish what the mode permits and say so here in a sentence.
 
 ## ⚠ The gap that matters now: `acceptEdits` is unverified
 
@@ -177,9 +228,14 @@ found by hand. Each was correct-looking code that nothing had watched do
 its job.
 
 **What would close it**, and it is one run: a Manager launched with
-`--permission-mode acceptEdits`, given a prompt that requires writing a
-file in the project, observed to have written it, with the cycle ending
-`finished` and the supervisor resuming. Until somebody has seen that, "the
+`--permission-mode acceptEdits`, given a prompt that requires **writing a
+file AND running a command** — `git status` or the test suite will do —
+observed to have done both, with the cycle ending `finished` and the
+supervisor resuming.
+
+Both halves, because of the objection closed above: shell execution is a
+requirement of the role, so a run that only proves file writes leaves the
+half a Manager needs most unmeasured. Until somebody has seen that, "the
 Manager can act" is a claim about a flag rather than about the Manager.
 
 ## What would show this wrong
