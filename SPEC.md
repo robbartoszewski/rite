@@ -2174,6 +2174,159 @@ The point is incremental quality: known issues get a checklist item and are elim
 permanently. A checklist item that keeps firing becomes a lint rule or a gate; one that
 never fires gets removed.
 
+### 7.3. Requirements-derived scenarios, before a branch merges
+
+**Not built.** Specified here so the procedure exists before the code does,
+which is most of the point.
+
+After a feature branch has been through its terminating check and the
+resulting fixes, a Worker runs **test scenarios derived from the
+requirements** against the branch. The branch does not merge until they pass
+and the run is evidenced. The scenarios are written as part of the
+implementation plan, not after the code — a plan that cannot say what success
+looks like has not finished specifying the work.
+
+**The second benefit is the one that is easy to lose, so it is stated rather
+than implied: writing the scenarios surfaces questions nobody answered.** The
+scenario author has to say what should happen when the user does X, and a
+plan can leave that implicit where a scenario cannot. Those answers are
+cheaper before implementation than during it — a decision taken mid-flight is
+a decision taken by whoever happened to hit it, under time pressure, without
+the context that would have settled it.
+
+#### Why this, and not more review
+
+The evidence is this project's own v0.5.0, whose defects were found by a
+four-reviewer terminating check. Going through them one at a time, a
+requirements-derived scenario would have caught:
+
+- `rite loop start` reported success and started nothing — *"start the loop;
+  confirm it is running"* fails on the session table.
+- `rite pool fill` reported two sessions started with none running — same
+  shape, same scenario.
+- The publish gate **blocked every push it documented as non-blocking** —
+  *"with a pre-existing finding in the repository, push unrelated work"*
+  fails immediately. This is the clearest case: the requirement was written
+  down, the behaviour was its opposite, and two unit tests asserted the enum
+  rather than the outcome and stayed green for the life of the bug.
+- The schedule that looked enforced and was not — *"configure 0 Workers at
+  the weekend; start a Worker on a Saturday"*.
+- `rite update` destroying prose under a promise never to — *"edit a
+  generated section; run the update; confirm the edit survives"*.
+- `rite sandbox destroy` discarding unapplied work — *"create work, do not
+  push it, destroy"*.
+- The resume that returned a fresh session with no context, and the
+  supervisor that restarted a session a human had deliberately quit.
+- **Every instance of the written-tested-called-by-nothing class**, because a
+  scenario exercises a path and an uncalled function presents as missing
+  behaviour rather than as missing coverage. `manager_to_start` implemented
+  the 0/1/2+ rule, had passing unit tests, and was called by nothing; a
+  scenario running `rite start` with two Managers configured fails at once.
+
+**And what it would NOT have caught**, which matters as much, because a gate
+sold as catching everything gets trusted where it should not be:
+
+- Credentials readable on the process table. Invisible from outside the
+  behaviour — the command works exactly as specified while doing it.
+- The suite hanging on a real keychain prompt; 19 tests never running in CI.
+  Infrastructure, not behaviour.
+- Documentation claims that were false — 61 decisions described as 52,
+  multi-machine described as single-machine. A scenario tests the code.
+- Path escapes such as `rite remove worker ..`, **unless** the requirements
+  say what an invalid name does. They are caught only where someone thought
+  to require it, which is an argument for requirements that name hostile
+  input rather than for scenarios alone.
+
+So: most of the behavioural defects, none of the security-invisible,
+documentation or infrastructure ones. That is a strong result and a bounded
+one, and it is the honest basis for adopting this.
+
+#### Three conditions, each with an artifact a gate can check
+
+A condition a reviewer can only agree with is not a condition. Each of these
+names something that exists in the tree, so "did this happen" is answerable
+without forming a judgement.
+
+**1. Independence, enforced by ORDER rather than by attestation.**
+The scenarios for a phase are committed **before** the implementation branch
+is created, and that is the check: `git merge-base` on the scenario file and
+the branch. It is not fakeable by a reviewer who reads the diff first,
+because when the scenarios were written there was no diff.
+
+Ordering is used instead of authorship because authorship is unverifiable
+after the fact — nothing distinguishes a scenario derived from the
+requirements from one reverse-engineered out of the code and signed by
+somebody else. The scenario file also records `derived_from:`, naming the
+requirement or ticket each scenario comes from; a scenario that cannot name
+one is testing the implementation.
+
+**THE SINGLE-OPERATOR CASE IS NOT AN EXCEPTION, IT IS THE COMMON CASE.**
+rite is routinely run by one person, and a condition with no defined
+behaviour there is a condition that gets skipped silently. So: with no second
+author available, the ordering requirement stands alone and independence is
+recorded as **not satisfied** — `independent: false` in the scenario file.
+The gate does not block. It degrades, visibly, and the merge record says
+which check was weaker. A skipped condition that announces itself is worth
+more than one that quietly does not apply.
+
+**2. Self-evidencing runs — machine-captured, not pasted.**
+Results go in `.rite/scenarios/<phase>/run-<timestamp>.log`, written by
+redirecting the command's own output, and each entry carries the command,
+its output, and **its exit code read directly**. A hand-pasted transcript is
+not a result: it is a claim about a result, and it is editable.
+
+The gate checks the file exists, names every scenario in the plan, and
+carries an exit code for each.
+
+⚠ **This closes presence, not fidelity, and the difference is the whole
+lesson of the release that motivated this.** Four times in v0.5.0 a check
+produced clean-looking output while exercising nothing — a wrong CLI
+invocation read as "does not escape", a test file nothing collected, a suite
+that skipped 19 tests for a missing binary, a harness reported working that
+had never attached. A transcript proves a command ran. It does not prove the
+command was the right one. **The residual risk is stated rather than
+engineered away, because nothing in this section removes it** — the only
+known defence is the independence of whoever wrote the invocation, which is
+the condition above and the one that degrades first.
+
+**3. Depth declared, not assumed.**
+The implementation plan states a tier — `cli`, `service`, or `ui` — and a
+scenario count for it. The gate checks the declared tier against the project's
+own modules: a project with a frontend module declaring `cli` is refused, so
+depth cannot be downgraded by classifying it away.
+
+**UI scenarios are slow, flaky, and lie in both directions.** Measured on a
+sibling project this week: a QA run reported "does not reproduce" for a real
+defect because keyboard focus did not survive a batched interaction — the
+scenario ran, its assertions passed, and the bug was present throughout. They
+carry their own budget line, and their green is **not** equivalent to a CLI
+scenario's green; a plan that treats it as equivalent is drawing a conclusion
+the evidence does not support.
+
+#### Who decides, and what happens when they disagree
+
+**The phase's reviewer decides sufficiency, not the implementer**, and the
+decision is recorded with the merge. A gate with no named decider defaults to
+whoever holds merge rights, which is usually the person whose work is being
+gated.
+
+Where the scenario author and the implementer disagree about whether
+behaviour matches the requirement, **the requirement is the authority, and if
+it is ambiguous the disagreement is the finding** — it is escalated as an
+unanswered question rather than settled by whoever is more insistent. That
+ambiguity surfacing here, before merge, is the second benefit of this gate
+arriving one stage earlier than usual.
+
+#### Where the gate sits
+
+It composes with batching the terminating review **per phase rather than per
+ticket**: one gate at the point where a phase branch reaches trunk, carrying
+two checks — the terminating review of the code, and the requirements-derived
+scenarios of the behaviour. They answer different questions. The review asks
+"is this code correct"; the scenarios ask "is this what was asked for", and
+v0.5.0 shipped a release where the second question had no answer because
+nobody had been assigned to ask it.
+
 ---
 
 ## 8. Configuration
@@ -5309,6 +5462,7 @@ happened once already and left no trace until this review found it.
 | D-78 | `rite start` with no name, by Manager count | **0 fails, 1 works bare, 2+ refuses AND LISTS them** | Starting a default where none is configured invents a configuration the user did not write; requiring a name where there is one Manager is ceremony; picking among several is a guess about which engine spends which quota. The 2+ case must print the names — a refusal that says "several are configured" and stops sends the user to `rite doctor` to learn what they could have typed. §9.14.9. |
 | D-79 | One root with per-Manager subdirectories, or separate roots per Manager | **SUBDIRECTORIES UNDER ONE ROOT — settled 2026-09-20, with the counter-argument in front of the decider** | `docs/design/V060_MULTI_MANAGER.md` recorded separate roots and is now marked superseded rather than rewritten, because its cost — "a second protocol... the two would drift" — is real and is now accepted debt rather than an avoided one. What reversed it is a fact about the code: separate roots mean separate claim ledgers, and `claims_channel()` returns nothing unless BOTH `coordination.managers` and `coordination.remote` are set, so two Managers on one machine would silently not see each other's claims — the failure this project hit twice in one day, made the default. §9.14.9. |
 | D-80 | Bare `rite start`: orient, or start the one Manager? | **BOTH, distinguished by whether one is already RUNNING rather than by the argument typed** | §9.14.0 said a bare start must never begin a session, because start is what a session runs to orient itself; D-78 said one Manager works bare. Direct contradiction. Resolved on the observable fact: no Manager running means start it, a Manager running means report it and exit 0. That answers §9.14.0's recursion fear with a mechanism rather than a convention — the orienting session finds the Manager it is running inside — and makes §9.14.0's idempotence rule load-bearing rather than incidental. §9.14.0. |
+| D-81 | Does a terminating review make a pre-merge behaviour gate redundant? | **NO — they answer different questions, and v0.5.0 is the evidence** | A terminating check on v0.5.0's source found its defects and the release still shipped without the features it was scoped for, because reviewing code asks "is this correct" and nobody was assigned to ask "is this what was asked for". Going through that release's findings one at a time, a requirements-derived scenario would have caught most of the behavioural defects — including every instance of the implemented-tested-called-by-nothing class, which a scenario surfaces as missing behaviour rather than as missing coverage — and none of the security-invisible, documentation or infrastructure ones. Adopted with the bound stated, because a gate sold as catching everything gets trusted where it should not be. Each condition carries a checkable artifact rather than an attestation — independence is enforced by ORDER (scenarios committed before the implementation branch, checkable with `git merge-base`) because authorship is unverifiable after the fact; and the single-operator case degrades visibly with `independent: false` rather than being silently skipped, since one operator is this tool's common case and not an exception. §7.3. |
 
 ---
 
