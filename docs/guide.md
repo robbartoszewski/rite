@@ -475,6 +475,30 @@ than inside a module is not visible to the worker. If a clone fetches from a
 directory that contains the worker's own, such as the project root itself,
 start says it cannot be mounted.
 
+## A Manager needs a token in your environment
+
+**`rite start <manager>` runs the engine non-interactively**, so a session
+ends when its turn does and the supervisor can tell finishing from crashing
+by reading an exit status. A non-interactive engine cannot stop and ask you
+to log in, so it needs a credential it can read without you:
+
+    claude setup-token                 # prints a long-lived token
+    export CLAUDE_CODE_OAUTH_TOKEN=... # in the shell you run rite from
+
+    rite start <manager> --sessions 3 --minutes 90
+
+**rite reads it from the environment and never handles it.** The pane
+inherits your shell's environment, so the token reaches the engine without
+rite storing it, logging it, or putting it on a command line — there is
+nothing for rite to redact, because rite never has the value. Do not pass
+it to rite as an argument and do not put it in `.rite/config.yaml`.
+
+Without it, `rite start` refuses before spending a session and tells you
+so. That refusal is different from the one you get when a token is present
+but the engine still could not authenticate: rite cannot tell a bad
+credential from one the engine failed to read, and it says so rather than
+guessing.
+
 ## Recording what went wrong when nobody is watching (beta)
 
 Feedback about how rite itself is working has only ever existed where a

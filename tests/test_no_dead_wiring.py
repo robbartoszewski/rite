@@ -53,6 +53,13 @@ UNCALLED_ON_PURPOSE = {
         "and a test asserts the naming rule against it — a private helper "
         "would move that assertion into a test of something else."
     ),
+    "token_is_absent": (
+        "Called by `start` in the same file. Public because it is the one "
+        "place rite decides whether an unattended run has a credential, "
+        "and the tests pin both the absent and the blank-string cases by "
+        "name — a private helper would move those assertions onto the "
+        "refusal's wording instead of onto the rule."
+    ),
     "attachment": (
         "Called by `ending` and by `was_attached` in the same file. Public "
         "because it is the three-valued answer — attached / not attached / "

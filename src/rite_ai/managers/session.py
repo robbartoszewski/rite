@@ -390,6 +390,34 @@ def start(
 
     manager_dir(root, manager).mkdir(parents=True, exist_ok=True)
     launch = command or engine or "claude"
+    if not command and token_is_absent() and (engine or "claude") == "claude":
+        # ⚠ **Refused BEFORE a session is spent, and said truthfully.**
+        # Since the engine is launched with `-p` it cannot fall back to an
+        # interactive login, and the keychain path is measured to fail
+        # there — so no token means a session that starts, dies, and costs
+        # a `rite manager stop` to clean up.
+        #
+        # This is deliberately NOT `_why_the_engine_died`'s message. That
+        # one exists for a real ambiguity — rite cannot tell a bad
+        # credential from an unread one — and it is right there. Here the
+        # variable is simply unset, there is no ambiguity, and telling
+        # somebody their credential might be invalid would send them to
+        # re-authenticate a login that is fine.
+        #
+        # An explicit `command` is never second-guessed: that caller is not
+        # launching Claude Code.
+        return StartResult(
+            False,
+            f"refusing to start Manager {manager!r}: an unattended run "
+            f"needs {CLAUDE_OAUTH_ENV} in the environment and it is not "
+            f"set.\n"
+            f"  rite runs the engine non-interactively so a session ends "
+            f"when its turn does, and a non-interactive engine cannot ask "
+            f"you to log in.\n"
+            f"  Mint one with `claude setup-token`, then export it in the "
+            f"shell you run `rite start` from — rite reads it from the "
+            f"environment and never stores or logs it.",
+        )
     # ⚠ **`cwd` stays the PROJECT ROOT and the identity travels separately.**
     # The alternative considered was launching in `manager_dir` so a process
     # could read its own name off `Path.cwd()`. That cwd is load-bearing: the
@@ -906,6 +934,34 @@ def attachment(name: str) -> Attachment:
             known=False,
             detail=f"tmux answered {raw!r}, which is not a client count",
         )
+
+
+CLAUDE_OAUTH_ENV = "CLAUDE_CODE_OAUTH_TOKEN"
+"""The credential an unattended Claude Code run needs, read from the
+environment and NEVER handled by rite.
+
+⚠ **It must reach the engine by inheritance, never as an argument.** A
+pane inherits the environment of the process that asked for it, so a token
+already exported in the user's shell arrives with rite never holding the
+value, never writing it, and nothing to redact. The obvious alternative is
+the mechanism `MANAGER_ENV` already uses — `tmux new-session -e VAR=value`
+— and it is the wrong one here: that value lands on tmux's own argv, where
+`ps` shows it to every local account on the machine.
+
+§9.14.7 states the same rule as a compliance constraint: consume this
+variable from the environment only; never read, persist, log or transmit
+it.
+"""
+
+
+def token_is_absent() -> bool:
+    """Is there no usable Claude Code token in this environment?
+
+    Blank counts as absent — an exported-but-empty variable is how a
+    sourced env file fails, and treating it as present would send the user
+    to the credential-ambiguity message for a case with no ambiguity.
+    """
+    return not os.environ.get(CLAUDE_OAUTH_ENV, "").strip()
 
 
 # Shapes an engine prints when it cannot authenticate. Matched to DETECT,

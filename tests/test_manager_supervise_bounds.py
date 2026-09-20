@@ -272,15 +272,23 @@ class TestAFailedStartEndsTheRun:
 
 def test_the_engine_string_is_used_as_an_executable_name():
     """⚠ Pinned as a LIMIT, not a contract. There is no adapter: the engine
-    string is run as a command and `--resume` is Claude Code's spelling,
-    appended unconditionally. A local model has no session to resume and
-    this shape cannot express it — which is the point of leaving the
-    interface unstable until `local` forces it (§9.14.2, D-63)."""
-    assert launch_command("claude") == "claude"
-    assert launch_command("claude", "abc") == "claude --resume abc"
-    assert launch_command("", "") == "claude"
-    # The defect this pins: a non-Claude engine gets Claude's flag.
-    assert launch_command("some-other-engine", "id") == "some-other-engine --resume id"
+    string is run as a command, and BOTH flags on it are Claude Code's
+    spelling — `--resume` when there is a session to carry on, and `-p`
+    always, so the engine exits when its turn is done and `ending` can read
+    an exit status instead of inferring one. A local model has no session
+    to resume and this shape cannot express it — which is the point of
+    leaving the interface unstable until `local` forces it (§9.14.2,
+    D-63)."""
+    assert launch_command("claude") == "claude -p"
+    assert launch_command("claude", "abc") == "claude -p --resume abc"
+    assert launch_command("", "") == "claude -p"
+    # The defect this pins: a non-Claude engine gets Claude's flags. `-p`
+    # widens it from "only when resuming" to "every launch", which is a
+    # real cost and is why the config validator's closed engine list is
+    # what keeps it harmless today.
+    assert (
+        launch_command("some-other-engine", "id") == "some-other-engine -p --resume id"
+    )
 
 
 class TestAnUnrecognisedVerdictStops:

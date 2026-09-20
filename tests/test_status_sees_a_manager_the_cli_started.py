@@ -27,8 +27,10 @@ discover that the real producer builds a different one.
 So this test drives `_default_starter` — the function the CLI calls — and
 asks `rite status` what it sees. No mock, no hand-built record.
 
-⚠ `claude` is never launched here: the engine is `sleep`, and
-`launch_command` uses the engine string as the executable name.
+⚠ `claude` is never launched here: the engine is `sh`, and
+`launch_command` uses the engine string as the executable name — it
+also appends `-p`, which `sh` accepts and `sleep` did not, which is
+why this is not `sleep 120`.
 """
 
 from __future__ import annotations
@@ -78,7 +80,7 @@ def test_status_reports_a_manager_started_the_way_the_cli_starts_one():
         result = _default_starter(
             root,
             manager,
-            engine="sleep 120",
+            engine="sh",
             resume_id="",
             max_sessions=1,
             window_seconds=60,

@@ -89,7 +89,21 @@ def launch_command(engine: str, resume_id: str = "") -> str:
     for any engine that spells it differently and meaningless for one with
     no session to resume.
     """
-    base = engine or "claude"
+    # ⚠ **`-p` IS THE CYCLE BOUNDARY.** An interactive engine never exits,
+    # so a supervisor wanting cycles would have to infer one ended from
+    # something else — idleness, quiet output, a timer — and every one of
+    # those is a classifier over a signal that means other things too,
+    # which is the defect class `ending` spent this release shedding. With
+    # `-p` the engine's own exit IS the boundary, and `ending` already
+    # reads exit statuses for a living.
+    #
+    # It is appended unconditionally, for the same reason `--resume` is and
+    # with the same cost: this module has no registry and treats the engine
+    # string as an executable name (see the module docstring). `-p` is
+    # Claude Code's spelling. The config validator accepts only `claude`,
+    # `human` and `local:<class>` as engines, so the one engine this
+    # actually launches today is the one the flag is for.
+    base = f"{engine or 'claude'} -p"
     if resume_id:
         # ⚠ **REFUSES rather than escapes, and raises rather than drops the
         # flag.** This string is handed to `tmux new-session`, which runs it
