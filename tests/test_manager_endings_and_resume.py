@@ -70,6 +70,24 @@ class TestTheThreeEndings:
         )
         assert how.kind == FINISHED and how.resume
 
+    def test_an_absent_exit_status_is_UNCLEAR_not_zero(self, monkeypatch):
+        """⚠ Caught by Linux CI. A draft parsed an empty
+        `#{pane_dead_status}` as 0, so a tmux that does not populate it
+        turned every ending into a clean one — `exit 9` read as FINISHED and
+        would have been resumed. macOS filled the field and Linux did not,
+        which is the platform-vocabulary split that produced three defects
+        this week."""
+        import rite_ai.managers.session as session_mod
+
+        class Reply:
+            returncode = 0
+            stdout = "1|"
+
+        monkeypatch.setattr(session_mod.subprocess, "run", lambda *a, **k: Reply())
+        how = ending("any-session", human_was_present=False)
+        assert how.kind == UNCLEAR
+        assert not how.resume, "an unreadable exit status permitted a resume"
+
     @tmux_only
     def test_a_nonzero_exit_is_CRASHED_and_does_not_resume(self, project):
         result = start(project, "lead", command="sh", max_sessions=1)

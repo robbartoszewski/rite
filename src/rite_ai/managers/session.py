@@ -395,13 +395,29 @@ def ending(name: str, human_was_present: bool) -> Ending:
 
     raw = (done.stdout or "").strip().split("|")
     dead = raw[0] if raw else ""
-    try:
-        status = int(raw[1]) if len(raw) > 1 and raw[1] else 0
-    except ValueError:
-        status = 0
+    reported = raw[1] if len(raw) > 1 else ""
 
     if dead != "1":
         return Ending(UNCLEAR, detail="the pane is not dead")
+
+    # ⚠ AN ABSENT STATUS IS NOT ZERO. A draft parsed empty as 0, so a tmux
+    # that does not populate `#{pane_dead_status}` turned every ending into
+    # a clean one — and `exit 9` read as FINISHED and would have been
+    # resumed. Caught by Linux CI, where that field came back empty while
+    # macOS filled it: the same platform-vocabulary split that produced
+    # three defects this week. Unreadable means unclear, which does not
+    # resume.
+    try:
+        status = int(reported)
+    except ValueError:
+        return Ending(
+            UNCLEAR,
+            detail=(
+                "the pane is dead but tmux reported no exit status "
+                f"({reported!r}), so whether it finished or failed is unknown"
+            ),
+        )
+
     if status != 0:
         return Ending(
             CRASHED,
