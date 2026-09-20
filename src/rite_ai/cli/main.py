@@ -3592,14 +3592,26 @@ def schedule_show() -> None:
     Examples:
       rite schedule show
     """
+    from rite_ai.schedule import resolve_zone
+
     _, config = _load_config_for_write()
     sched = config.schedule
-    click.echo(f"timezone: {sched.timezone or '(not set)'}")
+    # ⚠ `describe()`, not the raw field. The field is empty when the zone
+    # is machine-local, so printing it said "(not set)" about a schedule
+    # that is very much on a clock — the silent-wrong-clock D-48 was
+    # written against, in the one command whose whole job is to say which
+    # clock. `rite start` already prints this; this did not.
+    click.echo(resolve_zone(sched.timezone).describe())
     if not sched.windows:
         click.echo("no windows configured")
         return
     for w in sched.windows:
-        click.echo(f"  {w.hours}  workers={w.workers}")
+        # ⚠ `days` was never printed. A window that applies Mon-Fri and one
+        # that applies Sat-Sun rendered identically, so a user refused on a
+        # Saturday saw two windows and could not tell which one refused
+        # them — and `start_worker`'s refusal points them at THIS command.
+        days = w.days.strip() if w.days else "every day"
+        click.echo(f"  {days:<10} {w.hours}  workers={w.workers}")
 
 
 @schedule.command("set")
