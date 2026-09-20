@@ -27,6 +27,7 @@ from pathlib import Path
 
 from rite_ai.label import project_slug
 from rite_ai.managers import (
+    MANAGER_ENV,
     ManagerInstance,
     manager_dir,
     pid_alive,
@@ -260,6 +261,18 @@ def running(root: Path, manager: str) -> ManagerInstance | None:
     return instance
 
 
+def _rejected_the_flag(done: subprocess.CompletedProcess) -> bool:
+    """Whether tmux refused because it does not KNOW `-e`, not because the
+    session could not start.
+
+    Matched on tmux's own wording for an unknown option rather than on any
+    nonzero exit: falling back on every failure would retry a genuine
+    refusal without the identity and report success for it.
+    """
+    said = ((done.stderr or "") + (done.stdout or "")).lower()
+    return "unknown flag" in said or "unknown option" in said or "usage:" in said
+
+
 def start(
     root: Path,
     manager: str,
@@ -336,15 +349,39 @@ def start(
 
     manager_dir(root, manager).mkdir(parents=True, exist_ok=True)
     launch = command or engine or "claude"
+    # ⚠ **`cwd` stays the PROJECT ROOT and the identity travels separately.**
+    # The alternative considered was launching in `manager_dir` so a process
+    # could read its own name off `Path.cwd()`. That cwd is load-bearing: the
+    # prompt tells the Manager to "Read `.rite/`" as a relative path, `rite`
+    # walks UP from cwd for the project marker, and git resolves the worktree
+    # from it. Moving it would have traded a missing identity for three silent
+    # breakages, so the environment carries the name and cwd is left alone.
+    #
+    # `-e` needs tmux 3.2 (2021). Measured here on 3.7c and in CI on 3.4, but
+    # a hard failure on an older tmux would mean the Manager does not start AT
+    # ALL — losing the session to gain the name — so a refusal that names the
+    # flag falls back and says the identity is missing.
+    argv = [binary, "new-session", "-d", "-e", f"{MANAGER_ENV}={manager}"]
+    identified = True
     try:
         done = subprocess.run(
-            [binary, "new-session", "-d", "-s", name, launch],
+            [*argv, "-s", name, launch],
             capture_output=True,
             text=True,
             errors="replace",
             timeout=120,
             cwd=str(root),
         )
+        if done.returncode != 0 and _rejected_the_flag(done):
+            identified = False
+            done = subprocess.run(
+                [binary, "new-session", "-d", "-s", name, launch],
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=120,
+                cwd=str(root),
+            )
     except (OSError, subprocess.SubprocessError) as e:
         return StartResult(False, f"could not start a session: {e}")
     if done.returncode != 0:
@@ -386,9 +423,22 @@ def start(
         ),
     )
     attach = f"tmux attach -t {name}"
+    # Said, not swallowed. A Manager that cannot read its own name still
+    # works — `--manager` is explicit on every command that needs it — but
+    # the person who sees a journal entry refused for a missing default
+    # should already know why.
+    blind = (
+        ""
+        if identified
+        else (
+            f"\n  this tmux does not support `new-session -e` (3.2+), so the "
+            f"session cannot read {MANAGER_ENV} and commands inside it need "
+            f"`--manager {manager}` spelled out."
+        )
+    )
     return StartResult(
         True,
-        f"Manager '{manager}' started as {name}.\n  reach it with: {attach}",
+        f"Manager '{manager}' started as {name}.\n  reach it with: {attach}{blind}",
         session=name,
         attach=attach,
     )
