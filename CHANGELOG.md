@@ -2,6 +2,16 @@
 
 ## 0.5.1 (unreleased)
 
+### Telling a human quitting from an agent finishing is now measured, not reasoned
+
+A Manager session exits with status 0 whether the agent finished or a
+person typed `exit`, so rite asks tmux whether anybody was attached. That
+check shipped in v0.5.1's development with its TRUE direction unverified —
+no test harness could produce a genuinely attached client. It can now: a
+tmux pane is a real terminal, so attaching from inside one gives a real
+client on a real tty. Confirmed True while attached, False before and
+after.
+
 ### A project alias and a Manager can no longer silently be the same word
 
 `rite start <word>` matches Manager names before aliases, so an alias that

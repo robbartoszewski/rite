@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import subprocess
 import time
+import uuid
 from pathlib import Path
 
 import pytest
@@ -498,3 +499,66 @@ class TestTheStandDownIsBounded:
         and a session that vanished, which are rite's problems, not tmux's
         reticence."""
         _platform_supplied_a_status("any", how)
+
+
+@tmux_only
+def test_was_attached_is_TRUE_for_a_real_attached_client():
+    """⚠ **The branch that was reasoned rather than measured**, and the fix
+    that depends on it was incomplete until it was.
+
+    `was_attached` is what tells a human typing `exit` from an agent
+    finishing — both are exit status 0 — so if it never fired in practice a
+    human quitting would read as FINISHED and the supervisor would resume,
+    which is the exact behaviour it was added to stop. The FALSE direction
+    was confirmed early; every attempt at the TRUE one returned
+    `list-clients: (none)`, including a `pty.fork`, and it shipped with the
+    docstring saying so.
+
+    **A tmux PANE is a real terminal.** Attaching to the target from inside
+    another tmux session gives a genuine client on a genuine tty — which
+    `pty.fork` never managed — and `$TMUX` must be cleared in the pane or
+    tmux refuses the nested attach and the client silently never appears.
+    That refusal is what made the first version of this measurement report
+    `(none)` and look like another failure.
+
+    Measured: `/dev/ttys015 … (attached,focused,UTF-8)`, and True.
+    """
+    target = f"wa-target-{uuid.uuid4().hex[:6]}"
+    host = f"wa-host-{uuid.uuid4().hex[:6]}"
+
+    def tx(*args):
+        return subprocess.run(["tmux", *args], capture_output=True, text=True)
+
+    try:
+        tx("new-session", "-d", "-s", target, "sh")
+        time.sleep(0.5)
+        assert not was_attached(target), "nothing is attached yet"
+
+        tx("new-session", "-d", "-s", host, "sh")
+        time.sleep(0.5)
+        # `TMUX=` or tmux refuses to nest and no client ever appears.
+        tx("send-keys", "-t", host, f"TMUX= tmux attach -t {target}", "Enter")
+        for _ in range(20):
+            time.sleep(0.2)
+            if "attached" in tx("list-clients", "-t", target).stdout:
+                break
+        else:
+            pytest.skip(
+                "no client could be attached in this environment, so there "
+                "is nothing of rite's to assert — `was_attached`'s FALSE "
+                "direction is covered by the tests above"
+            )
+
+        assert was_attached(target) is True, (
+            "a real attached client on a real tty read as nobody there — a "
+            "human typing `exit` would be resumed over"
+        )
+        tx("send-keys", "-t", host, "C-b", "d")
+        for _ in range(15):
+            time.sleep(0.2)
+            if not was_attached(target):
+                break
+        assert not was_attached(target), "it stayed True after the client left"
+    finally:
+        tx("kill-session", "-t", target)
+        tx("kill-session", "-t", host)

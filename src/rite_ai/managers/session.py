@@ -489,24 +489,24 @@ def was_attached(name: str) -> bool:
     supervisor records whether anybody was EVER attached during a session,
     which is the question `ending` needs.
 
-    ⚠ **UNVERIFIED IN THE TRUE DIRECTION.** The query works and returns `0`
-    correctly for an unattached session, confirmed. Nothing has observed it
-    return True, because creating a genuinely attached client needs a real
-    terminal and every attempt from a test harness — including a `pty.fork`
-    — produced `list-clients: (none)`. So the FALSE branch is measured and
-    the TRUE branch is reasoned.
+    ⚠ **BOTH DIRECTIONS ARE NOW MEASURED.** This shipped saying the TRUE
+    one was reasoned rather than observed: every attempt to create a
+    genuinely attached client returned `list-clients: (none)`, a `pty.fork`
+    included, and the docstring said so rather than implying otherwise.
 
-    **That matters because this signal is load-bearing.** It is what tells
-    a human typing `exit` apart from an agent finishing, and both produce
-    exit status 0. If it never fires in practice, a human quitting reads as
-    FINISHED and the supervisor resumes — the exact behaviour it was added
-    to stop. The transcript check in `supervise` catches the case where no
-    transcript exists, which is defence in depth and NOT a substitute: a
-    real provider session leaves a transcript, so that backstop would not
-    fire where it is most needed.
+    That mattered because the signal is load-bearing. It is what tells a
+    human typing `exit` from an agent finishing — both are exit status 0 —
+    so had it never fired in practice, a human quitting would read as
+    FINISHED and the supervisor would resume, the exact behaviour it was
+    added to stop.
 
-    **Verify this on a real terminal before trusting it**, and treat the
-    fix as incomplete until somebody has.
+    **A tmux PANE is a real terminal**, which is what `pty.fork` never
+    managed to be. Attaching from inside another tmux session produces a
+    real client on a real tty — measured: `/dev/ttys015 …
+    (attached,focused,UTF-8)`, and True; False before it and False after it
+    detaches. `$TMUX` must be cleared in that pane or tmux refuses the
+    nested attach and the client silently never appears, which is what made
+    the first measurement look like another failure.
     """
     binary = _tmux()
     if binary is None:
