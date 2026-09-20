@@ -1,12 +1,19 @@
 # Changelog
 
-## 0.5.0 (2026-09-20)
+## 0.5.1 (unreleased)
 
-**The headline, stated so it cannot be read as more than it is: rite now
-watches the queue and says why it is stopped. It still does not start
-sessions.** Every Worker begins because a human, or a Manager session a human
-is sitting with, typed a command. The gap this release closes is *"nobody
-noticed the run had stalled"*, not *"nobody is doing the work"*.
+**Why this release exists, stated plainly: v0.5.0 shipped a schedule that
+looks enforced and is not.** A user opens `config.yaml`, sees windows and
+worker counts, and has no way to discover that `rite sandbox start` ignores
+them — and v0.5.0's changelog says nothing, because the entry explaining it
+was written after the tag. That is the silent-wrong-belief defect v0.5.0's
+own notes are largely about, shipped inside the release that files it. It is
+the reason this is prompt rather than convenient.
+
+v0.5.0 was tagged against its release FINDINGS rather than against its
+assigned feature scope. `rite start <name>` and the refined schedule were
+both in scope and neither was in the tag. The schedule half is corrected
+here; `rite start <name>` is being planned and reviewed before it is built.
 
 ### Enhancements
 
@@ -27,14 +34,15 @@ schedule:
     - {days: "Sat-Sun", hours: "00:00-23:59", workers: 0}
 ```
 
-⚠ **The schedule was ADVISORY before this release, and if you set one and
-believed it was enforced, it was not.** `workers_at` was correct and was
+⚠ **The schedule was ADVISORY in v0.5.0 and every release before it. If
+you configured one and believed it was enforced, it was not — including in
+v0.5.0, which shipped this very paragraph's absence.** `workers_at` was correct and was
 read by the loop's verdict and the scheduler tick; `rite sandbox start`
 checked the flat `sandbox.max_concurrent_workers` and never consulted it. So
 a project configured for zero Workers at the weekend started one anyway
 whenever anything asked, while `rite loop status` reported `closed` — the
 schedule allows nobody — about a Worker that was running. Two true sentences
-that disagreed. `start_worker` now refuses outside the window and names when
+that disagreed. From 0.5.1 `start_worker` refuses outside the window and names when
 it next opens.
 
 **`schedule.timezone` is now optional and defaults to the machine's own
@@ -51,6 +59,30 @@ the first time a colleague's fleet runs on a different schedule from yours.
 **Time not covered by any window is zero Workers**, not the flat cap and not
 unbounded. Unchanged behaviour, documented because it is the value most
 projects meet first and never configure.
+
+
+### Notes for existing projects
+
+**Nothing you configured changes meaning.** A `schedule.windows` entry with
+no `days` still means every day, and a project with no schedule is
+unaffected — `workers_at` returns 0 for an empty schedule, so the new
+refusal is skipped rather than refusing everything.
+
+**One behaviour does change, deliberately.** `rite sandbox start` now
+refuses outside a configured window where it previously started a Worker. If
+you have a schedule and have been relying on starts working at any hour,
+that is the change to know about — and the refusal names when the window
+next opens.
+
+## 0.5.0 (2026-09-20)
+
+**The headline, stated so it cannot be read as more than it is: rite now
+watches the queue and says why it is stopped. It still does not start
+sessions.** Every Worker begins because a human, or a Manager session a human
+is sitting with, typed a command. The gap this release closes is *"nobody
+noticed the run had stalled"*, not *"nobody is doing the work"*.
+
+### Enhancements
 
 - **`rite loop` watches the queue and names why it is not moving.** A cycle
   reads the schedule, every Worker's checkout, the claim ledger and the board,

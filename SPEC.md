@@ -4629,6 +4629,85 @@ the same mistake as freezing the state layer against git alone.
 §9.14.2's instability ends when `local` lands, not when the second adapter
 lands.
 
+#### 9.14.9. The shape settled (2026-09-20), and what it overturns
+
+**Three questions this section left open have been answered, and the answers
+change the section rather than completing it.** Recorded together because
+they interlock: each one is what makes the next affordable.
+
+**1. A provider is a Manager ATTRIBUTE, not a command argument.** D-72 is
+resolved in favour of what `src/rite_ai/local/` already built: `engine` is a
+field on a Manager, and a project may run several Managers on different
+engines at once. **§9.14's original model — one command argument selecting
+the project's single Manager session — is withdrawn.** It was written
+without knowledge of the built design, and §9.14.7b recorded that as the
+largest unresolved finding; this is its resolution.
+
+**2. `rite start <name>` names a MANAGER.** Not a provider, not a directory,
+not a registry alias. D-71's ambiguity narrows but does not vanish: §8.9's
+`rite start <alias>` and §9.10's `rite start <dir>` still exist, so the
+resolution order must be stated and a Manager name that collides with a
+registered alias must be refused at registration rather than resolved by
+precedence.
+
+**3. Identity comes from the name, and the per-Manager directory follows.**
+§9.14.5 and D-77 recorded that the boundary property was blocked on a
+per-process Manager identity that `.rite/machine` could not supply. **A
+Manager started as `rite start planner` knows it is `planner`** — the
+identity is the argument, which is why questions 2 and 3 are one decision.
+Each Manager gets its own subdirectory inside the single project root, so
+§5.4's containment property becomes statable: the boundary is
+`<root>/.rite/managers/<name>/`, and everything in §5.4.6's "shared by
+accident" list moves under it.
+
+⚠ **This CONFLICTS with `docs/design/V060_MULTI_MANAGER.md`, which records
+the opposite shape and attributes it to the same source.** That document says
+"separate roots per Manager, coordinating through the shared state layer —
+each Manager owns its own project root and its own `.rite/`", and rejects a
+shared `.rite/` by name: "a second protocol that has to be kept in agreement
+with the first, and the two would drift." It calls that **the load-bearing
+decision**.
+
+The two were written a day apart, neither cites the other, and this
+paragraph was written without knowledge of that one — which is the defect
+this document keeps recording, now committed inside its own resolution of it.
+
+**Not resolved here, because it is not a drafting question.** One root with
+per-Manager subdirectories and separate roots over the state layer are
+different coordination models with different failure modes, and picking one
+by which paragraph was edited last would be the worst available method. **It
+must be settled before anything builds a per-Manager path**, because the two
+answers do not differ by a relocation: under separate roots,
+`<root>/.rite/managers/<name>/` is not moved later, it is discarded.
+
+**4. Profiles are shared; instances are per-user.** A Manager's *profile* —
+its engine, duties, model — is committed config, because a team agrees on
+what a `planner` is. A Manager's *instance* — that this machine's user is
+running one, and its runtime state — lives in `.rite/user/` and is not
+committed, because it is meaningful only on the machine that wrote it. This
+is the same line `.rite/` already draws (§8.x) applied one level down, and it
+is what keeps a shared `config.yaml` from claiming a Manager is running on
+somebody else's laptop.
+
+**5. Dispatch is 0/1/2+, and each case behaves differently on purpose.**
+
+| Managers configured | `rite start` with no name | Why |
+|---|---|---|
+| 0 | **fails** | There is nothing to start, and starting a default would invent a configuration the user did not write |
+| 1 | **works bare** | The common case, and requiring a name to state the obvious is ceremony |
+| 2+ | **refuses, and LISTS them** | Picking one would be a guess, and a guess about which engine spends which quota is not a guess worth making |
+
+⚠ **The 2+ case must list the names, not merely refuse.** A refusal that says
+"several Managers are configured" and stops leaves the user running `rite
+doctor` to find out what they could have typed. This is the same rule
+§9.14.0's duplicate refusal follows: a refusal that names the remedy is a
+different thing from one that only says no.
+
+⚠ **What this does NOT resolve.** §9.14.6's narrowing stands — the lifecycle
+is the human's foreground process and an unattended overnight Manager is out
+of scope. The compliance contradiction in §9.14.7 stands. And §9.14.5's
+ceiling is still a count, because §2.6.1 has not changed.
+
 
 ## 10. Credentials
 
@@ -5145,13 +5224,15 @@ happened once already and left no trace until this review found it.
 | D-68 | Whether the budget ceiling may have a default | **No — refused rather than defaulted, and "not applicable" is a distinct answer from "unlimited"** | Silently choosing a number the user did not choose is how `rite pool fill --count 500` became possible, and spent quota is the one damage no cleanup reverses (§5.1.1). A provider with no metered cost declares the ceiling inapplicable; that is a property of the provider, where "unlimited" is a decision nobody made. §9.14.5. |
 | D-69 | The unit of the mandatory ceiling | **A session-start COUNT plus a wall-clock window — never a spend figure** | §2.6.1: no file under `~/.claude/` exposes the quota and `/usage` is reachable only inside an interactive session; `budget` is machine-wide and states per-project attribution is unavailable; D-38 forbids the path from measurement back to control. A ceiling checked against spend is a check that cannot run, and §9.11 forbids reporting that as a pass. §9.14.5. |
 | D-70 | What the lifecycle does on the `closed` verdict | **Stops** | The schedule authorising zero Workers is the user saying "not now". The loop sleeps through it by design (§2.7.3), so a lifecycle that merely followed the loop would keep a Manager session spending through the hours the user told rite to be idle. Missing from the first draft, found independently by both review rounds. §9.14.4. |
-| D-71 | The command name `rite start <provider>` | **NOT settled — the positional is already taken twice and the choice is the owner's** | §8.9 defines `rite start <alias>` against the Dispatch registry and §9.10 defines `rite start [<dir>]`, so `rite start local` is ambiguous and nothing reserves provider names. A flag, a subcommand, or enforced reserved names — recorded as open rather than picked, because a plan that assumes the bare positional has not read §8.9. §9.14.7a. |
-| D-72 | Whether a provider is a command argument or a Manager attribute | **UNRESOLVED — and it blocks the implementation plan** | §9.14 models a provider as an argument selecting the project's one Manager session. The built design makes `engine` a field on `ManagerRole` and presets three Managers running CONCURRENTLY (`lead`=claude, `planner`=local:large, `executor`=local:small). The two are different designs; §9.14 picked the first without knowing the second existed. It also voids §9.14.0's one-Manager-per-project rule, which is what pays for the D-50 amendment. §9.14.7b. |
+| D-71 | What `rite start <name>` names | **A MANAGER — settled 2026-09-20** | Not a provider, not a directory, not a registry alias. §8.9's `rite start <alias>` and §9.10's `rite start <dir>` still exist, so the resolution order must be stated and a Manager name colliding with a registered alias is refused AT REGISTRATION rather than resolved by precedence — a precedence rule is a silent winner. §9.14.9. |
+| D-72 | Whether a provider is a command argument or a Manager attribute | **A Manager ATTRIBUTE — settled 2026-09-20, in favour of what `local/` already built** | `engine` is a field on a Manager and a project may run several on different engines at once, so §9.14's original model — one argument selecting the project's single Manager — is withdrawn. It was written without knowledge of the built design; §9.14.7b recorded that as the largest unresolved finding and this resolves it. §9.14.9. |
 | D-73 | Whether the session or the resumer dies with the terminal | **The SESSION may outlive it; the RESUMER may not** | Review found the two requirements denying each other: §9.14.3 needs a session that survives detaching, §9.14.6 said nothing outlives the terminal, and tmux — rite's only persistence — is detached by construction. They separate: a session the human started continuing is what §9.12 already permits (`rite sandbox start` leaves one running); what §9.12 forbids is an unattended START, so it is the resumer that must die. §9.14.6. |
 | D-74 | How the one-Manager refusal establishes liveness | **Fail CLOSED, against the INNER PROCESS, with the remedy printed** | The mechanism nearest to hand is tmux `has-session`, which answers "does a session exist" rather than "is the command running" — the facade fixed twice in one night in `loop.start` and `pool.fill` — and it returns false when tmux is missing or times out, so an unanswerable check would permit two PAID sessions. §5.1.1: a safety property may fail closed, never open. The remedy must be printed because this design's ordinary exit is an ungraceful terminal close, so a stale marker is the common morning state. Raised by a peer session at the stage where it is still free to fix. §9.14.0. |
 | D-75 | What rite may refuse a user | **Three cases, not two: an ACCIDENT rite makes impossible; a choice CONTRADICTING an earlier choice of the user's own, where rite honours the earlier one and refuses; and a free choice, whose cost rite makes visible and never refuses** | The two-case form was drafted first and review falsified it on rite's own behaviour: `rite pool fill --count 500` is typed explicitly, so the dichotomy calls it a choice and says never refuse — and rite refuses. The third case is what it was hiding, and it is not paternalism: refusing `--count 500` honours `sandbox.max_concurrent_workers`, a number the user wrote down, and clamping would be the paternalistic option because it substitutes rite's number while appearing to comply. §5.0. |
 | D-76 | Whether a Manager is sandboxed | **No — containment comes from what it is PERMITTED to do, not from where it runs** | Three independent reasons: it needs broad project access by its nature, it must be attachable by a human (§9.14.3), and macOS may refuse a sandbox inside a sandbox — which would leave a sandboxed Manager structurally unable to start sandboxed Workers, the one thing it exists to do. yoloAI is the WORKER RUNTIME and sits on a different axis from `claude`/`cursor`/`local`, which are Manager engines; conflating them produces the reasonable-sounding and wrong conclusion that a Manager should be sandboxed like a Worker. §5.4. |
-| D-77 | What blocks the Manager boundary property | **A per-process Manager IDENTITY, which does not exist — and it must land before any per-Manager path scoping** | Review falsified the draft property "nothing outside the acting Manager's own directory": `.rite/` is flat, roughly twenty per-project state paths are shared and exactly one is keyed by identity, four more live in `~/.rite/` outside the project entirely — and `this_manager` returns the FIRST LINE of `.rite/machine`, with no `RITE_MANAGER` anywhere, so a process cannot answer which Manager it is. `Claim` has no manager field either, so the ledger cannot express "my own claims". Order: identity, then relocate state, then the property — scoped to rite's own state, never to project files, since a Manager writes and commits those by design. §5.4.5. |
+| D-77 | What blocks the Manager boundary property | **UNBLOCKED 2026-09-20: identity is the name you started with** | A Manager started as `rite start planner` knows it is `planner`, so the identity `.rite/machine` could not supply arrives as the argument — which is why D-71 and D-77 are one decision. Each Manager gets its own subdirectory in the single project root, so §5.4's boundary becomes statable as `<root>/.rite/managers/<name>/`, and §5.4.6's shared-by-accident list moves under it. Profiles stay committed; instances live in `.rite/user/`, uncommitted, because a shared config must not claim a Manager is running on somebody else's laptop. §9.14.9. |
+| D-78 | `rite start` with no name, by Manager count | **0 fails, 1 works bare, 2+ refuses AND LISTS them** | Starting a default where none is configured invents a configuration the user did not write; requiring a name where there is one Manager is ceremony; picking among several is a guess about which engine spends which quota. The 2+ case must print the names — a refusal that says "several are configured" and stops sends the user to `rite doctor` to learn what they could have typed. §9.14.9. |
+| D-79 | One root with per-Manager subdirectories, or separate roots per Manager | **CONFLICTED — two recorded designs, both attributed to the owner, neither citing the other. Blocks any per-Manager path work** | §9.14.9 adopts subdirectories under one root; `docs/design/V060_MULTI_MANAGER.md` adopts separate roots coordinating over the state layer and rejects a shared `.rite/` as "a second protocol... the two would drift", calling that the load-bearing decision. Written a day apart in mutual ignorance. The answers do not differ by a relocation: under separate roots the subdirectory is discarded, not moved, so building either costs the other. §9.14.9. |
 
 ---
 
