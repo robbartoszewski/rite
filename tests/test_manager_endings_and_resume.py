@@ -14,6 +14,7 @@ worked, which is this week's recurring shape.
 
 from __future__ import annotations
 
+import json
 import subprocess
 import time
 import uuid
@@ -28,9 +29,11 @@ from rite_ai.managers.session import (
     QUIT,
     STATUS_READS,
     UNCLEAR,
+    Attachment,
     Ending,
     Liveness,
     StartResult,
+    Stopped,
     ending,
     exit_status_available,
     liveness,
@@ -433,10 +436,20 @@ class TestTheStatusArrivesAfterTheDeath:
         # known to exist. Stubbed rather than scripted so the read counts
         # below stay about the status polling and nothing else.
         monkeypatch.setattr(session_mod, "session_exists", lambda _n: True)
-        # `ending` now asks `was_attached` itself rather than trusting only
-        # the sampled flag, which is another subprocess call; stubbed so the
-        # read counts below stay about the status polling.
-        monkeypatch.setattr(session_mod, "was_attached", lambda _n: False)
+        # `ending` asks the attachment question itself rather than trusting
+        # only the sampled flag, and that is another subprocess call on the
+        # same `display-message`; answered here so the read counts below
+        # stay about the status polling.
+        #
+        # ⚠ Stubbed as a KNOWN "nobody", not left to the scripted replies.
+        # `fake_run` answers every call with the same canned string, so the
+        # attachment probe used to receive `1|0` and parse it as False —
+        # and the test passed through a mis-parse. Now that an unreadable
+        # count is `known=False`, that shows up as `unclear`, which is the
+        # probe being honest rather than this test's subject changing.
+        monkeypatch.setattr(
+            session_mod, "attachment", lambda _n: Attachment(False, known=True)
+        )
         return seen
 
     def test_a_status_that_arrives_late_is_waited_for(self, monkeypatch):
@@ -724,3 +737,256 @@ class TestEndingAsksAboutTheManagersOwnPane:
             subprocess.run(
                 ["tmux", "kill-session", "-t", made.session], capture_output=True
             )
+
+
+@tmux_only
+@reports_exit_status
+class TestTheSecondCycleActuallyStarts:
+    """⚠ **REAL tmux, REAL starter, two cycles.** The reason the resume path
+    shipped unable to run is that every multi-cycle test above injects
+    `starter`, so `tmux new-session` was never called a SECOND time anywhere
+    in the suite — and the failure is entirely in the second call.
+
+    Measured before the fix: cycle 1 ended FINISHED, `resume_from` was the
+    right id, and cycle 2 died on `duplicate session:
+    rite-mgr-<project>-lead`. `start` sets `remain-on-exit on` so the exit
+    status survives for `ending` to read (§9.14.4) — which keeps the dead
+    session ALIVE under the name the next cycle needs, because
+    `session_name` is deterministic. The two halves of this release were
+    mutually exclusive:
+
+        remain-on-exit on   -> FINISHED is reachable, the name is taken
+        remain-on-exit off  -> the name is free, ending() is always UNCLEAR
+
+    So a test that fakes the starter cannot close this, and neither can one
+    that tears the session down itself before the second `start` — that is
+    the test supplying the step production was missing.
+    """
+
+    def _agent(self, tmp_path: Path) -> Path:
+        """Exits cleanly, unattended, after outliving `settled_alive`."""
+        agent = tmp_path / "agent.sh"
+        agent.write_text("#!/bin/sh\nsleep 3\nexit 0\n")
+        agent.chmod(0o755)
+        return agent
+
+    def _transcripts(self, monkeypatch, root: Path, tmp_path: Path) -> None:
+        """A transcript newer than every cycle, so the id is never the
+        reason a cycle does not start."""
+        import rite_ai.managers.transcripts as transcripts_mod
+
+        base = tmp_path / "transcripts"
+        directory = project_transcript_dir(root, base)
+        directory.mkdir(parents=True)
+        written = directory / f"{uuid.uuid4()}.jsonl"
+        written.write_text(json.dumps({"sessionId": written.stem}) + "\n")
+        import os
+
+        later = time.time() + 3600
+        os.utime(written, (later, later))
+        monkeypatch.setattr(
+            transcripts_mod, "default_transcripts_dir", lambda: base
+        )
+
+    def test_a_second_cycle_starts_instead_of_colliding_with_the_first(
+        self, project, tmp_path, monkeypatch
+    ):
+        from rite_ai.managers.session import session_name, stop
+
+        self._transcripts(monkeypatch, project, tmp_path)
+        name = session_name(project, "lead")
+        stop(name)
+        try:
+            result = supervise(
+                project,
+                "lead",
+                engine=str(self._agent(tmp_path)),
+                max_sessions=2,
+                window_seconds=0,
+                poll=0.3,
+            )
+        finally:
+            stop(name)
+
+        assert len(result.cycles) == 2, (
+            f"only {len(result.cycles)} cycle(s) ran and the supervisor said "
+            f"{result.reason!r}. A resume that cannot take the session name "
+            f"back is a resume that never happens."
+        )
+        assert "duplicate session" not in result.reason, result.reason
+        assert result.cycles[0].resumed_from == ""
+        assert result.cycles[1].resumed_from, (
+            "cycle 2 started without an id, so it began a FRESH context"
+        )
+        assert result.ok, result.reason
+
+
+class TestTheDefaultResumeIdIsCalled:
+    """⚠ **The default itself, not an injected stand-in.**
+
+    Every other supervisor test passes `resume_id_for`, so
+    `_default_resume_id` had no test that ran it: replacing its body with
+    `return ""` — the regression its own docstring recounts, where every
+    "resume" ran a bare `claude` with a fresh context — left the whole
+    suite green. An injectable whose default is never exercised is the
+    uncalled function that docstring is about, one layer up.
+
+    `starter` is still faked here because tmux is not the subject and this
+    must run everywhere;
+    `TestTheSecondCycleActuallyStarts` covers the same default against real
+    tmux and skips where tmux cannot report a status, which is exactly
+    where this one still has to work.
+    """
+
+    def _transcript(self, monkeypatch, root: Path, tmp_path: Path, sid: str) -> None:
+        import os
+
+        import rite_ai.managers.transcripts as transcripts_mod
+
+        base = tmp_path / "transcripts"
+        directory = project_transcript_dir(root, base)
+        directory.mkdir(parents=True)
+        written = directory / f"{sid}.jsonl"
+        written.write_text(json.dumps({"sessionId": sid}) + "\n")
+        later = time.time() + 3600
+        os.utime(written, (later, later))
+        monkeypatch.setattr(transcripts_mod, "default_transcripts_dir", lambda: base)
+
+    def _run(self, project, monkeypatch, seen):
+        def starter(root, manager, *, engine, resume_id, max_sessions, window_seconds):
+            seen.append(resume_id)
+            return StartResult(True, "ok", session=f"s{len(seen)}")
+
+        monkeypatch.setattr(
+            supervise_mod, "liveness", lambda _n: Liveness(False, known=True)
+        )
+        monkeypatch.setattr(supervise_mod, "was_attached", lambda _n: False)
+        monkeypatch.setattr(
+            supervise_mod,
+            "ending",
+            lambda _n, human_was_present, pane="": Ending(FINISHED),
+        )
+        monkeypatch.setattr(
+            supervise_mod, "stop_session", lambda _s: Stopped(True, True)
+        )
+        monkeypatch.setattr(supervise_mod, "forget_instance", lambda _r, _m: None)
+        return supervise(
+            project,
+            "lead",
+            engine="claude",
+            max_sessions=3,
+            window_seconds=0,
+            starter=starter,
+            poll=0,
+        )
+
+    def test_the_id_reaches_the_starter_without_being_injected(
+        self, project, tmp_path, monkeypatch
+    ):
+        sid = "07719abc-1ecf-443d-a4a0-f9a9ae6cd314"
+        self._transcript(monkeypatch, project, tmp_path, sid)
+        seen: list[str] = []
+        self._run(project, monkeypatch, seen)
+        assert seen == ["", sid, sid], (
+            "cycle 2 did not receive the id `_default_resume_id` reads from "
+            "the transcript — every later cycle would start a FRESH context"
+        )
+
+    def test_a_transcript_whose_id_is_hostile_stops_rather_than_resuming(
+        self, project, tmp_path, monkeypatch
+    ):
+        """A `sessionId` that is not shaped like one is not an id, so there
+        is nothing to resume — and the supervisor stops rather than
+        silently starting a fresh context or building a shell command out
+        of it."""
+        import os
+
+        import rite_ai.managers.transcripts as transcripts_mod
+
+        base = tmp_path / "transcripts"
+        directory = project_transcript_dir(project, base)
+        directory.mkdir(parents=True)
+        written = directory / "stray.jsonl"
+        written.write_text(json.dumps({"sessionId": "abc$(touch owned)"}) + "\n")
+        later = time.time() + 3600
+        os.utime(written, (later, later))
+        monkeypatch.setattr(transcripts_mod, "default_transcripts_dir", lambda: base)
+
+        seen: list[str] = []
+        result = self._run(project, monkeypatch, seen)
+        assert seen == [""], seen
+        assert "no transcript was found to resume from" in result.reason
+        assert not (Path.cwd() / "owned").exists()
+
+
+class TestAnUnanswerableAttachmentDoesNotResume:
+    """⚠ **The `liveness()` bug, in the other signal of the same module.**
+
+    A clean exit is QUIT if somebody was attached and FINISHED if nobody
+    was — the same exit status either way, so the attachment probe IS the
+    distinction. It used to answer a bare False for every way of failing:
+    tmux missing, a timeout, a refusal, an unreadable reply. False means
+    FINISHED, and FINISHED is the one verdict that RESUMES — so a probe
+    that merely could not run restarted the session a human had just quit,
+    which is the behaviour the probe was added to prevent.
+
+    `Ending`'s own docstring is the rule this enforces: **`resume` is False
+    whenever the answer is not certain.**
+    """
+
+    @pytest.mark.parametrize(
+        "why",
+        [
+            "tmux not found",
+            "tmux refused: server exited unexpectedly",
+            "tmux answered '', which is not a client count",
+        ],
+    )
+    def test_a_probe_that_could_not_answer_is_UNCLEAR_not_FINISHED(
+        self, monkeypatch, why
+    ):
+        how = _clean_exit_ending(
+            monkeypatch, Attachment(False, known=False, detail=why)
+        )
+        assert how.kind == UNCLEAR, (
+            f"an unanswerable attachment probe landed on {how.kind}; "
+            "FINISHED would have resumed a session a human may have quit"
+        )
+        assert not how.resume
+        assert why in how.detail
+
+    def test_a_probe_that_answered_nobody_is_still_FINISHED(self, monkeypatch):
+        """The fix must not turn the ordinary case into a refusal — that
+        would stop every resume rather than the uncertain ones."""
+        how = _clean_exit_ending(monkeypatch, Attachment(False, known=True))
+        assert how.kind == FINISHED and how.resume, how.detail
+
+    def test_a_probe_that_answered_somebody_is_QUIT(self, monkeypatch):
+        how = _clean_exit_ending(monkeypatch, Attachment(True, known=True))
+        assert how.kind == QUIT, how.detail
+
+    def test_an_unanswerable_probe_is_QUIT_when_a_human_was_sampled(self, monkeypatch):
+        """The sampled flag is independent evidence and still decides."""
+        how = _clean_exit_ending(
+            monkeypatch,
+            Attachment(False, known=False, detail="x"),
+            human_was_present=True,
+        )
+        assert how.kind == QUIT, how.detail
+
+
+def _clean_exit_ending(monkeypatch, answer, human_was_present=False):
+    """Drive `ending` to its exit-status-0 branch with scripted tmux
+    replies, so the attachment question is the only thing that varies."""
+    import rite_ai.managers.session as session_mod
+
+    class _Reply:
+        returncode = 0
+        stdout = "1|0|"
+        stderr = ""
+
+    monkeypatch.setattr(session_mod, "_tmux", lambda: "/usr/bin/tmux")
+    monkeypatch.setattr(session_mod, "session_exists", lambda _n: True)
+    monkeypatch.setattr(session_mod.subprocess, "run", lambda *a, **k: _Reply())
+    monkeypatch.setattr(session_mod, "attachment", lambda _n: answer)
+    return session_mod.ending("mgr", human_was_present=human_was_present)

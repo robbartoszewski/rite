@@ -600,7 +600,14 @@ def ending(name: str, human_was_present: bool, pane: str = "") -> Ending:
             UNCLEAR,
             detail=(
                 "the pane is dead but tmux reported no exit status "
-                f"({reported!r}) within {STATUS_READS * STATUS_PAUSE:g}s, so "
+                # ⚠ READS, not seconds. `STATUS_READS * STATUS_PAUSE` is the
+                # sleeping only — it omits 30 subprocess round-trips, so the
+                # message said "within 3s" for a wait measured at 4.4s
+                # against an instant tmux and 10.9s at 0.2s per call. A
+                # number nobody measured, in the sentence a human reads to
+                # judge whether tmux is sick. Reads are what this loop
+                # actually counts.
+                f"({reported!r}) across {STATUS_READS} reads, so "
                 "whether it finished or failed is unknown"
             ),
         )
@@ -618,7 +625,23 @@ def ending(name: str, human_was_present: bool, pane: str = "") -> Ending:
     # client on a real tty. The information was available and discarded.
     # OR, not replace: the sampled flag answers "was anybody EVER there",
     # which this call cannot see, and this answers "is anybody there NOW".
-    if human_was_present or was_attached(name):
+    here = attachment(name)
+    if not here.known and not human_was_present:
+        # ⚠ **NOT "nobody was there".** The sampled flag says nobody was
+        # seen, and the live probe could not answer — so the one signal
+        # separating a human typing `exit` from an agent finishing is
+        # missing, and both produce this exact exit status. FINISHED would
+        # resume; refusing costs one command. §5.1.1: a safety property may
+        # fail closed, never open.
+        return Ending(
+            UNCLEAR,
+            detail=(
+                "it exited cleanly, but whether anybody was attached could "
+                f"not be determined ({here.detail}) — and a human typing "
+                "`exit` looks exactly like this"
+            ),
+        )
+    if human_was_present or here.attached:
         # A clean exit with somebody attached at some point. `exit` typed by
         # a human and an agent finishing are the SAME exit status, so this
         # cannot be told apart — and the safe reading is that the human
@@ -708,11 +731,50 @@ def was_attached(name: str) -> bool:
     nested attach and the client silently never appears, which is what made
     the first measurement look like another failure.
     """
+    return attachment(name).attached
+
+
+@dataclass(frozen=True)
+class Attachment:
+    """Whether a client is attached, and whether we could find out.
+
+    ⚠ **Three answers, for `Liveness`'s reason.** `was_attached` returned a
+    bare bool and answered False for *every* way of failing — tmux missing,
+    the session gone, a timeout, a refusal, an unparseable reply. In
+    `ending` that False is not neutral: it is the difference between QUIT
+    and FINISHED, and FINISHED is the one verdict that RESUMES. So a probe
+    that merely could not run restarted a session a human had quit, which
+    is the behaviour `was_attached` was added to prevent, reached through
+    its error path instead of its answer.
+
+    That is the same conflation as the original `liveness` bug — an
+    unanswerable question read as a confident negative — and `Ending`'s own
+    docstring already forbids it: **`resume` is False whenever the answer
+    is not certain.**
+    """
+
+    attached: bool
+    known: bool
+    detail: str = ""
+
+
+def attachment(name: str) -> Attachment:
+    """Is a client attached right now, and could we tell?
+
+    Every failure is `known=False` and carries why. The only real negative
+    is tmux answering with a number that is not positive.
+    """
     binary = _tmux()
     if binary is None:
-        return False
+        return Attachment(False, known=False, detail="tmux not found")
     if not session_exists(name):
-        return False
+        # Not "nobody is attached". `ending` establishes that the session
+        # exists before it asks, so a session that has since vanished means
+        # something changed underneath — and whether anybody was there when
+        # it did is exactly what cannot now be observed.
+        return Attachment(
+            False, known=False, detail=f"no session named {name} to ask about"
+        )
     try:
         done = subprocess.run(
             [binary, "display-message", "-p", "-t", name, "#{session_attached}"],
@@ -721,14 +783,22 @@ def was_attached(name: str) -> bool:
             errors="replace",
             timeout=30,
         )
-    except (OSError, subprocess.SubprocessError):
-        return False
+    except (OSError, subprocess.SubprocessError) as e:
+        return Attachment(False, known=False, detail=f"could not ask tmux: {e}")
     if done.returncode != 0:
-        return False
+        detail = (done.stderr or done.stdout or "").strip()[:200]
+        return Attachment(False, known=False, detail=f"tmux refused: {detail}")
+    raw = (done.stdout or "").strip()
     try:
-        return int((done.stdout or "0").strip()) > 0
+        return Attachment(int(raw) > 0, known=True)
     except ValueError:
-        return False
+        # ⚠ An empty or unreadable expansion is NOT zero. That parse is the
+        # `#{pane_dead_status}` defect in the other field of the same call.
+        return Attachment(
+            False,
+            known=False,
+            detail=f"tmux answered {raw!r}, which is not a client count",
+        )
 
 
 def _pane_id(name: str) -> str:

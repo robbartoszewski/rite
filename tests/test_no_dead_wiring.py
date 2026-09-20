@@ -53,6 +53,16 @@ UNCALLED_ON_PURPOSE = {
         "and a test asserts the naming rule against it — a private helper "
         "would move that assertion into a test of something else."
     ),
+    "attachment": (
+        "Called by `ending` and by `was_attached` in the same file. Public "
+        "because it is the three-valued answer — attached / not attached / "
+        "could not tell — that `ending` branches on, and the tests pin the "
+        "`known=False` cases by name: `was_attached` returns a bare bool "
+        "and cannot express the third, which is precisely the conflation "
+        "that made a failed probe read as FINISHED and resume a session a "
+        "human had quit. A private `_attachment` would put that distinction "
+        "back out of reach of the tests that exist to hold it."
+    ),
     "launch_command": (
         "Called by `_default_starter` in the same file. Public because it is "
         "the one place the engine string becomes a command line, and SPEC "

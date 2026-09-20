@@ -19,9 +19,53 @@ has to be replaced is a file rather than a line inside the supervisor
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from rite_ai.budget import default_transcripts_dir
+
+_SESSION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
+
+
+def session_id_problem(value: str) -> str:
+    """Why `value` cannot be a session id, or "" if it can.
+
+    ⚠ **This is what keeps a file's contents out of a shell.** The id is
+    read from a transcript's `sessionId` field and reaches
+    `tmux new-session` as part of a command string, which tmux runs through
+    `sh -c`. Measured before this existed: a `sessionId` of
+    `abc$(touch FILE)` created the file, and so did the backtick spelling —
+    the substitution ran before `claude` was even reached. Nothing between
+    the file and the shell looked at the value.
+
+    **A positive shape, not an escape routine.** Escaping is a claim about
+    every metacharacter of a shell nobody here chose; this says what a
+    session id is MADE OF and refuses everything else, so a spelling nobody
+    thought of is excluded by default rather than by enumeration.
+
+    ⚠ **The leading character is a rule of its own, and not about quoting.**
+    An id starting with `-` is read by the engine as a FLAG, so
+    `--resume -rf` is a different failure with the same cause: it never
+    reaches a shell and is still not an id.
+
+    **Observed rather than declared, and deliberately wider than the
+    observation.** Every one of 140 transcripts on the machine this was
+    written on carried a canonical 36-character lowercase UUID. The rule
+    admits any identifier token to that length instead, because pinning it
+    to a UUID would make rite stop resuming the day the provider changes
+    its id format — and the property actually needed is "cannot act in a
+    shell", which this delivers in full while surviving that change. The
+    measurement is recorded so a later reader can tighten it knowingly.
+    """
+    if not value:
+        return "it is empty"
+    if not _SESSION_ID.fullmatch(value):
+        return (
+            f"{value!r} is not shaped like a session id — letters, digits, "
+            "'-' and '_' only, starting with a letter or digit, at most 128 "
+            "characters"
+        )
+    return ""
 
 
 def project_transcript_dir(root: Path, base: Path | None = None) -> Path:
@@ -60,7 +104,13 @@ def latest_session_id(root: Path, since: float = 0.0, base: Path | None = None) 
     # against the file's own contents rather than trusted: a stray `.jsonl`
     # in that directory would otherwise become an id nobody can resume.
     stated = _stated_session_id(newest)
-    if stated:
+    # ⚠ A stated id that is not shaped like one is NOT an id. Returning it
+    # would put a transcript's contents into the shell `tmux new-session`
+    # runs (see `session_id_problem`); returning "" means the supervisor
+    # refuses to continue, which is this module's existing answer to "no id"
+    # and the safe one — a fresh context started silently is the failure
+    # this file exists to prevent.
+    if stated and not session_id_problem(stated):
         return stated
     return ""
 
