@@ -196,6 +196,75 @@ schedule in Europe/Warsaw (machine local)
   Sat-Sun    00:00-23:59  workers=0
 ```
 
+### Fixed: `rite status` said a session was gone when it could not know
+
+`rite status` reported a Manager whose process had ended as *"the session is
+gone"*. It checks the recorded pid and nothing else, and a dead pid does not
+prove the tmux session went with it — `remain-on-exit` keeps the session so
+its exit status and its conversation survive, which makes a session that is
+still there the COMMON case for a dead pid.
+
+Measured: `tmux ls` listed a session that `rite status` called gone, while
+`rite start` in that identical state called it *"left over from an earlier
+run … held open so its exit status could be read"*. Two commands, one
+session, contradictory words — and status is the one an operator reads
+first.
+
+It now says what the pid proves and names the rest as possible:
+
+```console
+recorded but not running: planner — the recorded process is gone. Its tmux
+session may still be left over, held open so its exit status could be read;
+`rite manager stop planner` clears it.
+```
+
+The wording is borrowed from `rite start`'s refusal rather than written
+fresh, because a third description of one state is how the first two came to
+disagree. `rite status` still spawns no process — it is the command run most
+often — so it cannot ask tmux, and the honest report of a question it may not
+ask is the uncertain one plus the command that settles it.
+
+### Talking to a running Manager: attach with `tmux attach`
+
+`rite status` prints the command:
+
+```console
+managers:
+  planner: running as rite-mgr-acme-73053d-planner — tmux attach -t rite-mgr-acme-73053d-planner
+```
+
+Measured end to end against real tmux: typing in the pane works, and a
+Manager you `exit` yourself is **not** restarted — the supervisor sees that
+somebody was attached, calls the ending a quit rather than a finish, and
+says so. Reaching `--minutes` while you are attached does not evict you
+either: the session stays up and you keep typing, because a ceiling is an
+accounting limit rather than a stop.
+
+⚠ **If you already live in tmux, `tmux attach` refuses to nest.** Clear the
+variable for that one command:
+
+```console
+TMUX= tmux attach -t rite-mgr-acme-73053d-planner
+```
+
+This is tmux's own behaviour, not rite's, but it is the first thing an
+operator who works inside tmux will hit.
+
+### Known: a journal entry does not record who wrote it
+
+A Manager session carries `RITE_MANAGER`, and `--manager` defaults to it, so
+anything run in that pane files under that Manager — **including what you
+type yourself while attached.** An entry a human wrote is indistinguishable
+from one the Manager wrote: the file has anchor, observed, expected and
+inferred, and no author field.
+
+Filing on a Manager's behalf is a real case and is why `--manager` became
+optional, so this is not simply a bug. But the journal exists as evidence
+about how rite is working, and *who noticed something* is load-bearing in
+evidence — a human's note carrying a Manager's authority is the wrong
+direction for that to fail. Recorded rather than fixed: the entry format is
+already marked beta and will change.
+
 ### Fixed: an anchor of invisible characters is no longer an anchor
 
 `str.strip()` removes Python-whitespace only, so U+200B ZERO WIDTH SPACE,

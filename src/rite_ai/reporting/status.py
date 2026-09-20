@@ -397,9 +397,36 @@ def _manager_lines(root: Path) -> list[str]:
         else:
             stale.append(instance.name)
     if stale:
+        # ⚠ **It said "the session is gone", and it cannot know that.**
+        # `pid_alive` answers about the recorded PROCESS. `remain-on-exit`
+        # keeps a tmux session after its command ends — on purpose, so the
+        # exit status and the conversation survive — so the common case for
+        # a dead pid is a session that is still there. Measured: `tmux ls`
+        # listed a session that this line called gone, while `session.start`
+        # in the same state called it "left over ... held open".
+        #
+        # The `pid=0` class: not a wrong lookup, a wrong claim about what
+        # the lookup proves. Fixed as WORDING because `collect_status` may
+        # not spawn a process (`test_it_does_not_spawn_a_process`), so this
+        # cannot ask tmux — and the honest report of a question it may not
+        # ask is the uncertain one, plus the command that settles it.
+        #
+        # Vocabulary borrowed from `session.start`'s refusal rather than
+        # invented: a third description of one state drifts from the other
+        # two, which is how these two came to disagree.
+        names = sorted(stale)
+        how = (
+            f"rite manager stop {names[0]}"
+            if len(names) == 1
+            # Naming one of several tells the reader to clear that one and
+            # says nothing about the rest.
+            else "rite manager stop <name>"
+        )
         live.append(
-            f"  recorded but not running: {', '.join(sorted(stale))} "
-            "— the session is gone; the record is not"
+            f"  recorded but not running: {', '.join(names)} — the "
+            f"recorded process is gone. Its tmux session may still be left "
+            f"over, held open so its exit status could be read; "
+            f"`{how}` clears it."
         )
     return live
 
