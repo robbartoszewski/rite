@@ -208,6 +208,55 @@ Its output goes to `.rite/loop.log`, rotated like the scheduler's. `rite loop
 run` on its own prints one cycle and exits, which is the way to see what it
 thinks without leaving anything running.
 
+## Which clock your schedule runs on
+
+A schedule says when Workers may run:
+
+```yaml
+schedule:
+  timezone: Europe/Warsaw     # optional
+  windows:
+    - days: "Mon-Fri"
+      hours: "09:00-17:00"
+      workers: 3
+```
+
+**The timezone is optional.** Leave it out and the hours mean your own
+machine's local time — "nine to five" is your working day, and on a project
+you run from one machine you should not have to name your own timezone.
+
+**rite tells you which clock it picked.** `rite start` prints a line like:
+
+    schedule in Europe/Warsaw (machine local)
+
+`machine local` means no timezone was configured and this machine's clock is
+being used. `from config` means the schedule named a zone and that zone is
+in use.
+
+⚠ **Set a timezone when more than one machine reads the schedule.** The
+schedule lives in `.rite/config.yaml`, which is committed — so everyone
+gets the same file, and without a timezone each machine reads it against
+its own clock. The same window then means different hours in different
+places. At Friday 23:00 UTC, a `09:00-17:00 Mon-Fri` schedule with no
+timezone allows 3 Workers in Los Angeles (Friday 16:00) and 0 in Tokyo
+(Saturday 08:00) — the day itself is different. One IANA name in the config
+removes that entirely.
+
+⚠ **A timezone that is set but misspelled is an error, not a fallback.**
+`Europe/Lodnon` is not a timezone. rite does not stop, but it says so
+loudly rather than quietly using your machine's clock:
+
+    schedule in Europe/Warsaw (machine local — schedule.timezone
+    'Europe/Lodnon' is not a known timezone and was ignored)
+
+`rite doctor` reports it too. This is deliberately different from leaving
+the field out: an empty field is a choice, a misspelled one is a mistake,
+and before 0.5.1 the two printed the same sentence.
+
+**A typo in `days:` behaves the same way** — `Mon-Fry` is not a day range,
+so that window is ignored entirely and contributes no Workers. `rite
+doctor` names the typo and says the window was dropped.
+
 ## Starting a sandboxed worker
 
 ### Before the first one

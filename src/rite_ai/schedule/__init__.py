@@ -161,9 +161,7 @@ def resolve_zone(tz_name: str) -> ResolvedZone:
         except (ZoneInfoNotFoundError, ValueError):
             # Carry what was asked for: falling back silently is the
             # silent-wrong-clock D-48 was written against.
-            return ResolvedZone(
-                machine_zone_name(), machine_local=True, rejected=text
-            )
+            return ResolvedZone(machine_zone_name(), machine_local=True, rejected=text)
         return ResolvedZone(text, machine_local=False)
     return ResolvedZone(machine_zone_name(), machine_local=True)
 

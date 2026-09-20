@@ -228,8 +228,7 @@ class TestTheScheduleDecidesHowMany:
 
         described = resolve_zone("Mars/Olympus").describe()
         assert "Mars/Olympus" in described and "machine local" in described, (
-            "the fallback is silent, which is the trap §2.7 names: "
-            f"{described!r}"
+            f"the fallback is silent, which is the trap §2.7 names: {described!r}"
         )
 
 

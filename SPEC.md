@@ -2614,7 +2614,9 @@ budget:
                                    # Anthropic billing cycle — override if yours differs.
 
 schedule:
-  timezone: Europe/Warsaw          # required (§2.7)
+  timezone: Europe/Warsaw          # OPTIONAL (D-48) — unset means this
+                                   # machine's own clock; `rite start`
+                                   # prints which zone it resolved
   windows:
     - hours: "09:00-18:00"
       workers: 3
@@ -3122,7 +3124,8 @@ rite schedule set <hours> <n>      # set worker count for an hour range, e.g.
                                     #   'rite schedule set 09:00-18:00 3'
 rite schedule set <hours> 0        # off for that window — a clean stop (§2.7.3),
                                     #   not a kill
-rite schedule set-timezone <tz>    # required before any window is meaningful (D-48);
+rite schedule set-timezone <tz>    # OPTIONAL (D-48) — unset runs on this machine's
+                                    #   clock; set it when the project spans machines;
                                     #   'rite init' also asks for this in Section 6
 
 rite watchdog                      # cheap, non-LLM liveness check (§3.5). Exit 0 when
@@ -3482,12 +3485,16 @@ every Worker to its own token.
 
 ```
 Worker schedule timezone? [detected: Europe/Warsaw]
-  Required (D-48) — a schedule with no timezone is a trap the first time
-  it's read from a different machine or a different person's laptop.
+  Optional (D-48) — leave it blank and the schedule runs on whichever
+  machine reads it. Set it when the project is read from more than one:
+  the same window then means the same hours everywhere.
 ```
 
-Defaults to the system timezone, detected. Not skippable — every subsequent
-`rite schedule set` (§2.7, §9.1) depends on this being set first.
+Defaults to the system timezone, detected, and may be left blank. `rite
+start` prints which zone it resolved, so a machine running on its own clock
+says so rather than looking configured. A zone that IS set and cannot be
+resolved is a different state entirely — an error, named by `rite doctor`,
+quoting the string it could not use (D-48).
 
 **Section 7 — Knowledge** `[7/7]`
 
@@ -6109,7 +6116,7 @@ happened once already and left no trace until this review found it.
 | D-45 | Coordination-cost visibility | **Instrument refused-claim-attempt COUNT (not wait time — claims are refused outright, never queued), merge conflicts per merge, and "nothing safe to start" frequency; surface in `rite status`** | Contention grows roughly with N² (pairs of Workers collide), and the knee varies by project — observed directly: 25 concurrent sessions jammed the board (four in a row found nothing safe to start), 3 ran fine. Gives the user their own project's knee from data instead of a guess. §2.7.2. |
 | D-46 | Zero-Worker schedule window | **Runs the same `rite stop` handover, never a kill** | A schedule window strands work every evening exactly like an uncommitted working tree does (D-33) unless it goes through the existing clean-stop path. §2.7.3. |
 | D-47 | Cross-project load | **The multi-project hub (§8.9) warns on aggregate concurrency across all registered projects, at configuration time** | Per-project schedules can each look sane and still sum to more than the weekly budget supports — only the hub sees the total. Warning at configuration time (not exhaustion) is the same forecast-early pattern as D-32/pool warnings. §2.7.4. |
-| D-48 | Schedule timezone | **Required field, no default** | A schedule with an assumed timezone is correct only where it was written and wrong everywhere else it's read — cheap to require, expensive to debug once omitted. §2.7. |
+| D-48 | Schedule timezone | **Optional (relaxed 0.5.1). Unset means this machine's clock; a zone that was SET and cannot be resolved is an error** | ⚠ RELAXED, not drifted. It required the field with no default, because a schedule with an assumed timezone is correct only where it was written and wrong everywhere else it is read. **That reasoning still holds and was measured**: one committed `09:00-17:00 Mon-Fri` at Friday 23:00 UTC gives 3 Workers in America/Los_Angeles (Fri 16:00) and 0 in Asia/Tokyo (Sat 08:00) — the day itself differs. Relaxed anyway because a schedule expresses the operator's working day, and a one-machine project should not have to name its own zone; the loudness the requirement bought is bought back by REPORTING which clock was resolved instead of refusing to run. **TWO STATES, DELIBERATELY DISTINCT:** *no zone given* is a supported configuration and reports `machine local`; *a zone given and not resolvable* is an ERROR — it names the rejected string and `rite doctor` reports it. Until 0.5.1 these were byte-identical, so a typo read exactly like an unconfigured project. ⚠ OPEN: `validate_schedule` still reports an unset timezone as "required (D-48)", which this decision makes false. What replaces it is undecided — the hazard is real only where a schedule is read by more than one machine, and neither tracked-ness (a solo developer commits everything; rite's own `.rite/config.yaml` is tracked) nor anything `validate_schedule` can see distinguishes that. §2.7. |
 | D-49 | Ticket-link interface method | **`link(id, target_id, link_type)` added to the abstract `TicketBackend` interface (§6.1), not left as a JIRA-only capability; returns `void \| BackendError`, and a backend with no real link mechanism must return the error rather than substitute a weaker one silently** | §6.2 already specified "blocked by" linking as backend behaviour; found during the Phase-1 implementation-plan rewrite that the interface itself had no method to carry it. A `void`-only return was reviewed and rejected in the same pass — it would let a real link and a silent no-op look identical to a caller that reasons about dependencies. §6.1. |
 | D-50 | `rite start`'s setup phase — what it performs vs. reports | **`start` performs anything idempotent, local and free; it REPORTS anything persistent, networked or quota-spending, naming the command that does it.** Three steps the spec had it perform are now reports: registering the scheduler (a standing cron/launchd entry), refreshing the KB cache (network fetches), and topping up the coordinator pool (spawns `claude`, spends quota). `start` gained the health check it genuinely owed — schedule validation, the config it is about to be governed by — without shelling out to `doctor`. | Measured: none of §9.10's four setup steps existed, and the spec had marked them "not built" without deciding whose defect it was. Mostly the spec's. A lifecycle command that installs cron entries and starts paid sessions as a side effect is the wrong default, and two of the three are irreversible in the direction that matters — spent quota is the one damage no cleanup reverses (§5.1.1). §9.10 also contradicted §8.7 outright on the KB cache; §8.7 wins. The outbox flush stays as the one deliberate exception, because §9.10's offline `stop` promises delivery "on next contact" and nothing else would ever deliver it. "Idempotent" is restated precisely: calling `start` twice does not do the work twice, rather than the old and false "is a no-op". §9.10, §2.5.1, §2.7.5, §2.7.4. |
 | D-51 | Sandbox default | **Opt-out: `sandbox.enabled: true`, and the §9.3 questionnaire defaults the answer to Yes** | Was opt-in, on the reasoning that "an added dependency should be opted into, not defaulted on" — yoloAI is a separate binary from yoloai.dev, so defaulting on would fail first run for everyone without it. That reasoning stopped holding once two things existed: §9.3 asks at the one moment a human is certainly at a terminal (`install.sh` cannot — piping it to a shell binds stdin to the pipe), and `rite doctor` verifies by starting a real sandbox and tearing it down rather than by finding a file on PATH. A machine without yoloAI now gets a question it can answer and a row naming what is missing, not a first-run failure. On a platform with no backend rite has verified, §9.3 does not ask at all and says why in one line. **Not a precedent for migrating defaults into this register:** numeric defaults keep their rationale in `config/models.py` beside the value, which is where someone changing one will read it. |
