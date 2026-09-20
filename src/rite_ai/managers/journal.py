@@ -132,8 +132,56 @@ def start_notice(root: Path, manager: str, *, enabled: bool = True) -> str:
     relative = Path(".rite") / "managers" / manager / "journal"
     return (
         f"recording issues to {directory}\n"
-        f"  to send them back:  git add -f {relative} && git commit\n"
-        f"  (the -f is REQUIRED — a plain `git add` silently refuses here)"
+        f"  copy that directory to share the entries; to commit them "
+        f"instead, `git add -f {relative}` is needed "
+        f"(a plain `git add` refuses here)"
+    )
+
+
+def instructions(root: Path, manager: str, *, enabled: bool = True) -> str:
+    """The three things a recording Manager is told, or "" when off.
+
+    ⚠ ONE COPY OF THIS TEXT, ON PURPOSE. It is delivered in the start
+    prompt (D-93) rather than in `CLAUDE.md`, because `CLAUDE.md` is
+    project-level and written by `rite init` while `--record-issues` is
+    per-start — two Managers in one project started differently would need
+    two versions of one shared file. The prompt is per-session by
+    construction, so §9.15.1's "genuinely off when off" is exact: a Manager
+    without the flag does not receive these because they were never
+    composed.
+
+    `managers/prompt.py` appends whatever this returns and does not know
+    what it says. Two copies of this text drifting apart is the failure
+    this arrangement exists to prevent.
+
+    ⚠ THE THIRD PARAGRAPH IS THE ONE THAT MATTERS, and §9.15.6 gained it as
+    item 3 only after the command existed. Telling a Manager WHERE and WHEN
+    but not HOW leaves it to hand-write markdown into the directory —
+    bypassing the anchor refusal entirely and producing exactly the
+    unanchored entries D-87 exists to prevent. Once the refusal lives
+    behind a command, naming the command is part of the instruction or the
+    mechanism is optional.
+    """
+    if not enabled:
+        return ""
+    directory = journal_dir(root, manager).resolve()
+    return (
+        "\n\nYou are recording process issues this session. They go in:\n"
+        f"  {directory}\n\n"
+        "Write an entry when something behaves differently from what the "
+        "docs, or a tool's own output, claimed — a command reporting "
+        "success while doing nothing, a check passing on input it could "
+        "not read, a probe reporting a capability the same call then "
+        "denied. Not every failing test: a failing test is work, and work "
+        "goes to the board.\n\n"
+        "Record it with:\n"
+        f"  rite journal observe --manager {manager} "
+        "--anchor <what makes it checkable> \\\n"
+        "    --observed <what you saw> --expected <what should have "
+        "happened>\n\n"
+        "An entry without an anchor is refused: a commit SHA, a file and "
+        "line, a command with its output, a ticket id, or a named log file "
+        "with a timestamp in it."
     )
 
 

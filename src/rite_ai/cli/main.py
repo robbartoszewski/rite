@@ -5989,7 +5989,7 @@ def _start_a_manager(
     # who needs them if they never leave the machine that wrote them. Empty
     # string when the flag is off: a Manager that will not write a journal
     # is not told where one would go (§9.15.1).
-    from rite_ai.managers.journal import start_notice
+    from rite_ai.managers.journal import instructions, start_notice
     from rite_ai.managers.prompt import for_manager
 
     notice = start_notice(root, role.name, enabled=record_issues)
@@ -6001,7 +6001,10 @@ def _start_a_manager(
         engine=role.engine,
         max_sessions=sessions,
         window_seconds=minutes * 60.0,
-        prompt=for_manager(role.name),
+        prompt=for_manager(
+            role.name,
+            extra=instructions(root, role.name, enabled=record_issues),
+        ),
         verdict=_loop_verdict,
         note=lambda m: click.echo(m, err=True),
     )
