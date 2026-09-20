@@ -36,7 +36,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from rite_ai.managers import ManagerInstance, forget_instance, record_instance
+from rite_ai.managers import forget_instance
 from rite_ai.managers.prompt import deliver as deliver_prompt
 from rite_ai.managers.session import StartResult, ending, liveness, was_attached
 from rite_ai.managers.session import start as start_session
@@ -387,15 +387,14 @@ def _default_starter(root, manager, *, engine, resume_id, max_sessions, window_s
         max_sessions=max_sessions,
         window_seconds=window_seconds,
     )
-    if result.ok:
-        record_instance(
-            root,
-            ManagerInstance(
-                name=manager,
-                session=result.session,
-                engine=launch_command(engine, resume_id),
-                max_sessions=max_sessions,
-                window_seconds=window_seconds,
-            ),
-        )
+    # ⚠ NO SECOND `record_instance` HERE. `start_session` has already
+    # written the record, with tmux's pane pid and the command that
+    # actually ran. This function used to re-record the same instance
+    # immediately afterwards, without a pid and with the CONFIGURED engine
+    # string — overwriting both fields §9.14.10 exists to keep honest, and
+    # making `rite status` report every live Manager as dead.
+    #
+    # The second write was not merely wrong, it was redundant: every value
+    # it set is already set by `start_session`, which receives the same
+    # arguments.
     return result

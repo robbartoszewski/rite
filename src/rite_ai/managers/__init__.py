@@ -73,8 +73,17 @@ class ManagerInstance:
     """One running Manager, as this machine sees it."""
 
     name: str
+    pid: int
+    """⚠ REQUIRED, and the absence of a default is the point.
+
+    It defaulted to 0, and `pid_alive(0)` is False, so a record built
+    without one was indistinguishable from a record of a dead process.
+    `_default_starter` omitted it and `rite status` reported every running
+    Manager as "recorded but not running — the session is gone", on the
+    only path the CLI takes. Correcting that one caller would have left the
+    next one free to make the same mistake; a value whose default silently
+    means "dead" should not have one."""
     session: str = ""
-    pid: int = 0
     started_at: float = 0.0
     engine: str = ""
     max_sessions: int = 0
@@ -108,6 +117,11 @@ def read_instance(root: Path, name: str) -> ManagerInstance | None:
     if not isinstance(raw, dict) or "name" not in raw:
         return None
     known = {f: raw[f] for f in ManagerInstance.__dataclass_fields__ if f in raw}
+    # A record written before `pid` existed genuinely has no pid, and 0 is
+    # the honest answer: we do not know whether that process is alive. This
+    # is the ONLY place that may supply one — a constructor call that omits
+    # it is a bug, which is why the field has no default.
+    known.setdefault("pid", 0)
     try:
         return ManagerInstance(**known)
     except (TypeError, ValueError):
