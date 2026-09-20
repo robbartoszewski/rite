@@ -5208,6 +5208,16 @@ becomes a default nobody validated.
 it knows the entry format may change. That is what beta buys, and it is the
 licence to keep refining without a compatibility argument.
 
+⚠ **"Beta" and "turn this on for an unattended run" are not in tension, and
+the help text must not read as though they were.** Raised in review as a
+mixed message, and it would be one if beta meant *not ready to use*. It
+does not: it is a statement about the stability of the ENTRY FORMAT, not
+about whether the feature works. The two say different things to the same
+reader — *use this when nobody is watching* and *do not build a parser
+against what it writes yet* — and both are true. So the help text carries
+the recommendation and the caveat in that order, and neither hedges the
+other.
+
 #### 9.15.2. Two kinds of entry, because the important judgements are not available in the moment
 
 **Observations** are written when **something behaves differently from
@@ -5368,14 +5378,29 @@ one is a human being, in the next planned run, and the gap is live now.
 **The minimum that closes it is documentation, not machinery**, and it is
 specified as the minimum rather than as the design:
 
-1. **`rite start --record-issues` prints where entries will be written**,
-   as an absolute path, at start — beside the resolved timezone and the
-   engine line, for the same reason: a fact is cheapest to learn at the
-   moment it is actionable, not afterwards.
-2. **The docs say how to send them back**, naming both routes, because the
-   obvious one silently fails: `git add -f` is REQUIRED (§9.15.3 — `.rite/*`
-   excludes the parent directory, so a plain `git add` refuses), or archive
-   the directory.
+1. **`rite start --record-issues` prints, at start, the absolute path AND
+   the exact command that gets the entries out** — beside the resolved
+   timezone and the engine line, for the same reason: a fact is cheapest to
+   learn at the moment it is actionable.
+
+   ⚠ **The COMMAND, not just the path, and this is the whole of the
+   difference.** A draft printed the path and left the route in the docs —
+   which is an instruction to a human who may never read them, and §9.15.3
+   closes by saying a format that makes the wrong thing impossible beats
+   any amount of exhortation. Documenting a route is exhortation. Printing
+   it hands it to the operator, in their scrollback, without their having
+   gone looking:
+
+       recording issues to <project>/.rite/managers/lead/journal
+         to send them back:  git add -f .rite/managers/lead/journal && git commit
+         (the -f is REQUIRED — a plain `git add` silently refuses here)
+
+   One f-string, not a subsystem. Raised in review by rite-dd against the
+   section's own closing argument, which is the second time that argument
+   has been turned on a draft of this section and won.
+2. **The docs say the same thing** for somebody who reads them first, and
+   name the archive route as well — but the printed line is what the
+   operator actually gets, and the docs are the backup.
 3. **Nothing collects, uploads or transmits them automatically.** §9.15.5's
    inertness is not relaxed by this, and a diagnostic that phoned home
    would be a worse feature than one that returns nothing.
