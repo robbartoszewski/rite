@@ -22,7 +22,7 @@ Not "I have stopped writing."
 | 6 | **Prompting the session on start** | ⚠ **NOT SPECIFIED** | — | — |
 | 7 | Managers in `rite status` | **BUILT** (rite-dd) | — | `f803a10` |
 | 8 | Ctrl+C stops both; `rite stop` recovers | **SPECIFIED, not built** | §9.14.12–13, D-85 | — |
-| 9 | Issue recording | **SPECIFIED, not built** | §9.15, D-83/84/86 | — |
+| 9 | Issue recording | **SPECIFIED, not built** — and the release's one scope lever, see Q7 | §9.15, D-83/84/86 | — |
 
 Found and fixed during refinement, not on the original list:
 
@@ -189,6 +189,16 @@ live in `~/AI/rite-dogfood/phase2/inferred-absence.yaml`, which is not a
 clone of this repo. §9.15 now states the principle in its own words and
 carries no id. If those rules should be normative for rite, they need to
 arrive in SPEC with their own numbers.
+
+**Q7. Does item 9 stay in v0.5.1?** It is the only item not required for
+"full-featured single Manager" to be true, so it is the natural thing to
+move if the release sheds weight — rite-dd raised this and was right to.
+The question is with Robert and unanswered. **Until it is answered it is
+0.5.1 scope and §9.15 is written as such**, because a section written only
+once its release is confirmed is a section written under time pressure, and
+the scope statement is worth having whichever release carries it. If it
+moves to 0.6.0 nothing is wasted: §9.15 goes with it unchanged, and the
+estimate below drops by 3–4 sittings.
 
 **Q5. What is the flag called?** §9.15 says it must read as diagnostic
 rather than as a feature everyone should enable. I have not named it, since

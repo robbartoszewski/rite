@@ -5075,6 +5075,15 @@ leaves evidence instead of silence.
 ⚠ **It is OFF by default and it is a BETA feature.** §9.15.1 says why, what
 it costs, and what would make the default flip.
 
+⚠ **Release status, recorded because it is the one item here that is a
+scope lever.** This is the only part of v0.5.1 not required for
+"full-featured single Manager" to be true, so it is the natural thing to
+move if the release has to shed weight. That challenge is with the project
+owner and unanswered. **Until it is answered this is v0.5.1 scope and is
+specified as such** — a section written only once its release is confirmed
+is a section written under time pressure, and the scope statement is worth
+having in the repository whichever release carries it.
+
 #### 9.15.0. A process issue, not a work issue — and this is the load-bearing line
 
 A ticket that fails is **work**. It goes to the board, which is what the
@@ -5146,8 +5155,19 @@ licence to keep refining without a compatibility argument.
 
 #### 9.15.2. Two kinds of entry, because the important judgements are not available in the moment
 
-**Observations** are written when something looks wrong, at the moment it
-looks wrong.
+**Observations** are written when **something behaves differently from
+what the docs, or the tool's own output, claimed** — at the moment it does.
+
+⚠ That trigger is narrow ON PURPOSE, and an earlier draft of this section
+had it as *"when something looks wrong"*, which is not the same thing and
+is materially worse. "Looks wrong" admits every failing test and produces
+the dumping ground §9.15.0 exists to prevent. **The claim-versus-behaviour
+gap is the specific judgement that produced this release's findings** — a
+gate reporting success on a file it could not open, a wrong invocation
+producing output indistinguishable from the feature working, a probe
+reporting a capability the same call then denied. Each is a document or an
+output saying one thing while the system did another, and none of them is a
+test going red.
 
 **Retrospectives** are written at a boundary — a ticket closing, a review
 round finishing, a merge landing.
