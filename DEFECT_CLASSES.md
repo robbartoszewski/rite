@@ -652,7 +652,27 @@ the output format's own syntax, a value that is present but empty of
 content, the same value from twelve processes at once. Or simply a second
 reviewer told to attack rather than to confirm.
 
+**The same class in CODE: a blacklist is a review built from a list of
+known examples.** It inherits the imagination of whoever wrote the list and
+cannot exceed it. Measured the same day, inside the fix for the defect
+above: a blacklist of Unicode categories (Cf, Zs, Cc) intended to reject
+contentless anchors **missed U+2800 BRAILLE PATTERN BLANK**, which is
+category So. It was caught only by re-running the exact characters the
+first review had named — that is, by luck of having a list.
+
+The replacement is a **positive rule**: a value must contain an
+alphanumeric. Every anchor §9.15.3 permits has one, and a rule about what
+must be PRESENT cannot be widened by a new codepoint. So:
+
+⚠ **Prefer a property the input must satisfy over a list of inputs to
+reject.** The blast-radius guard is the same move from the other side —
+requiring its regex to still MATCH the invocations rite legitimately makes,
+rather than counting the files it scanned.
+
 **What still gets through.** A property nobody has thought to attack. Two
 reviewers with the same mental model produce the same blind spot, which is
 the argument for the reviewer not being the author — and for the second
-reviewer being given a different brief, not the same checklist.
+reviewer being given a different brief, not the same checklist. ⚠ **Two
+reviews finding ten defects between them, with the second finding all ten,
+is evidence about the FIRST reviewer and not evidence that the tenth was
+the last one.**

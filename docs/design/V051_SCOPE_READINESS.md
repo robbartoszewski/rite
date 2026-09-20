@@ -26,7 +26,7 @@ Not "I have stopped writing."
 | 6 | Prompting the session on start | **BUILT + mutation-checked** | §9.14.11a, D-90 | `a555091` |
 | 7 | Managers in `rite status` | **BUILT** (rite-dd) | — | `f803a10` |
 | 8 | Ctrl+C stops both; `rite manager stop` recovers | **BUILT + mutation-checked** | §9.14.12–13, D-85 | `52b64c9` |
-| 9 | Issue recording (`--record-issues`) | **BUILT** (rite-dd) | §9.15, D-83..D-93 | `93f87f9` |
+| 9 | Issue recording (`--record-issues`) | **BUILT; 10 defects found after, closure pending** | §9.15, D-83..D-93 | `93f87f9` + fixes |
 
 Found and fixed during refinement, not on the original list:
 
@@ -470,3 +470,34 @@ Recorded as defect class 16.
 first two were vacuous tests found by mutation, and those at least failed
 against mutated code. This one passed against genuinely defective code and
 would have shipped it as reviewed.
+
+### Item 9's status, recorded without a verdict (2026-09-20)
+
+rite-dd's instruction, and it is the right one: **record the closure with a
+SHA and the defect list, not with a judgement.**
+
+Two reviews of item 9 found ten defects between them. The first — mine —
+found none. The second found all ten, four severe: markdown injection
+forging `## inferred` headings, contentless anchors passing the refuser,
+a verdict field reachable via `--inferred`, and concurrent writes losing
+341 of 30000 entries while reporting success. All ten are fixed; each fix
+was verified red against the old code first.
+
+⚠ **Nobody should read that as "item 9 is now clean."** Two reviews, ten
+defects, and the second found all of them — that is evidence about the
+first reviewer, not evidence that the tenth defect was the last one. **A
+third review is the honest next step**, and neither of the two people who
+have looked is the right person to do it:
+
+- I wrote §9.15, so a review I build from it inherits my imagination
+  (class 16) — demonstrated, not hypothetical.
+- rite-dd wrote the implementation and found its ten defects, which makes
+  them the best-informed reader and the one least able to see what their
+  own model omits.
+
+**That is a decision for the project owner**, not something either of us
+should resolve by reviewing again and reporting a cleaner number. The
+options are a third reviewer with an adversarial brief, or shipping item 9
+with this history recorded and the residual risk accepted — which is
+defensible, since the feature is inert by design (§9.15.5) and its worst
+failure mode is a misleading file a human reads, not a system that acts.
