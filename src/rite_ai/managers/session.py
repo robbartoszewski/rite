@@ -367,54 +367,86 @@ def ending(name: str, human_was_present: bool) -> Ending:
     With it, the pane persists as dead and carries `#{pane_dead_status}` —
     which is also why the conversation is still there for a human to read
     after the supervisor has stopped.
+
+    ⚠ **`#{pane_dead}` and `#{pane_dead_status}` do not arrive together.**
+    tmux marks a pane dead when its file descriptor closes and fills the
+    status in when it reaps the child, and nothing orders those two. So
+    there is a window — short, and wider on Linux than on macOS — where the
+    pane reads dead with no status yet. A draft read once and called that
+    window permanently unknown, which made every CLEAN exit `unclear` on
+    Linux CI while `exit 9` passed, because a crash happened to lose the
+    race less often.
+
+    That is also exactly how the capability probe came to disagree with the
+    thing it was probing: the probe polled until the status appeared and
+    this did not. **Waiting is the production behaviour, so the probe had
+    been measuring a patience `ending` did not have.**
     """
     binary = _tmux()
     if binary is None:
         return Ending(UNCLEAR, detail="tmux not found, so the exit status is gone")
-    try:
-        done = subprocess.run(
-            [
-                binary,
-                "display-message",
-                "-p",
-                "-t",
-                name,
-                "#{pane_dead}|#{pane_dead_status}",
-            ],
-            capture_output=True,
-            text=True,
-            errors="replace",
-            timeout=30,
-        )
-    except (OSError, subprocess.SubprocessError) as e:
-        return Ending(UNCLEAR, detail=f"could not read the exit status: {e}")
-    if done.returncode != 0:
-        # The session is gone entirely — `remain-on-exit` did not hold it,
-        # or something removed it. No status to read, so no restart.
-        return Ending(UNCLEAR, detail="the session is gone, with its exit status")
 
-    raw = (done.stdout or "").strip().split("|")
-    dead = raw[0] if raw else ""
-    reported = raw[1] if len(raw) > 1 else ""
+    def ask() -> tuple[bool, str, str] | None:
+        """(reachable, pane_dead, pane_dead_status), or None if unreadable."""
+        try:
+            done = subprocess.run(
+                [
+                    binary,
+                    "display-message",
+                    "-p",
+                    "-t",
+                    name,
+                    "#{pane_dead}|#{pane_dead_status}",
+                ],
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=30,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if done.returncode != 0:
+            return (False, "", "")
+        raw = (done.stdout or "").strip().split("|")
+        return (True, raw[0] if raw else "", raw[1] if len(raw) > 1 else "")
 
-    if dead != "1":
-        return Ending(UNCLEAR, detail="the pane is not dead")
+    reported = ""
+    status: int | None = None
+    # Ten reads over a second. Long enough for the reap to land, short
+    # enough that a supervisor cycle does not notice; and if the status
+    # never arrives the answer is still UNCLEAR, so waiting can only turn
+    # an unknown into a known and never the other way.
+    for attempt in range(10):
+        if attempt:
+            time.sleep(0.1)
+        answer = ask()
+        if answer is None:
+            return Ending(UNCLEAR, detail="could not read the exit status")
+        reachable, dead, reported = answer
+        if not reachable:
+            # The session is gone entirely — `remain-on-exit` did not hold
+            # it, or something removed it. No status to read, so no restart.
+            return Ending(UNCLEAR, detail="the session is gone, with its exit status")
+        if dead != "1":
+            return Ending(UNCLEAR, detail="the pane is not dead")
+        # ⚠ AN ABSENT STATUS IS NOT ZERO. A draft parsed empty as 0, so a
+        # tmux that had not yet reaped the child turned every ending into a
+        # clean one — and `exit 9` read as FINISHED and would have been
+        # resumed. Caught by Linux CI, where the field came back empty while
+        # macOS filled it. Unreadable means keep asking, then unclear.
+        try:
+            status = int(reported)
+        except ValueError:
+            continue
+        break
 
-    # ⚠ AN ABSENT STATUS IS NOT ZERO. A draft parsed empty as 0, so a tmux
-    # that does not populate `#{pane_dead_status}` turned every ending into
-    # a clean one — and `exit 9` read as FINISHED and would have been
-    # resumed. Caught by Linux CI, where that field came back empty while
-    # macOS filled it: the same platform-vocabulary split that produced
-    # three defects this week. Unreadable means unclear, which does not
-    # resume.
-    try:
-        status = int(reported)
-    except ValueError:
+    if status is None:
         return Ending(
             UNCLEAR,
             detail=(
                 "the pane is dead but tmux reported no exit status "
-                f"({reported!r}), so whether it finished or failed is unknown"
+                f"({reported!r}) within a second, so whether it finished or "
+                "failed is unknown"
             ),
         )
 
@@ -512,18 +544,24 @@ def exit_status_available() -> bool:
     """Can this tmux report why a session's command ended?
 
     ⚠ **Not everywhere, and the consequence is severe enough to probe for
-    rather than assume.** `ending` needs `#{pane_dead_status}`; measured on
-    CI, a Linux tmux left that field EMPTY where macOS filled it. With it
-    empty every ending is `unclear`, which does not resume — so on such a
-    tmux the supervisor starts one session and stops, for ever.
+    rather than assume.** `ending` needs `#{pane_dead_status}`; with it
+    unavailable every ending is `unclear`, which does not resume — so on
+    such a tmux the supervisor starts one session and stops, for ever.
 
     **That is the safe direction and it is not a working feature.** Better
     to say so at start than to have a user watch `rite start` do one cycle
     and call it a bug in their project.
 
-    Probed by running it, because a version number is a proxy: the question
-    is whether this binary populates the field, and the only way to know is
-    to make a pane die and look.
+    ⚠ **The answer comes from `ending` itself.** Four earlier probes
+    imitated it instead and each disagreed with it differently: the name
+    collided with itself, the command died before the option was set, an
+    absent status parsed as zero, and the setup call diverged. The last one
+    reported the capability PRESENT on Linux while real sessions answered
+    `unclear`, because the probe polled for the status and `ending` did not
+    — a capability check disagreeing with the thing it checks, which turns
+    "this does not work here" into "this is broken". **Nothing is left to
+    imitate: the probe runs the production sequence and reads the
+    production verdict.**
     """
     global _EXIT_STATUS_ANSWER
     if _EXIT_STATUS_ANSWER is not None:
@@ -539,12 +577,10 @@ def exit_status_available() -> bool:
     # got in its own way. Found by the suite, where it fires more than once.
     name = f"rite-probe-exit-{os.getpid()}-{uuid.uuid4().hex[:8]}"
     try:
-        # ⚠ A LONG-LIVED command, then the option, then make it exit — the
-        # same order `start` uses. A draft launched `sh -c 'exit 3'`, which
-        # died before `remain-on-exit` could be set, so on some tmux the
-        # session was already gone and the probe reported the capability
-        # ABSENT on a machine that has it. A probe that gets in its own way
-        # answers about itself rather than about the machine.
+        # A LONG-LIVED command, then the option, then make it exit — the
+        # order `start` uses. A draft launched `sh -c 'exit 3'`, which died
+        # before `remain-on-exit` could be set, so the session was already
+        # gone and the probe reported ABSENT on a machine that has it.
         made = subprocess.run(
             [binary, "new-session", "-d", "-s", name, "sh"],
             capture_output=True,
@@ -555,6 +591,8 @@ def exit_status_available() -> bool:
         if made.returncode != 0:
             return False
         _keep_pane_after_exit(binary, name)
+        if not settled_alive(name):
+            return False
         subprocess.run(
             [binary, "send-keys", "-t", name, "exit 3", "Enter"],
             capture_output=True,
@@ -563,27 +601,13 @@ def exit_status_available() -> bool:
         )
         for _ in range(20):
             time.sleep(0.1)
-            asked = subprocess.run(
-                [
-                    binary,
-                    "display-message",
-                    "-p",
-                    "-t",
-                    name,
-                    "#{pane_dead}|#{pane_dead_status}",
-                ],
-                capture_output=True,
-                text=True,
-                errors="replace",
-                timeout=30,
-            )
-            if asked.returncode != 0:
+            if not liveness(name).alive:
                 break
-            parts = (asked.stdout or "").strip().split("|")
-            if parts and parts[0] == "1":
-                _EXIT_STATUS_ANSWER = len(parts) > 1 and parts[1].strip() == "3"
-                return _EXIT_STATUS_ANSWER
-        return False
+        # 3, not "any answer": a tmux that reports a status but the wrong
+        # one is not a tmux `ending` can tell finishing from crashing on.
+        how = ending(name, human_was_present=False)
+        _EXIT_STATUS_ANSWER = how.kind == CRASHED and how.status == 3
+        return _EXIT_STATUS_ANSWER
     except (OSError, subprocess.SubprocessError):
         return False
     finally:

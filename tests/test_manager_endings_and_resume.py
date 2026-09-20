@@ -81,7 +81,7 @@ class TestTheThreeEndings:
         subprocess.run(
             ["tmux", "kill-session", "-t", result.session], capture_output=True
         )
-        assert how.kind == FINISHED and how.resume
+        assert how.kind == FINISHED and how.resume, how.detail
 
     def test_an_absent_exit_status_is_UNCLEAR_not_zero(self, monkeypatch):
         """⚠ Caught by Linux CI. A draft parsed an empty
@@ -138,7 +138,7 @@ class TestTheThreeEndings:
         subprocess.run(
             ["tmux", "kill-session", "-t", result.session], capture_output=True
         )
-        assert how.kind == QUIT
+        assert how.kind == QUIT, how.detail
         assert not how.resume, "the human said stop and it restarted anyway"
 
     def test_a_session_that_is_gone_is_UNCLEAR_and_does_not_resume(self):
@@ -295,3 +295,68 @@ def test_a_tmux_without_exit_status_makes_every_ending_unclear():
     how = ending(result.session, human_was_present=False)
     subprocess.run(["tmux", "kill-session", "-t", result.session], capture_output=True)
     assert how.kind == UNCLEAR and not how.resume
+
+
+class TestTheStatusArrivesAfterTheDeath:
+    """⚠ The defect that made Linux CI red three times, as a property.
+
+    `#{pane_dead}` and `#{pane_dead_status}` do not arrive together — tmux
+    marks a pane dead when its fd closes and fills the status in when it
+    reaps the child, and nothing orders those two. Reading once turned that
+    window into a permanent `unclear`, so every CLEAN exit on Linux failed
+    to resume while `exit 9` passed, because a crash lost the race less
+    often. These tests run on any platform because they drive the race
+    directly rather than waiting to be unlucky on one.
+    """
+
+    def _replies(self, monkeypatch, answers: list[str]):
+        import rite_ai.managers.session as session_mod
+
+        seen: list[str] = []
+
+        class Reply:
+            returncode = 0
+
+            def __init__(self, out: str):
+                self.stdout = out
+
+        def fake_run(*args, **kwargs):
+            out = answers[min(len(seen), len(answers) - 1)]
+            seen.append(out)
+            return Reply(out)
+
+        monkeypatch.setattr(session_mod.subprocess, "run", fake_run)
+        monkeypatch.setattr(session_mod.time, "sleep", lambda _s: None)
+        return seen
+
+    def test_a_status_that_arrives_late_is_waited_for(self, monkeypatch):
+        seen = self._replies(monkeypatch, ["1|", "1|", "1|0"])
+        how = ending("any-session", human_was_present=False)
+        assert how.kind == FINISHED, (
+            f"a status that arrived on the third read was called unknown: {how.detail}"
+        )
+        assert how.resume
+        assert len(seen) == 3, "it stopped asking before the status arrived"
+
+    def test_a_late_nonzero_status_is_still_CRASHED(self, monkeypatch):
+        self._replies(monkeypatch, ["1|", "1|9"])
+        how = ending("any-session", human_was_present=False)
+        assert how.kind == CRASHED and how.status == 9, how.detail
+        assert not how.resume
+
+    def test_a_status_that_never_arrives_is_still_UNCLEAR(self, monkeypatch):
+        """The fail-safe the waiting must not spend. Waiting can turn an
+        unknown into a known; it must never turn an unknown into a guess."""
+        seen = self._replies(monkeypatch, ["1|"])
+        how = ending("any-session", human_was_present=False)
+        assert how.kind == UNCLEAR
+        assert not how.resume, "waiting was allowed to invent a clean exit"
+        assert len(seen) == 10, "it gave up before it had waited"
+
+    def test_a_pane_that_is_not_dead_is_not_waited_for(self, monkeypatch):
+        """Only the dead-without-status window is a race. A live pane is an
+        answer, and polling it would stall every caller by a second."""
+        seen = self._replies(monkeypatch, ["0|"])
+        how = ending("any-session", human_was_present=False)
+        assert how.kind == UNCLEAR
+        assert len(seen) == 1, "it waited on a pane that was simply still running"
