@@ -83,7 +83,9 @@ def test_status_reports_a_manager_started_the_way_the_cli_starts_one():
             max_sessions=1,
             window_seconds=60,
         )
-        assert result.ok, f"the starter failed, so this proves nothing: {result.message}"
+        assert result.ok, (
+            f"the starter failed, so this proves nothing: {result.message}"
+        )
         session = result.session
         assert (
             subprocess.run(

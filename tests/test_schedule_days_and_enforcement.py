@@ -156,10 +156,21 @@ class TestStartWorkerRefusesOutsideTheWindow:
         from rite_ai import sandbox
         from rite_ai.schedule import Moment, ResolvedZone
 
+        # ⚠ THE WEEKDAY WINDOW COMES FIRST, and the order is the test.
+        #
+        # This previously listed `Sat-Sun / 00:00-23:59 / 0` first, so at
+        # 10:00 on a Saturday the first window matched on HOURS alone and
+        # returned 0 whether or not the day was consulted. The test asserted
+        # a refusal and got one for the wrong reason: measured, `workers_at`
+        # returned 0 for weekday=SAT and 0 for weekday=None.
+        #
+        # With `Mon-Fri / 09:00-17:00 / 3` first, the day decides: 0 when
+        # Saturday is known, 3 when it is ignored. The test now fails if the
+        # enforcement point stops consulting the day.
         root = self._project(
             "schedule:\n  timezone: Europe/Warsaw\n  windows:\n"
-            '    - {days: "Sat-Sun", hours: "00:00-23:59", workers: 0}\n'
             '    - {days: "Mon-Fri", hours: "09:00-17:00", workers: 3}\n'
+            '    - {days: "Sat-Sun", hours: "00:00-23:59", workers: 0}\n'
         )
         zone = ResolvedZone("Europe/Warsaw", machine_local=False)
         monkeypatch.setattr(
