@@ -213,8 +213,12 @@ class TestThePromptGoesInAtLaunch:
         monkeypatch.setattr(session_mod.subprocess, "run", lambda *a, **k: Refused())
         (tmp_path / ".rite").mkdir()
         session_mod.start(
-            tmp_path, "lead", engine="claude", prompt="do the thing",
-            max_sessions=1, window_seconds=0,
+            tmp_path,
+            "lead",
+            engine="claude",
+            prompt="do the thing",
+            max_sessions=1,
+            window_seconds=0,
         )
         written = manager_dir(tmp_path, "lead") / PROMPT_FILE
         assert written.read_text() == "do the thing"
@@ -249,8 +253,11 @@ class TestASessionThatDiedIsNotASessionThatStarted:
         stop(name)
         try:
             result = start(
-                tmp_path, "lead", command="sh -c 'exit 1'",
-                max_sessions=1, window_seconds=0,
+                tmp_path,
+                "lead",
+                command="sh -c 'exit 1'",
+                max_sessions=1,
+                window_seconds=0,
             )
             assert not result.ok, (
                 "tmux created the session, so `new-session` succeeded — and "

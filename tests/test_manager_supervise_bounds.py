@@ -46,9 +46,17 @@ def instant(monkeypatch):
     """
     started: list[str] = []
 
-    def starter(root, manager, *, engine, resume_id,
-            max_sessions, window_seconds, prompt="", permission="",
-        ):
+    def starter(
+        root,
+        manager,
+        *,
+        engine,
+        resume_id,
+        max_sessions,
+        window_seconds,
+        prompt="",
+        permission="",
+    ):
         started.append(resume_id)
         return StartResult(True, "ok", session=f"fake-{len(started)}", attach="")
 
@@ -116,8 +124,16 @@ class TestTheWindowBounds:
         complement of the test below, and the reason both exist."""
         alive_until: dict[str, float] = {}
 
-        def starter(root, manager, *, engine, resume_id,
-            max_sessions, window_seconds, prompt="", permission="",
+        def starter(
+            root,
+            manager,
+            *,
+            engine,
+            resume_id,
+            max_sessions,
+            window_seconds,
+            prompt="",
+            permission="",
         ):
             name = f"s{len(alive_until) + 1}"
             alive_until[name] = time.time() + 0.3
@@ -330,8 +346,16 @@ class TestAnUnrecognisedVerdictStops:
         (tmp_path / ".rite").mkdir()
         started: list[str] = []
 
-        def starter(root, manager, *, engine, resume_id,
-            max_sessions, window_seconds, prompt="", permission="",
+        def starter(
+            root,
+            manager,
+            *,
+            engine,
+            resume_id,
+            max_sessions,
+            window_seconds,
+            prompt="",
+            permission="",
         ):
             started.append(manager)
             return StartResult(True, "started", session="s", attach="a")
@@ -357,8 +381,16 @@ class TestAnUnrecognisedVerdictStops:
         (tmp_path / ".rite").mkdir()
         started: list[str] = []
 
-        def starter(root, manager, *, engine, resume_id,
-            max_sessions, window_seconds, prompt="", permission="",
+        def starter(
+            root,
+            manager,
+            *,
+            engine,
+            resume_id,
+            max_sessions,
+            window_seconds,
+            prompt="",
+            permission="",
         ):
             started.append(manager)
             return StartResult(False, "stop here", session="", attach="")

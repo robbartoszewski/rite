@@ -37,7 +37,12 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from rite_ai.managers import forget_instance, manager_dir
+from rite_ai.managers import (
+    designate,
+    designated,
+    forget_instance,
+    manager_dir,
+)
 from rite_ai.managers.permissions import permission_argument, permission_mode
 from rite_ai.managers.session import (
     PROMPT_FILE,
@@ -248,6 +253,7 @@ def supervise(
     max_sessions: int,
     window_seconds: float,
     prompt: str = "",
+    fresh: bool = False,
     verdict: object = None,
     note: object = None,
     starter: object = None,
@@ -282,8 +288,26 @@ def supervise(
     permission = permission_argument(chosen.mode)
 
     cycles: list[Cycle] = []
-    resume_from = ""
     live = ""
+
+    # ⚠ CONTINUATION IS THE DEFAULT. Cycle one used to begin with no memory,
+    # so the work a Manager did yesterday was unreachable today. The id is
+    # DESIGNATED rather than chosen: there is one candidate and no heuristic
+    # to tune, which is the same move as preferring a property the input
+    # must satisfy over a list to reject.
+    #
+    # ⚠ `--fresh` REWRITES the designation rather than skipping it once.
+    # Settled, not emergent: skipping would orphan the new session — the
+    # user starts over, works all day, and tomorrow's bare `rite start`
+    # silently returns to the conversation they deliberately abandoned.
+    resume_from = "" if fresh else designated(root, manager)
+    continuing = bool(resume_from)
+    tried_designation = continuing
+    if not fresh and not continuing:
+        # ⚠ A DIFFERENT FACT from "the one you had is gone", and it reads
+        # differently on purpose — the timezone precedent, where an unset
+        # zone and a rejected one do not print the same line.
+        say(f"no previous session recorded for {manager!r}, so this run starts fresh.")
 
     while True:
         # BOTH bounds before starting. A ceiling checked afterwards reports
@@ -385,6 +409,31 @@ def supervise(
                 max_sessions=max_sessions,
                 window_seconds=window_seconds,
             )
+            if not result.ok and tried_designation and not cycles:
+                # ⚠ THE EXISTENCE CHECK IS ON THE SESSION, NOT THE FILE. A
+                # designation can be present and perfectly readable while
+                # the provider has forgotten that conversation. The property
+                # is "the resume did not take" — the start failing — and NOT
+                # the wording, because a malformed id and a well-formed
+                # unknown one produce DIFFERENT messages and code matching
+                # one silently misses the other. The provider validates
+                # before doing any work, so trying costs nothing.
+                say(
+                    f"the previous session for {manager!r} could not be "
+                    f"continued, so this run starts FRESH. It will not "
+                    f"remember the earlier conversation."
+                )
+                tried_designation = False
+                continuing = False
+                resume_from = ""
+                result = launch(
+                    root,
+                    manager,
+                    engine=engine,
+                    resume_id="",
+                    max_sessions=max_sessions,
+                    window_seconds=window_seconds,
+                )
             if not result.ok:
                 return SuperviseResult(False, result.message, cycles)
 
@@ -422,6 +471,16 @@ def supervise(
 
             how = ending(result.session, human_was_present=attended, pane=live_pane)
             cycle.ending = how.kind
+            # ⚠ DESIGNATED WHATEVER THE ENDING. A cycle that quit or
+            # crashed is still the conversation a user comes back to
+            # tomorrow — arguably more so. Designating only resumable
+            # endings would record nothing for the endings a human most
+            # wants to pick up, which is the mechanic the design note left
+            # open and warned about.
+            observed = next_id(root, manager, cycle.started_at)
+            if observed:
+                designate(root, manager, observed)
+
             if not how.resume:
                 return SuperviseResult(
                     how.kind != "crashed",
@@ -431,7 +490,7 @@ def supervise(
 
             # Only now, and only for a session that finished cleanly with
             # nobody attached, is a resume the right thing.
-            resume_from = next_id(root, manager, cycle.started_at)
+            resume_from = observed
             if not resume_from:
                 return SuperviseResult(
                     True,
@@ -461,6 +520,14 @@ def supervise(
             # the name is derived instead: `start` creates the tmux session
             # before it records anything, so the name is known even when
             # the result is not.
+            # ⚠ THE ORDINARY STOP, not an anomaly — so it must leave
+            # something to continue. Designated BEFORE the teardown,
+            # because `_torn_down` clears the instance record and a user
+            # who pressed Ctrl-C still means to come back.
+            if cycles:
+                interrupted_id = next_id(root, manager, cycles[-1].started_at)
+                if interrupted_id:
+                    designate(root, manager, interrupted_id)
             return _torn_down(
                 root, manager, live or session_name(root, manager), cycles, say
             )
