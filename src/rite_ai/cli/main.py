@@ -5818,10 +5818,25 @@ def _a_manager_is_running(root: Path, roles: list) -> bool:
     return any(running(root, role.name) is not None for role in roles)
 
 
-def _start_a_manager(root: Path, role, sessions: int | None) -> None:
-    """Start one Manager, refusing without a ceiling (D-68)."""
-    from rite_ai.managers.session import start as start_manager
+def _loop_verdict(root: Path) -> str:
+    """The loop's own answer to "should this continue" (§9.14.4).
 
+    `unknown` when it cannot be established, which is a STOP — the loop's
+    own default on the unknown, and the safe direction when the alternative
+    is spending on a project whose state could not be read.
+    """
+    try:
+        from rite_ai.loop import plan_cycle
+
+        return str(getattr(plan_cycle(root), "verdict", "unknown") or "unknown")
+    except Exception:  # noqa: BLE001 - an unreadable project is `unknown`
+        return "unknown"
+
+
+def _start_a_manager(
+    root: Path, role, sessions: int | None, window: float = 0.0
+) -> None:
+    """Start one Manager, refusing without a ceiling (D-68)."""
     if sessions is None:
         click.echo(
             "refusing to start: --sessions is required and has no default.\n"
@@ -5835,11 +5850,27 @@ def _start_a_manager(root: Path, role, sessions: int | None) -> None:
         )
         raise SystemExit(1)
 
-    result = start_manager(root, role.name, engine=role.engine, max_sessions=sessions)
-    if not result.ok:
-        click.echo(result.message, err=True)
+    # `supervise`, not a single `start`: the feature is KEEPING the Manager
+    # working. This runs in the FOREGROUND — it is the human's own process,
+    # which is the whole of §9.12's compliance argument — so it does not
+    # return until a bound or a stop verdict ends it.
+    from rite_ai.managers.supervise import supervise
+
+    click.echo(
+        f"starting Manager '{role.name}' — up to {sessions} session(s). "
+        "Ctrl-C ends the run; a session already started keeps running."
+    )
+    outcome = supervise(
+        root,
+        role.name,
+        engine=role.engine,
+        max_sessions=sessions,
+        window_seconds=window,
+        verdict=_loop_verdict,
+    )
+    click.echo(outcome.reason)
+    if not outcome.ok:
         raise SystemExit(1)
-    click.echo(result.message)
 
 
 @cli.command("start")

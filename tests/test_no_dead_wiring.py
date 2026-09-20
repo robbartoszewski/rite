@@ -47,6 +47,13 @@ WATCHED = (
 
 # name -> why nothing calls it. A reason is required; "not yet" is not one.
 UNCALLED_ON_PURPOSE = {
+    "launch_command": (
+        "Called by `_default_starter` in the same file. Public because it is "
+        "the one place the engine string becomes a command line, and SPEC "
+        "§9.14.11 points at it by name as the thing that is NOT an adapter — "
+        "a private `_launch_command` would make the limit harder to cite than "
+        "to keep."
+    ),
     # --- rite_ai/managers/, added when this guard was widened ---
     "user_dir": (
         "Called by `instance_path` in the same file. `called_outside` counts "

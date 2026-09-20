@@ -4651,6 +4651,31 @@ the same mistake as freezing the state layer against git alone.
 §9.14.2's instability ends when `local` lands, not when the second adapter
 lands.
 
+#### 9.14.11. ⚠ There is no adapter yet, and the engine string is an executable name
+
+**Stated plainly so nobody mistakes a fallback for a contract.** What ships
+in 0.5.1 is not the adapter interface §9.14.1 describes. There is no
+protocol, nothing for a second engine to implement, and no way to express
+that an engine takes different flags. `launch_command(engine, resume_id)`
+runs **the engine string as a command** and appends `--resume <id>`, which
+is Claude Code's spelling, unconditionally.
+
+**What that assumes, structurally:** that an engine IS a long-running
+interactive process in a pane. A local model is request/response — no pane,
+no session to resume, and `settled_alive` would reject it for exiting
+immediately, which is the correct behaviour for a shape this code cannot
+express.
+
+⚠ **The interface is unstable and is NOT being generalised from one
+implementation.** §9.14.2 and D-63 give the reason, and it is the state
+layer's: git, a filesystem and a key-value store all existed before that
+interface froze, which is the only reason it is genuinely
+backend-agnostic. Guessing the boundary from Claude alone would produce an
+interface shaped like Claude, and the second adapter would discover it.
+
+**So the boundary is drawn when `local` forces it, and until then this
+section is the honest description of what exists.**
+
 #### 9.14.10. A recorded value names the thing it claims to name
 
 **A value written into state must describe what is actually running, not

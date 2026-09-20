@@ -428,6 +428,18 @@ re-derive the whole path rather than reading a diff.
 does with the ERROR VALUE, not only with the exception. If the answer is
 "returns a default", the shape survived.
 
+**The detection rule, which is the reusable half: ask what the thing can
+SEE, not whether it passes.** Recorded because it caught this class
+committing itself. The dead-wiring guard of class 13 was widened to a
+second directory; the edit changed the constant and not the loop body; the
+suite went green. Asking "does it pass" returned yes. Asking "what
+functions does it now see" returned **zero from the new directory**, which
+is the answer that showed the widening had not happened.
+
+A green suite is compatible with a check that reads nothing, which is this
+document's first class restated — so for any change that alters a check's
+SCOPE, the verification is to print the scope, not to run the suite.
+
 **What still gets through.** Every instance where the error travels as a
 value rather than an exception — a returned `None`, an empty list, a
 falsy result — because linters see error handling only in `try` blocks.
