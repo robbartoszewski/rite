@@ -178,7 +178,7 @@ because the existing command has side effects on the board. Same-shape fix
 (intercept Manager names first) is available; whether it is right here is
 yours.
 
-**Q3. Is clause 3 of the journal a refusal or a convention?** "An entry
+**Q3. (CLOSED — see above.) Is clause 3 a refusal or a convention?** "An entry
 without an anchor is not written" — is that enforced on the writing path,
 or documented for the Manager to follow? §9.15 states it as a requirement
 on the format and does not say which. It changes the implementation.
@@ -199,6 +199,17 @@ once its release is confirmed is a section written under time pressure, and
 the scope statement is worth having whichever release carries it. If it
 moves to 0.6.0 nothing is wasted: §9.15 goes with it unchanged, and the
 estimate below drops by 3–4 sittings.
+
+**Q8. How does 0.6.0's gate reach entries that are never committed?**
+The journal is gitignored and per-Manager — machine-local, and inside a
+directory a torn-down sandbox takes with it. §9.15.4 says these entries are
+the QA gate's raw material. Nothing contradicts in 0.5.1 because nothing
+reads them, which is why it is recorded now as a design question rather
+than in 0.6.0 as a migration. Raised by rite-dd.
+
+**Q3 — ANSWERED (rite-dd): the refusal is on the writing path.** Written
+into §9.15.3 and recorded as D-87. Left here so the answer is visible
+beside the question it closed.
 
 **Q5. What is the flag called?** §9.15 says it must read as diagnostic
 rather than as a feature everyone should enable. I have not named it, since

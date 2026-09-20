@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.20.0 · **Date:** 2026-09-20
+**Version:** 0.20.1 · **Date:** 2026-09-20
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -5189,16 +5189,34 @@ appended file invites a stream, and separate files make promoting one to a
 ticket a copy rather than an extraction.
 
 **Gitignored by default,** which needs no new machinery: `.gitignore`
-already excludes `.rite/*` and re-includes only authored config, so a
-journal under `.rite/managers/` is ignored unless somebody deliberately
-re-includes it. It is a Manager's own observation, not a shared artefact,
-until a human promotes it.
+already excludes `.rite/*`, so a journal under `.rite/managers/` is ignored.
+It is a Manager's own observation, not a shared artefact, until a human
+promotes it — and **promotion is a COPY into a ticket**, which is the same
+reason §9.15.3 keeps one file per entry.
+
+⚠ **A draft added "unless somebody deliberately re-includes it", and that is
+FALSE for this path.** `.rite/*` excludes `.rite/managers` as a DIRECTORY,
+and git does not descend into an excluded directory, so a `!` negation three
+levels down has no effect. Measured:
+
+    .gitignore:  .rite/*
+                 !.rite/config.yaml
+                 !.rite/managers/lead/journal/e.md
+
+    check-ignore .rite/config.yaml                  -> NOT ignored (negation works)
+    check-ignore .rite/managers/lead/journal/e.md   -> ignored by `.rite/*`
+    git add      .rite/managers/lead/journal/e.md   -> refused: ".rite/managers"
+
+The negation works for `config.yaml` because it is a DIRECT child — which is
+why the existing `.gitignore` comment explains `.rite/*` rather than
+`.rite/`. Committing a journal entry in place needs `git add -f`. Found in
+review by rite-dd, who measured it rather than reading the rule.
 
 ##### The required fields
 
 | field | rule |
 |---|---|
-| `anchor` | **Required. An entry without one is not written.** A commit SHA, a file path with a line, a command with its output, a ticket id, or a log timestamp. |
+| `anchor` | **Required. An entry without one is not written — refused on the WRITING PATH, before any file is created.** A commit SHA, a file path with a line, a command with its output, a ticket id, or a named log file with a timestamp in it. |
 | `observed` | What was seen. Factual, and tied to the anchor. |
 | `expected` | What the Manager expected instead. |
 | `inferred` | What the Manager concludes. **Separate from `observed`, syntactically.** |
@@ -5249,6 +5267,29 @@ requirements on the format, not guidance to the Manager.
    commit, verify it exists. Mechanical, no judgement, and it catches the
    worst class.
 
+   ⚠ **Every permitted anchor must be checkable, or the requirement leaks.**
+   A draft allowed "a log timestamp", and a bare timestamp has nothing to
+   check against — it is indistinguishable from an invented one, which is
+   the exact failure this subsection exists to prevent. It now has to name
+   the log FILE as well, so there is something to open. The other four were
+   already verifiable. Found in review by rite-dd.
+
+##### The refusal is a branch in the writer, not a rule the writer is asked to follow
+
+⚠ **Settled in review (rite-dd), and this section's own closing argument is
+what settles it.** A requirement on the format is honoured by the Manager
+choosing to honour it, which is exhortation wearing a table — and the
+paragraph below names two instances this week where an explicit instruction
+to check carefully immediately preceded the error it warned against.
+
+So: **the function that writes an entry refuses an unanchored one and
+creates no file.** Both halves are required and they fail for different
+reasons — a refusal that still writes means the check runs after the write,
+and a silent no-write means the caller cannot tell a refusal from a success.
+
+It costs one branch, not a subsystem: the writer already has to open and
+name a file, so refusing before that is cheaper than validating afterwards.
+
 ⚠ **What does NOT work, named because it is the first thing anyone
 reaches for: instructing the Manager to be careful.** This week has two
 instances where an explicit instruction to check carefully immediately
@@ -5281,6 +5322,15 @@ condition whose absence would have spent money all night.
 was a waste"* is a conclusion the Manager is not positioned to draw — the
 round that changed nothing may be the round that killed a design which
 looked fine.
+
+⚠ **OPEN: the 0.6.0 consumer cannot reach these entries as specified.**
+§9.15.3 makes the journal gitignored and per-Manager, which is to say
+machine-local, uncommitted, and inside a directory that a torn-down sandbox
+takes with it. A gate running on another machine, in CI, or after that
+Manager is gone cannot read a file that was never committed. **Nothing
+contradicts in 0.5.1, because nothing reads them** — which is precisely why
+it is recorded now, while it is a design question, rather than in 0.6.0
+when it is a migration. Raised in review by rite-dd.
 
 **Connection to 0.6.0.** These entries are the raw material for the QA gate:
 *"a bug was not caught during testing"* is precisely the evidence that says
@@ -5855,6 +5905,7 @@ happened once already and left no trace until this review found it.
 | D-84 | How a Manager judges whether a review or a test round was worth it | **It records cost, what changed, and whether the change would have been caught elsewhere — and draws NO verdict** | The obvious metric is inverted and this project has already measured the shape: a round ending "fix these three things" produces a commit, a round ending "this design would force-release live Workers, start again" produces nothing, so commit-based review value is biased toward cheap reviews BY CONSTRUCTION and a Manager judging by output would rank bad reviewing above good. D-39 records the same inversion for delivery (a raw merged-ticket count rewards bursting even when the work is wrong); D-67 and D-70 are the instances — review rounds that produced no commits, killed three legs of an argument and caught a stop condition whose absence would have spent money all night. "Round 2 cost 150k and changed nothing" is checkable; "round 2 was a waste" is a conclusion the Manager is not positioned to draw. §9.15.4. |
 | D-85 | What stops a Manager: Ctrl+C, a bound, or `rite stop` | **Ctrl+C stops BOTH supervisor and session; a bound stops supervision and leaves the session alive; `rite stop <manager>` is the orphan-recovery path only** | A bound is an accounting limit and the user may be mid-conversation, so the pane surviving is right and was verified deliberately. Ctrl+C is a human saying stop, and leaving a live session spending quota with only the restarts halted is not what they asked for — nor should it take two commands. The two paths currently share their teardown, so separating them is the work. Ctrl+C must also call `forget_instance` (zero callers today) or a stopped Manager leaves a record that makes the next `rite start` believe it is running, which is the stale-lock defect in a new place. §9.14.12. |
 | D-86 | How the journal is protected against invented events | **By the FORMAT — a required verifiable anchor and a syntactic observed/inferred split — never by instructing the Manager to be careful** | An issue log containing events that did not happen is worse than no log, and it would poison self-reflection later, which is the one thing eventually meant to read it. An entry with no anchor (commit SHA, file and line, command with output, ticket id, log timestamp) is not written; anchors are checked where checking is cheap; entries are written at the moment rather than reconstructed, because compaction is the specific enemy (this week: a session quoting SHAs stale after a history rewrite, and another reporting reviewers as running that were never launched — memory, not malice); and no entry may claim another agent's internal state, which is the form a hallucination naturally takes. Exhortation is explicitly rejected: this week has two instances where an instruction to check carefully immediately preceded the error it warned against. The same principle underlies the project's paste-the-invocation rule. (A draft cited that rule and a scenario-citation rule by id; neither reference existed in this repository, so the ids are an open question rather than a citation — the rule broken inside the section that states it.) §9.15.3. |
+| D-87 | Is the journal's anchor requirement enforced, or asked for? | **ENFORCED on the writing path — the writer refuses an unanchored entry and creates no file** | A requirement on the format is honoured by the Manager choosing to honour it, which is exhortation wearing a table — and §9.15.3 names two instances this week where an explicit instruction to check carefully immediately preceded the error it warned against. Both halves are required and fail for different reasons: a refusal that still writes means the check runs after the write, and a silent no-write means the caller cannot tell refusal from success. It costs one branch, not a subsystem, because the writer already has to open and name a file. Settled in review (rite-dd) against the section's own closing argument. §9.15.3. |
 
 ---
 
@@ -5863,6 +5914,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.20.1 — §9.15 after review.** The anchor requirement is enforced on the writing path rather than asked for (D-87); "a log timestamp" is no longer a permitted anchor on its own, because a bare timestamp is indistinguishable from an invented one and every permitted anchor must be checkable or the requirement leaks; and a claim that a journal entry could be re-included into git was FALSE and is corrected with the measurement — `.rite/*` excludes `.rite/managers` as a directory and git does not descend into an excluded directory, so a `!` negation three levels down has no effect. One gap is recorded rather than closed: the 0.6.0 gate that is meant to consume these entries cannot reach them, because they are machine-local and uncommitted. All four found by rite-dd in review.
 
 **Changes in 0.20.0 — the Manager's process journal (§9.15), stop semantics (§9.14.12–13), and a subsection that contradicted the code.**
 
