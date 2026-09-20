@@ -56,14 +56,42 @@ def for_manager(manager: str, *, extra: str = "") -> str:
 
 @dataclass(frozen=True)
 class Delivery:
-    """⚠ `ok` False is not an error to raise — it is a fact to report.
+    """Whether the prompt REACHED THE TERMINAL. Not whether it was read.
 
-    A Manager whose prompt did not arrive is still a running session the
-    human is paying for, and killing it to signal a delivery failure would
-    destroy work to report a problem. The caller says so and carries on.
+    ⚠ **The field is named for what it can see, because the earlier name
+    lied.** It was `ok`, and callers read that as "the Manager got its
+    prompt". It does not mean that. A tty echoes keystrokes whether or not
+    the foreground process ever calls `read()`, and this confirms delivery
+    by reading the pane back — so a session running `sleep 300`, which
+    never touches stdin, returns True:
+
+        deliver(name, "...") -> reached_terminal=True, 'the prompt is on
+                                the terminal'
+
+    **A process that never reads stdin is indistinguishable from one that
+    did.** That is precisely the case §9.14.11a warns about — "a `send-keys`
+    can be swallowed by a shell that is not yet reading" — so the guarantee
+    is weaker than the warning it was written to answer.
+
+    ⚠ **Do not spend an afternoon looking for a proxy; there isn't one.**
+    Checked and rejected:
+
+    * `#{pane_in_mode}` is about tmux's OWN copy mode, not the pane's
+      process.
+    * `#{pane_pid}` and the foreground pgid say WHAT is running, never
+      whether it is blocked in `read()`.
+    * `/proc/<pid>/wchan` or `syscall` would answer it on Linux and does
+      not exist on macOS, which is where this runs.
+
+    So the honest position is a narrow claim rather than a strong-sounding
+    one: **this proves the characters arrived at the terminal.** What the
+    program did with them is not observable from outside it.
+
+    `reached_terminal` False with nothing sent (an empty prompt) is still
+    True, because nothing was owed.
     """
 
-    ok: bool
+    reached_terminal: bool
     detail: str = ""
 
 
@@ -115,9 +143,13 @@ def deliver(name: str, text: str) -> Delivery:
         except (OSError, subprocess.SubprocessError):
             break
         if seen.returncode == 0 and first and first in (seen.stdout or ""):
-            return Delivery(True, "prompt is on screen")
+            return Delivery(
+                True,
+                "the prompt is on the terminal; whether the process read it "
+                "is not observable",
+            )
     return Delivery(
         False,
-        "the prompt was sent but did not appear in the pane, so the session "
-        "may be waiting for input it never received",
+        "the prompt was sent but never appeared on the terminal, so the "
+        "session did not even receive the characters",
     )

@@ -3,6 +3,13 @@
 A Manager started with an empty prompt waits for a human to type, which is
 the behaviour the command exists to remove.
 
+⚠ **`Delivery.reached_terminal` is a narrow claim and the name says so.**
+A tty echoes keystrokes whether or not the process reads them, so a session
+running `sleep 300` returns True — a process that never reads stdin is
+indistinguishable from one that did. The field was called `ok`, which
+callers read as "the Manager got its prompt"; it never meant that. See the
+dataclass docstring for the proxies that were checked and rejected.
+
 ⚠ **The two properties worth the most here are not "a prompt is sent".**
 They are that delivery is CONFIRMED rather than assumed, and that a RESUMED
 session is not prompted again. The first because a `send-keys` can be
@@ -160,7 +167,7 @@ class TestAFailedDeliveryIsReportedNotFatal:
             note=said.append,
         )
         assert result.ok, "a lost prompt killed the run"
-        assert any("may not have arrived" in m for m in said), said
+        assert any("did not reach the terminal" in m for m in said), said
         assert any("tmux attach" in m for m in said), "it did not say how to look"
 
 
@@ -175,13 +182,13 @@ class TestDeliveryAgainstRealTmux:
         try:
             marker = f"echo RITE-MARKER-{uuid.uuid4().hex[:6]}"
             got = deliver(name, marker)
-            assert got.ok, got.detail
+            assert got.reached_terminal, got.detail
         finally:
             subprocess.run(["tmux", "kill-session", "-t", name], capture_output=True)
 
     def test_a_session_that_does_not_exist_is_a_failed_delivery(self):
         got = deliver(f"absent-{uuid.uuid4().hex[:6]}", "hello")
-        assert not got.ok
+        assert not got.reached_terminal
         assert "no session" in got.detail
 
     def test_a_prefix_of_a_live_session_is_not_typed_into(self):
@@ -194,7 +201,9 @@ class TestDeliveryAgainstRealTmux:
         time.sleep(0.5)
         try:
             got = deliver(name[:-1], "SHOULD NOT ARRIVE")
-            assert not got.ok, "a prompt was typed into a different session"
+            assert not got.reached_terminal, (
+                "a prompt was typed into a different session"
+            )
         finally:
             subprocess.run(["tmux", "kill-session", "-t", name], capture_output=True)
 
@@ -237,14 +246,46 @@ class TestDeliveryAgainstRealTmux:
                 break
         try:
             got = deliver(name, f"RITE-NEVER-ARRIVES-{uuid.uuid4().hex[:6]}")
-            assert not got.ok, (
+            assert not got.reached_terminal, (
                 "a prompt that never reached the pane was reported as "
                 "delivered — the confirmation is not confirming"
             )
-            assert "did not appear" in got.detail
+            assert "never appeared on the terminal" in got.detail
         finally:
             subprocess.run(["tmux", "kill-session", "-t", name], capture_output=True)
 
     def test_an_empty_prompt_sends_nothing_and_is_not_a_failure(self):
         got = deliver("any-name-at-all", "   ")
-        assert got.ok and "nothing" in got.detail
+        assert got.reached_terminal and "nothing" in got.detail
+
+
+@tmux_only
+def test_a_process_that_never_reads_stdin_still_reports_reaching_the_terminal():
+    """⚠ The limitation, asserted rather than left in a docstring — because
+    a stated limitation nobody tests is a claim that drifts.
+
+    `sleep 300` never touches stdin. The tty echoes the keystrokes anyway,
+    so the pane contains the text and `reached_terminal` is True. This is
+    the case §9.14.11a warns about ("a `send-keys` can be swallowed by a
+    shell that is not yet reading") and the confirmation cannot see it.
+
+    **If this test ever goes red, the guarantee got STRONGER** — somebody
+    found a way to observe consumption — and `Delivery` should be renamed
+    again rather than this test deleted.
+    """
+    name = f"deaf-{uuid.uuid4().hex[:6]}"
+    subprocess.run(
+        ["tmux", "new-session", "-d", "-s", name, "sleep 300"], capture_output=True
+    )
+    time.sleep(0.6)
+    try:
+        got = deliver(name, f"RITE-NEVER-READ-{uuid.uuid4().hex[:6]}")
+        assert got.reached_terminal, (
+            "the echo case stopped reporting True — if consumption is now "
+            "observable, rename the guarantee instead of deleting this"
+        )
+        assert "not observable" in got.detail, (
+            "the detail no longer says what it cannot see"
+        )
+    finally:
+        subprocess.run(["tmux", "kill-session", "-t", name], capture_output=True)

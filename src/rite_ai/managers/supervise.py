@@ -268,14 +268,14 @@ def supervise(
             # of a first cycle that was itself a resume.
             if prompt and not resume_from:
                 handed = hand_over(result.session, prompt)
-                cycle.prompted = handed.ok
-                if not handed.ok:
+                cycle.prompted = handed.reached_terminal
+                if not handed.reached_terminal:
                     # Reported, NOT fatal. A Manager whose prompt did not arrive
                     # is still a running session the human is paying for, and
                     # killing it to signal a delivery failure would destroy work
                     # to report a problem.
                     say(
-                        f"warning: the Manager's prompt may not have arrived — "
+                        f"warning: the Manager's prompt did not reach the terminal — "
                         f"{handed.detail}. Attach with `tmux attach -t "
                         f"{result.session}` and check."
                     )
