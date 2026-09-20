@@ -67,15 +67,24 @@ def current_manager() -> str:
     a human's own shell is not a Manager, and that is the common case — so a
     caller uses this to fill a DEFAULT, never to assert one.
 
-    ⚠ **The name is validated before it is returned.** An environment is
-    inherited by anything a session starts, and this value reaches
-    `manager_dir` as a path segment; `name_problem` is the check that join
-    already relies on. A value that could not be a Manager's name reads as
-    absent rather than raising, because the caller is filling a default and
-    a default that tracebacks is worse than one that is not there.
+    ⚠ **The name is validated before it is returned, by the SAME rule the
+    rest of the Manager path uses.** An environment is inherited by anything
+    a session starts, and this value reaches `manager_dir` as a path segment
+    — which RAISES on a bad name. A default that tracebacks is worse than
+    one that is not there, so a value that could not be a Manager's name
+    reads as absent.
+
+    ⚠ `must_be_a_tmux_target=True` is not optional here, and leaving it off
+    is a live bug rather than a strictness preference: without it `.` is
+    admitted (context FILE names come through `name_problem` too), so
+    `RITE_MANAGER=v2.0` would be returned here and then raise in
+    `manager_dir`. Every other Manager-name caller — `start`, `manager_dir`,
+    `instance_path`, the journal's writer — passes it.
     """
     value = os.environ.get(MANAGER_ENV, "").strip()
-    if not value or name_problem(value, kind="manager name"):
+    if not value or name_problem(
+        value, kind="manager name", must_be_a_tmux_target=True
+    ):
         return ""
     return value
 

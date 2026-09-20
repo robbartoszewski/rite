@@ -65,7 +65,23 @@ class TestTheAnswerWithoutASession:
         monkeypatch.setenv(MANAGER_ENV, "  planner\n")
         assert current_manager() == "planner"
 
-    @pytest.mark.parametrize("hostile", ["../escape", "a/b", "", "   ", "."])
+    @pytest.mark.parametrize(
+        "hostile",
+        [
+            "../escape",
+            "a/b",
+            "",
+            "   ",
+            ".",
+            # ⚠ Both are SAFE AS A PATH and broken as a tmux target: `.` is
+            # tmux's pane separator and `:` its window separator, so a
+            # session under either is created and then addressable by
+            # nothing. `manager_dir` raises on them, so returning one here
+            # would turn a missing default into a traceback.
+            "v2.0",
+            "eu:west",
+        ],
+    )
     def test_a_name_that_could_not_be_a_managers_reads_as_absent(
         self, monkeypatch, hostile
     ):
