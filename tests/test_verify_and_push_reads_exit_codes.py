@@ -134,3 +134,32 @@ def test_the_commands_this_file_names_still_exist_in_the_script():
             "something else, update VERDICTS here — until then the exit-code "
             "guard above is checking for a command that is not there"
         )
+
+
+def test_both_patterns_still_match_the_script():
+    """⚠ The floor under the test above, which reads `0 >= 0` when broken.
+
+    `test_each_captured_code_is_actually_tested` compares two regex counts.
+    If the script renames `rc=$?`, or changes how it compares, BOTH counters
+    go to zero independently and `tests >= captures` is trivially true — so
+    the guard on the one script standing between a red suite and a push to
+    origin would pass having matched nothing.
+
+    That is the exact defect this file was written about, one level up: a
+    check that never ran is indistinguishable from one that passed. Floors
+    are well below today's figures (6 and 6) so ordinary edits to the script
+    never touch them.
+    """
+    body = "\n".join(_code_lines())
+    captures = len(re.findall(r"rc=\$\?", body))
+    tests = len(re.findall(r"\$rc -(?:ne|eq) \d", body))
+    assert captures >= 3, (
+        f"the capture pattern `rc=$?` matched {captures} times. The script "
+        "captures exit codes in several places, so a near-zero count means "
+        "the pattern no longer matches how they are written — and the test "
+        "above is comparing two zeroes"
+    )
+    assert tests >= 3, (
+        f"the comparison pattern matched {tests} times. Same failure: the "
+        "guard passes because it found nothing, not because nothing is wrong"
+    )

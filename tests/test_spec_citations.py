@@ -109,3 +109,39 @@ def test_specs_version_header_matches_its_newest_revision_entry():
         f"SPEC header says {header.group(1)} but the newest revision entry is "
         f"{entries[0]} — bump one or the other"
     )
+
+
+def test_the_citation_scan_actually_reads_the_repository():
+    """⚠ The floor under every check in this file.
+
+    `existing` (the sections parsed out of SPEC.md) already has a floor at
+    line 83. `_CITING` — the files searched FOR citations — does not, and it
+    is built from six `rglob`/`glob` calls over `src/`, `tests/`, `tools/`,
+    `templates/` and `.github/workflows/`. `rglob` on a directory that does
+    not exist returns nothing and raises nothing, so renaming any one of
+    them shrinks the corpus silently, and renaming the lot leaves `dangling`
+    empty and every test here passing over zero files.
+
+    Two floors, because they fail for different reasons: the first says the
+    files were found, the second says the citation PATTERN still matches
+    them. A reformat that changed how sections are written would keep the
+    file count healthy and take the match count to zero.
+    """
+    assert len(_CITING) >= 100, (
+        f"only {len(_CITING)} files collected to search for citations. One "
+        "of the globbed directories has moved or been renamed, and the "
+        "dangling-citation check is scanning almost nothing"
+    )
+    found = 0
+    for path in _CITING:
+        try:
+            found += len(_CITATION.findall(path.read_text(errors="replace")))
+        except OSError:
+            continue
+    assert found >= 100, (
+        f"the citation pattern matched {found} references across "
+        f"{len(_CITING)} files. rite cites SPEC sections throughout, so a "
+        "near-zero count means the pattern no longer matches how citations "
+        "are written — the check then reports no dangling citations because "
+        "it found no citations at all"
+    )

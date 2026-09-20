@@ -205,3 +205,38 @@ def test_every_text_mode_subprocess_handles_undecodable_output():
         "subprocess output decoded as text with no `errors=` — git can hand "
         f"back bytes that are not UTF-8: {offenders}"
     )
+
+
+def test_the_text_mode_scan_actually_reads_the_package():
+    """⚠ The floor under `test_every_text_mode_subprocess_handles_undecodable_output`.
+
+    That test walks `src/rite_ai` and collects `text=True` subprocess calls
+    with no `errors=`. `rglob` on a renamed directory returns nothing and
+    raises nothing, so `offenders` stays empty and the guard passes having
+    read no files — while the property it protects is that git can hand back
+    bytes that are not UTF-8, which is how a filename in another locale, or
+    a secret in a diff, crashes or is silently mangled.
+
+    Two floors, for the two ways it goes dark: the files must be there, and
+    the trigger token must still be found in them. A refactor that wrapped
+    every subprocess call in a helper would keep the file count healthy and
+    take the `text=True` count to zero, leaving nothing to check.
+    """
+    src = Path(__file__).resolve().parent.parent / "src" / "rite_ai"
+    files = sorted(src.rglob("*.py"))
+    assert len(files) >= 50, (
+        f"only {len(files)} Python files found under {src} — the "
+        "undecodable-bytes guard is scanning almost nothing"
+    )
+    hits = sum(
+        1
+        for path in files
+        for line in path.read_text().splitlines()
+        if "text=True" in line and not line.strip().startswith("#")
+    )
+    assert hits >= 15, (
+        f"`text=True` appears on {hits} lines across {len(files)} files. "
+        "rite decodes subprocess output in many places, so a near-zero count "
+        "means the scan's trigger no longer matches how those calls are "
+        "written, and the guard reports no offenders because it examined none"
+    )
