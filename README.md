@@ -271,13 +271,21 @@ it. What follows is what is genuinely not built, checked against the code.
 - **The loop works the queue.** `rite loop` watches it and says why it is
   stopped — it prints the Worker it would start and does not start one.
   Two ways to close that. Dispatching mechanical subtasks to local models is
-  still unwired: the pieces are in the code, nothing calls them, and there is
-  no command. Dispatching Claude sessions **unattended** remains forbidden by
-  SPEC §9.12, on purpose, because it spends your quota while nobody is
-  watching. *Attended* dispatch arrived in 0.5.1 as `rite start <manager>`,
-  which keeps a Manager session going in your own foreground terminal under
-  two ceilings you typed — so the gap is now narrower than this section used
-  to claim, and it is the loop that still starts nothing. So the loop closes
+  still unwired — but only the half that would run one: nothing outside
+  `rite_ai/local/` calls the runner or the harness, and there is no command
+  that executes a subtask on a local model. The rest is wired and reachable:
+  assignment routes duties through the local duty router, and `rite doctor`
+  probes a configured `local:<class>` endpoint rather than assuming it.
+  *This bullet said "the pieces are in the code, nothing calls them" until
+  0.5.1, which was false in both directions — and the same stale claim had
+  already been corrected once in `docs/rite-local-dogfood-decisions.md` section 8
+  without anyone propagating it here.* Dispatching Claude sessions
+  **unattended** remains forbidden by SPEC §9.12, on purpose, because it
+  spends your quota while nobody is watching. *Attended* dispatch arrived in
+  0.5.1 as `rite start <manager>`, which keeps a Manager session going in
+  your own foreground terminal under two ceilings you typed — so the gap is
+  now narrower than this section used to claim, and it is the loop that
+  still starts nothing. So the loop closes
   *"nobody noticed the queue had stalled"* and not *"nobody is doing the
   work"*.
 - **Questions routed to whoever owns the area.** What is built: you list
@@ -353,9 +361,13 @@ including against three interchangeable state backends. What has not happened
 is two physical machines on one project over a real network. Treat it as
 implemented and unproven rather than as either.
 
-**Claude only, deliberately.** `CLAUDE.md` and `.claude/agents/` are
-first-class here rather than behind a provider abstraction, and no other tool
-is planned.
+**Claude is the only agent rite drives today, deliberately.** `CLAUDE.md`
+and `.claude/agents/` are first-class here rather than behind a provider
+abstraction. *This said "no other tool is planned", which contradicted the
+"Planned — not built" section eighty lines above in this same file:* a local
+model tier (`local:<class>`) is designed, ticketed, parsed by the config and
+probed by `rite doctor`, and what is missing is the half that runs a subtask
+on one. No other **hosted** provider is planned.
 
 **Workers are interchangeable, so there is no capability routing.** Every
 worker holds the same project-scoped credentials, so assignment picks

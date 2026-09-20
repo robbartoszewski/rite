@@ -119,6 +119,74 @@ session that finished normally read as "unknown" and the supervisor
 stopped rather than resuming. The check now waits for the status; if it
 never arrives the answer is still unknown, which still does not resume.
 
+### Fixed: a Manager name is now checked against what it BECOMES, not just where it goes
+
+A Manager name is a path segment *and* a tmux target, and only the first
+was checked. `eu:west` and `v2.0` both passed — `:` is tmux's window
+separator and `.` its pane separator — so tmux created a session under a
+name no later lookup could resolve. Measured: `rite start` reported that
+the session "started and exited immediately" **while a real session was
+running**, `rite manager stop` reported success having killed nothing, and
+the liveness check answered confidently that it was not alive. In
+production that pane runs `claude`, so the failure mode was a paid,
+detached session with no instance record and a recovery command that could
+not see it.
+
+Names are now validated by an **allowlist** — ASCII letters, digits, `.`,
+`_`, `-` — rather than a list of characters to reject, because `:` would
+not have been on a reject list either. The stricter tmux-target rule, which
+additionally refuses `.`, is passed explicitly at every call site that
+takes a Manager name, rather than being the default for every caller —
+context *file* names come through the same function, and `database.md`
+must keep its dot. A name that was accepted before and is refused now was
+already broken; it just failed later and less visibly.
+
+### Fixed: the ending path asks the Manager's own pane, and reads the kill signal
+
+Three defects from a hostile review of how a session's ending is
+determined, each reproduced against real tmux before the fix:
+
+- **`-t <session>` answers about the session's *active* pane.** Attach and
+  run `tmux split-window`, exit that scratch shell, and `ending` reported
+  `finished` while the Manager's own pane was still running its process.
+  `start` now records the Manager's `#{pane_id}` and every later question
+  names that pane.
+- **`#{pane_dead_signal}` carries `kill` in the same call that leaves
+  `#{pane_dead_status}` empty**, so an OOM-killed or externally killed
+  Manager read as "cannot tell" rather than as a fault.
+- **Whether a human was attached** is asked of the session rather than
+  inferred.
+
+### A Manager can read its own name — `RITE_MANAGER`
+
+`rite start <manager>` now sets `RITE_MANAGER` on the tmux session, so a
+process inside it can determine which Manager it is. Previously the name
+reached the session only as prompt text, which the supervisor sends on the
+**first** session and deliberately never again — so after a resume nothing
+on the machine could answer the question.
+
+`--manager` on `rite journal observe` and `rite journal retrospective` is
+therefore no longer required: inside a Manager's own session it defaults to
+that Manager. An explicit `--manager` still wins, and outside a session the
+command refuses rather than guessing a name — an entry filed under the
+wrong Manager is worse than one that was refused.
+
+⚠ **Needs tmux 3.2 or newer** (for `new-session -e`). On an older tmux the
+session still starts and `rite start` says that the identity is unavailable
+and that commands inside it need `--manager` spelled out.
+
+### Fixed: an anchor of invisible characters is no longer an anchor
+
+`str.strip()` removes Python-whitespace only, so U+200B ZERO WIDTH SPACE,
+U+200C ZWNJ and U+2800 BRAILLE PATTERN BLANK all passed the anchor refusal
+— measured. An entry whose anchor renders blank is worse than the invented
+SHA the known gap below describes, because at least an invented SHA looks
+like something a reader will try to check.
+
+The rule is now positive rather than a blacklist: an anchor must contain at
+least one alphanumeric character. A first attempt blacklisted Unicode
+categories and missed U+2800 on its first run, whose category is `So`.
+
 **Why this release exists, stated plainly: v0.5.0 shipped a schedule that
 looks enforced and is not.** A user opens `config.yaml`, sees windows and
 worker counts, and has no way to discover that `rite sandbox start` ignores
