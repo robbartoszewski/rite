@@ -211,8 +211,16 @@ def is_tmux_session_alive(name: str) -> bool:
     binary = _tmux_binary()
     if binary is None:
         return False
+    # ⚠ `=` is tmux's EXACT-match prefix, and it is not decoration. `-t`
+    # resolves by exact match, then fnmatch, then PREFIX — so `has-session
+    # -t rite-pool-foo-1` succeeds when only `rite-pool-foo-10` exists, and
+    # `slot_name` numbers slots exactly that way. A pool of eleven reads
+    # slot 1 as alive because slot 10 is, so a dead slot is never refilled
+    # and `pool status` reports liveness nothing observed — the failure
+    # `_settled_alive` exists to prevent, one layer up. Measured:
+    # `has-session -t lead` -> 0 and `-t =lead` -> 1, with only `leader` up.
     proc = subprocess.run(
-        [binary, "has-session", "-t", name],
+        [binary, "has-session", "-t", f"={name}"],
         capture_output=True,
         text=True,
         errors="replace",

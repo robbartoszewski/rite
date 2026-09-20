@@ -279,9 +279,16 @@ def is_alive(name: str) -> bool:
     binary = _tmux()
     if binary is None:
         return False
+    # ⚠ `=` is tmux's EXACT-match prefix. `-t` resolves by exact match, then
+    # fnmatch, then PREFIX, so without it a longer-named session answers for
+    # a shorter one and `loop start` refuses — "a loop is already running" —
+    # about a session that does not exist. `session_name` carries a path
+    # hash, which makes a collision between two projects unlikely rather
+    # than impossible; the property should not rest on a hash staying in the
+    # name. Measured: `has-session -t lead` -> 0 with only `leader` up.
     try:
         done = subprocess.run(
-            [binary, "has-session", "-t", name],
+            [binary, "has-session", "-t", f"={name}"],
             capture_output=True,
             text=True,
             errors="replace",
