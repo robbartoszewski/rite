@@ -10,6 +10,16 @@ mechanics at the end are open; the decision is not.
 
 **Continuation becomes the default, and starting over becomes explicit.**
 
+**Addendum, decided 2026-09-21:**
+
+> if designated manager session doesn't exist, `rite start X` is
+> effectively `rite start X --fresh`
+
+**There is no error state here.** Nothing to continue is not a problem for
+the user to clear before they may work — it is a reason to do the obvious
+useful thing. That settles two of the mechanics below; see "Settled by the
+addendum".
+
 ---
 
 ## What this changes
@@ -73,6 +83,62 @@ existing `<name>.json` layout. Two Managers on one machine designate
 independently; the same project on two machines designates independently,
 which is correct — a provider session id is not portable between them.
 
+## Settled by the addendum: nothing to continue means start fresh
+
+Two cases that were open collapse into one rule, and neither is an error:
+
+| state | behaviour |
+|---|---|
+| **no designation at all** — first ever run for this Manager, or the file was pruned with the rest of `.rite/user/` | start fresh |
+| **a designation naming a session the provider no longer knows** — transcripts pruned, machine reimaged, id expired | start fresh |
+
+Robert's sentence names the second directly. The first follows by the same
+principle and was never a candidate for an error anyway: a first run has
+nothing to continue by definition, and a Manager that refused to start until
+its user cleared a missing file would be unusable on day one.
+
+⚠ **This settles the INVOCATION-START case and should not be read as
+changing the mid-run refusal.** They are different moments. When a cycle
+ends mid-run and no transcript is found, the supervisor today refuses —
+*"continuing would start a FRESH context rather than carry the work on.
+Refused rather than silently restarting"* — and that refusal protects work
+already in flight: a ticket is half-done and a fresh context would redo or
+abandon it. At invocation start there is no such work to lose, so refusing
+would cost the user a command and protect nothing. A builder should keep
+both behaviours rather than making one of them consistent with the other.
+
+### Recommended, not decided: say so when it happens
+
+**This is mine, not Robert's, and it is his call.**
+
+A run that starts fresh *because the designated session was gone* should
+say so. Silence makes it identical, from the user's side, to the
+continuation they asked for — so a user who believes they are carrying on
+yesterday's conversation gets a Manager with no memory of it and nothing
+anywhere explaining why. That is the confident-wrong-answer shape this
+release spent its length removing: `pid=0`, `rite status` calling a live
+session gone, `liveness` answering `known=True` about a session it could not
+address.
+
+**The precedent is the timezone, and it is exact.** `resolve_zone` returns
+three distinguishable answers, and `describe()` states which one applies:
+
+    schedule in Europe/Warsaw (from config)
+    schedule in Europe/Warsaw (machine local)
+    schedule in Europe/Warsaw (machine local — schedule.timezone 'Not/AZone'
+      is not a known timezone and was ignored)
+
+D-48 was relaxed to let the zone default, and the relaxation was only
+acceptable because the default is announced — "a default that is never
+stated is the same silent-wrong-clock D-48 was written against". The same
+sentence applies here with one word changed. It also gives the shape: an
+unset designation and a designation that was *rejected* should not print the
+same line, because "you never had one" and "the one you had is gone" are
+different facts to the person reading.
+
+Robert has been consistent about wanting fallbacks loud, so I expect
+agreement — but it is recorded as open rather than assumed.
+
 ## Open mechanics, for whoever builds it
 
 ⚠ **These are mechanics, not the decision.** None of them reopens whether
@@ -87,22 +153,7 @@ continuation is the default.
    classifier that already distinguishes `finished`, `quit`, `crashed` and
    `unclear`.
 
-2. **What happens when the file is missing?** First ever run for a Manager
-   is the ordinary case and must not be an error. The question is whether a
-   *missing* designation is silently equivalent to `--fresh`, or is said out
-   loud — "no designated session for `planner`; starting a new one" — which
-   is the direction the rest of the release has gone every time.
-
-3. **What happens when it names a session the provider no longer knows?**
-   Transcripts are pruned, machines are reimaged, providers expire ids. This
-   is the one that must not fail silently: `--resume` against an unknown id
-   is what "each cycle began a FRESH context with the ticket half-done and
-   no memory of it" already described, and the supervisor's existing refusal
-   for a missing transcript ("continuing would start a FRESH context rather
-   than carry the work on. Refused rather than silently restarting") is the
-   precedent to follow rather than re-derive.
-
-4. **Does `--fresh` re-designate, or skip once?** Both are defensible and
+2. **Does `--fresh` re-designate, or skip once?** Both are defensible and
    they differ permanently. If `--fresh` rewrites the designation, the new
    session becomes the thing tomorrow's bare `rite start` continues. If it
    only skips, tomorrow returns to the older conversation and the fresh one
@@ -110,7 +161,7 @@ continuation is the default.
    wording says what `--fresh` *starts*, not what it *designates*, so this
    is genuinely unsettled.
 
-5. **Is the designation inspectable and settable?** `rite status` already
+3. **Is the designation inspectable and settable?** `rite status` already
    names a Manager's session. Whether a user can read the designated id, and
    whether they can point a Manager at a different one by hand, follows from
    the same argument that made `--manager` explicit as well as defaulted:
