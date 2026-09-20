@@ -134,7 +134,7 @@ does not.
 
 ## Carried into 0.6.0 from 0.5.1 — engineering, not design
 
-Four items deferred out of 0.5.1 deliberately. None blocks the design
+Five items deferred out of 0.5.1 deliberately. None blocks the design
 above; all are things the next person to work in this area should know
 before they spend an afternoon rediscovering them.
 
@@ -260,3 +260,44 @@ an adoption feature, a doctor check that enumerates the server, a
 multi-Manager view — gets a confident wrong answer of exactly the shape
 item 1 warns about. Either document the precondition at the function, or
 make it take a validated name type.
+
+### 5. An unattended Manager cannot act without approval — OPEN, and NOT new
+
+**Observed in the 0.5.1 acceptance run.** Three cycles ran against real
+`claude`, resumed correctly and stopped on their ceiling — and the Manager
+produced nothing. Its pane:
+
+    ...le. This needs to be approved on your end before I can proceed.
+    DONE-1
+    Pane is dead (status 0, ...)
+
+It was asked to write one file, said it needed approval, answered `DONE-1`,
+and exited 0.
+
+**This gap predates `-p` and predates this release.** `RITE_LOOP_PLAN.md`
+records the assumption directly — §5.3.1 has the Manager create sandboxes
+"as ordinary tool calls … the human approval happens once, at the Manager"
+— which is only true while a human is at the Manager. Unattended, nobody
+answers, and that is `DEFECT_CLASSES.md` class 15 in its original words: a
+prompt is not an exception, it is the absence of an answer. An interactive
+Manager would have reached the same wall and WAITED at it until the window
+bound.
+
+⚠ **What `-p` changed is the failure mode, and that part IS new.** Waiting
+is visible — the session stays alive, `ending` says the pane is not dead,
+nothing resumes. Refusing is not: the engine exits 0, `ending` reads
+FINISHED, the supervisor resumes, and the run reports success having done
+nothing. **A refusal that looks like a clean finish is worse than a hang**,
+and it is the same shape as every other finding this release — a real
+answer to the wrong question, believed because the check could not tell.
+
+**Deliberately not fixed here.** The remedy is Claude Code's
+`--permission-mode` / `--allowedTools`, and choosing what an unattended
+agent may do to somebody's repository is a security decision that belongs
+to Robert, not to a late fix for something else. Recorded with what was
+measured so the decision can be made on evidence.
+
+**What would make it detectable meanwhile:** nothing distinguishes "the
+Manager did the work" from "the Manager declined and exited 0" today, and
+that is the cheaper half of the problem.
+

@@ -82,6 +82,10 @@ def test_status_reports_a_manager_started_the_way_the_cli_starts_one():
             manager,
             engine="sh",
             resume_id="",
+            # The launch pipes `$RITE_PROMPT` into the engine, so the stub
+            # needs something to do — this is what keeps the session alive
+            # long enough for `rite status` to be asked about it.
+            prompt="sleep 60",
             max_sessions=1,
             window_seconds=60,
         )

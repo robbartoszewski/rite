@@ -335,7 +335,9 @@ class TestTheSupervisorRefusesToResumeIntoNothing:
     def test_a_real_id_is_passed_to_the_next_cycle(self, project, monkeypatch):
         seen: list[str] = []
 
-        def starter(root, manager, *, engine, resume_id, max_sessions, window_seconds):
+        def starter(root, manager, *, engine, resume_id,
+            max_sessions, window_seconds, prompt="",
+        ):
             seen.append(resume_id)
             return StartResult(True, "ok", session=f"s{len(seen)}")
 
@@ -851,7 +853,9 @@ class TestTheDefaultResumeIdIsCalled:
         monkeypatch.setattr(transcripts_mod, "default_transcripts_dir", lambda: base)
 
     def _run(self, project, monkeypatch, seen):
-        def starter(root, manager, *, engine, resume_id, max_sessions, window_seconds):
+        def starter(root, manager, *, engine, resume_id,
+            max_sessions, window_seconds, prompt="",
+        ):
             seen.append(resume_id)
             return StartResult(True, "ok", session=f"s{len(seen)}")
 

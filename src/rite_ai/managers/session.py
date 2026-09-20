@@ -286,6 +286,7 @@ def start(
     *,
     engine: str = "",
     command: str = "",
+    prompt: str = "",
     max_sessions: int = 0,
     window_seconds: float = 0.0,
 ) -> StartResult:
@@ -453,6 +454,18 @@ def start(
     # call started would keep the inherited name for every LATER session on
     # it, so the poisoning outlives the command that caused it.
     uninherited = {k: v for k, v in os.environ.items() if k != MANAGER_ENV}
+    # The cycle's instruction, read by the launch command off stdin. Set
+    # even when empty so a stale value from the caller's shell cannot leak
+    # into a session that was meant to get none.
+    # Written before the session starts, because the launch redirects its
+    # stdin from this path. `0600` and rewritten each cycle: the engine is
+    # given one instruction, not a history.
+    prompt_path = manager_dir(root, manager) / PROMPT_FILE
+    try:
+        prompt_path.write_text(prompt)
+        prompt_path.chmod(0o600)
+    except OSError as e:
+        return StartResult(False, f"could not write the cycle's prompt: {e}")
     try:
         done = subprocess.run(
             [*argv, "-s", name, launch],
@@ -935,6 +948,24 @@ def attachment(name: str) -> Attachment:
             detail=f"tmux answered {raw!r}, which is not a client count",
         )
 
+
+PROMPT_FILE = "prompt.txt"
+"""Where this cycle's instruction is written for the engine to read.
+
+⚠ **A FILE, because the environment does not reach the pane.** The prompt
+must not be an argument — `tmux new-session <cmd>` puts its command on
+tmux's argv, where `ps` shows it to every local account, and a prompt
+quotes ticket text, paths and internal names. The obvious alternative was
+an inherited variable, and it does not work: **a pane takes its
+environment from the tmux SERVER, not from the client that asked**
+(measured — a nested `new-session` against an already-running server reads
+the server's value, not the caller's). That is exactly why `MANAGER_ENV`
+needs `-e`, and `-e` is the argv exposure being avoided.
+
+So the instruction is written to `0600` under the Manager's own directory
+and the launch redirects stdin from it. The PATH is on the command line,
+which is harmless; the CONTENT never is.
+"""
 
 CLAUDE_OAUTH_ENV = "CLAUDE_CODE_OAUTH_TOKEN"
 """The credential an unattended Claude Code run needs, read from the

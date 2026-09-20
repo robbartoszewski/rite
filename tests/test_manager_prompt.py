@@ -27,8 +27,8 @@ import uuid
 
 import pytest
 
-from rite_ai.managers.prompt import Delivery, deliver, for_manager
-from rite_ai.managers.session import StartResult
+from rite_ai.managers.prompt import deliver, for_manager
+from rite_ai.managers.session import StartResult, Stopped
 from rite_ai.managers.supervise import supervise
 
 tmux_only = pytest.mark.skipif(
@@ -52,126 +52,87 @@ class TestComposition:
         assert for_manager("p") == for_manager("p", extra="")
 
 
-class TestOnlyTheFirstSessionIsPrompted:
-    """D-90's stated default, which is the half of the decision that was
-    inferred rather than given — so it is the half most worth pinning."""
+class TestOnlyTheFirstSessionGetsTheOpeningPrompt:
+    """⚠ **D-90 amended, not worked around.** The decision that the prompt
+    goes to the first session only was right while the engine was a REPL:
+    later cycles were the same conversation continuing, so there was
+    nothing to say. `-p` changed the premise — each cycle is a separate
+    invocation that exits, and one launched with no input exits 1 rather
+    than continuing. So every cycle carries an instruction, and a resumed
+    one carries a DIFFERENT instruction.
 
-    def _run(self, tmp_path, cycles: int):
-        (tmp_path / ".rite").mkdir(exist_ok=True)
-        sent: list[tuple[str, str]] = []
-        started: list[str] = []
+    What D-90 was protecting still holds and is pinned here: the OPENING
+    prompt is never re-issued, because telling a session to do work it has
+    already done is how it gets done twice.
+    """
 
-        def starter(root, manager, *, engine, resume_id, max_sessions, window_seconds):
-            started.append(resume_id)
-            return StartResult(True, "ok", session=f"s{len(started)}", attach="a")
-
+    def _cycles(self, tmp_path, monkeypatch, endings):
         import rite_ai.managers.supervise as sup
 
-        return sent, started, starter, sup
+        (tmp_path / ".rite").mkdir(exist_ok=True)
+        seen: list[tuple[str, str]] = []
 
-    def test_a_fresh_session_is_prompted(self, tmp_path, monkeypatch):
-        sent, started, starter, sup = self._run(tmp_path, 1)
-        monkeypatch.setattr(
-            sup, "deliver_prompt", lambda n, t: sent.append((n, t)) or Delivery(True)
-        )
+        def starter(
+            root, manager, *, engine, resume_id, max_sessions, window_seconds, prompt=""
+        ):
+            seen.append((resume_id, prompt))
+            return StartResult(True, "ok", session=f"s{len(seen)}", attach="a")
+
+        kinds = iter(endings)
+
+        def ending(n, human_was_present, pane=""):
+            kind = next(kinds, "quit")
+            return type(
+                "E",
+                (),
+                {
+                    "kind": kind,
+                    "resume": kind == "finished",
+                    "status": 0,
+                    "detail": "",
+                },
+            )()
+
         monkeypatch.setattr(
             sup, "liveness", lambda n: type("L", (), {"alive": False})()
         )
         monkeypatch.setattr(sup, "was_attached", lambda n: False)
-        monkeypatch.setattr(
-            sup,
-            "ending",
-            lambda n, human_was_present, pane="": type(
-                "E", (), {"kind": "quit", "resume": False, "status": 0, "detail": ""}
-            )(),
-        )
+        monkeypatch.setattr(sup, "ending", ending)
+        monkeypatch.setattr(sup, "stop_session", lambda s: Stopped(True, True))
+        monkeypatch.setattr(sup, "forget_instance", lambda r, m: None)
         supervise(
             tmp_path,
             "lead",
-            engine="sh",
-            max_sessions=1,
-            window_seconds=0,
-            prompt="HELLO MANAGER",
-            verdict=lambda _r: "ready",
-            starter=starter,
-        )
-        assert [t for _n, t in sent] == ["HELLO MANAGER"]
-
-    def test_a_resumed_session_is_NOT_prompted_again(self, tmp_path, monkeypatch):
-        sent, started, starter, sup = self._run(tmp_path, 2)
-        monkeypatch.setattr(
-            sup, "deliver_prompt", lambda n, t: sent.append((n, t)) or Delivery(True)
-        )
-        monkeypatch.setattr(
-            sup, "liveness", lambda n: type("L", (), {"alive": False})()
-        )
-        monkeypatch.setattr(sup, "was_attached", lambda n: False)
-        monkeypatch.setattr(
-            sup,
-            "ending",
-            lambda n, human_was_present, pane="": type(
-                "E", (), {"kind": "finished", "resume": True, "status": 0, "detail": ""}
-            )(),
-        )
-        supervise(
-            tmp_path,
-            "lead",
-            engine="sh",
+            engine="claude",
             max_sessions=3,
             window_seconds=0,
-            prompt="HELLO MANAGER",
-            verdict=lambda _r: "ready",
+            prompt="OPENING: implement ticket ACME-1.",
             starter=starter,
-            resume_id_for=lambda root, manager, since: "SESSION-ID",
+            resume_id_for=lambda r, m, since=0.0: "sess-1",
+            poll=0,
         )
-        assert started == ["", "SESSION-ID", "SESSION-ID"], started
-        assert len(sent) == 1, (
-            f"a resumed session was prompted again ({len(sent)} sends) — the "
-            f"tool told the agent to begin what it was in the middle of"
-        )
+        return seen
+
+    def test_the_first_session_gets_the_opening_prompt(self, tmp_path, monkeypatch):
+        seen = self._cycles(tmp_path, monkeypatch, ["quit"])
+        assert seen == [("", "OPENING: implement ticket ACME-1.")]
+
+    def test_a_resumed_session_is_told_to_continue_instead(self, tmp_path, monkeypatch):
+        from rite_ai.managers.supervise import CONTINUATION
+
+        seen = self._cycles(tmp_path, monkeypatch, ["finished", "quit"])
+        assert len(seen) == 2, seen
+        assert seen[0][1] == "OPENING: implement ticket ACME-1."
+        assert seen[1] == ("sess-1", CONTINUATION)
+
+    def test_no_cycle_is_ever_launched_with_nothing_to_do(self, tmp_path, monkeypatch):
+        """The measured failure: `claude -p` with no input exits 1."""
+        seen = self._cycles(tmp_path, monkeypatch, ["finished", "finished", "quit"])
+        assert len(seen) == 3, seen
+        for resume_id, prompt in seen:
+            assert prompt.strip(), f"cycle resumed from {resume_id!r} had no input"
 
 
-class TestAFailedDeliveryIsReportedNotFatal:
-    def test_the_run_continues_and_the_human_is_told(self, tmp_path, monkeypatch):
-        (tmp_path / ".rite").mkdir(exist_ok=True)
-        said: list[str] = []
-
-        def starter(root, manager, *, engine, resume_id, max_sessions, window_seconds):
-            return StartResult(True, "ok", session="s1", attach="a")
-
-        import rite_ai.managers.supervise as sup
-
-        monkeypatch.setattr(
-            sup, "deliver_prompt", lambda n, t: Delivery(False, "swallowed")
-        )
-        monkeypatch.setattr(
-            sup, "liveness", lambda n: type("L", (), {"alive": False})()
-        )
-        monkeypatch.setattr(sup, "was_attached", lambda n: False)
-        monkeypatch.setattr(
-            sup,
-            "ending",
-            lambda n, human_was_present, pane="": type(
-                "E", (), {"kind": "quit", "resume": False, "status": 0, "detail": ""}
-            )(),
-        )
-        result = supervise(
-            tmp_path,
-            "lead",
-            engine="sh",
-            max_sessions=1,
-            window_seconds=0,
-            prompt="HELLO",
-            verdict=lambda _r: "ready",
-            starter=starter,
-            note=said.append,
-        )
-        assert result.ok, "a lost prompt killed the run"
-        assert any("did not reach the terminal" in m for m in said), said
-        assert any("tmux attach" in m for m in said), "it did not say how to look"
-
-
-@tmux_only
 class TestDeliveryAgainstRealTmux:
     def test_it_confirms_the_prompt_reached_the_pane(self):
         name = f"prompt-{uuid.uuid4().hex[:6]}"

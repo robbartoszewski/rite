@@ -46,7 +46,9 @@ def instant(monkeypatch):
     """
     started: list[str] = []
 
-    def starter(root, manager, *, engine, resume_id, max_sessions, window_seconds):
+    def starter(root, manager, *, engine, resume_id,
+            max_sessions, window_seconds, prompt="",
+        ):
         started.append(resume_id)
         return StartResult(True, "ok", session=f"fake-{len(started)}", attach="")
 
@@ -114,7 +116,9 @@ class TestTheWindowBounds:
         complement of the test below, and the reason both exist."""
         alive_until: dict[str, float] = {}
 
-        def starter(root, manager, *, engine, resume_id, max_sessions, window_seconds):
+        def starter(root, manager, *, engine, resume_id,
+            max_sessions, window_seconds, prompt="",
+        ):
             name = f"s{len(alive_until) + 1}"
             alive_until[name] = time.time() + 0.3
             return StartResult(True, "ok", session=name, attach="")
@@ -279,15 +283,15 @@ def test_the_engine_string_is_used_as_an_executable_name():
     to resume and this shape cannot express it — which is the point of
     leaving the interface unstable until `local` forces it (§9.14.2,
     D-63)."""
-    assert launch_command("claude") == "claude -p"
-    assert launch_command("claude", "abc") == "claude -p --resume abc"
-    assert launch_command("", "") == "claude -p"
+    assert launch_command("claude").endswith("claude -p")
+    assert launch_command("claude", "abc").endswith("claude -p --resume abc")
+    assert launch_command("", "").endswith("claude -p")
     # The defect this pins: a non-Claude engine gets Claude's flags. `-p`
     # widens it from "only when resuming" to "every launch", which is a
     # real cost and is why the config validator's closed engine list is
     # what keeps it harmless today.
-    assert (
-        launch_command("some-other-engine", "id") == "some-other-engine -p --resume id"
+    assert launch_command("some-other-engine", "id").endswith(
+        "some-other-engine -p --resume id"
     )
 
 
@@ -326,7 +330,9 @@ class TestAnUnrecognisedVerdictStops:
         (tmp_path / ".rite").mkdir()
         started: list[str] = []
 
-        def starter(root, manager, *, engine, resume_id, max_sessions, window_seconds):
+        def starter(root, manager, *, engine, resume_id,
+            max_sessions, window_seconds, prompt="",
+        ):
             started.append(manager)
             return StartResult(True, "started", session="s", attach="a")
 
@@ -351,7 +357,9 @@ class TestAnUnrecognisedVerdictStops:
         (tmp_path / ".rite").mkdir()
         started: list[str] = []
 
-        def starter(root, manager, *, engine, resume_id, max_sessions, window_seconds):
+        def starter(root, manager, *, engine, resume_id,
+            max_sessions, window_seconds, prompt="",
+        ):
             started.append(manager)
             return StartResult(False, "stop here", session="", attach="")
 

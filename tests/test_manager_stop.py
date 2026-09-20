@@ -67,7 +67,6 @@ class TestCtrlCStopsBothAndLeavesNoPhantom:
             ),
         )
         monkeypatch.setattr(sup, "was_attached", lambda n: False)
-        monkeypatch.setattr(sup, "deliver_prompt", lambda n, t: None)
 
         def interrupt(_n):
             raise KeyboardInterrupt
@@ -80,7 +79,9 @@ class TestCtrlCStopsBothAndLeavesNoPhantom:
         _recorded(root)
         killed, said = self._harness(monkeypatch)
 
-        def starter(r, m, *, engine, resume_id, max_sessions, window_seconds):
+        def starter(r, m, *, engine, resume_id,
+            max_sessions, window_seconds, prompt="",
+        ):
             return StartResult(True, "ok", session="s1", attach="a")
 
         result = supervise(
@@ -106,7 +107,9 @@ class TestCtrlCStopsBothAndLeavesNoPhantom:
         assert read_instance(root, "lead") is not None, "fixture did not record"
         killed, said = self._harness(monkeypatch)
 
-        def starter(r, m, *, engine, resume_id, max_sessions, window_seconds):
+        def starter(r, m, *, engine, resume_id,
+            max_sessions, window_seconds, prompt="",
+        ):
             return StartResult(True, "ok", session="s1", attach="a")
 
         supervise(
@@ -131,7 +134,9 @@ class TestCtrlCStopsBothAndLeavesNoPhantom:
         _recorded(root)
         killed, said = self._harness(monkeypatch)
 
-        def starter(r, m, *, engine, resume_id, max_sessions, window_seconds):
+        def starter(r, m, *, engine, resume_id,
+            max_sessions, window_seconds, prompt="",
+        ):
             return StartResult(True, "ok", session="s1", attach="a")
 
         result = supervise(
@@ -173,7 +178,6 @@ class TestABoundLeavesTheSessionAlive:
         killed: list[str] = []
         monkeypatch.setattr(sup, "stop_session", lambda n: killed.append(n))
         monkeypatch.setattr(sup, "was_attached", lambda n: False)
-        monkeypatch.setattr(sup, "deliver_prompt", lambda n, t: None)
         monkeypatch.setattr(
             sup, "liveness", lambda n: type("L", (), {"alive": False})()
         )
@@ -187,7 +191,9 @@ class TestABoundLeavesTheSessionAlive:
             )(),
         )
 
-        def starter(r, m, *, engine, resume_id, max_sessions, window_seconds):
+        def starter(r, m, *, engine, resume_id,
+            max_sessions, window_seconds, prompt="",
+        ):
             return StartResult(True, "ok", session="s1", attach="a")
 
         result = supervise(
@@ -216,7 +222,6 @@ class TestABoundLeavesTheSessionAlive:
         root = _project(tmp_path)
         _recorded(root)
         monkeypatch.setattr(sup, "was_attached", lambda n: False)
-        monkeypatch.setattr(sup, "deliver_prompt", lambda n, t: None)
         monkeypatch.setattr(
             sup, "liveness", lambda n: type("L", (), {"alive": False})()
         )
@@ -228,7 +233,9 @@ class TestABoundLeavesTheSessionAlive:
             )(),
         )
 
-        def starter(r, m, *, engine, resume_id, max_sessions, window_seconds):
+        def starter(r, m, *, engine, resume_id,
+            max_sessions, window_seconds, prompt="",
+        ):
             return StartResult(True, "ok", session="s1", attach="a")
 
         supervise(
@@ -363,7 +370,9 @@ class TestTheInterruptGuardCoversTheWholeCycle:
         root = self._recorded(tmp_path)
         monkeypatch.setattr(sup, "stop_session", lambda n: Stopped(True, True, "ok"))
 
-        def interrupted_start(r, m, *, engine, resume_id, max_sessions, window_seconds):
+        def interrupted_start(r, m, *, engine, resume_id,
+            max_sessions, window_seconds, prompt="",
+        ):
             raise KeyboardInterrupt
 
         result = sup.supervise(
@@ -399,7 +408,9 @@ class TestTheInterruptGuardCoversTheWholeCycle:
             lambda n: asked.append(n) or Stopped(True, True, "ok"),
         )
 
-        def interrupted_start(r, m, *, engine, resume_id, max_sessions, window_seconds):
+        def interrupted_start(r, m, *, engine, resume_id,
+            max_sessions, window_seconds, prompt="",
+        ):
             raise KeyboardInterrupt
 
         sup.supervise(
@@ -435,7 +446,9 @@ class TestTheInterruptGuardCoversTheWholeCycle:
             sup, "liveness", lambda n: (_ for _ in ()).throw(KeyboardInterrupt())
         )
 
-        def starter(r, m, *, engine, resume_id, max_sessions, window_seconds):
+        def starter(r, m, *, engine, resume_id,
+            max_sessions, window_seconds, prompt="",
+        ):
             return StartResult(True, "ok", session="s1", attach="a", pane="%1")
 
         said: list[str] = []

@@ -32,13 +32,14 @@ window is what actually limits duration, and §9.14.5 says so.
 
 from __future__ import annotations
 
+import shlex
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from rite_ai.managers import forget_instance
-from rite_ai.managers.prompt import deliver as deliver_prompt
+from rite_ai.managers import forget_instance, manager_dir
 from rite_ai.managers.session import (
+    PROMPT_FILE,
     StartResult,
     ending,
     liveness,
@@ -50,6 +51,27 @@ from rite_ai.managers.session import stop as stop_session
 from rite_ai.managers.transcripts import session_id_problem
 
 POLL_SECONDS = 2.0
+
+CONTINUATION = (
+    "Continue the work you were doing in this session. Re-read your own "
+    "last messages for where you left off, do the next step, and stop."
+)
+"""What a RESUMED cycle is told, and why it is not the opening prompt.
+
+⚠ **D-90 said the prompt goes to the first session only, and that was
+right while the engine was a REPL.** Later cycles were the same
+conversation continuing, so there was nothing to say. `-p` changed the
+premise: each cycle is now a separate invocation that exits, and one
+launched with no input does not continue, it EXITS 1 — measured, "Input
+must be provided either through stdin or as a prompt argument when using
+--print". So a resumed cycle needs an instruction.
+
+⚠ **It must not be the opening prompt again.** Re-issuing "do X" to a
+session that already did X is how work happens twice, which is the concern
+D-90 recorded in the first place. This says to carry on, and the session's
+own history — reached through `--resume` — is where "from what" comes
+from.
+"""
 
 # Loop verdicts that end the lifecycle (§9.14.4). `closed` is here because a
 # window authorising zero Workers is the user saying "not now", and a Manager
@@ -79,7 +101,9 @@ Together they are exhaustive over `loop`'s seven verdicts, and a test
 asserts it, so an eighth cannot be added without classifying it."""
 
 
-def launch_command(engine: str, resume_id: str = "") -> str:
+def launch_command(
+    engine: str, resume_id: str = "", prompt_path: str = ""
+) -> str:
     """What to run in the pane.
 
     ⚠ **The engine string is used as an EXECUTABLE NAME.** There is no
@@ -103,6 +127,17 @@ def launch_command(engine: str, resume_id: str = "") -> str:
     # Claude Code's spelling. The config validator accepts only `claude`,
     # `human` and `local:<class>` as engines, so the one engine this
     # actually launches today is the one the flag is for.
+    # ⚠ **THE PROMPT ARRIVES ON STDIN, FROM THE ENVIRONMENT.** `claude -p`
+    # requires its input AT LAUNCH — measured: with none it exits 1 saying
+    # "Input must be provided either through stdin or as a prompt argument
+    # when using --print". rite used to type the prompt in after the
+    # session started, which works for a REPL and cannot work for a command
+    # that has already exited by then.
+    #
+    # `printf` reads `$RITE_PROMPT` out of the inherited environment, so the
+    # instruction never becomes an argument: `tmux new-session <cmd>` puts
+    # its command on tmux's argv, and a prompt quotes ticket text, paths and
+    # internal names. Same reason the token is never an argument.
     base = f"{engine or 'claude'} -p"
     if resume_id:
         # ⚠ **REFUSES rather than escapes, and raises rather than drops the
@@ -126,8 +161,8 @@ def launch_command(engine: str, resume_id: str = "") -> str:
                 f"refusing to build a launch command with a resume id that "
                 f"{problem}. This string is run by a shell."
             )
-        return f"{base} --resume {resume_id}"
-    return base
+        base = f"{base} --resume {resume_id}"
+    return f"{base} < {shlex.quote(str(prompt_path))}" if prompt_path else base
 
 
 def _default_resume_id(root: Path, manager: str, since: float = 0.0) -> str:
@@ -221,7 +256,6 @@ def supervise(
     # Injectable so a test can read what a human would have been told,
     # and a no-op by default so nothing prints from a library call.
     say = note if callable(note) else (lambda _m: None)
-    hand_over = deliver_prompt
     begin = clock()
     deadline = begin + window_seconds if window_seconds > 0 else None
     launch = starter if callable(starter) else _default_starter
@@ -317,11 +351,16 @@ def supervise(
                         f"and run `rite start` again.",
                         cycles,
                     )
+            # ⚠ EVERY cycle carries an instruction, and a resumed one
+            # carries a DIFFERENT instruction. See `CONTINUATION` for why
+            # this amends D-90 rather than working around it.
+            cycle_prompt = CONTINUATION if resume_from else prompt
             result: StartResult = launch(
                 root,
                 manager,
                 engine=engine,
                 resume_id=resume_from,
+                prompt=cycle_prompt,
                 max_sessions=max_sessions,
                 window_seconds=window_seconds,
             )
@@ -338,27 +377,13 @@ def supervise(
             )
             cycles.append(cycle)
 
-            # ⚠ THE FIRST SESSION ONLY (D-90). A resumed session already carries
-            # the context the prompt would establish, and re-issuing an
-            # instruction into a conversation that is mid-task is the same class
-            # of error as restarting a session a human deliberately quit: the
-            # tool telling the agent to begin something it is in the middle of.
-            # `resume_from` is the observable — empty means this is a fresh
-            # context — rather than `len(cycles) == 1`, which would also be true
-            # of a first cycle that was itself a resume.
-            if prompt and not resume_from:
-                handed = hand_over(result.session, prompt)
-                cycle.prompted = handed.reached_terminal
-                if not handed.reached_terminal:
-                    # Reported, NOT fatal. A Manager whose prompt did not arrive
-                    # is still a running session the human is paying for, and
-                    # killing it to signal a delivery failure would destroy work
-                    # to report a problem.
-                    say(
-                        f"warning: the Manager's prompt did not reach the terminal — "
-                        f"{handed.detail}. Attach with `tmux attach -t "
-                        f"{result.session}` and check."
-                    )
+            # ⚠ **THE PROMPT IS NOT TYPED IN ANY MORE.** It went in with
+            # the launch, on stdin, from the environment — because
+            # `claude -p` needs its input before it runs and has exited by
+            # the time anything could type. `deliver_prompt` typing into a
+            # live pane was correct for a REPL and is a no-op against a
+            # command that reads stdin once.
+            cycle.prompted = bool(cycle_prompt)
 
             # Wait for it to end. The human can attach throughout — that is
             # §9.14.3, and it is why "nobody is watching" is false here in a way
@@ -514,12 +539,17 @@ def _why(answer: str, started: int) -> str:
     )
 
 
-def _default_starter(root, manager, *, engine, resume_id, max_sessions, window_seconds):
+def _default_starter(
+    root, manager, *, engine, resume_id, max_sessions, window_seconds, prompt=""
+):
     result = start_session(
         root,
         manager,
         engine=engine,
-        command=launch_command(engine, resume_id),
+        command=launch_command(
+            engine, resume_id, str(manager_dir(root, manager) / PROMPT_FILE)
+        ),
+        prompt=prompt,
         max_sessions=max_sessions,
         window_seconds=window_seconds,
     )
