@@ -80,6 +80,7 @@ class ProjectStatus:
         default_factory=CoordinationCostCounts
     )
     loop: str = ""
+    managers: list[str] = field(default_factory=list)
     """Whether a work-seeking loop is running for this project, and since
     when. Empty when the question could not be asked at all (no tmux).
 
@@ -196,6 +197,7 @@ def collect_status(root: Path, board: bool = False) -> ProjectStatus:
         return status
 
     status.loop = _loop_line(root)
+    status.managers = _manager_lines(root)
 
     status.coordination_cost = read_counts(root)
 
@@ -360,6 +362,48 @@ def _format_boards(boards: list[BoardState] | None, unreached: str = "") -> list
     return lines
 
 
+def _manager_lines(root: Path) -> list[str]:
+    """Which Managers are running, WITHOUT spawning a process.
+
+    `rite start <manager>` could start one and nothing could tell you it was
+    there — `running_instances` and `pid_alive` both existed with zero
+    callers, which is the same built-and-never-wired shape this release keeps
+    finding. For an unsupervised release, being unable to ask what is running
+    is the disqualifying half of that.
+
+    **Liveness is filtered here rather than in `running_instances`**, which
+    returns every RECORDED instance and says so. A listing that repeats the
+    record without checking it invents Managers that died with a reboot.
+
+    No subprocess: `collect_status` is the read-only path and a test pins
+    that it never spawns one, so this asks the pid with a signal rather than
+    asking tmux. Same trade as `_loop_line` — the cheap view may briefly lag,
+    and the authoritative command never does.
+
+    A record whose process is gone is REPORTED, not dropped. Silently
+    omitting it is how a stale record becomes invisible and then permanent;
+    naming it is what gets it cleaned up.
+    """
+    from rite_ai.managers import pid_alive, running_instances
+
+    live: list[str] = []
+    stale: list[str] = []
+    for instance in running_instances(root):
+        if pid_alive(instance.pid):
+            live.append(
+                f"  {instance.name}: running as {instance.session} "
+                f"— tmux attach -t {instance.session}"
+            )
+        else:
+            stale.append(instance.name)
+    if stale:
+        live.append(
+            f"  recorded but not running: {', '.join(sorted(stale))} "
+            "— the session is gone; the record is not"
+        )
+    return live
+
+
 def _loop_line(root: Path) -> str:
     """Whether a loop is running, WITHOUT shelling out.
 
@@ -477,6 +521,9 @@ def format_status(status: ProjectStatus) -> str:
 
     if status.loop:
         lines.append(f"\nloop: {status.loop}")
+    if status.managers:
+        lines.append("\nmanagers:")
+        lines.extend(status.managers)
 
     if status.coordination:
         # Above the cost counters, because "who is Owner" is the question

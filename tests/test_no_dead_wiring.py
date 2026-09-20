@@ -83,11 +83,12 @@ UNCALLED_ON_PURPOSE = {
         "`running()` treats a dead session or a dead pid as absent, so the "
         "cost of not calling this is a file, not a refusal."
     ),
-    "running_instances": (
-        "For `rite status` to list running Managers, which is not built. "
-        "Kept rather than deferred because `_a_manager_is_running` needed "
-        "exactly this shape and asking per-name was the wrong one."
-    ),
+    # `running_instances` was here — "for `rite status` to list running
+    # Managers, which is not built". It is built now, and THIS TEST IS HOW
+    # THAT WAS NOTICED: the push that wired it was refused with "these are
+    # called now; drop their exemptions". An exemption that outlives its
+    # reason is a standing permission to leave something unwired, so the
+    # guard checks the list shrinks as well as that nothing escapes it.
     # `manager_views` and `assign_to_manager` were here, exempted because
     # "whether an unattended tick may [write to the board] is Q9, unanswered.
     # Wiring it is one call in `_owner_duties`." Q9 now has a switch
