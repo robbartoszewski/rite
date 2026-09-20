@@ -2,6 +2,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from rite_ai.claims.ledger import ClaimsLedger
+from rite_ai.schedule import Moment, ResolvedZone
 from rite_ai.scheduler import (
     detect_backend,
     install,
@@ -60,7 +61,10 @@ class TestRunTick:
         state_path = root / ".rite" / "schedule-state.json"
         state_path.write_text("3")  # simulate "last tick saw 3 workers"
 
-        with patch("rite_ai.scheduler.current_minute_of_day", return_value=720):
+        with patch(
+            "rite_ai.scheduler.current_moment",
+            return_value=Moment(720, 2, ResolvedZone("UTC", machine_local=False)),
+        ):
             result = run_tick(root)  # 720 = 12:00, inside the 0-workers window
 
         assert any("handed over worker 'alpha'" in m for m in result.messages)
@@ -78,7 +82,10 @@ class TestRunTick:
         state_path = root / ".rite" / "schedule-state.json"
         state_path.write_text("3")
 
-        with patch("rite_ai.scheduler.current_minute_of_day", return_value=600):
+        with patch(
+            "rite_ai.scheduler.current_moment",
+            return_value=Moment(600, 2, ResolvedZone("UTC", machine_local=False)),
+        ):
             result = run_tick(root)
 
         assert not any("handed over" in m for m in result.messages)

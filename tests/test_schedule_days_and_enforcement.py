@@ -126,12 +126,31 @@ class TestTheResolvedClockIsReported:
         assert "machine local" in zone.describe()
 
     def test_an_unrecognised_zone_does_not_silently_become_utc(self):
-        """It falls back to the machine, and the description says machine
-        local rather than naming the zone that was asked for — the operator
-        needs to see that what they wrote is not what is being used."""
+        """It falls back to the machine, and says so — and now also says
+        WHICH zone it rejected.
+
+        ⚠ This assertion was inverted, and the docstring said why it should
+        be: "the operator needs to see that what they wrote is not what is
+        being used". It asserted the rejected name was ABSENT from the
+        description, which made a typo indistinguishable from an unset
+        field — measured, `Europe/Lodnon` and `""` produced byte-identical
+        output. The property is that the description must not present the
+        rejected zone as the one IN USE; naming it as rejected serves the
+        stated intent rather than defeating it.
+        """
         zone = resolve_zone("Mars/Olympus_Mons")
         assert zone.machine_local
-        assert "Mars/Olympus_Mons" not in zone.describe()
+        described = zone.describe()
+        assert "machine local" in described
+        assert described != resolve_zone("").describe(), (
+            "a rejected zone reads exactly like an unconfigured one"
+        )
+        assert "Mars/Olympus_Mons" in described, (
+            "the operator cannot find their own typo from this message"
+        )
+        assert "schedule in Mars/Olympus_Mons (" not in described, (
+            "the rejected zone is presented as the one in use"
+        )
 
 
 class TestStartWorkerRefusesOutsideTheWindow:
