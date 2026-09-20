@@ -5218,10 +5218,13 @@ requirements on the format, not guidance to the Manager.
 3. **Observed and inferred are separate fields.** This week's best findings
    had exactly that shape, and its worst errors were conclusions presented
    as observations — *"the mutant survived"*, when it had never run.
-4. **No claims about another agent's internal state.** A Manager may record
-   that a review produced no commits. It may **not** record that a reviewer
-   *"did not try"* or *"was not thorough"*: unobservable, and it is the form
-   a hallucination naturally takes.
+4. **No claims about another agent's internal state — or about rite's
+   own components' reasoning.** A Manager may record that a review produced
+   no commits; it may **not** record that a reviewer *"did not try"* or
+   *"was not thorough"*. Unobservable, and it is the form a hallucination
+   naturally takes. The same applies inward: *"the loop did not check the
+   schedule"* is recordable and checkable, *"the loop assumed the schedule
+   was advisory"* is a claim about code's intent that no anchor can carry.
 5. **Anchors are checked where checking is cheap.** If an entry cites a
    commit, verify it exists. Mechanical, no judgement, and it catches the
    worst class.
