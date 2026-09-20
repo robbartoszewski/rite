@@ -5980,9 +5980,9 @@ def _start_a_manager(
     )
     # Composed HERE because this layer is the one that knows what the user
     # asked for. `for_manager` takes an `extra` that the journal's
-    # instructions will fill when `--record-issues` is wired (D-93); it is
-    # empty until then, and the empty case is the same shape as the full
-    # one so this call site does not branch.
+    # instructions fill when `--record-issues` is on (D-93); it is the empty
+    # string when the flag is off, and the empty case is the same shape as
+    # the full one so this call site does not branch.
     # §9.15.3a. Printed HERE, beside the bounds, because a fact is cheapest
     # to learn at the moment it is actionable rather than in a log
     # afterwards — and because the entries are worth nothing to the person
