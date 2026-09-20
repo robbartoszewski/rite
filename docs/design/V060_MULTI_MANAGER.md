@@ -291,6 +291,11 @@ nothing. **A refusal that looks like a clean finish is worse than a hang**,
 and it is the same shape as every other finding this release — a real
 answer to the wrong question, believed because the check could not tell.
 
+**Decided since, elsewhere.** `PERMISSION_MODE_FOR_UNATTENDED_RUNS.md`
+carries Robert's answer — `--permission-mode acceptEdits` by default,
+`--dangerously-skip-permissions` as a per-Manager opt-in — and is the home
+for the decision. What stays here is the measurement it was decided on.
+
 **Deliberately not fixed here.** The remedy is Claude Code's
 `--permission-mode` / `--allowedTools`, and choosing what an unattended
 agent may do to somebody's repository is a security decision that belongs
