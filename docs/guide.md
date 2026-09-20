@@ -617,9 +617,19 @@ otherwise:
   size of an Anthropic weekly quota, so any such percentage would be measured
   against a number you supplied rather than against your real limit. (It does
   split the total into cache reads versus new tokens, as a share of the
-  total — a different thing.) It never
-  recommends a Worker count or throttles anything; the schedule you set is
-  the only thing that controls concurrency.
+  total — a different thing.) It never recommends a Worker count or throttles
+  anything. **Two things you set control concurrency**, not one: the
+  schedule's per-window worker count, and `sandbox.max_concurrent_workers`.
+  A start is refused when either says no.
+
+  *This said "the schedule you set is the only thing that controls
+  concurrency", which was wrong twice over. In v0.5.0 the schedule controlled
+  nothing at the start path — `rite sandbox start` never consulted it, so a
+  project set to zero workers at the weekend started one anyway while the
+  loop reported `closed`. Since v0.5.1 it is enforced, and "only" is still
+  wrong because the cap is enforced too. A sentence claiming one mechanism
+  where there are two is how someone sets a schedule and believes it is
+  doing work it is not.*
 - **Sandboxing needs a real security review before you'd trust it with
   untrusted work.** On macOS `rite init` sets `sandbox.enabled` on by default
   (it asks, and the default answer is Yes), and Workers are sandboxed only when
