@@ -57,3 +57,41 @@ def test_a_real_subcommand_works_through_it():
     proc = _run("review")
     assert proc.returncode == 0, proc.stderr
     assert "# checklist:" in proc.stdout
+
+
+def test_every_command_group_is_registered_before_the_entry_point_runs():
+    """⚠ A group declared BELOW `if __name__ == "__main__"` does not exist
+    under `-m`, because `cli()` runs before the decorator registers it.
+
+    Measured: `python -m rite_ai.cli.main journal observe ...` returned
+    "No such command 'journal'" while `rite journal observe ...` worked.
+    `journal` was the only group in the file positioned after that block.
+
+    This is worse than an inconsistency. The Manager is told to record
+    entries with `rite journal observe`; an agent that reaches for the `-m`
+    form — which the comment above that block says is "an idiom this
+    codebase already uses" — gets a hard error on the one command it was
+    given, and its obvious fallback is to write the file by hand, which is
+    exactly the bypass SPEC §9.15.6 item 3 exists to prevent.
+
+    Checked structurally rather than by invoking every group, so a group
+    added below the block fails here whatever it is called.
+    """
+    from pathlib import Path
+
+    source = Path(__file__).resolve().parent.parent / "src/rite_ai/cli/main.py"
+    lines = source.read_text().splitlines()
+    entry = next(
+        i
+        for i, line in enumerate(lines)
+        if line.startswith('if __name__ == "__main__"')
+    )
+    late = [
+        (i + 1, lines[i + 1].strip())
+        for i in range(entry, len(lines) - 1)
+        if lines[i].startswith("@cli.group(") or lines[i].startswith("@cli.command(")
+    ]
+    assert not late, (
+        f"these commands are declared after the `-m` entry point and are "
+        f"unreachable through it: {late}"
+    )

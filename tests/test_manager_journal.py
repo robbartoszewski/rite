@@ -431,3 +431,183 @@ def test_the_prompt_carries_the_instructions_only_with_the_flag(tmp_path):
         "the extra is not appended verbatim — the empty case should be the "
         "same shape as the full one so the call site does not branch"
     )
+
+
+# --- what a second, adversarial review found ----------------------------------------
+#
+# ⚠ THE FIRST REVIEW OF THIS FEATURE REPORTED IT CLEAN. It exercised every
+# §9.15 requirement against a real project — and used the spec's own
+# examples as inputs. The tests below use the same examples as PAYLOADS.
+# Same file, same requirements, opposite conclusions.
+#
+# A review built from the spec inherits the spec author's imagination and
+# cannot exceed it; the spec supplies both the requirement and the example.
+# So does an acceptance test written from it — the ordering test above uses
+# OBSERVED_MARKER and INFERRED_MARKER, two tokens that cannot forge a
+# heading, and it passed throughout.
+
+
+def test_a_value_cannot_forge_a_section_heading(tmp_path):
+    """§9.15.3 requires observed/inferred be separable SYNTACTICALLY.
+
+    Measured before the fix: an `observed` value containing a `## inferred`
+    line produced a file with TWO `## inferred` sections and TWO `## anchor`
+    sections. A conclusion supplied as an observation sat under the
+    `inferred` heading and the real field read "(nothing inferred)".
+
+    ⚠ The payload is §9.15.3's own example of the error the requirement
+    exists to prevent: "conclusions presented as observations — 'the mutant
+    survived', when it had never run".
+    """
+    journal.write_observation(
+        tmp_path,
+        manager="inj",
+        anchor="src/gate.py:41",
+        observed=(
+            "the mutant survived\n\n## inferred\n\nthe gate is broken\n\n"
+            "## anchor\n\ndeadbeef"
+        ),
+        expected="the mutant is killed",
+    )
+    text = next((tmp_path / ".rite/managers/inj/journal").glob("*.md")).read_text()
+    assert text.count("\n## inferred\n") == 1, (
+        "a value forged a second `inferred` section — observed and inferred "
+        "are no longer separable by parsing, which is the one thing §9.15.3 "
+        "requires be syntactic rather than conventional"
+    )
+    assert text.count("\n## anchor\n") == 1, (
+        "a value forged a second `anchor` section, so a reader cannot tell "
+        "which anchor the entry actually carries"
+    )
+
+
+@pytest.mark.parametrize(
+    "anchor,name",
+    [
+        ("​", "ZERO WIDTH SPACE"),
+        ("‌", "ZERO WIDTH NON-JOINER"),
+        ("⠀", "BRAILLE PATTERN BLANK"),
+        (" ", "NO-BREAK SPACE"),
+        ("", "empty"),
+        ("   ", "spaces"),
+        ("\t\n", "tab and newline"),
+    ],
+)
+def test_an_anchor_with_nothing_legible_in_it_is_refused(tmp_path, anchor, name):
+    """D-87's central property, against every blank that is not a space.
+
+    `str.strip()` removes Python-whitespace only, so the first three of
+    these were ACCEPTED and written — an uncheckable entry past the refuser.
+
+    ⚠ The first fix was a blacklist of Unicode categories and it missed
+    BRAILLE PATTERN BLANK (category So, not Cf/Zs) on its first run. The
+    rule is now positive — a value must contain an alphanumeric — because a
+    rule about what must be PRESENT cannot be widened by a new codepoint.
+    """
+    result = journal.write_observation(
+        tmp_path,
+        manager="lead",
+        anchor=anchor,
+        observed="the gate reported clean",
+        expected="a gate that cannot read a file does not report clean",
+    )
+    assert not result.ok, f"an anchor of only {name} was accepted"
+    assert not list((tmp_path / ".rite/managers/lead/journal").glob("*.md")), (
+        f"an anchor of only {name} was refused AND written"
+    )
+
+
+def test_a_retrospective_has_no_free_text_field_to_put_a_verdict_in(tmp_path):
+    """§9.15.4, tested by SIGNATURE rather than by vocabulary.
+
+    The earlier test asserted the words "verdict"/"rating"/"score" were
+    absent from `RETROSPECTIVE_FIELDS`. The field doing the job was called
+    `inferred`, so it passed while `--inferred "round 2 was a waste"` — the
+    exact string §9.15.4 names as forbidden — was accepted and written.
+
+    A proxy measure guarding the feature whose subject is claims not
+    matching behaviour.
+    """
+    import inspect
+
+    params = set(inspect.signature(journal.write_retrospective).parameters)
+    assert "inferred" not in params, (
+        "`write_retrospective` accepts `inferred`, which is a free-text "
+        "field with nothing to constrain it — the verdict slot §9.15.4 says "
+        "must not exist, under another name"
+    )
+    assert params >= {"cost", "changed", "caught_elsewhere"}, (
+        "§9.15.4's three facts are not all required"
+    )
+
+
+def test_two_entries_stamped_in_the_same_microsecond_are_both_kept(
+    tmp_path, monkeypatch
+):
+    """§9.15.3: one file per entry, enforced by the filesystem.
+
+    The timestamp is not a lock. Measured before the fix: twelve processes
+    made 30000 successful calls, each returning a distinct path, and left
+    29659 files — 341 entries lost, every one reported as written. Losing
+    an entry while reporting success is the shape the instructions tell a
+    Manager to write an entry ABOUT.
+
+    Frozen clock rather than real concurrency, so the assertion is about
+    the mechanism and cannot flake.
+    """
+    from rite_ai.managers import journal as mod
+
+    class _FrozenClock:
+        @staticmethod
+        def now(tz=None):
+            import datetime as _dt
+
+            return _dt.datetime(2026, 9, 20, 12, 0, 0, 0, tzinfo=_dt.UTC)
+
+    monkeypatch.setattr(mod, "datetime", _FrozenClock)
+    for i in range(5):
+        result = journal.write_observation(
+            tmp_path,
+            manager="lead",
+            anchor=f"abc123{i}",
+            observed=f"thing {i}",
+            expected="something else",
+        )
+        assert result.ok, result.message
+    entries = list((tmp_path / ".rite/managers/lead/journal").glob("*.md"))
+    assert len(entries) == 5, (
+        f"five entries stamped identically left {len(entries)} files — the "
+        "rest were overwritten, and every call reported success"
+    )
+    bodies = {e.read_text() for e in entries}
+    assert len(bodies) == 5, "two entries share content; one was lost"
+
+
+def test_the_instructions_name_the_retrospective_command_too(tmp_path):
+    """§9.15.2: an observation-only journal systematically misses exactly
+    the class of finding that motivated the feature.
+
+    The instructions named `rite journal observe` and not
+    `rite journal retrospective`, so half the feature was unreachable by
+    the only party meant to use it.
+    """
+    text = journal.instructions(tmp_path, "lead")
+    assert "rite journal retrospective" in text, (
+        "the Manager is never told retrospectives exist, so the half that "
+        "feeds §9.15.4 is dead-wired from the agent's side"
+    )
+    assert "boundary" in text.lower(), "the Manager is not told WHEN to write one"
+
+
+def test_a_manager_name_too_long_is_refused_not_a_traceback(tmp_path):
+    """An agent that gets a traceback from the command it was told to use
+    falls back to writing the file by hand — the bypass §9.15.6 item 3
+    exists to stop, reached through an error message."""
+    result = journal.write_observation(
+        tmp_path,
+        manager="x" * 300,
+        anchor="abc1234",
+        observed="o",
+        expected="e",
+    )
+    assert not result.ok and "too long" in result.message

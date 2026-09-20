@@ -6163,6 +6163,30 @@ def start_cmd(
         # Not a Manager name: fall through to directory/alias resolution,
         # which is what `rite start /path` and `rite start <alias>` need.
 
+    # ⚠ EVERY PATH ABOVE THIS LINE STARTS A MANAGER; none below does, and
+    # `--record-issues` only means anything to a Manager session. It was
+    # accepted and silently ignored here — so an operator turning it on for
+    # an unattended run got a normal-looking start, no journal, and no
+    # indication of either until the run was over and had produced nothing.
+    #
+    # That is verbatim one of the three findings §9.15 quotes as the
+    # benchmark for what this feature should CATCH: "a wrong CLI invocation
+    # produces output indistinguishable from the feature working". Refusing
+    # rather than warning, because the whole point of the flag is that
+    # nobody is watching to read a warning.
+    if record_issues:
+        click.echo(
+            "refusing to start: --record-issues applies to a Manager "
+            "session, and this is not one.\n"
+            "  `rite start` here assesses the project and reports; only "
+            "`rite start <manager>` runs a session that could record "
+            "anything.\n"
+            "  Accepting the flag and ignoring it would leave you expecting "
+            "a journal that was never going to be written (§9.15).",
+            err=True,
+        )
+        raise SystemExit(1)
+
     root = _resolve_directory_or_alias(directory)
     result = start(root)
     if not result.ok:
@@ -6593,8 +6617,6 @@ def help() -> None:  # noqa: A001 - deliberately shadows builtin, it's the comma
 # entry point. The `-m` form is an idiom this codebase already uses
 # (`python -m rite_ai.gate`, see `rite_ai/gate/__main__.py`), so a reader will
 # reasonably try it here too.
-if __name__ == "__main__":  # pragma: no cover - see tests/test_module_entry_point.py
-    cli()
 
 
 @cli.group()
@@ -6675,14 +6697,12 @@ def journal_observe(
     required=True,
     help="Whether the change would have been caught by something else.",
 )
-@click.option("--inferred", default="", help="What you conclude, kept separate.")
 def journal_retrospective(
     manager: str,
     anchor: str,
     cost: str,
     changed: str,
     caught_elsewhere: str,
-    inferred: str,
 ) -> None:
     """Record what a boundary cost and what it changed — with NO verdict.
 
@@ -6708,9 +6728,12 @@ def journal_retrospective(
         cost=cost,
         changed=changed,
         caught_elsewhere=caught_elsewhere,
-        inferred=inferred,
     )
     if not result.ok:
         click.echo(result.message, err=True)
         raise SystemExit(1)
     click.echo(f"recorded: {result.path}")
+
+
+if __name__ == "__main__":  # pragma: no cover - see tests/test_module_entry_point.py
+    cli()

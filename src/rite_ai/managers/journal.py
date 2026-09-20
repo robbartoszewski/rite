@@ -74,11 +74,12 @@ capability is reachable and unannounced to the agent — the same class as
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from rite_ai.names import name_problem
+from rite_ai.names import name_problem, require_safe_name
 
 OBSERVATION = "observation"
 RETROSPECTIVE = "retrospective"
@@ -87,8 +88,44 @@ RETROSPECTIVE = "retrospective"
 # the absence of a verdict field is the point, not an oversight, and a
 # `value`/`rating`/`score` column would reintroduce the inverted metric by
 # giving the Manager somewhere to put a conclusion it cannot support.
-RETROSPECTIVE_FIELDS = ("anchor", "cost", "changed", "caught_elsewhere", "inferred")
+# ⚠ NO `inferred` HERE, and its absence is the point. An earlier version
+# carried one, and `--inferred "round 2 was a waste"` was accepted and
+# written — the exact string §9.15.4 names as the conclusion a Manager
+# is not positioned to draw. The module docstring, the CHANGELOG and the
+# command help all claimed there was nowhere to put it while there was,
+# in the feature whose subject is documented claims not matching
+# behaviour. A guard that bans the WORDS "verdict"/"rating"/"score" from
+# this tuple never had to notice, because the field doing the job was
+# called something else.
+RETROSPECTIVE_FIELDS = ("anchor", "cost", "changed", "caught_elsewhere")
 OBSERVATION_FIELDS = ("anchor", "observed", "expected", "inferred")
+
+# ⚠ `str.strip()` IS NOT ENOUGH, and this is the anchor rule's entire
+# enforcement. `strip()` removes Python-whitespace only, so U+200B ZERO
+# WIDTH SPACE, U+200C ZWNJ and U+2800 BRAILLE PATTERN BLANK all survived it
+# and were accepted as anchors — measured. An entry whose anchor section
+# renders blank is worse than the documented "a present anchor is not
+# verified to resolve" gap: an invented SHA at least looks like something a
+# reader will try to check, where this reads as no anchor at all having
+# passed the refuser.
+#
+# ⚠ THE FIRST FIX WAS A BLACKLIST of Unicode categories (Cf, Zs, Cc) and it
+# missed U+2800 on the first run, whose category is So. Blacklisting the
+# invisible is whack-a-mole against a character set that keeps growing, and
+# the miss was found only because the check was run against the exact
+# characters the review named.
+#
+# So the rule is POSITIVE: a value must contain something legible. Every
+# anchor §9.15.3 permits — a commit SHA, a file path with a line, a command
+# with its output, a ticket id, a log file with a timestamp — contains an
+# alphanumeric character, and so does any prose worth reading. A rule about
+# what must be PRESENT cannot be widened by a new codepoint.
+
+
+def _is_blank(value: str) -> bool:
+    """True when nothing legible is present."""
+    return not any(ch.isalnum() for ch in value)
+
 
 _ANCHOR_HELP = (
     "an anchor is a commit SHA, a file path with a line, a command with its "
@@ -106,7 +143,18 @@ class WriteResult:
 
 
 def journal_dir(root: Path, manager: str) -> Path:
-    """Where this Manager's entries live (§9.14.9, §9.15.3)."""
+    """Where this Manager's entries live (§9.14.9, §9.15.3).
+
+    ⚠ Validated, not merely joined. `managers.manager_dir` already refuses
+    these names with "a name reaching a path unchecked is the defect
+    `rite_ai.names` exists for, and this is a new join" — and this function
+    re-spelled the same path by hand without the check. Today the write
+    path catches a bad name first, so nothing escapes; `start_notice` and
+    `instructions` call this with no such guard and would PRINT an escaping
+    path. A guard that works only because a different function runs first
+    is not a guard.
+    """
+    require_safe_name(manager, kind="manager name")
     return Path(root) / ".rite" / "managers" / manager / "journal"
 
 
@@ -179,6 +227,16 @@ def instructions(root: Path, manager: str, *, enabled: bool = True) -> str:
         "--anchor <what makes it checkable> \\\n"
         "    --observed <what you saw> --expected <what should have "
         "happened>\n\n"
+        "At a BOUNDARY — a ticket closing, a review round finishing, a "
+        "merge landing — record what it cost instead:\n"
+        f"  rite journal retrospective --manager {manager} "
+        "--anchor <what makes it checkable> \\\n"
+        "    --cost <tokens, wall-clock, rounds> --changed <what changed> "
+        "\\\n"
+        "    --caught-elsewhere <would anything else have caught it>\n\n"
+        '"changed: nothing" is a legitimate and useful entry. Do not '
+        "judge whether a round was worth it — record the three facts and "
+        "leave the conclusion to a reader.\n\n"
         "An entry without an anchor is refused: a commit SHA, a file and "
         "line, a command with its output, a ticket id, or a named log file "
         "with a timestamp in it."
@@ -199,14 +257,27 @@ def _field_problem(manager: str, anchor: str, required: dict[str, str]) -> str:
     bad_name = name_problem(manager, kind="manager name")
     if bad_name:
         return bad_name
-    if not anchor.strip():
+    # ⚠ Length is a path rule, not a name rule, which is why `name_problem`
+    # does not carry it — but the traceback it produced (`OSError: [Errno
+    # 63] File name too long`) reaches an AGENT, and an agent that gets a
+    # traceback from the command it was told to use falls back to writing
+    # the file by hand. That is the bypass §9.15.6 item 3 exists to stop,
+    # reached through an error message. 200 is well under every filesystem
+    # limit and far past any real Manager name.
+    if len(manager) > 200:
+        return (
+            f"a manager name of {len(manager)} characters is too long to be "
+            "a directory on any filesystem rite supports — 200 is the limit "
+            "here, and a real Manager name is a word"
+        )
+    if _is_blank(anchor):
         return (
             "refusing to write a journal entry with no anchor: an entry "
             "nobody can check is worse than no entry, because it reads like "
             f"evidence. {_ANCHOR_HELP}"
         )
     for field, value in required.items():
-        if not value.strip():
+        if _is_blank(value):
             return (
                 f"refusing to write a journal entry with no `{field}`: "
                 f"'X failed' without what was expected instead is "
@@ -217,19 +288,78 @@ def _field_problem(manager: str, anchor: str, required: dict[str, str]) -> str:
 
 
 def _write(root: Path, manager: str, kind: str, body: str) -> WriteResult:
+    """One file per entry (§9.15.3), enforced by the filesystem.
+
+    ⚠ THE TIMESTAMP IS NOT A LOCK, and a comment here previously claimed
+    microseconds made a collision impossible. Measured: twelve processes
+    writing as the same Manager produced 30000 successful calls, each
+    returning `ok=True` with a distinct path, and 29659 files — **341
+    entries lost, every one of them reported as written.** Two processes
+    still lost 73. A Manager running two tool calls at once is the ordinary
+    case, not a contrived one.
+
+    Losing an entry while reporting success is precisely the shape the
+    instructions tell a Manager to write an entry ABOUT, so the feature was
+    producing the defect it exists to record.
+
+    `O_CREAT | O_EXCL` makes the filesystem decide. On a collision the
+    stamp gains a suffix and we try again rather than overwrite; the loop
+    is bounded because an unbounded retry on a full or read-only disk is a
+    hang, and this project has spent the day on things that wait forever.
+    """
     directory = journal_dir(root, manager)
     directory.mkdir(parents=True, exist_ok=True)
-    # Microseconds, because three entries in a loop are a realistic case and
-    # a second-resolution stamp would silently overwrite the earlier ones —
-    # one file per entry is §9.15.3's requirement, not a preference.
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
-    path = directory / f"{stamp}-{kind}.md"
-    path.write_text(body, encoding="utf-8")
-    return WriteResult(True, path=path)
+    for attempt in range(50):
+        suffix = "" if attempt == 0 else f"-{attempt}"
+        path = directory / f"{stamp}{suffix}-{kind}.md"
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            continue
+        except OSError as e:
+            return WriteResult(
+                False, f"could not write the journal entry to {path}: {e}"
+            )
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(body)
+        return WriteResult(True, path=path)
+    return WriteResult(
+        False,
+        f"could not find a free filename in {directory} after 50 attempts — "
+        "entries are timestamped to the microsecond, so this means something "
+        "is writing them faster than the clock advances",
+    )
 
 
 def _section(name: str, value: str) -> str:
-    return f"## {name}\n\n{value.strip()}\n\n"
+    """One field, as a heading a value cannot forge.
+
+    ⚠ MEASURED INJECTION. The fields are free text written by an agent, and
+    the format is markdown headings. An `observed` value containing a line
+    `## inferred` produced a file with two `## inferred` sections and two
+    `## anchor` sections — so a conclusion supplied as an observation sat
+    under the `inferred` heading, the real `inferred` read "(nothing
+    inferred)", and a second, invented anchor appeared indistinguishable
+    from the first.
+
+    That defeats the one thing §9.15.3 requires be SYNTACTIC rather than
+    conventional: that `observed` and `inferred` are separable. The spec's
+    own example of the error it is guarding — "conclusions presented as
+    observations, *'the mutant survived'* when it had never run" — is
+    exactly what the injection produces.
+
+    Escaping with a backslash is markdown's own mechanism: a
+    backslashed hash renders as
+    a literal `#`, and a reader or a parser splitting on `^## ` no longer
+    matches. The value survives readably; only its ability to start a
+    section is removed.
+    """
+    escaped = "\n".join(
+        "\\" + line if line.lstrip().startswith("#") else line
+        for line in value.strip().splitlines()
+    )
+    return f"## {name}\n\n{escaped}\n\n"
 
 
 def write_observation(
@@ -278,7 +408,6 @@ def write_retrospective(
     cost: str,
     changed: str,
     caught_elsewhere: str,
-    inferred: str = "",
 ) -> WriteResult:
     """Record what a boundary cost and what it changed — with no verdict.
 
@@ -305,6 +434,5 @@ def write_retrospective(
         + _section("cost", cost)
         + _section("changed", changed)
         + _section("caught_elsewhere", caught_elsewhere)
-        + _section("inferred", inferred or "(nothing inferred)")
     )
     return _write(root, manager, RETROSPECTIVE, body)
