@@ -17,9 +17,11 @@ property may fail closed, never open.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -333,6 +335,11 @@ QUIT = "quit"
 CRASHED = "crashed"
 UNCLEAR = "unclear"
 
+_EXIT_STATUS_ANSWER: bool | None = None
+"""Cached: whether this tmux reports an exit status is a property of the
+machine, not of the moment, so asking once per process is enough — and
+each probe costs a session create and destroy."""
+
 
 @dataclass(frozen=True)
 class Ending:
@@ -484,3 +491,74 @@ def was_attached(name: str) -> bool:
         return int((done.stdout or "0").strip()) > 0
     except ValueError:
         return False
+
+
+def exit_status_available() -> bool:
+    """Can this tmux report why a session's command ended?
+
+    ⚠ **Not everywhere, and the consequence is severe enough to probe for
+    rather than assume.** `ending` needs `#{pane_dead_status}`; measured on
+    CI, a Linux tmux left that field EMPTY where macOS filled it. With it
+    empty every ending is `unclear`, which does not resume — so on such a
+    tmux the supervisor starts one session and stops, for ever.
+
+    **That is the safe direction and it is not a working feature.** Better
+    to say so at start than to have a user watch `rite start` do one cycle
+    and call it a bug in their project.
+
+    Probed by running it, because a version number is a proxy: the question
+    is whether this binary populates the field, and the only way to know is
+    to make a pane die and look.
+    """
+    global _EXIT_STATUS_ANSWER
+    if _EXIT_STATUS_ANSWER is not None:
+        return _EXIT_STATUS_ANSWER
+
+    binary = _tmux()
+    if binary is None:
+        return False
+    # ⚠ Unique per CALL, not per process. A draft used the pid alone, so two
+    # probes in one run collided on the name, `new-session` refused the
+    # second with "duplicate session", and the capability read as ABSENT —
+    # a probe reporting the machine cannot do something because the probe
+    # got in its own way. Found by the suite, where it fires more than once.
+    name = f"rite-probe-exit-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+    try:
+        made = subprocess.run(
+            [binary, "new-session", "-d", "-s", name, "sh -c 'exit 3'"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=30,
+        )
+        if made.returncode != 0:
+            return False
+        subprocess.run(
+            [binary, "set-option", "-t", name, "remain-on-exit", "on"],
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        # It has already exited; re-run it so the option is in force.
+        subprocess.run(
+            [binary, "respawn-pane", "-k", "-t", name, "sh -c 'exit 3'"],
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        time.sleep(0.5)
+        asked = subprocess.run(
+            [binary, "display-message", "-p", "-t", name, "#{pane_dead_status}"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=30,
+        )
+        _EXIT_STATUS_ANSWER = (asked.stdout or "").strip() == "3"
+        return _EXIT_STATUS_ANSWER
+    except (OSError, subprocess.SubprocessError):
+        return False
+    finally:
+        subprocess.run(
+            [binary, "kill-session", "-t", name], capture_output=True, check=False
+        )

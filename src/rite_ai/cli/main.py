@@ -5854,7 +5854,17 @@ def _start_a_manager(
     # working. This runs in the FOREGROUND — it is the human's own process,
     # which is the whole of §9.12's compliance argument — so it does not
     # return until a bound or a stop verdict ends it.
+    from rite_ai.managers.session import exit_status_available
     from rite_ai.managers.supervise import supervise
+
+    if not exit_status_available():
+        click.echo(
+            "warning: this tmux does not report why a session ended "
+            "(#{pane_dead_status} is empty), so finished, quit and crashed "
+            "cannot be told apart. The Manager will run ONE session and "
+            "stop rather than resume into an unknown state.",
+            err=True,
+        )
 
     click.echo(
         f"starting Manager '{role.name}' — up to {sessions} session(s). "

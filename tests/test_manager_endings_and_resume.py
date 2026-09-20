@@ -30,6 +30,7 @@ from rite_ai.managers.session import (
     Liveness,
     StartResult,
     ending,
+    exit_status_available,
     liveness,
     start,
     was_attached,
@@ -40,6 +41,17 @@ from rite_ai.managers.transcripts import latest_session_id, project_transcript_d
 tmux_only = pytest.mark.skipif(
     subprocess.run(["which", "tmux"], capture_output=True).returncode != 0,
     reason="needs real tmux; mocking it is the bug",
+)
+
+# ⚠ A CAPABILITY, not a platform. Measured on CI: a Linux tmux left
+# `#{pane_dead_status}` empty where macOS filled it, so `ending` answered
+# `unclear` for every outcome and the supervisor could never resume there.
+# Skipping on the capability rather than on `sys.platform` states what the
+# dependency actually is — and `exit_status_available` is the same probe the
+# CLI uses to warn a user, so this test and that warning cannot disagree.
+reports_exit_status = pytest.mark.skipif(
+    not exit_status_available(),
+    reason="this tmux does not populate #{pane_dead_status}; outcomes are unclear",
 )
 
 
@@ -53,6 +65,7 @@ class TestTheThreeEndings:
     """A restart is right for exactly one of them."""
 
     @tmux_only
+    @reports_exit_status
     def test_a_clean_unattended_exit_is_FINISHED_and_resumes(self, project):
         result = start(project, "lead", command="sh", max_sessions=1)
         assert result.ok, result.message
@@ -89,6 +102,7 @@ class TestTheThreeEndings:
         assert not how.resume, "an unreadable exit status permitted a resume"
 
     @tmux_only
+    @reports_exit_status
     def test_a_nonzero_exit_is_CRASHED_and_does_not_resume(self, project):
         result = start(project, "lead", command="sh", max_sessions=1)
         subprocess.run(
@@ -107,6 +121,7 @@ class TestTheThreeEndings:
         assert not how.resume, "a crash that repeats would repeat at the user's expense"
 
     @tmux_only
+    @reports_exit_status
     def test_a_clean_exit_with_a_human_present_is_QUIT(self, project):
         """The measured defect: this and FINISHED are the same exit status,
         so the only difference is whether somebody was there."""
@@ -255,3 +270,28 @@ def test_was_attached_is_false_for_an_unattached_session(project):
     answer = was_attached(result.session)
     subprocess.run(["tmux", "kill-session", "-t", result.session], capture_output=True)
     assert answer is False
+
+
+@tmux_only
+def test_a_tmux_without_exit_status_makes_every_ending_unclear():
+    """The consequence, asserted rather than left to be discovered.
+
+    Where `#{pane_dead_status}` is empty the supervisor starts one session
+    and stops for ever — safe, and not a working feature. `rite start` warns
+    about it at startup using this same probe, so the warning and this test
+    cannot drift apart."""
+    if exit_status_available():
+        pytest.skip("this tmux does report exit status; nothing to assert")
+    import tempfile
+
+    root = Path(tempfile.mkdtemp())
+    (root / ".rite").mkdir()
+    result = start(root, "lead", command="sh", max_sessions=1)
+    subprocess.run(
+        ["tmux", "send-keys", "-t", result.session, "exit 0", "Enter"],
+        capture_output=True,
+    )
+    time.sleep(1.0)
+    how = ending(result.session, human_was_present=False)
+    subprocess.run(["tmux", "kill-session", "-t", result.session], capture_output=True)
+    assert how.kind == UNCLEAR and not how.resume
