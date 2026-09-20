@@ -357,6 +357,46 @@ class TestAnUnrecognisedVerdictStops:
         assert started == ["lead"]
 
 
+def _loop_verdict_constants() -> dict[str, str]:
+    """Every verdict `loop/` declares, DISCOVERED rather than listed.
+
+    ⚠ A draft imported the values but named the constants in a literal
+    tuple, so a renamed value went red and an EIGHTH verdict simply did not
+    appear — the test passed while `supervise` refused the new verdict as
+    unrecognised. Found by rite-dd.
+
+    Module-level `NAME = "lowercase"` with an uppercase NAME yields exactly
+    the seven verdicts and nothing else, checked before relying on it — no
+    other uppercase string constant lives at `loop/__init__.py`'s top
+    level. If one ever does, the fix is for `loop` to export a `VERDICTS`
+    set and for this to read it, rather than for this to grow a skip list.
+    """
+    import ast
+
+    source = (
+        Path(__file__).resolve().parents[1] / "src" / "rite_ai" / "loop" / "__init__.py"
+    ).read_text()
+    found = {}
+    for node in ast.parse(source).body:
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if not isinstance(target, ast.Name) or not target.id.isupper():
+            continue
+        if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+            found[target.id] = node.value.value
+    return found
+
+
+def test_the_discovery_finds_the_verdicts_it_is_meant_to():
+    """The discovery above is worthless if it silently finds nothing — an
+    empty set makes every assertion below vacuously true, which is the
+    failure shape that produced a passing check over no data this week."""
+    found = _loop_verdict_constants()
+    assert len(found) >= 7, f"discovery found {len(found)} verdicts: {found}"
+    assert "IDLE" in found and found["IDLE"] == "idle"
+
+
 def test_the_two_verdict_sets_are_exhaustive_over_the_loop():
     """⚠ So an EIGHTH verdict cannot silently continue.
 
@@ -365,25 +405,13 @@ def test_the_two_verdict_sets_are_exhaustive_over_the_loop():
     the point they add it, instead of discovering the behaviour when it is
     produced at 3am.
     """
-    from rite_ai import loop as loop_mod
     from rite_ai.managers.supervise import CONTINUE_VERDICTS, STOP_VERDICTS
 
-    verdicts = {
-        getattr(loop_mod, n)
-        for n in (
-            "CLOSED",
-            "IDLE",
-            "SATURATED",
-            "BLOCKED",
-            "DEADLOCKED",
-            "READY",
-            "UNKNOWN",
-        )
-    }
+    verdicts = set(_loop_verdict_constants().values())
     classified = STOP_VERDICTS | CONTINUE_VERDICTS
     assert not (verdicts - classified), (
-        f"these loop verdicts are in neither set, so they would be refused "
-        f"as unrecognised: {sorted(verdicts - classified)}"
+        f"these loop verdicts are in neither set, so `supervise` would "
+        f"refuse them as unrecognised: {sorted(verdicts - classified)}"
     )
     assert not (classified - verdicts), (
         f"these are classified but are not loop verdicts: "
