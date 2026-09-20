@@ -5934,6 +5934,7 @@ def _start_a_manager(
     sessions: int | None,
     minutes: float | None,
     record_issues: bool = False,
+    fresh: bool = False,
 ) -> None:
     """Start one Manager, refusing without a ceiling (D-68)."""
     if sessions is None:
@@ -6017,6 +6018,7 @@ def _start_a_manager(
             role.name,
             extra=instructions(root, role.name, enabled=record_issues),
         ),
+        fresh=fresh,
         verdict=_loop_verdict,
         note=lambda m: click.echo(m, err=True),
     )
@@ -6097,6 +6099,15 @@ def manager_stop(name: str) -> None:
     "neither suffices alone (D-82).",
 )
 @click.option(
+    "--fresh",
+    is_flag=True,
+    default=False,
+    help="Start a NEW session instead of continuing this Manager's last "
+    "one. Without it, `rite start <manager>` continues where that Manager "
+    "left off; with it, the new session becomes what a later bare start "
+    "continues.",
+)
+@click.option(
     "--record-issues",
     is_flag=True,
     default=False,
@@ -6106,7 +6117,11 @@ def manager_stop(name: str) -> None:
     "release documents or supports it.",
 )
 def start_cmd(
-    directory: str, sessions: int | None, minutes: float | None, record_issues: bool
+    directory: str,
+    sessions: int | None,
+    minutes: float | None,
+    record_issues: bool,
+    fresh: bool,
 ) -> None:
     """Bring rite up — assess state and act.
 
@@ -6163,14 +6178,14 @@ def start_cmd(
             if not chosen.ok:
                 click.echo(chosen.problem, err=True)
                 raise SystemExit(1)
-            _start_a_manager(here, chosen.role, sessions, minutes, record_issues)
+            _start_a_manager(here, chosen.role, sessions, minutes, record_issues, fresh)
             return
     elif roles:
         from rite_ai.managers import manager_to_start
 
         chosen = manager_to_start(roles, directory)
         if chosen.ok:
-            _start_a_manager(here, chosen.role, sessions, minutes, record_issues)
+            _start_a_manager(here, chosen.role, sessions, minutes, record_issues, fresh)
             return
         # Not a Manager name: fall through to directory/alias resolution,
         # which is what `rite start /path` and `rite start <alias>` need.

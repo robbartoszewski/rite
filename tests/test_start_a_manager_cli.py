@@ -146,3 +146,26 @@ class TestTheManagerNameIsInterceptedFirst:
         )
         assert not supervised
         assert result.exit_code != 0
+
+
+class TestFreshReachesTheSupervisor:
+    """⚠ The class-13 property again: a flag that stops at the CLI is
+    indistinguishable, from every angle except this one, from a flag that
+    works. `--minutes` shipped threaded through three modules and supplied
+    by nobody."""
+
+    def test_fresh_arrives(self, project, supervised):
+        result = CliRunner().invoke(
+            cli, ["start", "planner", "--sessions", "1", "--minutes", "5", "--fresh"]
+        )
+        assert result.exit_code == 0, result.output
+        assert supervised[0]["fresh"] is True
+
+    def test_its_absence_arrives_too(self, project, supervised):
+        """Continuation is the DEFAULT, so the default must reach the
+        supervisor as False rather than as nothing."""
+        result = CliRunner().invoke(
+            cli, ["start", "planner", "--sessions", "1", "--minutes", "5"]
+        )
+        assert result.exit_code == 0, result.output
+        assert supervised[0]["fresh"] is False

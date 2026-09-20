@@ -173,6 +173,56 @@ def read_instance(root: Path, name: str) -> ManagerInstance | None:
         return None
 
 
+def designation_path(root: Path, name: str) -> Path:
+    """Where this Manager's designated session id is kept.
+
+    ⚠ **A FILE OF ITS OWN, and not `instance_path`'s.** `forget_instance`
+    unlinks `<name>.json`, and Ctrl-C calls it — so a designation stored
+    there would be erased by the ordinary way a user stops a Manager, which
+    is precisely the run they most want to continue tomorrow. The instance
+    record describes a session that IS running; the designation describes
+    one to come back to. Different lifetimes, different files.
+
+    Under `user_dir()` with the instance record: per-user, per-machine,
+    never committed. A provider's session id is not portable between
+    machines, and a shared `config.yaml` claiming one on somebody else's
+    laptop is worse than saying nothing.
+    """
+    return user_dir(root) / f"{name}.designated.json"
+
+
+def designate(root: Path, name: str, session_id: str) -> None:
+    """Record the session a bare `rite start <name>` should continue."""
+    if not session_id:
+        return
+    path = designation_path(root, name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_atomic(path, json.dumps({"session": session_id}, indent=2) + "\n")
+
+
+def designated(root: Path, name: str) -> str:
+    """The designated session id, or "" when there is none to continue.
+
+    ⚠ **Unreadable is the same as absent, deliberately.** There is no error
+    state here: nothing to continue is a reason to start fresh, not a
+    problem a user must clear before they may work. A corrupt file must not
+    stop somebody working.
+
+    ⚠ **And this answers only what was WRITTEN DOWN.** Whether the provider
+    still knows that conversation is a different question, and it is not
+    answerable from here — the caller finds out by trying it. Treating a
+    readable file as proof the session exists is a proxy for the property.
+    """
+    try:
+        raw = json.loads(designation_path(root, name).read_text())
+    except (OSError, ValueError):
+        return ""
+    if not isinstance(raw, dict):
+        return ""
+    got = raw.get("session")
+    return got if isinstance(got, str) else ""
+
+
 def forget_instance(root: Path, name: str) -> None:
     try:
         instance_path(root, name).unlink()

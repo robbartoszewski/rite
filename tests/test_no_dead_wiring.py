@@ -89,6 +89,16 @@ UNCALLED_ON_PURPOSE = {
         "that assertion onto a literal string, which is the same reason "
         "`user_dir` is here."
     ),
+    "designation_path": (
+        "Called by `designate` and `designated` in the same file, and by "
+        "the tests that assert two Managers designate independently. "
+        "Public because it is the one place the designation's LOCATION is "
+        "decided, and that location is load-bearing: it must not be "
+        "`instance_path`, which `forget_instance` unlinks on every Ctrl-C "
+        "— storing the designation there would erase it with the ordinary "
+        "stop. A private helper would move that assertion into a test of "
+        "something else."
+    ),
     # --- rite_ai/managers/, added when this guard was widened ---
     "user_dir": (
         "Called by `instance_path` in the same file. `called_outside` counts "
