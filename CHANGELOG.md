@@ -2,6 +2,27 @@
 
 ## 0.5.1 (unreleased)
 
+### Talk to a running Manager — `rite connect <manager>`
+
+A Manager could be watched and not talked to. Attaching to its tmux pane
+showed what it did; it gave you no way to answer a question it needed
+answered, and no way to redirect it without killing it.
+
+Each Manager now has a mailbox — two directories of timestamped JSON files
+under `.rite/managers/<name>/mail/`. Messages you send are delivered at the
+start of the Manager's next turn, appended to the instruction it is given;
+messages it writes wait for you to read.
+
+    rite connect lead
+
+opens an ordinary interactive Claude Code session pointed at that mailbox.
+rite is not building a chat — the chat is Claude Code, and this side signs
+in from your keychain, so talking to a Manager needs no token.
+
+**Nothing records or checks who wrote a message.** A file in the inbox is
+delivered because it is there, so anything that can write a file can talk
+to a Manager later without rite growing a transport layer first.
+
 ### ⚠ A Manager runs with NO permission gate — `--dangerously-skip-permissions`
 
 **`rite start <manager>` launches Claude Code with
