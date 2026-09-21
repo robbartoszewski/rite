@@ -5913,17 +5913,76 @@ def _a_manager_is_running(root: Path, roles: list) -> bool:
     return any(running(root, role.name) is not None for role in roles)
 
 
-def _loop_verdict(root: Path) -> str:
+def _board_for_manager(root: Path):
+    """The board this Manager reads, and WHICH of the three states it is in.
+
+    ⚠ **Absent and unreachable are different states**, and `_ticket_backend`
+    answers `(None, message)` for both. A project with no backend configured
+    needs a line of config; a project whose Jira is down needs somebody to
+    look at a server. Telling the second user to set up a board they already
+    have would be this codebase's signature defect wearing a friendly face,
+    so the discriminator is read directly: `ticket_backend.type == "none"` is
+    ABSENT, and anything else that failed to build is UNREACHABLE.
+    """
+    from rite_ai.config.parse import ParseError, parse_config
+
+    board, problem = _ticket_backend("workers")
+    if board is not None:
+        return board, "ok", ""
+    config = parse_config(root / ".rite" / "config.yaml")
+    absent = not isinstance(config, ParseError) and config.ticket_backend.type == "none"
+    return None, ("absent" if absent else "unreachable"), problem or ""
+
+
+def _setup_prompt(root: Path, manager: str) -> str:
+    """What a Manager is asked to do when the project has no board yet.
+
+    Robert's decision: a project with nothing configured is not refused —
+    the Manager starts, and its work for that cycle is guiding the User
+    through setting the missing pieces up. rite needs no setup wizard
+    because a Manager is an agent; it needs a different opening
+    instruction.
+
+    The missing pieces are named concretely so it is not guessing.
+    """
+    return (
+        f"You are the Manager {manager!r} for the project at {root}.\n\n"
+        "This project has NO ticket backend configured, so there is no queue "
+        "for you to work. Your job this session is to help the person at the "
+        "terminal set one up, and nothing else.\n\n"
+        "What is missing, concretely: `ticket_backend` in "
+        f"`{root}/.rite/config.yaml`. It needs `type` set to either `jira` "
+        "(which also needs `site` and `projects`) or `github` (which also "
+        "needs `repo`). Read the file, see what is already there, explain "
+        "the choice, and make the change they ask for.\n\n"
+        "Do not start any other work, do not create tickets, and do not "
+        "invent a backend they did not choose. When the configuration is "
+        "written, tell them to run `rite start` again to begin working the "
+        "queue."
+    )
+
+
+def _loop_verdict(root: Path, board=None) -> str:
     """The loop's own answer to "should this continue" (§9.14.4).
 
     `unknown` when it cannot be established, which is a STOP — the loop's
     own default on the unknown, and the safe direction when the alternative
     is spending on a project whose state could not be read.
+
+    ⚠ **The board is an ARGUMENT because it was silently absent.** This
+    called `plan_cycle(root)` with none, and `plan_cycle` never builds one
+    — `board` is injection-only — so it returned `unknown` for every
+    project whatever was configured, and `rite start <manager>` could never
+    start a Manager at all. The `rite loop` path one file away had always
+    passed `plan_cycle(root, board=board, sandbox_status=...)`; this is the
+    same board from the same builder, not a second way to make one.
     """
     try:
         from rite_ai.loop import plan_cycle
+        from rite_ai.sandbox import worker_sandbox_status
 
-        return str(getattr(plan_cycle(root), "verdict", "unknown") or "unknown")
+        cycle = plan_cycle(root, board=board, sandbox_status=worker_sandbox_status)
+        return str(getattr(cycle, "verdict", "unknown") or "unknown")
     except Exception:  # noqa: BLE001 - an unreadable project is `unknown`
         return "unknown"
 
@@ -6008,18 +6067,72 @@ def _start_a_manager(
     notice = start_notice(root, role.name, enabled=record_issues)
     if notice:
         click.echo(notice)
+    # ⚠ **The board a Manager reads is the one the loop reads.** Absent and
+    # unreachable both stop — spending sessions on a project whose queue
+    # cannot be read is what `unknown`-is-a-stop already means — but they
+    # must not READ as each other: one needs a line of config, the other
+    # needs somebody to look at a server. Before this, both arrived as
+    # "stopped on 'unknown' after 0 session(s) — this is a fault, not a
+    # completion", which was neither true nor actionable for either.
+    board, board_state, board_problem = _board_for_manager(root)
+    if board_state == "unreachable":
+        # ⚠ NOT the setup path. This project HAS a board; it could not be
+        # reached. Sending this user to configure one would be telling them
+        # to fix something that is not broken.
+        click.echo(
+            f"refusing to start Manager {role.name!r}: {board_problem}", err=True
+        )
+        click.echo(
+            "  This project has a ticket backend configured — it could not "
+            "be reached, which is a different problem from not having one. "
+            "Nothing was started.",
+            err=True,
+        )
+        raise SystemExit(1)
+
+    setting_up = board_state == "absent"
+    if setting_up:
+        # ⚠ ONE cycle, and it does not resume. A setup session is only
+        # useful while somebody is there to be guided, and resuming it
+        # unattended would spend the remaining ceiling talking to an empty
+        # pane. The ceiling does the work — no new flag — and the reason is
+        # said out loud rather than left for the user to infer from a run
+        # that stopped earlier than they asked for.
+        sessions = 1
+        click.echo(
+            f"this project has no ticket backend, so Manager {role.name!r} "
+            f"is starting to help you configure one — not to work a queue.",
+            err=True,
+        )
+        click.echo(
+            "  One session only: a setup session needs you at the terminal, "
+            "so it is not resumed. Run `rite start` again when the board is "
+            "configured.",
+            err=True,
+        )
+
     outcome = supervise(
         root,
         role.name,
         engine=role.engine,
         max_sessions=sessions,
         window_seconds=minutes * 60.0,
-        prompt=for_manager(
-            role.name,
-            extra=instructions(root, role.name, enabled=record_issues),
+        prompt=(
+            _setup_prompt(root, role.name)
+            if setting_up
+            else for_manager(
+                role.name,
+                extra=instructions(root, role.name, enabled=record_issues),
+            )
         ),
         fresh=fresh,
-        verdict=_loop_verdict,
+        # A setup session's work is not queue work, so the queue's verdict
+        # is not the question. With no board it would answer `unknown` and
+        # stop before the Manager ever started — which is the defect this
+        # whole change is about, one level in.
+        verdict=(lambda _r: "ready")
+        if setting_up
+        else (lambda r: _loop_verdict(r, board)),
         note=lambda m: click.echo(m, err=True),
     )
     click.echo(outcome.reason)
