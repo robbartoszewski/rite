@@ -71,6 +71,26 @@ def send(root: Path, manager: str, box: str, text: str) -> Path:
     return path
 
 
+def _as_time(value: object) -> float:
+    """A timestamp, or 0.0 when the value is not one.
+
+    ⚠ **`float()` USED TO SIT OUTSIDE THE `try`**, so a `timestamp` that
+    was a string, a list or `null` raised out of `read` — which promises it
+    never raises — and out of the supervisor's own loop, ending the run. A
+    message whose text is readable is worth delivering with a wrong
+    ordering key; it is not worth killing the Manager the sender was trying
+    to reach.
+
+    0.0 sorts it first, which is harmless: `read` orders by FILENAME, and
+    the timestamp is carried for the reader rather than used to sort.
+    """
+    try:
+        when = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0.0
+    return when if when == when else 0.0  # NaN is not a time
+
+
 def read(root: Path, manager: str, box: str) -> list[Message]:
     """Everything waiting in a box, in send order. Never raises.
 
@@ -92,7 +112,7 @@ def read(root: Path, manager: str, box: str) -> list[Message]:
         text = str(data.get("text", "") or "")
         if not text.strip():
             continue
-        out.append(Message(text, float(data.get("timestamp", 0.0)), path))
+        out.append(Message(text, _as_time(data.get("timestamp")), path))
     return out
 
 

@@ -6140,6 +6140,88 @@ def _start_a_manager(
         raise SystemExit(1)
 
 
+def _connect_briefing(root: Path, manager_name: str) -> str:
+    """What the connected session is told.
+
+    ⚠ **A COMMAND TO RUN, not a format to imitate.** This used to hand the
+    session the file name shape and the JSON keys and ask it to write them
+    by hand, every message, forever — while `mailbox.send`, which writes
+    exactly that and is tested, had no production caller at all. An LLM
+    emitting `"timestamp": null` once was enough to raise out of
+    `mailbox.read` and end the supervised run the User was talking to.
+
+    Removing the contract removes the class. `rite message` is one call the
+    session already knows how to make, and it goes through the validated
+    writer, so there is no shape left for it to get wrong.
+
+    Reading stays direct: the session reads the files it is shown, and a
+    malformed one there costs a message rather than a Manager.
+    """
+    from rite_ai.managers.mailbox import OUTBOX, mailbox_dir
+
+    outbox = mailbox_dir(root, manager_name, OUTBOX)
+    return (
+        f"You are the User's side of a conversation with the rite Manager "
+        f"{manager_name!r} in the project at {root}.\n\n"
+        f"The Manager may not be running right now, and that is fine — "
+        f"messages wait for it.\n\n"
+        f"TO READ what it has said: the JSON files in {outbox}, oldest "
+        f"first by filename. Each has a `text` field. Delete one once you "
+        f"have relayed it so it is not shown twice.\n\n"
+        f"TO SEND, run this — do not write the file yourself:\n"
+        f'  rite message {manager_name} "<what the person wants to say>"\n'
+        f"It is delivered at the start of the Manager's next turn.\n\n"
+        f"Start by reading anything waiting, then ask the person what they "
+        f"want to say."
+    )
+
+
+@cli.command("message")
+@click.argument("manager_name")
+@click.argument("text")
+def message(manager_name: str, text: str) -> None:
+    """Send a message to a Manager — delivered at its next turn.
+
+    ⚠ **This exists so nothing has to hand-write the mailbox format.**
+    `rite connect` used to brief its session with the file naming and the
+    JSON keys; a single malformed value raised out of the supervisor's own
+    loop and ended the run. One command, one validated writer, no shape to
+    get wrong.
+
+    The Manager need not be running — the message waits for it.
+
+    Examples:
+      rite message planner "stop after this ticket and report"
+    """
+    from rite_ai.managers.mailbox import INBOX, send
+
+    root = _require_project_root()
+    roles, problems = _manager_roles(root)
+    if problems:
+        click.echo("cannot read this project's Managers:", err=True)
+        for problem in problems[:3]:
+            click.echo(f"  {problem}", err=True)
+        raise SystemExit(1)
+    if manager_name not in {r.name for r in roles}:
+        known = ", ".join(sorted(r.name for r in roles)) or "none declared"
+        click.echo(
+            f"no Manager named {manager_name!r} in this project — {known}", err=True
+        )
+        raise SystemExit(1)
+    if not text.strip():
+        # ⚠ Refused rather than written. `read` skips blank text, so a file
+        # written here would be deleted undelivered and the sender would
+        # never learn their message went nowhere.
+        click.echo("refusing to send an empty message.", err=True)
+        raise SystemExit(1)
+
+    send(root, manager_name, INBOX, text)
+    click.echo(
+        f"message queued for {manager_name!r} — delivered at the start of its "
+        f"next turn. `rite connect {manager_name}` reads its replies."
+    )
+
+
 @cli.command()
 @click.argument("manager_name")
 def connect(manager_name: str) -> None:
@@ -6178,21 +6260,7 @@ def connect(manager_name: str) -> None:
     inbox.mkdir(parents=True, exist_ok=True)
     outbox.mkdir(parents=True, exist_ok=True)
 
-    briefing = (
-        f"You are the User's side of a conversation with the rite Manager "
-        f"{manager_name!r} in the project at {root}.\n\n"
-        f"The Manager may not be running right now, and that is fine — "
-        f"messages wait for it.\n\n"
-        f"TO READ what it has said: the JSON files in {outbox}, oldest "
-        f"first by filename. Each has a `text` field. Delete one once you "
-        f"have relayed it so it is not shown twice.\n\n"
-        f"TO SEND: write a file to {inbox} named "
-        f"`<milliseconds>_<pid>_<n>.json` containing "
-        f'`{{"text": "...", "timestamp": <unix seconds>}}`. It is delivered '
-        f"at the start of the Manager's next turn.\n\n"
-        f"Start by reading anything waiting, then ask the person what they "
-        f"want to say."
-    )
+    briefing = _connect_briefing(root, manager_name)
 
     click.echo(
         f"connecting to Manager {manager_name!r} — its mailbox is {outbox.parent}"

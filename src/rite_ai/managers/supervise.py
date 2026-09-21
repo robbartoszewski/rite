@@ -448,11 +448,12 @@ def supervise(
             waiting_for_it = take_mail(root, manager, INBOX)
             if waiting_for_it:
                 say(f"delivering {len(waiting_for_it)} message(s) to {manager!r}")
-            cycle_prompt = (
-                cycle_prompt
-                + delivery_note(waiting_for_it)
-                + how_to_reply(root, manager)
-            )
+            # Composed once, for both launches below: the fallback needs the
+            # same mail and the same reply instructions, differing only in
+            # which opening text it starts from.
+            extras = delivery_note(waiting_for_it) + how_to_reply(root, manager)
+            fresh_prompt = prompt + extras
+            cycle_prompt = cycle_prompt + extras
             result: StartResult = launch(
                 root,
                 manager,
@@ -490,10 +491,21 @@ def supervise(
                     # start, and the operator's instruction was discarded on
                     # the one path that exists to recover.
                     #
-                    # `prompt`, not `cycle_prompt`: this is a NEW
-                    # conversation, so it gets the opening instruction and
-                    # not the continuation the resumed attempt was given.
-                    prompt=prompt,
+                    # ⚠ **`fresh_prompt`, and the composition matters.** This
+                    # is a NEW conversation, so it gets the opening
+                    # instruction rather than the continuation the resumed
+                    # attempt was given — and it must still carry the mail
+                    # and the reply instructions, which are appended per
+                    # cycle above.
+                    #
+                    # Passing bare `prompt` here DELETED MESSAGES: `take`
+                    # had already emptied the inbox, the supervisor had
+                    # already said "delivering N message(s)", and the
+                    # session that actually ran never saw them. Third
+                    # argument silently dropped at this one call site in two
+                    # days, after `prompt` and `permission` — all three are
+                    # pinned now.
+                    prompt=fresh_prompt,
                     # ⚠ AND THE PERMISSION MODE, lost the same way. It was
                     # added to the launch above when the permission work
                     # landed and not to this one, and `launch_command` only
