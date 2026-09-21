@@ -44,7 +44,7 @@ from rite_ai.managers import (
     forget_instance,
     manager_dir,
 )
-from rite_ai.managers.permissions import permission_argument, permission_mode
+from rite_ai.managers.permissions import PERMISSION_FLAG, announcement
 from rite_ai.managers.session import (
     PROMPT_FILE,
     StartResult,
@@ -300,14 +300,12 @@ def supervise(
     launch = starter if callable(starter) else _default_starter
     next_id = resume_id_for if callable(resume_id_for) else _default_resume_id
 
-    # ⚠ Resolved ONCE and passed EVERY cycle. Once because a user's
-    # choice about what this Manager may do should not change mid-run;
-    # every cycle because nothing carries it between invocations.
-    chosen = permission_mode(root, manager)
-    if chosen.problem:
-        return SuperviseResult(False, f"refusing to start: {chosen.problem}", [])
-    say(chosen.announcement)
-    permission = permission_argument(chosen.mode)
+    # ⚠ Said ONCE and passed EVERY cycle. Every cycle because nothing
+    # carries a permission mode into `-p`; said because this grant is total
+    # and the one line below is all that stands between a user and a
+    # surprise.
+    say(announcement(manager))
+    permission = PERMISSION_FLAG
 
     cycles: list[Cycle] = []
     live = ""

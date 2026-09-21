@@ -1,20 +1,123 @@
 # What a `-p` Manager may DO — the permission mode is rite's parameter now
 
-**Status: DECIDED by Robert, 2026-09-21.** Recorded, not proposed. Nothing
-is built and no launch path was touched.
+## ⚠ REVERSED on 2026-09-21 — `acceptEdits` was wrong, and the evidence is why
 
-> `--permission-mode acceptEdits` as default,
-> `--dangerously-skip-permissions` as opt-in
+**Robert's decision, replacing the one recorded below:**
 
-— and the opt-in is configured **per Manager**.
+> always `--dangerously-skip-permissions`
 
-⚠ **`acceptEdits` has NOT been observed working.** See "The gap that
-matters now" below. The decision is made; the verification is not done.
+Passed on every cycle, for every Manager. **The per-Manager opt-in is gone**
+— with one level there is nothing to opt into, and a config key a user could
+set that changed nothing would read like a control and be none. It was
+removed rather than left inert.
 
-Second scope created by Finding B's Option 1, and a sibling of
-`CREDENTIAL_HANDLING_FOR_UNATTENDED_RUNS.md`: that one is about the token
-`claude -p` needs to *authenticate*, this one about the permission it needs
-to *act*. They arrive from the same choice and should be read together.
+### Why it changed: the measurement changed
+
+`acceptEdits` was chosen on evidence, and the evidence was a **bare
+`claude -p` probe**: a file written with the exact contents asked for, and
+a shell command that really executed (`date +%s` returned a value inside
+the real time window, which a model writing the file from memory could not
+produce).
+
+The first real run through `rite start` measured something the probe had
+not. Three cycles against a two-ticket board, and the Manager said:
+
+    Both `rite loop status` and a direct GitHub check (`gh issue list
+    --repo robbartoszewski/rite-dogfood-scratch`) are blocked pending
+    approval — no external/network commands are going through in this
+    session.
+
+No ticket was ever read. No artifact. Each cycle hit the wall, said so, and
+**exited 0** — which `ending` read as a clean finish, so the supervisor
+resumed, three times. The decision did not change because somebody argued
+better; it changed because the thing it rested on turned out to be false in
+the case that matters.
+
+⚠ **This was the note's own falsification criterion, and it fired
+verbatim** — see "What would show this wrong": *"`acceptEdits` not being
+sufficient for ordinary Manager work — a duty that needs to run a command
+… That would not reopen the default; it would mean the opt-in is reached
+more often than 'deliberate act' suggests."* It is reached always.
+
+### ⚠ The discrepancy is UNEXPLAINED, and we chose not to chase it
+
+Under `acceptEdits`, a bare probe ran `touch` and `date`; a Manager could
+run neither `rite` nor `gh`. **Some Bash is permitted and some is not, and
+nobody here established the rule.**
+
+Recorded rather than resolved, deliberately. It stopped mattering for the
+decision the moment the answer became "skip permissions entirely", and
+chasing it would have been work that changed no outcome on a release night.
+Written down because somebody will ask, and the honest answer is that we
+know the outcome and not the mechanism. If that rule ever matters again —
+a third mode, a narrower grant, a sandboxed Manager — this is the loose
+thread to pull.
+
+### Carried to 0.6.0: a configurable allowlist for the advanced user
+
+**Robert's addendum:** *"let's make it configurable so an advanced,
+security-conscious User can set an allow list.
+`--dangerously-skip-permissions` stays as the default"*.
+
+So the default above is settled and does not change. What returns in 0.6.0
+is **configurability of a different shape**, and the difference matters to
+whoever builds it:
+
+| | the opt-in that was removed | the allowlist that is coming |
+|---|---|---|
+| what a user sets | one of two MODE NAMES | a list of command PATTERNS |
+| where | `.rite/user/<manager>.yaml` (rite's own) | `.claude/settings.json` — Claude Code's format |
+| shape | `permission_mode: acceptEdits` | `{"permissions": {"allow": ["Bash(rite:*)"]}}` |
+| who it is for | anybody raising one Manager's trust | the advanced, security-conscious user |
+| how rite would act | pass a different flag | write or merge a settings file |
+
+⚠ **The per-Manager mode machinery was REMOVED rather than kept for this,
+and that was a judgement call.** It read a rite-owned YAML file and
+validated the value against two mode names. An allowlist is a different
+file, in another tool's format, holding a different kind of value, acted on
+by a different mechanism — none of the removed code's shape survives the
+translation, and the only genuinely reusable part (reading a per-Manager
+file out of `user_dir`) is three lines. Keeping it would have left a config
+key that silently changed nothing, which is the one outcome ruled out.
+
+**The measurement whoever builds this needs, because it is the starting
+point for "what does a Manager actually require":**
+
+- Under `acceptEdits`, a Manager through `rite start` could run **neither
+  `rite` nor `gh`** — "no external/network commands are going through in
+  this session". Three cycles, no ticket read, no artifact.
+- Under the **same mode**, a bare `claude -p` probe **did** execute `touch`
+  and `date +%s` (the timestamp landed inside the real time window, so it
+  genuinely ran).
+
+Some Bash is permitted and some is not, and **nobody established the rule —
+we deliberately did not chase it** once the answer became "skip permissions
+entirely". An allowlist builder cannot avoid that question: the whole job
+is deciding which patterns a Manager needs. `Bash(rite:*)` and `Bash(gh:*)`
+are the two the real run named out loud, and they are a floor rather than a
+complete set.
+
+### What did not change
+
+**The security asymmetry below still stands, and now it is the whole of the
+risk rather than half.** A Worker is bounded by its yoloAI sandbox; a
+Manager is bounded by nothing but the user's own filesystem permissions.
+With this grant there is no permission layer under it either.
+
+So **the announcement carries more weight, not less**: rite says on every
+run that the Manager will not ask before anything it does, that it runs
+unsandboxed in the project directory, and that it has the user's own file
+and network access. That line is now the only thing between a user and a
+surprise.
+
+---
+
+## ⚠ SUPERSEDED — the original decision follows, kept for its reasoning
+
+Everything from here down records the `acceptEdits` decision and the
+measurements behind it. It is kept rather than deleted because the
+reasoning about WHY the mode must be passed every cycle, and why it cannot
+be inherited, is unchanged and still load-bearing. Only the value changed.
 
 ---
 

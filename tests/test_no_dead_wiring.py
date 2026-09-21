@@ -53,14 +53,6 @@ UNCALLED_ON_PURPOSE = {
         "and a test asserts the naming rule against it — a private helper "
         "would move that assertion into a test of something else."
     ),
-    "mode_path": (
-        "Called by `permission_mode` in the same file. Public because it is "
-        "the one place the per-Manager opt-in's location is decided, and the "
-        "tests name that path — `.rite/user/<manager>.yaml`, beside the "
-        "instance record and deliberately NOT inside it, because "
-        "`record_instance` rewrites `<manager>.json` wholesale on every "
-        "start and would destroy a choice the user authored."
-    ),
     "token_is_absent": (
         "Called by `start` in the same file. Public because it is the one "
         "place rite decides whether an unattended run has a credential, "
@@ -98,6 +90,16 @@ UNCALLED_ON_PURPOSE = {
         "`user_dir` is here."
     ),
     # --- rite_ai/managers/, added when this guard was widened ---
+    "user_dir": (
+        "Called by `instance_path` in the same file. `called_outside` counts "
+        "callers in OTHER files, which is right for `coordination/` where "
+        "each file is a mechanism, and counts a package's internal API as "
+        "dead. Exempted rather than relaxing the rule, because relaxing it "
+        "would hide the nine-at-once case this guard was written for. "
+        "(Briefly had an outside caller while the per-Manager permission "
+        "opt-in existed; that was removed when the grant became a single "
+        "level, and this came back with it.)"
+    ),
     "instance_path": (
         "Same: called by `record_instance`, `read_instance` and "
         "`forget_instance` in the same file."

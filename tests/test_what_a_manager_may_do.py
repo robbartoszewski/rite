@@ -1,127 +1,84 @@
-"""The permission mode rite passes, every cycle.
+"""The permission flag rite passes, every cycle, for every Manager.
 
-⚠ **Nothing carries a permission mode into `-p`.** Resuming from a
-terminal restores the mode a session was in, and that restoration
-explicitly EXCLUDES `-p`. So there is no path where a User grants
-permission once, interactively, and the unattended cycles inherit it: the
-mode is a value rite composes at the launch site and passes on EVERY
-invocation, exactly as `--resume <id>` is.
+**Robert's decision, reversing `acceptEdits`: always
+`--dangerously-skip-permissions`.** The first decision was made on a bare
+`claude -p` probe, where `acceptEdits` wrote a file with the exact contents
+asked for and ran a shell command. The first real run through `rite start`
+measured what the probe had not — a Manager that could reach neither `rite`
+nor `gh`, three cycles, no ticket ever read, no artifact. The decision
+changed because the measurement did.
 
-Measured on a bare `claude -p`, no rite involved:
-
-  - with `--permission-mode acceptEdits`: exit 0, the file was created with
-    the contents asked for;
-  - with no mode at all: exit 0, NO file, "I don't have permission to write
-    that file";
-  - and under `acceptEdits` a shell command really executed — `date +%s`
-    returned a value inside the real time window, which a model writing the
-    file from memory could not produce.
-
-The middle case is why a resumed cycle without the flag would be a Manager
-that silently stops being able to work while still exiting 0.
+⚠ **Nothing carries a permission mode into `-p`.** Resuming from a terminal
+restores the mode a session was in, and that restoration excludes `-p`. So
+a cycle launched without the flag is a Manager that silently cannot act AND
+still exits 0 — read by `ending` as a clean finish, and resumed. That is
+why these tests care about EVERY cycle rather than the first.
 """
 
 from __future__ import annotations
 
-import pytest
-
-from rite_ai.managers.permissions import (
-    ACCEPT_EDITS,
-    SKIP_ALL,
-    permission_argument,
-    permission_mode,
-)
+from rite_ai.managers.permissions import PERMISSION_FLAG, announcement
 from rite_ai.managers.supervise import launch_command
 
 
-class TestTheDefaultIsSafeAndAlwaysPassed:
-    def test_a_manager_with_no_configuration_gets_acceptEdits(self, tmp_path):
-        (tmp_path / ".rite").mkdir()
-        chosen = permission_mode(tmp_path, "lead")
-        assert chosen.mode == ACCEPT_EDITS
-        assert not chosen.explicit
-        assert not chosen.problem
-
-    def test_the_flag_is_on_the_first_cycle(self):
-        assert "--permission-mode acceptEdits" in launch_command(
-            "claude", "", "/p.txt", permission_argument(ACCEPT_EDITS)
+class TestTheFlagIsOnEveryCycle:
+    def test_the_first_cycle_carries_it(self):
+        assert PERMISSION_FLAG in launch_command(
+            "claude", "", "/p.txt", PERMISSION_FLAG
         )
 
-    def test_the_flag_is_on_a_RESUMED_cycle_too(self):
-        """⚠ The one that matters: `-p` does not restore a session's mode,
-        so a resumed cycle without it is a Manager that can no longer act
-        and still exits 0."""
-        built = launch_command(
-            "claude", "abc-123", "/p.txt", permission_argument(ACCEPT_EDITS)
-        )
-        assert "--permission-mode acceptEdits" in built
+    def test_a_RESUMED_cycle_carries_it_too(self):
+        """⚠ The one that matters: `-p` does not restore a session's mode."""
+        built = launch_command("claude", "abc-123", "/p.txt", PERMISSION_FLAG)
+        assert PERMISSION_FLAG in built
         assert "--resume abc-123" in built
 
-
-class TestTheOptInIsADeliberateAct:
-    def _write(self, tmp_path, text):
-        (tmp_path / ".rite" / "user").mkdir(parents=True, exist_ok=True)
-        (tmp_path / ".rite" / "user" / "lead.yaml").write_text(text)
-
-    def test_the_opt_in_is_read_from_the_per_manager_file(self, tmp_path):
-        self._write(tmp_path, "permission_mode: dangerously-skip-permissions\n")
-        chosen = permission_mode(tmp_path, "lead")
-        assert chosen.mode == SKIP_ALL
-        assert chosen.explicit
-
-    def test_it_becomes_the_engines_own_flag_not_a_mode_value(self):
-        """`--dangerously-skip-permissions` is its own flag; passing it as a
-        value to `--permission-mode` would be a different, wrong thing."""
-        assert permission_argument(SKIP_ALL) == "--dangerously-skip-permissions"
-        assert permission_argument(ACCEPT_EDITS) == "--permission-mode acceptEdits"
-
-    def test_the_opt_in_is_per_manager_not_per_project(self, tmp_path):
-        self._write(tmp_path, "permission_mode: dangerously-skip-permissions\n")
-        assert permission_mode(tmp_path, "lead").mode == SKIP_ALL
-        assert permission_mode(tmp_path, "planner").mode == ACCEPT_EDITS
-
-    @pytest.mark.parametrize(
-        "text",
-        [
-            "permission_mode: acceptedits\n",
-            "permission_mode: skip\n",
-            "permission_mode: yes\n",
-            "permission_mode: true\n",
-            "permission_mode: --dangerously-skip-permissions\n",
-        ],
-    )
-    def test_an_unrecognised_value_REFUSES_rather_than_guessing(self, tmp_path, text):
-        """⚠ Never silently falls back to the default. A user who wrote
-        something in this file made a decision about what their Manager may
-        do to their machine, and running with a different one because their
-        spelling was wrong is the worst of both."""
-        self._write(tmp_path, text)
-        chosen = permission_mode(tmp_path, "lead")
-        assert chosen.problem, f"{text!r} was accepted"
-        assert "permission_mode" in chosen.problem
-
-    def test_a_corrupt_file_refuses_too(self, tmp_path):
-        self._write(tmp_path, "permission_mode: [this is not a string\n")
-        assert permission_mode(tmp_path, "lead").problem
-
-    def test_an_empty_file_is_not_an_opt_in(self, tmp_path):
-        self._write(tmp_path, "")
-        chosen = permission_mode(tmp_path, "lead")
-        assert chosen.mode == ACCEPT_EDITS and not chosen.explicit
+    def test_it_is_claude_codes_own_flag_not_a_mode_value(self):
+        """`--permission-mode dangerously-skip-permissions` would be a
+        different and wrong thing."""
+        assert PERMISSION_FLAG == "--dangerously-skip-permissions"
+        assert "--permission-mode" not in PERMISSION_FLAG
 
 
-class TestTheModeIsStated:
-    def test_the_choice_carries_what_to_say(self, tmp_path):
-        """A Manager that CHOSE not to act and one that was NOT ALLOWED to
-        act look identical without this."""
-        (tmp_path / ".rite").mkdir()
-        assert "acceptEdits" in permission_mode(tmp_path, "lead").announcement
+class TestTheGrantIsAnnounced:
+    def test_it_names_the_flag(self):
+        assert PERMISSION_FLAG in announcement("lead")
 
-    def test_the_opt_in_announcement_says_it_is_the_dangerous_one(self, tmp_path):
+    def test_it_says_the_manager_will_not_ask(self):
+        """One line a user can read and know what they have agreed to."""
+        said = announcement("lead").lower()
+        assert "not ask" in said
+
+    def test_it_says_where_that_power_reaches(self):
+        """⚠ A Manager is unsandboxed — unlike a Worker, which yoloAI
+        bounds. The announcement is the only thing standing between a user
+        and a surprise, so it must say so rather than name a flag."""
+        said = announcement("lead").lower()
+        assert "unsandboxed" in said
+        assert "machine" in said
+
+    def test_it_names_the_manager(self):
+        assert "planner" in announcement("planner")
+
+
+class TestThereIsNoInertConfigLeftBehind:
+    def test_no_per_manager_permission_file_is_read(self, tmp_path):
+        """⚠ The per-Manager opt-in was REMOVED, not left unreachable. With
+        one level, a key a user could set that changed nothing would read
+        like a control and be none — which this codebase has enough of."""
+        import rite_ai.managers.permissions as perms
+
+        assert not hasattr(perms, "permission_mode")
+        assert not hasattr(perms, "mode_path")
+        assert not hasattr(perms, "ACCEPT_EDITS")
+
+    def test_a_stale_opt_in_file_changes_nothing(self, tmp_path):
+        """Somebody who wrote the old file gets the same launch as somebody
+        who did not — the flag does not depend on it."""
         (tmp_path / ".rite" / "user").mkdir(parents=True)
         (tmp_path / ".rite" / "user" / "lead.yaml").write_text(
-            "permission_mode: dangerously-skip-permissions\n"
+            "permission_mode: acceptEdits\n"
         )
-        said = permission_mode(tmp_path, "lead").announcement
-        assert "dangerously-skip-permissions" in said
-        assert "lead.yaml" in said, "it must name where the choice came from"
+        assert PERMISSION_FLAG in launch_command(
+            "claude", "", "/p.txt", PERMISSION_FLAG
+        )
