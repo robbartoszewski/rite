@@ -2,6 +2,113 @@
 
 ## 0.5.1 (unreleased)
 
+### ⚠ A Manager runs with NO permission gate — `--dangerously-skip-permissions`
+
+**`rite start <manager>` launches Claude Code with
+`--dangerously-skip-permissions` on every cycle.** The Manager does not ask
+before anything it does — any file, any command, any network call — and it
+runs **unsandboxed**, in your project's directory, on your machine, with
+your own file and network access. Workers run inside a sandbox; a Manager
+does not. The same flag means two different things in the two places, and
+only one of them has a container under it.
+
+The exact command in the pane:
+
+```console
+claude -p --dangerously-skip-permissions --resume <id> < <prompt file>
+```
+
+**Why, and it is measured rather than assumed.** A gated mode was tried
+first. Under `acceptEdits` a bare probe wrote a file and ran a command, so
+it looked sufficient — but the first real run through `rite start` measured
+a Manager that could reach neither `rite` nor `gh`:
+
+> Both `rite loop status` and a direct GitHub check are blocked pending
+> approval — no external/network commands are going through in this session.
+
+Three cycles, no ticket read, no artifact. A Manager that must stop and ask
+is not running unattended. **The decision changed because the measurement
+did.**
+
+⚠ **The discrepancy between the probe and the real run is unexplained.**
+Some Bash was permitted and some was not, and nobody established the rule;
+it stopped mattering once the answer became "skip permissions entirely".
+Recorded because somebody will ask, and the honest answer is that we know
+the outcome and not the mechanism.
+
+**Every run says so**, because the announcement is the only thing between a
+user and a surprise:
+
+```console
+permissions: --dangerously-skip-permissions — Manager 'planner' will NOT ask
+before anything it does. It runs unsandboxed in this project's directory, on
+this machine, with your own file and network access.
+```
+
+**There is no setting for it in 0.5.1.** An earlier shape had a per-Manager
+opt-in; with this as the only level, that key would have changed nothing,
+which is worse than no key because it reads like a control. 0.6.0 brings
+configurability back as an allowlist of command patterns, with this flag
+still the default.
+
+### A Manager session is non-interactive — readable, not typeable
+
+**The engine runs as `claude -p` with its instruction on stdin**, so a cycle
+ends when the engine does. That is what makes the supervisor's cycle
+boundary the engine's own exit rather than a guess from idleness or a timer.
+
+⚠ **This replaces what an earlier draft of this changelog said.** While
+`rite start` was being built the Manager was an interactive session, and
+this section described attaching and typing into it — "typing in the pane
+works", a Manager you `exit` yourself. **That is no longer true**: stdin is
+redirected from the prompt file, so there is nothing to type into and no
+`exit` to type.
+
+**Attaching still works, for reading.** `rite status` prints the command:
+
+```console
+managers:
+  planner: running as rite-mgr-acme-73053d-planner — tmux attach -t rite-mgr-acme-73053d-planner
+```
+
+The pane shows what the Manager is doing, and `remain-on-exit` keeps the
+conversation readable after the cycle ends.
+
+⚠ **If you already live in tmux, `tmux attach` refuses to nest.** Clear the
+variable for that one command:
+
+```console
+TMUX= tmux attach -t rite-mgr-acme-73053d-planner
+```
+
+tmux's own behaviour rather than rite's, but the first thing an operator who
+works inside tmux will hit.
+
+### `rite start <manager>` continues where it left off; `--fresh` starts over
+
+A Manager's session is now **designated** and continued by default, so the
+work it did yesterday is reachable today. `--fresh` starts a new session and
+rewrites the designation.
+
+The id is designated rather than chosen: there is one candidate and no
+heuristic to tune. It lives in its own file under `.rite/user/`, separate
+from the instance record because `forget_instance` unlinks that on every
+Ctrl-C — a designation stored there would be erased by the ordinary way a
+user stops a Manager, which is precisely the run they most want to continue.
+
+**Nothing to continue is not an error.** A missing designation, one the
+provider has forgotten, and one that cannot be used all start fresh and say
+which:
+
+```console
+no previous session recorded for 'planner', so this run starts fresh.
+the previous session for 'planner' could not be continued, so this run
+starts FRESH. It will not remember the earlier conversation.
+```
+
+Those two read differently on purpose — "you never had one" and "the one you
+had is gone" are different facts.
+
 ### Fixed before release: `days:` was parsed but ignored by the loop and scheduler
 
 The day dimension above is enforced at `rite sandbox start`, and four other
@@ -178,32 +285,6 @@ fresh, because a third description of one state is how the first two came to
 disagree. `rite status` still spawns no process — it is the command run most
 often — so it cannot ask tmux, and the honest report of a question it may not
 ask is the uncertain one plus the command that settles it.
-
-### Talking to a running Manager: attach with `tmux attach`
-
-`rite status` prints the command:
-
-```console
-managers:
-  planner: running as rite-mgr-acme-73053d-planner — tmux attach -t rite-mgr-acme-73053d-planner
-```
-
-Measured end to end against real tmux: typing in the pane works, and a
-Manager you `exit` yourself is **not** restarted — the supervisor sees that
-somebody was attached, calls the ending a quit rather than a finish, and
-says so. Reaching `--minutes` while you are attached does not evict you
-either: the session stays up and you keep typing, because a ceiling is an
-accounting limit rather than a stop.
-
-⚠ **If you already live in tmux, `tmux attach` refuses to nest.** Clear the
-variable for that one command:
-
-```console
-TMUX= tmux attach -t rite-mgr-acme-73053d-planner
-```
-
-This is tmux's own behaviour, not rite's, but it is the first thing an
-operator who works inside tmux will hit.
 
 ### Enhancements
 

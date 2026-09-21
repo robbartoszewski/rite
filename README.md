@@ -321,6 +321,30 @@ guide](docs/guide.md)); watching the queue (0.5.0, above).
 
 ## Why you might not want it
 
+**A Manager runs with no permission gate, unsandboxed, on your machine.**
+`rite start <manager>` launches Claude Code with
+`--dangerously-skip-permissions`, so the Manager **does not ask before
+anything it does** — every file, every command, every network call — in your
+project's directory, with your own file and network access. Workers are
+different: they run inside a sandbox. A Manager is not.
+
+That is the trade `rite start` makes. A Manager that must stop and ask is
+not running unattended, and the modes that ask were measured refusing a
+Manager the ability to run `rite` or `gh` at all — three cycles, no ticket
+read, no work done. rite states the grant every run rather than leaving it
+to be discovered:
+
+```console
+permissions: --dangerously-skip-permissions — Manager 'planner' will NOT ask
+before anything it does. It runs unsandboxed in this project's directory, on
+this machine, with your own file and network access.
+```
+
+There is no setting for this in 0.5.1. If that is not a trade you want on a
+given machine, do not run `rite start <manager>` there — Workers, the loop
+and everything else are unaffected. 0.6.0 adds an allowlist of permitted
+command patterns for the advanced user, with this flag still the default.
+
 **It runs on Pro; what it is *for* may not.** Starting a worker needs no more
 than a signed-in Claude Code, plus a token from `claude setup-token` if it
 runs sandboxed. But rite neither meters nor throttles — workers
@@ -349,6 +373,11 @@ you can attach to the session and watch it, Ctrl-C ends the run, and it stops
 at two ceilings you had to type — `--sessions` (how many) and `--minutes`
 (how long), neither of which has a default. Nothing about it is scheduled and
 nothing survives your shell.
+
+A bare `rite start <manager>` **continues that Manager's last session** — the
+work it did yesterday is reachable today — and `--fresh` starts a new one
+instead. Nothing to continue is not an error: a first run, or a session the
+provider has forgotten, starts fresh and says which.
 
 **No gates on your code.** Your sessions run your tests and linters — that is
 what rite tells them to do — but rite does not read the results, so there is
