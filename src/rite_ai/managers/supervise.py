@@ -143,10 +143,13 @@ def launch_command(
     # session started, which works for a REPL and cannot work for a command
     # that has already exited by then.
     #
-    # `printf` reads `$RITE_PROMPT` out of the inherited environment, so the
-    # instruction never becomes an argument: `tmux new-session <cmd>` puts
-    # its command on tmux's argv, and a prompt quotes ticket text, paths and
-    # internal names. Same reason the token is never an argument.
+    # The prompt is REDIRECTED FROM A FILE (`< <path>`), so the instruction
+    # never becomes an argument: `tmux new-session <cmd>` puts its command
+    # on tmux's argv, where `ps` shows it to every local account, and a
+    # prompt quotes ticket text, paths and internal names. Same reason the
+    # token is never an argument. (An earlier draft passed it through
+    # `$RITE_PROMPT` in the inherited environment; the file is what ships,
+    # and `session.PROMPT_FILE` records why.)
     base = f"{engine or 'claude'} -p"
     if permission:
         # ⚠ **EVERY cycle, not just the first.** Resuming with `-p` does not
@@ -431,6 +434,19 @@ def supervise(
                     manager,
                     engine=engine,
                     resume_id="",
+                    # ⚠ THE PROMPT, which this omitted. Without it the call
+                    # took `_default_starter`'s `prompt=""`, `start_session`
+                    # wrote an empty `prompt.txt` ("even when empty"), and
+                    # the launch became `claude -p < <empty>` — which exits
+                    # 1, per the measurement in `launch_command`. So the run
+                    # rite had just announced as starting FRESH could not
+                    # start, and the operator's instruction was discarded on
+                    # the one path that exists to recover.
+                    #
+                    # `prompt`, not `cycle_prompt`: this is a NEW
+                    # conversation, so it gets the opening instruction and
+                    # not the continuation the resumed attempt was given.
+                    prompt=prompt,
                     max_sessions=max_sessions,
                     window_seconds=window_seconds,
                 )
