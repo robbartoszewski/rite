@@ -447,6 +447,16 @@ def supervise(
                     # conversation, so it gets the opening instruction and
                     # not the continuation the resumed attempt was given.
                     prompt=prompt,
+                    # ⚠ AND THE PERMISSION MODE, lost the same way. It was
+                    # added to the launch above when the permission work
+                    # landed and not to this one, and `launch_command` only
+                    # adds the flag `if permission` — so the fallback ran
+                    # `claude -p` with none, which the permission design
+                    # records as "a working loop around a Manager that
+                    # cannot act". Two arguments, one call site, the same
+                    # omission twice: this call is the one that gets
+                    # forgotten, so the test now pins both.
+                    permission=permission,
                     max_sessions=max_sessions,
                     window_seconds=window_seconds,
                 )

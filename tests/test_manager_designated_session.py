@@ -359,7 +359,13 @@ class TestTheFreshFallbackIsGivenSomethingToDo:
             prompt="",
             **kw,
         ):
-            seen.append({"resume_id": resume_id, "prompt": prompt})
+            seen.append(
+                {
+                    "resume_id": resume_id,
+                    "prompt": prompt,
+                    "permission": kw.get("permission", ""),
+                }
+            )
             if resume_id:
                 return StartResult(False, "engine exited immediately")
             return StartResult(True, "ok", session="s1", attach="a", pane="%1")
@@ -394,6 +400,18 @@ class TestTheFreshFallbackIsGivenSomethingToDo:
         assert "OPENING INSTRUCTION" in seen[1]["prompt"], (
             f"the relaunch got something other than the opening prompt: "
             f"{seen[1]['prompt']!r}"
+        )
+        # ⚠ THE SAME CALL LOST THE PERMISSION MODE TOO, and for the same
+        # reason: `permission=` was added to the FIRST launch when the
+        # permission work landed and not to this one. `launch_command` only
+        # adds the flag `if permission`, so the fallback ran `claude -p`
+        # with none — which the permission design records as "a working loop
+        # around a Manager that cannot act".
+        assert seen[1]["permission"] == seen[0]["permission"], (
+            f"the fresh relaunch was given a different permission mode from "
+            f"the resumed attempt: {seen[0]['permission']!r} then "
+            f"{seen[1]['permission']!r}. A Manager with no permission mode "
+            "starts and can do nothing"
         )
 
     def test_the_resumed_attempt_still_gets_the_continuation(
