@@ -34,7 +34,7 @@ def project(tmp_path: Path, monkeypatch) -> Path:
     )
     (rite_dir / "modules.yaml").write_text("modules: {}\n")
     (rite_dir / "config.yaml").write_text(
-        "ticket_backend:\n  type: none\n"
+        "ticket_backend:\n  type: github\n  repo: acme/acme\n"
         "heartbeat:\n  interval_minutes: 10\n  stall_threshold: 3\n"
         "coordination:\n"
         "  managers:\n    - planner\n"
@@ -65,6 +65,15 @@ def supervised(monkeypatch) -> list[dict]:
         calls.append({"root": root, "manager": manager, **kw})
         return Outcome()
 
+    import rite_ai.cli.main as main_mod
+
+    # A board that exists and answers. These tests are about what the CLI
+    # passes to `supervise`, not about reaching GitHub — but `type: none`
+    # would now route them into the no-board setup session, which is a
+    # different feature with a different prompt and a ceiling of one.
+    monkeypatch.setattr(
+        main_mod, "_ticket_backend", lambda role="workers": (object(), None)
+    )
     monkeypatch.setattr(sup, "supervise", fake)
     monkeypatch.setattr(ses, "exit_status_available", lambda: True)
     monkeypatch.setattr(ses, "running", lambda *a, **k: None)
