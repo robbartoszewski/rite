@@ -213,6 +213,8 @@ def designated(root: Path, name: str) -> str:
     answerable from here — the caller finds out by trying it. Treating a
     readable file as proof the session exists is a proxy for the property.
     """
+    from rite_ai.managers.transcripts import session_id_problem
+
     try:
         raw = json.loads(designation_path(root, name).read_text())
     except (OSError, ValueError):
@@ -220,7 +222,20 @@ def designated(root: Path, name: str) -> str:
     if not isinstance(raw, dict):
         return ""
     got = raw.get("session")
-    return got if isinstance(got, str) else ""
+    if not isinstance(got, str) or session_id_problem(got):
+        # ⚠ **AN UNUSABLE ID IS AN ABSENT ONE**, by the same rule as the
+        # corrupt file above — and this half was missing. `launch_command`
+        # REFUSES an id that is not shaped like one, because that string is
+        # run by a shell; it raises rather than dropping the flag, so
+        # handing one back from here wedged `rite start` with a traceback
+        # and kept wedging it, since the file is re-read every run.
+        # Measured, with `{"session": "abc\nrm -rf /"}`.
+        #
+        # Checked HERE rather than only at the write, so a file already
+        # poisoned heals on the next run instead of needing a user to find
+        # and delete something they were never told about.
+        return ""
+    return got
 
 
 def forget_instance(root: Path, name: str) -> None:

@@ -167,3 +167,40 @@ continuation is the default.
    the same argument that made `--manager` explicit as well as defaulted:
    the default serves the common case, and the flag is how somebody drives
    it from outside.
+
+---
+
+## Carried to 0.6.0 from the round-one review of the designation
+
+Found by attacking the failure and boundary cases; one was fixed in
+v0.5.1 (a malformed designation wedged `rite start` with a traceback) and
+these were not.
+
+1. **Nothing checks that a designated id belongs to THIS project or THIS
+   Manager** — `supervise` reads the id and passes it to `--resume`
+   unexamined, so a file naming another Manager's session would continue
+   that conversation and the announcement would correctly say "continuing".
+   The means already exist and whoever picks this up should not start from
+   scratch: `project_transcript_dir(root)` enumerates this project's
+   transcripts and `_stated_session_id` reads the id out of each, so
+   membership is answerable without a new mechanism. ⚠ **Honest limit: a
+   cross-project resume was NOT demonstrated** — the finding is the missing
+   check, not an observed wrong resume, and it needs a hand-edit or a bug
+   to reach.
+
+2. **The two files under `.rite/user/` are separated safely by accident.**
+   `running_instances()` globs `*.json`, which `<name>.designated.json`
+   matches; it is skipped only because `read_instance` validates the stem
+   through `name_problem(..., must_be_a_tmux_target=True)`, which rejects
+   the `.` in `planner.designated`. Verified working today. The separation
+   of the two files is deliberate and well-argued; its safety rests on an
+   unrelated tmux-naming rule about dots, so a non-`.json` suffix or an
+   explicit skip in the glob would make it structural rather than
+   incidental.
+
+3. **"Designated whatever the ending" has one unstated exception.** The
+   Ctrl-C write is guarded by `if cycles:`, so an interrupt arriving before
+   the first cycle is appended designates nothing. That looks correct —
+   there is no conversation to come back to yet — but it is the one path
+   where the stated rule does not hold, and an unstated exception is how the
+   next person is surprised.

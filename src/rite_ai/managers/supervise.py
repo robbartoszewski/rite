@@ -40,6 +40,7 @@ from pathlib import Path
 from rite_ai.managers import (
     designate,
     designated,
+    designation_path,
     forget_instance,
     manager_dir,
 )
@@ -199,6 +200,24 @@ def _default_resume_id(root: Path, manager: str, since: float = 0.0) -> str:
     return latest_session_id(root, since=since)
 
 
+def _could_not_continue(manager: str) -> str:
+    """One wording, two routes to it.
+
+    A designation fails either because the provider has forgotten the
+    session (the start does not take) or because what was written down
+    cannot be used at all (`designated` refuses it). Both are "there was one
+    and you are not getting it", which is what the user needs to know, so
+    both say this. Two copies of the sentence would drift, which is how
+    `rite status` and `rite start` came to describe one session in
+    contradictory words.
+    """
+    return (
+        f"the previous session for {manager!r} could not be continued, so "
+        f"this run starts FRESH. It will not remember the earlier "
+        f"conversation."
+    )
+
+
 def _stopped_because(how, started: int) -> str:
     """Say which of the three happened, because a restart is right for
     exactly one and a human needs to know which they are looking at."""
@@ -307,7 +326,20 @@ def supervise(
         # ⚠ A DIFFERENT FACT from "the one you had is gone", and it reads
         # differently on purpose — the timezone precedent, where an unset
         # zone and a rejected one do not print the same line.
-        say(f"no previous session recorded for {manager!r}, so this run starts fresh.")
+        #
+        # ⚠ **A file that is THERE and gave nothing is the second fact, not
+        # the first.** `designated` returns "" both when nothing was ever
+        # written and when what was written cannot be used — a corrupt file,
+        # or an id `launch_command` would refuse. Reporting the second as
+        # "no previous session recorded" tells a user their work was never
+        # designated when it was, and is gone.
+        if designation_path(root, manager).exists():
+            say(_could_not_continue(manager))
+        else:
+            say(
+                f"no previous session recorded for {manager!r}, so this run "
+                f"starts fresh."
+            )
 
     while True:
         # BOTH bounds before starting. A ceiling checked afterwards reports
@@ -418,11 +450,7 @@ def supervise(
                 # unknown one produce DIFFERENT messages and code matching
                 # one silently misses the other. The provider validates
                 # before doing any work, so trying costs nothing.
-                say(
-                    f"the previous session for {manager!r} could not be "
-                    f"continued, so this run starts FRESH. It will not "
-                    f"remember the earlier conversation."
-                )
+                say(_could_not_continue(manager))
                 tried_designation = False
                 continuing = False
                 resume_from = ""
