@@ -4,14 +4,14 @@ SHA-256 of each CLAUDE.md section every tagged release wrote identically
 for every project, so a file written before markers existed can still be
 shown to be rite's own rather than a user's edit.
 
-From: v0.1.0 (15/23 static), v0.2.0 (16/24 static), v0.3.0 (16/26 static), v0.4.0 (13/26 static), v0.5.0 (16/29 static).
+From: v0.1.0 (15/23 static), v0.2.0 (16/24 static), v0.3.0 (16/26 static), v0.4.0 (13/26 static), v0.5.0 (16/29 static), v0.5.1 (16/29 static).
 """
 
 # ruff: noqa: E501 — these lines are the bytes a release wrote.
 
 # The releases read to build this file. Machine-readable on purpose:
 # `tests/test_update_refresh.py` asserts the newest tag is here.
-RELEASES: tuple[str, ...] = ("v0.1.0", "v0.2.0", "v0.3.0", "v0.4.0", "v0.5.0")
+RELEASES: tuple[str, ...] = ("v0.1.0", "v0.2.0", "v0.3.0", "v0.4.0", "v0.5.0", "v0.5.1")
 
 SECTIONS: dict[str, frozenset[str]] = {
     "Before anything else: read the handover snapshot": frozenset(
