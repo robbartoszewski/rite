@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.5.1 (unreleased)
+## 0.5.1 (2026-09-21)
 
 ### Talk to a running Manager — `rite connect <manager>`
 
@@ -13,11 +13,19 @@ under `.rite/managers/<name>/mail/`. Messages you send are delivered at the
 start of the Manager's next turn, appended to the instruction it is given;
 messages it writes wait for you to read.
 
+    rite message lead "drop ticket 12, do 14 first"
     rite connect lead
 
-opens an ordinary interactive Claude Code session pointed at that mailbox.
-rite is not building a chat — the chat is Claude Code, and this side signs
-in from your keychain, so talking to a Manager needs no token.
+`rite message` sends one line from anywhere — a script, a cron job, your
+own shell. `rite connect` opens an ordinary interactive Claude Code session
+pointed at that mailbox. rite is not building a chat — the chat is Claude
+Code, and this side signs in from your keychain, so talking to a Manager
+needs no token.
+
+**A Manager that is already running keeps the instructions it started
+with.** Its opening prompt is sent on a fresh session only, so a release
+that changes that text — this one does — reaches an existing Manager only
+after `rite start <manager> --fresh`.
 
 **Nothing records or checks who wrote a message.** A file in the inbox is
 delivered because it is there, so anything that can write a file can talk
