@@ -123,15 +123,22 @@ class TestOnlyTheFirstSessionGetsTheOpeningPrompt:
 
     def test_the_first_session_gets_the_opening_prompt(self, tmp_path, monkeypatch):
         seen = self._cycles(tmp_path, monkeypatch, ["quit"])
-        assert seen == [("", "OPENING: implement ticket ACME-1.")]
+        # Containment, not equality: the mailbox appends reply
+        # instructions to every cycle's prompt. The property is which
+        # instruction the cycle carries, not that nothing was added to it.
+        assert len(seen) == 1 and seen[0][0] == ""
+        assert "OPENING: implement ticket ACME-1." in seen[0][1]
 
     def test_a_resumed_session_is_told_to_continue_instead(self, tmp_path, monkeypatch):
         from rite_ai.managers.supervise import CONTINUATION
 
         seen = self._cycles(tmp_path, monkeypatch, ["finished", "quit"])
         assert len(seen) == 2, seen
-        assert seen[0][1] == "OPENING: implement ticket ACME-1."
-        assert seen[1] == ("sess-1", CONTINUATION)
+        assert "OPENING: implement ticket ACME-1." in seen[0][1]
+        assert seen[1][0] == "sess-1"
+        assert CONTINUATION in seen[1][1]
+        # The half that matters: the opening instruction is NOT re-issued.
+        assert "OPENING: implement ticket ACME-1." not in seen[1][1]
 
     def test_no_cycle_is_ever_launched_with_nothing_to_do(self, tmp_path, monkeypatch):
         """The measured failure: `claude -p` with no input exits 1."""

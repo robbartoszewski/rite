@@ -44,6 +44,9 @@ from rite_ai.managers import (
     forget_instance,
     manager_dir,
 )
+from rite_ai.managers.mailbox import INBOX, delivery_note, how_to_reply
+from rite_ai.managers.mailbox import take as take_mail
+from rite_ai.managers.mailbox import waiting as mail_waiting
 from rite_ai.managers.permissions import PERMISSION_FLAG, announcement
 from rite_ai.managers.session import (
     PROMPT_FILE,
@@ -253,6 +256,7 @@ class Cycle:
     started_at: float = 0.0
     ended_at: float = 0.0
     attended: bool = False
+    mail_waiting: bool = False
     ending: str = ""
 
 
@@ -432,6 +436,23 @@ def supervise(
             # carries a DIFFERENT instruction. See `CONTINUATION` for why
             # this amends D-90 rather than working around it.
             cycle_prompt = CONTINUATION if resume_from else prompt
+            # ⚠ **THE ONE HOOK.** Messages are appended to the instruction
+            # already composed for this cycle rather than delivered by a
+            # second mechanism. The engine runs with `-p` and has read its
+            # stdin before anything could type into the pane, so this
+            # composition point is where a Manager reliably reads — and a
+            # second delivery path would be a second thing to keep correct.
+            #
+            # Taken, not peeked: a message delivered stays delivered, so a
+            # Manager is not told the same thing every cycle until it acts.
+            waiting_for_it = take_mail(root, manager, INBOX)
+            if waiting_for_it:
+                say(f"delivering {len(waiting_for_it)} message(s) to {manager!r}")
+            cycle_prompt = (
+                cycle_prompt
+                + delivery_note(waiting_for_it)
+                + how_to_reply(root, manager)
+            )
             result: StartResult = launch(
                 root,
                 manager,
@@ -513,9 +534,20 @@ def supervise(
             # while waiting, because attachment is a moment and the question
             # `ending` asks is whether somebody was ever there.
             attended = False
+            # ⚠ Mail is NOTICED here and DELIVERED at the next turn
+            # boundary, not injected mid-turn. The engine has already read
+            # its instruction for this cycle; there is nowhere to put a
+            # message that it would read now, and pretending otherwise
+            # would mean a message that looks delivered and is not.
             while liveness(result.session).alive:
                 if deadline is not None and clock() >= deadline:
                     break
+                if not cycle.mail_waiting and mail_waiting(root, manager, INBOX):
+                    cycle.mail_waiting = True
+                    say(
+                        f"a message is waiting for {manager!r}; it is delivered "
+                        f"when this session ends and the next one starts"
+                    )
                 attended = attended or was_attached(result.session)
                 time.sleep(poll)
             cycle.ended_at = clock()

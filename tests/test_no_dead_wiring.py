@@ -100,6 +100,17 @@ UNCALLED_ON_PURPOSE = {
         "opt-in existed; that was removed when the grant became a single "
         "level, and this came back with it.)"
     ),
+    "send": (
+        "Mailbox writes come from AGENTS following prose instructions, not "
+        "from Python callers: the Manager is told where to write its "
+        "replies, and `rite connect`'s briefing tells the User's session "
+        "the same. So `send` is the format's definition and the tests' way "
+        "to produce it, with no production caller by construction. ⚠ That "
+        "leaves TWO writers of one format — this function and two blocks of "
+        "instruction text — which is a real smell and is logged for 0.6.0: "
+        "collapse them, most likely by giving agents a command to call "
+        "instead of a shape to reproduce."
+    ),
     "instance_path": (
         "Same: called by `record_instance`, `read_instance` and "
         "`forget_instance` in the same file."

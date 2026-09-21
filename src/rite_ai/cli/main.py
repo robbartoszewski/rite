@@ -6140,6 +6140,77 @@ def _start_a_manager(
         raise SystemExit(1)
 
 
+@cli.command()
+@click.argument("manager_name")
+def connect(manager_name: str) -> None:
+    """Talk to a running Manager — opens a Claude Code session on its mailbox.
+
+    ⚠ **rite is not building a chat. The chat is Claude Code.** This starts
+    an ordinary interactive session, in this project, with instructions
+    telling it where the Manager's mailbox is and how to read and write it.
+    Everything a conversation needs — history, editing, your own questions
+    — is the session you are already sitting in.
+
+    ⚠ **This side authenticates from the keychain the normal way**, so you
+    do NOT need `CLAUDE_CODE_OAUTH_TOKEN` to talk to your Manager. That
+    token is for the unattended side, which cannot stop and log in.
+    """
+    import subprocess
+
+    from rite_ai.managers.mailbox import INBOX, OUTBOX, mailbox_dir
+
+    root = _require_project_root()
+    roles, problems = _manager_roles(root)
+    if problems:
+        click.echo("cannot read this project's Managers:", err=True)
+        for problem in problems[:3]:
+            click.echo(f"  {problem}", err=True)
+        raise SystemExit(1)
+    if manager_name not in {r.name for r in roles}:
+        known = ", ".join(sorted(r.name for r in roles)) or "none declared"
+        click.echo(
+            f"no Manager named {manager_name!r} in this project — {known}", err=True
+        )
+        raise SystemExit(1)
+
+    inbox = mailbox_dir(root, manager_name, INBOX)
+    outbox = mailbox_dir(root, manager_name, OUTBOX)
+    inbox.mkdir(parents=True, exist_ok=True)
+    outbox.mkdir(parents=True, exist_ok=True)
+
+    briefing = (
+        f"You are the User's side of a conversation with the rite Manager "
+        f"{manager_name!r} in the project at {root}.\n\n"
+        f"The Manager may not be running right now, and that is fine — "
+        f"messages wait for it.\n\n"
+        f"TO READ what it has said: the JSON files in {outbox}, oldest "
+        f"first by filename. Each has a `text` field. Delete one once you "
+        f"have relayed it so it is not shown twice.\n\n"
+        f"TO SEND: write a file to {inbox} named "
+        f"`<milliseconds>_<pid>_<n>.json` containing "
+        f'`{{"text": "...", "timestamp": <unix seconds>}}`. It is delivered '
+        f"at the start of the Manager's next turn.\n\n"
+        f"Start by reading anything waiting, then ask the person what they "
+        f"want to say."
+    )
+
+    click.echo(
+        f"connecting to Manager {manager_name!r} — its mailbox is {outbox.parent}"
+    )
+    click.echo("  (this side signs in from your keychain; no token needed)")
+    try:
+        raise SystemExit(
+            subprocess.run(["claude", briefing], cwd=str(root), check=False).returncode
+        )
+    except FileNotFoundError:
+        click.echo(
+            "claude is not on PATH, so there is nothing to open. The mailbox "
+            f"is still there: read {outbox} and write {inbox}.",
+            err=True,
+        )
+        raise SystemExit(1) from None
+
+
 @cli.group()
 def manager() -> None:
     """A declared Manager's session — start it with `rite start <manager>`."""
