@@ -320,3 +320,122 @@ class TestTheDesignationIsWrittenFromTheRun:
             "Ctrl-C lost the designation — the ordinary stop erased what "
             "tomorrow continues"
         )
+
+
+class TestTheFreshFallbackIsGivenSomethingToDo:
+    """⚠ The existing fallback test asserts the ANNOUNCEMENT. That is why
+    this survived.
+
+    `test_a_dead_designation_falls_back_to_fresh` checks that rite says
+    "could not be continued ... fresh". It does, correctly. What nothing
+    checked is what the relaunch is HANDED — and `_starter` above records
+    only `resume_id`, swallowing everything else into `**kw`, so the prompt
+    was invisible to the harness as well as to the assertions.
+
+    Measured on the code before this test: the second `launch(...)` passed
+    `resume_id=""` and omitted `prompt`, taking `_default_starter`'s
+    `prompt=""` default.
+
+        launch 1: resume_id='11111111-222'  prompt='Continue the work...'
+        launch 2: resume_id=''              prompt=''
+
+    `start_session` writes `prompt.txt` "even when empty", and the launch is
+    `claude -p < prompt.txt`. This module's own measured note says `-p` with
+    no input "exits 1 saying Input must be provided either through stdin or
+    as a prompt argument when using --print". So the path that announces a
+    fresh start handed the engine an empty file, and the operator's
+    instruction was discarded on the one path designed to recover.
+    """
+
+    def _recording_starter(self, seen: list):
+        def starter(
+            root,
+            manager,
+            *,
+            engine,
+            resume_id,
+            max_sessions,
+            window_seconds,
+            prompt="",
+            **kw,
+        ):
+            seen.append(
+                {
+                    "resume_id": resume_id,
+                    "prompt": prompt,
+                    "permission": kw.get("permission", ""),
+                }
+            )
+            if resume_id:
+                return StartResult(False, "engine exited immediately")
+            return StartResult(True, "ok", session="s1", attach="a", pane="%1")
+
+        return starter
+
+    def test_the_relaunch_is_given_the_opening_prompt(self, tmp_path, monkeypatch):
+        import rite_ai.managers.supervise as sup
+
+        root = _project(tmp_path)
+        designate(root, "lead", "PRUNED")
+        _quiet(monkeypatch, sup)
+        seen: list = []
+        supervise(
+            root,
+            "lead",
+            engine="claude",
+            max_sessions=1,
+            window_seconds=0,
+            prompt="OPENING INSTRUCTION: do the work",
+            verdict=lambda _r: "ready",
+            starter=self._recording_starter(seen),
+            note=lambda _m: None,
+        )
+        assert len(seen) == 2, f"expected a resumed try then a fresh one: {seen}"
+        assert seen[1]["resume_id"] == "", "the fallback must not resume"
+        assert seen[1]["prompt"], (
+            "the fresh relaunch was handed NO prompt. `claude -p` with empty "
+            "stdin exits 1, so the run rite just announced as starting fresh "
+            "cannot start at all — and the operator's instruction is gone"
+        )
+        assert "OPENING INSTRUCTION" in seen[1]["prompt"], (
+            f"the relaunch got something other than the opening prompt: "
+            f"{seen[1]['prompt']!r}"
+        )
+        # ⚠ THE SAME CALL LOST THE PERMISSION MODE TOO, and for the same
+        # reason: `permission=` was added to the FIRST launch when the
+        # permission work landed and not to this one. `launch_command` only
+        # adds the flag `if permission`, so the fallback ran `claude -p`
+        # with none — which the permission design records as "a working loop
+        # around a Manager that cannot act".
+        assert seen[1]["permission"] == seen[0]["permission"], (
+            f"the fresh relaunch was given a different permission mode from "
+            f"the resumed attempt: {seen[0]['permission']!r} then "
+            f"{seen[1]['permission']!r}. A Manager with no permission mode "
+            "starts and can do nothing"
+        )
+
+    def test_the_resumed_attempt_still_gets_the_continuation(
+        self, tmp_path, monkeypatch
+    ):
+        """So the fix cannot be "send the opening prompt to both"."""
+        import rite_ai.managers.supervise as sup
+
+        root = _project(tmp_path)
+        designate(root, "lead", "PRUNED")
+        _quiet(monkeypatch, sup)
+        seen: list = []
+        supervise(
+            root,
+            "lead",
+            engine="claude",
+            max_sessions=1,
+            window_seconds=0,
+            prompt="OPENING INSTRUCTION: do the work",
+            verdict=lambda _r: "ready",
+            starter=self._recording_starter(seen),
+            note=lambda _m: None,
+        )
+        assert "OPENING INSTRUCTION" not in seen[0]["prompt"], (
+            "a continuation was handed the opening instruction — the failure "
+            "D-90 was amended to prevent"
+        )

@@ -306,3 +306,34 @@ measured so the decision can be made on evidence.
 Manager did the work" from "the Manager declined and exited 0" today, and
 that is the cheaper half of the problem.
 
+
+### 6. An empty prompt file is launchable — OPEN (hardening, not a fix)
+
+`_default_starter` defaults `prompt=""` and `start_session` writes
+`prompt.txt` "even when empty", with no guard. `claude -p` with empty
+stdin exits 1, so a caller that forgets the prompt produces a session that
+dies at launch rather than a refusal naming the mistake.
+
+That exact omission shipped once — the fresh fallback in `supervise`
+launched without a prompt, and the run rite had announced as starting
+fresh could not start. Fixed at the call site; the enabling condition is
+still there for the next caller.
+
+**Cheap guard available:** refuse to launch with an empty prompt, so the
+failure is a sentence rather than a silent no-op. Deliberately not taken
+during the 0.5.1 release window — it is hardening, and the defect it would
+have caught was fixed directly.
+
+### 7. The shared test starter records only the resume id — OPEN
+
+`tests/test_manager_designated_session.py::_starter` appends `resume_id`
+and swallows everything else into `**kw`. That is why the missing prompt
+survived a green suite: the harness could not see the argument, so no
+assertion built on it could either. The permission mode was invisible the
+same way, and was missing from the same call.
+
+⚠ **Other tests use that harness.** The same blind spot may be hiding
+defects of the same shape — an argument added to one call site and not
+another, with nothing able to observe the difference. Not investigated:
+recorded so the next person looking at these tests knows the recorder is
+the limit, not the coverage.
