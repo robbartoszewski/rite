@@ -18,9 +18,24 @@ carried table below.
 
 ## Ordering: Slack or Ollama first
 
-**Recommendation: a small cycle-boundary spike from the Ollama side first
-(B1), then Slack, then the rest of Ollama.** Not a coin toss — the coupling
-between them is real, one-directional, and cheap to settle.
+**Recommendation, revised after the tool survey (B0): run the one-sitting
+spike B1 first, then SLACK, then the rest of the local work.**
+
+⚠ **The earlier draft of this plan put the whole local track first**, on the
+premise that Ollama has no provider-managed session id and would therefore
+stress the engine contract hardest. **The survey weakens that premise**: if
+the adapter is thin glue over Goose, Goose supplies the session identity and
+`goose run` exits at the turn boundary — the same shape as `claude -p` — so
+the contract bends much less and the mail delivery point does not move.
+
+**B1 still goes first, because it is one sitting and it is what tells us
+whether that is true.** If the spike shows Goose does what its docs say,
+Slack is unblocked from the local track entirely and should go next on its
+own merits: it is the release's headline, it is user-facing, and its code is
+insulated by the mailbox. If the spike shows otherwise, the coupling below
+applies again and the local track moves ahead of Slack.
+
+The coupling the spike is testing, stated so the answer is checkable:
 
 **The coupling runs Ollama → Slack, and not back.** Mail is delivered at the
 **cycle boundary**, in the instruction composed for each cycle. That boundary
@@ -77,6 +92,84 @@ Neither is a build task and both need Robert. See "Decisions needed" 1 and 2.
 
 ---
 
+## B0. Does an existing tool already do local sessions? — surveyed 2026-09-23
+
+**Robert's instruction: consider existing free-to-use session managers rather
+than building session handling ourselves.** Same instinct that produced `rite
+connect` — the chat is Claude Code, not something rite reimplements.
+
+**Read from project documentation, not from reputation.** The question that
+decides the adapter: does the tool give **both** a headless run for cycles
+**and** an interactive session a User can attach to, addressable by something
+stable that survives the process exiting — and is the licence compatible with
+shipping rite as MIT.
+
+| Tool | Conversation identity | Survives exit | Headless run | Human can attach to the SAME conversation | Needs | Licence |
+|---|---|---|---|---|---|---|
+| **Goose** (block/goose) | `--session-id`, `-n/--name`, or `--path` | **Yes** — SQLite `sessions.db` since 1.10.0 | `goose run -i <FILE>` / `-t <TEXT>` / stdin | **Yes** — `goose session --resume -n <name>` continues what a headless run started | one binary; Ollama an explicit provider | **Apache-2.0**, Agentic AI Foundation (Linux Foundation) |
+| Aider | chat history files (`.aider.chat.history.md`) | as files, not as an addressable session | `--message` / `--message-file` with `--yes-always` | not natively — session management is recent/third-party | Python | Apache-2.0 |
+| OpenHands | conversation id; `--resume <id>` / `--resume --last` | yes | ⚠ **an open PRD, "Support non-interactive CLI mode" (CLI issue #147)** — not settled | yes | Python/binary | MIT |
+| Cline | `--id <session_id>`, `<millis>_<5 chars>` | yes | young CLI; ⚠ **open bug: `--json` mode cannot resume an existing session id** (#10856) | yes | Node; primarily an IDE surface | Apache-2.0 |
+| Open Interpreter | — | — | — | — | Python | ⚠ **AGPL-3.0** |
+| Continue (`cn`) | CLI exists | unconfirmed | unconfirmed | unconfirmed | Node | ⚠ **not confirmed — do not assume** |
+
+### Verdict: **thin glue over Goose**, subject to one spike
+
+Goose is the only candidate that satisfies all four requirements from its own
+documentation, and it is the one whose licence and governance suit shipping
+as a credential: Apache-2.0, under the Linux Foundation's Agentic AI
+Foundation, with Ollama named as a supported provider.
+
+**Thin glue means:** rite composes an instruction, runs `goose run` against a
+named session, and reads the exit. Continuity is Goose's `sessions.db`.
+Attachment is `goose session --resume -n <name>` — which is `rite connect`'s
+argument applied to the local tier, and is the same answer Robert gave for
+Claude.
+
+⚠ **It probably makes `harness.py` and `runners.py` unnecessary.** They are
+the uncalled half of `src/rite_ai/local/`. If Goose holds the loop, that code
+is not wired up — it is **deleted**, and the release gets smaller.
+
+### Three things the spike must MEASURE, not read
+
+⚠ **These are why B1 stays a spike rather than becoming a design.** Each is
+an assumption that reading the docs cannot settle.
+
+1. **Headless *and* named-resumable together is documented on two pages and
+   demonstrated on neither.** The headless tutorial shows `goose run
+   --no-session -t "..."`, i.e. the opposite of resumable; the CLI reference
+   lists `-r/--resume`, `--name` and `--session-id` on `goose run`. Nothing
+   shows one run starting a named session and a later run continuing it. **Run
+   it.**
+2. **`GOOSE_MODE=auto` carries rite's own permission failure, verbatim.** The
+   docs say operations requiring approval "will either use default
+   permissions or **fail**". That is precisely what v0.5.1 measured with
+   `claude -p` under `acceptEdits` — a working loop around a Manager that
+   could not act, three cycles and no artifact. Whatever Goose's equivalent
+   of `--dangerously-skip-permissions` is, it has to be established before
+   B4, not after.
+3. **Exit codes are not documented.** The docs only imply shell convention
+   (`if ! goose run ...`). Cycle-end detection is the engine contract's
+   core — `claude -p` was chosen *because* its exit is the boundary — so this
+   needs measuring rather than assuming.
+
+### What this does to the engine contract, and to the ordering
+
+⚠ **It weakens the premise that made Ollama urgent, and that is the most
+important consequence here.** The argument for Ollama early was that Claude
+and Cursor both have provider-managed session ids and **Ollama has none**, so
+a contract validated only against the first two would encode that property by
+accident.
+
+**Goose supplies the missing identity.** A Goose-backed local Manager has a
+stable session name that survives process exit, and `goose run` exits when the
+turn ends — the same shape as `claude -p`. So the contract bends much less
+than assumed, and **the cycle boundary does not move, which means mail
+delivery does not move either.**
+
+**That largely dissolves the Ollama → Slack coupling**, and it changes the
+recommendation below.
+
 ## B. Local models — Ollama
 
 **Robert's framing:** rite plans adapters for Cursor and Ollama, and **the
@@ -104,10 +197,10 @@ endpoint rather than a runtime (RL-14). `RL-T1` measured seatbelt reaching
 
 | # | Item | What it is | Why this release | Depends on | Size |
 |---|---|---|---|---|---|
-| B1 | **Spike: what is a cycle boundary without a session id?** | For an engine with no provider-managed session id — what ends a turn, where does continuity live, and does mail keep exactly one delivery point? | **Gates Slack's design** (see Ordering) and decides B3's shape. Cheapest item in the release and the one most other things lean on. | — | 1 sitting |
-| B2 | **RL-T0 spike — can an adopted agent hold a rite task loop on a local model?** | The gating spike the local tickets mark ⛔. | Decides whether B3 adopts an agent or builds a loop. **Doing B3 before this is the rework Robert wants avoided.** | — | 1–2 sittings |
+| B1 | **Spike: does Goose do what its docs say?** | Run the three measurements in B0: headless *and* named-resumable together; what `GOOSE_MODE=auto` does with an operation needing approval; what the exit code is on success and failure. Against a real Ollama endpoint. | **Decides the whole local track and unblocks Slack's ordering.** Cheapest item in the release and the one most else leans on. | — | 1 sitting |
+| B2 | **RL-T0 — can an adopted agent hold a rite task loop on a local model?** | The gating spike the local tickets mark ⛔. **Largely answered if B1 passes**: Goose IS the adopted agent, and RL-T0's question becomes whether it holds rite's contracts rather than whether one exists. | Decides whether B4 is glue or a build. **Doing B4 before this is the rework Robert wants avoided.** | B1 | ½–1 sitting if B1 passes, 1–2 if not |
 | B3 | **State the engine contract** | Write down what an engine must provide — launch, resume-or-equivalent, prompt delivery, cycle boundary, permission — as the thing Claude, Ollama and later Cursor all satisfy. | **This is the "no rework" requirement.** `launch_command` hard-codes Claude Code's spelling (`-p`, `--resume`, `--dangerously-skip-permissions`) and treats the engine string as an executable name, with no registry. A second engine either forks that function or the contract gets written first. | B1, B2 | 2–3 sittings |
-| B4 | **Wire the harness and runners to a caller** | Give the executing half a command, so `local:<class>` runs a subtask. | The tier is routed and probed but cannot execute. This is the release's local deliverable. | B2, B3 | 3–5 sittings |
+| B4 | **Glue `local:<class>` to Goose** | Compose the instruction, run `goose run` against a named session, read the exit. ⚠ **And DELETE `harness.py` and `runners.py`** if Goose holds the loop — they are the uncalled half, and leaving them is the built-and-never-wired class this project keeps finding. | The tier is routed and probed but cannot execute. This is the release's local deliverable, and on the thin-glue path it is much smaller than it was. | B2, B3 | 2–3 sittings as glue; 3–5 if B1 fails and rite holds the loop |
 | B5 | **Ollama end to end against a real endpoint** | `local:<class>` doing a real subtask. | Proves B3 by using it once, which is the only way to know a contract is a contract. | B4 | 2–3 sittings |
 | B6 | **Finish the Docker half of RL-T1** | Whether a Docker-backed sandbox reaches the host endpoint. | Unmeasured today and named as such. Cheap; removes an unknown. | — | ½ sitting |
 
@@ -142,9 +235,14 @@ of these are urgent, and that is noted per row.
 **Order:** B1 → C1, C2, C3 → A1 (once Decision 1 lands), A2 → A3, A4, A5 →
 B2 → B3 → B4, B5 → C4 → B6 and the rest of C as it fits.
 
-B1 is first because it is one sitting and both other tracks lean on it.
+B1 is first because it is one sitting and every later choice — Slack's
+ordering, B4's size, whether `harness.py` survives — turns on its result.
 C1–C3 follow because they are small and two of them are *tests being blind* —
 the condition under which everything after gets built unverified.
+
+⚠ **If B1 fails**, Slack and the local track swap: the contract question
+becomes live again, B4 grows to 3–5 sittings, and the Ordering section's
+coupling argument applies as written.
 
 ### The minimum that makes v0.6.0 coherent
 
@@ -195,7 +293,16 @@ class 0.5.1 was spent removing.
    beside. Worth confirming: it is the difference between a feature and a
    reversal.
 
-4. ⚠ **SPEC commits 0.6.0 to a QA gate that appears nowhere in this plan.**
+4. ⚠ **Adopt Goose as the local tier's session manager?** B0 says it is the
+   only surveyed tool meeting all four requirements, Apache-2.0 and under the
+   Linux Foundation. **It is a dependency on a third-party binary**, which is
+   a different kind of commitment from a library: a user installs it, and
+   rite's local tier stops working if it changes. The upside is that rite
+   stops owning an agent loop and a conversation store, and two uncalled
+   modules get deleted. **B4 should not start until this is answered**, and
+   B1 is what gives the answer its evidence.
+
+5. ⚠ **SPEC commits 0.6.0 to a QA gate that appears nowhere in this plan.**
    §9.15.4 says the journal entries "are the raw material for the QA gate"
    and that the scenario gate (D-81, §7.3) is what the journal is being
    refined toward; §7.3 says **"Not built."** So a spec reader expects a
