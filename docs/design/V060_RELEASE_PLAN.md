@@ -106,29 +106,76 @@ shipping rite as MIT.
 
 | Tool | Conversation identity | Survives exit | Headless run | Human can attach to the SAME conversation | Needs | Licence |
 |---|---|---|---|---|---|---|
-| **Goose** (block/goose) | `--session-id`, `-n/--name`, or `--path` | **Yes** — SQLite `sessions.db` since 1.10.0 | `goose run -i <FILE>` / `-t <TEXT>` / stdin | **Yes** — `goose session --resume -n <name>` continues what a headless run started | one binary; Ollama an explicit provider | **Apache-2.0**, Agentic AI Foundation (Linux Foundation) |
+| **Goose** (aaif-goose/goose) | `--session-id`, `-n/--name`, or `--path` | **documented** — SQLite `sessions.db` since 1.10.0 · ⚠ *unverified* | `goose run -i <FILE>` / `-t <TEXT>` / stdin | **documented** — `goose session --resume -n <name>` · ⚠ *unverified* | one binary; Ollama an explicit provider | **Apache-2.0**, Agentic AI Foundation (Linux Foundation) |
+| **opencode** (anomalyco/opencode) | `--session <id>`, `--continue` for the last one | documented | `opencode run "<text>"`, `--format json` (JSONL) | yes — same session id | one binary | open source ⚠ *licence not confirmed here* |
 | Aider | chat history files (`.aider.chat.history.md`) | as files, not as an addressable session | `--message` / `--message-file` with `--yes-always` | not natively — session management is recent/third-party | Python | Apache-2.0 |
 | OpenHands | conversation id; `--resume <id>` / `--resume --last` | yes | ⚠ **an open PRD, "Support non-interactive CLI mode" (CLI issue #147)** — not settled | yes | Python/binary | MIT |
 | Cline | `--id <session_id>`, `<millis>_<5 chars>` | yes | young CLI; ⚠ **open bug: `--json` mode cannot resume an existing session id** (#10856) | yes | Node; primarily an IDE surface | Apache-2.0 |
-| Open Interpreter | — | — | — | — | Python | ⚠ **AGPL-3.0** |
-| Continue (`cn`) | CLI exists | unconfirmed | unconfirmed | unconfirmed | Node | ⚠ **not confirmed — do not assume** |
+| Open Interpreter | — | — | a REPL-first tool; no turn-per-invocation session contract found | — | Python | **Apache-2.0** |
 
-### Verdict: **thin glue over Goose**, subject to one spike
+⚠ **Two corrections to the first draft of this survey, both found in
+review.**
 
-Goose is the only candidate that satisfies all four requirements from its own
-documentation, and it is the one whose licence and governance suit shipping
-as a credential: Apache-2.0, under the Linux Foundation's Agentic AI
-Foundation, with Ollama named as a supported provider.
+1. **opencode was missed entirely, and it clears the same four bars.** The
+   first draft concluded "only Goose satisfies all four". **That conclusion
+   was false**, and the mechanism is worth naming: the search stopped when it
+   found a winner. opencode is now surveyed beside Goose.
+2. **Open Interpreter is Apache-2.0, not AGPL-3.0** — it relicensed, and the
+   licence was the first draft's stated reason for excluding it. The reason
+   was wrong. It is still excluded, on a real reason this time: it is
+   REPL-first and no turn-per-invocation session contract was found for it.
+   If that is wrong too, it should be re-surveyed rather than left out.
 
-**Thin glue means:** rite composes an instruction, runs `goose run` against a
-named session, and reads the exit. Continuity is Goose's `sessions.db`.
-Attachment is `goose session --resume -n <name>` — which is `rite connect`'s
-argument applied to the local tier, and is the same answer Robert gave for
-Claude.
+### Verdict: **Goose or opencode, and it is a config value** — subject to one spike
 
-⚠ **It probably makes `harness.py` and `runners.py` unnecessary.** They are
-the uncalled half of `src/rite_ai/local/`. If Goose holds the loop, that code
-is not wired up — it is **deleted**, and the release gets smaller.
+⚠ **The first draft framed this as "should rite adopt a third-party agent
+binary". That question was already closed, in code, before this plan was
+written.** `config/managers.py:73` has
+`_LOCAL_ONLY = ("endpoint", "model", "agent")` with the comment *"Only a
+`local:*` engine may carry these, and it must carry all three"*;
+`ManagerRole.agent` exists at :90 and is parsed at :228; `opencode` appears
+in four test files; and `engine_probe.py` already checks the agent binary is
+installed.
+
+**So rite already commits to an adopted agent binary. The open question is
+which value `agent:` takes** — `goose` or `opencode` — and that is a
+configuration choice a user could in principle make per Manager, not a
+dependency approval.
+
+**Goose is the better default on handle shape.** Its session handles are
+caller-chosen names (`-n/--name`) that rite can derive from the Manager name,
+where opencode's are ids rite must capture from a run and store. rite already
+has machinery for the second shape — it is what `designated` does for
+Claude — but the first is simpler and needs none of it.
+
+⚠ **opencode's headless output has two open defects against exactly the
+capability rite depends on** (knowing a turn ended): `--format json` can exit
+before emitting the final `step_finish` event (#26855), and drops subagent
+parts (#49300). That is R2 in the interface below, and it is the one
+capability with no workaround.
+
+### ⚠ The biggest risk to the local tier, and it is not the tool
+
+**Goose requires tool calling, and many local models do not have it.** From
+its own providers documentation, verbatim:
+
+> "goose extensively uses tool calling, so models without it can only do chat
+> completion. **If using models without tool calling, all goose extensions
+> must be disabled.**"
+
+For Ollama it recommends "any model supporting tool-calling" (Qwen2.5 as the
+example) and warns that the **default 4096-token context is too low**, so
+`OLLAMA_CONTEXT_LENGTH` must be raised.
+
+**This was absent from the first draft entirely** — from the survey, from the
+spike and from the decision — and it is the largest risk the local tier
+carries. A reviewer reports an experimental toolshim mitigation requiring a
+second interpreter model; **that is not on the providers page and is recorded
+here as reported rather than verified.**
+
+⚠ **It interacts with the harness correction below.** If extensions are
+disabled the agent does *less*, which makes `harness.py` running the verify
+itself matter **more**, not less.
 
 ### Three things the spike must MEASURE, not read
 
@@ -152,6 +199,14 @@ an assumption that reading the docs cannot settle.
    (`if ! goose run ...`). Cycle-end detection is the engine contract's
    core — `claude -p` was chosen *because* its exit is the boundary — so this
    needs measuring rather than assuming.
+4. ⚠ **Whether a locally-runnable tool-calling model is good enough to hold
+   a subtask.** Added after review. Goose needs tool calling; without it
+   every extension must be disabled. The spike must run against a real
+   tool-calling model on Ollama, with `OLLAMA_CONTEXT_LENGTH` raised, and
+   report what the model could actually do — not merely that the plumbing
+   connected. **`tools/rite_local_bench/tasks.py` already exists** with ten
+   calibrated tasks whose tests assert each verify fails on `before` and
+   passes on `solution`; use it rather than judging by eye.
 
 ### What this does to the engine contract, and to the ordering
 
@@ -225,10 +280,15 @@ Goose offers:
 | R4 | **Be addressable by a human for the same conversation** | `rite connect`'s argument, and Robert's requirement that local chat keep working. |
 | R5 | **Run without per-action approval** | An unattended Manager that stops to ask is not unattended — measured, v0.5.1. |
 | R6 | **Be checkable before use** | `rite doctor` already probes the endpoint; it must also answer "is the engine there". |
+| R7 | ⚠ **Leave verification to rite, not the agent** | Added after review. `harness.py` runs the verify ITSELF and derives `accepted` from that alone, never from the agent's claim. An adapter that let the agent report its own success would hand verification to the thing being verified, in the tier where the model is least trustworthy. |
 
-**That is the interface. Six capabilities, and rite already implements all
-six for Claude** — which is the strongest evidence the list is rite-shaped
-rather than Goose-shaped.
+**That is the interface — seven capabilities, and rite already implements all
+seven for Claude**, which is the strongest evidence the list is rite-shaped
+rather than agent-shaped.
+
+⚠ **R7 was missing from the first draft, and its absence is what produced
+this plan's worst error** (see B4). An interface that omits "who decides the
+work was done" will happily admit an adapter that deletes the boundary.
 
 ### The replacement checklist — what Robert is buying
 
@@ -247,14 +307,15 @@ If Goose disappears, a replacement must provide:
 **Seven items, and the adapter that wraps them is roughly a day** — provided
 a replacement tool has all seven.
 
-⚠ **And that proviso is the real risk, not the abstraction.** B0 surveyed
-six tools against exactly these properties and **only Goose satisfied all of
-them.** Aider has no addressable resumable session; OpenHands has not settled
-non-interactive mode; Cline cannot resume under `--json`; Open Interpreter is
-AGPL-3.0. So "implement its features" is cheap, and "find something else with
-these features" is, on today's evidence, **the part that is not guaranteed**.
-That is the honest shape of the bet and it should be stated to Robert that
-way rather than as a reassurance about layering.
+8. ⚠ and it must **not** be trusted to report its own success — rite runs
+   the verify (R7).
+
+⚠ **The first draft said only Goose satisfied all of these, and used that to
+argue the market was the real risk. That was wrong: opencode satisfies them
+too**, modulo the two open `--format json` defects noted above. The
+substitutability argument therefore softens — there are at least two viable
+values for `agent:` today, which is the difference between a bet and a
+dependency.
 
 ### Which parts of the interface are shaped by Goose rather than by rite
 
@@ -300,8 +361,8 @@ implementation to prove it against — which is the only way to know a contract
 is a contract.
 
 **B4 does not grow.** What changes is that the release gains a real reason to
-do B3 properly, and `harness.py` and `runners.py` become deletions rather
-than work.
+do B3 properly, and that `harness.py` is the thing the adapter plugs into
+rather than competes with.
 
 ## B. Local models — Ollama
 
@@ -318,9 +379,31 @@ by accident. Finding that out during v0.6.0 is much cheaper than after.
 **What already exists, and it is more than half.** `src/rite_ai/local/` ships
 `duty_router.py`, `engine_probe.py`, `harness.py`, `runners.py` and
 `decomposition.py`. The duty router is called by `coordination/assignment.py`
-and the endpoint probe by `rite doctor`. **The runner and harness have no
-caller outside the package** — that is the gap, and it is the half that
-executes.
+and the endpoint probe by `rite doctor`. 
+
+⚠ **`harness.py` and `runners.py` have no production caller — verified,
+zero production imports — but that is a WIRING GAP, not dead code.** An
+earlier draft of this plan called them "the uncalled half" and proposed
+deleting them. `harness.py` line 3 says **"Orchestration, not an agent
+(RL-13)"**: the agent supplies file editing and the model's own loop, and
+*nothing else*. `run_subtask` carries the plan-approval gate, claim take and
+release on every exit path, the heartbeat, and `accepted` derived from the
+verify alone and never from the agent's claim. **They were designed AROUND an
+adopted agent** — which is exactly what Goose is — and deleting them would
+hand verification to the agent being verified, in the tier where the model is
+least trustworthy.
+
+⚠ **How that error was made, because it is the class this project keeps
+finding:** purpose inferred from call-graph position. A grep showed no caller
+outside the package, "uncalled" became "unnecessary", and the file was never
+opened.
+
+⚠ **A note for whoever ever reconsiders their fate:** the dead-wiring guard
+does not watch `local/`, and widening it would not help.
+`mentioned_outside()` is a word-boundary text search, so two dead files
+referencing each other satisfy it, and generic names like `Context` and
+`Claims` satisfy it by collision. That needs import analysis; **the guard
+will not tell you when it is safe.**
 
 **The endpoint decision is taken and measured.** Inference on the host, tool
 execution sandboxed, over a **local OpenAI-compatible endpoint** — Ollama, LM
@@ -333,8 +416,8 @@ endpoint rather than a runtime (RL-14). `RL-T1` measured seatbelt reaching
 | B1 | **Spike: does Goose do what its docs say?** | Run the three measurements in B0: headless *and* named-resumable together; what `GOOSE_MODE=auto` does with an operation needing approval; what the exit code is on success and failure. Against a real Ollama endpoint. | **Decides the whole local track and unblocks Slack's ordering.** Cheapest item in the release and the one most else leans on. | — | 1 sitting |
 | B2 | **RL-T0 — can an adopted agent hold a rite task loop on a local model?** | The gating spike the local tickets mark ⛔. **Largely answered if B1 passes**: Goose IS the adopted agent, and RL-T0's question becomes whether it holds rite's contracts rather than whether one exists. | Decides whether B4 is glue or a build. **Doing B4 before this is the rework Robert wants avoided.** | B1 | ½–1 sitting if B1 passes, 1–2 if not |
 | B3 | **State the engine contract** | Write down what an engine must provide — launch, resume-or-equivalent, prompt delivery, cycle boundary, permission — as the thing Claude, Ollama and later Cursor all satisfy. | **This is the "no rework" requirement.** `launch_command` hard-codes Claude Code's spelling (`-p`, `--resume`, `--dangerously-skip-permissions`) and treats the engine string as an executable name, with no registry. A second engine either forks that function or the contract gets written first. | B1, B2 | 2–3 sittings |
-| B4 | **Glue `local:<class>` to Goose** | Compose the instruction, run `goose run` against a named session, read the exit. ⚠ **And DELETE `harness.py` and `runners.py`** if Goose holds the loop — they are the uncalled half, and leaving them is the built-and-never-wired class this project keeps finding. | The tier is routed and probed but cannot execute. This is the release's local deliverable, and on the thin-glue path it is much smaller than it was. | B2, B3 | 2–3 sittings as glue; 3–5 if B1 fails and rite holds the loop |
-| B5 | **Ollama end to end against a real endpoint** | `local:<class>` doing a real subtask. | Proves B3 by using it once, which is the only way to know a contract is a contract. | B4 | 2–3 sittings |
+| B4 | **Wire `harness.run_subtask` to an agent adapter** | Give `harness.py` its production caller, with the agent behind the R1–R7 boundary. rite keeps the approval gate, the claims, the heartbeat and the verify; the agent edits files and runs the model's loop. | The tier is routed and probed but nothing invokes the orchestration. **This is the release's local deliverable** — and B5 is its proof, not a second tier. | B2, B3 | see Sizes |
+| B5 | **Prove B4 on the existing benchmark** | Run `local:<class>` against a real Ollama endpoint on `tools/rite_local_bench/tasks.py` — **ten calibrated tasks that already exist**, with tests asserting each verify fails on `before` and passes on `solution`. | Proves the contract by using it, on a measure built for this that does not need inventing. | B4 | see Sizes |
 | B6 | **Finish the Docker half of RL-T1** | Whether a Docker-backed sandbox reaches the host endpoint. | Unmeasured today and named as such. Cheap; removes an unknown. | — | ½ sitting |
 
 ---
@@ -345,10 +428,16 @@ Recorded across five design notes; **this table is the index, the notes stay
 the detail.** No new analysis. Multi-Manager moving to v0.7.0 changes which
 of these are urgent, and that is noted per row.
 
+⚠ **Four items were missing from the first draft of this index** (C14–C17),
+found in review. **An index that loses items is worse than no index**,
+because the notes stop being read once a table claims to cover them — and
+Robert's standing rule is postpone, never drop. `V070_MULTI_MANAGER.md` §5 is
+correctly absent: it shipped in v0.5.1.
+
 | # | Item | Where recorded | Why this release | Size |
 |---|---|---|---|---|
 | C1 | **tmux socket isolation for tests** | `V070_MULTI_MANAGER.md` §3 | The suite and a live Manager share one tmux server, so a test run can kill an operator's Manager. One autouse fixture setting `TMUX_TMPDIR`, no call-site changes. | 1 sitting |
-| C2 | **`_default_starter` defaults `permission=""`** | `V070_MULTI_MANAGER.md` §6, `PERMISSION_MODE…md` | A caller that forgets the flag gets a Manager that cannot act. Same call site that dropped three arguments in two days. **Touched by B3** — the contract has to say who supplies it. | ½ sitting |
+| C2 | **`_default_starter` defaults `permission=""`** | `PERMISSION_MODE_FOR_UNATTENDED_RUNS.md` | A caller that forgets the flag gets a Manager that cannot act. Same call site that dropped three arguments in two days. **Touched by B3** — the contract has to say who supplies it. ⚠ *Citation corrected: an earlier draft cited `V070_MULTI_MANAGER.md` §6, which is about `prompt=""` — a different default in the same signature, now C14.* | ½ sitting |
 | C3 | **The shared test starter records only the resume id** | `V070_MULTI_MANAGER.md` §7 | Tests using it are blind to prompt and permission, which is how those went unpinned. **Blocks confidence in B4/B5**, whose tests would be equally blind. | 1 sitting |
 | C4 | **Configurable permission allowlist** | `PERMISSION_MODE_FOR_UNATTENDED_RUNS.md` | 0.5.1 ships `--dangerously-skip-permissions` always, and that note **promises 0.6.0** brings an allowlist of command patterns in `.claude/settings.json`, flag still the default. Promised in a shipped document. | 2–3 sittings |
 | C5 | **The Manager's reply path still hand-writes JSON** | mailbox review, 0.5.1 | The other half of the "two writers of one format" the `send` exemption named; the User side got `rite message`. **Raised by Slack**: A1/A4 add a third participant to that format. | 1 sitting |
@@ -360,8 +449,36 @@ of these are urgent, and that is noted per row.
 | C11 | **`.rite/user/` separation is incidental** | `V060_SESSION_CONTINUITY.md` §2 | Two files stay apart only because a glob's stem validation rejects a dot. A non-`.json` suffix or an explicit skip makes it structural. | ½ sitting |
 | C12 | **`session_exists` is not a general tmux predicate** | `V070_MULTI_MANAGER.md` §4 | Named as if general, true only for the shapes it is called with. | ½ sitting |
 | C13 | **`journal.instructions()` still spells out `--manager`** | `V070_MULTI_MANAGER.md` §2 | Redundant since `RITE_MANAGER`; pinned by tests, so it waits for a deliberate change to that text. | ½ sitting |
+| C14 | **An empty prompt file is launchable** | `V070_MULTI_MANAGER.md` §6 — **OPEN** | `_default_starter` defaults `prompt=""` and `start_session` writes `prompt.txt` "even when empty", with no guard; `claude -p` with empty stdin exits 1. The same omission already shipped once, in `supervise`'s fresh fallback. | ½–1 sitting |
+| C15 | **The real-tmux tests are load-sensitive and nondeterministic** | `V070_MULTI_MANAGER.md` §1 — **OPEN** | Proven code-independent by a markdown-only control run. Related to C1 but not the same item: C1 isolates the socket, this is the residual nondeterminism. | 1–2 sittings |
+| C16 | **Three refusals embed raw tmux stderr** | `CREDENTIAL_HANDLING…md` Trap 2 | A leak only if Trap 1 (C6) happens, and the two are coupled — which is why both belong in one release rather than one being taken alone. | ½–1 sitting |
+| C17 | **`if cycles:` — the unstated exception to "designated whatever the ending"** | `V060_SESSION_CONTINUITY.md` item 3 | An interrupt before the first cycle is appended designates nothing. Looks correct; it is the one path where the stated rule does not hold, and an unstated exception is how the next person is surprised. | ½ sitting |
 
 ---
+
+## Sizes — and why B4/B5 carry none
+
+⚠ **Both reviews challenged the sizes, and the challenge is right on its own
+evidence.** `RITE_LOCAL_ESTIMATE.md:118` says of the unit used throughout
+this plan: *"The simulation's per-ticket unit is one sitting and is not
+defended anywhere."* Re-asserting it in a new document does not defend it.
+
+**What the numbers in this plan are, stated honestly:** ordinal, not
+cardinal. They say which items are small and which are large **relative to
+each other**, and they are useful for sequencing and for deciding what to cut.
+They are not a schedule, and nothing should be promised on them.
+
+**B4 and B5 carry no number at all**, because the honest answer is that their
+size is what B1 and B2 are for:
+
+- if the agent holds a subtask well on a locally-runnable tool-calling model,
+  B4 is an adapter behind an existing boundary;
+- if tool calling is unavailable or the model cannot hold a subtask, the local
+  tier's value shrinks and B4's size stops being the interesting question.
+
+**Guessing between those two and writing the average down would be the
+failure this project has spent two releases removing.** The spikes are cheap
+precisely so the estimate does not have to be a guess.
 
 ## Sequencing, and where the release can be cut
 
@@ -426,27 +543,38 @@ class 0.5.1 was spent removing.
    beside. Worth confirming: it is the difference between a feature and a
    reversal.
 
-4. ⚠ **Adopt Goose as the local tier's session manager?** Health-assessed in
-   B0a and it is a reasonable bet: Apache-2.0, repository actually
-   transferred to the Linux Foundation's AAIF org, 452 contributors, released
-   and pushed the day it was assessed, PRs mostly merged within two days.
+4. ⚠ **Which agent does `agent:` name — `goose` or `opencode`?**
 
-   **The costs, stated plainly so the decision is made on them:**
+   **Not a dependency approval. That decision is already made, in code.**
+   `config/managers.py:73` requires a `local:*` engine to carry `endpoint`,
+   `model` and `agent`; `ManagerRole.agent` exists and is parsed; `opencode`
+   is in four test fixtures; `engine_probe.py` already checks the agent binary
+   is installed. **rite is committed to an adopted agent binary** — the open
+   question is which value the key takes, and a user could in principle set it
+   per Manager.
 
-   - It is a dependency on a **third-party binary a user installs**, not a
-     library rite vendors.
-   - It ships a **minor release most weeks**, and rite would depend on flags
-     rather than an API — so rite should **pin a tested version** rather than
-     track latest.
-   - ⚠ **The substitutability is the real exposure, not the layering.** The
-     replacement checklist is seven items and about a day's work — *if* a
-     replacement has all seven. Of six tools surveyed, **only Goose did**. So
-     "if Goose disappears we just implement its features" is true of the
-     adapter and **not yet true of the market**.
+   **Goose is the recommended default**, on handle shape: caller-chosen
+   session names rite can derive from the Manager name, where opencode's ids
+   must be captured from a run and stored. Health-assessed in B0a and sound —
+   Apache-2.0, repository genuinely transferred to the Linux Foundation's AAIF
+   org, 452 contributors, released and pushed the day it was checked.
 
-   Against that: rite stops owning an agent loop and a conversation store,
-   and `harness.py` and `runners.py` become deletions. **B4 should not start
-   until this is answered**, and B1 is what gives the answer its evidence.
+   **The costs to weigh:**
+
+   - ⚠ **Tool calling is the real risk, not the tool.** Goose needs it and
+     many local models lack it; without it *every extension must be
+     disabled*. For Ollama it wants a tool-calling model and a raised
+     `OLLAMA_CONTEXT_LENGTH`. **B1 must measure this**, and if no adequate
+     locally-runnable tool-calling model is available, the local tier's value
+     shrinks regardless of which agent is named.
+   - Goose ships a **minor release most weeks** and rite depends on flags
+     rather than an API — pin a tested version.
+   - opencode has **two open defects in exactly the capability rite needs**
+     (knowing a turn ended): `--format json` can exit before the final
+     `step_finish` (#26855) and drops subagent parts (#49300).
+
+   **B4 should not start until this is answered**, and B1 is what gives the
+   answer its evidence.
 
 5. ⚠ **SPEC commits 0.6.0 to a QA gate that appears nowhere in this plan.**
    §9.15.4 says the journal entries "are the raw material for the QA gate"
