@@ -1,4 +1,21 @@
-# Multi-Manager, 0.6.0 — Robert's design, recorded
+# Multi-Manager, 0.7.0 — Robert's design, recorded
+
+⚠ **MOVED TO v0.7.0 on 2026-09-23, and this file was renamed with it.** It
+was `V060_MULTI_MANAGER.md`. Robert had misremembered his own earlier
+decision; asked again, he confirmed **"multi-manager is out, Slack is in"** —
+which restores the scope he set two days earlier. v0.6.0 is fixes + Slack +
+local models; multi-Manager and Cursor are v0.7.0.
+
+Renamed rather than left, because a filename claiming a release is a claim a
+reader believes before they open the file, and this release spent two days
+clearing exactly that class of stale artefact. **The decisions inside are
+unaffected** — SPEC §9.14.9 and D-79 still carry them, and the superseded
+"separate roots" shape below is still superseded.
+
+⚠ **The "Carried into 0.6.0" section near the end is still 0.6.0 work.**
+Those items were never multi-Manager work; they are in
+`V060_RELEASE_PLAN.md`'s carried table and ship in v0.6.0 regardless of where
+this document went.
 
 ## ⚠ SUPERSEDED on 2026-09-20 — the shape below was reversed
 

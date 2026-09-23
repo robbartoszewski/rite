@@ -6,7 +6,7 @@ analysis under each part is mine; it is aimed at what building will have to
 decide, not at whether to build.
 
 **Status of the file itself.** This note is committed under `docs/design/`, so
-it reaches a fresh clone. The other design notes — `V060_MULTI_MANAGER.md`
+it reaches a fresh clone. The other design notes — `V070_MULTI_MANAGER.md`
 included — are under `.docs/`, which `.gitignore` excludes and where **nothing
 is tracked at all**: `git ls-files .docs` returns empty. V060 records that
 ownership question as open and says that if it resolves by dropping `.docs/`

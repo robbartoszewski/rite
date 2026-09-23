@@ -37,5 +37,5 @@ private note needs to be public, move it and scan it, rather than forcing it.
 ## Where things went
 
 This directory replaces the old `.docs/`, which was ignored wholesale — which
-is why `V060_MULTI_MANAGER.md`, the design anybody taking rite over would
+is why `V070_MULTI_MANAGER.md`, the design anybody taking rite over would
 need, did not reach a fresh clone.

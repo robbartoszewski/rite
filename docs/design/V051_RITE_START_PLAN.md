@@ -29,7 +29,7 @@ Confirmed in the tree rather than assumed:
 **0. ⚠ DECISION REQUIRED: one root with subdirectories, or separate roots? —
 0 sittings, blocks 1–3 sittings of others.**
 
-`docs/design/V060_MULTI_MANAGER.md` and SPEC §9.14.9 record **opposite**
+`docs/design/V070_MULTI_MANAGER.md` and SPEC §9.14.9 record **opposite**
 shapes, a day apart, neither citing the other, both attributed to the same
 source. V060: "separate roots per Manager... each Manager owns its own
 project root and its own `.rite/`", rejecting a shared `.rite/` by name as "a
@@ -115,7 +115,7 @@ during.**
 ⚠ **Item 0 may dissolve this question rather than answer it.** Under separate
 roots each Manager has its own loop by construction, and there is nothing to
 share. The first draft of this plan claimed the question was unanswered
-anywhere; that was wrong — it is answered in `V060_MULTI_MANAGER.md`, by a
+anywhere; that was wrong — it is answered in `V070_MULTI_MANAGER.md`, by a
 design this plan had not read.
 
 **7. Tests — 1.5 sittings.**

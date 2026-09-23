@@ -23,7 +23,7 @@ in nothing a process could. `current_manager()` reads `RITE_MANAGER`, which
 because both go through the same `new-session`.
 
 ⚠ **This is the shared-root model, and its cost is known rather than
-avoided.** `docs/design/V060_MULTI_MANAGER.md` argued for separate roots on
+avoided.** `docs/design/V070_MULTI_MANAGER.md` argued for separate roots on
 the grounds that a shared root is "a second protocol that has to be kept in
 agreement with the first, and the two would drift". That is true and it is
 accepted debt (D-79): what reversed the decision is that separate roots mean
