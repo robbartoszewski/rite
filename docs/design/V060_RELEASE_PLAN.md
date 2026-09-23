@@ -170,6 +170,139 @@ delivery does not move either.**
 **That largely dissolves the Ollama → Slack coupling**, and it changes the
 recommendation below.
 
+### Is Goose a safe bet? — project health, measured 2026-09-23
+
+Assessed from the repository and its release history rather than from
+reputation. **Every figure below came from the GitHub API on the date above.**
+
+| | |
+|---|---|
+| **Governance** | `block/goose` **redirects to `aaif-goose/goose`** — the repository was *transferred*, not merely badged. The Linux Foundation / Agentic AI Foundation status is real at the level that matters: the org owns the repo. |
+| **Licence** | Apache-2.0 (API `license.spdx_id`). Not archived, not disabled, not a fork. |
+| **Scale** | 54,588 stars, 6,299 forks, **452 contributors**. |
+| **Alive?** | Last push **the day of this assessment**; `v1.52.0` released the same day. |
+| **Cadence** | 10 minor releases in ~10 weeks (`v1.42.0` 2026-07-13 → `v1.52.0` 2026-09-23). Roughly weekly, with one patch release in that window. |
+| **Active core** | ~12 humans committing in the last 30 days; top author 49 commits. A small active core under a long tail, which is ordinary for a project this size. |
+| **Employer concentration** | Historically Block-originated and still partly so — of six active committers checked, two state Block publicly and four state nothing. **Not conclusively single-employer, and not conclusively not.** |
+| **Responsiveness** | Of the last 20 closed PRs, 12 merged: six same-day, two at 2 days, then a tail at 13/32/33 days. Oldest *recently-updated* open issue is ~7 weeks old — the backlog is churned, not rotting. |
+| **Breaking changes** | None flagged in the last 10 release notes. ⚠ Absence of the word is not proof of absence of breakage. |
+
+**Read: a healthy, fast-moving project with real foundation governance** —
+and the risks are the ordinary ones rather than red flags.
+
+⚠ **The risk that actually applies to rite is the cadence, not the health.**
+rite would depend on **CLI flags and behaviour, not an API**, against a
+project shipping a minor release most weeks. Nothing in the last ten release
+notes flags a break, but a surface moving that fast should be **pinned to a
+tested version** rather than tracked.
+
+⚠ **One fact worth noticing rather than filing:** the org move already
+invalidated URLs. The install command published in some places points at
+`aaif-goose`, and anything that hard-coded `block/goose` is already stale.
+That is exactly the dependency-drift the adapter has to absorb.
+
+---
+
+## B0a. The abstraction layer, and what a replacement must implement
+
+**Robert's constraint, verbatim:** *"if Goose disappears overnight, all we
+need to do is implement its features but it's not a total local harness
+refactor."*
+
+So nothing outside the adapter may know Goose exists — not the supervisor,
+not the mailbox, not the CLI, **and not the config keys a user sets.**
+
+### What rite actually needs from an engine
+
+Derived from what the supervisor already does with `claude -p`, not from what
+Goose offers:
+
+| # | Capability | Why rite needs it |
+|---|---|---|
+| R1 | **Run one turn non-interactively from an instruction** | The cycle is the unit the supervisor bounds, counts and reports. |
+| R2 | **End observably, with success distinguishable from failure** | `ending` classifies finished / quit / crashed / unclear; the cycle boundary is the whole reason `-p` was chosen. |
+| R3 | **Carry continuity to the next turn** | Continuation-by-default is a shipped v0.5.1 decision. |
+| R4 | **Be addressable by a human for the same conversation** | `rite connect`'s argument, and Robert's requirement that local chat keep working. |
+| R5 | **Run without per-action approval** | An unattended Manager that stops to ask is not unattended — measured, v0.5.1. |
+| R6 | **Be checkable before use** | `rite doctor` already probes the endpoint; it must also answer "is the engine there". |
+
+**That is the interface. Six capabilities, and rite already implements all
+six for Claude** — which is the strongest evidence the list is rite-shaped
+rather than Goose-shaped.
+
+### The replacement checklist — what Robert is buying
+
+If Goose disappears, a replacement must provide:
+
+1. a command that runs **one turn** from an instruction file or stdin and
+   **exits** when the turn ends;
+2. an **exit status** that distinguishes success from failure;
+3. a **session identifier that survives process exit** — either chosen by the
+   caller or discoverable afterwards;
+4. a way to **continue that session** on the next turn;
+5. a way for a **human to open the same session** interactively;
+6. a way to run **without per-action approval**;
+7. a way to tell it is **installed and reachable**.
+
+**Seven items, and the adapter that wraps them is roughly a day** — provided
+a replacement tool has all seven.
+
+⚠ **And that proviso is the real risk, not the abstraction.** B0 surveyed
+six tools against exactly these properties and **only Goose satisfied all of
+them.** Aider has no addressable resumable session; OpenHands has not settled
+non-interactive mode; Cline cannot resume under `--json`; Open Interpreter is
+AGPL-3.0. So "implement its features" is cheap, and "find something else with
+these features" is, on today's evidence, **the part that is not guaranteed**.
+That is the honest shape of the bet and it should be stated to Robert that
+way rather than as a reassurance about layering.
+
+### Which parts of the interface are shaped by Goose rather than by rite
+
+**An abstraction nobody has implemented twice is a guess.** These three axes
+are where a second implementation will push back — named now so they are not
+discovered later:
+
+1. ⚠ **Who names the session — and this is a genuine conflict, not a
+   detail.** Claude Code *generates* a session id that rite must **discover**
+   from a transcript; Goose takes a **name rite chooses**. Those are opposite
+   directions of control. rite's entire designation machinery — `designated`,
+   `_default_resume_id`, the transcript scan — exists *because* Claude
+   assigns the id, and a Goose-backed Manager **bypasses all of it**. R3 must
+   therefore admit both "the engine assigns; you discover" and "you assign",
+   and an interface modelling only one will fight the other.
+2. **How permission is expressed.** Claude takes a **flag**
+   (`--dangerously-skip-permissions`); Goose takes an **environment
+   variable** (`GOOSE_MODE=auto`). R5 cannot be "a flag string".
+3. **How the instruction arrives.** Claude `-p` reads **stdin** (rite
+   redirects from a file); Goose accepts `-i <FILE>`, `-t <TEXT>` or stdin.
+   R1 must allow a file path *or* stdin rather than assuming one.
+
+### ⚠ The configuration surface must stay rite's vocabulary
+
+**An abstraction that leaks through configuration is not an abstraction.** If
+a user's config says `goose_mode: auto`, Goose is in rite's public surface
+and a replacement has to emulate its vocabulary forever.
+
+**The good news is that the config surface is already rite-shaped**:
+`engine: local:<class>` plus an endpoint is existing vocabulary that names a
+tier, not a runtime. The rule to hold: **no Goose noun reaches
+`config.yaml`.** Anything Goose-specific lives inside the adapter, or at most
+in a single opaque passthrough rite does not interpret and does not document
+as a supported surface.
+
+### Does the layer cost more than the glue it wraps?
+
+**No — and the reason matters.** The layer *is* the glue. `launch_command`
+already hard-codes Claude's spelling with no registry, so **generalising it
+was B3's job before Goose entered the picture**. Adding an adapter boundary
+is not new cost; it is the cost that was already scheduled, now with a second
+implementation to prove it against — which is the only way to know a contract
+is a contract.
+
+**B4 does not grow.** What changes is that the release gains a real reason to
+do B3 properly, and `harness.py` and `runners.py` become deletions rather
+than work.
+
 ## B. Local models — Ollama
 
 **Robert's framing:** rite plans adapters for Cursor and Ollama, and **the
@@ -293,14 +426,27 @@ class 0.5.1 was spent removing.
    beside. Worth confirming: it is the difference between a feature and a
    reversal.
 
-4. ⚠ **Adopt Goose as the local tier's session manager?** B0 says it is the
-   only surveyed tool meeting all four requirements, Apache-2.0 and under the
-   Linux Foundation. **It is a dependency on a third-party binary**, which is
-   a different kind of commitment from a library: a user installs it, and
-   rite's local tier stops working if it changes. The upside is that rite
-   stops owning an agent loop and a conversation store, and two uncalled
-   modules get deleted. **B4 should not start until this is answered**, and
-   B1 is what gives the answer its evidence.
+4. ⚠ **Adopt Goose as the local tier's session manager?** Health-assessed in
+   B0a and it is a reasonable bet: Apache-2.0, repository actually
+   transferred to the Linux Foundation's AAIF org, 452 contributors, released
+   and pushed the day it was assessed, PRs mostly merged within two days.
+
+   **The costs, stated plainly so the decision is made on them:**
+
+   - It is a dependency on a **third-party binary a user installs**, not a
+     library rite vendors.
+   - It ships a **minor release most weeks**, and rite would depend on flags
+     rather than an API — so rite should **pin a tested version** rather than
+     track latest.
+   - ⚠ **The substitutability is the real exposure, not the layering.** The
+     replacement checklist is seven items and about a day's work — *if* a
+     replacement has all seven. Of six tools surveyed, **only Goose did**. So
+     "if Goose disappears we just implement its features" is true of the
+     adapter and **not yet true of the market**.
+
+   Against that: rite stops owning an agent loop and a conversation store,
+   and `harness.py` and `runners.py` become deletions. **B4 should not start
+   until this is answered**, and B1 is what gives the answer its evidence.
 
 5. ⚠ **SPEC commits 0.6.0 to a QA gate that appears nowhere in this plan.**
    §9.15.4 says the journal entries "are the raw material for the QA gate"
