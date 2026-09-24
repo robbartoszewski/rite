@@ -515,7 +515,9 @@ will not tell you when it is safe.**
 execution sandboxed, over a **local OpenAI-compatible endpoint** — Ollama, LM
 Studio, llama.cpp's server and vLLM all expose one, so rite requires an
 endpoint rather than a runtime (RL-14). `RL-T1` measured seatbelt reaching
-`http://localhost:11434`; **Docker is unmeasured.**
+`http://localhost:11434`; **Docker is now measured too — B6, 2026-09-24:
+reachable at `host.docker.internal`, and at none of the three other
+addresses tried.**
 
 | # | Item | What it is | Why this release | Depends on | Size |
 |---|---|---|---|---|---|
@@ -527,7 +529,7 @@ endpoint rather than a runtime (RL-14). `RL-T1` measured seatbelt reaching
 | ~~B4d~~ | ✅ **DONE — `GOOSE_MODE=auto` bypasses approval, and Goose runs sandboxed.** [`spikes/B4d-goose-permission-and-sandbox.md`](spikes/B4d-goose-permission-and-sandbox.md). `auto`: exit 0, deleted a file unattended. `approve`: exit 1, **fails fast rather than hanging**. In a yoloAI seatbelt sandbox it works ⚠ **only with `HOME` set to a writable path** — otherwise it panics at startup failing to create a log file. Endpoint reachable (HTTP 200), host repo writes blocked. ⚠ **Closes the WORKER case only** — Managers run unsandboxed. | — | B4a | **spent: ~1 sitting** |
 | B4 | **Wire `harness.run_subtask` to a Goose adapter** | Give `harness.py` its production caller, with Goose behind the R1–R7 boundary. rite keeps the approval gate, the claims, the heartbeat and the verify; the agent edits files and runs the model's loop. ⚠ **The adapter must not read the exit code as a verdict** (B1). | The tier is routed and probed but nothing invokes the orchestration. **This is the release's local deliverable** — and B5 is its proof, not a second tier. | B2 ✅, B3, Decision 4 | **2–3 sittings** — the spike closed the uncertainty this was withheld for |
 | B5 | **Prove B4 on the existing benchmark** | Run `local:<class>` through `harness.run_subtask` on `tools/rite_local_bench/tasks.py`. ⚠ **The bar is now a number, not a vibe:** Goose scored **5/5** driven directly. Through rite's harness it should match; a materially worse score means the harness is the problem, not the model. | Proves the contract by using it, against a measured baseline. | B4 | **2–3 sittings** |
-| B6 | **Finish the Docker half of RL-T1** | Whether a Docker-backed sandbox reaches the host endpoint. | Unmeasured today and named as such. Cheap; removes an unknown. | — | ½ sitting |
+| ~~B6~~ | ✅ **DONE — the Docker half of RL-T1** | Measured 2026-09-24. A Docker-backed yoloAI sandbox completes a real `/v1/chat/completions` against the host endpoint at **`host.docker.internal`** — and at none of `gateway.docker.internal`, `host.containers.internal` or `172.17.0.1`, so the address is not safe to guess. | — | **spent: ~¼ sitting** |
 | B7 | ⚠ **`rite doctor` reports the served context window** | Query the endpoint for the window actually in force and warn when it is below a threshold the tier needs. `engine_probe.py` already probes the endpoint; this is a field on the same probe. | **The single highest-value item in the local track.** An unset `OLLAMA_CONTEXT_LENGTH` presents as models that cannot call tools and agents that lose history — it cost this plan two wrong conclusions. A one-line warning removes the whole class. | — | **1 sitting** |
 | B8 | **The adapter sets `num_ctx` per request where it can** | Rather than trusting the operator's environment. ⚠ **Needs checking first**: Ollama's OpenAI-compatible `/v1` path may ignore `options.num_ctx`, in which case this reduces to B7 plus documentation. | Belt and braces on the failure that dominated the spike. | B7 | **½–1 sitting**, or drops out |
 

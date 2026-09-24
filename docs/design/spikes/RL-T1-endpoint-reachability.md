@@ -41,3 +41,50 @@ Two consequences the design does not mention:
    are both corrupted if an empty `content` is read as a failed or dishonest
    answer when it is a budget artefact. Budget the reasoning, and treat
    `finish_reason: "length"` as a distinct outcome from a wrong answer.
+
+---
+
+## ✅ The Docker half, measured 2026-09-24 (B6)
+
+**Docker Desktop starts on this machine now**, so the test this note called
+"the honest one" and could not take has been taken.
+
+**A Docker-backed yoloAI sandbox reaches the host endpoint, at
+`host.docker.internal`.** Sandbox created with `yoloai new <name> <workdir>
+--backend docker` — the same backend `yoloai system backends` reports
+available here — and the request issued from inside the running container.
+
+| address tried from inside the sandbox | `GET /api/tags` |
+|---|---|
+| **`host.docker.internal`** | **HTTP 200** |
+| `gateway.docker.internal` | no response |
+| `host.containers.internal` | no response |
+| `172.17.0.1` | no response |
+
+⚠ **Only one of the four works, so the address is not a detail to leave to
+a default.** `172.17.0.1` is the docker0 bridge gateway that works on Linux
+and does not exist on Docker Desktop for macOS;
+`host.containers.internal` is Podman's spelling. A config that guesses will
+be right on one platform and silently unreachable on the others.
+
+**A real completion, not just a listing** — `POST /v1/chat/completions` to
+`http://host.docker.internal:11434`, `qwen3:8b`:
+
+    reply : 'PLATYPUS42'
+    finish: stop | usage: 155 tokens
+
+22 models were visible from inside, matching the host.
+
+**So both backends are now proven** and for different reasons: seatbelt
+because D-30 says it has no network isolation, docker because Docker
+Desktop publishes the host under a name of its own. The two are not the
+same guarantee — a Docker sandbox started with `--network-isolated` or
+`--network-none` would block this, and neither flag was used here.
+
+⚠ **This note's own incidental finding reproduced exactly, unprompted.**
+The first attempt used `max_tokens: 40` and came back `content: ""` with 40
+completion tokens spent — which reads as "the model said nothing" and is
+really a budget artefact. It was a reasoning-budget truncation, not a
+networking failure, and it took a second look to tell those apart. That is
+the trap this note already warned about, met in the wild by a reader who
+had just read the warning.
