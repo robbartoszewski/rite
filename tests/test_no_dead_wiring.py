@@ -47,13 +47,6 @@ WATCHED = (
 
 # name -> why nothing calls it. A reason is required; "not yet" is not one.
 UNCALLED_ON_PURPOSE = {
-    "settings_path": (
-        "Called by `write_settings` in the same file. Public because it is "
-        "the one place rite decides WHERE a Manager's permission list lives "
-        "— under `user_dir`, because what a Manager may run on this machine "
-        "is a local trust decision and not a property of the repository — "
-        "and a test pins that by name."
-    ),
     "settings_document": (
         "Called by `write_settings` in the same file. Public because it is "
         "the one place the engine's settings SHAPE is written down, and the "

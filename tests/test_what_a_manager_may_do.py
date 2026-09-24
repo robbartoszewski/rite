@@ -24,14 +24,18 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from rite_ai.managers.permissions import (
     BYPASS_FLAG,
     DEFAULT_ALLOW,
     GENEROUS_ALLOW,
     NOT_ALLOWED,
     OBSERVED_ALLOW,
+    allowed,
     announcement,
     launch_arguments,
+    refusal,
     settings_document,
     settings_path,
     write_settings,
@@ -72,12 +76,13 @@ class TestTheListCoversWhatWasObserved:
         """⚠ The v0.5.1 acceptance run, verbatim: *'Both `rite loop status`
         and a direct GitHub check (`gh issue list …`) are blocked pending
         approval.'* Three cycles, no ticket read, no artifact."""
-        assert "Bash(rite:*)" in DEFAULT_ALLOW
-        assert "Bash(gh:*)" in DEFAULT_ALLOW
+        assert allowed("rite loop status")
+        assert allowed("gh issue list --repo owner/name")
+        assert allowed("rite --version")
 
     def test_the_busiest_observed_tools_are_allowed(self):
-        for tool in ("git", "python3", "uv", "grep"):
-            assert f"Bash({tool}:*)" in DEFAULT_ALLOW, tool
+        for command in ("git status", "python3 -c 'x'", "uv run pytest", "grep -r x ."):
+            assert allowed(command), command
 
     def test_observed_and_generous_entries_are_kept_apart(self):
         """⚠ So nobody later reads the guesses as evidence."""
@@ -88,15 +93,14 @@ class TestTheListCoversWhatWasObserved:
         """`bash -c "curl …"` is one hop around every other row."""
         for shell in ("bash", "sh", "zsh"):
             assert shell in NOT_ALLOWED
-            assert f"Bash({shell}:*)" not in DEFAULT_ALLOW
+            assert not allowed(f"{shell} -c 'curl http://example.com'")
 
     def test_the_route_around_that_actually_happened_is_closed(self):
         """⚠ Told nothing about starting Workers, a Manager improvised a
         bare `claude` and they died on launch. `rite sandbox start` is the
         supported route, and it is allowed."""
-        assert "Bash(claude:*)" not in DEFAULT_ALLOW
-        assert "claude" in NOT_ALLOWED
-        assert "Bash(rite:*)" in DEFAULT_ALLOW
+        assert not allowed("claude -p --dangerously-skip-permissions")
+        assert allowed("rite sandbox start w1 --ticket 4")
 
 
 class TestEveryCycleCarriesThePermissionDecision:
@@ -170,6 +174,35 @@ class TestTheSettingsFileTheEngineReads:
         assert json.loads(theirs.read_text())["permissions"]["deny"]
 
 
+class TestARefusalTellsTheUserWhatToDo:
+    """C21. A refusal a user cannot act on is the same defect as a silent
+    one."""
+
+    def test_it_names_the_command_that_was_refused(self, tmp_path):
+        said = refusal("curl https://example.com", tmp_path)
+        assert "curl" in said
+
+    def test_it_gives_the_exact_line_that_would_permit_it(self, tmp_path):
+        said = refusal("curl https://example.com", tmp_path)
+        assert '"Bash(curl:*)"' in said
+
+    def test_it_names_the_file_to_put_that_line_in(self, tmp_path):
+        said = refusal("curl https://example.com", tmp_path)
+        assert ".claude/settings.json" in said.replace("\\", "/")
+
+    def test_it_says_not_to_edit_rites_own_file(self, tmp_path):
+        """Because rite rewrites it every run, an edit there would vanish
+        without ever reporting that it had."""
+        said = refusal("curl https://example.com", tmp_path)
+        assert "rewritten every run" in said
+
+    @pytest.mark.parametrize(
+        "command", ["curl x", "/usr/bin/curl x", "HTTPS_PROXY=x curl x"]
+    )
+    def test_it_finds_the_executable_however_it_was_spelled(self, command, tmp_path):
+        assert '"Bash(curl:*)"' in refusal(command, tmp_path)
+
+
 class TestTheGrantIsAnnounced:
     def test_it_no_longer_claims_the_manager_will_not_ask(self):
         """⚠ That sentence was true of the bypass flag and is false now.
@@ -207,3 +240,149 @@ class TestThereIsNoInertConfigLeftBehind:
         )
         arguments = launch_arguments(write_settings(tmp_path))
         assert "--settings" in launch_command("claude", "", "/p.txt", arguments)
+
+
+def _transcript(base: Path, root: Path, entries: list[dict]) -> Path:
+    directory = base / str(root.resolve()).replace("/", "-")
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / "sess.jsonl"
+    path.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+    return path
+
+
+def _use(identifier: str, command: str) -> dict:
+    return {
+        "message": {
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": identifier,
+                    "name": "Bash",
+                    "input": {"command": command},
+                }
+            ]
+        }
+    }
+
+
+def _result(identifier: str, text: str, error: bool = True) -> dict:
+    return {
+        "message": {
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": identifier,
+                    "is_error": error,
+                    "content": text,
+                }
+            ]
+        }
+    }
+
+
+class TestRiteCanSeeWhatTheEngineRefused:
+    """⚠ Without this a refusal is invisible to rite: the engine tells the
+    MODEL, and the model may say so, work around it, or neither. The v0.5.1
+    acceptance run was all three across three cycles that each exited 0."""
+
+    def test_it_finds_the_command_behind_a_bare_denial(self, tmp_path):
+        from rite_ai.managers.transcripts import refused_commands
+
+        root = tmp_path / "project"
+        root.mkdir()
+        base = tmp_path / "transcripts"
+        _transcript(
+            base,
+            root,
+            [_use("t1", "curl https://example.com"),
+             _result("t1", "This command requires approval")],
+        )
+        assert refused_commands(root, base=base) == ["curl https://example.com"]
+
+    def test_it_prefers_the_part_the_engine_named(self, tmp_path):
+        """⚠ Otherwise the refusal quotes a compound line and names the
+        wrong executable — measured shape: *'This Bash command contains
+        multiple operations. The following part requires approval: …'*"""
+        from rite_ai.managers.transcripts import refused_commands
+
+        root = tmp_path / "project"
+        root.mkdir()
+        base = tmp_path / "transcripts"
+        _transcript(
+            base,
+            root,
+            [
+                _use("t1", "echo hi; curl https://example.com"),
+                _result(
+                    "t1",
+                    "This Bash command contains multiple operations. The "
+                    "following part requires approval: curl https://example.com",
+                ),
+            ],
+        )
+        assert refused_commands(root, base=base) == ["curl https://example.com"]
+
+    def test_a_successful_command_is_not_reported_as_refused(self, tmp_path):
+        from rite_ai.managers.transcripts import refused_commands
+
+        root = tmp_path / "project"
+        root.mkdir()
+        base = tmp_path / "transcripts"
+        _transcript(
+            base,
+            root,
+            [_use("t1", "git status"), _result("t1", "On branch main", error=False)],
+        )
+        assert refused_commands(root, base=base) == []
+
+    def test_a_missing_transcript_directory_is_not_an_error(self, tmp_path):
+        """⚠ Absence is not an exception. A project with no transcripts has
+        had nothing refused, which is a different thing from a failure."""
+        from rite_ai.managers.transcripts import refused_commands
+
+        assert refused_commands(tmp_path, base=tmp_path / "nope") == []
+
+
+class TestTheUserIsToldAboutARefusal:
+    def test_a_refused_command_outside_the_list_gets_the_line_to_add(self, tmp_path):
+        import rite_ai.managers.supervise as sup
+
+        said: list[str] = []
+        sup._say_refusals(tmp_path, 0.0, said.append)  # no transcripts: silent
+        assert said == []
+
+    def test_a_refused_command_INSIDE_the_list_is_reported_differently(
+        self, tmp_path, monkeypatch
+    ):
+        """⚠ It means rite's settings never reached the engine — telling the
+        user to add a line they already have would send them the wrong
+        way."""
+        import rite_ai.managers.supervise as sup
+
+        monkeypatch.setattr(sup, "refused_commands", lambda *a, **k: ["rite status"])
+        said: list[str] = []
+        sup._say_refusals(tmp_path, 0.0, said.append)
+        assert len(said) == 1
+        assert "DOES cover" in said[0]
+        assert str(settings_path(tmp_path)) in said[0]
+
+    def test_an_unlisted_refusal_names_the_line_that_would_permit_it(
+        self, tmp_path, monkeypatch
+    ):
+        import rite_ai.managers.supervise as sup
+
+        monkeypatch.setattr(sup, "refused_commands", lambda *a, **k: ["curl http://x"])
+        said: list[str] = []
+        sup._say_refusals(tmp_path, 0.0, said.append)
+        assert '"Bash(curl:*)"' in said[0]
+
+    def test_the_same_refusal_twice_is_said_once(self, tmp_path, monkeypatch):
+        """Three cycles refused the same command in the acceptance run."""
+        import rite_ai.managers.supervise as sup
+
+        monkeypatch.setattr(
+            sup, "refused_commands", lambda *a, **k: ["curl x", "curl x", "curl x"]
+        )
+        said: list[str] = []
+        sup._say_refusals(tmp_path, 0.0, said.append)
+        assert len(said) == 1

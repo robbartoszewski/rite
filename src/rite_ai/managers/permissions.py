@@ -218,6 +218,52 @@ def launch_arguments(path: Path) -> str:
     return f"--settings {shlex.quote(str(path))} --permission-prompts none"
 
 
+def allowed(command: str, allow: tuple[str, ...] = DEFAULT_ALLOW) -> bool:
+    """Whether rite's own list would permit `command`.
+
+    ⚠ **This is rite's check for rite's message, NOT a reimplementation of
+    the engine's matcher.** The engine decides what actually runs. This
+    exists so that the coverage of `DEFAULT_ALLOW` can be tested against the
+    recorded corpus, and so `refusal` can name the line to add. Where the
+    two disagree the engine wins and this is wrong — which is why nothing
+    downstream of a real launch consults it.
+    """
+    head = _leading_executable(command)
+    return bool(head) and f"Bash({head}:*)" in allow
+
+
+def _leading_executable(command: str) -> str:
+    """The executable a shell would run first, or "" if there isn't one."""
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return ""
+    for word in words:
+        if "=" in word and not word.startswith(("/", ".", "-")):
+            continue  # VAR=value prefixes
+        return Path(word).name if word.startswith(("/", "./", "../")) else word
+    return ""
+
+
+def refusal(command: str, root: Path) -> str:
+    """C21: what to tell a user when a command was not permitted.
+
+    ⚠ **A refusal a user cannot act on is the same defect as a silent one.**
+    So this says which command, and the exact line that would permit it —
+    not "adjust your permissions".
+    """
+    head = _leading_executable(command) or command.strip()
+    return (
+        f"refused: {command.strip()!r} — {head!r} is not in the permission "
+        f"allowlist rite passes to the engine.\n"
+        f"To permit it, add this line to the \"allow\" list in "
+        f'{Path(".claude") / "settings.json"} in this project:\n'
+        f'    "Bash({head}:*)"\n'
+        f"rite's own list is at {settings_path(root)} and is rewritten every "
+        f"run, so edit the project file rather than that one."
+    )
+
+
 def announcement(manager: str, allow: tuple[str, ...] = DEFAULT_ALLOW) -> str:
     """What rite prints about permissions, every run.
 

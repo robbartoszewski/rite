@@ -141,3 +141,87 @@ def _stated_session_id(path: Path) -> str:
     except OSError:
         return ""
     return ""
+
+
+_DENIAL = re.compile(
+    r"requires approval|haven't granted it yet|permission to use|"
+    r"permission denied by|not allowed to (?:run|use)",
+    re.I,
+)
+_NAMED_PART = re.compile(r"following part requires approval:\s*(.+)", re.I | re.S)
+
+
+def refused_commands(root: Path, since: float = 0.0, base: Path | None = None) -> list[str]:
+    """Commands this project's recent sessions were REFUSED, most recent last.
+
+    ⚠ **Without this, a refusal is invisible to rite.** The engine tells the
+    MODEL that a command needed approval; the model may then say so, work
+    around it, or quietly do neither — and the v0.5.1 acceptance run is all
+    three, across three cycles that each still exited 0. Reading the denial
+    out of the transcript is how rite learns what its own allowlist missed
+    instead of waiting for somebody to notice a Manager achieved nothing.
+
+    ⚠ **Claude Code specific, like everything else in this module.** The
+    three recorded shapes, measured from transcripts on this machine:
+
+        This command requires approval
+        This Bash command contains multiple operations. The following part
+        requires approval: which rite 2>&1; rite --help 2>&1
+        Claude requested permissions to write to <path>, but you haven't
+        granted it yet.
+
+    The second names the offending part, so it is preferred over the whole
+    command when present — otherwise the refusal rite prints would quote a
+    compound line and name the wrong executable.
+    """
+    directory = project_transcript_dir(root, base)
+    try:
+        candidates = [p for p in directory.glob("*.jsonl") if p.is_file()]
+    except OSError:
+        return []
+    if since > 0:
+        candidates = [p for p in candidates if _mtime(p) >= since]
+    refused: list[str] = []
+    for path in sorted(candidates, key=_mtime):
+        refused.extend(_refused_in(path))
+    return refused
+
+
+def _refused_in(path: Path) -> list[str]:
+    commands: dict[str, str] = {}
+    refused: list[str] = []
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    for line in lines:
+        if '"tool_use"' not in line and '"tool_result"' not in line:
+            continue
+        try:
+            entry = json.loads(line)
+        except (ValueError, TypeError):
+            continue
+        for block in ((entry.get("message") or {}).get("content") or []):
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "tool_use" and block.get("name") == "Bash":
+                command = (block.get("input") or {}).get("command", "")
+                if block.get("id") and command:
+                    commands[block["id"]] = command
+            elif block.get("type") == "tool_result" and block.get("is_error"):
+                body = block.get("content")
+                text = body if isinstance(body, str) else json.dumps(body)
+                if not _DENIAL.search(text):
+                    continue
+                named = _NAMED_PART.search(text)
+                # The named part wins; otherwise fall back to the command the
+                # result belongs to; a result with neither is skipped rather
+                # than reported as an empty refusal.
+                found = (
+                    named.group(1).strip()
+                    if named
+                    else commands.get(block.get("tool_use_id", ""), "")
+                )
+                if found:
+                    refused.append(found)
+    return refused
