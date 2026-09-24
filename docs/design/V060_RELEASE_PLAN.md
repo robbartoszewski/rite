@@ -140,6 +140,7 @@ Neither is a build task and both need Robert. See "Decisions needed" 1 and 2.
 |---|---|---|---|---|---|
 | A1 | **Per-reader delivery for the outbox** | Today a reader is told *"delete one once you have relayed it so it is not shown twice."* With two permanent readers, whoever reads first deletes and the other never sees it. Needs per-reader read state, fan-out, or acknowledgement. | **Blocks Slack outright.** Robert's "both keep working permanently" requirement and the current delete-on-relay instruction cannot both hold. | Decision 1 | 1–2 sittings |
 | A2 | **Slack credentials through the existing store** | A bot token is a credential; `credentials/` and the gate already have the shapes. | A token is the first thing the adapter needs and the last thing that should be improvised. | — | 1 sitting |
+| A3a | ⚠ **Choose the Slack transport — CHOSEN, unproven** | **Web API polling** (`conversations.history` with `oldest`), because it is the only transport needing neither an inbound listener nor a held-open connection. Events API needs a public HTTPS URL (hosting, ruled out); Socket Mode needs a second token, a reconnect loop, per-event acks and caps at 10 sockets. Evidence: [`spikes/A3a-slack-transport.md`](spikes/A3a-slack-transport.md). ⚠ **The proof — a message arriving in a standalone script within 5s — has NOT been made**: it needs a workspace, an app and a bot token that do not exist yet. **Ticket stays open.** | Decides A3b's shape | A2 | 1 sitting spent, proof outstanding |
 | A3 | **Listening inside `rite start`** | Poll Slack in the supervisor's existing wait loop — where `mail_waiting` already polls — and write inbound messages into the inbox via `send()`. | This is "no daemon" made concrete, and it reuses the validated writer rather than adding a second one. | A2, B1 | 2–3 sittings |
 | A4 | **Posting the outbox to Slack** | The other direction, through whatever A1 decides. | Half a channel is not a channel. | A1, A2 | 1–2 sittings |
 | A5 | **Say what happens when no Manager is running** | With listening inside `rite start`, a message sent while nothing runs stays in Slack. | ⚠ A user will hit this on day one and read silence as "it is broken". Needs to be either handled or stated. | A3 | ½–1 sitting |
@@ -721,7 +722,25 @@ they stop promising a 0.6.0 deliverable that is now 0.7.0. See SPEC updates.
    outside a run, which reopens "no daemon". Refusing it is coherent but must
    be *said* — see A5.
 
-3. **Does C4's allowlist replace the always-skip default or sit beside it?**
+3. ⚠ **Slack app distribution — a transport decision in disguise, and it blocks A3b.**
+   `conversations.history` is Tier 3 (50+/min, a 2-second poll works) **only
+   for internal customer-built apps**. For an app distributed outside the
+   Marketplace it is **1 request per minute with a 15-object limit**, which
+   makes the poll loop impossible — and Socket Mode apps cannot be
+   Marketplace-listed, so that escape is closed too.
+   **(a)** each user creates their own Slack app — works, more setup for
+   them; **(b)** rite ships one distributed app — does not work at any useful
+   latency. Recorded rather than assumed because (a) is the only functioning
+   option and it changes what setup docs have to say.
+
+4. ⚠ **Is "no daemon" about hosting, or about holding a connection open?**
+   Socket Mode needs no hosting and no inbound URL, so it satisfies the first
+   reading. It also needs a persistent WebSocket, reconnects *"once every few
+   hours"*, per-event acknowledgement and a 10-connection cap — a daemon's
+   problem list inside a process whose selling point is that it is not one.
+   Polling was chosen on the stricter reading. **Confirm which was meant.**
+
+5. **Does C4's allowlist replace the always-skip default or sit beside it?**
    The shipped note says "with this flag still the default", which reads as
    beside. Worth confirming: it is the difference between a feature and a
    reversal.
