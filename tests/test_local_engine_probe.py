@@ -196,7 +196,20 @@ def test_the_url_is_built_without_doubling_the_version_segment():
         which=_installed,
     )
 
-    assert seen == ["http://localhost:11434/v1/models", "http://h:1234/v1/models"]
+    assert seen == [
+        # An endpoint already carrying /v1 must not get a second one...
+        "http://localhost:11434/v1/models",
+        "http://localhost:11434/api/ps",
+        # ...and one without it must get exactly one.
+        "http://h:1234/v1/models",
+        "http://h:1234/api/ps",
+    ], seen
+
+    # ⚠ B7 added the /api/ps call, and it is the SAME doubling hazard from the
+    # other direction: the native endpoint must have /v1 STRIPPED, not
+    # appended. `http://localhost:11434/v1/api/ps` is a 404 that would report
+    # every window as unknown and never say why.
+    assert "/v1/api/ps" not in " ".join(seen)
 
 
 def test_a_probe_object_with_nothing_established_is_a_problem_not_a_pass():

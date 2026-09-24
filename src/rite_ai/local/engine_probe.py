@@ -19,6 +19,23 @@ somebody to the wrong one:
 - is the endpoint answering at all? (nothing listening, wrong port, wrong host)
 - does it have the declared model? (a name typo, or a model never pulled)
 - is the agent binary on this machine? (`opencode` not installed)
+- **is it being served with enough context to work?** (B7, below)
+
+**The fourth question was added because it cost a night.** An endpoint can be
+up, serving the right model, with the agent installed, and the tier still
+fails — because the model is being served with a context window smaller than
+the agent's own system prompt. Measured 2026-09-24: Ollama serves every model
+at 4096 tokens when `OLLAMA_CONTEXT_LENGTH` is unset, while opencode sends
+~31KB of prompt and tool schemas before the task is added and Goose sends
+~19KB.
+
+**It does not present as a configuration fault.** It presents as models that
+cannot call tools and agents that lose conversation history — a model
+declaring tool support, accepting the request and returning empty content
+with no error; a resumed session answering "that is not in the conversation
+history". Four such results reversed at 32768 with nothing else changed. The
+spike that found it spent most of a night attributing the symptoms to the
+models and the tools. One line in `rite doctor` removes the whole class.
 
 **The model list is a courtesy, not a contract.** An endpoint that answers but
 does not serve `/v1/models` is not broken — it is simply not one rite can ask,
@@ -40,6 +57,20 @@ PROBE_TIMEOUT_SECONDS = 5.0
 engine that cannot answer in five seconds is not one a subtask should wait
 behind."""
 
+MINIMUM_CONTEXT_WINDOW = 32_768
+"""The lowest window measured to work — NOT a tuned minimum, and the
+difference matters.
+
+Measured 2026-09-24 on `tools/rite_local_bench/tasks.py`: at **4096** Goose
+scored 4/5 and opencode 0/5 with every task timing out; at **32768** both
+scored 5/5. **Nothing in between was measured.** So this is the lowest
+known-good value rather than a floor somebody derived, and a window between
+the two may well be fine.
+
+It is written this way on purpose: a threshold presented as a tuned minimum
+invites somebody to shave it, and there is no evidence here to shave against.
+If a smaller window is measured to work, lower this and say what was run."""
+
 
 @dataclass(frozen=True)
 class EngineProbe:
@@ -55,6 +86,15 @@ class EngineProbe:
     """None when the endpoint could not be asked."""
     agent_installed: bool | None = None
     """None when the role declares no agent."""
+    context_window: int | None = None
+    """Tokens the model is actually being SERVED with, not what it supports.
+
+    `None` when it could not be established, which is the common case and not
+    a fault: the endpoint may not be Ollama, or the model may simply not be
+    loaded right now. **Reported as unknown rather than guessed** — the same
+    rule this module already applies to the model list."""
+    context_detail: str = ""
+    """Why `context_window` is None, when it is."""
 
     @property
     def problems(self) -> list[str]:
@@ -78,12 +118,71 @@ class EngineProbe:
                 f"manager {self.manager}: its declared agent is not on this "
                 "machine's PATH, so nothing can drive the model"
             )
+        if (
+            self.context_window is not None
+            and self.context_window < MINIMUM_CONTEXT_WINDOW
+        ):
+            found.append(
+                f"manager {self.manager}: its model is being served with a "
+                f"{self.context_window}-token context window, below the "
+                f"{MINIMUM_CONTEXT_WINDOW} measured to work. An agent's own "
+                "system prompt and tool schemas are larger than this, so the "
+                "task never fits — it looks like a model that cannot call "
+                "tools or an agent that loses history, not like a setting. "
+                "Fix: set OLLAMA_CONTEXT_LENGTH (or the equivalent) and "
+                "restart the server"
+            )
         return found
 
 
 def _models_url(endpoint: str) -> str:
     base = endpoint.rstrip("/")
     return base + "/models" if base.endswith("/v1") else base + "/v1/models"
+
+
+def _running_url(endpoint: str) -> str:
+    """Ollama's native "what is loaded" endpoint.
+
+    Deliberately native rather than OpenAI-compatible: **the served context
+    window is not in the OpenAI API at all**, so there is nothing
+    provider-neutral to ask. An endpoint that is not Ollama answers 404 and
+    the window is reported unknown, which is the honest answer rather than a
+    failure."""
+    base = endpoint.rstrip("/")
+    if base.endswith("/v1"):
+        base = base[: -len("/v1")]
+    return base + "/api/ps"
+
+
+def _served_window(endpoint: str, model: str, get) -> tuple[int | None, str]:
+    """The window `model` is being served with, or None and why not.
+
+    ⚠ **Only a LOADED model can answer this.** Ollama reports
+    `context_length` per running model; a model nothing has called yet is not
+    in the list. That is reported as unknown rather than as a problem — a
+    warning about a model that is merely idle would be noise, and noise in a
+    doctor report is how people learn to scroll past it.
+    """
+    if not model:
+        return None, "the role declares no model"
+    try:
+        response = get(_running_url(endpoint))
+    except Exception as e:  # noqa: BLE001 - any failure is "cannot be asked"
+        return None, f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
+    if getattr(response, "status_code", 0) != 200:
+        return None, "the endpoint does not report what it has loaded"
+    try:
+        running = response.json().get("models", [])
+    except Exception:  # noqa: BLE001
+        return None, "its loaded-model list could not be read"
+    for entry in running:
+        names = {str(entry.get("name", "")), str(entry.get("model", ""))}
+        if model in names or any(n.startswith(model + "-") for n in names if n):
+            window = entry.get("context_length")
+            if isinstance(window, int) and window > 0:
+                return window, ""
+            return None, "it is loaded but does not report a context length"
+    return None, "the model is not loaded right now, so its window is not set yet"
 
 
 def probe_engine(role, *, get=None, which=None) -> EngineProbe:
@@ -158,11 +257,14 @@ def probe_engine(role, *, get=None, which=None) -> EngineProbe:
             agent_installed=agent_installed,
         )
 
+    window, why = _served_window(role.endpoint, role.model, get)
     return EngineProbe(
         role.name,
         reachable=True,
         detail=f"answering, {len(served)} model(s)",
         models=served,
+        context_window=window,
+        context_detail=why,
         # Ollama reports `qwen3:8b` and some servers report `qwen3:8b-instruct`
         # for the same pull, so a prefix match rather than equality — a false
         # "missing" sends somebody to re-pull a model they have.
