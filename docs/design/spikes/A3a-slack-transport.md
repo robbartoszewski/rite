@@ -10,13 +10,35 @@ context-free and would match a real SPEC section.
 
 ---
 
-## The constraint this decision serves
+## ⚠ CORRECTED 2026-09-24 — the requirement I was given was not the requirement
 
-Robert's requirement, verbatim: **"no daemon, no hosting, no separate
-service"** — `rite start <manager>` itself does the listening. The supervisor
-already has a loop that wakes every `POLL_SECONDS = 2.0` and already calls
-`mail_waiting` there, so the shape a transport has to fit is **an outbound
-call from inside an existing loop**.
+**The first version of this note was decided against "no daemon, no
+hosting". Robert never said that.** What he said, on 2026-09-21, verbatim:
+
+> "rite start X process (for the current Owner) will be the thing that
+> listens for Slack changes."
+
+That is a statement about **which process listens** — the supervisor rather
+than a separate service. It was relayed to me as "no daemon, no hosting", I
+decided on the strict reading, and the strict reading was doing real work in
+the recommendation.
+
+**On the actual requirement, Socket Mode qualifies.** A WebSocket held open
+inside `rite start X` *is* the supervisor listening, in exactly the process
+he named. So the two transports were re-weighed on equal footing.
+
+⚠ **The recommendation did not change. The reasons did, and the reason that
+used to carry it turns out to carry nothing.**
+
+---
+
+## The constraint, restated correctly
+
+**Whatever listens must be the `rite start X` process**, not a service
+somebody else runs. The supervisor already wakes every `POLL_SECONDS = 2.0`
+and already calls `mail_waiting` there, so an outbound call fits without new
+machinery — but a held-open socket in that same loop would also satisfy the
+requirement as stated.
 
 ## Three transports, not two
 
@@ -30,7 +52,39 @@ call from inside an existing loop**.
 needs a publicly reachable HTTPS URL that Slack POSTs to, and that URL must
 be verified before the subscription can be saved. That is hosting.
 
-## Recommendation: **Web API polling**
+## Recommendation, re-derived: **Web API polling** — same answer, different reasons
+
+⚠ **The reason it used to win is gone.** "Only transport that needs neither a
+listener nor a held-open connection" was decided against a requirement Robert
+did not set, and against a distribution cost that turns out to be shared.
+
+**It still wins, on three things that survive the correction:**
+
+1. **Half the setup and half the credentials.** One `xoxb-` token against
+   two, and no Socket Mode toggle. A2 is already blocked on a
+   credential-model question; Socket Mode doubles it.
+2. **Per-Manager isolation.** Slack explicitly does not guarantee which
+   socket a payload lands on, so multi-Manager under Socket Mode means every
+   Manager receives every Manager's traffic and filters. Polling gives each
+   Manager its own channel read, with nothing shared.
+3. **Fewer failure modes in a loop that must stay simple.** A failed HTTPS
+   call is reported and retried on the next 2-second tick. A dropped socket
+   is a reconnect state machine, acknowledgement bookkeeping, and a
+   connection budget — inside the supervisor.
+
+**And what Socket Mode would have bought is worth nothing here:** push
+latency does not help a Manager that only reads between turns, and the rate
+limit it avoids is not binding once every user has their own app — which both
+transports require.
+
+⚠ **If any of these changes, revisit:** if rite ever distributes one shared
+Slack app, polling becomes impossible (1/min) and Socket Mode becomes
+impossible too (the socket would have to be central) — **the requirement
+itself would have to move**, not the transport.
+
+---
+
+### The mechanics
 
 `conversations.history` with an `oldest` timestamp, called from the loop that
 already exists.
@@ -54,65 +108,96 @@ Supporting facts, all documented:
   per channel"*. The mailbox emits replies at cycle boundaries, minutes
   apart, so this is not a constraint rite can reach.
 
-## ⚠ The cost Robert has to see, and it is not latency
+## ⚠ The cost that turned out to be shared, not a cost of polling
 
-**Polling's rate limit depends on how the Slack app is DISTRIBUTED, not on
-what rite does.** From the method's own page:
+The first version of this note made this polling's decisive disadvantage.
+**It is not a disadvantage at all, because the other option requires the same
+thing.**
 
-> "As of May 29, 2025, for new applications and installation commercially
-> distributed outside of the Marketplace, this method is rate limited to **1
-> request per minute**. The maximum and default values for the `limit`
-> parameter have both been reduced to **15 objects**. For Marketplace and
-> internal customer-built applications, this method has Tier 3 rate limits."
+`conversations.history` drops to **1 request per minute, 15 objects** for
+apps distributed outside the Marketplace; Tier 3 (50+/min) applies to
+Marketplace and **internal customer-built** apps. So polling needs each user
+to have their own workspace app.
 
-So:
+**So does Socket Mode**, and this is the finding that settles it. The socket
+is opened with an **app-level token**, and that token is app-scoped:
 
-- **Each user creates their own workspace app → internal custom app → Tier 3
-  → a 2-second poll works.** This is the path that functions.
-- **rite ships one distributed Slack app outside the Marketplace → 1 request
-  per minute.** A 2-second poll is impossible; the best achievable is a
-  once-a-minute check, and only 15 messages per read.
-- **And the obvious escape is closed:** Socket Mode apps *"are not currently
-  allowed in the public Slack Marketplace"*, so "use Socket Mode and get
-  listed" is not available either.
+> "App-level tokens represent your app across organizations, including
+> installations by all individual users on all workspaces in a given
+> organization."
+> "App-level tokens are obtained upon app creation. Find your app-level token
+> in the Basic Information tab of the app settings."
 
-⚠ **That makes this a distribution decision wearing a transport costume.**
-Choosing polling commits rite to telling each user to create their own Slack
-app. That is more setup for them, and it is the only shape in which the
-latency is acceptable. **Flagged rather than chosen.**
+**Nothing in Slack's documentation ever issues an `xapp-` token to an
+installing workspace or user.** It lives in the developer's app settings. So
+for a user's own `rite start` to hold the socket, that user must own the app.
+The only documented distributed Socket Mode topology is the opposite — one
+process run by the app owner, holding connections for every installation,
+with an `InstallationStore` to look up each workspace's bot token. That is a
+central service, which is the thing the requirement rules out.
 
-⚠ **One claim deliberately NOT relied on.** A web search asserted that from
-March 2026 existing non-Marketplace installations also lose Tier 3. The
-string "2026" appears nowhere in the rate-limit guide, the method reference,
-or either changelog entry, and the docs currently say the opposite —
-*"Existing installations ... will not be subject to the new posted limits"*.
-Recorded as unverified. **Re-check before shipping**, because if it is true
-the distribution decision above gets sharper rather than softer.
+⚠ **Therefore: every user creates their own Slack app under BOTH transports.**
+Once that is true, the app is an internal customer-built application, Tier 3
+applies, and **polling's rate limit stops being a constraint at all** — a
+2-second poll is 30 requests a minute against a 50+/min allowance.
 
-## What Socket Mode would cost instead
+**The setup burden does not disappear under Socket Mode. It grows:**
 
-Kept because it is Slack's own documented answer to "no public endpoint", and
-because if the distribution constraint above is unacceptable it is the
-fallback.
+| | polling | Socket Mode |
+|---|---|---|
+| create an app | yes | yes |
+| tokens the user must handle | **one** (`xoxb-`) | **two** (`xoxb-` **and** `xapp-` with `connections:write`) |
+| extra app settings | — | enable Socket Mode, generate the app-level token |
 
-- Needs an **app-level token** (`xapp-`) *in addition to* the bot token, with
-  the **`connections:write`** scope — so A2's credential question doubles.
-- Holds a WebSocket open; **at most 10 concurrent connections per app**,
-  which caps concurrent Managers at ten before anything of rite's does.
-- *"No matter what, you'll need to handle connection refreshes once every few
-  hours"* — reconnect logic, disconnect reasons, and a `hello` payload whose
-  `approximate_connection_time` example is 3600s.
-- **Every event must be acknowledged** by `envelope_id` or Slack retries it.
+That doubles A2's credential question — which is currently blocked on a
+credential-model decision — for no gain rite can use.
 
-**None of that is hosting. All of it is a daemon's problem list** —
-reconnection, liveness, acknowledgement, connection budget — arriving inside
-a process whose selling point is that it is not one. That is the tension, and
-it is Robert's to weigh rather than mine to settle.
+⚠ **One claim carried as ASSEMBLED, not quoted.** That all installations'
+events arrive over one socket is nowhere stated in a single sentence. It is
+assembled from three documented facts: the token is app-scoped; the `hello`
+frame identifies the connection by `app_id` with no `team_id`; and the
+official distributed pattern is one socket process plus an
+`InstallationStore`. Strong and convergent, but assembled. **The decisive
+fact — that `xapp-` is issued at app creation and never to an installer — is
+quoted directly.**
 
-⚠ Slack also recommends **HTTP for production** (*"the highest possible
-reliability for application connectivity"*) and Socket Mode for local and
-firewalled use. rite's requirement rules out their production recommendation,
-so whichever of the two remaining is chosen is off Slack's preferred path.
+## What Socket Mode costs, now that it is a live option
+
+- **Two credentials instead of one** (above).
+- **Reconnects.** *"No matter what, you'll need to handle connection
+  refreshes once every few hours."* Disconnect reasons, a `hello` payload
+  with an `approximate_connection_time`, and reconnect logic inside the
+  supervisor's loop.
+- **Per-event acknowledgement** by `envelope_id`, or Slack retries.
+- ⚠ **The 10-connection cap is PER APP** — *"Slack limits the number of
+  concurrent WebSocket connections to 10 per app"* — not per token and not
+  per installation.
+- ⚠ **And the multi-Manager consequence is worse than the cap.** Slack:
+  *"When multiple connections are active, each payload may be sent to ANY of
+  the connections. It's best not to assume any particular pattern for how
+  payloads will be distributed across multiple open connections."*
+
+  With several Managers under one user's app, each holding a socket, **a
+  message meant for one Manager's channel can be delivered to another
+  Manager's socket.** Every Manager would have to receive everything and
+  filter — so every Manager sees every other Manager's Slack traffic. That is
+  an isolation property rite would be giving up, and multi-Manager is v0.7.0.
+
+  **Under polling each Manager reads its own channel independently and there
+  is no cross-talk.** Nothing is shared and nothing has to filter.
+
+**Does the 10-cap bind before rite's own limits?** Yes — rite has no Manager
+count below ten, so Slack's cap arrives first. It is generous for realistic
+use (one to three Managers), so it is a ceiling rather than a live
+constraint; the payload-distribution behaviour above is the real cost, and it
+bites at **two** Managers, not ten.
+
+⚠ **What Socket Mode genuinely buys:** push latency instead of a poll
+interval, and no Web API rate-limit exposure on the read path at all. It is
+also Slack's documented recommendation for on-premise and firewalled cases.
+**The latency is worth nothing here** — a Manager only reads between turns,
+so a message noticed instantly is still delivered at the next cycle boundary,
+which is where `mail_waiting` already delivers it.
 
 ## What polling buys, beyond fitting the constraint
 

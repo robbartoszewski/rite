@@ -767,17 +767,23 @@ they stop promising a 0.6.0 deliverable that is now 0.7.0. See SPEC updates.
    Marketplace it is **1 request per minute with a 15-object limit**, which
    makes the poll loop impossible — and Socket Mode apps cannot be
    Marketplace-listed, so that escape is closed too.
-   **(a)** each user creates their own Slack app — works, more setup for
-   them; **(b)** rite ships one distributed app — does not work at any useful
-   latency. Recorded rather than assumed because (a) is the only functioning
-   option and it changes what setup docs have to say.
+   ⚠ **This is now informational, not a decision.** Socket Mode needs a
+   per-user app too — the `xapp-` token is issued at app creation and never
+   to an installer — so **every user creates their own Slack app under either
+   transport**, which makes it an internal customer-built app and restores
+   Tier 3. The rate limit stops binding. What remains is a setup-docs fact:
+   users create an app. ⚠ It becomes a decision again only if rite ever
+   distributes one shared app, and at that point **neither** transport works
+   and the requirement has to move.
 
-4. ⚠ **Is "no daemon" about hosting, or about holding a connection open?**
-   Socket Mode needs no hosting and no inbound URL, so it satisfies the first
-   reading. It also needs a persistent WebSocket, reconnects *"once every few
-   hours"*, per-event acknowledgement and a 10-connection cap — a daemon's
-   problem list inside a process whose selling point is that it is not one.
-   Polling was chosen on the stricter reading. **Confirm which was meant.**
+4. ✅ **"No daemon" was a misrelay — WITHDRAWN, and the answer survived it.**
+   Robert said *"rite start X process (for the current Owner) will be the
+   thing that listens for Slack changes"* — which process listens, not a ban
+   on held connections. Socket Mode held inside `rite start X` satisfies it.
+   Re-evaluated on the correct requirement: **polling still wins, for
+   different reasons** — one credential instead of two, and per-Manager
+   isolation where Slack explicitly does not guarantee which socket a payload
+   lands on. See the spike note.
 
 5. **Does C4's allowlist replace the always-skip default or sit beside it?**
    The shipped note says "with this flag still the default", which reads as
