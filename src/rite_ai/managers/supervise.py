@@ -44,6 +44,7 @@ from rite_ai.managers import (
     forget_instance,
     manager_dir,
 )
+from rite_ai.managers.engines import spelling_for
 from rite_ai.managers.mailbox import INBOX, delivery_note, how_to_reply
 from rite_ai.managers.mailbox import take as take_mail
 from rite_ai.managers.mailbox import waiting as mail_waiting
@@ -123,16 +124,37 @@ def launch_command(
     resume_id: str = "",
     prompt_path: str = "",
     permission: str = "",
+    agent: str = "",
 ) -> str:
-    """What to run in the pane.
+    """What to run in the pane, in the engine's OWN vocabulary (B3a).
 
-    ⚠ **The engine string is used as an EXECUTABLE NAME.** There is no
-    registry, no adapter and no way to express that an engine takes
-    different flags — see this module's docstring. `--resume <id>` is
-    Claude Code's spelling and is appended unconditionally, which is wrong
-    for any engine that spells it differently and meaningless for one with
-    no session to resume.
+    ⚠ **THIS USED TO APPEND CLAUDE CODE'S FLAGS TO WHATEVER IT WAS GIVEN.**
+    The engine string was an executable name, `-p` and `--resume <id>` went
+    on unconditionally, and the permission mode went on argv — correct for
+    exactly one engine and another tool's vocabulary for every other. The
+    old test pinned that as behaviour, with a docstring saying the interface
+    stays unstable *"until `local` forces it"*. It is forcing it.
+
+    The spelling now comes from `engines.spelling_for`, keyed by the engine
+    and — for `local:<class>`, which names a tier and not a runtime — by the
+    `agent` its role declares.
+
+    ⚠ **Claude's command line is unchanged, byte for byte.** A registry that
+    altered the one engine rite actually launches would be a refactor with a
+    behaviour change hidden in it.
+
+    ⚠ **An unknown engine is run AS GIVEN, and gets nothing invented for
+    it.** rite does not know an unrecognised tool's flags, so it does not
+    guess: no turn flag, and a `resume_id` or `permission` it cannot express
+    is an error rather than something dropped. Dropping a resume id starts a
+    FRESH context with the ticket half-done, which is the silent failure this
+    path exists to prevent.
     """
+    spelling = spelling_for(engine, agent)
+    command = spelling.binary or engine or "claude"
+    parts = [command]
+    if spelling.turn:
+        parts.append(spelling.turn)
     # ⚠ **`-p` IS THE CYCLE BOUNDARY.** An interactive engine never exits,
     # so a supervisor wanting cycles would have to infer one ended from
     # something else — idleness, quiet output, a timer — and every one of
@@ -161,14 +183,22 @@ def launch_command(
     # token is never an argument. (An earlier draft passed it through
     # `$RITE_PROMPT` in the inherited environment; the file is what ships,
     # and `session.PROMPT_FILE` records why.)
-    base = f"{engine or 'claude'} -p"
     if permission:
         # ⚠ **EVERY cycle, not just the first.** Resuming with `-p` does not
         # restore the mode a session was in — that restoration explicitly
         # excludes `-p` — so a resumed cycle launched without this is a
         # Manager that can no longer act AND still exits 0, which `ending`
         # reads as a clean finish. D-90's shape exactly, in a second place.
-        base = f"{base} {permission}"
+        if not spelling.permission_is_argv:
+            # ⚠ Goose takes `GOOSE_MODE` in the ENVIRONMENT, not on argv, so
+            # "permission" cannot be "a flag string". The adapter that owns
+            # that engine sets it; this refuses rather than writing a flag
+            # the tool would reject.
+            raise ValueError(
+                f"{command} expresses permission in its environment, not on "
+                "the command line — the adapter must set it, not this."
+            )
+        parts.append(permission)
     if resume_id:
         # ⚠ **REFUSES rather than escapes, and raises rather than drops the
         # flag.** This string is handed to `tmux new-session`, which runs it
@@ -191,8 +221,23 @@ def launch_command(
                 f"refusing to build a launch command with a resume id that "
                 f"{problem}. This string is run by a shell."
             )
-        base = f"{base} --resume {resume_id}"
-    return f"{base} < {shlex.quote(str(prompt_path))}" if prompt_path else base
+        if not spelling.resume:
+            raise ValueError(
+                f"{command!r} has no resume spelling rite knows, so there is "
+                f"no way to continue {resume_id!r} with it. Refused rather "
+                "than dropped: dropping it starts a fresh context with the "
+                "ticket half-done, which is the failure this path exists to "
+                "prevent."
+            )
+        parts.append(spelling.resume.format(handle=resume_id))
+    base = " ".join(parts)
+    if not prompt_path:
+        return base
+    if spelling.prompt_flag:
+        return f"{base} {spelling.prompt_flag} {shlex.quote(str(prompt_path))}"
+    # Redirected, not an argument: `tmux new-session` puts its command on
+    # tmux's argv where `ps` shows it to every local account.
+    return f"{base} < {shlex.quote(str(prompt_path))}"
 
 
 def _say_refusals(root: Path, since: float, say) -> None:
