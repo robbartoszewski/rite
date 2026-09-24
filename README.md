@@ -390,6 +390,12 @@ including against three interchangeable state backends. What has not happened
 is two physical machines on one project over a real network. Treat it as
 implemented and unproven rather than as either.
 
+**A local model tier needs `OLLAMA_CONTEXT_LENGTH` set.** Ollama serves every
+model at 4096 tokens by default, which is smaller than an agent's own system
+prompt — so the tier fails in ways that look like models unable to call tools
+and agents losing conversation history, rather than like a setting. `rite
+doctor` reports the window actually in force. See the guide.
+
 **Claude is the only agent rite drives today, deliberately.** `CLAUDE.md`
 and `.claude/agents/` are first-class here rather than behind a provider
 abstraction. *This said "no other tool is planned", which contradicted the

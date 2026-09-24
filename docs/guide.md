@@ -499,6 +499,47 @@ but the engine still could not authenticate: rite cannot tell a bad
 credential from one the engine failed to read, and it says so rather than
 guessing.
 
+## A local model needs a context window you have to set
+
+**This one is worth reading before you debug anything else**, because when it
+is wrong it does not look like a setting. It looks like a model that cannot
+call tools and an agent that forgets what you just told it.
+
+Ollama serves **every** model with a 4096-token context window unless you say
+otherwise, whatever the model itself supports. `qwen3:32b` declares 40960 and
+tool support, and you still get 4096. An agent's system prompt and tool
+schemas are bigger than that before your task is added — measured, opencode
+sends about 31KB on the wire and Goose about 19KB — so the window is full
+before the work starts.
+
+    export OLLAMA_CONTEXT_LENGTH=32768   # then restart the ollama server
+
+**32768 is the lowest value measured to work**, not a tuned minimum. On rite's
+own five-task benchmark at 4096, Goose scored 4/5 and opencode 0/5 with every
+task timing out; at 32768 both scored 5/5. Nothing in between was measured, so
+a smaller window may well be fine — but it has not been shown to be.
+
+**What it looks like when it is wrong**, so you recognise it rather than
+chasing it:
+
+- a model that declares tool support, accepts the request, and returns empty
+  content **with no error at all**;
+- a file that never gets written, while the agent explains what it would have
+  written;
+- a resumed session answering "that is not in the conversation history" about
+  something you told it one turn ago;
+- tasks that run to a timeout without finishing.
+
+**`rite doctor` tells you.** It asks the endpoint what window the model is
+actually being served with and says so:
+
+    manager planner: its model is being served with a 4096-token context
+    window, below the 32768 measured to work...
+
+It reports **unknown** rather than guessing when it cannot tell — the model is
+not loaded yet, or the endpoint is LM Studio, llama.cpp or vLLM rather than
+Ollama, none of which expose this through the OpenAI-compatible API.
+
 ## Keeping a project's generated files current
 
 `rite init` writes `CLAUDE.md`, `.claude/commands/`, `.claude/agents/`, the
