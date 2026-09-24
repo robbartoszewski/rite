@@ -561,12 +561,49 @@ correctly absent: it shipped in v0.5.1.
 | C15 | **The real-tmux tests are load-sensitive and nondeterministic** | `V070_MULTI_MANAGER.md` §1 — **OPEN** | Proven code-independent by a markdown-only control run. Related to C1 but not the same item: C1 isolates the socket, this is the residual nondeterminism. | 1–2 sittings |
 | C16 | **Three refusals embed raw tmux stderr** | `CREDENTIAL_HANDLING…md` Trap 2 | A leak only if Trap 1 (C6) happens, and the two are coupled — which is why both belong in one release rather than one being taken alone. | ½–1 sitting |
 | C23 | ⚠ **The outbox now grows without bound** | A1, Decision 1 | **A consequence of 1(a), not a defect in it.** Readers no longer delete, so nothing does. A retention rule needs a policy decision — age, count, or "when every registered reader has passed it" — and the last one reintroduces a subscriber list, which is what 1(a) was chosen to avoid. **Not guessed here.** Small today (a reply is a few hundred bytes) and unbounded is still unbounded. | ½–1 sitting once the policy is chosen |
-| C20 | ⚠ **Run the benchmark under the DEFAULT allowlist** | this plan, Decision 3 | **The observation C4 does not contain.** Run the five benchmark tasks with the shipped default allowlist in force and confirm they still pass. **Baseline is 5/5** (Goose, 32768 window). A task that stalls on approval means the list is too narrow — and that is the finding, not a test failure to work around. | 1 sitting |
+| C20 | ⚠ **Run the benchmark under the DEFAULT allowlist** — 🔴 **STILL OPEN after C4/C21/C22 landed; see below** | this plan, Decision 3 | **The observation C4 does not contain.** Run the five benchmark tasks with the shipped default allowlist in force and confirm they still pass. **Baseline is 5/5** (Goose, 32768 window). A task that stalls on approval means the list is too narrow — and that is the finding, not a test failure to work around. | 1 sitting |
 | C21 | **The refusal names the command and how to allow it** | this plan, Decision 3 | A refusal a user cannot act on is the same defect as a silent one. The message must say which command was refused and the line that would permit it. | ½ sitting |
 | C22 | ⚠ **Release notes state the upgrade behaviour change** | this plan, Decision 3 | Existing users get **different behaviour on upgrade**: a Manager that ran unattended may now stop for approval. Discovering that mid-run is the worst way to learn it. **Not optional — it is the same doc-describes-reality rule C19 exists for.** | ½ sitting |
 | C19 | ⚠ **Amend SPEC §9.15.4 and §7.3 — the QA gate is 0.7.0** | this plan, Decision 5 | Robert moved the scenario gate (D-81) out of this release. Until the spec says so, a spec reader expects a 0.6.0 deliverable that will not arrive. **Required by Decision 5; not optional.** | ½ sitting |
 | C18 | ⚠ **The local tier's docs must state the `OLLAMA_CONTEXT_LENGTH` requirement** | this plan, "Prerequisite" | Measured: at Ollama's 4,096 default the tier fails in ways that look like model and tool defects rather than configuration. B7 warns; this tells an operator what to do about it. **Pairs with B7 and should not ship without it.** | ½ sitting |
 | C17 | **`if cycles:` — the unstated exception to "designated whatever the ending"** | `V060_SESSION_CONTINUITY.md` item 3 | An interrupt before the first cycle is appended designates nothing. Looks correct; it is the one path where the stated rule does not hold, and an unstated exception is how the next person is surprised. | ½ sitting |
+
+
+### 🔴 C20 is still open, and it is the observation the others cannot substitute for
+
+**C4, C21 and C22 landed 2026-09-24. C20 did not**, and the reason is a
+credential rather than a design problem: `claude -p` on this machine answers
+
+    Failed to authenticate: OAuth session expired and could not be refreshed
+
+so no agent run of any kind could be made. The five tasks were never
+started, let alone scored.
+
+⚠ **What was checked instead is NOT the same thing, and must not be read as
+if it were.** Mechanically, every one of the five tasks' verify commands
+(`python -m pytest -q <test>`) is covered by the default list, as are the
+reads, edits and test runs the tasks need. That is a check of rite's own
+matcher against rite's own list — it cannot see what the ENGINE does with
+the settings file, which is the entire question. A settings file that fails
+validation is silently ignored under `-p`, and this check would pass just
+as happily in that case.
+
+**A second reading of C20 is also unresolved and worth stating**, because
+whoever picks this up hits it immediately. The row's baseline is *"5/5
+(Goose, 32768 window)"*, but the allowlist is Claude Code's
+`.claude/settings.json` and **Goose does not read it**. So either the
+benchmark is to be run through `claude -p` with the allowlist, using Goose's
+5/5 only as the yardstick that the tasks are passable (the reading taken
+here), or the ticket wants something the local tier has no way to express.
+That should be settled before the run rather than during it.
+
+**To do it:** restore a working `claude` login, then for each of the five
+tasks launch `claude -p --settings <rite's permissions.json>
+--permission-prompts none` in a directory holding the task's `before` files
+and run the task's verify afterwards. Baseline 5/5. ⚠ **A task that stalls
+or that ends having edited nothing is the finding, not a flake** — it means
+the list is too narrow, and the commands to add are the ones
+`refused_commands` will have recorded in that session's transcript.
 
 ---
 
