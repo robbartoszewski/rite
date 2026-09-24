@@ -137,6 +137,15 @@ OBSERVATION_FIELDS = ("anchor", "observed", "expected", "inferred")
 # present anchor RESOLVES — is still unimplemented, and this does not
 # change that: `deadbeef` is still accepted. What it guarantees is that the
 # anchor section contains something a reader can see and try.
+#
+# ⚠ **DECIDED, NOT PROVISIONAL (C9, 0.6.0).** A wider rule — any letter or
+# number category in any script — was evaluated and fails its own test: the
+# Hangul fillers and the Egyptian hieroglyph blanks are category `Lo`, so it
+# accepts the invisible characters it exists to refuse, and `unicodedata`
+# has nothing that tells them apart. "The anchor renders" is not computable
+# from Unicode data as far as is established. The full record, including the
+# two rescue options and why neither was taken, is
+# docs/design/V060_ANCHOR_LEGIBILITY.md. Read it before touching this.
 
 _LEGIBLE = frozenset(string.ascii_letters + string.digits)
 
@@ -311,6 +320,18 @@ def _field_problem(manager: str, anchor: str, required: dict[str, str]) -> str:
             "here, and a real Manager name is a word"
         )
     if _is_blank(anchor):
+        if anchor.strip() and any(ch.isalnum() for ch in anchor):
+            # ⚠ Not "no anchor": the Manager wrote one, in a script with no
+            # ASCII letter or digit. Saying "no anchor" is false, and a
+            # refusal the Manager cannot act on is the one it routes around
+            # by hand-writing the file — so this names the rule and the fix.
+            return (
+                "refusing this anchor: it has no ASCII letter or digit. rite "
+                "cannot tell a wholly non-Latin anchor from characters that "
+                "render as nothing, so it requires one ASCII identifier a "
+                "reader can check — include the SHA, the file path and line, "
+                f"the ticket id, or the command. {_ANCHOR_HELP}"
+            )
         return (
             "refusing to write a journal entry with no anchor: an entry "
             "nobody can check is worse than no entry, because it reads like "

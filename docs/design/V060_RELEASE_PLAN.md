@@ -568,7 +568,7 @@ correctly absent: it shipped in v0.5.1.
 | C6 | **The `tmux -e` argv trap** | `CREDENTIAL_HANDLING…md` Trap 1 | A credential passed via `-e` lands on the server's argv. **Raised by A2** — Slack introduces a second token. | 1–2 sittings |
 | C7 | **Journal redaction** | `CREDENTIAL_HANDLING…md` | `redact_secrets` exists with the right shape; the journal path does not use it. **Raised by A2** for the same reason. | 1 sitting |
 | C8 | **Designation membership check** | `V060_SESSION_CONTINUITY.md` §1 | Nothing verifies a designated id belongs to this project or Manager. **Less urgent now** — multi-Manager was what raised the stakes, and it moved. | 1–2 sittings |
-| C9 | **Anchor ASCII limit** | `V060_ANCHOR_LEGIBILITY.md` | Ships correct and too blunt: an anchor entirely in a non-Latin script is refused though a reader could check it. | 1 sitting |
+| ~~C9~~ | ✅ **DECIDED — the ASCII floor stays** (Robert, 2026-09-24) | `V060_ANCHOR_LEGIBILITY.md` | The alternative (accept any letter/number category in any script) was measured to fail its own observation: the Hangul fillers U+3164/U+115F/U+1160/U+FFA0 and the Egyptian hieroglyph blanks are category `Lo`, so it accepts the invisible characters it exists to refuse, and `unicodedata` exposes nothing that separates them. "The anchor renders" is not computable from Unicode data as far as is established; the note records the rescue options and why neither was taken. | — |
 | C10 | **Journal provenance** | 0.5.1 CHANGELOG, known limitation | An entry has no author field, so a human filing while attached is indistinguishable from the Manager. **Raised by Slack**: a third writer makes "who said this" harder, not easier. | 1 sitting |
 | C11 | **`.rite/user/` separation is incidental** | `V060_SESSION_CONTINUITY.md` §2 | Two files stay apart only because a glob's stem validation rejects a dot. A non-`.json` suffix or an explicit skip makes it structural. | ½ sitting |
 | C12 | **`session_exists` is not a general tmux predicate** | `V070_MULTI_MANAGER.md` §4 | Named as if general, true only for the shapes it is called with. | ½ sitting |
@@ -797,7 +797,7 @@ class 0.5.1 was spent removing.
   sitting, and without it the next person to touch this repeats the spike's
   night. A warning about a tier that has not shipped yet is still cheaper than
   the debugging it prevents.
-- **C5, C8, C9, C10, C11, C12, C13** — independent, small, no dependants.
+- **C5, C8, C10, C11, C12, C13** — independent, small, no dependants. (C9 is decided, not slipped: the ASCII floor stays.)
 - **B6, B8** — measurements, not features.
 
 ---

@@ -1,50 +1,97 @@
-# The journal anchor rule is too blunt — 0.6.0
+# The journal anchor rule: the ASCII floor stays — decided 0.6.0
 
-**Status: OPEN.** v0.5.1 ships an ASCII floor. It is correct about what it
-refuses and wrong about some of what it refuses.
+**Status: DECIDED 2026-09-24 (Robert): keep the ASCII floor.** This is the
+rule, not a stopgap for one. An anchor must contain at least one ASCII letter
+or digit, and an anchor written wholly in a non-Latin script is refused.
+
+**Why, in one sentence, for the next person:** "the anchor renders" is the
+property actually wanted, and as far as has been established it **is not
+computable from Unicode data** — four rules about characters have now been
+tried, and every one that described characters lost to a character nobody
+listed. Start from that, not from a fifth rule.
 
 ## What ships, and what it costs
 
 `rite journal observe --anchor` requires the value to contain at least one
 **ASCII letter or digit** (`journal.py:_is_blank`). Verified by running it:
 
-    accepted  6a8a5b2                      RT-412
+    accepted  6a8a5b2                      RT-412      src/модуль.py:88
     REFUSED   U+3164 HANGUL FILLER         U+2800 BRAILLE PATTERN BLANK
     REFUSED   é                            U+FF21 FULLWIDTH LATIN A
+    REFUSED   модуль строка   (wholly Cyrillic)
 
-The cost: an anchor written **entirely** in a non-Latin script, with no
-line number, SHA, path separator or ticket id, is refused although a reader
-could check it. Only a value with *no* ASCII character at all is affected —
-`src/модуль.py:88` passes.
+The cost, accepted knowingly: an anchor written **entirely** in a non-Latin
+script, with no line number, SHA, path separator or ticket id, is refused
+although a reader could check it. Only a value with *no* ASCII character at
+all is affected. Every anchor form §9.15.3 names — a SHA, a `file:line`, a
+command with its output, a ticket id, a log file with a timestamp — carries
+ASCII, so the refusal says so and tells the Manager how to satisfy it.
 
-## ⚠ Read this before replacing it: three rules, two of them defeated
+## ⚠ Read this before replacing it: five rules, four of them defeated
 
-Whoever tightens this will otherwise walk the same path.
+Whoever reopens this will otherwise walk the same path.
 
 | attempt | rule | defeated by |
 |---|---|---|
 | 1 | `str.strip()` | U+200B, U+200C, U+2800 — `strip()` removes Python-whitespace only |
 | 2 | blacklist of Unicode categories (Cf, Zs, Cc) | **U+2800**, category `So` |
 | 3 | `str.isalnum()` — a positive rule | **U+3164 HANGUL FILLER**, U+115F, U+1160, U+FFA0 — category `Lo`, alphanumeric **and** invisible |
-| 4 (ships) | at least one ASCII alphanumeric | nothing yet; too blunt |
+| 4 (**ships, decided**) | at least one ASCII alphanumeric | nothing — ASCII is a closed set; cost stated above |
+| 5 (evaluated 0.6.0, **rejected before building**) | accept any letter or number category (L\*, N\*) in any script; refuse format, control, separator | **its own observation** — see below |
 
-**The pattern is the lesson.** Attempts 1–3 were rules about *characters*,
-and each was beaten by a character its author had not met. `isalnum()` is
-Unicode-aware, which is exactly why it failed — it says yes to the Hangul
-fillers. ASCII is a closed set: Unicode cannot add a new ASCII
-alphanumeric, which is the only reason attempt 4 has held.
+### Attempt 5, and why it failed on paper
 
-## The property actually wanted
+Proposed as the category-shaped version of the positive rule that worked:
+accept any character in a letter or number category, in any script. Its
+definition of done required that the Hangul fillers and U+2800 still be
+refused. Measured on Python 3.14.3, Unicode 16.0.0:
+
+    U+3164  Lo  HANGUL FILLER                   isalnum=True
+    U+115F  Lo  HANGUL CHOSEONG FILLER          isalnum=True
+    U+1160  Lo  HANGUL JUNGSEONG FILLER         isalnum=True
+    U+FFA0  Lo  HALFWIDTH HANGUL FILLER         isalnum=True
+    U+13441 Lo  EGYPTIAN HIEROGLYPH FULL BLANK  isalnum=True
+    U+13442 Lo  EGYPTIAN HIEROGLYPH HALF BLANK  isalnum=True
+    U+2800  So  BRAILLE PATTERN BLANK
+
+**All six invisible characters are category `Lo` — a letter category.** So
+"accept any letter" accepts exactly the characters the rule exists to
+refuse. It is attempt 3 again at the category level, because `isalnum()` is
+itself defined over those categories. (U+2800 would be refused correctly;
+it is `So`.)
+
+**Python's `unicodedata` exposes nothing that separates them.** Its whole
+interface is `category`, `bidirectional`, `combining`, `decimal`, `digit`,
+`numeric`, `east_asian_width`, `mirrored`, `decomposition`, `name`,
+`lookup`, `normalize` and `is_normalized`. None of them says "renders as
+nothing".
+
+**The two ways to rescue it, and why neither was taken:**
+
+1. **Vendor Unicode's `Default_Ignorable_Code_Point` data** (from
+   `DerivedCoreProperties.txt`, which Python does not ship) and refuse those.
+   It catches the four Hangul fillers. **It does not catch the Egyptian
+   blanks**, which are not default-ignorable — so it is incomplete on the
+   day it lands, and it adds a data file to keep in step with Unicode.
+2. **Refuse a character whose Unicode NAME marks it blank** (`FILLER`,
+   `BLANK`, …). It catches all six today. It is the character-list pattern
+   in a different coat — the shape that lost as attempts 2 and 3 — and it is
+   built from the same criterion as the sweep test below, so the test could
+   only confirm the rule agrees with itself.
+
+## The property actually wanted, and the standing position
 
 **That the anchor RENDERS** — that a reader looking at the entry sees
-something they can act on.
+something they can act on. Rendering depends on font, terminal and combining
+behaviour; "has a visible glyph" is not a property the Unicode data exposes,
+and three rules that approximated it from character properties each lost to
+a character their author had not met.
 
-That is not implemented because it is hard to define correctly, not because
-nobody thought of it. Rendering depends on font, terminal, and combining
-behaviour; "has a glyph" is not a property the standard exposes cleanly,
-and `unicodedata` does not answer it. A replacement that gets this right is
-a real piece of work and worth doing — this note exists so it is done
-deliberately rather than by another guess.
+So the standing position is **the ASCII floor, deliberately**: it does not
+approximate rendering at all, it requires the one closed set every §9.15.3
+anchor form already uses. Reopen it only with a way to compute "renders"
+that does not come from a list of characters — and run the sweep below
+against it before anything else.
 
 ## ⚠ The constraint that killed the stronger idea, and binds any replacement
 

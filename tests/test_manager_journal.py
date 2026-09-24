@@ -828,3 +828,52 @@ class TestAnEntrySaysWhereItWasFiledFrom:
         before, after = self._file(tmp_path, monkeypatch, "", observed=forged)
         assert "\\## recorded_from" in before
         assert "outside any Manager session" in after
+
+
+class TestTheASCIIFloorIsTheDecidedRule:
+    """C9, decided 2026-09-24: the ASCII floor stays. See
+    docs/design/V060_ANCHOR_LEGIBILITY.md before changing anything here."""
+
+    def test_a_wholly_non_latin_anchor_is_refused_with_the_rule_not_no_anchor(
+        self, tmp_path
+    ):
+        """The accepted cost. The refusal must say the real rule and how to
+        satisfy it — "no anchor" was false, and a refusal a Manager cannot act
+        on is the one it routes around by hand-writing the file."""
+        result = journal.write_observation(
+            tmp_path,
+            manager="lead",
+            anchor="модуль строка",
+            observed="x",
+            expected="y",
+        )
+        assert not result.ok
+        assert "no ASCII letter or digit" in result.message
+        assert "no anchor" not in result.message
+        # And the way out it names works.
+        assert journal.write_observation(
+            tmp_path,
+            manager="lead",
+            anchor="src/модуль.py:88",
+            observed="x",
+            expected="y",
+        ).ok
+
+    def test_the_evidence_the_decision_rests_on_still_holds(self):
+        """The wider rule (any letter/number category) was rejected because
+        characters that render as nothing sit IN a letter category. Derived
+        from `unicodedata`, not listed: if this ever comes back empty, the
+        reason for the decision has changed and it is worth reopening."""
+        import unicodedata
+
+        from rite_ai.managers.journal import _is_blank
+
+        blank_letters = {
+            cp
+            for cp in range(0x110000)
+            if unicodedata.category(chr(cp))[0] in "LN"
+            and any(w in unicodedata.name(chr(cp), "") for w in ("FILLER", " BLANK"))
+        }
+        assert {0x3164, 0x115F, 0x1160, 0xFFA0} <= blank_letters
+        for cp in blank_letters:
+            assert _is_blank(chr(cp)), f"U+{cp:04X} would be accepted"
