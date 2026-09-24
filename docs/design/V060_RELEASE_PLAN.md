@@ -531,7 +531,7 @@ addresses tried.**
 | B5 | **Prove B4 on the existing benchmark** | Run `local:<class>` through `harness.run_subtask` on `tools/rite_local_bench/tasks.py`. ⚠ **The bar is now a number, not a vibe:** Goose scored **5/5** driven directly. Through rite's harness it should match; a materially worse score means the harness is the problem, not the model. | Proves the contract by using it, against a measured baseline. | B4 | **2–3 sittings** |
 | ~~B6~~ | ✅ **DONE — the Docker half of RL-T1** | Measured 2026-09-24. A Docker-backed yoloAI sandbox completes a real `/v1/chat/completions` against the host endpoint at **`host.docker.internal`** — and at none of `gateway.docker.internal`, `host.containers.internal` or `172.17.0.1`, so the address is not safe to guess. | — | **spent: ~¼ sitting** |
 | B7 | ⚠ **`rite doctor` reports the served context window** | Query the endpoint for the window actually in force and warn when it is below a threshold the tier needs. `engine_probe.py` already probes the endpoint; this is a field on the same probe. | **The single highest-value item in the local track.** An unset `OLLAMA_CONTEXT_LENGTH` presents as models that cannot call tools and agents that lose history — it cost this plan two wrong conclusions. A one-line warning removes the whole class. | — | **1 sitting** |
-| B8 | **The adapter sets `num_ctx` per request where it can** | Rather than trusting the operator's environment. ⚠ **Needs checking first**: Ollama's OpenAI-compatible `/v1` path may ignore `options.num_ctx`, in which case this reduces to B7 plus documentation. | Belt and braces on the failure that dominated the spike. | B7 | **½–1 sitting**, or drops out |
+| ~~B8~~ | 🔴 **CLOSED NOT POSSIBLE — the adapter cannot set `num_ctx`** | ⚠ **The check was made 2026-09-24 and the ticket drops out.** Ollama's `/v1/chat/completions` IGNORES `options.num_ctx`: `ollama ps` reports `CONTEXT 4096` with it set, identical to the request without it, while the native `/api/chat` with the same option reports `16384`. Goose uses `/v1` and its binary contains the string `num_ctx` zero times, so it would not send it even if the endpoint honoured it — and rite launches the agent rather than issuing the request, so there is no adapter of rite's to change. **B7 plus the documentation are the whole prerequisite story.** See below for the one mechanism that does work. | B7 | **spent: ~¼ sitting; drops out** |
 
 ---
 
@@ -620,6 +620,53 @@ Read out of the transcripts rather than from what the model said about
 itself. The second row is the one that matters: it rules out the case this
 plan flagged, where a settings file that fails validation is silently
 ignored under `-p` and a passing check means nothing.
+
+
+### 🔴 B8 is closed as not possible — and the one thing that would work
+
+**Measured, `ollama ps` after each request, model unloaded between arms so
+the number is this request's and not a leftover:**
+
+| request | `CONTEXT` |
+|---|---|
+| `/v1/chat/completions`, no options (baseline) | 4096 |
+| `/v1/chat/completions` + `options.num_ctx: 16384` | **4096 — ignored** |
+| `/api/chat` + `options.num_ctx: 16384` (native) | **16384** |
+
+The native arm also grew the resident size from 5.6 GB to 7.5 GB, which is
+an independent confirmation that a larger KV cache was really allocated
+rather than a number being echoed back.
+
+**Three reasons this cannot be done as the ticket describes**, and any one
+of them would be enough:
+
+1. The OpenAI-compatible path ignores the option, and that is the path the
+   local tier uses.
+2. `strings` on the Goose binary finds `/v1/chat/completions` 24 times and
+   `num_ctx` **zero** times — it would not send the option if the endpoint
+   honoured it.
+3. rite does not issue these requests at all. It launches an agent binary,
+   which issues them. There is no adapter of rite's in the request path to
+   put the option into.
+
+⚠ **The goal is still reachable, by a different mechanism, and it is worth
+recording rather than losing with the ticket.** A model derived with a
+Modelfile carries the window with it:
+
+    FROM qwen3:8b
+    PARAMETER num_ctx 16384
+
+Requested through `/v1/chat/completions` — the path Goose uses — that model
+serves `CONTEXT 16384`, with `OLLAMA_CONTEXT_LENGTH` unset and the
+operator's environment untouched. So rite COULD protect a user from the
+4096 default by creating a derived model rather than by warning about it.
+
+**That is not a smaller version of B8 and should not be slipped in as
+one.** It writes a new entry into the operator's Ollama model library — a
+side effect on shared state outside the project, which is a different
+decision from anything in this release, and it doubles a large model's disk
+footprint. Recorded as an option for whoever picks the prerequisite story
+up; B7 and the documentation remain the answer for 0.6.0.
 
 ---
 
