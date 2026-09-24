@@ -148,7 +148,15 @@ def send(root: Path, manager: str, box: str, text: str) -> Path:
     where = mailbox_dir(root, manager, box)
     where.mkdir(parents=True, exist_ok=True)
     ts = time.time()
-    path = where / f"{int(ts * 1000)}_{os.getpid()}_{next(_SEQUENCE)}.json"
+    # ⚠ ZERO-PADDED, because the name IS the order. `read` sorts filenames
+    # and a reader's cursor is a filename comparison, so an unpadded
+    # counter put `…_10.json` BEFORE `…_9.json` within one millisecond —
+    # found when the suite's own sends pushed the counter across a digit and
+    # `test_order_is_send_order` read ['third', 'first', 'second']. Past a
+    # cursor that is not misordering but loss: the later message sorts behind
+    # a position the reader has already passed. Widths cover every pid Linux
+    # and macOS issue (≤ 7 digits) and a counter no process reaches.
+    path = where / f"{int(ts * 1000)}_{os.getpid():07d}_{next(_SEQUENCE):012d}.json"
     write_atomic(path, json.dumps({"text": text, "timestamp": ts}) + "\n")
     return path
 
