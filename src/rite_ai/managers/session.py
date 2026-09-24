@@ -488,7 +488,7 @@ def start(
         return StartResult(False, f"could not write the cycle's prompt: {e}")
     try:
         done = subprocess.run(
-            [*argv, "-s", name, launch],
+            [*argv, "-s", name, launch, *_remain_on_exit(name)],
             capture_output=True,
             text=True,
             errors="replace",
@@ -499,7 +499,15 @@ def start(
         if done.returncode != 0 and _rejected_the_flag(done):
             identified = False
             done = subprocess.run(
-                [binary, "new-session", "-d", "-s", name, launch],
+                [
+                    binary,
+                    "new-session",
+                    "-d",
+                    "-s",
+                    name,
+                    launch,
+                    *_remain_on_exit(name),
+                ],
                 capture_output=True,
                 text=True,
                 errors="replace",
@@ -516,12 +524,8 @@ def start(
         detail = _what_tmux_said(done)
         return StartResult(False, f"tmux refused to start the session: {detail}")
 
-    # `remain-on-exit on` so the pane survives its command and carries
-    # `#{pane_dead_status}` — without it tmux destroys the session and the
-    # exit status goes with it, leaving finished, quit and crashed
-    # indistinguishable. It also leaves the conversation readable after the
-    # supervisor stops, which is what a human attaching afterwards wants.
-    _keep_pane_after_exit(binary, name)
+    # `remain-on-exit on` was set here, in a SECOND tmux call, and it is now
+    # chained into `new-session` itself — see `_remain_on_exit` for the race.
 
     if not settled_alive(name):
         return StartResult(
@@ -1226,26 +1230,43 @@ def _pane_id(name: str) -> str:
     return (done.stdout or "").strip() if done.returncode == 0 else ""
 
 
-def _keep_pane_after_exit(binary: str, name: str) -> None:
-    """Set `remain-on-exit` so a pane survives its command.
+def _remain_on_exit(name: str) -> list[str]:
+    """The tail that makes `new-session` keep its pane after the command ends.
+
+    `remain-on-exit on` so the pane survives its command and carries
+    `#{pane_dead_status}` — without it tmux destroys the session and the exit
+    status goes with it, leaving finished, quit and crashed
+    indistinguishable. It also leaves the conversation readable after the
+    supervisor stops.
+
+    ⚠ **CHAINED INTO THE SAME tmux COMMAND, because a second call RACES the
+    command it is protecting (C15).** This was a separate `set-window-option`
+    run after `new-session` returned, with `check=False`. A command that
+    exits before that call arrives takes its window with it, and the call
+    failed with "no such window" — swallowed. Measured on tmux 3.7c with an
+    instant-exit command, 50 launches each:
+
+        separate call:                        session held  4/50
+        `new-session … ; set-window-option`:  session held 50/50
+
+    One client's queued commands run before the server reaps the child, so
+    the option is in place before the exit can be processed. Without this,
+    an engine that dies at once — a bad login, a `--resume` the provider has
+    forgotten — lost its exit status, and under load a slower command lost it
+    too: the named cause-candidate for the real-tmux tests that failed only
+    under full-suite load ("remain-on-exit did not hold the session").
 
     ⚠ **ONE function, used by both `start` and the probe, and that is the
     point.** They set it separately before, with `set-option`; on Linux CI
     the probe then reported the capability present while real sessions
     behaved as if it were absent. **A probe that does not use the production
-    call measures something else** — and a capability check that disagrees
-    with the thing it is checking is worse than no check.
+    call measures something else.**
 
     `set-window-option` because that is what `remain-on-exit` is. macOS
     accepted the session form and appeared to honour it; that is the
     platform telling you what you want to hear.
     """
-    subprocess.run(
-        [binary, "set-window-option", "-t", name, "remain-on-exit", "on"],
-        capture_output=True,
-        timeout=30,
-        check=False,
-    )
+    return [";", "set-window-option", "-t", name, "remain-on-exit", "on"]
 
 
 def exit_status_available() -> bool:
@@ -1305,7 +1326,7 @@ def _probe_once() -> bool:
         # before `remain-on-exit` could be set, so the session was already
         # gone and the probe reported ABSENT on a machine that has it.
         made = subprocess.run(
-            [binary, "new-session", "-d", "-s", name, "sh"],
+            [binary, "new-session", "-d", "-s", name, "sh", *_remain_on_exit(name)],
             capture_output=True,
             text=True,
             errors="replace",
@@ -1313,7 +1334,6 @@ def _probe_once() -> bool:
         )
         if made.returncode != 0:
             return False
-        _keep_pane_after_exit(binary, name)
         if not settled_alive(name):
             return False
         subprocess.run(
