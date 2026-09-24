@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from known_session import designate_known
 from rite_ai.managers import (
     ManagerInstance,
     designate,
@@ -196,7 +197,7 @@ class TestABareStartContinues:
         import rite_ai.managers.supervise as sup
 
         root = _project(tmp_path)
-        designate(root, "lead", "YESTERDAY")
+        designate_known(root, "lead", "YESTERDAY")
         _quiet(monkeypatch, sup)
         calls: list[str] = []
         supervise(
@@ -242,7 +243,7 @@ class TestAGoneSessionFallsBackLOUDLY:
         import rite_ai.managers.supervise as sup
 
         root = _project(tmp_path)
-        designate(root, "lead", "PRUNED")
+        designate_known(root, "lead", "PRUNED")
         _quiet(monkeypatch, sup)
         calls: list[str] = []
         said: list[str] = []
@@ -267,7 +268,7 @@ class TestAGoneSessionFallsBackLOUDLY:
         import rite_ai.managers.supervise as sup
 
         root = _project(tmp_path)
-        designate(root, "lead", "PRUNED")
+        designate_known(root, "lead", "PRUNED")
         _quiet(monkeypatch, sup)
         said: list[str] = []
         supervise(
@@ -304,7 +305,7 @@ class TestAGoneSessionFallsBackLOUDLY:
         )
         gone: list[str] = []
         root_b = _project(tmp_path / "b")
-        designate(root_b, "lead", "PRUNED")
+        designate_known(root_b, "lead", "PRUNED")
         supervise(
             root_b,
             "lead",
@@ -332,7 +333,7 @@ class TestFreshRedesignates:
         import rite_ai.managers.supervise as sup
 
         root = _project(tmp_path)
-        designate(root, "lead", "YESTERDAY")
+        designate_known(root, "lead", "YESTERDAY")
         _quiet(monkeypatch, sup)
         calls: list[str] = []
         supervise(
@@ -353,7 +354,7 @@ class TestFreshRedesignates:
         import rite_ai.managers.supervise as sup
 
         root = _project(tmp_path)
-        designate(root, "lead", "YESTERDAY")
+        designate_known(root, "lead", "YESTERDAY")
         _quiet(monkeypatch, sup)
         supervise(
             root,
@@ -431,7 +432,7 @@ class TestCtrlCBeforeTheFirstCycleIsTheStatedException:
 
         root = _project(tmp_path)
         _quiet(monkeypatch, sup)
-        designate(root, "lead", "YESTERDAY")
+        designate_known(root, "lead", "YESTERDAY")
         said: list[str] = []
         supervise(
             root,
@@ -504,7 +505,7 @@ class TestTheFreshFallbackIsGivenSomethingToDo:
         import rite_ai.managers.supervise as sup
 
         root = _project(tmp_path)
-        designate(root, "lead", "PRUNED")
+        designate_known(root, "lead", "PRUNED")
         _quiet(monkeypatch, sup)
         seen: list = []
         supervise(
@@ -549,7 +550,7 @@ class TestTheFreshFallbackIsGivenSomethingToDo:
         import rite_ai.managers.supervise as sup
 
         root = _project(tmp_path)
-        designate(root, "lead", "PRUNED")
+        designate_known(root, "lead", "PRUNED")
         _quiet(monkeypatch, sup)
         seen: list = []
         supervise(
@@ -666,3 +667,50 @@ class TestTheRecorderCanSeeWhatItIsRecording:
             something_new="SEEN",
         )
         assert calls[0].extra == {"something_new": "SEEN"}, calls[0]
+
+
+class TestADesignationMustBeThisProjects:
+    """C8. `supervise` passed a designated id to `--resume` unexamined, so a
+    file naming another project's session was continued and announced as a
+    continuation. Measured through `rite start`: the engine was launched with
+    `--resume <another project's session id>`."""
+
+    def _run(self, tmp_path, monkeypatch, sid, *, own):
+        import json
+
+        import rite_ai.managers.supervise as sup
+        from rite_ai.managers.transcripts import project_transcript_dir
+
+        root = _project(tmp_path / "proj")
+        _quiet(monkeypatch, sup)
+        where = project_transcript_dir(root if own else Path("/somewhere/else"))
+        where.mkdir(parents=True, exist_ok=True)
+        (where / f"{sid}.jsonl").write_text(json.dumps({"sessionId": sid}) + "\n")
+        designate(root, "lead", sid)
+        calls: list = []
+        said: list[str] = []
+        supervise(
+            root,
+            "lead",
+            engine="claude",
+            prompt="go",
+            max_sessions=1,
+            window_seconds=0,
+            verdict=lambda _r: "ready",
+            starter=_starter(calls),
+            note=said.append,
+        )
+        return calls, " ".join(said)
+
+    def test_another_projects_session_is_not_continued(self, tmp_path, monkeypatch):
+        calls, said = self._run(tmp_path, monkeypatch, "FOREIGN-1", own=False)
+        assert calls[0].resume_id == "", f"resumed another project's session: {calls}"
+        assert "not one of this project's conversations" in said, said
+        # Its own sentence, not the provider-forgot-it one — different facts.
+        assert "could not be continued" not in said, said
+
+    def test_this_projects_session_still_is(self, tmp_path, monkeypatch):
+        """The control: a check that refused everything would pass above."""
+        calls, said = self._run(tmp_path, monkeypatch, "MINE-1", own=True)
+        assert calls[0].resume_id == "MINE-1", calls
+        assert "not one of this project's" not in said, said

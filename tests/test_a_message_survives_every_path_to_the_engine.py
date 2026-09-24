@@ -33,8 +33,9 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
+from known_session import designate_known
 from rite_ai.cli.main import cli
-from rite_ai.managers import designate, mailbox
+from rite_ai.managers import mailbox
 from rite_ai.managers.supervise import StartResult, supervise
 
 MESSAGE = "PLEASE STOP AND REPORT"
@@ -60,7 +61,7 @@ def project(tmp_path: Path) -> Path:
 
 def _run_with_dead_designation(root: Path) -> list[dict]:
     """Cycle one resumes, the provider has forgotten it, the fallback runs."""
-    designate(root, "planner", "sidDEAD")
+    designate_known(root, "planner", "sidDEAD")
     seen: list[dict] = []
 
     def starter(

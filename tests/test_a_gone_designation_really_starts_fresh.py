@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 
-from rite_ai.managers import designate
+from known_session import designate_known
 from rite_ai.managers.supervise import supervise
 
 pytestmark = pytest.mark.skipif(
@@ -49,7 +49,7 @@ def test_the_fresh_fallback_launches_after_a_resume_dies_in_its_pane():
     )
     engine.chmod(0o755)
     manager = f"lead{uuid.uuid4().hex[:6]}"
-    designate(root, manager, "00000000-0000-4000-8000-000000000000")
+    designate_known(root, manager, "00000000-0000-4000-8000-000000000000")
     said: list[str] = []
     try:
         outcome = supervise(

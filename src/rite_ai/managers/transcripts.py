@@ -134,6 +134,37 @@ def latest_session_id(root: Path, since: float = 0.0, base: Path | None = None) 
     return ""
 
 
+def belongs_to_project(root: Path, session_id: str, base: Path | None = None) -> bool:
+    """Is `session_id` one of THIS project's conversations?
+
+    ⚠ **Why a designation is checked against this (C8).** `supervise` read
+    the designated id and passed it to `--resume` unexamined, so a file
+    naming another project's session was launched as a continuation and
+    announced as one. Measured through `rite start` with a stub engine: a
+    designation holding a session of a different project reached the engine
+    as `--resume <that id>`.
+
+    Answered from the same place the designation came from: an id is
+    designated only after `latest_session_id` read it out of a transcript in
+    this project's directory, so it is this project's exactly when one of
+    those transcripts states it. Read the same way, so the writer and this
+    check cannot disagree about what a file says.
+
+    ⚠ **Project, not Manager.** Every Manager in a project writes into the
+    same directory, so which Manager a conversation belongs to is not in the
+    transcripts and this cannot answer it. A designation naming a sibling
+    Manager's session still passes — stated, not solved.
+    """
+    if session_id_problem(session_id):
+        return False
+    directory = project_transcript_dir(root, base)
+    try:
+        candidates = [p for p in directory.glob("*.jsonl") if p.is_file()]
+    except OSError:
+        return False
+    return any(_stated_session_id(p) == session_id for p in candidates)
+
+
 def _mtime(path: Path) -> float:
     try:
         return path.stat().st_mtime
