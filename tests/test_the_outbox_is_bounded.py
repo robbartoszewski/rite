@@ -54,8 +54,12 @@ def test_the_size_cap_removes_the_oldest_processed_first(tmp_path):
     _send_all(tmp_path, ["P0", "P1", "P2", "P3"])
     _read_all(tmp_path)
     _send_all(tmp_path, ["U4", "U5"])
-    one = os.path.getsize(read(tmp_path, "lead", OUTBOX)[0].path)
-    got = prune(tmp_path, "lead", max_bytes=4 * one)
+    # Budgeted from the files themselves: sizes differ by a byte or two with
+    # the timestamp's repr, so "4 × the first one" can sit one byte short.
+    newest_four = sum(
+        os.path.getsize(m.path) for m in read(tmp_path, "lead", OUTBOX)[2:]
+    )
+    got = prune(tmp_path, "lead", max_bytes=newest_four)
     assert _names(tmp_path) == ["P2", "P3", "U4", "U5"]
     assert len(got.removed) == 2 and not got.full_of_unread
 
@@ -66,8 +70,7 @@ def test_an_unread_message_survives_a_size_cap_eviction(tmp_path):
     _send_all(tmp_path, ["P0"])
     _read_all(tmp_path)
     _send_all(tmp_path, ["U1", "U2", "U3"])
-    one = os.path.getsize(read(tmp_path, "lead", OUTBOX)[0].path)
-    got = prune(tmp_path, "lead", max_bytes=one)
+    got = prune(tmp_path, "lead", max_bytes=1)
     assert _names(tmp_path) == ["U1", "U2", "U3"]
     assert got.full_of_unread
     assert "will not delete an unread message" in full_warning(got, "lead")
