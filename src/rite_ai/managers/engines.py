@@ -60,6 +60,17 @@ class Spelling:
     Empty means this engine cannot resume, and rite must not invent a
     spelling for it."""
 
+    start: str = ""
+    """Template for NAMING a new conversation, with `{handle}`. Only an
+    engine whose handle is ours has one.
+
+    ⚠ **Without this, `resume` is unreachable for such an engine.** Goose
+    resolves `-n <name> -r` by name and fails loudly on a name it has never
+    seen — measured — so a first cycle launched with no `-n` creates a
+    conversation under a name Goose chose, and the second cycle asks to
+    continue a name that does not exist. The handle has to be declared on
+    the way IN, not only on the way back."""
+
     handle_is_ours: bool = False
     """True when rite CHOOSES the handle (Goose's `-n <name>`), False when the
     engine assigns one rite must discover afterwards (Claude's session id).
@@ -97,6 +108,7 @@ did before this registry existed, and a test asserts the argv."""
 GOOSE = Spelling(
     binary="goose",
     turn="run",
+    start="-n {handle}",
     resume="-n {handle} -r",
     handle_is_ours=True,
     permission_env="GOOSE_MODE",

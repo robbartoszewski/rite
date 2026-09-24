@@ -104,6 +104,46 @@ outright.
 
 `Spelling.handle_is_ours` is where this is expressed.
 
+#### ⚠ The handle has to be declared on the way IN, not only on the way back
+
+**Measured 2026-09-24, and it is what break 1 of B4b actually was.** Saying
+"rite assigns the name" is not enough: the name has to reach the FIRST
+launch. Goose resolves `-r` by name and fails loudly on a name it has never
+seen, so a first cycle with no `-n` creates a conversation under a name Goose
+chose, and the second cycle asks to continue one that does not exist.
+
+So the contract needs `Spelling.start` (`-n {handle}`) beside
+`Spelling.resume` (`-n {handle} -r`). An engine that assigns its own id has
+no `start` — there is nothing for rite to say — which is why Claude's command
+line is unchanged.
+
+**The observation, three arms, against real Goose and `qwen3:32b`.** Cycle
+one is told a token; cycle two is asked for it, in the commands rite itself
+composes:
+
+| arm | cycle 2's command | result | exit |
+|---|---|---|---|
+| **fixed** | `goose run -n <name> -r -i p2` | **replies `PLATYPUS42`** | 0 |
+| no `-n` on cycle one | `goose run -n <name> -r -i p2` | `Error: No session found with name ...` | **1** |
+| **the break as it was** | `goose run -i p2` | *"I don't have access to any token you've asked me to remember in this conversation."* | **0** |
+
+⚠ **Read the third row's exit code.** Claude's transcript scan returns `""`
+for a Goose run, so the resume argument vanishes and the cycle starts fresh
+— and says so only to the model, in prose, while reporting success. That is
+`_default_resume_id`'s own documented failure arriving by a different road:
+*"each cycle began a FRESH context with the ticket half-done and no memory of
+it — identical from outside to a resume that worked."*
+
+The second row is the shape to prefer where a choice exists: a handle for a
+conversation that was never created fails at the next launch, loudly, rather
+than continuing without memory.
+
+⚠ **This also corrects an earlier reading of the B1 spike**, which recorded
+that Goose does not replay history on resume. That measurement used
+`--resume --session-id` and watched token counts. Under `-n <name> -r` the
+model demonstrably has the earlier turn: it answered with a token that
+appears nowhere in cycle two's prompt.
+
 Measured for Goose, because "it takes a name" could have meant a label: the
 name **resolves by name rather than by recency** (an older named session is
 returned in preference to a newer unnamed one), **fails loudly on an unknown

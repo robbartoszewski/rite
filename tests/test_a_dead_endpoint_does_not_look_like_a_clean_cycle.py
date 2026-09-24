@@ -131,7 +131,6 @@ class TestAClaudeManagerIsUnchanged:
 
             return StartResult(True, "ok", session="s1", attach="a", pane="%1")
 
-
         outcome = supervise(
             _project(tmp_path),
             "lead",

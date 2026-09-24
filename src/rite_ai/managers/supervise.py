@@ -151,6 +151,7 @@ def launch_command(
     prompt_path: str = "",
     permission: str = "",
     agent: str = "",
+    start_handle: str = "",
 ) -> str:
     """What to run in the pane, in the engine's OWN vocabulary (B3a).
 
@@ -271,6 +272,26 @@ def launch_command(
                 "prevent."
             )
         parts.append(spelling.resume.format(handle=resume_id))
+    elif start_handle:
+        # ⚠ **NAMING A NEW CONVERSATION, which only an engine whose handle is
+        # ours can do.** Claude generates its id and has no `start` spelling,
+        # so this branch is unreachable for it and the argv is unchanged.
+        #
+        # Without it, `resume` is unreachable for Goose: it resolves `-r` by
+        # name and fails loudly on a name it has never seen, so a first cycle
+        # with no `-n` creates a conversation under a name Goose chose and
+        # the second cycle asks to continue one that does not exist. That
+        # failure is silent in the only way that matters — the second cycle
+        # still starts, just with no memory — which is `_default_resume_id`'s
+        # documented defect arriving by a different road.
+        problem = session_id_problem(start_handle)
+        if problem:
+            raise ValueError(
+                f"refusing to build a launch command with a session handle "
+                f"that {problem}. This string is run by a shell."
+            )
+        if spelling.start:
+            parts.append(spelling.start.format(handle=start_handle))
     base = " ".join(parts)
     if not prompt_path:
         return base
@@ -312,8 +333,47 @@ def _say_refusals(root: Path, since: float, say) -> None:
             say(refusal(command, root))
 
 
+def _resume_id_source(engine: str, agent: str = ""):
+    """Where this engine's handle COMES FROM — discovered, or chosen by rite.
+
+    ⚠ **Break 1 of B4b: this used to be Claude's answer for every engine.**
+    `_default_resume_id` scans Claude Code's transcript directory for
+    `*.jsonl`. Goose writes no such transcript, so every resumed cycle got
+    `resume_id=""` and started FRESH — and `_default_resume_id`'s own
+    docstring already records what that looks like from outside: *"each
+    cycle began a FRESH context with the ticket half-done and no memory of
+    it — identical from outside to a resume that worked."* The same defect,
+    reached by a different road, in the function that documents it.
+
+    **`Spelling.handle_is_ours` is the axis, and it is a source rather than
+    a format.** Claude ASSIGNS an id rite must discover afterwards; Goose
+    takes a name rite CHOOSES, so there is nothing to discover and the
+    answer is known before the cycle runs.
+
+    ⚠ **For a chosen handle this returns the name even when the cycle did no
+    work, and that is deliberate.** The alternative is probing Goose for
+    whether the session exists, which is a second classifier over a signal
+    that means other things. A name for a conversation that was never
+    created fails LOUDLY at the next launch — Goose refuses an unknown name,
+    measured — where the discovered-id path fails by returning "" and
+    letting the supervisor refuse. Both report; neither continues silently,
+    which is the property that matters.
+    """
+    spelling = spelling_for(engine, agent)
+    if not spelling.handle_is_ours:
+        return _default_resume_id
+
+    def chosen(root: Path, manager: str, since: float = 0.0) -> str:
+        # Deterministic, and the same string the tmux session carries — one
+        # name for one Manager's conversation, so a human reading `tmux ls`
+        # and a human reading `goose session list` see the same handle.
+        return session_name(root, manager)
+
+    return chosen
+
+
 def _default_resume_id(root: Path, manager: str, since: float = 0.0) -> str:
-    """The provider session to carry on from.
+    """The provider session to carry on from — for an engine that ASSIGNS one.
 
     ⚠ **A draft defaulted this to `lambda: ""`**, so `launch_command` got no
     id, every "resume" ran a bare `claude`, and each cycle began a FRESH
@@ -446,7 +506,9 @@ def supervise(
     begin = clock()
     deadline = begin + window_seconds if window_seconds > 0 else None
     launch = starter if callable(starter) else _default_starter
-    next_id = resume_id_for if callable(resume_id_for) else _default_resume_id
+    next_id = (
+        resume_id_for if callable(resume_id_for) else _resume_id_source(engine, agent)
+    )
 
     # ⚠ Said ONCE and passed EVERY cycle. Every cycle because nothing
     # carries a permission mode into `-p`; said because this grant is total
@@ -1038,6 +1100,23 @@ def _default_starter(
     from rite_ai.managers.engines import permission_placement
 
     placement = permission_placement(engine, agent, permission)
+    # ⚠ **DERIVED HERE rather than passed in, and that is the point.** This
+    # call site has silently dropped `prompt`, then `permission`, then
+    # `agent` — three arguments in two days, each producing a Manager that
+    # started and could not work. A fourth argument would be a fourth thing
+    # to drop, and the fresh fallback below is exactly the caller that keeps
+    # dropping them.
+    #
+    # Nothing has to be threaded: the name is a function of the Manager and
+    # its engine, both of which are already here. An engine that assigns its
+    # own id has no `start` spelling, so this is "" for Claude and its argv
+    # is unchanged.
+    handle_spelling = spelling_for(engine, agent)
+    start_handle = (
+        session_name(root, manager)
+        if handle_spelling.handle_is_ours and not resume_id
+        else ""
+    )
     result = start_session(
         root,
         manager,
@@ -1051,6 +1130,7 @@ def _default_starter(
             str(manager_dir(root, manager) / PROMPT_FILE),
             permission,
             agent,
+            start_handle,
         ),
         prompt=prompt,
         max_sessions=max_sessions,
