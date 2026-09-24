@@ -59,6 +59,7 @@ from rite_ai.managers.permissions import (
 from rite_ai.managers.session import (
     PROMPT_FILE,
     StartResult,
+    approval_blocked,
     ending,
     liveness,
     session_name,
@@ -302,8 +303,31 @@ def launch_command(
     return f"{base} < {shlex.quote(str(prompt_path))}"
 
 
-def _say_refusals(root: Path, since: float, say) -> None:
+def _say_refusals(
+    root: Path,
+    since: float,
+    say,
+    engine: str = "",
+    agent: str = "",
+    pane: str = "",
+) -> None:
     """Tell the user what the engine refused, and how to permit it.
+
+    ⚠ **Break 4 of B4b: this read CLAUDE's transcripts for every engine.**
+    `refused_commands` scans Claude Code's transcript directory, which Goose
+    does not write — so a Goose Manager's refusals were invisible, and the
+    empty list that came back was indistinguishable from "nothing was
+    refused". An instrument that reports the absence of a thing it never
+    looked for is measuring nothing (defect class 1), and reading that
+    absence as zero is class 2. Both, in one call.
+
+    **What a refusal IS differs by engine, and that is the axis**
+    (`Spelling.per_command_refusals`). Claude refuses one command and carries
+    on, leaving a record naming it. Goose in a headless run has no
+    per-command refusal at all: under `GOOSE_MODE=auto` nothing is refused,
+    and under `approve` the whole session dies on the first tool call. So for
+    such an engine there is nothing per-command to collect — and rite says
+    the one thing that IS true rather than silently saying nothing.
 
     ⚠ **C21, and the reason it is here rather than in a report.** A refusal
     the user never sees is the same defect as a silent one: the v0.5.1
@@ -319,6 +343,28 @@ def _say_refusals(root: Path, since: float, say) -> None:
     and telling that user to add a line they already have would send them
     in the wrong direction.
     """
+    spelling = spelling_for(engine, agent)
+    if not spelling.per_command_refusals:
+        # ⚠ **NOT "no refusals" — a different statement, and the whole point
+        # of break 4.** Nothing is scanned here because there is nothing this
+        # engine records per command. The one refusal it CAN produce is
+        # whole-session, so that is what rite looks for, and it is reported
+        # with the remedy for the same reason C21 exists: a refusal a user
+        # cannot act on is the same defect as a silent one.
+        if pane and approval_blocked(pane):
+            say(
+                "refused: the engine ended the whole session rather than one "
+                "command — it wanted an approval and this run is "
+                "non-interactive, so nobody could give it. This engine's "
+                "permission mode is whole-session"
+                + (f" ({spelling.permission_env})" if spelling.permission_env else "")
+                + f", and rite sets it to "
+                f"{UNATTENDED_MODE_FOR_ENV_ENGINES!r} — so a mode reached it "
+                f"from somewhere rite does not control: a managed engine "
+                f"config, or the environment on a path that bypasses the "
+                f"launch."
+            )
+        return
     for command in dict.fromkeys(refused_commands(root, since)):
         if allowed(command):
             say(
@@ -856,7 +902,7 @@ def supervise(
                 time.sleep(poll)
             cycle.ended_at = clock()
             cycle.attended = attended
-            _say_refusals(root, cycle.started_at, say)
+            _say_refusals(root, cycle.started_at, say, engine, agent, live_pane)
 
             how = ending(result.session, human_was_present=attended, pane=live_pane)
             cycle.ending = how.kind

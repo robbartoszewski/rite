@@ -1204,6 +1204,41 @@ def _authentication_looks_broken(pane_text: str) -> bool:
     return any(shape in low for shape in _AUTH_SHAPES)
 
 
+_APPROVAL_SHAPES = (
+    "tool approval required",
+    "require an interactive terminal",
+    "modes require an interactive",
+)
+
+
+def approval_blocked(pane: str) -> bool:
+    """Did the engine die because it wanted an approval nobody could give?
+
+    ⚠ **This is what a refusal looks like for an engine whose permission mode
+    is WHOLE-SESSION.** Claude refuses one command and carries on; Goose in
+    a non-interactive run refuses the whole session on the first tool call.
+    Measured 2026-09-24, verbatim:
+
+        Error: Tool approval required in non-interactive mode with
+        GooseMode::approve. This is an invalid configuration —
+        Approve/SmartApprove modes require an interactive terminal. Use
+        GooseMode::Auto for headless sessions.
+
+    ⚠ **Matched to DETECT, and the pane is never relayed** — the same rule
+    as `_authentication_looks_broken` beside it, and for the same reason: a
+    pane can carry secrets, so echoing it back is a leak waiting for the
+    right launch line.
+
+    rite sets the mode itself, so a Manager it started should not reach this.
+    It is detected anyway because the one case that produces it is a mode
+    arriving from somewhere rite does not control — a managed goose config,
+    or an operator's environment on a path that bypasses the launch — and
+    that is exactly the case with nothing else to explain it.
+    """
+    low = _pane_text(pane).lower() if pane else ""
+    return any(shape in low for shape in _APPROVAL_SHAPES)
+
+
 def _pane_text(name: str) -> str:
     """What the pane shows, for DETECTION only. Never returned to a user."""
     binary = _tmux()

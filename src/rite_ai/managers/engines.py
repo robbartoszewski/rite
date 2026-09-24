@@ -81,6 +81,24 @@ class Spelling:
     all of it, and a contract that modelled only one direction would fight
     the other."""
 
+    per_command_refusals: bool = False
+    """True when this engine can refuse an INDIVIDUAL command and leave a
+    record of which one.
+
+    ⚠ **A separate axis from `permission_env`, deliberately.** They correlate
+    today — Claude has a per-command allowlist and takes a flag, Goose has a
+    whole-session mode in the environment — and using one to stand for the
+    other would be the conflation this codebase keeps having to undo. What a
+    refusal LOOKS like is not the same question as where the mode is kept.
+
+    Measured for Goose 2026-09-24: there is no per-command refusal in a
+    headless run at all. Under `GOOSE_MODE=auto` nothing is refused; under
+    `approve` the whole session dies on the first tool call with *"Tool
+    approval required in non-interactive mode ... Approve/SmartApprove modes
+    require an interactive terminal."* So there is nothing per-command to
+    collect, and an instrument that reported "no refusals" would be
+    reporting the absence of a thing it never looked for."""
+
     permission_env: str = ""
     """The environment variable this engine keeps its permission mode in, or
     "" when it takes a command-line flag.
@@ -101,7 +119,12 @@ class Spelling:
     redirection, which is what keeps a prompt off `ps` for Claude."""
 
 
-CLAUDE = Spelling(binary="claude", turn="-p", resume="--resume {handle}")
+CLAUDE = Spelling(
+    binary="claude",
+    turn="-p",
+    resume="--resume {handle}",
+    per_command_refusals=True,
+)
 """Unchanged, byte for byte. Every existing Manager must launch exactly as it
 did before this registry existed, and a test asserts the argv."""
 
