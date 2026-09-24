@@ -731,3 +731,57 @@ class TestNoInvisibleCharacterCanBeAnAnchor:
         from rite_ai.managers.journal import _is_blank
 
         assert not _is_blank(anchor), f"a legitimate anchor was refused: {anchor!r}"
+
+
+class TestAPastedTokenDoesNotReachTheFile:
+    """C7. A Manager is told to paste "a command with its output", and
+    §9.15.3a tells the operator to zip the journal and send it. Measured
+    before redaction existed, through `rite journal observe`: an `env | grep
+    TOKEN` dump and a `cat .envrc` reached the file verbatim."""
+
+    PASTED = (
+        "$ env | grep TOKEN\n"
+        "GITHUB_TOKEN=ghp_SENTINEL0123456789abcdef\n"
+        "$ cat .envrc\n"
+        "export JIRA_API_TOKEN=jira-SENTINEL-0123456789\n"
+        "export OTHER='quoted SENTINEL with spaces'\n"
+        "exit status 0, PYTHONPATH=src, --sessions=3\n"
+    )
+
+    def test_through_the_command(self, tmp_path, monkeypatch):
+        from click.testing import CliRunner
+
+        from rite_ai.cli.main import cli
+
+        rite = tmp_path / ".rite"
+        rite.mkdir()
+        (rite / "brief.yaml").write_text(
+            "project:\n  name: acme\n  role: owner\n"
+            "what:\n  kind: app\ntechnology:\n  languages:\n    - python\n"
+        )
+        (rite / "modules.yaml").write_text("modules: {}\n")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("RITE_PROJECT_ROOT", raising=False)
+        result = CliRunner().invoke(
+            cli,
+            [
+                "journal",
+                "observe",
+                "--manager",
+                "lead",
+                "--anchor",
+                "rite doctor, 2026-09-24T11:00Z",
+                "--observed",
+                self.PASTED,
+                "--expected",
+                "no token in the environment dump",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        (entry,) = (tmp_path / ".rite" / "managers" / "lead" / "journal").iterdir()
+        text = entry.read_text()
+        assert "SENTINEL" not in text, text
+        # The control: redaction that ruined the entry would teach a Manager
+        # to write the file by hand. Short and lower-case assignments stay.
+        assert "PYTHONPATH=src" in text and "--sessions=3" in text, text
+        assert "GITHUB_TOKEN=[redacted]" in text, text
