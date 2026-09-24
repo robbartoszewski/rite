@@ -47,6 +47,14 @@ WATCHED = (
 
 # name -> why nothing calls it. A reason is required; "not yet" is not one.
 UNCALLED_ON_PURPOSE = {
+    "settings_document": (
+        "Called by `write_settings` in the same file. Public because it is "
+        "the one place the engine's settings SHAPE is written down, and the "
+        "tests assert against it by name — that the document carries "
+        "permissions and nothing else, since `--settings` merges over the "
+        "user's own file and every key rite writes is one it takes from "
+        "them. Inlining it would move that assertion onto the bytes on disk."
+    ),
     "project_transcript_dir": (
         "Called by `latest_session_id` in the same file. Public because it "
         "is the one place a provider's private directory layout is encoded, "
@@ -90,16 +98,6 @@ UNCALLED_ON_PURPOSE = {
         "`user_dir` is here."
     ),
     # --- rite_ai/managers/, added when this guard was widened ---
-    "user_dir": (
-        "Called by `instance_path` in the same file. `called_outside` counts "
-        "callers in OTHER files, which is right for `coordination/` where "
-        "each file is a mechanism, and counts a package's internal API as "
-        "dead. Exempted rather than relaxing the rule, because relaxing it "
-        "would hide the nine-at-once case this guard was written for. "
-        "(Briefly had an outside caller while the per-Manager permission "
-        "opt-in existed; that was removed when the grant became a single "
-        "level, and this came back with it.)"
-    ),
     "instance_path": (
         "Same: called by `record_instance`, `read_instance` and "
         "`forget_instance` in the same file."

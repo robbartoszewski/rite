@@ -560,7 +560,7 @@ class TestTheRecorderCanSeeWhatItIsRecording:
         """⚠ The argument whose absence produced a Manager that ran three
         cycles and could not act. Invisible to the old recorder."""
         import rite_ai.managers.supervise as sup
-        from rite_ai.managers.permissions import PERMISSION_FLAG
+        from rite_ai.managers.permissions import BYPASS_FLAG
 
         root = _project(tmp_path)
         _quiet(monkeypatch, sup)
@@ -576,9 +576,20 @@ class TestTheRecorderCanSeeWhatItIsRecording:
             starter=_starter(calls),
         )
         assert calls, "nothing launched, so this measures nothing"
-        assert calls[0].permission == PERMISSION_FLAG, (
-            "the launch carried no permission mode, so the Manager would "
+        # ⚠ Checked by SUBSTANCE, not against the constant it used to
+        # equal. 0.6.0 replaced one flag with a settings path plus a prompt
+        # target, and a test pinned to the old value would have gone green
+        # on a launch that carried neither.
+        assert "--settings" in calls[0].permission, (
+            "the launch carried no permission decision, so the Manager would "
             f"start and be unable to act: {calls[0]}"
+        )
+        assert "--permission-prompts none" in calls[0].permission, (
+            "without this a refused command has nobody to ask and the run "
+            f"stalls instead of reporting: {calls[0]}"
+        )
+        assert BYPASS_FLAG not in calls[0].permission, (
+            "0.5.1's blanket bypass is no longer the default"
         )
 
     def test_an_argument_the_recorder_does_not_name_is_still_captured(self):

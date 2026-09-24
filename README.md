@@ -322,28 +322,42 @@ guide](docs/guide.md)); watching the queue (0.5.0, above).
 ## Why you might not want it
 
 **A Manager runs with no permission gate, unsandboxed, on your machine.**
-`rite start <manager>` launches Claude Code with
-`--dangerously-skip-permissions`, so the Manager **does not ask before
-anything it does** — every file, every command, every network call — in your
-project's directory, with your own file and network access. Workers are
-different: they run inside a sandbox. A Manager is not.
+`rite start <manager>` launches Claude Code against a **permission
+allowlist**: a generous list of command families the Manager may run
+without asking, and a refusal for anything else. Nothing waits for an
+approval — rite passes `--permission-prompts none`, so a command outside
+the list is denied at once and the cycle carries on rather than hanging on
+a prompt nobody is there to answer.
 
-That is the trade `rite start` makes. A Manager that must stop and ask is
-not running unattended, and the modes that ask were measured refusing a
-Manager the ability to run `rite` or `gh` at all — three cycles, no ticket
-read, no work done. rite states the grant every run rather than leaving it
-to be discovered:
+**The list is generous on purpose.** A Manager that must stop and ask is
+not running unattended: the gated modes were measured refusing a Manager
+the ability to run `rite` or `gh` at all — three cycles, no ticket read, no
+work done. So the default was derived from what these agents were measured
+invoking rather than from a plausible-looking set, and it covers `git`,
+`rite`, `gh`, `python`, `uv`, `pytest`, `yoloai`, the file and text tools,
+and the local-tier binaries. rite states the grant every run rather than
+leaving it to be discovered:
 
 ```console
-permissions: --dangerously-skip-permissions — Manager 'planner' will NOT ask
-before anything it does. It runs unsandboxed in this project's directory, on
-this machine, with your own file and network access.
+permissions: Manager 'planner' may run 69 allowlisted command families
+(permissions.json); anything else is REFUSED rather than queued for
+approval. It still runs unsandboxed in this project's directory, on this
+machine, with your own file and network access — the allowlist narrows what
+it reaches for, not what it could reach.
 ```
 
-There is no setting for this in 0.5.1. If that is not a trade you want on a
-given machine, do not run `rite start <manager>` there — Workers, the loop
-and everything else are unaffected. 0.6.0 adds an allowlist of permitted
-command patterns for the advanced user, with this flag still the default.
+⚠ **That last sentence is the important one: this is a speed bump, not a
+sandbox.** `git` runs hooks and `python -c` runs anything, so a Manager is
+still unsandboxed in your project's directory with your own file and
+network access. Workers are different: they run inside a sandbox. A Manager
+does not.
+
+To change the list, edit your own `.claude/settings.json` — add to
+`permissions.allow` to widen it, or `permissions.deny` to narrow it. rite
+rewrites its own file from code on every run and never touches yours. If
+that is not a trade you want on a given machine, do not run
+`rite start <manager>` there — Workers, the loop and everything else are
+unaffected.
 
 **It runs on Pro; what it is *for* may not.** Starting a worker needs no more
 than a signed-in Claude Code, plus a token from `claude setup-token` if it

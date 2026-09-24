@@ -47,7 +47,14 @@ from rite_ai.managers import (
 from rite_ai.managers.mailbox import INBOX, delivery_note, how_to_reply
 from rite_ai.managers.mailbox import take as take_mail
 from rite_ai.managers.mailbox import waiting as mail_waiting
-from rite_ai.managers.permissions import PERMISSION_FLAG, announcement
+from rite_ai.managers.permissions import (
+    allowed,
+    announcement,
+    launch_arguments,
+    refusal,
+    settings_path,
+    write_settings,
+)
 from rite_ai.managers.session import (
     PROMPT_FILE,
     StartResult,
@@ -58,7 +65,7 @@ from rite_ai.managers.session import (
 )
 from rite_ai.managers.session import start as start_session
 from rite_ai.managers.session import stop as stop_session
-from rite_ai.managers.transcripts import session_id_problem
+from rite_ai.managers.transcripts import refused_commands, session_id_problem
 
 POLL_SECONDS = 2.0
 
@@ -188,6 +195,37 @@ def launch_command(
     return f"{base} < {shlex.quote(str(prompt_path))}" if prompt_path else base
 
 
+def _say_refusals(root: Path, since: float, say) -> None:
+    """Tell the user what the engine refused, and how to permit it.
+
+    ⚠ **C21, and the reason it is here rather than in a report.** A refusal
+    the user never sees is the same defect as a silent one: the v0.5.1
+    acceptance run was refused `rite loop status` on three consecutive
+    cycles, each exited 0, and nothing rite printed said so — the only
+    record was a sentence the MODEL chose to write. This reads the denial
+    out of the transcript instead of hoping it was mentioned.
+
+    ⚠ **A command rite's own list covers, refused anyway, is a DIFFERENT
+    fault and is said differently.** It means the engine never applied
+    rite's settings — most likely because a settings file that fails
+    validation is silently ignored under `-p` (measured, `claude --help`) —
+    and telling that user to add a line they already have would send them
+    in the wrong direction.
+    """
+    for command in dict.fromkeys(refused_commands(root, since)):
+        if allowed(command):
+            say(
+                f"refused: {command.strip()!r} — which rite's own allowlist "
+                f"DOES cover. The engine did not apply "
+                f"{settings_path(root)}; under `-p` a settings file that "
+                f"fails validation is ignored without a message. Check that "
+                f"file parses, and check `permissions.deny` in "
+                f"{Path('.claude') / 'settings.json'}."
+            )
+        else:
+            say(refusal(command, root))
+
+
 def _default_resume_id(root: Path, manager: str, since: float = 0.0) -> str:
     """The provider session to carry on from.
 
@@ -309,7 +347,12 @@ def supervise(
     # and the one line below is all that stands between a user and a
     # surprise.
     say(announcement(manager))
-    permission = PERMISSION_FLAG
+    # ⚠ **Written before the first launch and passed on EVERY cycle.** The
+    # file is rewritten from code each run so the list a Manager gets is the
+    # list this release ships; the arguments are re-passed because nothing
+    # carries a permission decision into `-p` — the same reason the flag
+    # they replace had to be.
+    permission = launch_arguments(write_settings(root))
 
     cycles: list[Cycle] = []
     live = ""
@@ -564,6 +607,7 @@ def supervise(
                 time.sleep(poll)
             cycle.ended_at = clock()
             cycle.attended = attended
+            _say_refusals(root, cycle.started_at, say)
 
             how = ending(result.session, human_was_present=attended, pane=live_pane)
             cycle.ending = how.kind

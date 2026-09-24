@@ -53,11 +53,33 @@ know the outcome and not the mechanism. If that rule ever matters again —
 a third mode, a narrower grant, a sandboxed Manager — this is the loose
 thread to pull.
 
-### Carried to 0.6.0: a configurable allowlist for the advanced user
+### ⚠ SUPERSEDED 2026-09-24 — the allowlist REPLACED the flag in 0.6.0
 
-**Robert's addendum:** *"let's make it configurable so an advanced,
-security-conscious User can set an allow list.
-`--dangerously-skip-permissions` stays as the default"*.
+**Robert's decision, Decision 3(b) of the v0.6.0 plan:**
+
+> *"Let's make the more secure option the default, just make sure the
+> allowlist is generous and covers everything a worker needs under normal
+> circumstances."*
+
+⚠ **This reverses the addendum recorded below, and deliberately.** That
+addendum said the allowlist would sit BESIDE the flag; it does not. 0.6.0
+stops passing `--dangerously-skip-permissions` at all and launches with
+`--settings <rite's list> --permission-prompts none` instead. The sentence
+"with this flag still the default" is false from 0.6.0 onward and is
+corrected here rather than left to be believed.
+
+**The condition is the substance of the work, not a caveat on it.** A
+too-narrow list does not fail loudly — it produces the stall this note's
+own measurement describes — so the shipped list is derived from 14,981
+recorded Bash invocations rather than imagined, with the corpus committed
+at `tests/data/observed_commands.json` and a test requiring every command
+in it to be allowed or refused with a stated reason. See
+`src/rite_ai/managers/permissions.py`.
+
+**The original addendum, kept for its reasoning:**
+
+*"let's make it configurable so an advanced, security-conscious User can
+set an allow list. `--dangerously-skip-permissions` stays as the default"*.
 
 So the default above is settled and does not change. What returns in 0.6.0
 is **configurability of a different shape**, and the difference matters to
