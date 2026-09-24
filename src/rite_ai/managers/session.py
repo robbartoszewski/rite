@@ -616,19 +616,42 @@ def session_exists(name: str) -> bool:
     genuinely exists, so pinning it there reintroduces the bug it is meant
     to fix. Measured on tmux 3.7c. Hence two calls — existence here,
     content there — which also makes them fail independently.
+
+    ⚠ **And `=` was still not exact for every name, so this no longer asks
+    by target at all (C12).** A target is parsed before it is matched:
+    `has-session -t =eu:west` reads session `eu`, window `west`. tmux WILL
+    create a session named `eu:west` (measured, 3.7c), and against one this
+    returned False — a confident "not there" about a session that is.
+
+    So existence is now answered by listing session NAMES and comparing
+    strings, which involves no target grammar and is exact for any name.
+    rite's own names never contain `:` (`name_problem` refuses it), which is
+    why this cost nothing before — but the function reads as a general
+    predicate, and the next caller asking about a name from outside rite
+    would not know it was not one.
+
+    ⚠ **Only THIS function became general.** Every other `-t` in this module
+    still addresses by target, so it is still only sound for a name rite
+    validated. Knowing a stranger's `eu:west` exists does not make it
+    addressable.
     """
     binary = _tmux()
     if binary is None:
         return False
     try:
         done = subprocess.run(
-            [binary, "has-session", "-t", f"={name}"],
+            [binary, "list-sessions", "-F", "#{session_name}"],
             capture_output=True,
+            text=True,
+            errors="replace",
             timeout=30,
         )
     except (OSError, subprocess.SubprocessError):
         return False
-    return done.returncode == 0
+    # Nonzero with no server running: nothing exists, which is the answer.
+    if done.returncode != 0:
+        return False
+    return name in done.stdout.splitlines()
 
 
 def ending(name: str, human_was_present: bool, pane: str = "") -> Ending:

@@ -128,3 +128,40 @@ def test_neither_invents_a_session_when_nothing_matches(only_the_longer_name):
     nobody = f"rite-test-absent-{uuid.uuid4().hex[:8]}"
     assert not pool_is_alive(nobody)
     assert not loop_is_alive(nobody)
+
+
+@pytest.mark.parametrize("separator", [":", "."])
+def test_session_exists_is_exact_for_a_name_tmux_would_parse_as_a_target(
+    separator,
+):
+    """C12. `=` makes `has-session` exact about PREFIXES, not about grammar.
+
+    ⚠ `has-session -t =eu:west` reads session `eu`, window `west`. tmux will
+    create a session literally named `eu:west`, and `session_exists` said it
+    was not there — measured on 3.7c before the fix. rite never creates such a
+    name (`name_problem` refuses `:`), which is why it cost nothing; the
+    function reads as a general predicate, so the next caller would not know.
+
+    The fragments are asserted absent too, so a predicate that answered True
+    for everything would not pass.
+    """
+    from rite_ai.managers.session import session_exists
+
+    head, tail = f"pfx{uuid.uuid4().hex[:6]}", "west"
+    name = f"{head}{separator}{tail}"
+    made = _tmux("new-session", "-d", "-s", name, "sleep 60")
+    assert made.returncode == 0, made.stderr
+    try:
+        listed = _tmux("list-sessions", "-F", "#{session_name}").stdout.split()
+        assert name in listed, f"tmux renamed it, so this proves nothing: {listed}"
+        assert session_exists(name), f"{name!r} exists and was reported absent"
+        assert not session_exists(head)
+        assert not session_exists(tail)
+    finally:
+        # Killed by its `$id`, found by listing: the name as a target would
+        # miss it for the same reason `has-session` did.
+        ids = _tmux("list-sessions", "-F", "#{session_id} #{session_name}").stdout
+        for line in ids.splitlines():
+            sid, _, sname = line.partition(" ")
+            if sname == name:
+                _tmux("kill-session", "-t", sid)
