@@ -559,6 +559,7 @@ correctly absent: it shipped in v0.5.1.
 | C14 | **An empty prompt file is launchable** | `V070_MULTI_MANAGER.md` §6 — **OPEN** | `_default_starter` defaults `prompt=""` and `start_session` writes `prompt.txt` "even when empty", with no guard; `claude -p` with empty stdin exits 1. The same omission already shipped once, in `supervise`'s fresh fallback. | ½–1 sitting |
 | C15 | **The real-tmux tests are load-sensitive and nondeterministic** | `V070_MULTI_MANAGER.md` §1 — **OPEN** | Proven code-independent by a markdown-only control run. Related to C1 but not the same item: C1 isolates the socket, this is the residual nondeterminism. | 1–2 sittings |
 | C16 | **Three refusals embed raw tmux stderr** | `CREDENTIAL_HANDLING…md` Trap 2 | A leak only if Trap 1 (C6) happens, and the two are coupled — which is why both belong in one release rather than one being taken alone. | ½–1 sitting |
+| C19 | ⚠ **Amend SPEC §9.15.4 and §7.3 — the QA gate is 0.7.0** | this plan, Decision 5 | Robert moved the scenario gate (D-81) out of this release. Until the spec says so, a spec reader expects a 0.6.0 deliverable that will not arrive. **Required by Decision 5; not optional.** | ½ sitting |
 | C18 | ⚠ **The local tier's docs must state the `OLLAMA_CONTEXT_LENGTH` requirement** | this plan, "Prerequisite" | Measured: at Ollama's 4,096 default the tier fails in ways that look like model and tool defects rather than configuration. B7 warns; this tells an operator what to do about it. **Pairs with B7 and should not ship without it.** | ½ sitting |
 | C17 | **`if cycles:` — the unstated exception to "designated whatever the ending"** | `V060_SESSION_CONTINUITY.md` item 3 | An interrupt before the first cycle is appended designates nothing. Looks correct; it is the one path where the stated rule does not hold, and an unstated exception is how the next person is surprised. | ½ sitting |
 
@@ -654,9 +655,35 @@ class 0.5.1 was spent removing.
 
 ---
 
-## Decisions needed from Robert
+## Decisions — ✅ ALL FIVE DECIDED 2026-09-24
 
-**Flagged rather than assumed.**
+**Robert's answers, recorded as given.** The reasoning under each is kept so
+a later reader sees what was weighed, not just what was picked.
+
+| # | Decision | Answer |
+|---|---|---|
+| 1 | Two permanent readers of one outbox | **(a) per-reader cursor** — readers never delete; each tracks its own position |
+| 2 | Slack message with no Manager running | **(a) refuse and say so** |
+| 3 | Permission allowlist vs the always-skip default | **(b) replaces** — ⚠ *see the note on Decision 3* |
+| 4 | Which agent `agent:` names | **(a) `goose`** |
+| 5 | The 0.6.0 QA gate | **(b) move to 0.7.0 and amend the spec in this release** |
+
+⚠ **Decision 1(a) preserves a test-pinned invariant, which is why it is also
+the cheapest.** `tests/test_a_user_can_talk_to_a_running_manager.py::TestTheSupervisorDoesNotCareWhoWrote`
+deliberately pins that nothing records a sender. A per-reader cursor keeps
+that; fan-out and acknowledgement would have reversed it.
+
+⚠ **Decision 3 is HELD PENDING CONFIRMATION and C4 must not start.** (b) is a
+behaviour reversal on upgrade, and it appears to contradict what Robert said
+on 2026-09-21: *"let's make it configurable so an advanced, security-conscious
+User can set an allow list. `--dangerously-skip-permissions` stays as the
+default."* That reads as (a), beside. The question is back with him; **every
+other decision is firm and the rest of the release proceeds.**
+
+**Decision 5 adds a task to this release**: amend SPEC §9.15.4 and §7.3 so
+they stop promising a 0.6.0 deliverable that is now 0.7.0. See SPEC updates.
+
+**The original framing of each, kept:**
 
 1. ⚠ **Two permanent readers of one outbox — who deletes?** The current
    instruction is *"delete one once you have relayed it so it is not shown
@@ -767,10 +794,19 @@ class 0.5.1 was spent removing.
 
 ## SPEC updates
 
-**One change, and it is a correction rather than new spec:** SPEC §9.14.9 and
-D-79 cite `docs/design/V060_MULTI_MANAGER.md`, which no longer exists under
-that name. Those citations now point at `V070_MULTI_MANAGER.md`. The
-decisions they record are unchanged.
+**Two changes, both corrections rather than new spec.**
+
+1. ⚠ **Already landed, recorded so it is not done twice.** SPEC §9.14.9 and
+   D-79 cited `docs/design/V060_MULTI_MANAGER.md`, which no longer exists
+   under that name; the citations point at `V070_MULTI_MANAGER.md` as of
+   commit `3ff6152`. `grep -c V060_MULTI_MANAGER SPEC.md` returns **0**.
+
+2. ⚠ **NEW, required by Decision 5 — this is ticket C19.** §9.15.4 says the
+   journal entries "are the raw material for the QA gate" and points at the
+   scenario gate (D-81, §7.3) as a 0.6.0 destination; §7.3 says **"Not
+   built."** Robert moved the gate to **0.7.0**, so both sections must say so
+   in this release. Leaving them is the defect class 0.5.1 was spent
+   removing: a shipped document describing behaviour that does not exist.
 
 **Nothing else.** Slack's design is not settled enough to specify — Decision 1
 changes its shape — and the engine contract (B3) is the kind of thing that
