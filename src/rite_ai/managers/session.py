@@ -309,6 +309,7 @@ def start(
     prompt: str = "",
     max_sessions: int = 0,
     window_seconds: float = 0.0,
+    pane_env: dict[str, str] | None = None,
 ) -> StartResult:
     """Start one Manager session, or refuse and say why.
 
@@ -452,6 +453,13 @@ def start(
     # ALL — losing the session to gain the name — so a refusal that names the
     # flag falls back and says the identity is missing.
     argv = [binary, "new-session", "-d", *_on_tmux_argv(MANAGER_ENV, manager)]
+    # ⚠ The engine's permission mode, when the engine keeps it in the
+    # environment rather than on its command line (Goose's `GOOSE_MODE`).
+    # It goes through the same allowlist as the Manager name: a mode name is
+    # not a secret, but the check is what stops the next variable being
+    # added here by pattern-matching on this line.
+    for key, value in sorted((pane_env or {}).items()):
+        argv.extend(_on_tmux_argv(key, value))
     identified = True
     # ⚠ **THE NAME WE INHERITED MUST NOT TRAVEL WITH US.** `rite start` is
     # routinely run from inside another Manager's session, where this
@@ -996,7 +1004,7 @@ def attachment(name: str) -> Attachment:
         )
 
 
-ALLOWED_ON_TMUX_ARGV = frozenset({MANAGER_ENV})
+ALLOWED_ON_TMUX_ARGV = frozenset({MANAGER_ENV, "GOOSE_MODE"})
 """The ONLY variables that may be passed to a pane with `tmux -e` (C6).
 
 A positive list on purpose. `-e NAME=value` puts the value on tmux's argv,
@@ -1005,7 +1013,14 @@ harmless for a Manager's name, a leak for anything secret. The trap is that
 the line doing it for the name reads as an established pattern, so "pass the
 token the same way" looks like consistency. A list of names to REFUSE would
 miss the next credential (Slack brings a second one); a list of names to
-ALLOW cannot."""
+ALLOW cannot.
+
+⚠ `GOOSE_MODE` is here because Goose keeps its permission mode in the
+environment rather than on a flag, and a mode name (`auto`, `approve`) is
+not a secret — it is the same class of value as a Manager's name. It is
+listed explicitly rather than admitted by a rule like "anything ending in
+_MODE", because the next variable an engine wants here might well be a
+token."""
 
 
 def _on_tmux_argv(name: str, value: str) -> list[str]:

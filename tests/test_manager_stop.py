@@ -89,6 +89,7 @@ class TestCtrlCStopsBothAndLeavesNoPhantom:
             window_seconds,
             prompt="",
             permission="",
+            agent="",
         ):
             return StartResult(True, "ok", session="s1", attach="a")
 
@@ -125,6 +126,7 @@ class TestCtrlCStopsBothAndLeavesNoPhantom:
             window_seconds,
             prompt="",
             permission="",
+            agent="",
         ):
             return StartResult(True, "ok", session="s1", attach="a")
 
@@ -160,6 +162,7 @@ class TestCtrlCStopsBothAndLeavesNoPhantom:
             window_seconds,
             prompt="",
             permission="",
+            agent="",
         ):
             return StartResult(True, "ok", session="s1", attach="a")
 
@@ -225,6 +228,7 @@ class TestABoundLeavesTheSessionAlive:
             window_seconds,
             prompt="",
             permission="",
+            agent="",
         ):
             return StartResult(True, "ok", session="s1", attach="a")
 
@@ -275,6 +279,7 @@ class TestABoundLeavesTheSessionAlive:
             window_seconds,
             prompt="",
             permission="",
+            agent="",
         ):
             return StartResult(True, "ok", session="s1", attach="a")
 
@@ -420,6 +425,7 @@ class TestTheInterruptGuardCoversTheWholeCycle:
             window_seconds,
             prompt="",
             permission="",
+            agent="",
         ):
             raise KeyboardInterrupt
 
@@ -466,6 +472,7 @@ class TestTheInterruptGuardCoversTheWholeCycle:
             window_seconds,
             prompt="",
             permission="",
+            agent="",
         ):
             raise KeyboardInterrupt
 
@@ -512,6 +519,7 @@ class TestTheInterruptGuardCoversTheWholeCycle:
             window_seconds,
             prompt="",
             permission="",
+            agent="",
         ):
             return StartResult(True, "ok", session="s1", attach="a", pane="%1")
 

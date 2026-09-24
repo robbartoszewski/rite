@@ -6141,6 +6141,7 @@ def _start_a_manager(
         root,
         role.name,
         engine=role.engine,
+        agent=role.agent,
         # ⚠ LOCAL ENGINES ONLY, and a Claude Manager is unchanged because
         # `None` means "no check". Claude's exit status IS its cycle
         # boundary, which is why `-p` was chosen; goose's is not — it exits

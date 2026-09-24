@@ -70,9 +70,20 @@ class Spelling:
     all of it, and a contract that modelled only one direction would fight
     the other."""
 
-    permission_is_argv: bool = True
-    """False when permission is expressed in the environment rather than on
-    the command line, as Goose's `GOOSE_MODE` is."""
+    permission_env: str = ""
+    """The environment variable this engine keeps its permission mode in, or
+    "" when it takes a command-line flag.
+
+    ⚠ **THE DESTINATION, NOT A BOOLEAN.** An earlier version recorded only
+    whether permission was argv. That was enough to REFUSE writing a flag
+    for Goose and not enough to put the value anywhere — so a Goose Manager
+    launched with no permission handling at all, taking whatever
+    `GOOSE_MODE` the operator's shell carried or Goose's own default when it
+    carried none. Measured 2026-09-24: that default is `auto`, which ran
+    `rm` on a file unattended.
+
+    A refusal that leaves a value homeless is worse than no refusal.
+    Knowing WHERE it goes is what lets the supervisor put it there."""
 
     prompt_flag: str = ""
     """How the instruction file is named on argv. Empty means stdin
@@ -88,7 +99,7 @@ GOOSE = Spelling(
     turn="run",
     resume="-n {handle} -r",
     handle_is_ours=True,
-    permission_is_argv=False,
+    permission_env="GOOSE_MODE",
     prompt_flag="-i",
 )
 """Measured 2026-09-24, not read from a table. `goose run -n <name> -t ...`
@@ -126,6 +137,21 @@ Claude's. That was the live defect, because `local:*` is the engine that
 exists and is not Claude."""
 
 _BY_AGENT: dict[str, Spelling] = {"goose": GOOSE}
+
+
+def permission_placement(engine: str, agent: str, permission: str):
+    """Where this engine's permission mode goes.
+
+    `("env", NAME, value)`, `("argv", "", value)`, or None when there is
+    nothing to place. One function, so a caller cannot put it in the wrong
+    place by forgetting which engine it is holding.
+    """
+    if not permission:
+        return None
+    spelling = spelling_for(engine, agent)
+    if spelling.permission_env:
+        return ("env", spelling.permission_env, permission)
+    return ("argv", "", permission)
 
 
 def spelling_for(engine: str, agent: str = "") -> Spelling:

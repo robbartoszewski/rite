@@ -82,6 +82,7 @@ class TestOnlyTheFirstSessionGetsTheOpeningPrompt:
             window_seconds,
             prompt="",
             permission="",
+            agent="",
         ):
             seen.append((resume_id, prompt))
             return StartResult(True, "ok", session=f"s{len(seen)}", attach="a")

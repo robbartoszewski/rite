@@ -72,6 +72,28 @@ from rite_ai.managers.transcripts import (
     session_id_problem,
 )
 
+UNATTENDED_MODE_FOR_ENV_ENGINES = "auto"
+"""The permission mode given to an engine that keeps one in its environment.
+
+⚠ **THE MECHANISM IS SETTLED; THIS VALUE IS NOT, AND IT IS ROBERT'S CALL.**
+Both available answers are bad and one contradicts a decision just taken:
+
+* `auto` — what Goose defaults to anyway. Measured 2026-09-24: it ran `rm`
+  on a file unattended. **Unconstrained**, days after C4 deliberately made
+  the secure option the default for a `claude` Manager.
+* `approve` / `smart_approve` — measured the same day: in a headless run an
+  operation needing approval **fails, exit 1**, rather than prompting. So a
+  Manager in that mode stops at its first real operation.
+
+`auto` is used because the alternative does not run at all, and because it
+is what happens today anyway — so this changes no behaviour, it only makes
+the choice rite's and visible. **It does not close the gap C4 closed for
+Claude**, and nothing here can: `GOOSE_MODE` is whole-session with no
+per-command concept, so C4's allowlist semantics cannot be expressed for
+this engine at all. Closing it properly means the sandbox being the
+boundary (B4d measured Goose runs inside one), which means sandboxing
+Managers — a much larger change than a permission setting."""
+
 POLL_SECONDS = 2.0
 
 CONTINUATION = (
@@ -208,16 +230,16 @@ def launch_command(
         # excludes `-p` — so a resumed cycle launched without this is a
         # Manager that can no longer act AND still exits 0, which `ending`
         # reads as a clean finish. D-90's shape exactly, in a second place.
-        if not spelling.permission_is_argv:
-            # ⚠ Goose takes `GOOSE_MODE` in the ENVIRONMENT, not on argv, so
-            # "permission" cannot be "a flag string". The adapter that owns
-            # that engine sets it; this refuses rather than writing a flag
-            # the tool would reject.
-            raise ValueError(
-                f"{command} expresses permission in its environment, not on "
-                "the command line — the adapter must set it, not this."
-            )
-        parts.append(permission)
+        if spelling.permission_env:
+            # ⚠ NOT AN ERROR AND NOT DROPPED. Goose keeps its permission
+            # mode in `GOOSE_MODE`, so it does not belong on this command
+            # line — `session.start` puts it in the environment instead,
+            # from `permission_placement`. Writing a flag here would hand
+            # the tool something it rejects; raising here would stop a
+            # Manager that is perfectly startable.
+            pass
+        else:
+            parts.append(permission)
     if resume_id:
         # ⚠ **REFUSES rather than escapes, and raises rather than drops the
         # flag.** This string is handed to `tmux new-session`, which runs it
@@ -378,6 +400,7 @@ def supervise(
     manager: str,
     *,
     engine: str = "",
+    agent: str = "",
     max_sessions: int,
     window_seconds: float,
     prompt: str = "",
@@ -429,13 +452,38 @@ def supervise(
     # carries a permission mode into `-p`; said because this grant is total
     # and the one line below is all that stands between a user and a
     # surprise.
-    say(announcement(manager))
+    spelling = spelling_for(engine, agent)
     # ⚠ **Written before the first launch and passed on EVERY cycle.** The
     # file is rewritten from code each run so the list a Manager gets is the
     # list this release ships; the arguments are re-passed because nothing
     # carries a permission decision into `-p` — the same reason the flag
     # they replace had to be.
-    permission = launch_arguments(write_settings(root))
+    if spelling.permission_env:
+        # ⚠ **AN ENGINE THAT KEEPS ITS MODE IN THE ENVIRONMENT GETS ONE, AND
+        # UNTIL NOW GOT NOTHING.** `launch_command` correctly refuses to
+        # write a flag for such an engine, and nothing put the value
+        # anywhere else — so a Goose Manager launched with whatever
+        # `GOOSE_MODE` the operator's shell happened to carry, or with
+        # Goose's own default when it carried none. Measured 2026-09-24:
+        # that default is `auto`, which ran `rm` on a file unattended.
+        #
+        # Setting it explicitly is what makes the mode rite's decision for
+        # the session rather than an ambient one — an operator with
+        # `GOOSE_MODE=approve` exported would otherwise get a Manager that
+        # fails on its first real operation (measured: exit 1), with
+        # nothing saying why.
+        permission = UNATTENDED_MODE_FOR_ENV_ENGINES
+        say(
+            f"permissions: Manager {manager!r} runs its engine with "
+            f"{spelling.permission_env}={permission}. ⚠ This engine has no "
+            "per-command allowlist — the mode is whole-session, so the "
+            "allowlist a `claude` Manager gets does not exist here. It runs "
+            "unsandboxed in this project's directory with your own file and "
+            "network access."
+        )
+    else:
+        permission = launch_arguments(write_settings(root))
+        say(announcement(manager))
 
     cycles: list[Cycle] = []
     live = ""
@@ -618,6 +666,7 @@ def supervise(
                 root,
                 manager,
                 engine=engine,
+                agent=agent,
                 resume_id=resume_from,
                 prompt=cycle_prompt,
                 permission=permission,
@@ -661,6 +710,7 @@ def supervise(
                     root,
                     manager,
                     engine=engine,
+                    agent=agent,
                     resume_id="",
                     # ⚠ THE PROMPT, which this omitted. Without it the call
                     # took `_default_starter`'s `prompt=""`, `start_session`
@@ -941,6 +991,7 @@ def _default_starter(
     window_seconds,
     permission,
     prompt,
+    agent="",
 ):
     """Start one cycle's session. `permission` and `prompt` have NO DEFAULT,
     deliberately.
@@ -984,15 +1035,22 @@ def _default_starter(
             f"a defect in whatever called the launch, not something to fix "
             f"in your config.",
         )
+    from rite_ai.managers.engines import permission_placement
+
+    placement = permission_placement(engine, agent, permission)
     result = start_session(
         root,
         manager,
+        pane_env=(
+            {placement[1]: placement[2]} if placement and placement[0] == "env" else {}
+        ),
         engine=engine,
         command=launch_command(
             engine,
             resume_id,
             str(manager_dir(root, manager) / PROMPT_FILE),
             permission,
+            agent,
         ),
         prompt=prompt,
         max_sessions=max_sessions,

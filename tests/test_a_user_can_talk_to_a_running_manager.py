@@ -144,6 +144,7 @@ class TestItReachesTheManagerAndComesBack:
             window_seconds,
             prompt="",
             permission="",
+            agent="",
         ):
             seen.append(prompt)
             return StartResult(True, "ok", session="s1", attach="a")
@@ -197,6 +198,7 @@ class TestItReachesTheManagerAndComesBack:
             window_seconds,
             prompt="",
             permission="",
+            agent="",
         ):
             return StartResult(True, "ok", session="s1", attach="a")
 
@@ -252,6 +254,7 @@ class TestItReachesTheManagerAndComesBack:
             window_seconds,
             prompt="",
             permission="",
+            agent="",
         ):
             seen.append(prompt)
             return StartResult(True, "ok", session="s1", attach="a")

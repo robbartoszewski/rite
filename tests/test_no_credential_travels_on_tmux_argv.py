@@ -39,8 +39,14 @@ def test_a_credential_cannot_be_put_on_tmux_argv():
 def test_the_managers_name_still_can():
     """The control: a guard that refused everything would pass the test above
     and stop every Manager knowing its own name."""
-    (name,) = ALLOWED_ON_TMUX_ARGV
-    assert _on_tmux_argv(name, "lead") == ["-e", f"{name}=lead"]
+    # ⚠ Asserts the NAME, not the set's size. This unpacked the allowlist as
+    # a single element, so adding a second permitted name (GOOSE_MODE, an
+    # engine's permission mode) broke a test about the Manager's name for a
+    # reason that had nothing to do with it.
+    from rite_ai.managers import MANAGER_ENV
+
+    assert MANAGER_ENV in ALLOWED_ON_TMUX_ARGV
+    assert _on_tmux_argv(MANAGER_ENV, "lead") == ["-e", f"{MANAGER_ENV}=lead"]
 
 
 @pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is not installed")

@@ -398,6 +398,7 @@ class TestTheSupervisorRefusesToResumeIntoNothing:
             window_seconds,
             prompt="",
             permission="",
+            agent="",
         ):
             seen.append(resume_id)
             return StartResult(True, "ok", session=f"s{len(seen)}")
@@ -924,6 +925,7 @@ class TestTheDefaultResumeIdIsCalled:
             window_seconds,
             prompt="",
             permission="",
+            agent="",
         ):
             seen.append(resume_id)
             return StartResult(True, "ok", session=f"s{len(seen)}")

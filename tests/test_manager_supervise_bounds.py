@@ -56,6 +56,7 @@ def instant(monkeypatch):
         window_seconds,
         prompt="",
         permission="",
+        agent="",
     ):
         started.append(resume_id)
         return StartResult(True, "ok", session=f"fake-{len(started)}", attach="")
@@ -134,6 +135,7 @@ class TestTheWindowBounds:
             window_seconds,
             prompt="",
             permission="",
+            agent="",
         ):
             name = f"s{len(alive_until) + 1}"
             alive_until[name] = time.time() + 0.3
@@ -335,14 +337,24 @@ def test_a_substituted_binary_still_gets_claudes_spelling():
     )
 
 
-def test_an_engine_whose_permission_is_environmental_refuses_a_flag():
-    """Goose takes GOOSE_MODE in the environment, so "permission" cannot be
-    "a flag string". The adapter that owns the engine sets it; this refuses
-    rather than writing a flag the tool would reject."""
-    with pytest.raises(ValueError, match="environment"):
-        launch_command(
-            "local:large", "", "", "--dangerously-skip-permissions", agent="goose"
-        )
+def test_an_engine_whose_permission_is_environmental_omits_it_from_argv():
+    """⚠ CHANGED, and the change is the point. This asserted that
+    `launch_command` RAISED for such an engine.
+
+    Refusing was only half a design. The value had nowhere else to go, so a
+    Goose Manager launched with NO permission handling at all — taking
+    whatever `GOOSE_MODE` the operator's shell carried, or Goose's own
+    default when it carried none. Measured: that default is `auto`, which
+    ran `rm` on a file unattended. **A refusal that leaves a value homeless
+    is worse than no refusal.**
+
+    `Spelling` now carries the destination, so the mode is omitted here and
+    placed in the environment by `session.start`. Raising would have stopped
+    a Manager that is perfectly startable.
+    """
+    built = launch_command("local:large", "", "/p.txt", "auto", agent="goose")
+    assert built == "goose run -i /p.txt"
+    assert "auto" not in built
 
 
 class TestAnUnrecognisedVerdictStops:
@@ -390,6 +402,7 @@ class TestAnUnrecognisedVerdictStops:
             window_seconds,
             prompt="",
             permission="",
+            agent="",
         ):
             started.append(manager)
             return StartResult(True, "started", session="s", attach="a")
@@ -425,6 +438,7 @@ class TestAnUnrecognisedVerdictStops:
             window_seconds,
             prompt="",
             permission="",
+            agent="",
         ):
             started.append(manager)
             return StartResult(False, "stop here", session="", attach="")
