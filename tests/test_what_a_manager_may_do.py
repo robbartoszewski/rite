@@ -32,6 +32,7 @@ from rite_ai.managers.permissions import (
     GENEROUS_ALLOW,
     NOT_ALLOWED,
     OBSERVED_ALLOW,
+    TOOL_ALLOW,
     allowed,
     announcement,
     launch_arguments,
@@ -87,7 +88,9 @@ class TestTheListCoversWhatWasObserved:
     def test_observed_and_generous_entries_are_kept_apart(self):
         """⚠ So nobody later reads the guesses as evidence."""
         assert set(OBSERVED_ALLOW) & set(GENEROUS_ALLOW) == set()
-        assert set(DEFAULT_ALLOW) == set(OBSERVED_ALLOW) | set(GENEROUS_ALLOW)
+        assert set(DEFAULT_ALLOW) == (
+            set(TOOL_ALLOW) | set(OBSERVED_ALLOW) | set(GENEROUS_ALLOW)
+        )
 
     def test_a_shell_is_not_allowed_because_it_would_void_the_list(self):
         """`bash -c "curl …"` is one hop around every other row."""
@@ -424,3 +427,73 @@ class TestTheDocsDescribeWhatShips:
         assert "BEHAVIOUR CHANGE ON UPGRADE" in unreleased
         assert "--dangerously-skip-permissions" in unreleased
         assert "--permission-prompts none" in unreleased
+
+
+class TestTheEnginesOwnToolsAreOnTheListToo:
+    """⚠ **The regression that scored 0/5 on the first real C20 run.**
+
+    A list of only `Bash(...)` patterns produces an agent that can run
+    anything on it and CHANGE nothing. All five benchmark tasks worked out
+    the correct fix, were denied `Edit`, and printed the patch for a human
+    to apply. Nothing stalled and nothing crashed — the work just did not
+    happen, which is this module's failure mode wearing a different hat.
+    """
+
+    def test_the_file_editing_tools_are_allowed(self):
+        for tool in ("Edit", "Write", "Read", "NotebookEdit"):
+            assert tool in DEFAULT_ALLOW, tool
+            assert allowed(tool), tool
+
+    def test_a_shell_only_list_cannot_satisfy_the_condition(self):
+        """ "Everything a worker needs" cannot be true of a list that cannot
+        edit a file."""
+        assert TOOL_ALLOW, "the tool half of the list is empty"
+        assert set(TOOL_ALLOW) <= set(DEFAULT_ALLOW)
+
+    def test_network_tools_are_refused_like_curl_is(self):
+        """Consistency: `WebFetch` is the same class of thing as `curl`."""
+        assert not allowed("WebFetch")
+        assert not allowed("WebSearch")
+
+    def test_a_refused_TOOL_is_told_to_add_the_tool_not_a_bash_pattern(self):
+        """⚠ `"Bash(Edit:*)"` is advice that does nothing."""
+        said = refusal("Edit", Path("/p"))
+        assert '"Edit"' in said
+        assert "Bash(Edit" not in said
+
+
+class TestRiteCanSeeANonBashDenial:
+    """⚠ The refusal that actually bit was the one rite was blind to: the
+    scanner keyed on Bash alone, so five `Edit` denials in a row produced an
+    empty list and the run looked like five unexplained failures."""
+
+    def test_a_denied_tool_is_reported_by_name(self, tmp_path):
+        from rite_ai.managers.transcripts import refused_commands
+
+        root = tmp_path / "project"
+        root.mkdir()
+        base = tmp_path / "transcripts"
+        _transcript(
+            base,
+            root,
+            [
+                {
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "t1",
+                                "name": "Edit",
+                                "input": {"file_path": "./x.py"},
+                            }
+                        ]
+                    }
+                },
+                _result(
+                    "t1",
+                    "Permission for this tool use was denied. It requires "
+                    "approval, and this session has no approval surface",
+                ),
+            ],
+        )
+        assert refused_commands(root, base=base) == ["Edit"]

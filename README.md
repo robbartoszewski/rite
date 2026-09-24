@@ -339,7 +339,7 @@ and the local-tier binaries. rite states the grant every run rather than
 leaving it to be discovered:
 
 ```console
-permissions: Manager 'planner' may run 69 allowlisted command families
+permissions: Manager 'planner' may run 77 allowlisted command families
 (permissions.json); anything else is REFUSED rather than queued for
 approval. It still runs unsandboxed in this project's directory, on this
 machine, with your own file and network access — the allowlist narrows what

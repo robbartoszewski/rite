@@ -195,6 +195,7 @@ def _stated_session_id(path: Path) -> str:
 
 _DENIAL = re.compile(
     r"requires approval|haven't granted it yet|permission to use|"
+    r"permission for this tool use was denied|"
     r"permission denied by|not allowed to (?:run|use)",
     re.I,
 )
@@ -256,9 +257,20 @@ def _refused_in(path: Path) -> list[str]:
         for block in (entry.get("message") or {}).get("content") or []:
             if not isinstance(block, dict):
                 continue
-            if block.get("type") == "tool_use" and block.get("name") == "Bash":
-                command = (block.get("input") or {}).get("command", "")
-                if block.get("id") and command:
+            if block.get("type") == "tool_use" and block.get("id"):
+                # ⚠ **EVERY tool, not just Bash.** A list of only shell
+                # patterns produced an agent that could run anything and
+                # change nothing, and the denial that stopped it was an
+                # `Edit` — which this function, keyed on Bash alone, could
+                # not see. The refusal that actually bit was the one rite
+                # was blind to.
+                if block.get("name") == "Bash":
+                    command = (block.get("input") or {}).get("command", "")
+                else:
+                    # The TOOL NAME is what a permission rule names, so it
+                    # is what the refusal has to tell the user to add.
+                    command = block.get("name", "")
+                if command:
                     commands[block["id"]] = command
             elif block.get("type") == "tool_result" and block.get("is_error"):
                 body = block.get("content")

@@ -93,6 +93,40 @@ SETTINGS_FILENAME = "permissions.json"
 committed. What a Manager on THIS machine may run is a local trust decision,
 not a property of the repository."""
 
+TOOL_ALLOW: tuple[str, ...] = (
+    "Read",
+    "Edit",
+    "Write",
+    "NotebookEdit",
+    "Glob",
+    "Grep",
+    "TodoWrite",
+    "Task",
+)
+"""⚠ **Not Bash at all, and leaving these out scored 0/5 on the first real
+C20 run.**
+
+Claude Code's permission rules cover its OWN tools as well as shell
+commands, and `Bash(...)` entries say nothing about them. A list of only
+shell patterns produces an agent that can RUN anything on the list and
+CHANGE nothing — measured: all five benchmark tasks worked out the correct
+fix, were denied `Edit`, and printed the patch for a human to apply.
+Nothing stalled and nothing crashed. The work simply did not happen, which
+is this module's failure mode wearing a different hat.
+
+The denial, verbatim from that run's transcript:
+
+    tool=Edit
+    Permission for this tool use was denied. It requires approval, and
+    this session has no approval surface — nobody can answer a permission
+    prompt here
+
+⚠ **`WebFetch` and `WebSearch` are deliberately absent**, for the same
+reason `curl` is: arbitrary network egress. That is a judgement rather than
+a measurement, and it is the one here most likely to need revisiting.
+"""
+
+
 OBSERVED_ALLOW: tuple[str, ...] = (
     # Reading and navigating the project. The long tail of every run.
     "Bash(echo:*)",
@@ -191,7 +225,7 @@ the failure mode this whole module exists to avoid. The cost of each wrong
 guess here is one more allowed command; the cost of omission is a hung run.
 """
 
-DEFAULT_ALLOW: tuple[str, ...] = OBSERVED_ALLOW + GENEROUS_ALLOW
+DEFAULT_ALLOW: tuple[str, ...] = TOOL_ALLOW + OBSERVED_ALLOW + GENEROUS_ALLOW
 
 NOT_ALLOWED: dict[str, str] = {
     "bash": "a shell wrapper defeats the list — `bash -c` is one hop around every row",
@@ -288,8 +322,30 @@ def allowed(command: str, allow: tuple[str, ...] = DEFAULT_ALLOW) -> bool:
     two disagree the engine wins and this is wrong — which is why nothing
     downstream of a real launch consults it.
     """
+    if command in _TOOL_NAMES:
+        return command in allow
     head = _leading_executable(command)
     return bool(head) and f"Bash({head}:*)" in allow
+
+
+_TOOL_NAMES = frozenset(
+    {
+        "Read",
+        "Edit",
+        "Write",
+        "MultiEdit",
+        "NotebookEdit",
+        "Glob",
+        "Grep",
+        "TodoWrite",
+        "Task",
+        "WebFetch",
+        "WebSearch",
+        "Bash",
+    }
+)
+"""The engine's own tool names, so a denial of one is not mistaken for a
+shell command that happens to be called `Edit`."""
 
 
 def _leading_executable(command: str) -> str:
@@ -312,13 +368,21 @@ def refusal(command: str, root: Path) -> str:
     So this says which command, and the exact line that would permit it —
     not "adjust your permissions".
     """
-    head = _leading_executable(command) or command.strip()
+    # ⚠ A denial of one of the engine's OWN tools is not a shell command,
+    # and telling a user to add `Bash(Edit:*)` would be advice that does
+    # nothing. The first C20 run failed on exactly that tool.
+    if command in _TOOL_NAMES:
+        head = command
+        line = f'"{command}"'
+    else:
+        head = _leading_executable(command) or command.strip()
+        line = f'"Bash({head}:*)"'
     return (
         f"refused: {command.strip()!r} — {head!r} is not in the permission "
         f"allowlist rite passes to the engine.\n"
         f'To permit it, add this line to the "allow" list in '
         f"{Path('.claude') / 'settings.json'} in this project:\n"
-        f'    "Bash({head}:*)"\n'
+        f"    {line}\n"
         f"rite's own list is at {settings_path(root)} and is rewritten every "
         f"run, so edit the project file rather than that one."
     )
