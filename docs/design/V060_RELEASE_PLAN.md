@@ -681,6 +681,37 @@ up; B7 and the documentation remain the answer for 0.6.0.
 
 ---
 
+## ⚠ Practice: verification must not use an operation that destroys state
+
+**Two instances in one day, same shape**, recorded because the second was
+committed by somebody who had already been caught by the first.
+
+1. **Editing the tree while a suite was running.** The run then describes a
+   tree that no longer exists. Caught because the result was discarded and
+   re-run clean, but only after the fact.
+2. **`git checkout -- <file>` to undo a mutation**, over work that was not
+   committed. It restored the file to `HEAD` — removing the mutation **and
+   the change being tested**, which had to be written again from scratch.
+
+**The rule, stated so it is usable rather than moralised:**
+
+> **Mutation testing uses a backup COPY, never a git restore.**
+> `cp <file> /tmp/keep_<file>` before mutating, `cp` back afterwards.
+
+⚠ **The reason is not carelessness, it is that the tool cannot help.**
+`git checkout --` restores to the last commit. **It cannot distinguish the
+mutation from the work**, because during a mutation test both are
+uncommitted changes to the same file and neither has been committed yet —
+which is the whole point of the technique. Any git-based undo is therefore
+the wrong instrument for this job however carefully it is aimed.
+
+**The same reasoning covers the first instance:** a verification run is a
+measurement of a specific tree, so the tree must be still when it is
+measured. If a change cannot wait for a suite to finish, the suite's result
+is not evidence about the change.
+
+**Neither is expensive to avoid.** One is a `cp`; the other is waiting.
+
 ## Sizes — B4/B5 now have numbers, and why
 
 ⚠ **Both reviews challenged the sizes, and the challenge is right on its own
