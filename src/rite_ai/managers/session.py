@@ -431,7 +431,7 @@ def start(
     # a hard failure on an older tmux would mean the Manager does not start AT
     # ALL — losing the session to gain the name — so a refusal that names the
     # flag falls back and says the identity is missing.
-    argv = [binary, "new-session", "-d", "-e", f"{MANAGER_ENV}={manager}"]
+    argv = [binary, "new-session", "-d", *_on_tmux_argv(MANAGER_ENV, manager)]
     identified = True
     # ⚠ **THE NAME WE INHERITED MUST NOT TRAVEL WITH US.** `rite start` is
     # routinely run from inside another Manager's session, where this
@@ -972,6 +972,36 @@ def attachment(name: str) -> Attachment:
         )
 
 
+ALLOWED_ON_TMUX_ARGV = frozenset({MANAGER_ENV})
+"""The ONLY variables that may be passed to a pane with `tmux -e` (C6).
+
+A positive list on purpose. `-e NAME=value` puts the value on tmux's argv,
+where `ps -ww` shows it to every local account for the life of the call —
+harmless for a Manager's name, a leak for anything secret. The trap is that
+the line doing it for the name reads as an established pattern, so "pass the
+token the same way" looks like consistency. A list of names to REFUSE would
+miss the next credential (Slack brings a second one); a list of names to
+ALLOW cannot."""
+
+
+def _on_tmux_argv(name: str, value: str) -> list[str]:
+    """`["-e", "NAME=value"]`, or raise for a name not cleared to be there.
+
+    Raises rather than dropping it: a variable silently left out is a Manager
+    started without something it was meant to have, and the person adding
+    one should meet the reason at the moment they add it. See
+    `ALLOWED_ON_TMUX_ARGV` and `CLAUDE_OAUTH_ENV`.
+    """
+    if name not in ALLOWED_ON_TMUX_ARGV:
+        raise ValueError(
+            f"refusing to pass {name} with `tmux -e`: the value would be on "
+            f"tmux's argv, readable by every local account via `ps`. Only "
+            f"{sorted(ALLOWED_ON_TMUX_ARGV)} may travel that way — see "
+            f"ALLOWED_ON_TMUX_ARGV for why this is an allowlist."
+        )
+    return ["-e", f"{name}={value}"]
+
+
 PROMPT_FILE = "prompt.txt"
 """Where this cycle's instruction is written for the engine to read.
 
@@ -994,13 +1024,26 @@ CLAUDE_OAUTH_ENV = "CLAUDE_CODE_OAUTH_TOKEN"
 """The credential an unattended Claude Code run needs, read from the
 environment and NEVER handled by rite.
 
-⚠ **It must reach the engine by inheritance, never as an argument.** A
-pane inherits the environment of the process that asked for it, so a token
-already exported in the user's shell arrives with rite never holding the
-value, never writing it, and nothing to redact. The obvious alternative is
-the mechanism `MANAGER_ENV` already uses — `tmux new-session -e VAR=value`
-— and it is the wrong one here: that value lands on tmux's own argv, where
-`ps` shows it to every local account on the machine.
+⚠ **It must never be an argument.** The obvious mechanism is the one
+`MANAGER_ENV` already uses — `tmux new-session -e VAR=value` — and it is the
+wrong one here: that value lands on tmux's own argv, where `ps` shows it to
+every local account on the machine. `_on_tmux_argv` refuses it, and a test
+inspects every argv a real start executes.
+
+⚠ **CORRECTED (C6): inheritance does NOT reliably deliver it.** This said a
+pane "inherits the environment of the process that asked for it". It
+inherits the tmux SERVER's — which `PROMPT_FILE` below had already measured.
+So the token arrives only when this `rite start` is what starts the server.
+Measured through `rite start` with a stub engine recording what it received:
+
+    token exported, no tmux server running        ->  engine has the token
+    token exported, operator's tmux already up    ->  engine has NONE
+
+The second is anyone who runs `rite start` from inside tmux. It is OPEN,
+not fixed here: every way to deliver the value to an existing server
+without argv (`update-environment`, a dedicated rite socket) is a decision
+about the operator's tmux and about credential handling, and the one that
+needs no decision — `-e` — is the leak this guard exists to stop.
 
 §9.14.7 states the same rule as a compliance constraint: consume this
 variable from the environment only; never read, persist, log or transmit
