@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.22.0 · **Date:** 2026-09-20
+**Version:** 0.22.1 · **Date:** 2026-09-24
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -2224,8 +2224,10 @@ never fires gets removed.
 
 ### 7.3. Requirements-derived scenarios, before a branch merges
 
-**Not built.** Specified here so the procedure exists before the code does,
-which is most of the point.
+**Not built, and not in 0.6.0 — targeted at 0.7.0.** Specified here so the
+procedure exists before the code does, which is most of the point. Robert
+moved the gate out of 0.6.0 on 2026-09-24 (release plan, Decision 5); see
+§9.15.4, which used to point at it as a 0.6.0 destination.
 
 After a feature branch has been through its terminating check and the
 resulting fixes, a Worker runs **test scenarios derived from the
@@ -5568,11 +5570,18 @@ answer to *who runs the dogfood* turned the same gap into a defect in this
 release, because the reader who cannot reach them is now a person rather
 than a future gate.
 
-**Connection to 0.6.0.** These entries are the raw material for the QA gate:
-*"a bug was not caught during testing"* is precisely the evidence that says
-whether the scenario gate (D-81, §7.3) is working. That is what the journal
-is being refined toward, and it is why the entries have to be checkable
-rather than merely present.
+**Connection to 0.7.0 — moved from 0.6.0.** These entries are the raw
+material for the QA gate: *"a bug was not caught during testing"* is
+precisely the evidence that says whether the scenario gate (D-81, §7.3) is
+working. That is what the journal is being refined toward, and it is why the
+entries have to be checkable rather than merely present.
+
+⚠ **The gate is NOT a 0.6.0 deliverable.** This paragraph named 0.6.0 as its
+destination until Robert moved the scenario gate to 0.7.0 on 2026-09-24
+(release plan, Decision 5). Nothing in 0.6.0 consumes these entries; they
+are still written, still inert (§9.15.5), and the gap recorded in the 0.20.1
+revision note — the gate cannot reach machine-local, uncommitted entries —
+travels with the gate to 0.7.0 unchanged.
 
 #### 9.15.5. Nothing reads it — and the anchors are what make that safe
 
@@ -6190,6 +6199,8 @@ Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
 
+**Changes in 0.22.1 — the QA gate is 0.7.0, not 0.6.0.** §9.15.4 pointed at the scenario gate (D-81, §7.3) as the 0.6.0 destination the journal was being refined toward, and §7.3 said only "Not built". Robert moved the gate to 0.7.0 (v0.6.0 release plan, Decision 5), so a reader of this document was being promised a 0.6.0 deliverable that will not arrive — the class of stale claim 0.5.1 was spent removing. Both sections now say 0.7.0, and the 0.20.1 note below that named "the 0.6.0 gate" says where it went rather than being rewritten. Nothing about the gate's design changed.
+
 **Changes in 0.22.0 — two things §9.15 required that could not be built.** Both found by rite-dd while implementing, and both reported rather than worked around. D-87's anchor refusal named no refuser, so it was a rule the Manager was asked to follow rather than one the tool enforced; rite now owns the writing path (D-92). And §9.15.6 put the journal instructions in the generated `CLAUDE.md`, which is project-level while the flag is per-start — unimplementable, and its consequence while open was a Manager told where the journal is and never told to write to it, which is the class the subsection exists to prevent. They move to the start prompt (D-93), which is per-session by construction and a stronger guarantee than the file could have given. §9.15.3's fifth measure — verifying that a present anchor RESOLVES — is marked unimplemented rather than left to read as done.
 
 **Changes in 0.21.1 — an escalation withdrawn.** §9.15.3a said the journal's entries "must be able to leave the machine that wrote them" and treated their being gitignored as a defect in this release. Withdrawn (D-91): rite builds no retrieval, the start line prints the path, and how the entries reach their reader is the operator's business — in the run this was written for, a zip file between two people who talk to each other. The observation was sound and the escalation was not, and the section keeps both rather than reading as though it had always said this. The condition that would make it wrong is stated instead: a reader who is not a person in the same conversation.
@@ -6198,7 +6209,7 @@ as an introduction to the tool.
 
 ⚠ **The reason the journal was kept turns one of its properties into a defect.** The next unattended run is on somebody else's machine with the owner not watching, so the journal being gitignored and machine-local means its only reader cannot reach it — §9.15.3a, which was a 0.6.0 design question until the answer to "who runs it" arrived. Closed with documentation rather than machinery, and an export command is recorded as the first thing to build if the dogfood shows the documented route is not taken.
 
-**Changes in 0.20.1 — §9.15 after review.** The anchor requirement is enforced on the writing path rather than asked for (D-87); "a log timestamp" is no longer a permitted anchor on its own, because a bare timestamp is indistinguishable from an invented one and every permitted anchor must be checkable or the requirement leaks; and a claim that a journal entry could be re-included into git was FALSE and is corrected with the measurement — `.rite/*` excludes `.rite/managers` as a directory and git does not descend into an excluded directory, so a `!` negation three levels down has no effect. One gap is recorded rather than closed: the 0.6.0 gate that is meant to consume these entries cannot reach them, because they are machine-local and uncommitted. All four found by rite-dd in review.
+**Changes in 0.20.1 — §9.15 after review.** The anchor requirement is enforced on the writing path rather than asked for (D-87); "a log timestamp" is no longer a permitted anchor on its own, because a bare timestamp is indistinguishable from an invented one and every permitted anchor must be checkable or the requirement leaks; and a claim that a journal entry could be re-included into git was FALSE and is corrected with the measurement — `.rite/*` excludes `.rite/managers` as a directory and git does not descend into an excluded directory, so a `!` negation three levels down has no effect. One gap is recorded rather than closed: the 0.6.0 gate (moved to 0.7.0 in 0.22.1) that is meant to consume these entries cannot reach them, because they are machine-local and uncommitted. All four found by rite-dd in review.
 
 **Changes in 0.20.0 — the Manager's process journal (§9.15), stop semantics (§9.14.12–13), and a subsection that contradicted the code.**
 
