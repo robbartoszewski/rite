@@ -75,6 +75,7 @@ capability is reachable and unannounced to the agent — the same class as
 from __future__ import annotations
 
 import os
+import re
 import string
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -326,6 +327,41 @@ def _field_problem(manager: str, anchor: str, required: dict[str, str]) -> str:
     return ""
 
 
+_ENV_ASSIGNMENT = re.compile(r"\b([A-Z_][A-Z0-9_]*=)([^\s]{8,})")
+
+
+def _redacted(body: str) -> str:
+    """The entry with credential-shaped values removed, BY STRUCTURE (C7).
+
+    ⚠ **A Manager is TOLD to paste command output** — "a command with its
+    output" is a permitted anchor — and §9.15.3a tells an operator to zip this
+    directory and send it. Measured before this existed, through `rite
+    journal observe`: an `env | grep TOKEN` dump and a `cat .envrc` in
+    `--observed` reached the file verbatim, three tokens and all.
+
+    Two passes, both about SHAPE and neither about names:
+      1. `redact_secrets`'s own pass — `export NAME='value'`, whatever the
+         name, including a value containing spaces;
+      2. any environment-shaped assignment, `UPPER_NAME=value`, quoted or not,
+         `export` or not, with a value of eight characters or more.
+
+    Eight is `redact_secrets`'s threshold and for the same reason, and upper
+    case is what makes it environment-shaped: `--sessions=3` and
+    `PYTHONPATH=src` survive, so an entry about a flag or a path stays
+    useful. That matters more than it looks — a redaction that ruins entries
+    teaches a Manager to write the file by hand, past every rule here.
+
+    ⚠ Known holes, stated: a value that is not in an assignment (a bare token
+    in a log line, an `Authorization:` header) is not recognised. No list of
+    token formats was added for it — a list loses to the next format.
+    """
+    from rite_ai.sandbox import redact_secrets
+
+    return _ENV_ASSIGNMENT.sub(
+        lambda m: m.group(1) + "[redacted]", redact_secrets(body)
+    )
+
+
 def _write(root: Path, manager: str, kind: str, body: str) -> WriteResult:
     """One file per entry (§9.15.3), enforced by the filesystem.
 
@@ -361,7 +397,7 @@ def _write(root: Path, manager: str, kind: str, body: str) -> WriteResult:
                 False, f"could not write the journal entry to {path}: {e}"
             )
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(body)
+            handle.write(_redacted(body))
         return WriteResult(True, path=path)
     return WriteResult(
         False,

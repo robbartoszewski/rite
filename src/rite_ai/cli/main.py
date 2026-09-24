@@ -6444,8 +6444,10 @@ def manager_stop(name: str) -> None:
     default=False,
     help="BETA, undocumented. Record what this Manager notices about how "
     "rite is working to a journal on disk. Off by default. The entry "
-    "format may change, entries are NOT redacted, and nothing in this "
-    "release documents or supports it.",
+    "format may change, entries are redacted only where a value looks like "
+    "an environment assignment (NAME=value) — a bare token elsewhere in "
+    "pasted output is NOT caught — and nothing in this release documents or "
+    "supports it.",
 )
 def start_cmd(
     directory: str,
