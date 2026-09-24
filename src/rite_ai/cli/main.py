@@ -5992,6 +5992,27 @@ def _loop_verdict(root: Path, board=None) -> str:
         return "unknown"
 
 
+def _engine_ready_for(role):
+    """Why this local Manager's engine cannot be used, per cycle.
+
+    Returns a callable giving a list of reasons, empty when it is usable.
+    The probe is the one `rite doctor` already renders (`engine_probe`), so
+    an operator reads the same sentence from both — and it answers all three
+    of endpoint, model and context window, the last of which is the failure
+    that looks like a broken model rather than a setting (B7).
+    """
+
+    def ready() -> list[str]:
+        from rite_ai.local.engine_probe import probe_engine
+
+        try:
+            return list(probe_engine(role).problems)
+        except Exception as e:  # noqa: BLE001 - a probe that cannot run is a reason
+            return [f"the engine could not be checked before starting: {e}."]
+
+    return ready
+
+
 def _start_a_manager(
     root: Path,
     role,
@@ -6120,6 +6141,13 @@ def _start_a_manager(
         root,
         role.name,
         engine=role.engine,
+        # ⚠ LOCAL ENGINES ONLY, and a Claude Manager is unchanged because
+        # `None` means "no check". Claude's exit status IS its cycle
+        # boundary, which is why `-p` was chosen; goose's is not — it exits
+        # 0 for an unreachable provider — so a local Manager needs the
+        # endpoint checked before each cycle or a dead endpoint reads as a
+        # clean finish until the window runs out.
+        engine_ready=_engine_ready_for(role) if role.is_local else None,
         max_sessions=sessions,
         window_seconds=minutes * 60.0,
         prompt=(
