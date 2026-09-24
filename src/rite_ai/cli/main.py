@@ -963,11 +963,16 @@ def _doctor_report(problems: list[str]) -> None:
                 )
             else:
                 live = loop_status(root)
-                click.echo(
-                    f"loop: running as {live.session}"
-                    if live.running
-                    else "loop: not running (`rite loop start`)"
-                )
+                if live.unknown:
+                    # C15: "could not ask" is not "not running", and saying
+                    # the second here tells somebody to start another loop.
+                    click.echo(f"loop: ⚠ {live.detail}")
+                else:
+                    click.echo(
+                        f"loop: running as {live.session}"
+                        if live.running
+                        else "loop: not running (`rite loop start`)"
+                    )
 
         # Sandbox litter. The cap counts this project's sandboxes now, so
         # leftovers no longer present as capacity — but they are still there,

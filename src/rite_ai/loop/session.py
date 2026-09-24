@@ -38,6 +38,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from rite_ai.managers.session import Liveness
 from rite_ai.state import write_atomic
 
 DRAIN_FILENAME = "loop-drain"
@@ -115,8 +116,13 @@ class LoopStatus:
     uptime: float = 0.0
     draining: str = ""
     detail: str = ""
+    unknown: bool = False
+    """tmux could not be asked. NOT the same as `running=False`, and never
+    printed as "not running" — that answer tells a reader to start another."""
 
     def lines(self) -> list[str]:
+        if self.unknown:
+            return [f"loop: ⚠ {self.detail}"]
         if not self.running:
             return [f"loop: not running — {self.detail}"]
         age = f", up {_age(self.uptime)}" if self.uptime else ""
@@ -276,9 +282,32 @@ def _tmux() -> str | None:
 
 
 def is_alive(name: str) -> bool:
+    """True only when tmux ANSWERED that the session exists. Callers that
+    must tell "not running" from "could not ask" use `liveness`."""
+    return liveness(name).alive
+
+
+def liveness(name: str) -> Liveness:
+    """Whether the loop's session is running, and whether tmux could say.
+
+    ⚠ **THREE ANSWERS, the fix `managers/session.py` made and this module
+    never got (C15).** This returned a bare bool, so a `has-session` that
+    timed out or could not run read as "no session". Measured through `rite
+    doctor` with the loop's session present and the tmux server frozen
+    (SIGSTOP): it printed "loop: not running (rite loop start)" — a
+    confident wrong answer that tells the reader to start a second loop.
+    That is the shape of C15's second named failure ("the loop session was
+    started and `rite doctor` did not see it"), and the load-sensitive tests
+    assert exactly there.
+
+    tmux answering nonzero is a real "no": `has-session` says so for a
+    session that is not there. Anything else — no answer inside the
+    timeout, an OS error, or an answer that is not about the session — is
+    `known=False`.
+    """
     binary = _tmux()
     if binary is None:
-        return False
+        return Liveness(False, known=True, detail="tmux is not installed")
     # ⚠ `=` is tmux's EXACT-match prefix. `-t` resolves by exact match, then
     # fnmatch, then PREFIX, so without it a longer-named session answers for
     # a shorter one and `loop start` refuses — "a loop is already running" —
@@ -292,11 +321,38 @@ def is_alive(name: str) -> bool:
             capture_output=True,
             text=True,
             errors="replace",
-            timeout=30,
+            timeout=LIVENESS_TIMEOUT,
         )
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    return done.returncode == 0
+    except subprocess.TimeoutExpired:
+        return Liveness(
+            False,
+            known=False,
+            detail=f"tmux did not answer within {LIVENESS_TIMEOUT:g}s",
+        )
+    except OSError as e:
+        return Liveness(False, known=False, detail=f"could not run tmux: {e}")
+    if done.returncode == 0:
+        return Liveness(True, known=True)
+    said = (done.stderr or "").strip()
+    # tmux's ways of saying NO, measured on 3.7c: "can't find session: x"
+    # (server up), "no server running on …" (socket dir or server gone), and
+    # "error connecting to … (No such file or directory)" (fresh socket dir,
+    # no server ever). The last one looks like a fault and is not — reading it
+    # as unknown would make `loop start` refuse on every machine with no tmux
+    # server running. Anything else (a permission error, a foreign message)
+    # is not an answer about this session.
+    no_server = "error connecting to" in said and "No such file or directory" in said
+    if (
+        "can't find session" in said
+        or "no server running" in said
+        or no_server
+        or not said
+    ):
+        return Liveness(False, known=True)
+    return Liveness(False, known=False, detail=f"tmux said: {said[:200]}")
+
+
+LIVENESS_TIMEOUT = 30.0
 
 
 def rite_command() -> str | None:
@@ -347,7 +403,16 @@ def start(root: Path, *, interval: float = DEFAULT_INTERVAL, command: str = ""):
         )
 
     name = session_name(root)
-    if is_alive(name):
+    here = liveness(name)
+    if not here.known:
+        # FAIL CLOSED, as `managers/session.start` does (D-74): a start that
+        # cannot establish there is no loop could make two.
+        return Refused(
+            f"cannot tell whether a loop is already running for this project "
+            f"({here.detail}), so starting one could make two",
+            remedy="check with `tmux ls` and try again",
+        )
+    if here.alive:
         return Refused(
             f"a loop is already running for this project as {name}",
             remedy=f"`rite loop status`, or `tmux attach -t {name}` to watch it",
@@ -492,7 +557,14 @@ def _ask_tmux(name: str, fmt: str) -> str:
 def status(root: Path) -> LoopStatus:
     name = session_name(root)
     drain = draining(root)
-    if not is_alive(name):
+    here = liveness(name)
+    if not here.known and _tmux() is not None:
+        return LoopStatus(
+            unknown=True,
+            session=name,
+            detail=f"cannot tell whether {name} is running — {here.detail}",
+        )
+    if not here.alive:
         if _tmux() is None:
             return LoopStatus(detail="tmux is not installed, so none was started")
         return LoopStatus(
@@ -541,7 +613,17 @@ def stop(root: Path, reason: str = "stop requested"):
     """
     request_drain(root, reason)
     name = session_name(root)
-    if not is_alive(name):
+    here = liveness(name)
+    if not here.known:
+        return Started(
+            name,
+            detail=(
+                f"asked it to drain, but cannot tell whether a loop is running "
+                f"({here.detail}). The drain signal is recorded either way; "
+                f"check with `rite loop status` once tmux answers."
+            ),
+        )
+    if not here.alive:
         # SAY WHETHER THE LOCK IS STILL HELD. `rite loop start`'s refusal
         # used to send people here, and this branch reported "no loop is
         # running" while a lock sat in the way of starting one — two
