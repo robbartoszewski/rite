@@ -221,8 +221,16 @@ exist yet.
 why; what is outstanding is the measurement that shows it works, plus the two
 questions above that belong to Robert:
 
-1. Does each user create their own Slack app (Tier 3, works) or does rite
-   distribute one (1/min, does not)?
+1. ✅ **ANSWERED 2026-09-24 — see `A3b-slack-distribution.md`.** Each user
+   creates their own app. rite CANNOT distribute one and keep polling: the
+   reduced limit is scoped *per API method per workspace/team per app*, so
+   every installation gets its own bucket of **one request per minute** —
+   per-app scoping would have been catastrophic, and per-workspace scoping
+   is merely fatal against a 2-second poll. The Marketplace escape is closed
+   to rite on three independent grounds. **This strengthens the transport
+   choice above rather than changing it**: polling was already chosen partly
+   because the distribution cost was shared with Socket Mode, and that is now
+   documented rather than assumed.
 2. Is the "no daemon" requirement about **hosting** — in which case Socket
    Mode qualifies — or about **holding a connection open**, in which case it
    does not?
