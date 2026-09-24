@@ -243,7 +243,13 @@ class TestThereIsNoInertConfigLeftBehind:
 
 
 def _transcript(base: Path, root: Path, entries: list[dict]) -> Path:
-    directory = base / str(root.resolve()).replace("/", "-")
+    # Placed where rite LOOKS, by rite's own rule. This spelled the rule out as
+    # `replace("/", "-")`, which is not Claude Code's (it also replaces `_`
+    # and `.`), and pytest's tmp paths contain `_` — so once the rule was
+    # corrected the fixture landed where nothing reads.
+    from rite_ai.managers.transcripts import project_transcript_dir
+
+    directory = project_transcript_dir(root, base)
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / "sess.jsonl"
     path.write_text("\n".join(json.dumps(e) for e in entries) + "\n")

@@ -278,6 +278,30 @@ class TestTheResumeIdIsReal:
         where = project_transcript_dir(Path("/a/b/c"), base=tmp_path)
         assert where.name == "-a-b-c"
 
+    @pytest.mark.parametrize(
+        "root, claude_named_it",
+        [
+            (
+                "/private/var/folders/4p/fvll8_4s5dsczftjs1dxfpz00000gn/T/permchk-7js6aj5r",
+                "-private-var-folders-4p-fvll8-4s5dsczftjs1dxfpz00000gn-T-permchk-7js6aj5r",
+            ),
+            (
+                "/Users/u/PapugaAI/deployment/.claude/worktrees/infallible-easley-86b93f",
+                "-Users-u-PapugaAI-deployment--claude-worktrees-infallible-easley-86b93f",
+            ),
+        ],
+        ids=["underscore", "dot"],
+    )
+    def test_the_directory_name_matches_what_claude_code_writes(
+        self, tmp_path, root, claude_named_it
+    ):
+        """The expected names are COPIED from directories Claude Code created
+        on a real machine, not derived from the rule — a test that derives
+        its expectation from the function under test can only agree with it.
+        rite replaced only `/`, so for these it looked in a directory that
+        did not exist and never found a session to resume."""
+        assert project_transcript_dir(Path(root), base=tmp_path).name == claude_named_it
+
     def test_the_id_comes_from_the_FILE_CONTENTS_not_the_name(self, tmp_path):
         """A stray `.jsonl` would otherwise become an id nobody can resume."""
         directory = project_transcript_dir(Path("/a/b"), base=tmp_path)
