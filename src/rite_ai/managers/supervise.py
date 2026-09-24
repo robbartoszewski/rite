@@ -731,9 +731,30 @@ def _default_starter(
     resume_id,
     max_sessions,
     window_seconds,
+    permission,
     prompt="",
-    permission="",
 ):
+    """Start one cycle's session. `permission` has NO DEFAULT, deliberately.
+
+    ⚠ **THE DEFAULT WAS THE DEFECT, and it is the same shape as
+    `ManagerInstance.pid`'s.** `permission=""` means "launch with no
+    permission flag", and a Manager launched that way starts cleanly, runs,
+    and then cannot act: it stops at the first operation needing approval,
+    waiting for a human who is not watching. Nothing raises, nothing is
+    logged, and the session spends its window doing nothing — defect class
+    15, a prompt is not an exception but the absence of an answer. Measured
+    in v0.5.1: three cycles, no artifact.
+
+    The neighbouring argument has already done exactly this. `supervise`'s
+    fresh fallback called this function without `prompt`, took the `prompt=""`
+    default, and launched `claude -p` against an empty stdin — so the run
+    rite had just announced as starting fresh could not start. That was fixed
+    at the call site, which leaves the next caller free to repeat it.
+
+    So this is unrepresentable rather than discouraged. `prompt` keeps its
+    default because C14 addresses it separately and changing both at once
+    would confuse which fix a regression belonged to.
+    """
     result = start_session(
         root,
         manager,

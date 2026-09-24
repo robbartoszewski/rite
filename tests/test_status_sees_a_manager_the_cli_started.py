@@ -68,6 +68,36 @@ def test_a_manager_instance_cannot_be_built_without_a_pid():
         ManagerInstance(name="lead", session="s")  # type: ignore[call-arg]
 
 
+def test_the_starter_cannot_be_called_without_a_permission_mode():
+    """C2. The DEFAULT was the defect, exactly as it was for `pid`.
+
+    ⚠ `permission=""` meant "launch with no permission flag", and a Manager
+    launched that way starts, runs, and cannot act — it stops at the first
+    operation needing approval, waiting for a human who is not there. That is
+    defect class 15: a prompt is not an exception, it is the absence of an
+    answer. Nothing fails, nothing is logged, and the session burns its
+    window doing nothing.
+
+    The same omission already shipped once on the neighbouring argument —
+    `supervise`'s fresh fallback launched with no prompt — so the enabling
+    condition is not hypothetical, it is a thing this signature has already
+    done. Correcting one caller leaves the next one to make the same mistake;
+    removing the default makes it unrepresentable.
+    """
+    from rite_ai.managers.supervise import _default_starter
+
+    with pytest.raises(TypeError):
+        _default_starter(  # type: ignore[call-arg]
+            Path("/tmp"),
+            "lead",
+            engine="sleep 1",
+            resume_id="",
+            max_sessions=1,
+            window_seconds=60,
+            prompt="do the thing",
+        )
+
+
 @pytest.mark.skipif(not _HAS_TMUX, reason="tmux is not installed")
 def test_status_reports_a_manager_started_the_way_the_cli_starts_one():
     from rite_ai.managers.supervise import _default_starter
@@ -86,6 +116,12 @@ def test_status_reports_a_manager_started_the_way_the_cli_starts_one():
             # needs something to do — this is what keeps the session alive
             # long enough for `rite status` to be asked about it.
             prompt="sleep 60",
+            # Explicit, now that C2 removed the default. This engine is a
+            # shell stub, which takes no permission flag, so "none" is the
+            # right value — and saying so is exactly the point of the
+            # change: the caller decides, rather than inheriting a default
+            # that means "launch a Manager that cannot act".
+            permission="",
             max_sessions=1,
             window_seconds=60,
         )
