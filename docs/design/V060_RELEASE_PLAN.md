@@ -546,7 +546,7 @@ correctly absent: it shipped in v0.5.1.
 | C1 | **tmux socket isolation for tests** | `V070_MULTI_MANAGER.md` §3 | The suite and a live Manager share one tmux server, so a test run can kill an operator's Manager. One autouse fixture setting `TMUX_TMPDIR`, no call-site changes. | 1 sitting |
 | C2 | **`_default_starter` defaults `permission=""`** | `PERMISSION_MODE_FOR_UNATTENDED_RUNS.md` | A caller that forgets the flag gets a Manager that cannot act. Same call site that dropped three arguments in two days. **Touched by B3** — the contract has to say who supplies it. ⚠ *Citation corrected: an earlier draft cited `V070_MULTI_MANAGER.md` §6, which is about `prompt=""` — a different default in the same signature, now C14.* | ½ sitting |
 | C3 | **The shared test starter records only the resume id** | `V070_MULTI_MANAGER.md` §7 | Tests using it are blind to prompt and permission, which is how those went unpinned. **Blocks confidence in B4/B5**, whose tests would be equally blind. | 1 sitting |
-| C4 | **Configurable permission allowlist** | `PERMISSION_MODE_FOR_UNATTENDED_RUNS.md` | 0.5.1 ships `--dangerously-skip-permissions` always, and that note **promises 0.6.0** brings an allowlist of command patterns in `.claude/settings.json`, flag still the default. Promised in a shipped document. | 2–3 sittings |
+| C4 | **Configurable permission allowlist — and it REPLACES the default** | `PERMISSION_MODE_FOR_UNATTENDED_RUNS.md`, Decision 3 | 0.5.1 ships `--dangerously-skip-permissions` always. ⚠ **Decision 3(b): the allowlist becomes the default and the flag stops being it** — a behaviour change on upgrade (C22). ⚠ **The shipped default list must be derived from observed invocations**, not imagined; too narrow means a Manager that stalls rather than fails. Proven by C20, explained by C21. ⚠ *The shipped note still says "with this flag still the default" and must be corrected in the same release.* | 2–3 sittings |
 | C5 | **The Manager's reply path still hand-writes JSON** | mailbox review, 0.5.1 | The other half of the "two writers of one format" the `send` exemption named; the User side got `rite message`. **Raised by Slack**: A1/A4 add a third participant to that format. | 1 sitting |
 | C6 | **The `tmux -e` argv trap** | `CREDENTIAL_HANDLING…md` Trap 1 | A credential passed via `-e` lands on the server's argv. **Raised by A2** — Slack introduces a second token. | 1–2 sittings |
 | C7 | **Journal redaction** | `CREDENTIAL_HANDLING…md` | `redact_secrets` exists with the right shape; the journal path does not use it. **Raised by A2** for the same reason. | 1 sitting |
@@ -559,6 +559,9 @@ correctly absent: it shipped in v0.5.1.
 | C14 | **An empty prompt file is launchable** | `V070_MULTI_MANAGER.md` §6 — **OPEN** | `_default_starter` defaults `prompt=""` and `start_session` writes `prompt.txt` "even when empty", with no guard; `claude -p` with empty stdin exits 1. The same omission already shipped once, in `supervise`'s fresh fallback. | ½–1 sitting |
 | C15 | **The real-tmux tests are load-sensitive and nondeterministic** | `V070_MULTI_MANAGER.md` §1 — **OPEN** | Proven code-independent by a markdown-only control run. Related to C1 but not the same item: C1 isolates the socket, this is the residual nondeterminism. | 1–2 sittings |
 | C16 | **Three refusals embed raw tmux stderr** | `CREDENTIAL_HANDLING…md` Trap 2 | A leak only if Trap 1 (C6) happens, and the two are coupled — which is why both belong in one release rather than one being taken alone. | ½–1 sitting |
+| C20 | ⚠ **Run the benchmark under the DEFAULT allowlist** | this plan, Decision 3 | **The observation C4 does not contain.** Run the five benchmark tasks with the shipped default allowlist in force and confirm they still pass. **Baseline is 5/5** (Goose, 32768 window). A task that stalls on approval means the list is too narrow — and that is the finding, not a test failure to work around. | 1 sitting |
+| C21 | **The refusal names the command and how to allow it** | this plan, Decision 3 | A refusal a user cannot act on is the same defect as a silent one. The message must say which command was refused and the line that would permit it. | ½ sitting |
+| C22 | ⚠ **Release notes state the upgrade behaviour change** | this plan, Decision 3 | Existing users get **different behaviour on upgrade**: a Manager that ran unattended may now stop for approval. Discovering that mid-run is the worst way to learn it. **Not optional — it is the same doc-describes-reality rule C19 exists for.** | ½ sitting |
 | C19 | ⚠ **Amend SPEC §9.15.4 and §7.3 — the QA gate is 0.7.0** | this plan, Decision 5 | Robert moved the scenario gate (D-81) out of this release. Until the spec says so, a spec reader expects a 0.6.0 deliverable that will not arrive. **Required by Decision 5; not optional.** | ½ sitting |
 | C18 | ⚠ **The local tier's docs must state the `OLLAMA_CONTEXT_LENGTH` requirement** | this plan, "Prerequisite" | Measured: at Ollama's 4,096 default the tier fails in ways that look like model and tool defects rather than configuration. B7 warns; this tells an operator what to do about it. **Pairs with B7 and should not ship without it.** | ½ sitting |
 | C17 | **`if cycles:` — the unstated exception to "designated whatever the ending"** | `V060_SESSION_CONTINUITY.md` item 3 | An interrupt before the first cycle is appended designates nothing. Looks correct; it is the one path where the stated rule does not hold, and an unstated exception is how the next person is surprised. | ½ sitting |
@@ -664,7 +667,7 @@ a later reader sees what was weighed, not just what was picked.
 |---|---|---|
 | 1 | Two permanent readers of one outbox | **(a) per-reader cursor** — readers never delete; each tracks its own position |
 | 2 | Slack message with no Manager running | **(a) refuse and say so** |
-| 3 | Permission allowlist vs the always-skip default | **(b) replaces** — ⚠ *see the note on Decision 3* |
+| 3 | Permission allowlist vs the always-skip default | **(b) replaces** — ✅ confirmed deliberately, with a condition |
 | 4 | Which agent `agent:` names | **(a) `goose`** |
 | 5 | The 0.6.0 QA gate | **(b) move to 0.7.0 and amend the spec in this release** |
 
@@ -673,12 +676,29 @@ the cheapest.** `tests/test_a_user_can_talk_to_a_running_manager.py::TestTheSupe
 deliberately pins that nothing records a sender. A per-reader cursor keeps
 that; fan-out and acknowledgement would have reversed it.
 
-⚠ **Decision 3 is HELD PENDING CONFIRMATION and C4 must not start.** (b) is a
-behaviour reversal on upgrade, and it appears to contradict what Robert said
-on 2026-09-21: *"let's make it configurable so an advanced, security-conscious
-User can set an allow list. `--dangerously-skip-permissions` stays as the
-default."* That reads as (a), beside. The question is back with him; **every
-other decision is firm and the rest of the release proceeds.**
+✅ **Decision 3 confirmed 2026-09-24, and the apparent contradiction was
+deliberate.** It was queried because it reversed what Robert said on
+2026-09-21 (*"`--dangerously-skip-permissions` stays as the default"*).
+He changed it on purpose, with a condition that is now the substance of C4:
+
+> *"Let's make the more secure option the default, just make sure the
+> allowlist is generous and covers everything a worker needs under normal
+> circumstances."*
+
+⚠ **That condition changes what C4 has to prove, and it is the risky half.**
+A default allowlist that is too narrow **does not fail loudly**. It produces a
+Manager that stalls waiting for an approval nobody is there to give — defect
+class 15, *"a prompt is not an exception, it is the absence of an answer"*.
+And the agent has form for routing around an obstacle rather than reporting
+it: when rite did not tell it how to start Workers, it improvised a bare
+`claude`.
+
+**So the default list is DERIVED FROM EVIDENCE, not imagined.** The material
+already exists: the benchmark runs, the v0.5.1 acceptance runs and the Manager
+transcripts all record what these agents actually invoked. Build from what was
+observed — git, the test runner, the build, file operations, `rite` itself,
+`gh` — rather than from a plausible-looking set. **A guessed allowlist is the
+same instrument as a guessed threshold.**
 
 **Decision 5 adds a task to this release**: amend SPEC §9.15.4 and §7.3 so
 they stop promising a 0.6.0 deliverable that is now 0.7.0. See SPEC updates.
