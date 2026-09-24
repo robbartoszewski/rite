@@ -91,3 +91,54 @@ def test_a_real_start_puts_nothing_but_allowed_names_on_tmux_argv(monkeypatch):
                 ["tmux", "kill-session", "-t", f"={result.session}"],
                 capture_output=True,
             )
+
+
+class TestARefusalDoesNotRelayWhatTmuxEchoed:
+    """C16. Three refusals put tmux's stderr in front of a user, and tmux
+    echoes what it was given. Coupled to the `-e` trap above: if a value ever
+    reaches tmux's argv, these are where it surfaces."""
+
+    @pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is not installed")
+    def test_a_real_refusal_carries_no_assigned_value_from_tmux(self):
+        """Measured before the redaction, through `stop`: tmux answered
+        `can't find window: TOKEN=<value>` and the refusal carried it. The
+        session name is only the vehicle that makes tmux echo an assignment
+        — rite's own names cannot contain one — so the value is allowed to
+        appear ONCE, where rite repeats the name it was handed, and not
+        again in what tmux said."""
+        from rite_ai.managers.session import stop
+
+        name = f"s{uuid.uuid4().hex[:6]}:TOKEN={SENTINEL}"
+        made = subprocess.run(
+            ["tmux", "new-session", "-d", "-s", name, "sleep 30"],
+            capture_output=True,
+            text=True,
+        )
+        assert made.returncode == 0, made.stderr
+        try:
+            refused = stop(name)
+            assert not refused.ok, "tmux did not refuse, so this proves nothing"
+            assert "TOKEN=[redacted]" in refused.detail, refused.detail
+            assert refused.detail.count(SENTINEL) == 1, refused.detail
+        finally:
+            listed = subprocess.run(
+                ["tmux", "list-sessions", "-F", "#{session_id} #{session_name}"],
+                capture_output=True,
+                text=True,
+            ).stdout
+            for line in listed.splitlines():
+                sid, _, sname = line.partition(" ")
+                if sname == name:
+                    subprocess.run(["tmux", "kill-session", "-t", sid])
+
+    def test_a_value_at_the_cut_leaves_only_the_marker(self):
+        """At the 200-character cut, what follows `TOKEN=` is a prefix of
+        the marker and never the start of the value."""
+        from rite_ai.managers.session import _what_tmux_said
+
+        said = "x" * 185 + f" TOKEN={SENTINEL}"
+        done = subprocess.CompletedProcess([], 1, stdout="", stderr=said)
+        out = _what_tmux_said(done)
+        assert len(out) <= 200
+        tail = out.split("TOKEN=", 1)[-1]
+        assert tail and "[redacted]".startswith(tail), out

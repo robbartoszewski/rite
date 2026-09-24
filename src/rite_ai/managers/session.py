@@ -18,6 +18,7 @@ property may fail closed, never open.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -268,6 +269,25 @@ def running(root: Path, manager: str) -> ManagerInstance | None:
     return instance
 
 
+_ASSIGNMENT = re.compile(r"([A-Za-z_][A-Za-z0-9_]*=)(\S+)")
+
+
+def _what_tmux_said(done: subprocess.CompletedProcess) -> str:
+    """tmux's own words for a refusal, safe to put in front of a person.
+
+    ⚠ **Redacted by STRUCTURE (C16).** Three refusals put
+    tmux's stderr into a message a user reads and pastes. tmux echoes what
+    it was given — measured: `stop` on a target shaped `s:TOKEN=<value>`
+    produced `can't find window: TOKEN=<value>` — so anything that ever puts
+    a `NAME=value` on tmux's argv (the `-e` trap `_on_tmux_argv` guards) would
+    surface it here. Every assignment's value is replaced whatever its name:
+    a list of secret names or values loses to the one nobody listed, and
+    rite never holds the token to search for anyway.
+    """
+    said = (done.stderr or done.stdout or "").strip()
+    return _ASSIGNMENT.sub(lambda m: m.group(1) + "[redacted]", said)[:200]
+
+
 def _rejected_the_flag(done: subprocess.CompletedProcess) -> bool:
     """Whether tmux refused because it does not KNOW `-e`, not because the
     session could not start.
@@ -493,7 +513,7 @@ def start(
         # Truncated, as `loop/session.py` truncates: tmux can emit a great
         # deal on failure and a refusal nobody can read is a refusal nobody
         # acts on.
-        detail = (done.stderr or done.stdout or "").strip()[:200]
+        detail = _what_tmux_said(done)
         return StartResult(False, f"tmux refused to start the session: {detail}")
 
     # `remain-on-exit on` so the pane survives its command and carries
@@ -871,7 +891,7 @@ def stop(name: str) -> Stopped:
     except (OSError, subprocess.SubprocessError) as e:
         return Stopped(False, False, f"could not stop {name}: {e}")
     if done.returncode != 0:
-        detail = (done.stderr or done.stdout or "").strip()[:200]
+        detail = _what_tmux_said(done)
         return Stopped(False, False, f"tmux refused to stop {name}: {detail}")
     return Stopped(True, True, f"stopped {name}")
 
@@ -957,7 +977,7 @@ def attachment(name: str) -> Attachment:
     except (OSError, subprocess.SubprocessError) as e:
         return Attachment(False, known=False, detail=f"could not ask tmux: {e}")
     if done.returncode != 0:
-        detail = (done.stderr or done.stdout or "").strip()[:200]
+        detail = _what_tmux_said(done)
         return Attachment(False, known=False, detail=f"tmux refused: {detail}")
     raw = (done.stdout or "").strip()
     try:
