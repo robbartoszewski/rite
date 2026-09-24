@@ -37,6 +37,7 @@ from rite_ai.managers.session import (
     ending,
     exit_status_available,
     liveness,
+    session_exists,
     start,
     was_attached,
 )
@@ -247,6 +248,34 @@ class TestTheThreeEndings:
         for kind in (QUIT, CRASHED, UNCLEAR):
             assert not Ending(kind).resume
         assert Ending(FINISHED).resume
+
+
+class TestTheExitStatusSurvivesACommandThatDiesAtOnce:
+    """C15. `remain-on-exit` was set by a SECOND tmux call after
+    `new-session` returned, with `check=False`. A command that exited first
+    took its window with it; the call failed ("no such window") silently and
+    the exit status was gone. Measured through `start` with `true`: the dead
+    session was held 2/20 before, 20/20 after chaining the option into the
+    same tmux command. Under load a slower command loses the same race, which
+    is the candidate cause for this file's load-sensitive failure."""
+
+    @tmux_only
+    def test_every_launch_keeps_its_dead_pane_and_status(self, tmp_path):
+        from rite_ai.managers.session import session_name
+
+        for i in range(10):
+            root = tmp_path / f"p{i}"
+            (root / ".rite").mkdir(parents=True)
+            start(root, "lead", command="true", max_sessions=1)
+            name = session_name(root, "lead")
+            try:
+                assert session_exists(name), (
+                    f"launch {i}: the session was destroyed before "
+                    "remain-on-exit took effect, so its exit status is gone"
+                )
+                assert ending(name, human_was_present=False).status == 0
+            finally:
+                subprocess.run(["tmux", "kill-session", "-t", f"={name}"])
 
 
 class TestLivenessUnderRemainOnExit:
