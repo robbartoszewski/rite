@@ -249,13 +249,20 @@ def delivery_note(messages: list[Message]) -> str:
 
 
 def how_to_reply(root: Path, manager: str) -> str:
-    """Instruction text telling a Manager where to put its replies."""
-    out = mailbox_dir(root, manager, OUTBOX)
+    """Instruction text telling a Manager how to reply.
+
+    ⚠ **A COMMAND, not a format (C5).** This used to hand the Manager a JSON
+    shape and a filename pattern to reproduce by hand, and `read` skips a
+    file it cannot use — so a reply with a wrong key was written, never
+    shown, and nobody told. `--manager` is spelled out for the reason
+    `journal.instructions` spells it: a Manager on a tmux without `-e` has no
+    `RITE_MANAGER` to default from.
+    """
     return (
         "\n\n## Talking to the User\n\n"
-        f"To ask the User something or tell them something, write a file to "
-        f'`{out}` containing JSON `{{"text": "...", "timestamp": '
-        f"<unix seconds>}}`, named `<milliseconds>_<pid>_<n>.json`. They "
-        f"read it with `rite connect {manager}`. Messages they send you "
-        f"arrive in your instructions at the start of a turn.\n"
+        f"To ask the User something or tell them something, run:\n"
+        f'  rite reply --manager {manager} "<your message>"\n'
+        f"Do not write files into the mailbox yourself. They read your replies "
+        f"with `rite connect {manager}`. Messages they send you arrive in your "
+        f"instructions at the start of a turn.\n"
     )

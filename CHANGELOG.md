@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.0 (unreleased)
+
+### A Manager replies with `rite reply`, not by writing a file
+
+A Manager used to be told to reply by writing a JSON file into its outbox
+with a particular name and shape. A reply written with a wrong key was left
+on disk and never shown to you, and nothing told either side. It now runs
+one command, the same validated writer `rite message` uses for your side:
+
+    rite reply --manager lead "ticket 12 needs an API key — skip it?"
+
+You read replies exactly as before. Unlike the opening prompt, these reply
+instructions are given with every turn, so a Manager continued by a plain
+`rite start <manager>` on this version gets them at its next turn — no
+`--fresh` needed.
+
 ## 0.5.1 (2026-09-21)
 
 ### Talk to a running Manager — `rite connect <manager>`
