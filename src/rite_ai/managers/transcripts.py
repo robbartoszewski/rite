@@ -201,7 +201,9 @@ _DENIAL = re.compile(
 _NAMED_PART = re.compile(r"following part requires approval:\s*(.+)", re.I | re.S)
 
 
-def refused_commands(root: Path, since: float = 0.0, base: Path | None = None) -> list[str]:
+def refused_commands(
+    root: Path, since: float = 0.0, base: Path | None = None
+) -> list[str]:
     """Commands this project's recent sessions were REFUSED, most recent last.
 
     ⚠ **Without this, a refusal is invisible to rite.** The engine tells the
@@ -251,7 +253,7 @@ def _refused_in(path: Path) -> list[str]:
             entry = json.loads(line)
         except (ValueError, TypeError):
             continue
-        for block in ((entry.get("message") or {}).get("content") or []):
+        for block in (entry.get("message") or {}).get("content") or []:
             if not isinstance(block, dict):
                 continue
             if block.get("type") == "tool_use" and block.get("name") == "Bash":

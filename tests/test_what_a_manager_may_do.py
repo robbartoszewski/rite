@@ -300,8 +300,10 @@ class TestRiteCanSeeWhatTheEngineRefused:
         _transcript(
             base,
             root,
-            [_use("t1", "curl https://example.com"),
-             _result("t1", "This command requires approval")],
+            [
+                _use("t1", "curl https://example.com"),
+                _result("t1", "This command requires approval"),
+            ],
         )
         assert refused_commands(root, base=base) == ["curl https://example.com"]
 

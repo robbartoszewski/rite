@@ -34,14 +34,27 @@ and what was added on purpose without evidence.
 
 Each of these WAS observed, and each is excluded anyway:
 
-| command | seen | why not |
-|---|---|---|
-| `bash`, `sh` | 119, 54 | A shell wrapper defeats the list entirely — `bash -c "curl …"` is one hop around every other row. Allowing these would make the rest decorative. |
-| `security`, `launchctl` | 79, 34 | Keychain and system-daemon access. Observed only in developer sessions, never in a Manager run. `security find-generic-password` is how a credential leaves this machine. |
-| `kill`, `pkill` | 53, 52 | A Manager that may kill processes may kill its own supervisor. |
-| `curl`, `wget` | 79, 0 | Arbitrary network egress. The observed GitHub need is served by `gh`. |
-| `claude` | 48 | ⚠ **This one is the documented failure.** Told nothing about how to start Workers, a Manager improvised a bare `claude` and the Workers died on launch. `rite sandbox start` is the supported route and the prompt now says so; granting `claude` re-opens the road around it. |
-| `sudo`, `ssh`, `docker` | 1, 2, 10 | Barely observed, and each widens the blast radius past this project. |
+**`bash`, `sh`** — seen 119, 54. A shell wrapper defeats the list entirely:
+`bash -c "curl …"` is one hop around every other row. Allowing these would
+make the rest decorative.
+
+**`security`, `launchctl`** — seen 79, 34. Keychain and system-daemon access.
+Observed only in developer sessions, never in a Manager run.
+`security find-generic-password` is how a credential leaves this machine.
+
+**`kill`, `pkill`** — seen 53, 52. A Manager that may kill processes may kill
+its own supervisor.
+
+**`curl`, `wget`** — seen 79, 0. Arbitrary network egress. The observed
+GitHub need is served by `gh`.
+
+**`claude`** — seen 48. ⚠ **This one is the documented failure.** Told
+nothing about how to start Workers, a Manager improvised a bare `claude` and
+the Workers died on launch. `rite sandbox start` is the supported route and
+the prompt now says so; granting `claude` re-opens the road around it.
+
+**`sudo`, `ssh`, `docker`** — seen 1, 2, 10. Barely observed, and each widens
+the blast radius past this project.
 
 ⚠ **The list is a speed bump, not a sandbox, and the announcement must keep
 saying so.** `git` runs hooks; `python -c` runs anything. A Manager is still
@@ -82,13 +95,33 @@ not a property of the repository."""
 
 OBSERVED_ALLOW: tuple[str, ...] = (
     # Reading and navigating the project. The long tail of every run.
-    "Bash(echo:*)", "Bash(cd:*)", "Bash(ls:*)", "Bash(cat:*)",
-    "Bash(head:*)", "Bash(tail:*)", "Bash(grep:*)", "Bash(sed:*)",
-    "Bash(awk:*)", "Bash(cut:*)", "Bash(tr:*)", "Bash(sort:*)",
-    "Bash(uniq:*)", "Bash(wc:*)", "Bash(find:*)", "Bash(diff:*)",
-    "Bash(file:*)", "Bash(realpath:*)", "Bash(pwd:*)", "Bash(which:*)",
-    "Bash(date:*)", "Bash(printf:*)", "Bash(true:*)", "Bash(test:*)",
-    "Bash(env:*)", "Bash(xargs:*)", "Bash(stat:*)",
+    "Bash(echo:*)",
+    "Bash(cd:*)",
+    "Bash(ls:*)",
+    "Bash(cat:*)",
+    "Bash(head:*)",
+    "Bash(tail:*)",
+    "Bash(grep:*)",
+    "Bash(sed:*)",
+    "Bash(awk:*)",
+    "Bash(cut:*)",
+    "Bash(tr:*)",
+    "Bash(sort:*)",
+    "Bash(uniq:*)",
+    "Bash(wc:*)",
+    "Bash(find:*)",
+    "Bash(diff:*)",
+    "Bash(file:*)",
+    "Bash(realpath:*)",
+    "Bash(pwd:*)",
+    "Bash(which:*)",
+    "Bash(date:*)",
+    "Bash(printf:*)",
+    "Bash(true:*)",
+    "Bash(test:*)",
+    "Bash(env:*)",
+    "Bash(xargs:*)",
+    "Bash(stat:*)",
     # Source control. 9,971 invocations — the single largest real tool.
     "Bash(git:*)",
     # rite itself. 1,398 — and `rite --version` being refused is the exact
@@ -97,28 +130,55 @@ OBSERVED_ALLOW: tuple[str, ...] = (
     # The Worker sandbox a Manager is told to start Workers with.
     "Bash(yoloai:*)",
     # Running and testing code.
-    "Bash(python:*)", "Bash(python3:*)", "Bash(pytest:*)", "Bash(uv:*)",
-    "Bash(pip:*)", "Bash(node:*)", "Bash(npm:*)", "Bash(npx:*)",
-    "Bash(go:*)", "Bash(ruff:*)",
+    "Bash(python:*)",
+    "Bash(python3:*)",
+    "Bash(pytest:*)",
+    "Bash(uv:*)",
+    "Bash(pip:*)",
+    "Bash(node:*)",
+    "Bash(npm:*)",
+    "Bash(npx:*)",
+    "Bash(go:*)",
+    "Bash(ruff:*)",
     # Changing files, which is the job.
-    "Bash(mkdir:*)", "Bash(cp:*)", "Bash(mv:*)", "Bash(rm:*)",
-    "Bash(touch:*)", "Bash(chmod:*)", "Bash(ln:*)", "Bash(tee:*)",
+    "Bash(mkdir:*)",
+    "Bash(cp:*)",
+    "Bash(mv:*)",
+    "Bash(rm:*)",
+    "Bash(touch:*)",
+    "Bash(chmod:*)",
+    "Bash(ln:*)",
+    "Bash(tee:*)",
     # The board.
     "Bash(gh:*)",
     # Watching its own work.
-    "Bash(ps:*)", "Bash(pgrep:*)", "Bash(sleep:*)", "Bash(tmux:*)",
+    "Bash(ps:*)",
+    "Bash(pgrep:*)",
+    "Bash(sleep:*)",
+    "Bash(tmux:*)",
     # The local tier. `agent: goose` is 0.6.0's decided default, so a
     # Manager on that tier reaches for these the way it reaches for `git`.
-    "Bash(goose:*)", "Bash(ollama:*)", "Bash(opencode:*)",
+    "Bash(goose:*)",
+    "Bash(ollama:*)",
+    "Bash(opencode:*)",
     # Verification a Worker was observed running.
-    "Bash(gitleaks:*)", "Bash(sqlite3:*)", "Bash(df:*)",
+    "Bash(gitleaks:*)",
+    "Bash(sqlite3:*)",
+    "Bash(df:*)",
 )
 """Every entry here led at least one recorded Bash invocation."""
 
 GENEROUS_ALLOW: tuple[str, ...] = (
-    "Bash(basename:*)", "Bash(dirname:*)", "Bash(uvx:*)", "Bash(pip3:*)",
-    "Bash(make:*)", "Bash(cargo:*)", "Bash(mypy:*)", "Bash(black:*)",
-    "Bash(xcodebuild:*)", "Bash(xcrun:*)",
+    "Bash(basename:*)",
+    "Bash(dirname:*)",
+    "Bash(uvx:*)",
+    "Bash(pip3:*)",
+    "Bash(make:*)",
+    "Bash(cargo:*)",
+    "Bash(mypy:*)",
+    "Bash(black:*)",
+    "Bash(xcodebuild:*)",
+    "Bash(xcrun:*)",
 )
 """⚠ **NOT observed — added deliberately, and separated so nobody later
 mistakes them for evidence.**
@@ -145,20 +205,20 @@ NOT_ALLOWED: dict[str, str] = {
     "curl": "arbitrary network egress; the observed GitHub need is served by `gh`",
     "wget": "as `curl`",
     "claude": "⚠ the documented route-around: told nothing about starting "
-              "Workers, a Manager improvised a bare `claude` and they died on "
-              "launch. `rite sandbox start` is the supported route",
+    "Workers, a Manager improvised a bare `claude` and they died on "
+    "launch. `rite sandbox start` is the supported route",
     "sudo": "privilege escalation",
     "ssh": "reaches another machine",
     "docker": "reaches outside the project and can mount the rest of the disk",
     "brew": "installs software system-wide; unattended package installation "
-            "is a surprise rather than normal Worker work",
+    "is a surprise rather than normal Worker work",
     "log": "macOS unified logging — a developer diagnostic, never agent work",
     "sample": "as `log`",
     "uptime": "as `log`",
     "mount": "as `log`, and changes the filesystem the project sits on",
     "md5": "as `log`; `shasum` covers the same need and was not needed either",
     "install": "a coreutils/BSD file installer that was noise in the corpus, "
-               "not a thing any run needed",
+    "not a thing any run needed",
 }
 """⚠ **Observed and refused anyway, each with its reason.**
 
@@ -256,8 +316,8 @@ def refusal(command: str, root: Path) -> str:
     return (
         f"refused: {command.strip()!r} — {head!r} is not in the permission "
         f"allowlist rite passes to the engine.\n"
-        f"To permit it, add this line to the \"allow\" list in "
-        f'{Path(".claude") / "settings.json"} in this project:\n'
+        f'To permit it, add this line to the "allow" list in '
+        f"{Path('.claude') / 'settings.json'} in this project:\n"
         f'    "Bash({head}:*)"\n'
         f"rite's own list is at {settings_path(root)} and is rewritten every "
         f"run, so edit the project file rather than that one."

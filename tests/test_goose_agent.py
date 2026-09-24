@@ -113,7 +113,8 @@ class TestItChecksBeforeItSpends:
         agent = _agent(
             probe=lambda: _Probe(
                 [
-                    "manager local: its model is being served with a 4096-token context window"
+                    "manager local: its model is being served with a "
+                    "4096-token context window"
                 ]
             ),
             launch=lambda *a: _completed(),
