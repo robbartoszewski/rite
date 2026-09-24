@@ -233,6 +233,21 @@ def instructions(root: Path, manager: str, *, enabled: bool = True) -> str:
     unanchored entries D-87 exists to prevent. Once the refusal lives
     behind a command, naming the command is part of the instruction or the
     mechanism is optional.
+
+    ⚠ **`--manager` IS SPELLED OUT ON PURPOSE, and it is not redundant.**
+    It looks redundant since `RITE_MANAGER`, and was carried into 0.6.0 as a
+    tidy-up to remove (C13). Measured before doing it: the variable reaches
+    the pane only through `tmux new-session -e`, and on a tmux older than 3.2
+    `start` falls back to a launch WITHOUT it — saying, in its own start
+    message, that these commands will refuse until given `--manager`. Run
+    through the CLI with `RITE_MANAGER` unset:
+
+        rite journal observe --manager lead --anchor … ->  recorded
+        rite journal observe --anchor …                 ->  refused, rc 1
+
+    So on that path the literal name in this text is the only identity the
+    Manager has, and removing it turns a working journal into a refused one.
+    Where the variable IS set the two agree, so spelling it costs nothing.
     """
     if not enabled:
         return ""

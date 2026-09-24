@@ -406,6 +406,16 @@ def test_the_instructions_say_where_when_and_HOW(tmp_path):
     assert "anchor" in text, "the anchor requirement is not stated"
 
 
+def test_the_instructions_name_the_manager_on_every_command(tmp_path):
+    """C13, resolved the other way. `--manager` looks redundant since
+    `RITE_MANAGER`, but a Manager launched by the tmux<3.2 fallback has no
+    `RITE_MANAGER`, and without the flag its `rite journal` commands refuse.
+    This pins it so a rewording does not quietly drop it."""
+    text = journal.instructions(tmp_path, "lead")
+    assert "rite journal observe --manager lead" in text
+    assert "rite journal retrospective --manager lead" in text
+
+
 def test_the_prompt_carries_the_instructions_only_with_the_flag(tmp_path):
     """The seam between this item and the prompting one, asserted end to end.
 
