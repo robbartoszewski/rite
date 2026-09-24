@@ -174,7 +174,9 @@ def _starter(calls: list, fail_on_resume: bool = False):
 
 
 def _quiet(monkeypatch, mod):
-    monkeypatch.setattr(mod, "liveness", lambda n: type("L", (), {"alive": False})())
+    monkeypatch.setattr(
+        mod, "liveness", lambda n: type("L", (), {"alive": False, "known": True})()
+    )
     monkeypatch.setattr(mod, "was_attached", lambda n: False)
     monkeypatch.setattr(mod, "stop_session", lambda n: None)
     monkeypatch.setattr(
