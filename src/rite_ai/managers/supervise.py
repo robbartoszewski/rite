@@ -385,13 +385,32 @@ def supervise(
     verdict: object = None,
     note: object = None,
     starter: object = None,
+    engine_ready: object = None,
     resume_id_for: object = None,
     poll: float = POLL_SECONDS,
     now: object = None,
 ) -> SuperviseResult:
     """Run the Manager until a bound or a stop verdict ends it.
 
-    `verdict`, `starter`, `resume_id_for` and `now` are injectable so this
+    ⚠ **`engine_ready` is checked BEFORE EVERY CYCLE, and its absence is
+    how a local Manager would spend a whole window doing nothing.**
+    `ending` classifies a cycle by the engine's exit status, which is
+    correct for `claude -p` — its exit IS the boundary. **It is not correct
+    for every engine.** Measured 2026-09-24: `goose run` returns **exit 0**
+    for a model that does not exist and **exit 0** for an unreachable
+    provider. So a Goose Manager pointed at a dead endpoint would be read as
+    `finished` every cycle, and this loop would keep starting sessions until
+    `--sessions` or `--minutes` ran out — the whole window spent, nothing
+    done, every cycle reported clean. That is RL-47's night arriving at the
+    Manager tier.
+
+    It returns the reasons this engine is not usable, or an empty list. It
+    is checked **before the mail is taken**, because `take_mail` deletes what
+    it reads and a cycle abandoned after that would lose the messages it was
+    carrying.
+
+    `verdict`, `starter`, `engine_ready`, `resume_id_for` and `now` are
+    injectable so this
     can be driven without spending anything. They are NOT an abstraction
     boundary — see the module docstring; they exist so the bounds can be
     verified by running rather than by reading, which is the only way to
@@ -486,6 +505,26 @@ def supervise(
                 f"({len(cycles)} session(s) started)",
                 cycles,
             )
+
+        if callable(engine_ready):
+            # ⚠ BEFORE `take_mail`. Taking mail deletes it, so a cycle
+            # abandoned after that point would lose the message it was
+            # about to deliver.
+            not_ready = list(engine_ready())
+            if not_ready:
+                return SuperviseResult(
+                    False,
+                    f"stopped after {len(cycles)} session(s): the engine is "
+                    f"not usable, so no session was started. "
+                    + " ".join(not_ready)
+                    + " Nothing was spent on this cycle. ⚠ This is checked "
+                    "because an engine's exit status does not always say a "
+                    "run failed — measured, `goose run` exits 0 for an "
+                    "unreachable provider — so without this the run would "
+                    "look like a clean cycle and repeat until its bounds "
+                    "ran out.",
+                    cycles,
+                )
 
         if callable(verdict):
             answer = verdict(root)
