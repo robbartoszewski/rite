@@ -9,6 +9,7 @@ continuation the default and starting over explicit
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 from rite_ai.managers import (
@@ -69,11 +70,57 @@ class TestTheDesignationOutlivesTheRun:
         assert designated(root, "lead") == ""
 
 
+@dataclass(frozen=True)
+class Launch:
+    """Every argument a launch was handed — not just the one a test looked at.
+
+    ⚠ **THIS RECORDER USED TO KEEP ONLY `resume_id`** and swallow the rest
+    into `**kw`, and that is how a real defect survived a green suite: the
+    fresh fallback in `supervise` launched with no prompt, the harness could
+    not see the argument, so no assertion built on it could either. The
+    permission mode was invisible the same way and was missing from the same
+    call.
+
+    **A recorder is a measuring instrument, and one that cannot see an
+    argument reports every value of it as correct.** `extra` catches anything
+    added to the launch that this class does not name yet, so the next
+    argument to appear is visible on the day it appears rather than on the
+    day it goes missing.
+    """
+
+    resume_id: str
+    prompt: str
+    permission: str
+    engine: str
+    max_sessions: int
+    window_seconds: float
+    extra: dict
+
+
 def _starter(calls: list, fail_on_resume: bool = False):
     def starter(
-        root, manager, *, engine, resume_id, max_sessions, window_seconds, **kw
+        root,
+        manager,
+        *,
+        engine,
+        resume_id,
+        max_sessions,
+        window_seconds,
+        prompt="",
+        permission="",
+        **kw,
     ):
-        calls.append(resume_id)
+        calls.append(
+            Launch(
+                resume_id=resume_id,
+                prompt=prompt,
+                permission=permission,
+                engine=engine,
+                max_sessions=max_sessions,
+                window_seconds=window_seconds,
+                extra=dict(kw),
+            )
+        )
         if fail_on_resume and resume_id:
             # ⚠ The engine refusing a resume. Detected by the START FAILING,
             # never by matching its words: a bad id and a well-formed unknown
@@ -118,7 +165,9 @@ class TestABareStartContinues:
             verdict=lambda _r: "ready",
             starter=_starter(calls),
         )
-        assert calls == ["YESTERDAY"], f"cycle one did not continue: {calls}"
+        assert [c.resume_id for c in calls] == ["YESTERDAY"], (
+            f"cycle one did not continue: {calls}"
+        )
 
     def test_no_designation_starts_fresh_and_says_which(self, tmp_path, monkeypatch):
         import rite_ai.managers.supervise as sup
@@ -137,7 +186,7 @@ class TestABareStartContinues:
             starter=_starter(calls),
             note=said.append,
         )
-        assert calls == [""]
+        assert [c.resume_id for c in calls] == [""]
         assert any("no previous session" in m.lower() for m in said), said
 
 
@@ -164,7 +213,7 @@ class TestAGoneSessionFallsBackLOUDLY:
             starter=_starter(calls, fail_on_resume=True),
             note=said.append,
         )
-        assert calls == ["PRUNED", ""], (
+        assert [c.resume_id for c in calls] == ["PRUNED", ""], (
             f"it did not fall back to a fresh start: {calls}"
         )
         assert result.ok
@@ -253,7 +302,9 @@ class TestFreshRedesignates:
             starter=_starter(calls),
             fresh=True,
         )
-        assert calls == [""], f"--fresh continued anyway: {calls}"
+        assert [c.resume_id for c in calls] == [""], (
+            f"--fresh continued anyway: {calls}"
+        )
 
     def test_fresh_REWRITES_the_designation(self, tmp_path, monkeypatch):
         import rite_ai.managers.supervise as sup
@@ -347,30 +398,10 @@ class TestTheFreshFallbackIsGivenSomethingToDo:
     instruction was discarded on the one path designed to recover.
     """
 
-    def _recording_starter(self, seen: list):
-        def starter(
-            root,
-            manager,
-            *,
-            engine,
-            resume_id,
-            max_sessions,
-            window_seconds,
-            prompt="",
-            **kw,
-        ):
-            seen.append(
-                {
-                    "resume_id": resume_id,
-                    "prompt": prompt,
-                    "permission": kw.get("permission", ""),
-                }
-            )
-            if resume_id:
-                return StartResult(False, "engine exited immediately")
-            return StartResult(True, "ok", session="s1", attach="a", pane="%1")
-
-        return starter
+    # ⚠ This class used to carry its own private recorder, because the
+    # shared `_starter` could not see `prompt` or `permission`. C3 fixed the
+    # shared one, so the workaround is gone: two recorders drifting apart is
+    # the same hazard as one that cannot see, arriving more slowly.
 
     def test_the_relaunch_is_given_the_opening_prompt(self, tmp_path, monkeypatch):
         import rite_ai.managers.supervise as sup
@@ -387,19 +418,19 @@ class TestTheFreshFallbackIsGivenSomethingToDo:
             window_seconds=0,
             prompt="OPENING INSTRUCTION: do the work",
             verdict=lambda _r: "ready",
-            starter=self._recording_starter(seen),
+            starter=_starter(seen, fail_on_resume=True),
             note=lambda _m: None,
         )
         assert len(seen) == 2, f"expected a resumed try then a fresh one: {seen}"
-        assert seen[1]["resume_id"] == "", "the fallback must not resume"
-        assert seen[1]["prompt"], (
+        assert seen[1].resume_id == "", "the fallback must not resume"
+        assert seen[1].prompt, (
             "the fresh relaunch was handed NO prompt. `claude -p` with empty "
             "stdin exits 1, so the run rite just announced as starting fresh "
             "cannot start at all — and the operator's instruction is gone"
         )
-        assert "OPENING INSTRUCTION" in seen[1]["prompt"], (
+        assert "OPENING INSTRUCTION" in seen[1].prompt, (
             f"the relaunch got something other than the opening prompt: "
-            f"{seen[1]['prompt']!r}"
+            f"{seen[1].prompt!r}"
         )
         # ⚠ THE SAME CALL LOST THE PERMISSION MODE TOO, and for the same
         # reason: `permission=` was added to the FIRST launch when the
@@ -407,10 +438,10 @@ class TestTheFreshFallbackIsGivenSomethingToDo:
         # adds the flag `if permission`, so the fallback ran `claude -p`
         # with none — which the permission design records as "a working loop
         # around a Manager that cannot act".
-        assert seen[1]["permission"] == seen[0]["permission"], (
+        assert seen[1].permission == seen[0].permission, (
             f"the fresh relaunch was given a different permission mode from "
-            f"the resumed attempt: {seen[0]['permission']!r} then "
-            f"{seen[1]['permission']!r}. A Manager with no permission mode "
+            f"the resumed attempt: {seen[0].permission!r} then "
+            f"{seen[1].permission!r}. A Manager with no permission mode "
             "starts and can do nothing"
         )
 
@@ -432,10 +463,98 @@ class TestTheFreshFallbackIsGivenSomethingToDo:
             window_seconds=0,
             prompt="OPENING INSTRUCTION: do the work",
             verdict=lambda _r: "ready",
-            starter=self._recording_starter(seen),
+            starter=_starter(seen, fail_on_resume=True),
             note=lambda _m: None,
         )
-        assert "OPENING INSTRUCTION" not in seen[0]["prompt"], (
+        assert "OPENING INSTRUCTION" not in seen[0].prompt, (
             "a continuation was handed the opening instruction — the failure "
             "D-90 was amended to prevent"
         )
+
+
+class TestTheRecorderCanSeeWhatItIsRecording:
+    """C3. The recorder is the instrument; these are its calibration.
+
+    ⚠ **A green suite with a blind recorder proves nothing**, which is the
+    whole point of this ticket. `supervise`'s fresh fallback shipped without
+    a prompt and without a permission mode, through a harness that kept only
+    `resume_id` — every assertion built on that harness passed, because none
+    of them could see the arguments that were missing.
+
+    So these do not test `supervise`. They test that the harness would NOTICE
+    if `supervise` stopped passing something — which is exactly what the two
+    mutations recorded in the commit message demonstrate.
+    """
+
+    def test_a_launch_records_the_prompt_it_was_handed(self, tmp_path, monkeypatch):
+        import rite_ai.managers.supervise as sup
+
+        root = _project(tmp_path)
+        _quiet(monkeypatch, sup)
+        calls: list = []
+        supervise(
+            root,
+            "lead",
+            engine="claude",
+            max_sessions=1,
+            window_seconds=0,
+            prompt="ORIENT-ME",
+            verdict=lambda _r: "ready",
+            starter=_starter(calls),
+        )
+        assert calls, "nothing launched, so this measures nothing"
+        # The cycle instruction is the operator's prompt with the mailbox
+        # reply instructions appended, so this checks the operator's text
+        # LEADS it rather than equalling it — appending is the behaviour, and
+        # a test asserting equality would break on any addition to that text
+        # while proving nothing more.
+        assert calls[0].prompt.startswith("ORIENT-ME"), (
+            "the launch did not carry the operator's instruction, or the "
+            f"recorder cannot see it: {calls[0]}"
+        )
+
+    def test_a_launch_records_the_permission_mode_it_was_handed(
+        self, tmp_path, monkeypatch
+    ):
+        """⚠ The argument whose absence produced a Manager that ran three
+        cycles and could not act. Invisible to the old recorder."""
+        import rite_ai.managers.supervise as sup
+        from rite_ai.managers.permissions import PERMISSION_FLAG
+
+        root = _project(tmp_path)
+        _quiet(monkeypatch, sup)
+        calls: list = []
+        supervise(
+            root,
+            "lead",
+            engine="claude",
+            max_sessions=1,
+            window_seconds=0,
+            prompt="go",
+            verdict=lambda _r: "ready",
+            starter=_starter(calls),
+        )
+        assert calls, "nothing launched, so this measures nothing"
+        assert calls[0].permission == PERMISSION_FLAG, (
+            "the launch carried no permission mode, so the Manager would "
+            f"start and be unable to act: {calls[0]}"
+        )
+
+    def test_an_argument_the_recorder_does_not_name_is_still_captured(self):
+        """`extra` is what stops this fix from being a one-time patch. An
+        argument added to the launch tomorrow is visible the day it appears,
+        not the day somebody notices it went missing."""
+        calls: list = []
+        starter = _starter(calls)
+        starter(
+            Path("/tmp"),
+            "lead",
+            engine="claude",
+            resume_id="",
+            max_sessions=1,
+            window_seconds=0,
+            prompt="p",
+            permission="--flag",
+            something_new="SEEN",
+        )
+        assert calls[0].extra == {"something_new": "SEEN"}, calls[0]
