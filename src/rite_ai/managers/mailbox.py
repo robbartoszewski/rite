@@ -148,7 +148,15 @@ def send(root: Path, manager: str, box: str, text: str) -> Path:
     where = mailbox_dir(root, manager, box)
     where.mkdir(parents=True, exist_ok=True)
     ts = time.time()
-    path = where / f"{int(ts * 1000)}_{os.getpid()}_{next(_SEQUENCE)}.json"
+    # ⚠ ZERO-PADDED, because the name IS the order. `read` sorts filenames
+    # and a reader's cursor is a filename comparison, so an unpadded
+    # counter put `…_10.json` BEFORE `…_9.json` within one millisecond —
+    # found when the suite's own sends pushed the counter across a digit and
+    # `test_order_is_send_order` read ['third', 'first', 'second']. Past a
+    # cursor that is not misordering but loss: the later message sorts behind
+    # a position the reader has already passed. Widths cover every pid Linux
+    # and macOS issue (≤ 7 digits) and a counter no process reaches.
+    path = where / f"{int(ts * 1000)}_{os.getpid():07d}_{next(_SEQUENCE):012d}.json"
     write_atomic(path, json.dumps({"text": text, "timestamp": ts}) + "\n")
     return path
 
@@ -249,13 +257,20 @@ def delivery_note(messages: list[Message]) -> str:
 
 
 def how_to_reply(root: Path, manager: str) -> str:
-    """Instruction text telling a Manager where to put its replies."""
-    out = mailbox_dir(root, manager, OUTBOX)
+    """Instruction text telling a Manager how to reply.
+
+    ⚠ **A COMMAND, not a format (C5).** This used to hand the Manager a JSON
+    shape and a filename pattern to reproduce by hand, and `read` skips a
+    file it cannot use — so a reply with a wrong key was written, never
+    shown, and nobody told. `--manager` is spelled out for the reason
+    `journal.instructions` spells it: a Manager on a tmux without `-e` has no
+    `RITE_MANAGER` to default from.
+    """
     return (
         "\n\n## Talking to the User\n\n"
-        f"To ask the User something or tell them something, write a file to "
-        f'`{out}` containing JSON `{{"text": "...", "timestamp": '
-        f"<unix seconds>}}`, named `<milliseconds>_<pid>_<n>.json`. They "
-        f"read it with `rite connect {manager}`. Messages they send you "
-        f"arrive in your instructions at the start of a turn.\n"
+        f"To ask the User something or tell them something, run:\n"
+        f'  rite reply --manager {manager} "<your message>"\n'
+        f"Do not write files into the mailbox yourself. They read your replies "
+        f"with `rite connect {manager}`. Messages they send you arrive in your "
+        f"instructions at the start of a turn.\n"
     )

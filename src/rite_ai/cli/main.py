@@ -6255,6 +6255,65 @@ def replies(manager_name: str, reader: str, peek: bool) -> None:
         mark_read(root, manager_name, OUTBOX, reader, waiting_for_reader)
 
 
+@cli.command("reply")
+@click.argument("text")
+@click.option(
+    "--manager",
+    default="",
+    help="Which Manager is speaking. Inside a Manager's own session it "
+    "defaults to that Manager and can be left out.",
+)
+def reply(text: str, manager: str) -> None:
+    """Say something to the User, from a Manager — read with `rite replies`.
+
+    ⚠ **The Manager's half of what `rite message` did for the User (C5).**
+    A Manager was instructed to write the outbox file itself: a JSON shape,
+    a filename pattern, a directory. `read` skips a file it cannot use rather
+    than failing the run, so a reply with the wrong key was on disk and never
+    shown — measured, `{"message": ...}` in the outbox and `rite replies`
+    said "nothing new". A question the Manager believes it asked and the User
+    never sees is the channel failing silently. One command, the same
+    validated writer, no shape to get wrong.
+
+    Examples:
+      rite reply --manager planner "ticket 12 needs an API key — skip it?"
+    """
+    from rite_ai.managers import current_manager
+    from rite_ai.managers.mailbox import OUTBOX, send
+
+    root = _require_project_root()
+    speaking = (manager or "").strip() or current_manager()
+    if not speaking:
+        click.echo(
+            "refusing to reply: no --manager, and this process is not running "
+            "as one (no RITE_MANAGER in the environment). Pass --manager "
+            "<name>, or run this inside the session `rite start <name>` "
+            "created.",
+            err=True,
+        )
+        raise SystemExit(1)
+    roles, problems = _manager_roles(root)
+    if problems:
+        click.echo("cannot read this project's Managers:", err=True)
+        for problem in problems[:3]:
+            click.echo(f"  {problem}", err=True)
+        raise SystemExit(1)
+    if speaking not in {r.name for r in roles}:
+        known = ", ".join(sorted(r.name for r in roles)) or "none declared"
+        click.echo(f"no Manager named {speaking!r} in this project — {known}", err=True)
+        raise SystemExit(1)
+    if not text.strip():
+        # Refused for the reason `rite message` refuses: `read` skips blank
+        # text, so the file would be written and never shown.
+        click.echo("refusing to send an empty reply.", err=True)
+        raise SystemExit(1)
+
+    send(root, speaking, OUTBOX, text)
+    click.echo(
+        f"reply queued from {speaking!r} — the User reads it with `rite replies`."
+    )
+
+
 @cli.command("message")
 @click.argument("manager_name")
 @click.argument("text")

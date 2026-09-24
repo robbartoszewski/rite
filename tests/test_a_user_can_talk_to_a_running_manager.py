@@ -280,4 +280,7 @@ class TestItReachesTheManagerAndComesBack:
             starter=starter,
             poll=0,
         )
-        assert str(mailbox_dir(tmp_path, "lead", OUTBOX)) in seen[0]
+        # C5: told a COMMAND, not the outbox path. A path invited the Manager
+        # to hand-write the file, and a wrong key was never shown.
+        assert "rite reply --manager lead" in seen[0]
+        assert str(mailbox_dir(tmp_path, "lead", OUTBOX)) not in seen[0]
