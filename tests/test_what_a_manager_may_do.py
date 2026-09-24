@@ -386,3 +386,33 @@ class TestTheUserIsToldAboutARefusal:
         said: list[str] = []
         sup._say_refusals(tmp_path, 0.0, said.append)
         assert len(said) == 1
+
+
+class TestTheDocsDescribeWhatShips:
+    """⚠ Defect class 6, prose and code drifting apart. The README quotes
+    the announcement verbatim and names a COUNT, and the count changes every
+    time somebody adds a command to the list."""
+
+    def _readme(self) -> str:
+        return (Path(__file__).parent.parent / "README.md").read_text()
+
+    def test_the_readme_quotes_the_announcement_this_release_prints(self):
+        printed = announcement("planner")
+        # The README wraps it to fit a console block, so compare on words.
+        assert " ".join(self._readme().split()).count(" ".join(printed.split())) == 1, (
+            "the README's permissions block is not what rite prints any more"
+        )
+
+    def test_the_readme_does_not_still_promise_the_old_flag_as_default(self):
+        """C4 named this explicitly: the shipped note said the allowlist
+        would arrive 'with this flag still the default', and it did not."""
+        assert "still the default" not in self._readme()
+
+    def test_the_changelog_says_the_behaviour_CHANGES_on_upgrade(self):
+        """C22. Existing users get different behaviour, and discovering that
+        mid-run is the worst way to learn it."""
+        changelog = (Path(__file__).parent.parent / "CHANGELOG.md").read_text()
+        unreleased = changelog.split("## 0.5.1")[0]
+        assert "BEHAVIOUR CHANGE ON UPGRADE" in unreleased
+        assert "--dangerously-skip-permissions" in unreleased
+        assert "--permission-prompts none" in unreleased

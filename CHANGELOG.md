@@ -2,6 +2,72 @@
 
 ## Unreleased
 
+### ⚠ BEHAVIOUR CHANGE ON UPGRADE — a Manager is no longer ungated
+
+**0.5.1 launched every Manager with `--dangerously-skip-permissions`. This release
+does not.** A Manager now runs against a **permission allowlist**, and a
+command outside it is **refused**.
+
+**What this means for you if you are upgrading.** A Manager that ran
+unattended under 0.5.1 may now stop short of something it used to do. It
+will not hang waiting for you — rite passes `--permission-prompts none`, so
+anything that would have asked is denied immediately and the cycle carries
+on — but work that depended on a command outside the list will not happen,
+and rite will print the refusal and the line that would permit it:
+
+```console
+refused: 'curl https://example.com' — 'curl' is not in the permission
+allowlist rite passes to the engine.
+To permit it, add this line to the "allow" list in .claude/settings.json
+in this project:
+    "Bash(curl:*)"
+```
+
+The exact command in the pane is now:
+
+```console
+claude -p --settings <rite's list> --permission-prompts none --resume <id> < <prompt file>
+```
+
+**The list is deliberately generous**, because the failure mode of a narrow
+one is not a visible error. It is a Manager stalled on an approval nobody
+is there to give — and in the run that motivated all of this, three cycles
+each exited 0 having read no ticket and produced no artifact. So the
+default was **derived from what these agents were measured invoking**:
+14,981 recorded Bash invocations across the 0.5.1 acceptance runs, the
+permission probes and this project's own sessions. `git`, `rite`, `gh`,
+`python`, `uv`, `pytest`, the file and text tools, `yoloai`, `goose` and
+`ollama` are all in it. `tests/data/observed_commands.json` carries the
+evidence, and a test requires every command in it to be either allowed or
+refused **with a stated reason** — so a later narrowing has to be argued
+for rather than slipped in.
+
+**A shell is not on the list.** `bash`, `sh` and `zsh` are excluded because
+`bash -c "…"` is one hop around every other entry. Neither is `curl`,
+`sudo`, `ssh`, `docker`, `brew`, `kill`, `security` or `launchctl`.
+`claude` is excluded too, and for a specific reason: told nothing about how
+to start Workers, a Manager once improvised a bare `claude` and the Workers
+died on launch. `rite sandbox start` is the supported route.
+
+⚠ **This is a speed bump, not a sandbox, and the announcement still says
+so.** `git` runs hooks and `python -c` runs anything. A Manager remains
+**unsandboxed**, in your project's directory, on your machine, with your own
+file and network access. What the allowlist buys is that the casual route
+to the rest of your machine is closed and a refusal is visible — not that a
+determined agent is contained. Workers are still the ones with a container
+under them.
+
+**To change the list**, edit **your own** `.claude/settings.json` — not
+rite's file, which is rewritten from code on every run so the shipped list
+and the running list cannot drift apart:
+
+- to **widen**, add to `permissions.allow`;
+- to **narrow**, add to `permissions.deny` — deny beats allow, and it is
+  the only direction a merge cannot express by adding.
+
+**To keep 0.5.1's behaviour**, put `--dangerously-skip-permissions` back
+yourself; rite no longer passes it for you.
+
 ### Two readers of one mailbox — `rite replies <manager>`
 
 0.5.1 told a reader to *delete a message once you have relayed it so it is
