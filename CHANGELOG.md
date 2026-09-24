@@ -1,5 +1,43 @@
 # Changelog
 
+## Unreleased
+
+### Two readers of one mailbox — `rite replies <manager>`
+
+0.5.1 told a reader to *delete a message once you have relayed it so it is
+not shown twice*. That is correct for exactly one reader. With a Slack relay
+reading the same outbox alongside `rite connect`, whoever read first deleted
+and the other never saw it.
+
+Each reader now keeps its own position, and nothing deletes:
+
+    rite replies lead                  # as the local chat reader
+    rite replies lead --reader slack   # as the relay
+    rite replies lead --peek           # look without consuming
+
+**Nothing is written into a message.** The mailbox still records no sender
+and still delivers any file that appears, so anything able to write a file
+attaches with no transport layer to build first — which is why a per-reader
+cursor was chosen over fan-out or acknowledgement.
+
+⚠ **`rite connect`'s briefing changed**, so an existing Manager session keeps
+the old instruction until it is restarted. Nothing is lost if a session does
+delete a file, but a second reader will not see that message.
+
+⚠ **The outbox no longer shrinks on its own.** A retention rule is not in
+this release.
+
+### `rite doctor` reports a local model's context window
+
+An endpoint can be up, serving the right model, with the agent installed, and
+the local tier still fail — because ollama serves every model at 4096 tokens
+unless `OLLAMA_CONTEXT_LENGTH` says otherwise, and that is smaller than an
+agent's own system prompt.
+
+It does not look like a setting. It looks like a model that cannot call tools
+and an agent that forgets the previous turn. `rite doctor` now asks the
+endpoint what window is actually in force and says so. See the guide.
+
 ## 0.5.1 (2026-09-21)
 
 ### Talk to a running Manager — `rite connect <manager>`
