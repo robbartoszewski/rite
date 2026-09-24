@@ -52,11 +52,16 @@ which serves a real bare repo out of `tmp_path`).
 """
 
 import os
+import tempfile
 from pathlib import Path
 
 import keyring
 import pytest
 from keyring.backend import KeyringBackend
+
+_SOCKET_PATH_LIMIT = 104
+"""Where a Unix socket path stops being usable. macOS is 104, Linux 108; the
+smaller is used so a path that works here works there."""
 
 
 @pytest.fixture(autouse=True)
@@ -168,6 +173,64 @@ def _no_os_keychain():
         yield
     finally:
         keyring.set_keyring(previous)
+
+
+@pytest.fixture(scope="session")
+def _suite_tmux_socket() -> str:
+    """A tmux socket directory belonging to this suite and nothing else.
+
+    ⚠ MEASURED COUPLING, and it is the last shared global on this file's
+    list. Every `tmux` invocation in the suite and every one in the product
+    calls the bare binary with no `-S`, so `pytest` and a Manager started by
+    `rite start` land on the SAME tmux server — as do two suites running at
+    once on one machine.
+
+    Evidence it is not hypothetical: a stray `rite-loop-looptest-*` session
+    was found on the shared server during a run of a file that creates no
+    such session, and a control run elsewhere had a **five-file
+    markdown-only diff flip a tmux-detection test**. A documentation change
+    cannot affect tmux. A neighbour on the same server can.
+
+    `TMUX_TMPDIR` relocates the socket directory and tmux resolves it
+    itself, so setting it once for the pytest process covers the tests AND
+    the code under test, which inherit the environment. No call site
+    changes.
+
+    ⚠ **THE PATH MUST BE SHORT.** A Unix socket path is capped near 104
+    bytes and the socket becomes `$TMUX_TMPDIR/tmux-<uid>/default`.
+    pytest's `tmp_path_factory` basetemp is far too long — measured, it
+    fails with `error connecting to ... (File name too long)`, which names
+    neither tmux nor this fixture. So: a short `mkdtemp`, under `/tmp` when
+    it exists, and an explicit check that says what is wrong rather than
+    leaving the next person to decode errno 63.
+    """
+    parent = "/tmp" if os.path.isdir("/tmp") else None
+    directory = tempfile.mkdtemp(prefix="rt", dir=parent)
+    socket = os.path.join(directory, f"tmux-{os.getuid()}", "default")
+    if len(socket) >= _SOCKET_PATH_LIMIT:
+        raise RuntimeError(
+            f"the suite's tmux socket path is {len(socket)} bytes, at or over "
+            f"the {_SOCKET_PATH_LIMIT}-byte limit: {socket}. tmux would fail "
+            "with 'File name too long', which names neither tmux nor this "
+            "fixture. Use a shorter TMUX_TMPDIR parent."
+        )
+    return directory
+
+
+@pytest.fixture(autouse=True)
+def _isolated_tmux_server(monkeypatch, _suite_tmux_socket):
+    """Point every tmux call at the suite's own server, not the machine's.
+
+    Autouse and function-scoped for the same reason `_no_os_keychain` is:
+    a test that unsets or overrides it must not leak that to the next one.
+
+    ⚠ This does NOT clean up sessions the suite creates — tests own their
+    own teardown, as they already do. What it guarantees is that a session
+    the suite fails to clean up dies with the private server rather than
+    accumulating on the developer's, and that a Manager an operator is
+    actually running is invisible to the suite and untouched by it.
+    """
+    monkeypatch.setenv("TMUX_TMPDIR", _suite_tmux_socket)
 
 
 def _checkout_state() -> str | None:
