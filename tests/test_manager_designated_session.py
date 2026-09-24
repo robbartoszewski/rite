@@ -414,6 +414,60 @@ class TestTheDesignationIsWrittenFromTheRun:
         )
 
 
+class TestCtrlCBeforeTheFirstCycleIsTheStatedException:
+    """C17. "Designated whatever the ending" has one exception: an interrupt
+    before the first cycle is appended designates nothing, and whatever was
+    designated before stays. These pin both halves, so the exception is a
+    stated behaviour rather than a surprise."""
+
+    @staticmethod
+    def _interrupted_in_the_launch(*_a, **_k):
+        raise KeyboardInterrupt
+
+    def _run(self, tmp_path, monkeypatch, *, fresh):
+        import rite_ai.managers.supervise as sup
+
+        root = _project(tmp_path)
+        _quiet(monkeypatch, sup)
+        designate(root, "lead", "YESTERDAY")
+        said: list[str] = []
+        supervise(
+            root,
+            "lead",
+            engine="claude",
+            prompt="go",
+            max_sessions=3,
+            window_seconds=0,
+            fresh=fresh,
+            verdict=lambda _r: "ready",
+            starter=self._interrupted_in_the_launch,
+            # If this were consulted the test would see "NEW" designated.
+            resume_id_for=lambda r, m, since: "NEW",
+            note=said.append,
+        )
+        return designated(root, "lead"), " ".join(said)
+
+    def test_a_bare_start_keeps_what_it_set_out_to_continue(
+        self, tmp_path, monkeypatch
+    ):
+        kept, said = self._run(tmp_path, monkeypatch, fresh=False)
+        assert kept == "YESTERDAY"
+        assert "PREVIOUS conversation" not in said, (
+            "a bare start was warned about continuing — which is what it asked for"
+        )
+
+    def test_a_fresh_start_says_the_old_conversation_is_still_designated(
+        self, tmp_path, monkeypatch
+    ):
+        """⚠ The half that contradicts `--fresh` REWRITES the designation.
+        Measured before this was said: 'YESTERDAY' before and after, and
+        nothing printed — so tomorrow's bare `rite start` would silently
+        return to the conversation the user chose to abandon."""
+        kept, said = self._run(tmp_path, monkeypatch, fresh=True)
+        assert kept == "YESTERDAY", "the old id was dropped — that is a design change"
+        assert "PREVIOUS conversation" in said and "--fresh" in said, said
+
+
 class TestTheFreshFallbackIsGivenSomethingToDo:
     """⚠ The existing fallback test asserts the ANNOUNCEMENT. That is why
     this survived.

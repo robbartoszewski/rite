@@ -620,10 +620,37 @@ def supervise(
             # something to continue. Designated BEFORE the teardown,
             # because `_torn_down` clears the instance record and a user
             # who pressed Ctrl-C still means to come back.
+            #
+            # ⚠ **THE ONE EXCEPTION TO "DESIGNATED WHATEVER THE ENDING" (C17),
+            # stated because an unstated one is how the next person is
+            # surprised.** An interrupt before the first cycle is appended —
+            # inside the first launch, typically its settle window — designates
+            # NOTHING, and whatever was designated before stays. For a bare
+            # `rite start` that is right: no conversation began, so the one it
+            # set out to continue is still the one to continue.
+            #
+            # ⚠ For `--fresh` it contradicts a settled rule, which is why it is
+            # SAID rather than only written here. `--fresh` REWRITES the
+            # designation (see the top of this function), but only once a
+            # cycle exists to designate — so a `--fresh` interrupted that early
+            # leaves the conversation the user chose to abandon as the one a
+            # bare `rite start` continues tomorrow. Measured: designation
+            # 'YESTERDAY' before, 'YESTERDAY' after, nothing printed. Not
+            # cleared here, because clearing would lose that id for good, and
+            # whether `--fresh` should drop it up front is a design decision
+            # rather than a fix.
             if cycles:
                 interrupted_id = next_id(root, manager, cycles[-1].started_at)
                 if interrupted_id:
                     designate(root, manager, interrupted_id)
+            elif fresh and designated(root, manager):
+                say(
+                    f"interrupted before the fresh session's first cycle "
+                    f"began, so nothing new was designated: a bare `rite "
+                    f"start {manager}` will continue the PREVIOUS "
+                    f"conversation, not a fresh one. Pass --fresh again to "
+                    f"start over."
+                )
             return _torn_down(
                 root, manager, live or session_name(root, manager), cycles, say
             )
