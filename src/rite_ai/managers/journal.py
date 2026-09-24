@@ -362,6 +362,40 @@ def _redacted(body: str) -> str:
     )
 
 
+def _recorded_from(manager: str) -> str:
+    """Where this entry was filed from — an observed fact, not a claimed author.
+
+    ⚠ **Why this is not an "author" field (C10).** An entry had nothing
+    saying who wrote it, so a human filing on a Manager's behalf read exactly
+    like the Manager — measured, three entries filed by the Manager, by a
+    person, and by a second Manager were byte-identical. But the obvious
+    field, a name the writer supplies, is the writer vouching for itself, and
+    the OS user is the same person for both. What rite can OBSERVE is the
+    environment the command ran in: a Manager's session carries its name in
+    `RITE_MANAGER`, and a person's own shell does not.
+
+    ⚠ **It is where, not who, and the text says so.** A person typing inside
+    a Manager's tmux session reads as that Manager, and a Manager launched on
+    a tmux too old for `-e` carries no `RITE_MANAGER` and reads as outside —
+    so the line names the evidence rather than a conclusion. Computed here
+    rather than passed in, so no caller can omit it or state it wrongly.
+    """
+    from rite_ai.managers import MANAGER_ENV, current_manager
+
+    running_as = current_manager()
+    if running_as == manager:
+        return f"inside the session of Manager {manager} ({MANAGER_ENV} is {manager})"
+    if running_as:
+        return (
+            f"inside the session of Manager {running_as} ({MANAGER_ENV} is "
+            f"{running_as}), filed for {manager}"
+        )
+    return (
+        f"outside any Manager session (no {MANAGER_ENV}): a person's own "
+        f"shell, or a Manager started without the variable"
+    )
+
+
 def _write(root: Path, manager: str, kind: str, body: str) -> WriteResult:
     """One file per entry (§9.15.3), enforced by the filesystem.
 
@@ -382,6 +416,9 @@ def _write(root: Path, manager: str, kind: str, body: str) -> WriteResult:
     is bounded because an unbounded retry on a full or read-only disk is a
     hang, and this project has spent the day on things that wait forever.
     """
+    # ⚠ Appended AFTER redaction: this line is rite's own words, not pasted
+    # output, and C7's redaction ate `RITE_MANAGER=planner` when it ran first.
+    body = _redacted(body) + _section("recorded_from", _recorded_from(manager))
     directory = journal_dir(root, manager)
     directory.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
@@ -397,7 +434,7 @@ def _write(root: Path, manager: str, kind: str, body: str) -> WriteResult:
                 False, f"could not write the journal entry to {path}: {e}"
             )
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(_redacted(body))
+            handle.write(body)
         return WriteResult(True, path=path)
     return WriteResult(
         False,

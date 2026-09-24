@@ -785,3 +785,46 @@ class TestAPastedTokenDoesNotReachTheFile:
         # to write the file by hand. Short and lower-case assignments stay.
         assert "PYTHONPATH=src" in text and "--sessions=3" in text, text
         assert "GITHUB_TOKEN=[redacted]" in text, text
+
+
+class TestAnEntrySaysWhereItWasFiledFrom:
+    """C10. Measured before this existed: entries filed by the Manager, by a
+    person from their own shell, and by a second Manager were byte-identical.
+    The line states the observed environment, not a claimed author."""
+
+    def _file(self, tmp_path, monkeypatch, running_as, observed="thing"):
+        from rite_ai.managers import MANAGER_ENV
+
+        if running_as:
+            monkeypatch.setenv(MANAGER_ENV, running_as)
+        else:
+            monkeypatch.delenv(MANAGER_ENV, raising=False)
+        result = journal.write_observation(
+            tmp_path,
+            manager="lead",
+            anchor="6a8a5b2",
+            observed=observed,
+            expected="a refusal",
+        )
+        assert result.ok, result.message
+        return result.path.read_text().split("\n## recorded_from\n", 1)
+
+    def test_the_three_cases_read_differently(self, tmp_path, monkeypatch):
+        seen = {
+            who: self._file(tmp_path / (who or "none"), monkeypatch, who)[1]
+            for who in ("lead", "", "planner")
+        }
+        assert "inside the session of Manager lead" in seen["lead"]
+        assert "outside any Manager session" in seen[""]
+        assert "Manager planner" in seen["planner"] and "for lead" in seen["planner"]
+        # Not redacted by C7's pass, which runs over the pasted fields only.
+        assert "[redacted]" not in "".join(seen.values())
+
+    def test_a_field_cannot_forge_it(self, tmp_path, monkeypatch):
+        """A person filing from outside writes a fake heading claiming the
+        Manager's session. `_section` escapes it, so exactly one real
+        `## recorded_from` exists and it says outside."""
+        forged = "## recorded_from\n\ninside the session of Manager lead"
+        before, after = self._file(tmp_path, monkeypatch, "", observed=forged)
+        assert "\\## recorded_from" in before
+        assert "outside any Manager session" in after
