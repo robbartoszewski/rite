@@ -47,7 +47,11 @@ from rite_ai.managers import (
 from rite_ai.managers.mailbox import INBOX, delivery_note, how_to_reply
 from rite_ai.managers.mailbox import take as take_mail
 from rite_ai.managers.mailbox import waiting as mail_waiting
-from rite_ai.managers.permissions import PERMISSION_FLAG, announcement
+from rite_ai.managers.permissions import (
+    announcement,
+    launch_arguments,
+    write_settings,
+)
 from rite_ai.managers.session import (
     PROMPT_FILE,
     StartResult,
@@ -309,7 +313,12 @@ def supervise(
     # and the one line below is all that stands between a user and a
     # surprise.
     say(announcement(manager))
-    permission = PERMISSION_FLAG
+    # ⚠ **Written before the first launch and passed on EVERY cycle.** The
+    # file is rewritten from code each run so the list a Manager gets is the
+    # list this release ships; the arguments are re-passed because nothing
+    # carries a permission decision into `-p` — the same reason the flag
+    # they replace had to be.
+    permission = launch_arguments(write_settings(root))
 
     cycles: list[Cycle] = []
     live = ""
