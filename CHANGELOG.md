@@ -90,8 +90,12 @@ cursor was chosen over fan-out or acknowledgement.
 the old instruction until it is restarted. Nothing is lost if a session does
 delete a file, but a second reader will not see that message.
 
-⚠ **The outbox no longer shrinks on its own.** A retention rule is not in
-this release.
+**The outbox is bounded by age and by size, and never loses an unread
+message.** A message every reader has passed is removed after 30 days, and
+when a Manager's outbox passes 8 MiB the oldest such messages go first. An
+unread message is never removed to make room: if the outbox is over its cap
+with nothing read left to remove, `rite reply` and `rite replies` say so and
+delete nothing.
 
 ### A Manager replies with `rite reply`, not by writing a file
 

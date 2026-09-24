@@ -6224,7 +6224,7 @@ def replies(manager_name: str, reader: str, peek: bool) -> None:
       rite replies planner --reader slack   # as the relay
       rite replies planner --peek           # look without consuming
     """
-    from rite_ai.managers.mailbox import OUTBOX, mark_read, unread
+    from rite_ai.managers.mailbox import OUTBOX, full_warning, mark_read, prune, unread
     from rite_ai.names import UnsafeName
 
     root = _require_project_root()
@@ -6248,11 +6248,15 @@ def replies(manager_name: str, reader: str, peek: bool) -> None:
 
     if not waiting_for_reader:
         click.echo(f"nothing new from {manager_name!r} for reader {reader!r}.")
-        return
     for message in waiting_for_reader:
         click.echo(message.text.strip())
-    if not peek:
+    if waiting_for_reader and not peek:
         mark_read(root, manager_name, OUTBOX, reader, waiting_for_reader)
+    # C23: retention runs on every read, and a box full of unread messages is
+    # SAID — rite will not delete one to make room.
+    warning = full_warning(prune(root, manager_name, OUTBOX), manager_name)
+    if warning:
+        click.echo(warning, err=True)
 
 
 @cli.command("reply")
@@ -6279,7 +6283,7 @@ def reply(text: str, manager: str) -> None:
       rite reply --manager planner "ticket 12 needs an API key — skip it?"
     """
     from rite_ai.managers import current_manager
-    from rite_ai.managers.mailbox import OUTBOX, send
+    from rite_ai.managers.mailbox import OUTBOX, full_warning, prune, send
 
     root = _require_project_root()
     speaking = (manager or "").strip() or current_manager()
@@ -6312,6 +6316,10 @@ def reply(text: str, manager: str) -> None:
     click.echo(
         f"reply queued from {speaking!r} — the User reads it with `rite replies`."
     )
+    # C23: the store grows here, so it is bounded here too.
+    warning = full_warning(prune(root, speaking, OUTBOX), speaking)
+    if warning:
+        click.echo(warning, err=True)
 
 
 @cli.command("message")
