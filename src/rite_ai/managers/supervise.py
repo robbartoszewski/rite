@@ -58,7 +58,7 @@ from rite_ai.managers.session import (
 )
 from rite_ai.managers.session import start as start_session
 from rite_ai.managers.session import stop as stop_session
-from rite_ai.managers.transcripts import session_id_problem
+from rite_ai.managers.transcripts import belongs_to_project, session_id_problem
 
 POLL_SECONDS = 2.0
 
@@ -325,9 +325,23 @@ def supervise(
     # user starts over, works all day, and tomorrow's bare `rite start`
     # silently returns to the conversation they deliberately abandoned.
     resume_from = "" if fresh else designated(root, manager)
+    foreign = bool(resume_from) and not belongs_to_project(root, resume_from)
+    if foreign:
+        # ⚠ C8. Said in its own words, not `_could_not_continue`'s: "the
+        # provider forgot it" and "it is not this project's" are different
+        # facts — the timezone precedent — and only the second means the
+        # file itself may be wrong. Not deleted: it may be a transcript the
+        # user pruned, and the next run's designation replaces it anyway.
+        say(
+            f"the session designated for {manager!r} ({resume_from}) is not "
+            f"one of this project's conversations — its transcript may have "
+            f"been pruned, or the designation names another project's "
+            f"session — so this run starts FRESH rather than continue it."
+        )
+        resume_from = ""
     continuing = bool(resume_from)
     tried_designation = continuing
-    if not fresh and not continuing:
+    if not fresh and not continuing and not foreign:
         # ⚠ A DIFFERENT FACT from "the one you had is gone", and it reads
         # differently on purpose — the timezone precedent, where an unset
         # zone and a rejected one do not print the same line.
