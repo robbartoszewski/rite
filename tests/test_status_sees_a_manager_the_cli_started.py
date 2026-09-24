@@ -98,6 +98,60 @@ def test_the_starter_cannot_be_called_without_a_permission_mode():
         )
 
 
+def test_the_starter_cannot_be_called_without_a_prompt():
+    """C14, the half C2 deliberately left. `prompt=""` was the neighbouring
+    default, and it is the one that actually shipped a defect: `supervise`'s
+    fresh fallback omitted it and launched `claude -p` against empty stdin."""
+    from rite_ai.managers.supervise import _default_starter
+
+    with pytest.raises(TypeError):
+        _default_starter(  # type: ignore[call-arg]
+            Path("/tmp"),
+            "lead",
+            engine="sleep 1",
+            resume_id="",
+            max_sessions=1,
+            window_seconds=60,
+            permission="",
+        )
+
+
+@pytest.mark.skipif(not _HAS_TMUX, reason="tmux is not installed")
+@pytest.mark.parametrize("blank", ["", "  \n\t"])
+def test_a_blank_prompt_is_refused_before_a_session_is_spent(blank):
+    """C14. Removing the default does not stop a caller passing "".
+
+    ⚠ Measured before the guard, against the real `claude`: the session was
+    created, the engine exited at once on empty stdin, the tmux session was
+    left held open under the Manager's name, and the message told the
+    operator to run the command by hand to find out why. So this asserts on
+    what the TMUX SERVER holds afterwards, not only on the result — a
+    refusal that still spent a session would pass a result-only check.
+    """
+    from rite_ai.managers.supervise import _default_starter
+
+    root = Path(tempfile.mkdtemp(prefix="mgr-blank-"))
+    (root / ".rite").mkdir()
+    manager = f"lead{uuid.uuid4().hex[:6]}"
+    result = _default_starter(
+        root,
+        manager,
+        engine="sh",
+        resume_id="",
+        prompt=blank,
+        permission="",
+        max_sessions=1,
+        window_seconds=60,
+    )
+    assert not result.ok
+    assert "prompt is empty" in result.message
+    listed = subprocess.run(
+        ["tmux", "ls", "-F", "#{session_name}"], capture_output=True, text=True
+    ).stdout
+    assert manager not in listed, f"a session was spent anyway:\n{listed}"
+    assert not list(root.rglob("prompt.txt")), "an empty prompt was written"
+
+
 @pytest.mark.skipif(not _HAS_TMUX, reason="tmux is not installed")
 def test_status_reports_a_manager_started_the_way_the_cli_starts_one():
     from rite_ai.managers.supervise import _default_starter
