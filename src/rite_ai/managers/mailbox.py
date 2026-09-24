@@ -140,7 +140,9 @@ def mark_read(root: Path, manager: str, box: str, reader: str, messages) -> None
     except (OSError, UnsafeName):
         # A cursor that cannot be written means the reader sees the same
         # messages again. Annoying and safe; the alternative is losing them.
-        pass
+        return
+    # The moment messages become processed is the moment they may go.
+    prune(root, manager, box)
 
 
 def send(root: Path, manager: str, box: str, text: str) -> Path:
@@ -151,6 +153,128 @@ def send(root: Path, manager: str, box: str, text: str) -> Path:
     path = where / f"{int(ts * 1000)}_{os.getpid()}_{next(_SEQUENCE)}.json"
     write_atomic(path, json.dumps({"text": text, "timestamp": ts}) + "\n")
     return path
+
+
+MAX_AGE_SECONDS = 30 * 24 * 3600
+"""How long a PROCESSED message is kept (C23). Robert's suggestion, taken."""
+
+MAX_BOX_BYTES = 8 * 1024 * 1024
+"""The size a box may reach before its oldest PROCESSED messages go (C23).
+
+⚠ **Derived from what a Manager actually says, not from a round number.**
+No real outbox existed to measure — the only two on the machine were test
+artefacts — so the nearest real evidence was used: the assistant text in the
+v0.5.1 acceptance runs' Manager transcripts. 44 messages across 12 sessions,
+each weighed as this module would store it: median 225 B, p99 1.7 KB, max
+1.9 KB; the heaviest SESSION's entire text was 4 KB. A Manager replying with
+all of that on every cycle, two cycles an hour, for the whole 30-day age
+window, stores about 5.8 MB — so 8 MiB is a cap ordinary use inside the age
+window does not reach, and a runaway writer does. Sample is thin (44
+messages) and is stated as such so it can be revisited with real data."""
+
+
+@dataclass(frozen=True)
+class Retention:
+    """What one pass of `prune` did, and what it refused to do."""
+
+    removed: tuple[Path, ...] = ()
+    size: int = 0
+    unread_over_age: int = 0
+    full_of_unread: bool = False
+    """At or over the cap with nothing processed left to remove. A condition
+    to REPORT: resolving it by deleting would be silent message loss."""
+
+
+def _processed_through(root: Path, manager: str, box: str) -> str:
+    """The last filename EVERY reader has passed, or "" if none has.
+
+    ⚠ **"Every reader" means every reader with a cursor.** A reader is known
+    by the cursor it wrote in `mark_read`, and there is deliberately no other
+    registry — a subscriber list is what Decision 1(a) was chosen to avoid.
+    So a box nobody has read from has processed NOTHING and loses nothing,
+    and a reader that appears for the first time later starts from whatever
+    retention has kept. That second part is the cost of having no list, and
+    it is the smaller one.
+    """
+    folder = manager_dir(root, manager) / "mail" / f"{box}.read"
+    try:
+        cursors = [p.stem for p in folder.glob("*.json")]
+    except OSError:
+        return ""
+    positions = [_cursor(root, manager, box, reader) for reader in cursors]
+    return min(positions) if positions and all(positions) else ""
+
+
+def prune(
+    root: Path,
+    manager: str,
+    box: str = OUTBOX,
+    *,
+    now: float | None = None,
+    max_age: float = MAX_AGE_SECONDS,
+    max_bytes: int = MAX_BOX_BYTES,
+) -> Retention:
+    """Bound a box by age AND by size, removing only PROCESSED messages.
+
+    ⚠ **Neither bound deletes an unread message (C23).** Readers stopped
+    deleting when the outbox gained a second reader, so without this nothing
+    ever did. Robert's rule: time-based, and capped by store size with the
+    oldest processed items going first. "Processed" is load-bearing — an
+    unread message removed to make room is silent loss, the failure this
+    channel exists to prevent. So an unread message older than the age bound
+    is kept and COUNTED, and a box at its cap with nothing processed left is
+    REPORTED rather than resolved.
+
+    Age is the file's mtime, which `send` sets and which a hand-written
+    file also has; "oldest" is send order, the filename order `read` uses.
+    Never raises: it runs on the write and read paths, and a retention pass
+    that failed must not cost a message.
+    """
+    when = time.time() if now is None else now
+    where = mailbox_dir(root, manager, box)
+    try:
+        files = sorted(where.glob("*.json"))
+        sizes = {p: p.stat().st_size for p in files}
+        ages = {p: when - p.stat().st_mtime for p in files}
+    except OSError:
+        return Retention()
+    through = _processed_through(root, manager, box)
+    processed = [p for p in files if through and p.name <= through]
+    removed: list[Path] = []
+
+    def remove(path: Path) -> None:
+        try:
+            path.unlink()
+        except OSError:
+            return
+        removed.append(path)
+
+    for path in processed:
+        if ages[path] > max_age:
+            remove(path)
+    size = sum(v for p, v in sizes.items() if p not in removed)
+    for path in processed:
+        if size <= max_bytes:
+            break
+        if path not in removed:
+            remove(path)
+            if path in removed:
+                size -= sizes[path]
+    unread_over_age = sum(1 for p in files if p not in processed and ages[p] > max_age)
+    return Retention(tuple(removed), size, unread_over_age, size > max_bytes)
+
+
+def full_warning(retention: Retention, manager: str) -> str:
+    """The sentence to print when a box is full of messages nobody has read,
+    or "" when it is not."""
+    if not retention.full_of_unread:
+        return ""
+    return (
+        f"⚠ the outbox for {manager!r} holds {retention.size} bytes, over "
+        f"its {MAX_BOX_BYTES}-byte cap, and none of it has been read by every "
+        f"reader — so nothing was removed. Read it (`rite replies "
+        f"{manager}`); rite will not delete an unread message to make room."
+    )
 
 
 def _as_time(value: object) -> float:
