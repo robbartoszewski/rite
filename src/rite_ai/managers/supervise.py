@@ -147,12 +147,27 @@ def launch_command(
     altered the one engine rite actually launches would be a refactor with a
     behaviour change hidden in it.
 
-    ⚠ **An unknown engine is run AS GIVEN, and gets nothing invented for
-    it.** rite does not know an unrecognised tool's flags, so it does not
-    guess: no turn flag, and a `resume_id` or `permission` it cannot express
-    is an error rather than something dropped. Dropping a resume id starts a
-    FRESH context with the ticket half-done, which is the silent failure this
-    path exists to prevent.
+    ⚠ **An unrecognised engine keeps CLAUDE's spelling, deliberately — and
+    this docstring said the opposite until it was corrected.**
+
+    An earlier draft of this function refused to add anything to an engine it
+    did not recognise, and this paragraph described that. The suite showed it
+    was wrong: an unrecognised engine string is not an unknown tool, it is a
+    script STANDING IN for `claude` (`engine="sh"`, `engine=".../agent.sh"`),
+    and those stubs want Claude's flags because Claude is what they emulate.
+    Refusing broke two tests whose whole point is that the permission mode
+    reaches the launch. **The code changed; this text did not, until now** —
+    which is the documentation-describes-absent-behaviour defect this release
+    has been clearing, committed by the release that was clearing it.
+
+    **Production cannot reach that path at all.** `config/managers.py` accepts
+    exactly `claude`, `human` and `local:<class>`, and `local:*` resolves
+    through its declared `agent`. See `engines.SUBSTITUTED`.
+
+    ⚠ **What an engine genuinely cannot express is still refused, not
+    dropped** — `GOOSE_MODE` lives in the environment, so a permission FLAG
+    for Goose raises rather than being written. Dropping what cannot be said
+    is the silent failure this path exists to prevent.
     """
     spelling = spelling_for(engine, agent)
     command = spelling.binary or engine or "claude"
