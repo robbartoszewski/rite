@@ -70,6 +70,47 @@ class TestTheDesignationOutlivesTheRun:
         assert designated(root, "lead") == ""
 
 
+class TestTheDesignationIsNeverListedAsARunningManager:
+    """C11. Both files live in `.rite/user/` and `running_instances` globs
+    `*.json`, which `<name>.designated.json` matches.
+
+    ⚠ It used to stay out of the listing only because of two rules about
+    something else: the stem `lead.designated` fails the tmux naming rule, and
+    a designation has no `name` key. So this test RELAXES BOTH and asserts the
+    separation still holds — a test that leaves them in place would pass
+    against the old code and prove nothing about the new line. Measured with
+    both relaxed and no skip: `rite status` said `lead: running as <session
+    id> — tmux attach -t <session id>`.
+    """
+
+    def test_a_designation_is_skipped_even_when_nothing_else_would(
+        self, tmp_path, monkeypatch
+    ):
+        import json
+        import os
+
+        import rite_ai.managers as managers
+        from rite_ai.reporting.status import _manager_lines
+
+        root = _project(tmp_path)
+        # The positive control: a real record beside it must still be listed,
+        # since a listing that skips everything passes the negative half.
+        record_instance(
+            root,
+            ManagerInstance(name="real", pid=os.getpid(), session="s", engine="claude"),
+        )
+        designate(root, "lead", "SESSION-ABC")
+        designation_path(root, "lead").write_text(
+            json.dumps({"session": "SESSION-ABC", "name": "lead", "pid": os.getpid()})
+        )
+        monkeypatch.setattr(managers, "name_problem", lambda *a, **k: "")
+
+        assert [i.name for i in managers.running_instances(root)] == ["real"]
+        joined = "\n".join(_manager_lines(root))
+        assert "SESSION-ABC" not in joined, joined
+        assert designated(root, "lead") == "SESSION-ABC"
+
+
 @dataclass(frozen=True)
 class Launch:
     """Every argument a launch was handed — not just the one a test looked at.

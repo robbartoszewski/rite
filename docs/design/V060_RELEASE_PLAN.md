@@ -140,6 +140,7 @@ Neither is a build task and both need Robert. See "Decisions needed" 1 and 2.
 |---|---|---|---|---|---|
 | A1 | **Per-reader delivery for the outbox** | Today a reader is told *"delete one once you have relayed it so it is not shown twice."* With two permanent readers, whoever reads first deletes and the other never sees it. Needs per-reader read state, fan-out, or acknowledgement. | **Blocks Slack outright.** Robert's "both keep working permanently" requirement and the current delete-on-relay instruction cannot both hold. | Decision 1 | 1–2 sittings |
 | A2 | **Slack credentials through the existing store** | A bot token is a credential; `credentials/` and the gate already have the shapes. | A token is the first thing the adapter needs and the last thing that should be improvised. | — | 1 sitting |
+| A3a | ⚠ **Choose the Slack transport — CHOSEN, unproven** | **Web API polling** (`conversations.history` with `oldest`), because it is the only transport needing neither an inbound listener nor a held-open connection. Events API needs a public HTTPS URL (hosting, ruled out); Socket Mode needs a second token, a reconnect loop, per-event acks and caps at 10 sockets. Evidence: [`spikes/A3a-slack-transport.md`](spikes/A3a-slack-transport.md). ⚠ **The proof — a message arriving in a standalone script within 5s — has NOT been made**: it needs a workspace, an app and a bot token that do not exist yet. **Ticket stays open.** | Decides A3b's shape | A2 | 1 sitting spent, proof outstanding |
 | A3 | **Listening inside `rite start`** | Poll Slack in the supervisor's existing wait loop — where `mail_waiting` already polls — and write inbound messages into the inbox via `send()`. | This is "no daemon" made concrete, and it reuses the validated writer rather than adding a second one. | A2, B1 | 2–3 sittings |
 | A4 | **Posting the outbox to Slack** | The other direction, through whatever A1 decides. | Half a channel is not a channel. | A1, A2 | 1–2 sittings |
 | A5 | **Say what happens when no Manager is running** | With listening inside `rite start`, a message sent while nothing runs stays in Slack. | ⚠ A user will hit this on day one and read silence as "it is broken". Needs to be either handled or stated. | A3 | ½–1 sitting |
@@ -559,6 +560,7 @@ correctly absent: it shipped in v0.5.1.
 | C14 | **An empty prompt file is launchable** | `V070_MULTI_MANAGER.md` §6 — **OPEN** | `_default_starter` defaults `prompt=""` and `start_session` writes `prompt.txt` "even when empty", with no guard; `claude -p` with empty stdin exits 1. The same omission already shipped once, in `supervise`'s fresh fallback. | ½–1 sitting |
 | C15 | **The real-tmux tests are load-sensitive and nondeterministic** | `V070_MULTI_MANAGER.md` §1 — **OPEN** | Proven code-independent by a markdown-only control run. Related to C1 but not the same item: C1 isolates the socket, this is the residual nondeterminism. | 1–2 sittings |
 | C16 | **Three refusals embed raw tmux stderr** | `CREDENTIAL_HANDLING…md` Trap 2 | A leak only if Trap 1 (C6) happens, and the two are coupled — which is why both belong in one release rather than one being taken alone. | ½–1 sitting |
+| C23 | ⚠ **The outbox now grows without bound** | A1, Decision 1 | **A consequence of 1(a), not a defect in it.** Readers no longer delete, so nothing does. A retention rule needs a policy decision — age, count, or "when every registered reader has passed it" — and the last one reintroduces a subscriber list, which is what 1(a) was chosen to avoid. **Not guessed here.** Small today (a reply is a few hundred bytes) and unbounded is still unbounded. | ½–1 sitting once the policy is chosen |
 | C20 | ⚠ **Run the benchmark under the DEFAULT allowlist** | this plan, Decision 3 | **The observation C4 does not contain.** Run the five benchmark tasks with the shipped default allowlist in force and confirm they still pass. **Baseline is 5/5** (Goose, 32768 window). A task that stalls on approval means the list is too narrow — and that is the finding, not a test failure to work around. | 1 sitting |
 | C21 | **The refusal names the command and how to allow it** | this plan, Decision 3 | A refusal a user cannot act on is the same defect as a silent one. The message must say which command was refused and the line that would permit it. | ½ sitting |
 | C22 | ⚠ **Release notes state the upgrade behaviour change** | this plan, Decision 3 | Existing users get **different behaviour on upgrade**: a Manager that ran unattended may now stop for approval. Discovering that mid-run is the worst way to learn it. **Not optional — it is the same doc-describes-reality rule C19 exists for.** | ½ sitting |
@@ -720,7 +722,25 @@ they stop promising a 0.6.0 deliverable that is now 0.7.0. See SPEC updates.
    outside a run, which reopens "no daemon". Refusing it is coherent but must
    be *said* — see A5.
 
-3. **Does C4's allowlist replace the always-skip default or sit beside it?**
+3. ⚠ **Slack app distribution — a transport decision in disguise, and it blocks A3b.**
+   `conversations.history` is Tier 3 (50+/min, a 2-second poll works) **only
+   for internal customer-built apps**. For an app distributed outside the
+   Marketplace it is **1 request per minute with a 15-object limit**, which
+   makes the poll loop impossible — and Socket Mode apps cannot be
+   Marketplace-listed, so that escape is closed too.
+   **(a)** each user creates their own Slack app — works, more setup for
+   them; **(b)** rite ships one distributed app — does not work at any useful
+   latency. Recorded rather than assumed because (a) is the only functioning
+   option and it changes what setup docs have to say.
+
+4. ⚠ **Is "no daemon" about hosting, or about holding a connection open?**
+   Socket Mode needs no hosting and no inbound URL, so it satisfies the first
+   reading. It also needs a persistent WebSocket, reconnects *"once every few
+   hours"*, per-event acknowledgement and a 10-connection cap — a daemon's
+   problem list inside a process whose selling point is that it is not one.
+   Polling was chosen on the stricter reading. **Confirm which was meant.**
+
+5. **Does C4's allowlist replace the always-skip default or sit beside it?**
    The shipped note says "with this flag still the default", which reads as
    beside. Worth confirming: it is the difference between a feature and a
    reversal.

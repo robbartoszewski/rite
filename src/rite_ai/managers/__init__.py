@@ -188,7 +188,12 @@ def designation_path(root: Path, name: str) -> Path:
     machines, and a shared `config.yaml` claiming one on somebody else's
     laptop is worse than saying nothing.
     """
-    return user_dir(root) / f"{name}.designated.json"
+    return user_dir(root) / f"{name}{DESIGNATION_SUFFIX}"
+
+
+DESIGNATION_SUFFIX = ".designated.json"
+"""Named once, because two functions depend on it agreeing: `designation_path`
+writes it and `running_instances` must skip it. See the latter for why."""
 
 
 def designate(root: Path, name: str, session_id: str) -> None:
@@ -253,6 +258,19 @@ def running_instances(root: Path) -> list[ManagerInstance]:
     if not directory.is_dir():
         return out
     for path in sorted(directory.glob("*.json")):
+        if path.name.endswith(DESIGNATION_SUFFIX):
+            # ⚠ **SKIPPED BY NAME, ON PURPOSE (C11).** `<name>.designated.json`
+            # matches this glob. It used to stay out of the listing only by
+            # accident, twice over: `read_instance` validates the stem as a
+            # tmux target, which rejects the `.` in `planner.designated`, and
+            # it drops any file without a `name` key. Neither rule is about
+            # designations. Measured with both relaxed — a naming rule that
+            # admits dots, and a designation that records whose it is, which
+            # a membership check could reasonably add — `rite status` listed a
+            # running Manager and offered `tmux attach` to a provider session
+            # id. The two files have different lifetimes on purpose (see
+            # `designation_path`); keeping them apart is now this line's job.
+            continue
         instance = read_instance(root, path.stem)
         if instance is not None:
             out.append(instance)

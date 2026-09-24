@@ -776,9 +776,10 @@ def _default_starter(
     max_sessions,
     window_seconds,
     permission,
-    prompt="",
+    prompt,
 ):
-    """Start one cycle's session. `permission` has NO DEFAULT, deliberately.
+    """Start one cycle's session. `permission` and `prompt` have NO DEFAULT,
+    deliberately.
 
     ⚠ **THE DEFAULT WAS THE DEFECT, and it is the same shape as
     `ManagerInstance.pid`'s.** `permission=""` means "launch with no
@@ -795,10 +796,30 @@ def _default_starter(
     rite had just announced as starting fresh could not start. That was fixed
     at the call site, which leaves the next caller free to repeat it.
 
-    So this is unrepresentable rather than discouraged. `prompt` keeps its
-    default because C14 addresses it separately and changing both at once
-    would confuse which fix a regression belonged to.
+    So this is unrepresentable rather than discouraged.
+
+    ⚠ **And a blank prompt is REFUSED here, before a session is spent (C14).**
+    Removing the default stops a caller forgetting the argument; it does not
+    stop one passing an empty string. The launch built below redirects the
+    engine's stdin from `prompt.txt`, and `claude -p` with nothing on stdin
+    exits 1 — so without this the session is created, dies at once, is left
+    held open under the Manager's name, and the operator is told to run the
+    command by hand to see why. Measured before this guard existed.
+
+    The guard lives HERE, not in `start_session`, because this is the one
+    place that knows the launch reads the prompt: `start_session` also runs
+    a caller's explicit `command`, which may read nothing from stdin at all.
+    Whitespace counts as blank — it is what `rite sandbox` refuses too.
     """
+    if not prompt.strip():
+        return StartResult(
+            False,
+            f"refusing to start Manager {manager!r}: the cycle's prompt is "
+            f"empty, and the engine reads its instruction from it — a "
+            f"session launched with nothing to read exits at once. This is "
+            f"a defect in whatever called the launch, not something to fix "
+            f"in your config.",
+        )
     result = start_session(
         root,
         manager,
