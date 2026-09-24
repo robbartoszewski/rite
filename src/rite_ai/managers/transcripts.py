@@ -71,14 +71,33 @@ def session_id_problem(value: str) -> str:
 def project_transcript_dir(root: Path, base: Path | None = None) -> Path:
     """Claude Code's directory for a project root.
 
-    The name is the absolute path with `/` replaced by `-`, which is
-    observable rather than documented — derived by reading this machine's
-    own layout, and the reason this function exists instead of the rule
-    being inlined somewhere it would be mistaken for a spec.
+    The name is the absolute path with every character that is not an ASCII
+    letter or digit replaced by `-`, which is observable rather than
+    documented — derived by reading this machine's own layout, and the
+    reason this function exists instead of the rule being inlined somewhere
+    it would be mistaken for a spec.
+
+    ⚠ **It replaced only `/`, and was wrong for most real paths.** Read off
+    directories Claude Code itself created on this machine:
+
+        /private/var/folders/4p/fvll8_4s5…/T/permchk-7js6aj5r
+          -> -private-var-folders-4p-fvll8-4s5…-T-permchk-7js6aj5r
+        /Users/…/deployment/.claude/worktrees/infallible-easley-86b93f
+          -> -Users-…-deployment--claude-worktrees-infallible-easley-86b93f
+
+    `_` and `.` become `-` too. With only `/` replaced, rite looked in a
+    directory that did not exist for any project whose path held an
+    underscore, a dot or a space, so `latest_session_id` found nothing:
+    mid-run resumption refused ("no transcript was found to resume from")
+    and nothing was ever designated. Found while building the designation
+    membership check (C8), which would have rejected every such project.
+
+    Non-ASCII characters are assumed to follow the same rule and that is NOT
+    measured — no directory on this machine had one.
     """
     where = base if base is not None else default_transcripts_dir()
     resolved = str(Path(root).resolve())
-    return where / resolved.replace("/", "-")
+    return where / re.sub(r"[^A-Za-z0-9]", "-", resolved)
 
 
 def latest_session_id(root: Path, since: float = 0.0, base: Path | None = None) -> str:
