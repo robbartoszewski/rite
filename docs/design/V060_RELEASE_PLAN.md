@@ -521,7 +521,9 @@ endpoint rather than a runtime (RL-14). `RL-T1` measured seatbelt reaching
 |---|---|---|---|---|---|
 | ~~B1~~ | ✅ **DONE — spike: does Goose do what its docs say?** | Measured 2026-09-24. Headless + named resume works and the name is a real handle; exit codes are unusable (0 for a 404 model *and* an unreachable provider); `GOOSE_MODE=auto` not directly probed. | — | — | **spent: ~1 sitting** |
 | ~~B2~~ | ✅ **DONE — RL-T0: can an adopted agent hold a rite task loop on a local model?** | **Yes, at a correct context window.** Five benchmark tasks, `qwen3:32b`-class: Goose **5/5** in 1,958s, opencode **5/5** in 2,363s, no dishonest reports. ⚠ Five tasks, not the full ten. | — | — | **spent: ~2 sittings** |
-| B3 | **State the engine contract** | Write down what an engine must provide — launch, resume-or-equivalent, prompt delivery, cycle boundary, permission — as the thing Claude, Ollama and later Cursor all satisfy. | **This is the "no rework" requirement.** `launch_command` hard-codes Claude Code's spelling (`-p`, `--resume`, `--dangerously-skip-permissions`) and treats the engine string as an executable name, with no registry. A second engine either forks that function or the contract gets written first. | B1, B2 | 2–3 sittings |
+| ~~B3a~~ | ✅ **DONE — engine registry.** `managers/engines.py`; Claude byte-identical across 54 argv combinations, Goose launched through the real session path in its own vocabulary. ⚠ Narrower than the slogan: a substituted test stub still runs as given, because production cannot produce an unrecognised engine (closed validator list). What changed is that `local:<class>` resolves through its declared `agent`. | — | — | **spent: ~2 sittings** |
+| ~~B3b~~ | ✅ **DONE — the contract written.** [`ENGINE_CONTRACT.md`](ENGINE_CONTRACT.md). States R1–R7 including R7; admits **both** handle directions; ⚠ explicitly does **not** say the engine's exit is the boundary, because Goose returns exit 0 for a missing model and an unreachable provider. NOT OBSERVABLE — review gate. | — | B3a | **spent: ~1 sitting** |
+| ~~B3~~ | **State the engine contract** | Write down what an engine must provide — launch, resume-or-equivalent, prompt delivery, cycle boundary, permission — as the thing Claude, Ollama and later Cursor all satisfy. | **This is the "no rework" requirement.** `launch_command` hard-codes Claude Code's spelling (`-p`, `--resume`, `--dangerously-skip-permissions`) and treats the engine string as an executable name, with no registry. A second engine either forks that function or the contract gets written first. | B1, B2 | 2–3 sittings |
 | B4 | **Wire `harness.run_subtask` to a Goose adapter** | Give `harness.py` its production caller, with Goose behind the R1–R7 boundary. rite keeps the approval gate, the claims, the heartbeat and the verify; the agent edits files and runs the model's loop. ⚠ **The adapter must not read the exit code as a verdict** (B1). | The tier is routed and probed but nothing invokes the orchestration. **This is the release's local deliverable** — and B5 is its proof, not a second tier. | B2 ✅, B3, Decision 4 | **2–3 sittings** — the spike closed the uncertainty this was withheld for |
 | B5 | **Prove B4 on the existing benchmark** | Run `local:<class>` through `harness.run_subtask` on `tools/rite_local_bench/tasks.py`. ⚠ **The bar is now a number, not a vibe:** Goose scored **5/5** driven directly. Through rite's harness it should match; a materially worse score means the harness is the problem, not the model. | Proves the contract by using it, against a measured baseline. | B4 | **2–3 sittings** |
 | B6 | **Finish the Docker half of RL-T1** | Whether a Docker-backed sandbox reaches the host endpoint. | Unmeasured today and named as such. Cheap; removes an unknown. | — | ½ sitting |
@@ -765,17 +767,23 @@ they stop promising a 0.6.0 deliverable that is now 0.7.0. See SPEC updates.
    Marketplace it is **1 request per minute with a 15-object limit**, which
    makes the poll loop impossible — and Socket Mode apps cannot be
    Marketplace-listed, so that escape is closed too.
-   **(a)** each user creates their own Slack app — works, more setup for
-   them; **(b)** rite ships one distributed app — does not work at any useful
-   latency. Recorded rather than assumed because (a) is the only functioning
-   option and it changes what setup docs have to say.
+   ⚠ **This is now informational, not a decision.** Socket Mode needs a
+   per-user app too — the `xapp-` token is issued at app creation and never
+   to an installer — so **every user creates their own Slack app under either
+   transport**, which makes it an internal customer-built app and restores
+   Tier 3. The rate limit stops binding. What remains is a setup-docs fact:
+   users create an app. ⚠ It becomes a decision again only if rite ever
+   distributes one shared app, and at that point **neither** transport works
+   and the requirement has to move.
 
-4. ⚠ **Is "no daemon" about hosting, or about holding a connection open?**
-   Socket Mode needs no hosting and no inbound URL, so it satisfies the first
-   reading. It also needs a persistent WebSocket, reconnects *"once every few
-   hours"*, per-event acknowledgement and a 10-connection cap — a daemon's
-   problem list inside a process whose selling point is that it is not one.
-   Polling was chosen on the stricter reading. **Confirm which was meant.**
+4. ✅ **"No daemon" was a misrelay — WITHDRAWN, and the answer survived it.**
+   Robert said *"rite start X process (for the current Owner) will be the
+   thing that listens for Slack changes"* — which process listens, not a ban
+   on held connections. Socket Mode held inside `rite start X` satisfies it.
+   Re-evaluated on the correct requirement: **polling still wins, for
+   different reasons** — one credential instead of two, and per-Manager
+   isolation where Slack explicitly does not guarantee which socket a payload
+   lands on. See the spike note.
 
 5. **Does C4's allowlist replace the always-skip default or sit beside it?**
    The shipped note says "with this flag still the default", which reads as

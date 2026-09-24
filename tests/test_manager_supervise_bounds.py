@@ -290,25 +290,59 @@ class TestAFailedStartEndsTheRun:
         assert len(attempts) == 1
 
 
-def test_the_engine_string_is_used_as_an_executable_name():
-    """⚠ Pinned as a LIMIT, not a contract. There is no adapter: the engine
-    string is run as a command, and BOTH flags on it are Claude Code's
-    spelling — `--resume` when there is a session to carry on, and `-p`
-    always, so the engine exits when its turn is done and `ending` can read
-    an exit status instead of inferring one. A local model has no session
-    to resume and this shape cannot express it — which is the point of
-    leaving the interface unstable until `local` forces it (§9.14.2,
-    D-63)."""
+def test_claude_launches_exactly_as_it_did_before_the_registry():
+    """⚠ B3a's first half: a registry that changed the one engine rite
+    actually launches would be a refactor with a behaviour change hidden
+    inside it."""
     assert launch_command("claude").endswith("claude -p")
     assert launch_command("claude", "abc").endswith("claude -p --resume abc")
     assert launch_command("", "").endswith("claude -p")
-    # The defect this pins: a non-Claude engine gets Claude's flags. `-p`
-    # widens it from "only when resuming" to "every launch", which is a
-    # real cost and is why the config validator's closed engine list is
-    # what keeps it harmless today.
-    assert launch_command("some-other-engine", "id").endswith(
-        "some-other-engine -p --resume id"
+
+
+def test_a_second_engine_gets_its_own_vocabulary_not_claudes():
+    """⚠ THE DEFECT THIS TICKET REMOVES, and the test that used to pin it.
+
+    `launch_command("some-other-engine", "id")` returned
+    `some-other-engine -p --resume id` — Claude Code's flags appended to a
+    tool that has never heard of them. The old test asserted exactly that,
+    with a docstring saying the interface stays unstable "until `local`
+    forces it". It is forcing it.
+
+    Goose's spelling is measured, not invented: `run` is a subcommand rather
+    than a flag, the handle is a NAME rite chooses rather than an id it must
+    discover, and the instruction is a file argument rather than stdin.
+    """
+    built = launch_command("local:large", "", "/p.txt", agent="goose")
+    assert built == "goose run -i /p.txt", built
+    resumed = launch_command("local:large", "lead", "/p.txt", agent="goose")
+    assert resumed == "goose run -n lead -r -i /p.txt", resumed
+    assert "-p" not in resumed and "--resume" not in resumed
+
+
+def test_a_substituted_binary_still_gets_claudes_spelling():
+    """⚠ Not the defect — the opposite. A test stub (`sh`, `agent.sh`) is
+    STANDING IN for claude, so it wants Claude's flags. Production cannot
+    reach this path: the config validator's engine list is closed to
+    `claude`, `human` and `local:<class>`.
+
+    Refusing here was tried and was wrong: it broke two tests whose point is
+    that the permission mode reaches the launch, removing real coverage to
+    satisfy a rule about a case production cannot produce.
+    """
+    assert launch_command("sh", "", "/p.txt") == "sh -p < /p.txt"
+    assert launch_command("/tmp/agent.sh", "abc", "", "--flag") == (
+        "/tmp/agent.sh -p --flag --resume abc"
     )
+
+
+def test_an_engine_whose_permission_is_environmental_refuses_a_flag():
+    """Goose takes GOOSE_MODE in the environment, so "permission" cannot be
+    "a flag string". The adapter that owns the engine sets it; this refuses
+    rather than writing a flag the tool would reject."""
+    with pytest.raises(ValueError, match="environment"):
+        launch_command(
+            "local:large", "", "", "--dangerously-skip-permissions", agent="goose"
+        )
 
 
 class TestAnUnrecognisedVerdictStops:

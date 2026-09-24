@@ -32,12 +32,23 @@ class TestTheEngineIsToldToExit:
             "claude -p --resume abc-123"
         )
 
-    def test_another_engine_gets_the_same_flag_because_there_is_no_registry(self):
-        """Stated rather than silently true: `launch_command`'s docstring
-        already says the engine string is an executable name and `--resume`
-        is Claude Code's spelling appended unconditionally. `-p` is the
-        same bet and no worse, and pretending otherwise would need a
-        registry this module deliberately does not have."""
+    def test_a_substituted_binary_keeps_the_flag_because_it_stands_in_for_claude(
+        self,
+    ):
+        """⚠ RENAMED AND REASONED AGAIN — the registry this said did not
+        exist now does (B3a, `managers/engines.py`).
+
+        An unrecognised engine string still gets `-p`, and that is now a
+        decision rather than an absence: production cannot produce one (the
+        config validator's engine list is closed to `claude`, `human` and
+        `local:<class>`), so the only callers here are tests substituting a
+        script for the `claude` binary — and those are emulating Claude, so
+        Claude's flags are what they want.
+
+        The engine that IS not Claude, `local:<class>`, now resolves through
+        its declared agent and gets that agent's vocabulary instead. That
+        was the live defect; this was never it.
+        """
         assert launch_command("someotherengine").endswith("someotherengine -p")
 
 
