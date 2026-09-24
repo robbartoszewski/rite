@@ -17,6 +17,21 @@ That is deliberately ALL that is done for it. No adapter interface, no
 fan-out, no subscriber list: those are the parts that would have to be
 guessed at now and rewritten later (`docs/design/V080_RELAY_CHANNELS.md`).
 
+⚠ **READING IS PER-READER, AND THAT IS WHY THE INVARIANT ABOVE SURVIVES.**
+The outbox has more than one reader — `rite connect` and, from 0.6.0, a Slack
+relay — and the old rule was "delete one once you have relayed it so it is
+not shown twice". With two readers that rule loses messages: whoever reads
+first deletes, and the other never sees it.
+
+Decision 1 chose a **per-reader cursor**, and the reason it was chosen over
+fan-out and acknowledgement is precisely that it does not touch a message.
+A cursor records where a READER got to, in a file of its own, keyed by a name
+the reader supplies. **Messages stay identity-free**: nothing is written into
+them, nothing is copied per subscriber, and a file written by `echo` is still
+delivered because it is there. The other two options would each have required
+a message to know who had seen it, which reverses the property this module
+exists to keep.
+
 **Naming follows `reporting/outbox.py`** — milliseconds first so
 `sorted(glob(...))` reads in send order, then pid and a counter to break
 ties, because two writers in one millisecond otherwise produce one path
@@ -34,6 +49,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from rite_ai.managers import manager_dir
+from rite_ai.names import UnsafeName, require_safe_name
 from rite_ai.state import write_atomic
 
 INBOX = "in"
@@ -59,6 +75,72 @@ def mailbox_dir(root: Path, manager: str, box: str) -> Path:
     Manager on this machine is not something to commit.
     """
     return manager_dir(root, manager) / "mail" / box
+
+
+def _cursor_path(root: Path, manager: str, box: str, reader: str) -> Path:
+    """Where one reader's position in one box is remembered.
+
+    ⚠ Private deliberately. Nothing outside this module needs a cursor's
+    PATH — a reader uses `unread` and `mark_read` — and a public name with
+    no caller outside its own file is what `test_no_dead_wiring` exists to
+    catch. Exempting it would have been a standing claim that something
+    will call it later; nothing will.
+
+    `.rite/managers/<manager>/mail/<box>.read/<reader>.json` — a sibling of
+    the box rather than a file inside it, because everything inside a box is
+    a message and `read` globs `*.json` there. A cursor living among the
+    messages would be delivered as one.
+    """
+    require_safe_name(reader, kind="mailbox reader")
+    return manager_dir(root, manager) / "mail" / f"{box}.read" / f"{reader}.json"
+
+
+def _cursor(root: Path, manager: str, box: str, reader: str) -> str:
+    """The last filename this reader has seen, or "" — never raises.
+
+    A cursor that cannot be read is treated as "has seen nothing", which
+    re-delivers rather than drops. A message twice is recoverable; a message
+    nobody ever sees is the failure this channel exists to prevent.
+    """
+    try:
+        data = json.loads(_cursor_path(root, manager, box, reader).read_text())
+    except (OSError, ValueError, UnsafeName):
+        return ""
+    return str(data.get("last", "")) if isinstance(data, dict) else ""
+
+
+def unread(root: Path, manager: str, box: str, reader: str) -> list[Message]:
+    """Everything this reader has not seen yet, in send order.
+
+    ⚠ **Reads only. Nothing is deleted and nothing is marked** — call
+    `mark_read` once the messages have actually reached the person, so a
+    reader that crashes mid-relay re-delivers instead of losing them.
+    """
+    seen = _cursor(root, manager, box, reader)
+    return [m for m in read(root, manager, box) if m.path.name > seen]
+
+
+def mark_read(root: Path, manager: str, box: str, reader: str, messages) -> None:
+    """Advance this reader's cursor past `messages`. Never raises.
+
+    ⚠ **Advances to the LAST message given, not to "now".** A reader that
+    was handed three and relayed three moves past three; a message that
+    arrives between the read and this call is still unread, which is the
+    same window `take` handles the same way and for the same reason.
+    """
+    if not messages:
+        return
+    last = max(m.path.name for m in messages)
+    if last <= _cursor(root, manager, box, reader):
+        return
+    try:
+        path = _cursor_path(root, manager, box, reader)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        write_atomic(path, json.dumps({"last": last}) + "\n")
+    except (OSError, UnsafeName):
+        # A cursor that cannot be written means the reader sees the same
+        # messages again. Annoying and safe; the alternative is losing them.
+        pass
 
 
 def send(root: Path, manager: str, box: str, text: str) -> Path:

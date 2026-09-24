@@ -6154,8 +6154,18 @@ def _connect_briefing(root: Path, manager_name: str) -> str:
     session already knows how to make, and it goes through the validated
     writer, so there is no shape left for it to get wrong.
 
-    Reading stays direct: the session reads the files it is shown, and a
-    malformed one there costs a message rather than a Manager.
+    ⚠ **READING IS NOW A COMMAND TOO, for a second reason.** It used to say
+    "delete one once you have relayed it so it is not shown twice", which is
+    correct for exactly one reader and loses messages for two: with a Slack
+    relay reading the same outbox, whoever reads first deletes and the other
+    never sees it. `rite replies` advances this reader's own cursor and
+    deletes nothing (Decision 1), so both see every message.
+
+    It also removes the last hand-written format from this briefing. A
+    malformed file now costs a message rather than a Manager either way,
+    because `read` skips what it cannot parse — but a session told to parse
+    JSON by hand is a session that can report the wrong thing, and there is
+    no longer any reason for it to.
     """
     from rite_ai.managers.mailbox import OUTBOX, mailbox_dir
 
@@ -6165,15 +6175,84 @@ def _connect_briefing(root: Path, manager_name: str) -> str:
         f"{manager_name!r} in the project at {root}.\n\n"
         f"The Manager may not be running right now, and that is fine — "
         f"messages wait for it.\n\n"
-        f"TO READ what it has said: the JSON files in {outbox}, oldest "
-        f"first by filename. Each has a `text` field. Delete one once you "
-        f"have relayed it so it is not shown twice.\n\n"
+        f"TO READ what it has said, run this — it shows only what you have "
+        f"not seen yet and marks it seen:\n"
+        f"  rite replies {manager_name}\n"
+        f"Do NOT delete anything from {outbox}. Other readers have their own "
+        f"position in it and deleting a file takes the message from them.\n\n"
         f"TO SEND, run this — do not write the file yourself:\n"
         f'  rite message {manager_name} "<what the person wants to say>"\n'
         f"It is delivered at the start of the Manager's next turn.\n\n"
         f"Start by reading anything waiting, then ask the person what they "
         f"want to say."
     )
+
+
+@cli.command("replies")
+@click.argument("manager_name")
+@click.option(
+    "--reader",
+    default="connect",
+    show_default=True,
+    help="Which reader's position to advance. Each reader has its own, so "
+    "two of them see every message.",
+)
+@click.option(
+    "--peek",
+    is_flag=True,
+    default=False,
+    help="Show what is unread without marking it read.",
+)
+def replies(manager_name: str, reader: str, peek: bool) -> None:
+    """What a Manager has said that you have not seen yet.
+
+    ⚠ **THIS EXISTS BECAUSE THE OUTBOX HAS MORE THAN ONE READER.** The old
+    instruction was "delete one once you have relayed it so it is not shown
+    twice", which works for exactly one reader and loses messages for two:
+    whoever reads first deletes, and `rite connect` and a Slack relay never
+    see the same reply.
+
+    Each reader keeps its own cursor (Decision 1), so a message is shown once
+    per reader and deleted by none of them. **Nothing is written into the
+    message** — the mailbox still records no sender and still delivers any
+    file that appears, which is what lets anything that can write a file
+    attach to it.
+
+    \b
+    Examples:
+      rite replies planner                  # as the local chat reader
+      rite replies planner --reader slack   # as the relay
+      rite replies planner --peek           # look without consuming
+    """
+    from rite_ai.managers.mailbox import OUTBOX, mark_read, unread
+    from rite_ai.names import UnsafeName
+
+    root = _require_project_root()
+    roles, problems = _manager_roles(root)
+    if problems:
+        click.echo("cannot read this project's Managers:", err=True)
+        for problem in problems[:3]:
+            click.echo(f"  {problem}", err=True)
+        raise SystemExit(1)
+    if manager_name not in {r.name for r in roles}:
+        known = ", ".join(sorted(r.name for r in roles)) or "none declared"
+        click.echo(
+            f"no Manager named {manager_name!r} in this project — {known}", err=True
+        )
+        raise SystemExit(1)
+    try:
+        waiting_for_reader = unread(root, manager_name, OUTBOX, reader)
+    except UnsafeName as e:
+        click.echo(f"{e}", err=True)
+        raise SystemExit(1) from None
+
+    if not waiting_for_reader:
+        click.echo(f"nothing new from {manager_name!r} for reader {reader!r}.")
+        return
+    for message in waiting_for_reader:
+        click.echo(message.text.strip())
+    if not peek:
+        mark_read(root, manager_name, OUTBOX, reader, waiting_for_reader)
 
 
 @cli.command("message")
