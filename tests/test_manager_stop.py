@@ -203,7 +203,7 @@ class TestABoundLeavesTheSessionAlive:
         monkeypatch.setattr(sup, "stop_session", lambda n: killed.append(n))
         monkeypatch.setattr(sup, "was_attached", lambda n: False)
         monkeypatch.setattr(
-            sup, "liveness", lambda n: type("L", (), {"alive": False})()
+            sup, "liveness", lambda n: type("L", (), {"alive": False, "known": True})()
         )
         monkeypatch.setattr(
             sup,
@@ -255,7 +255,7 @@ class TestABoundLeavesTheSessionAlive:
         _recorded(root)
         monkeypatch.setattr(sup, "was_attached", lambda n: False)
         monkeypatch.setattr(
-            sup, "liveness", lambda n: type("L", (), {"alive": False})()
+            sup, "liveness", lambda n: type("L", (), {"alive": False, "known": True})()
         )
         monkeypatch.setattr(
             sup,

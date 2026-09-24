@@ -565,6 +565,26 @@ def supervise(
                 tried_designation = False
                 continuing = False
                 resume_from = ""
+                # ⚠ **CLEAR WHAT THE FAILED RESUME LEFT HELD, or the fresh
+                # start below collides with it.** A provider that has
+                # forgotten the session exits at once — measured, real
+                # `claude -p --resume <gone>` prints "No conversation found"
+                # and exits 1 — and `start` has already set
+                # `remain-on-exit`, so the dead session stays under the
+                # Manager's name. The fallback then met `start`'s own
+                # "left over from an earlier run" refusal: observed through
+                # `rite start` with a gone designation, the run announced
+                # "starts FRESH" and then started nothing. Robert's rule is
+                # that a gone designation IS a fresh start, so this is the
+                # rule not holding on the one path it names.
+                #
+                # Only a session tmux confirms is NOT alive is ended: it was
+                # created by the attempt above, moments ago, and its exit is
+                # the whole reason we are here.
+                held = session_name(root, manager)
+                here = liveness(held)
+                if here.known and not here.alive:
+                    stop_session(held)
                 result = launch(
                     root,
                     manager,

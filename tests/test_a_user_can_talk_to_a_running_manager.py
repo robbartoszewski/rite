@@ -149,7 +149,7 @@ class TestItReachesTheManagerAndComesBack:
             return StartResult(True, "ok", session="s1", attach="a")
 
         monkeypatch.setattr(
-            sup, "liveness", lambda n: type("L", (), {"alive": False})()
+            sup, "liveness", lambda n: type("L", (), {"alive": False, "known": True})()
         )
         monkeypatch.setattr(sup, "was_attached", lambda n: False)
         monkeypatch.setattr(
@@ -201,7 +201,7 @@ class TestItReachesTheManagerAndComesBack:
             return StartResult(True, "ok", session="s1", attach="a")
 
         monkeypatch.setattr(
-            sup, "liveness", lambda n: type("L", (), {"alive": False})()
+            sup, "liveness", lambda n: type("L", (), {"alive": False, "known": True})()
         )
         monkeypatch.setattr(sup, "was_attached", lambda n: False)
         monkeypatch.setattr(
@@ -257,7 +257,7 @@ class TestItReachesTheManagerAndComesBack:
             return StartResult(True, "ok", session="s1", attach="a")
 
         monkeypatch.setattr(
-            sup, "liveness", lambda n: type("L", (), {"alive": False})()
+            sup, "liveness", lambda n: type("L", (), {"alive": False, "known": True})()
         )
         monkeypatch.setattr(sup, "was_attached", lambda n: False)
         monkeypatch.setattr(
