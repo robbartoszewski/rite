@@ -51,7 +51,7 @@ Should, not must, and a known issue if left: SB4 (narrow `~/.claude`), C1
 | # | decision | blocks | options |
 |---|---|---|---|
 | 1 | **C28: what does a Manager do on Linux?** | any Linux claim; part of W1 and W4 | unsandboxed and said on every run; refuse to start and say why; the Landlock backend, which leaves the tmux socket reachable (spike B9b) |
-| 2 | **MMQ2: two Managers read one Owner's DM. Who acts?** | the two-Manager shape with Slack on. Today both act, and two relays are over Slack's 50/min floor | one app per Manager; per-Manager addressing; one Slack-reading Manager per project |
+| 2 | ✅ **MMQ2 DECIDED (Robert, option (c)) AND BUILT, `24bc75c`: only the Manager holding `route` opens a Slack relay.** Observed through `rite start`: a secondary's Slack connections at start went from 3 to 0, so one relay and 30/min, whatever the number of Managers. The rest of this row is as first written: **MMQ2: two Managers read one Owner's DM. Who acts?** | the two-Manager shape with Slack on. Today both act, and two relays are over Slack's 50/min floor | one app per Manager; per-Manager addressing; one Slack-reading Manager per project |
 | 3 | **C6/C26: how does a credential reach a sandboxed Manager?** | a sandboxed Manager on a private GitHub board, and HTTPS push. Today it is anonymous | laid out in `CREDENTIAL_HANDLING…md` and C26; not yet reduced to options |
 | 4 | **C25: an opt-out from the Manager sandbox?** | anyone whose hooks reach outside the profile. It also shapes option (a) of #1 | config key; `--no-sandbox`; widen per project |
 | 5 | MMQ5: two standups per window in one DM | nothing; ships as built | keep; merge; the Owner composes |
