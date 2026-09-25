@@ -274,7 +274,11 @@ second app.
 
 **What stays open is the accident.** With two Managers in one root, **both
 read the one DM**, so one instruction from the Owner reaches both, and both
-act on it. That is a cross-Manager accident of exactly the kind §5.4.8 exists
+act on it. That comes from the code, not from an observation. Each Manager's
+relay keeps its own cursor, in `.rite/managers/<name>/slack.json`
+(`slack.py`, `_state_path`), so each one delivers every message. The shared
+DM is therefore not split between them, and both receive all of it. Their
+posts are told apart by the `*<name>*:` prefix A4 puts on each one. That is a cross-Manager accident of exactly the kind §5.4.8 exists
 to prevent, and it arrives with the first multi-Manager project that uses
 Slack. (The first version of this question described a shipped
 `command_channel`. That shape has since been replaced, and the question is
@@ -371,9 +375,16 @@ of how much they change:
    are structurally impossible** when the handle exists and is recorded before
    the first turn. The only question is whether `create-chat` can fail
    silently. CU1 measures that.
-6. **Where it runs.** Minting runs in the **supervisor**, outside the Manager
-   boundary, before the pane starts. So the supervisor needs Cursor's
-   credential too. Today only the engine inside the pane needs its own.
+6. **Where it runs: proposed, not decided.** The natural place is the
+   **supervisor**, outside the Manager boundary, before the pane starts,
+   because that is where the launch is built and where a mint that fails can
+   be refused before anything starts. The cost is that the supervisor would
+   then need Cursor's credential too, where today only the engine inside the
+   pane needs its own. The alternative, minting inside the pane as the
+   engine's first act, keeps the credential in one place and brings back the
+   partial-failure states in item 3 inside the boundary, where the supervisor
+   cannot see them. CU3 is written for the supervisor. If CU1 shows the mint
+   needs something only the pane has, revisit it.
 
 **D-63's freeze condition is untouched by this.** It says the adapter
 interface freezes when `local` binds unchanged to a conformance suite. Cursor
@@ -475,13 +486,27 @@ the proxy allows only the sanctioned hosts. A client that ignores
 **The work divides by transport, and part 0.4 is why.** The profile can
 already name local sockets by path, so **local-socket destinations are
 decided in the profile** and never reach the proxy: the tmux socket is denied
-there today. Others (the name resolver's socket, the keychain's services,
-anything under `/private/var/run`) can be allowed or refused the same way.
+there today. Others (the name resolver's socket, anything under
+`/private/var/run`) can be allowed or refused the same way. The keychain is
+not one of them: it is reached through `mach-lookup`, a different rule (SB5).
 **Only IP traffic needs the proxy.** ⚠ Not measured: which local sockets a
 Manager's engines and tools need once IP is loopback-only. Name resolution
 is the obvious one. A client that goes through a CONNECT proxy should not
 need to resolve names itself, but that is unverified for every client in
 question.
+
+⚠ **Loopback is not one destination.** `localhost:*` admits every listener
+on the machine: the local model endpoint (which the local tier needs), but
+also any database, dev server or admin port the operator runs. **And, with
+several Managers, each other's proxies.** If each Manager's proxy enforces its
+own list, Manager A could send through B's proxy and get B's list.
+**Measured 2026-09-25: a profile can allow one loopback port and refuse the
+rest.** With `(deny network-outbound)` and
+`(allow network-outbound (remote ip "localhost:18765"))`, port 18765 answered
+200 and port 18766 was refused (curl exit 7). So each Manager's profile can
+admit only its own proxy's port, which closes the cross-proxy route and also
+shuts out the operator's other listeners. The local model endpoint then has
+to be admitted by its port, or go through the proxy.
 
 This shape is **inferred from measurements, and is not a decision.** It is
 option (a) of EGQ1. ⚠ The first version of this plan preferred it partly
@@ -496,7 +521,7 @@ gone: `9862b59` closed the escape by denying the socket's path and left
 | EG0 | **Measure first: which destinations do real runs reach?** `V070_EGRESS.md` Q5. The v0.5.1 and v0.6.0 acceptance runs, the benchmark, a Slack-connected run, and CU1 for Cursor. Derive the default list from what was observed, as C4's allowlist was derived from 14,981 recorded invocations | A committed data file of observed destinations per engine and role, and a test that requires every default entry to trace to it | — | 1–2 sittings |
 | EG1 | **The list is rite's vocabulary** in `config.yaml`: destinations as hosts (plus ports where needed), grouped by what they are for. No proxy or yoloAI syntax (`V070_EGRESS.md` Q2) | `rite doctor` renders the list and validates it with rite's own error wording. A proxy- or yoloAI-shaped key is refused | EGQ3 | 1 sitting |
 | EG2 | **Workers: enforce where the backend can, and say where it cannot.** Docker: pass the list as `--network-allow`. Seatbelt: rite states at start that Worker egress is **not controlled** on this backend, every run. It does not say "restricted" | A docker Worker is refused a destination off the list, and the refusal names it; a seatbelt project's start line says egress is uncontrolled | EG1, EGQ2 | 1–2 sittings |
-| EG3 | **Manager enforcement** per EGQ1. If (a): profile to loopback, proxy in the supervisor, `HTTPS_PROXY` in the engine's environment. Local sockets decided in the profile by path (part 0.4) | A real Claude Manager and a real Goose Manager each complete a cycle, including a ticket read and a `git push` to the sanctioned remote. A request to an unlisted host is refused **and reported** (EG4). `tmux` from inside is refused | EG0, EG1, EGQ1 | 3–4 sittings |
+| EG3 | **Manager enforcement** per EGQ1. If (a): profile to loopback, proxy in the supervisor, `HTTPS_PROXY` in the engine's environment. Local sockets decided in the profile by path (part 0.4) | A real Claude Manager and a real Goose Manager each complete a cycle, including a ticket read and a `git push` to the sanctioned remote. A request to an unlisted host is refused **and reported** (EG4). With two Managers running, each one's profile admits only its own proxy's loopback port: A's request to B's proxy port is refused. `tmux` from inside is refused | EG0, EG1, EGQ1 | 3–4 sittings |
 | EG4 | **A refusal names the destination and the line that permits it**, the C21 shape (`V070_EGRESS.md` Q3). A client that fails on a refused CONNECT reports a network error that looks like an outage, so the report must come from rite's side, read from the proxy's log, not from the client's message | The refused host appears in the pane-side refusal line **and** in the next check-in digest, with the config line that would allow it | EG3 | 1 sitting |
 | EG5 | **Content scanning, on allowed destinations that publish, only** (D-100). The structural credential rule of `redact_secrets`/C7, not a list of token formats. **Model calls never scanned** | A token pasted into a `gh issue create` body on the sanctioned repo is caught and reported. An ordinary model request is not scanned, which the proxy's own counters show | EG3, EGQ5 | 2 sittings |
 | EG6 | **Demonstrable for the local tier.** With a local engine and an internal-only list, `rite doctor` shows the list and a live refusal of an outside host | On a local-tier project, doctor's output contains the policy and a refused probe to a public host | EG3 | ½ sitting |
