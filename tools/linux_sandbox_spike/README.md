@@ -16,6 +16,13 @@ a private socket, and its own `sleep` processes. No sudo, no installs, no
 network, no writes anywhere else, and it never reads or prints a credential —
 only whether one is present.
 
+It uses `python3` — already present on a default Ubuntu, Debian, Fedora or
+RHEL — to call the three Landlock syscalls through `ctypes`. That needs no
+compiler and no privilege, and Landlock can only restrict the process that
+asks for it and that process's children: it cannot reach the shell that
+started it, and it cannot grant anything. Where `python3` is absent, every
+Landlock check reports `N/A` rather than guessing.
+
 ## What it answers
 
 1. **What exists** — kernel, Landlock as an active LSM, `bwrap`, `unshare`,
@@ -23,11 +30,21 @@ only whether one is present.
    restrict them), yoloAI's backends, Docker, and which engines are installed.
 2. **Whether the boundary can be built** — the macOS profile's properties one
    at a time: project readable and writable, another project denied, `$HOME`
-   denied, `git`/`rite` still runnable.
-3. **The two escapes macOS shipped with** — can a confined process drive a
+   denied, `git`/`rite` still runnable. Asked of **Landlock** and of
+   **bubblewrap** separately, because they fail independently: on a host that
+   restricts unprivileged user namespaces, bubblewrap cannot start at all
+   while Landlock still works.
+3. **Nesting** — whether a profile can be re-applied inside an already
+   confined process, whether a **narrower** one works, and whether a
+   **wider** one can grant back a denied path. This is the macOS trap: there
+   only a semantically equivalent profile survived, a narrower one failed
+   too, and nothing documented it.
+4. **The two escapes macOS shipped with** — can a confined process drive a
    tmux server living outside the boundary, and can it signal a process it did
    not start. Each has a control that shows *why* the result came out as it
-   did.
+   did. The socket escape is also asked of Landlock directly, because the
+   macOS fix for it was a filesystem deny and Landlock's filesystem rules do
+   not govern `connect(2)`.
 
 ## Reading the output
 
@@ -46,8 +63,9 @@ distinguishes a refusal *inside* a sandbox from a sandbox that never started.
 
 ## What it deliberately does not establish
 
-* The **Landlock ABI version** — that needs a compiled probe, and this script
-  compiles nothing. Kernel release is the proxy.
+* The **Landlock ABI version** where `python3` is missing — it is read by
+  calling `landlock_create_ruleset(NULL, 0, VERSION)`, so without an
+  interpreter to call it the kernel release is the only proxy.
 * Whether yoloAI's Linux backends actually **confine**; only whether they are
   reported available.
 * Anything about a Manager's real workload. No engine is run inside a sandbox
