@@ -1004,7 +1004,16 @@ def attachment(name: str) -> Attachment:
         )
 
 
-ALLOWED_ON_TMUX_ARGV = frozenset({MANAGER_ENV, "GOOSE_MODE", "TMPDIR"})
+ALLOWED_ON_TMUX_ARGV = frozenset(
+    {
+        MANAGER_ENV,
+        "GOOSE_MODE",
+        "TMPDIR",
+        "GOOSE_PROVIDER",
+        "GOOSE_MODEL",
+        "OLLAMA_HOST",
+    }
+)
 """The ONLY variables that may be passed to a pane with `tmux -e` (C6).
 
 A positive list on purpose. `-e NAME=value` puts the value on tmux's argv,
@@ -1029,7 +1038,16 @@ the profile beside it already names. It is needed because the engine is
 given its own temp directory rather than the system one: Goose panics
 without somewhere writable to put `.tmpXXXX` while loading extensions, and
 granting the per-user temp root instead was measured to expose every other
-process's scratch on the machine."""
+process's scratch on the machine.
+
+⚠ `GOOSE_PROVIDER`, `GOOSE_MODEL` and `OLLAMA_HOST` say WHICH model a local
+Manager runs, and where. Without them Goose silently used the operator's
+global config (measured 2026-09-25: declared `qwen3:8b`, ran
+`qwen3-vl:8b-instruct`). A provider name, a model name and an endpoint URL
+are configuration and not secrets; a secret an endpoint needs goes in the
+role's `credential`, which never travels this way. ⚠ **A URL CAN carry one**,
+`http://user:pass@host`, so `supervise` refuses an endpoint with userinfo
+rather than put it here."""
 
 
 def _on_tmux_argv(name: str, value: str) -> list[str]:

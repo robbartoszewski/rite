@@ -86,6 +86,23 @@ def session_name(ticket: str, subtask_id: str) -> str:
     return f"rite-{safe.strip('-').lower()}"
 
 
+def goose_environment(endpoint: str, model: str) -> dict[str, str]:
+    """What tells Goose WHICH model to run, and where.
+
+    Shared by a Worker (`GooseAgent`) and a Manager's launch
+    (`supervise`), so the two cannot come to disagree. ⚠ Without these Goose
+    uses the operator's GLOBAL config (`~/.config/goose/config.yaml`), and
+    it does so silently. Measured 2026-09-25: a Manager declared with
+    `model: qwen3:8b` ran `qwen3-vl:8b-instruct`, because only the Worker path
+    set them.
+    """
+    return {
+        "GOOSE_PROVIDER": "ollama",
+        "GOOSE_MODEL": model,
+        "OLLAMA_HOST": endpoint.rstrip("/").removesuffix("/v1"),
+    }
+
+
 @dataclass(frozen=True)
 class GooseAgent:
     """One turn of Goose against a local endpoint."""
@@ -136,14 +153,8 @@ class GooseAgent:
 
         argv = [self.binary, "run", "-n", handle, "-i", instruction_path]
         environment = dict(os.environ)
-        environment.update(
-            {
-                "GOOSE_PROVIDER": "ollama",
-                "GOOSE_MODEL": self.model,
-                "GOOSE_MODE": self.mode,
-                "OLLAMA_HOST": self.endpoint.rstrip("/").removesuffix("/v1"),
-            }
-        )
+        environment.update(goose_environment(self.endpoint, self.model))
+        environment["GOOSE_MODE"] = self.mode
         environment.update(self.env)
         try:
             completed = self._launch(argv, workspace, environment)

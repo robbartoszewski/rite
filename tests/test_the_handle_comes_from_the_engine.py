@@ -134,6 +134,15 @@ class TestTheStarterDerivesTheHandleRatherThanBeingHandedIt:
             return StartResult(False, "not starting anything in a test")
 
         monkeypatch.setattr(sup, "start_session", fake_start)
+        # Declared as a real project declares it: the launch reads the role's
+        # model and endpoint, and refuses a goose Manager that has none.
+        (tmp_path / ".rite").mkdir(exist_ok=True)
+        (tmp_path / ".rite" / "config.yaml").write_text(
+            "coordination:\n  managers: [lead]\n  manager_roles:\n"
+            "  - {name: lead, engine: 'local:tier', preset: lead, "
+            "endpoint: 'http://localhost:11434/v1', model: 'qwen3:8b', "
+            "agent: goose}\n"
+        )
         sup._default_starter(
             tmp_path,
             "lead",

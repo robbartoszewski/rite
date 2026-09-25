@@ -1261,6 +1261,49 @@ def _why(answer: str, started: int) -> str:
     )
 
 
+def _engine_model_env(root: Path, manager: str, agent: str):
+    """WHICH model a local Manager's engine runs, from its declared role.
+
+    DERIVED from the config, like everything else at the launch: this call
+    site has dropped three passed-in arguments in two days. Returns
+    `(environment, refusal)`, and the refusal is "" when there is none.
+
+    ⚠ Before this, a Goose Manager's declared `model` and `endpoint` were
+    read by `rite doctor` and by nothing that launched it. Goose then used
+    the operator's GLOBAL config instead, silently. Measured 2026-09-25:
+    declared `qwen3:8b`, ran `qwen3-vl:8b-instruct`.
+    """
+    if agent != "goose":
+        return {}, ""
+    from urllib.parse import urlsplit
+
+    from rite_ai.config.parse import ParseError, parse_config
+    from rite_ai.local.goose_agent import goose_environment
+
+    parsed = parse_config(root / ".rite" / "config.yaml")
+    if isinstance(parsed, ParseError):
+        return {}, f"config.yaml does not parse: {parsed.message}"
+    role = next(
+        (r for r in parsed.coordination.manager_roles if r.name == manager), None
+    )
+    if role is None or not (role.model and role.endpoint):
+        return {}, (
+            "a goose Manager must declare its model and endpoint in "
+            "coordination.manager_roles, or Goose silently runs whatever the "
+            "operator's global goose config names"
+        )
+    parts = urlsplit(role.endpoint)
+    if parts.username or parts.password:
+        # These values travel on tmux's argv (ALLOWED_ON_TMUX_ARGV), where
+        # `ps` shows them to every local account.
+        return {}, (
+            f"the endpoint for {manager!r} carries credentials in its URL, "
+            "which would appear on a process list. Put the secret in the "
+            "role's `credential` and the bare URL in `endpoint`"
+        )
+    return goose_environment(role.endpoint, role.model), ""
+
+
 def _default_starter(
     root,
     manager,
@@ -1318,6 +1361,9 @@ def _default_starter(
     from rite_ai.managers.engines import permission_placement
 
     placement = permission_placement(engine, agent, permission)
+    model_env, refused = _engine_model_env(root, manager, agent)
+    if refused:
+        return StartResult(False, f"refusing to start Manager {manager!r}: {refused}")
     # ⚠ **DERIVED HERE rather than passed in, and that is the point.** This
     # call site has silently dropped `prompt`, then `permission`, then
     # `agent` — three arguments in two days, each producing a Manager that
@@ -1357,6 +1403,7 @@ def _default_starter(
                 else {}
             ),
             "TMPDIR": str(engine_tmp(root, manager)),
+            **model_env,
         },
         engine=engine,
         command=wrap(
