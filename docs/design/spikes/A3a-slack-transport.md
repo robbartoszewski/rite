@@ -212,6 +212,11 @@ which is where `mail_waiting` already delivers it.
 
 ## ⚠ Status: the transport is chosen, the proof is NOT made
 
+⚠ **UPDATED 2026-09-25: the proof HAS been made.** Observed against a real
+workspace, a posted sentinel was readable 0.24 s later, on the first poll.
+Recorded in `../V060_RELEASE_PLAN.md`, row A3a, with the instrument at
+`tools/slack_probe/`. The section below is kept as the state on 2026-09-24.
+
 A3a's done-when is *"send a message in a Slack channel; a standalone script
 using the stored token prints it within 5s"*. **That observation has not been
 made** — it needs a real workspace, an app, and a bot token, none of which

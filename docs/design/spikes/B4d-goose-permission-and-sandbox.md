@@ -104,6 +104,11 @@ which is why one env var fixes it.
 
 ## 3. ⚠ What this buys, and what it does not
 
+⚠ **UPDATED 2026-09-25: "Managers do NOT run sandboxed" below is no longer
+true.** Since `4ebbbd7` a Manager runs inside a seatbelt profile, with Workers
+requested through a broker (B9). The section is kept as what held when it was
+measured.
+
 **The distinction that decides how much this is worth:**
 
 - **Workers already run sandboxed.** For the Worker case this closes cleanly:

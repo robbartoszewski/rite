@@ -247,6 +247,12 @@ name and pulls it. Measured precisely:
 
 ## 6. What this spike did not measure
 
+⚠ **UPDATED 2026-09-25:** the `GOOSE_MODE=auto` bullet was measured
+afterwards, in `B4d-goose-permission-and-sandbox.md`. `auto` deleted a file
+unattended, and `approve` fails fast with exit 1 rather than hanging. The
+other bullets are still unmeasured and are carried in
+`../V070_RELEASE_PLAN.md`.
+
 - The full ten-task benchmark — five tasks only.
 - Open Interpreter at any window above 4,096 — no scoped route exists.
 - Open Interpreter against an unreachable provider — `--oss` hardwires

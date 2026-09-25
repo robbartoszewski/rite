@@ -4,6 +4,15 @@
 Written on Robert's instruction so that ticket text's limits (SPEC §6.6.3)
 point at something rather than at nothing.
 
+⚠ **UPDATED 2026-09-25: the property, the network-layer enforcement and the
+scope of content scanning are now DECIDED and specified in SPEC §5.5 (D-99,
+D-100).** Planning and the open questions that remain are in
+`V070_RELEASE_PLAN.md`, tracks EG and SB. **Open question 1's premise below
+("the Manager does not have one") is stale.** Since B9 a Manager runs inside
+a seatbelt profile. It was measured that such a profile can confine to
+loopback and nothing finer, so the Manager's list must be enforced outside
+its boundary.
+
 ## The property
 
 **The agent may only talk to destinations the operator sanctioned — inbound

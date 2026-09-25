@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.23.1 · **Date:** 2026-09-25
+**Version:** 0.24.1 · **Date:** 2026-09-25
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -1836,6 +1836,33 @@ is in force.
 
 ### 5.4. Manager guardrails — containment without a sandbox
 
+⚠ **REVERSED IN 0.6.0, and the text below is kept as the argument that was
+reversed (D-76, superseded).** Robert put Manager sandboxing into 0.6.0
+because the permission allowlist cannot hold for Goose, whose `GOOSE_MODE`
+is whole-session. So the sandbox is the only boundary that works for every
+engine. Since `4ebbbd7` a Manager's pane runs inside a seatbelt profile that
+`managers/enclosure.py` composes. The three reasons below fared differently:
+
+- **Broad project access** did not stop it. The profile grants the whole
+  project tree, and that is also why the profile does **not** separate two
+  Managers in one root from each other (§5.4.8).
+- **Attachability** did not stop it either. The tmux pane is created outside
+  the boundary, and a human still attaches to it.
+- **Nesting was measured true** (`docs/design/spikes/B9-manager-sandboxing.md`):
+  only a semantically equivalent profile may be re-applied inside a sandbox,
+  so a sandboxed Manager cannot start a sandboxed Worker. It is answered by a
+  **broker**. The Manager requests a Worker, and the supervisor, outside the
+  boundary, validates the request and runs `rite sandbox start`
+  (`managers/broker.py`).
+
+⚠ **What the boundary does not do** is printed on every run
+(`enclosure.limitations()`). It does not confine the network. Measured on
+2026-09-25, it also does not keep a Manager from the tmux server, which runs
+commands outside it, or from signalling processes it did not start
+(`docs/design/V070_RELEASE_PLAN.md`, part 0). The remaining containment below,
+**what a Manager is permitted to do**, still applies in full. The sandbox
+adds to it and replaces none of it.
+
 §5.3 gives Workers a sandbox. Managers do not get one, and this section is
 the other half of the design rather than an exception to it.
 
@@ -1954,6 +1981,15 @@ here so the two are recognised as one problem rather than two.
 
 #### 5.4.5. ⚠ "The acting Manager's own directory" does not exist yet
 
+⚠ **PARTLY STALE: step 1 has landed, and so has the directory. Step 2 has
+not.** A Manager session carries `RITE_MANAGER` (`managers/__init__.py`,
+`MANAGER_ENV`), set on every session `rite start` creates. So a process can
+answer "which Manager am I". And `manager_dir()` gives each Manager
+`.rite/managers/<name>/`, where NEW state lives (the mailbox, the journal).
+**Existing per-project state has not moved**, and no 0.6.0 ticket moves it.
+Step 2 is carried to 0.7.0 as MM1 in `docs/design/V070_RELEASE_PLAN.md`. The
+text below is the analysis as written before either landed.
+
 **An earlier draft of this section proposed the property "nothing is written
 outside the acting Manager's own directory except the enumerated shared
 files", and called it checkable. It is not, and the reason is structural
@@ -2001,8 +2037,10 @@ primitives whose entire purpose is being shared.
 The enumeration must therefore split two kinds:
 
 - **Shared by decision** — the claim ledger, `pool.json`, the loop and
-  scheduler locks, the outbox, the coordination cache. Each stays shared and
-  each needs its reason written next to it.
+  scheduler locks, the coordination cache. Each stays shared and each needs
+  its reason written next to it. ⚠ *The outbox was on this list. It is no
+  longer shared: the mailbox lives under `.rite/managers/<name>/mail/`
+  (`managers/mailbox.py`), one per Manager.*
 - **Shared by accident** — everything else in the flat `.rite/`, which is
   shared because nothing gave it an owner, and which §5.4.5's step 2 moves.
 
@@ -2040,6 +2078,146 @@ A rule in this document is read once by whoever implements the thing it
 governs. The four escapes were all added by authors who would have endorsed
 the rule had they been asked, which is what makes a rule the wrong instrument
 here.
+
+#### 5.4.8. Separation between Managers that share a root — the requirement (0.7.0)
+
+**Status: DECIDED (Robert, 2026-09-20: D-79, §9.14.9). Not enforced.**
+Several Managers run in **one** project root, each with its own
+`.rite/managers/<name>/`, and they are **strictly separated**, in Robert's
+words: *"one misbehaving manager shouldn't be able to mess with others by
+accident."* Profiles are committed and shared. Per-instance configuration is
+gitignored.
+
+The requirement is §5.4.1's, applied between Managers rather than between a
+Manager and the operator's machine. Written as four properties so each can
+be tested:
+
+| | property | what must enforce it |
+|---|---|---|
+| **P1** | No rite command acting as Manager A writes rite state belonging to Manager B | the name-to-path join (§5.4.2), and §5.4.7's test at **Manager** granularity |
+| **P2** | Manager A's processes cannot signal Manager B's, or drive B's session | the Manager's sandbox profile: signals limited to its own processes, and the tmux server out of reach |
+| **P3** | State shared by decision (§5.4.6) is written only through its locked writer, and the list is enumerated by a test | §5.4.6 |
+| **P4** | A release or destroy names the Manager whose thing it is | §5.4.3, with a Manager field on the claim |
+
+⚠ **None of the four holds on `main` today, and this section does not claim
+otherwise.** Most per-project state is still flat (§5.4.5). `Claim` has no
+Manager field (§5.4.3). And P2 was **measured open** on 2026-09-25: from
+inside a Manager's profile, a process it did not start was killed, and the
+tmux server ran a command outside the boundary
+(`docs/design/V070_RELEASE_PLAN.md`, part 0).
+
+⚠ **The Manager's sandbox is not what enforces P1.** Each Manager's profile
+grants the whole project tree, so two Managers in one root can each reach
+the other's directory. The sandbox separates a Manager from the rest of the
+machine, not from its siblings. P1 is enforced by rite's own writers, or it
+is not enforced.
+
+**"By accident" is the bar, and it is not "against a hostile Manager."** A
+Manager may run `rite`, and `rite` does what the operator can. What this
+section requires is that ordinary mistakes cannot cross between Managers: a
+wrong path join, a broad `pkill`, a `tmux kill-server`, a force-release
+matched by path. The tickets and the open questions (where per-instance
+configuration lives, whether Workers belong to a Manager, a per-Manager
+worker cap) are in `docs/design/V070_RELEASE_PLAN.md`, track MM.
+
+### 5.5. Egress — where an agent may talk (0.7.0)
+
+**Status: DECIDED (Robert, 2026-09-25: D-99, D-100). Not built.** Until it
+ships, §6.6.3's warning stands unqualified. Design, measurements and open
+questions: `docs/design/V070_EGRESS.md` and
+`docs/design/V070_RELEASE_PLAN.md`, tracks EG and SB.
+
+#### 5.5.1. The property, stated positively
+
+**An agent may talk only to destinations the operator sanctioned, outbound
+and inbound.**
+
+It is a list of what is permitted, not of what is forbidden. A list of
+threats loses to the one nobody listed. A list of destinations is closed by
+construction, and whatever is not on it is refused, including the
+destination nobody thought of. One rule covers a push to a fork, a registry
+upload, a webhook, a paste site, a comment on a third party's tracker, and
+in the other direction a `git clone`, a package install or a `curl | sh`
+from anywhere unsanctioned.
+
+**This is the control that makes §6.6.3 survivable.** Text filters try to
+stop an agent from being fooled, and 8 of 8 agent-directed attacks passed
+one. This control does not care what the agent believes. An instruction to
+post `.env` to a collector goes nowhere, because the collector is not on the
+list.
+
+#### 5.5.2. Enforced at the network layer, never the tool layer
+
+**The list is enforced where connections are made**, not by deciding which
+programs may run. The command allowlist (C4) refuses `curl` and permits
+`git` and `gh`. Both of those reach the network and either can reach an
+unsanctioned destination. And `python -c`, a build script, a git hook or a
+package's post-install step can all make requests. **The command allowlist
+is not an egress control and must never be described as one.**
+
+**What the enforcement points can express, and this constrains every design
+of it:**
+
+- **A Worker on a docker backend.** yoloAI's `--network-isolated` with
+  `--network-allow` enforces a domain allowlist that the sandbox cannot
+  remove. On apple, podman and containerd the same flags are a guardrail the
+  sandbox can flush. On **seatbelt, rite's default backend,** yoloAI
+  **refuses** the flag. The allowlist is IPv4 only. (Read from `yoloai help
+  security`, 0.11.0; not measured by rite.)
+- **A Manager** runs under seatbelt on the host (§5.4). Measured 2026-09-25:
+  a seatbelt profile can confine a process to **loopback** and nothing finer.
+  A named host is rejected when the profile loads (*"host must be * or
+  localhost in network address"*). So a Manager's destination list cannot
+  live in its profile. It has to be enforced by something outside the
+  boundary that the Manager's traffic passes through. How is open.
+
+⚠ **So a project whose Workers run on seatbelt gets no Worker egress control,
+and rite must say so rather than imply otherwise.** The words "restricted",
+"isolated" or "controlled" may be used only for an enforcement point that
+actually enforces.
+
+#### 5.5.3. A refusal is reported, not silent
+
+A refused connection is reported the way a refused command is (C21): which
+destination was refused, and the configuration line that would permit it. A
+client that meets a refused connection usually reports something that looks
+like an outage. So the report comes from rite's side of the enforcement
+point, not from the client's error. A silent network failure would be the
+stall-without-a-message class again.
+
+#### 5.5.4. Content scanning — only on allowed destinations that publish (D-100)
+
+**The destination is the primary control. Content scanning is secondary, and
+it applies to one case: a destination that is allowed but publishes.** A
+`gh issue create` on the operator's own repository passes the destination
+check, and a token pasted into the body would go with it. For that case the
+outbound payload is scanned for credential-shaped content, using the
+structural rule `redact_secrets` already has, not a list of token formats.
+
+⚠ **Model calls are never scanned.** Code goes to the model provider by
+design, and that is the product working. A scanner on that path fires on
+every request, and one tuned to ignore it leaves the largest channel
+unwatched while appearing to watch it. The provider endpoint is a sanctioned
+destination, and rite says so rather than pretending to inspect it.
+
+**Which allowed destinations count as publishing is not decided**
+(`docs/design/V070_RELEASE_PLAN.md`, EGQ5).
+
+#### 5.5.5. The vocabulary is rite's
+
+The list lives in rite's configuration, in rite's words: hosts, grouped by
+what they are for. No proxy's syntax and no yoloAI flag reaches
+`config.yaml`, by the same rule that keeps engine nouns out of it. Whether
+the list is committed or per-instance is open (EGQ3).
+
+#### 5.5.6. What this makes demonstrable
+
+With a local engine (the local tier), no legitimate full-content egress
+exists. The list can then be entirely internal (the model endpoint, the
+internal git host, the package mirror), and *"nothing leaves this machine"*
+becomes something rite can **show**: the policy, and a refusal of an outside
+host. With a hosted engine the honest claim is narrower: nothing leaves
+except to the provider the operator chose.
 
 ## 6. Ticket backend
 
@@ -2234,10 +2412,11 @@ key". They read as ordinary ticket requirements, and **no text filter catches
 them**, because nothing in the words distinguishes them from legitimate work.
 
 **So a reader of this document must not conclude that ticket text is
-vetted.** It is normalised and phrase-scanned. An instruction to exfiltrate,
-worded as a task, reaches the agent unflagged. What limits the damage is not
+vetted.** Today it is neither normalised nor scanned. Even once § N is built,
+it is only normalised and phrase-scanned, and an instruction to exfiltrate,
+worded as a task, still reaches the agent unflagged. What limits the damage is not
 here. It is the command allowlist (C4) today, and destination control
-(`docs/design/V070_EGRESS.md`, v0.7.0), which makes a fooled agent harmless
+(§5.5, v0.7.0, decided and not built), which makes a fooled agent harmless
 rather than trying to stop it being fooled.
 
 ## 7. Review convention and checklists
@@ -6303,7 +6482,7 @@ happened once already and left no trace until this review found it.
 | D-59 | A lease that expires implausibly far ahead | **Not credible beyond `owner_lease_minutes + skew_tolerance`, and therefore challengeable** | §2.4.1's tolerance protects an incumbent from a fast challenger; the reverse case had no rule, and read literally a Manager whose clock is a day ahead holds the role permanently — a wedge needing no malice, only a wrong clock. Nothing honest can write an expiry beyond the longest permitted lease plus the most drift tolerated, so anything past that ceiling is invalid. Derived from two values already in `coordination:` rather than a third number to keep in step: raising the lease duration moves the ceiling with it. Logged distinctly, because it means somebody's clock is wrong. §2.4.1. |
 | D-60 | The lease's `priority` field | **Written for audit, ignored on read; config order always wins** | `coordination.managers` is declared intent under version control; a lease is ephemeral runtime state. A stale lease written before someone reordered the list must not override that reorder, or a deliberate config change silently fails to take effect until a lease happens to expire. The field is kept because what the holder believed its priority was at acquisition is useful when reconstructing why a promotion went the way it did — but it never participates in the comparison. Both halves stated so the field is neither deleted as dead weight nor, worse, started being read. §2.4.1. |
 | D-61 | Granularity of the state layer's compare-and-swap | **Per key, not whole-state; the version is an opaque fingerprint of the value** | The interface must be substitutable (D-20, D-21) or the git-versus-Redis question has no answer but "rewrite it". The first cut made the version whole-state because that is what `--force-with-lease` compares, on the stated ground that per-key CAS was not implementable on git — which was wrong: a git backend compares the key's own value, merges, pushes with the lease, and re-merges when the ref moved for an unrelated key, absorbing §2.4.2(b)'s ref-level race instead of exporting it. Better for git (that race can no longer mark a live Manager falsely stalled) and necessary for anything else (a key-value store would otherwise funnel every write through one global version). A version fingerprints the VALUE, so no backend needs a durable counter and an A→B→A rewrite is harmless: a decision made on content stays sound when the content is what was read. Proven rather than argued — `tests/test_state_layer_kv.py` binds a socket-served key-value store with no trees, refs or merges to the conformance suite unchanged, and it passes, including the process-burst concurrency tests. |
-| D-62 | Whether `rite start <provider>` inherits D-50 | **No — it AMENDS D-50, and the amendment is recorded rather than implied** | A Manager session is not idempotent, local or free; it fails all three of D-50's tests where the loop failed only one, and §9.10 refuses to start even the free loop. What buys the amendment is §5.1.1 — a command's surprising effects should be things the user asked for BY NAME, and `rite start claude` names it. What it costs is paid here: at most one Manager session per project, a second invocation refused, and bare `rite start` unchanged because it is what a session runs to orient itself. §9.14.0. |
+| D-62 | Whether `rite start <provider>` inherits D-50 | **No — it AMENDS D-50, and the amendment is recorded rather than implied** | A Manager session is not idempotent, local or free; it fails all three of D-50's tests where the loop failed only one, and §9.10 refuses to start even the free loop. What buys the amendment is §5.1.1 — a command's surprising effects should be things the user asked for BY NAME, and `rite start claude` names it. What it costs is paid here: at most one Manager session per project, a second invocation refused, and bare `rite start` unchanged because it is what a session runs to orient itself. §9.14.0. ⚠ **Narrowed, 2026-09-25 (recorded, not newly decided): the shipped refusal is per Manager NAME, not per project** (`managers/session.py`). D-72 and D-79 made several Managers per project legal, and §9.14.7b recorded that they void "one per project". The idempotence argument per name is owed (`docs/design/V070_RELEASE_PLAN.md`, MM6). |
 | D-63 | When the provider adapter interface freezes | **When `local` binds UNCHANGED to an adapter conformance suite — and that suite is written WITH the `claude` adapter, against the contract, not deferred to the freeze** | §3.3's precedent is sharper than a draft of §9.14.2 read it: `tests/state_layer_conformance.py` was P2-1a, written with the FIRST backend against the contract, and the git backend had to bind to it unchanged. Deferring the suite to the freeze moment inverts the thing that made it work. No adapter suite, interface or code exists today, so as drafted this froze on an unwritten artifact. Writing it now is also where the §9.14.7b mismatch with the built `local` package would surface automatically. §9.14.2. |
 | D-64 | Provider order after `claude` | **`local` second, `cursor` third — the most DIFFERENT provider second, not the easiest** | A local engine has no session concept, no session id to resume, no quota and possibly no interactive surface, so it violates every assumption the first adapter will bake in. Two hosted assistants would agree with each other and fail on the third. §9.14.8. |
 | D-65 | Whether a Manager session may be detached with logged output | **No — attachability is an interface requirement, not a Claude implementation detail** | A session a human cannot talk to is a report about a session. Stated at the interface because an abstraction designed from the mechanics alone arrives at "start, capture, log", which satisfies everything else and fails this completely. tmux gives the first adapter all of it free, which is exactly why it constrains the second. §9.14.3. |
@@ -6317,7 +6496,7 @@ happened once already and left no trace until this review found it.
 | D-73 | Whether the session or the resumer dies with the terminal | **The SESSION may outlive it; the RESUMER may not** | Review found the two requirements denying each other: §9.14.3 needs a session that survives detaching, §9.14.6 said nothing outlives the terminal, and tmux — rite's only persistence — is detached by construction. They separate: a session the human started continuing is what §9.12 already permits (`rite sandbox start` leaves one running); what §9.12 forbids is an unattended START, so it is the resumer that must die. §9.14.6. |
 | D-74 | How the one-Manager refusal establishes liveness | **Fail CLOSED, against the INNER PROCESS, with the remedy printed** | The mechanism nearest to hand is tmux `has-session`, which answers "does a session exist" rather than "is the command running" — the facade fixed twice in one night in `loop.start` and `pool.fill` — and it returns false when tmux is missing or times out, so an unanswerable check would permit two PAID sessions. §5.1.1: a safety property may fail closed, never open. The remedy must be printed because this design's ordinary exit is an ungraceful terminal close, so a stale marker is the common morning state. Raised by a peer session at the stage where it is still free to fix. §9.14.0. |
 | D-75 | What rite may refuse a user | **Three cases, not two: an ACCIDENT rite makes impossible; a choice CONTRADICTING an earlier choice of the user's own, where rite honours the earlier one and refuses; and a free choice, whose cost rite makes visible and never refuses** | The two-case form was drafted first and review falsified it on rite's own behaviour: `rite pool fill --count 500` is typed explicitly, so the dichotomy calls it a choice and says never refuse — and rite refuses. The third case is what it was hiding, and it is not paternalism: refusing `--count 500` honours `sandbox.max_concurrent_workers`, a number the user wrote down, and clamping would be the paternalistic option because it substitutes rite's number while appearing to comply. §5.0. |
-| D-76 | Whether a Manager is sandboxed | **No — containment comes from what it is PERMITTED to do, not from where it runs** | Three independent reasons: it needs broad project access by its nature, it must be attachable by a human (§9.14.3), and macOS may refuse a sandbox inside a sandbox — which would leave a sandboxed Manager structurally unable to start sandboxed Workers, the one thing it exists to do. yoloAI is the WORKER RUNTIME and sits on a different axis from `claude`/`cursor`/`local`, which are Manager engines; conflating them produces the reasonable-sounding and wrong conclusion that a Manager should be sandboxed like a Worker. §5.4. |
+| D-76 | Whether a Manager is sandboxed | ⚠ **Superseded in 0.6.0: YES, inside a seatbelt profile, with Workers requested through a broker (B9, `4ebbbd7`).** Robert reversed it because the allowlist cannot hold for Goose. The nesting reason below was measured true and answered by the broker, not by dropping the sandbox. Containment from what a Manager is PERMITTED to do still applies in full. §5.4. Original decision: **No — containment comes from what it is PERMITTED to do, not from where it runs** | Three independent reasons: it needs broad project access by its nature, it must be attachable by a human (§9.14.3), and macOS may refuse a sandbox inside a sandbox — which would leave a sandboxed Manager structurally unable to start sandboxed Workers, the one thing it exists to do. yoloAI is the WORKER RUNTIME and sits on a different axis from `claude`/`cursor`/`local`, which are Manager engines; conflating them produces the reasonable-sounding and wrong conclusion that a Manager should be sandboxed like a Worker. §5.4. |
 | D-77 | What blocks the Manager boundary property | **UNBLOCKED 2026-09-20: identity is the name you started with** | A Manager started as `rite start planner` knows it is `planner`, so the identity `.rite/machine` could not supply arrives as the argument — which is why D-71 and D-77 are one decision. Each Manager gets its own subdirectory in the single project root, so §5.4's boundary becomes statable as `<root>/.rite/managers/<name>/`, and §5.4.6's shared-by-accident list moves under it. Profiles stay committed; instances live in `.rite/user/`, uncommitted, because a shared config must not claim a Manager is running on somebody else's laptop. §9.14.9. |
 | D-78 | `rite start` with no name, by Manager count | **0 fails, 1 works bare, 2+ refuses AND LISTS them** | Starting a default where none is configured invents a configuration the user did not write; requiring a name where there is one Manager is ceremony; picking among several is a guess about which engine spends which quota. The 2+ case must print the names — a refusal that says "several are configured" and stops sends the user to `rite doctor` to learn what they could have typed. §9.14.9. |
 | D-79 | One root with per-Manager subdirectories, or separate roots per Manager | **SUBDIRECTORIES UNDER ONE ROOT — settled 2026-09-20, with the counter-argument in front of the decider** | `docs/design/V070_MULTI_MANAGER.md` recorded separate roots and is now marked superseded rather than rewritten, because its cost — "a second protocol... the two would drift" — is real and is now accepted debt rather than an avoided one. What reversed it is a fact about the code: separate roots mean separate claim ledgers, and `claims_channel()` returns nothing unless BOTH `coordination.managers` and `coordination.remote` are set, so two Managers on one machine would silently not see each other's claims — the failure this project hit twice in one day, made the default. §9.14.9. |
@@ -6340,6 +6519,8 @@ happened once already and left no trace until this review found it.
 | D-96 | What does `@rite` mean? | **"This is addressed to me" — a filter, not "do this", and NOT an access control** | A mention is still judged. Anyone in a workspace can type it, so it can never authorise. Authority (D-95) and addressing (D-96) are separate questions, and the docs must not blur them. §9.16.4. |
 | D-97 | Should rite scan ticket text for injection phrases? | **YES — report at the next check-in, NEVER block. Reverses the earlier advice against scanning** | The earlier advice rested on 9 of 18 ordinary tickets quarantined — in BLOCKING mode. Reporting makes a false positive cost a standup line, and the measured 6-of-9 catch rate on model-directed attacks becomes free signal. Named for what it does ("a phrase commonly used in prompt injection"), never "sanitized". ⚠ It catches none of 8 agent-directed attacks, and ticket text is not vetted. §6.6. **Planned 0.6.0, sequenced last and droppable (plan § N); not built.** |
 | D-98 | What input normalisation does ticket text get? | **Invisible characters removed, hidden tag characters decoded and shown, HTML comments stripped or surfaced** | Correctness, not security: the agent must see what a human reviewer sees. §6.6.1. **Planned 0.6.0, sequenced last and droppable (plan § N); not built.** |
+| D-99 | Where may an agent talk, and where is that enforced? | **Only to destinations the operator sanctioned, inbound and outbound, enforced at the NETWORK layer — never by which program runs** | A permitted list is closed by construction, and a list of threats loses to the one nobody listed. It is the control that makes §6.6.3's 8-of-8 survivable: it does not care what the agent believes. The tool layer cannot carry it, because `git` and `gh` are permitted and reach the network, and `python -c` or a hook can make any request. Measured constraint: a seatbelt profile can confine to loopback and nothing finer, so a Manager's list is enforced outside its boundary. §5.5. |
+| D-100 | What content is scanned on the way out? | **Only payloads to ALLOWED destinations that PUBLISH, with the structural credential rule. Model calls are NEVER scanned** | The destination is the primary control, and scanning covers the one case it passes: a token in an issue body on the operator's own repository. A scanner on the model path alarms on every request, or is tuned to ignore it and watches nothing while appearing to watch. Which destinations count as publishing is open. §5.5.4. |
 
 ---
 
@@ -6349,7 +6530,11 @@ Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
 
-**Changes in 0.23.1 — §6.6 reads true whether or not its tickets ship.** Robert placed § N (text cleanup and phrase reporting) in 0.6.0, last, so it can be dropped if quota runs out. §6.6 now opens with what rite does today, which is nothing to ticket text, stated separately from what § N would add, and marks §6.6.1 and §6.6.2 as not built. A release without N therefore does not describe behaviour rite lacks. §9.16.5's line on inbound Slack text is made conditional the same way, and the inference label on it stays, now marked accepted. D-97 and D-98 carry the placement.
+**Changes in 0.24.1 — §6.6 reads true whether or not its tickets ship.** Robert placed § N (text cleanup and phrase reporting) in 0.6.0, last, so it can be dropped if quota runs out. §6.6 now opens with what rite does today, which is nothing to ticket text, stated separately from what § N would add, and marks §6.6.1 and §6.6.2 as not built. A release without N therefore does not describe behaviour rite lacks. §9.16.5's line on inbound Slack text is made conditional the same way, and the inference label on it stays, now marked accepted. D-97 and D-98 carry the placement.
+
+**Changes in 0.24.0 — v0.7.0 specs, and a section the code had already overtaken.** §5.5 is new: egress control, decided and not built. The property is stated positively (only sanctioned destinations, both directions), enforced at the network layer (D-99), with content scanning confined to allowed destinations that publish and model calls never scanned (D-100). It carries a measured constraint the design note did not have: a seatbelt profile can confine a process to loopback and nothing finer, so a Manager's list must be enforced outside its boundary. §5.4.8 is new: the decided separation between Managers that share a root, written as four properties, **none of which holds today**. It says so, and says that the Manager's sandbox is not what enforces the first.
+
+⚠ **§5.4 was stale against `main`, and so were D-76 and §5.4.5.** B9 (`4ebbbd7`) put the Manager inside a seatbelt profile with a broker for Workers. D-76 ("a Manager is not sandboxed") was never marked, and §5.4.5 still said there was no per-Manager directory and no `RITE_MANAGER`. Both now say what the code does. The outbox is struck from §5.4.6's shared list, because it moved per-Manager, and D-62's "one Manager session per project" is narrowed to the per-name refusal that shipped. The measurements behind these corrections, including two ways out of the Manager's boundary found on 2026-09-25, are in `docs/design/V070_RELEASE_PLAN.md`, part 0.
 
 **Changes in 0.23.0 — who may instruct a Manager, and what ticket text is (and is not).** §9.16 is new: authority comes from the channel (the Owner's DM, or the local machine; a configurable broadcast channel, default `#all-rite`, never carries authority), addressing comes from `@rite` or a reply, and only a message that is both counts as an instruction (D-94–D-96). `@rite` is recorded as a filter and explicitly NOT an access control. §6.6 is new: ticket text is normalised (D-98), and injection phrases are reported at the check-in and never blocked (D-97). That reverses earlier advice, which rested on a 9-of-18 false-positive rate measured in blocking mode. §6.6.3 states plainly that 8 of 8 agent-directed attacks pass any text filter and that ticket text is not vetted. Destination control is a separate v0.7.0 design note, `docs/design/V070_EGRESS.md`.
 

@@ -244,6 +244,11 @@ observed says they do; nothing observed rules it out.
 
 ## What this settles, and what it does not
 
+⚠ **UPDATED 2026-09-25:** the last bullet below (A3a's done-when "remains
+unobserved") is stale. It was observed (`../V060_RELEASE_PLAN.md`, row A3a).
+The other two bullets are still open and are carried in
+`../V070_RELEASE_PLAN.md`.
+
 **Settled:** rite cannot ship one Slack app and keep the polling transport.
 A3a's open question 1 is answered, and the answer **strengthens the transport
 choice rather than changing it** — polling was chosen partly because the

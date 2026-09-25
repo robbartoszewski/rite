@@ -5,6 +5,11 @@ written down before it gets lost in a transcript. Nothing here is built. The
 analysis under each part is mine; it is aimed at what building will have to
 decide, not at whether to build.
 
+⚠ **UPDATED 2026-09-25: the status paragraph below is stale.** `.docs/` was
+replaced by this directory, and every design note, `V070_MULTI_MANAGER.md`
+included, is tracked here (see `README.md`). v0.7.0 planning, including the
+open questions this note raises, is in `V070_RELEASE_PLAN.md`.
+
 **Status of the file itself.** This note is committed under `docs/design/`, so
 it reaches a fresh clone. The other design notes — `V070_MULTI_MANAGER.md`
 included — are under `.docs/`, which `.gitignore` excludes and where **nothing

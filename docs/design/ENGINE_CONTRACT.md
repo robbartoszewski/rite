@@ -216,3 +216,10 @@ or R7's mechanics**, because those are not expressed in a command line:
 implemented twice is a guess, and B4a is the first real second
 implementation. Expect the registry to grow when it lands; the axes above are
 where to expect it.
+
+⚠ **A third handle direction is coming, and it is not built.** Cursor, as
+its documentation describes it, has the engine mint the id **before** the
+first turn, on request (`agent create-chat`). That is neither "rite
+chooses" nor "rite discovers", so `handle_is_ours` cannot carry it. Read, not
+measured. What it would cost this contract is in `V070_RELEASE_PLAN.md`,
+track CU. This document changes when the code does.
