@@ -222,6 +222,29 @@ same DM, and together they would poll 60 times a minute against a limit of
 it let authority point at a channel anyone can post in. Use
 `slack.owner_user`.
 
+### Several Managers in one project — an Owner that routes, `rite route`
+
+One project root can run a Claude Manager as the **Owner** beside one or more
+secondaries, typically on a local model. **The Owner is the one Manager whose
+duties include `route`** (the `lead` preset has it; `executor` does not).
+Exactly one must hold it when several Managers share a root, and
+`rite doctor` says so when none or several do.
+
+- **Only the Owner reads and posts Slack.** A secondary opens no Slack
+  connection at all, and says so when it starts. Before this, every Manager
+  read the Owner's DM and would have acted on the same instruction.
+- **The Owner hands work down:** `rite route helper "…"`. The secondary gets
+  it at its next turn, marked as routed by the Owner.
+- ⚠ **No Manager can write a Manager's inbox — another's or its own.** A
+  message in an inbox is an instruction, so each Manager's sandbox refuses
+  the write, and `rite message` run by a Manager refuses and says what to
+  use instead. A person's `rite message` from their own shell works as
+  before.
+
+This applies when the project has no `coordination.remote`. With one, the
+Managers may be on other machines and the election decides the Owner, and
+nothing here changes.
+
 ### Hidden text in tickets and Slack messages is shown, and injection phrases are reported
 
 Tracker UIs hide some of the text their APIs return. An agent reading that
