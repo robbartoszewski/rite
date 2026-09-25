@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.12 · **Date:** 2026-09-26
+**Version:** 0.24.13 · **Date:** 2026-09-26
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -2115,15 +2115,27 @@ be tested:
   refused, and the other Manager survived. It holds by exactly the two
   mechanisms named above: `(target same-sandbox)` signals and the denied tmux
   socket. It is not yet pinned by a test between two Managers.
-- **P1, P3 and P4 do not.** Most per-project state is still flat (§5.4.5).
-  The shared-by-decision list has no test behind it (§5.4.6). And `Claim` has
-  no Manager field (§5.4.3).
+- **P1 holds for the per-Manager directories and every inbox, and not for
+  flat per-project state** (updated 2026-09-26, MM-2). Each Manager's profile
+  now refuses writes under `.rite/managers/` except its own directory, and
+  refuses its own `mail/in` too (`enclosure._manager_separation`). Measured
+  with real `sandbox-exec`: a write into another Manager's directory or inbox,
+  its own inbox, `rite message` run as a Manager, a rename and a symlink into
+  an inbox were all refused, while the Manager still wrote its own state.
+  **An inbox write is an instruction**, since a message with no bracketed line
+  is delivered as the Owner's. So this is authority, not only tidiness, and
+  it is enforced on the writer, never on the content. Most per-project state
+  is still flat and still writable by either Manager (§5.4.5).
+- **P3 and P4 do not.** The shared-by-decision list has no test behind it
+  (§5.4.6). And `Claim` has no Manager field (§5.4.3).
 
-⚠ **The Manager's sandbox is not what enforces P1, and was measured not to.**
-Each Manager's profile grants the whole project tree, and one Manager wrote
-into the other's `.rite/managers/<name>/`. The sandbox separates a Manager's
-**processes** from its siblings'. It does not separate their **files**. P1 is
-enforced by rite's own writers, or it is not enforced.
+⚠ **Before MM-2 the Manager's sandbox did not enforce P1, and was measured
+not to**: each profile granted the whole project tree, and one Manager wrote
+into the other's `.rite/managers/<name>/`. That path is now refused, as the
+P1 row says. The rest of the tree is still granted whole, because an
+orchestrator works on the project, so the sandbox still does not separate
+the Managers' flat state. That part is enforced by rite's own writers, or
+it is not enforced.
 
 **"By accident" is the bar, and it is not "against a hostile Manager."** A
 Manager may run `rite`, and `rite` does what the operator can. What this
@@ -6741,6 +6753,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.13 — §5.4.8's P1: no Manager writes a Manager's inbox.** Each Manager's profile refuses writes under `.rite/managers/` except its own directory, and refuses its own `mail/in` too. This matters because an inbox write is an instruction. P1 now holds for per-Manager directories and every inbox, and not for flat per-project state, which is still shared. The "measured not to" paragraph is kept and marked as the measurement before the change.
 
 **Changes in 0.24.12 — §9.16.7: only the Owner hears Slack.** MMQ2 decided (Robert, option (c)). The Owner is the one Manager holding `route`, and only its `rite start` opens a Slack relay. Observed: a secondary went from 3 Slack connections at start to 0. The subsection used to record the opposite (every Manager's relay reads the DM), which was true until this revision. Routing and replies are marked planned.
 
