@@ -124,6 +124,14 @@ resolve to the tree measured. **Every result reproduced.**
 - Also measured, for the new grant: `~/.config/gh/config.yml` is readable
   and a write there is refused. It is read-only, as `b9a5f76` says.
 
+**Re-measured at `afa41e9`, 2026-09-26, after `7ae2ecc` changed the profile a
+third time** (read-only grants for the running rite's environment, C27). The
+same probes, the same method, and the same results: both tmux routes and the
+direct ungranted write refused, the outside process and `beta`'s engine
+survived, `beta` still killed its own child, HTTPS 200/301, `alpha` wrote
+into `beta`'s directory, and **44** projects' transcript directories were
+listed with another project's transcript read. SB4 is unchanged.
+
 So **§5.4.8's P2 (process separation) holds on `main`**, by exactly the two
 mechanisms the property names. **P1 (state separation) does not**, and the
 profile is not what could make it hold. See track MM.
