@@ -6034,6 +6034,30 @@ def _loop_verdict(root: Path, board=None) -> str:
         return "unknown"
 
 
+def _router_for(root: Path, manager: str):
+    """The routing step for this Manager's supervisor, or None.
+
+    ⚠ **Built for EVERY Manager in one root, not only the Owner** —
+    `routing.deliver_routes` discards a non-Owner's requests and SAYS so, and a
+    secondary that asks to route is exactly what an operator should see.
+    None only with a `remote`, where the election decides the Owner and
+    routing on that lease is v0.7.0.
+    """
+    from rite_ai.config.managers import routing_owner, shares_one_root
+    from rite_ai.config.models import ProjectConfig
+    from rite_ai.config.parse import ParseError, parse_config
+    from rite_ai.managers.routing import deliver_routes
+
+    parsed = parse_config(root / ".rite" / "config.yaml")
+    config = parsed if not isinstance(parsed, ParseError) else ProjectConfig()
+    if not shares_one_root(config.coordination.remote):
+        return None
+    roles = list(config.coordination.manager_roles)
+    owner = routing_owner(roles)
+    names = [r.name for r in roles]
+    return lambda say: deliver_routes(root, manager, owner, names, say)
+
+
 def _slack_listener(root: Path, manager: str):
     """A Slack listener for this Manager, opened, or None when Slack is off.
 
@@ -6077,7 +6101,8 @@ def _slack_listener(root: Path, manager: str):
             (
                 f"slack: {manager!r} does not read or post Slack — only the "
                 f"Manager holding 'route' does, and that is {owner_manager!r}. "
-                f"Its instructions come from this machine."
+                f"Its instructions come from {owner_manager!r}, which routes "
+                f"them with `rite route`, and from this machine."
             )
             if owner_manager
             else (
@@ -6309,6 +6334,7 @@ def _start_a_manager(
             # itself reads, so "is this a real ticket" has one answer in one
             # place; `for_project` refuses everything when there is none.
             broker=for_project(root, board),
+            router=_router_for(root, role.name),
             slack=listener,
             max_sessions=sessions,
             window_seconds=minutes * 60.0,
@@ -6464,6 +6490,73 @@ def replies(manager_name: str, reader: str, peek: bool) -> None:
     warning = full_warning(prune(root, manager_name, OUTBOX), manager_name)
     if warning:
         click.echo(warning, err=True)
+
+
+@cli.command("route")
+@click.argument("manager_name")
+@click.argument("text")
+def route(manager_name: str, text: str) -> None:
+    """Hand work to another Manager in this root — the Owner only.
+
+    One project root may run several Managers; the one holding `route` is the
+    Owner, the only one that reads Slack, and this is how it gives the others
+    their instructions. The text is delivered to MANAGER_NAME at its next
+    turn, under a line saying the Owner Manager routed it.
+
+    ⚠ This only ASKS. A Manager cannot write another Manager's inbox (its
+    sandbox refuses it), so the request goes into the Owner's own directory
+    and the Owner's supervisor delivers it — and delivers only for the
+    Manager holding `route`, whatever the request says.
+
+    Examples:
+      rite route helper "run the test suite on branch fix-12 and report"
+    """
+    from rite_ai.config.managers import routing_owner
+    from rite_ai.managers import current_manager
+    from rite_ai.managers.routing import request
+
+    root = _require_project_root()
+    speaking = current_manager()
+    if not speaking:
+        click.echo(
+            "refusing: `rite route` is how the Owner Manager hands work to "
+            "another Manager. From your own shell, send it directly with "
+            f'`rite message {manager_name} "…"`.',
+            err=True,
+        )
+        raise SystemExit(1)
+    roles, problems = _manager_roles(root)
+    if problems:
+        click.echo("cannot read this project's Managers:", err=True)
+        for problem in problems[:3]:
+            click.echo(f"  {problem}", err=True)
+        raise SystemExit(1)
+    owner = routing_owner(list(roles))
+    if speaking != owner:
+        click.echo(
+            f"refusing: {speaking!r} does not hold 'route'"
+            + (f" — {owner!r} does" if owner else " — no Manager here does")
+            + ". Report to the Owner with `rite reply` instead.",
+            err=True,
+        )
+        raise SystemExit(1)
+    names = [r.name for r in roles]
+    if manager_name == speaking or manager_name not in names:
+        others = ", ".join(n for n in names if n != speaking) or "none"
+        click.echo(
+            f"refusing: {manager_name!r} is not another Manager in this root "
+            f"(others: {others}).",
+            err=True,
+        )
+        raise SystemExit(1)
+    if not text.strip():
+        click.echo("refusing to route an empty message.", err=True)
+        raise SystemExit(1)
+    request(root, speaking, manager_name, text)
+    click.echo(
+        f"route queued: {manager_name!r} receives it at its next turn, marked "
+        f"as routed by {speaking!r}."
+    )
 
 
 @cli.command("reply")

@@ -595,6 +595,7 @@ def supervise(
     slack: object = None,
     resume_id_for: object = None,
     broker: object = None,
+    router: object = None,
     poll: float = POLL_SECONDS,
     now: object = None,
 ) -> SuperviseResult:
@@ -1000,6 +1001,14 @@ def supervise(
             while liveness(result.session).alive:
                 if deadline is not None and clock() >= deadline:
                     break
+                if callable(router):
+                    # ⚠ ROUTING, in the wait loop rather than at the cycle
+                    # boundary: it is file work, not a sandbox launch, and the
+                    # Owner's cycles are long — a secondary should not wait for
+                    # one to end to receive what it was handed. The secondary
+                    # still reads it at ITS next boundary, by the one hook.
+                    # `routing.deliver_routes`: the identity is this supervisor's.
+                    router(say)
                 if slack is not None:
                     # ⚠ **INTO THE INBOX, NOT STRAIGHT INTO THE PROMPT.** A
                     # Slack message becomes an ordinary mailbox file through
@@ -1040,6 +1049,10 @@ def supervise(
                 root, cycle.started_at, say, engine, agent, live_pane
             )
             _honour_worker_requests(root, manager, broker, say)
+            if callable(router):
+                # And once more at the boundary, for a request written in the
+                # cycle's last two seconds.
+                router(say)
             _say_if_the_sandbox_refused(root, manager, live_pane, say)
 
             how = ending(result.session, human_was_present=attended, pane=live_pane)
