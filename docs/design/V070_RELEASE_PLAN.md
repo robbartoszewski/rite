@@ -308,6 +308,34 @@ rewritten against what is built.)
 | (a) one app per Manager | each Manager has its own DM with the Owner | every user already creates their own app (A3b). This multiplies it per Manager, and every app is its own setup |
 | (b) one DM, addressed per Manager | an instruction names the Manager it is for, and a Manager treats an unaddressed DM message as context | D-96 makes `@rite` a filter, not authority, and per-Manager addressing is a new rule on top of it. It also needs a default: one Manager, or none |
 | (c) one Manager per project reads the DM | the others receive nothing from Slack | simplest, and it makes "which Manager is the Slack one" a profile key |
+
+**Across projects, settled 2026-09-25: one Slack app per project (D-101,
+SPEC §9.16.6).** Two projects on one app had the same DM accident as two
+Managers do here, plus a shared rate bucket, and one app per project removes
+both. **That arithmetic bears on this question, because it applies between
+Managers too.** Every running relay reads history 30 times a minute on its
+project's app: two Managers are 60 against Tier 3's "50+", and three are 90.
+So an option that keeps several relays polling one app is bounded by the
+multiplication, not only by the authority question.
+- **(a)** is D-101's move applied one level down.
+- **(c)** keeps the poll at 30 a minute.
+- **(b)**, with every Manager still reading, does not.
+
+**Private channels bound to a project, Robert's design: a v0.7.0
+CONVENIENCE, no longer the binding.** A user creates a private channel,
+invites the app, and names the project it belongs to. There can be one per
+person, or a shared team channel.
+- **What it buys:** authority stays structural (membership of the channel,
+  managed by Slack), and it is auditable (a visible member list, where a DM
+  has none).
+- ⚠ **What it changes:** the authority rule becomes "members of this bound
+  channel", not "the Owner in the Owner's DM". **A person added to the
+  channel silently gains command authority**, and nothing in rite records
+  that it happened.
+- **Open: cap or rotation.** Each bound channel polled every tick is 30 a
+  minute on the project's one app, so two are 60 and three are over.
+  Rotation keeps it at 30 and makes latency grow with the number of
+  channels.
 | (d) the Owner's id per instance (MMQ1) | each person's machine names its own Owner | answers a different question, who the Owner is on this machine, and not which Manager acts. Combinable with (b) or (c) |
 
 **MMQ3. The worker cap's third denominator** (`V070_MULTI_MANAGER.md` Q2).

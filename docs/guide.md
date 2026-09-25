@@ -701,6 +701,20 @@ line rite writes, saying which of these it is.
    names Slack's own error if either fails: `missing_scope`,
    `not_in_channel` or `channel_not_found`.
 
+**One Slack app per project.** Two projects can share a workspace, each
+with its own channels. They must not share an app, for two reasons:
+- **your DM is with the app.** Two projects on one app would both read it,
+  and both act on what you type.
+- **Slack's rate limits are per app.** One running Manager reads 30 times a
+  minute. Two on one app are 60 against a documented floor of "50+", and
+  three are 90.
+
+So create an app per project. The manifest makes that a few clicks, and each
+project stores its own token (`rite credential set slack` in that project).
+⚠ **A free workspace allows 10 custom apps**, so it holds about ten rite
+projects. rite cannot tell whether two projects share a token, so this is
+on you.
+
 **When no Manager is running**, a message you send waits in Slack. At the
 next `rite start` it is delivered at the Manager's first turn, with a line
 in the terminal saying how many arrived while it was stopped. Each run posts

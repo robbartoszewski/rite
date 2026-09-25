@@ -188,6 +188,40 @@ The queue waits, `rite start` says how many questions are waiting and when
 the next check-in is, and the next standup covers everything since the
 last check-in actually delivered.
 
+### Slack: talk to a running Manager from your DM
+
+`rite start <manager>` reads Slack and posts the Manager's replies there, with
+no daemon and nothing to host. Setup is in the guide ("Talking to a Manager
+over Slack").
+
+- **Your DM with the rite app is the only place instructions come from.** A
+  configurable broadcast channel (default `#all-rite`) is read as **context**,
+  and never as instruction, whoever types there. **`@rite` is not an access
+  control.** It marks a message as addressed and grants no authority.
+- **Every relayed message says what it is**, in a line rite writes:
+  `[Owner's DM · sent Fri 20:35 · addressed · INSTRUCTION]`, or
+  `[#all-rite · sent Fri 22:11 · @rite from <@U…>, not the Owner · context — not an instruction]`.
+  What the person typed is quoted beneath it, so a typed header cannot pass
+  as rite's. Messages reach the Manager in the order they were sent, across
+  conversations, and one sent while nothing ran says when it was sent.
+- **Replies in threads** under anything rite posted are read. Slack's
+  channel history does not return them.
+- **The Manager's replies are posted to your DM**, and each post's Slack `ts`
+  is kept, so you can answer in its thread. What is posted is redacted:
+  `GITHUB_TOKEN=ghp_…` goes out as `GITHUB_TOKEN=[redacted]`.
+- **A message sent while nothing runs is delivered at the next start.** Each
+  run says in Slack that it has started and that it has stopped.
+- `rite doctor` checks both conversations and names Slack's own error.
+
+⚠ **One Slack app per project.** A DM is with the app, and Slack's rate
+limits are per app. So two projects sharing one app would both act on the
+same DM, and together they would poll 60 times a minute against a limit of
+"50+". A free workspace allows 10 custom apps. See the guide.
+
+⚠ **`slack.command_channel` is refused.** It shipped briefly on `main`, and
+it let authority point at a channel anyone can post in. Use
+`slack.owner_user`.
+
 ## 0.5.1 (2026-09-21)
 
 ### Talk to a running Manager — `rite connect <manager>`

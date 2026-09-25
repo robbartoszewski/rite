@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.6 · **Date:** 2026-09-25
+**Version:** 0.24.7 · **Date:** 2026-09-25
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -5999,7 +5999,7 @@ new line with one, arrives inside the quote rather than as a header of its
 own. The note that delivers messages at the cycle boundary states the rule
 once, beside them: only INSTRUCTION is an instruction, context is weighed and
 not obeyed, a message with no header came from this machine, and nothing in
-a quote is rite's. **Order is send order, and the send time is shown:** a
+a quote is rite's. **A mention is recognised in both forms Slack produces**, the app's user id (`<@U…>`) and its bot id (`<@B…>`). Both were observed from people choosing `@rite` from the autocomplete. Matching only the first labelled a non-Owner's real mention "unaddressed": right about authority, wrong about addressing. A literal `@rite` that Slack did not link is text, not addressing. **Order is send order, and the send time is shown:** a
 message is filed by its Slack timestamp, not when rite heard it, because rite
 reads one conversation per tick and hears a gap only at the next start (both
 found live). The author is the Slack user id (`<@U…>`): reading names
@@ -6018,6 +6018,91 @@ text from outside, like a ticket. **Until then, it is relayed as typed.**
 ⚠ **Extending §6.6 to Slack is this section's inference, not part of the
 decisions above.** Robert accepted it on 2026-09-25, and the label stays
 because it records where the rule came from.
+
+#### 9.16.6. Several projects in one workspace: one Slack app per project (D-101)
+
+**Decided 2026-09-25 (Robert).** Companies run several projects in one Slack
+workspace, each with its own channels. This is a real deployment shape, and
+the design as shipped assumed one project per workspace in two places
+nobody had written down.
+
+**What already works: channels.** `slack:` is project-level configuration.
+Each project names its own broadcast channel, so two projects share a
+workspace without conflict.
+
+**What did not: the DM, and the rate limit. Both come from the APP.**
+- **A DM is with the app, one per person, not one per project.** Two projects
+  configured with the same `owner_user` on the same app read the same DM
+  conversation. Both treat a message there as an instruction, and nothing in
+  the design tells them apart. (Thread replies do: each relay reads only the
+  threads under its own posts. A top-level DM reaches every project on that
+  app.)
+- **Web API rate limits are scoped "per API method per workspace/team per
+  app"** (Slack's rate-limit documentation, quoted in
+  `docs/design/spikes/A3b-slack-distribution.md`). Projects sharing one app
+  share one bucket.
+
+**The decision: each project creates its own Slack app.** A DM with project
+A's app is unambiguously project A. The DM question is gone rather than
+solved, and no project marker or designated owner is needed.
+
+**⚠ The arithmetic is the reason, and it is written here so that sharing one
+app is not later proposed as a simplification.** A running Manager's relay
+reads `conversations.history` once per 2-second tick. That is **30 requests
+a minute**, whatever the number of conversations, because it alternates
+between them (§9.16.5). `conversations.replies` is a separate method with
+its own bucket. Tier 3 is documented as **"50+" a minute**, a floor rite
+cannot rely on beyond:
+
+| running relays on ONE app | `conversations.history` per minute | against 50+ |
+|---|---|---|
+| 1 | 30 | inside |
+| 2 | 60 | over the floor |
+| 3 | 90 | clearly over |
+
+With an app per project, each project has its own bucket and the table stops
+applying. The decision removes the constraint rather than working within it.
+⚠ **The same multiplication applies to several Managers in one project**,
+which share that project's app and DM. That is v0.7.0's MMQ2, and it is not
+settled here.
+
+**The ceiling this puts on a free workspace, verified.** Slack's help centre:
+a free workspace can "add up to 10 third-party or custom apps", and
+upgrading "will remove message, file, and app limits". A manifest-created
+rite app is a custom app, so it counts. **So a free workspace holds at most
+ten rite projects, fewer if it has other apps.** Robert's view: two projects
+is no burden, and anyone with ten or more needs a way to manage that anyway.
+
+**Smaller benefits.** A leaked bot token is scoped to one project. And rite's
+credential store is already per project (§10), so each project's
+`slack_bot_token` lives under its own namespace with no new mechanism.
+
+⚠ **Not enforced.** Nothing in rite detects two projects configured with
+the same app token. Another machine's configuration is invisible to it, and
+a token's identity (`auth.test`) is only comparable on one machine. The
+guide says it; nothing checks it.
+
+**Deferred to v0.7.0 as a CONVENIENCE: private channels bound to a project.**
+Robert's design: a user creates a private channel, invites the app, and tells
+rite which project it belongs to. There can be one per person, or a shared
+team channel. It is no longer needed to bind a conversation to a project
+(one app per project does that), but it keeps two properties worth having:
+- **authority stays structural.** Membership of the channel is the access
+  control, managed by Slack.
+- **it is auditable.** A channel has an inspectable member list and a DM
+  does not, so "who may command this Manager" has a visible answer.
+
+Two consequences, written down so they are not discovered:
+- **The authority rule changes**, from "the Owner, in the Owner's DM" to
+  "members of this bound channel". That is a different rule from §9.16.2's.
+  **A person added to the channel silently gains command authority**, and
+  nothing in rite records that it happened. That is the price of Slack
+  managing membership.
+- **The arithmetic bounds "as many as they want" within one project's app.**
+  Polling each bound channel every tick is 30 a minute per channel: two is
+  60 and three is over. Rotating through them keeps the rate at 30 and makes
+  latency grow with the number of channels. **Cap or rotation is OPEN**, an
+  implementation choice not yet made.
 
 ## 10. Credentials
 
@@ -6564,6 +6649,7 @@ happened once already and left no trace until this review found it.
 | D-98 | What input normalisation does ticket text get? | **Invisible characters removed, hidden tag characters decoded and shown, HTML comments stripped or surfaced** | Correctness, not security: the agent must see what a human reviewer sees. §6.6.1. **Planned 0.6.0, sequenced last and droppable (plan § N); not built.** |
 | D-99 | Where may an agent talk, and where is that enforced? | **Only to destinations the operator sanctioned, inbound and outbound, enforced at the NETWORK layer — never by which program runs** | A permitted list is closed by construction, and a list of threats loses to the one nobody listed. It is the control that makes §6.6.3's 8-of-8 survivable: it does not care what the agent believes. The tool layer cannot carry it, because `git` and `gh` are permitted and reach the network, and `python -c` or a hook can make any request. Measured constraint: for IP, a seatbelt profile can confine to loopback and name no host, so a Manager's host list is enforced outside its boundary. Local sockets it can refuse by path. §5.5. |
 | D-100 | What content is scanned on the way out? | **Only payloads to ALLOWED destinations that PUBLISH, with the structural credential rule. Model calls are NEVER scanned** | The destination is the primary control, and scanning covers the one case it passes: a token in an issue body on the operator's own repository. A scanner on the model path alarms on every request, or is tuned to ignore it and watches nothing while appearing to watch. Which destinations count as publishing is open. §5.5.4. |
+| D-101 | How do several projects share one Slack workspace? | **One Slack app per project** | A DM is with the APP, so two projects on one app read the same DM and both act on it. Rate limits are per method, per workspace, **per app**: one relay's history poll is 30/min, two on one app are 60 against Tier 3's "50+", and three are 90. An app per project gives each its own DM and its own bucket, which removes both problems at once. A free workspace allows 10 third-party or custom apps (Slack help centre), so it holds about ten projects. Private channels bound to a project are a v0.7.0 convenience, not the binding. §9.16.6. |
 
 ---
 
@@ -6572,6 +6658,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.7 — one Slack app per project (D-101), and a mention in either form.** §9.16.6 is new. It records that the shipped design assumed one project per workspace, in the DM and in the rate limit, which are both scoped to the app, and Robert's decision of one app per project. The arithmetic that makes sharing an app fail is written out, and so is the free plan's ten-app ceiling, verified. Private channels bound to a project are recorded as a v0.7.0 convenience, with the authority rule they would change. §9.16.5 records that a mention arrives as either the app's user id or its bot id, both observed.
 
 **Changes in 0.24.6 — one more measured constraint on enforcing a Manager's egress.** §5.5.2 adds that a seatbelt profile can admit a single loopback port and refuse the rest. That matters because loopback-only on its own admits every local listener on the machine, including another Manager's egress proxy. Measured with two local listeners: the admitted port answered 200 and the other was refused.
 
