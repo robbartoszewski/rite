@@ -38,6 +38,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from rite_ai.managers import (
+    checkins,
     designate,
     designated,
     designation_path,
@@ -762,6 +763,13 @@ def supervise(
 
         if callable(verdict):
             answer = verdict(root)
+            if answer == "idle":
+                # ⚠ THE SAFETY NET (plan § K2). A Manager with nothing left
+                # to do was waiting on something, so a deferral was wrong:
+                # what it held for the check-in is asked now, and said.
+                said = checkins.idle_with_questions_queued(root, manager)
+                if said:
+                    say(said)
             if answer in STOP_VERDICTS:
                 return SuperviseResult(
                     True,
@@ -839,13 +847,22 @@ def supervise(
             #
             # Taken, not peeked: a message delivered stays delivered, so a
             # Manager is not told the same thing every cycle until it acts.
+            # A check-in window is open: what was deferred to it is asked
+            # now, at the boundary, where nothing is mid-turn.
+            said = checkins.deliver_at_checkin(root, manager)
+            if said:
+                say(said)
             waiting_for_it = take_mail(root, manager, INBOX)
             if waiting_for_it:
                 say(f"delivering {len(waiting_for_it)} message(s) to {manager!r}")
             # Composed once, for both launches below: the fallback needs the
             # same mail and the same reply instructions, differing only in
             # which opening text it starts from.
-            extras = delivery_note(waiting_for_it) + how_to_reply(root, manager)
+            extras = (
+                delivery_note(waiting_for_it)
+                + how_to_reply(root, manager)
+                + checkins.instructions(root, manager)
+            )
             fresh_prompt = prompt + extras
             cycle_prompt = cycle_prompt + extras
             result: StartResult = launch(

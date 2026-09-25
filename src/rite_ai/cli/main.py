@@ -6463,6 +6463,124 @@ def reply(text: str, manager: str) -> None:
         click.echo(warning, err=True)
 
 
+@cli.command("ask")
+@click.argument("question")
+@click.option(
+    "--defer",
+    is_flag=True,
+    default=False,
+    help="Hold the question for the User's next check-in instead of asking "
+    "now. Only for a question that CLEARLY does not block you; needs --while.",
+)
+@click.option(
+    "--while",
+    "meanwhile",
+    default="",
+    help="What you will do meanwhile. Required with --defer: if there is "
+    "nothing, the question blocks you and must be asked now.",
+)
+@click.option(
+    "--manager",
+    default="",
+    help="Which Manager is asking. Inside a Manager's own session it "
+    "defaults to that Manager and can be left out.",
+)
+def ask(question: str, defer: bool, meanwhile: str, manager: str) -> None:
+    """Ask the User a question, now or at their next check-in (plan § K2).
+
+    ⚠ **ASK NOW UNLESS THE QUESTION IS CLEARLY DEFERRABLE; IF YOU ARE UNSURE
+    WHETHER IT BLOCKS YOU, IT BLOCKS YOU.** Deferring a blocking question
+    idles a Manager until the next check-in, hours away. Asking one that
+    could have waited costs the User thirty seconds. So without `--defer`
+    this asks now, exactly as `rite reply` does, and every case where a
+    deferral cannot be honoured safely asks now too and says why.
+
+    Examples:
+      rite ask --manager planner "which of the two schemas should ticket 12 use?"
+      rite ask --manager planner --defer "rename the CLI flag to --out?" \\
+          --while "implementing tickets 14 and 15, which do not touch the CLI"
+    """
+    from rite_ai.managers import checkins, current_manager
+    from rite_ai.managers.mailbox import OUTBOX, full_warning, prune, send
+
+    root = _require_project_root()
+    asking = (manager or "").strip() or current_manager()
+    if not asking:
+        click.echo(
+            "refusing to ask: no --manager, and this process is not running "
+            "as one (no RITE_MANAGER in the environment). Pass --manager "
+            "<name>, or run this inside the session `rite start <name>` "
+            "created.",
+            err=True,
+        )
+        raise SystemExit(1)
+    roles, problems = _manager_roles(root)
+    if problems:
+        click.echo("cannot read this project's Managers:", err=True)
+        for problem in problems[:3]:
+            click.echo(f"  {problem}", err=True)
+        raise SystemExit(1)
+    if asking not in {r.name for r in roles}:
+        known = ", ".join(sorted(r.name for r in roles)) or "none declared"
+        click.echo(f"no Manager named {asking!r} in this project — {known}", err=True)
+        raise SystemExit(1)
+    if not question.strip():
+        click.echo("refusing to send an empty question.", err=True)
+        raise SystemExit(1)
+
+    if defer and not meanwhile.strip():
+        # ⚠ Refused, and NOTHING is queued. A Manager that cannot name
+        # parallel work is waiting on the answer, which makes the question
+        # blocking by definition.
+        click.echo(
+            f"refusing to defer: no --while. If you cannot say what you will "
+            f"do meanwhile, {checkins.REFUSED_WITHOUT_WHILE}:\n"
+            f'  rite reply --manager {asking} "<question>"',
+            err=True,
+        )
+        raise SystemExit(1)
+
+    if not defer:
+        send(root, asking, OUTBOX, question)
+        if meanwhile.strip():
+            # A --while with no --defer is most likely a forgotten --defer.
+            # Asking now is the safe reading, and it is said.
+            click.echo(
+                "--while was given without --defer, so this was asked NOW, "
+                "not deferred."
+            )
+        click.echo(
+            f"asked now, from {asking!r} — the User reads it with `rite replies`."
+        )
+    else:
+        state = checkins.windows(root)
+        if not state.usable:
+            # ⚠ Nowhere to wait: a question deferred to a check-in that never
+            # comes is a question nobody is asked. Asked now, with the reason.
+            q = checkins.defer(root, asking, question, meanwhile)
+            checkins.ask_now(
+                root,
+                asking,
+                [q],
+                f"The Manager {asking!r} deferred this to a check-in, but "
+                f"there is none to wait for ({state.line}), so it is asked now:",
+            )
+            click.echo(
+                f"asked NOW, not deferred: {state.line}. Configure "
+                "checkins.windows in .rite/config.yaml for a deferral to wait."
+            )
+        else:
+            q = checkins.defer(root, asking, question, meanwhile)
+            click.echo(
+                f"deferred as {q.id} — {state.line}. It is asked at the "
+                "first cycle boundary inside a check-in window, or at once if "
+                "your loop goes idle first."
+            )
+    warning = full_warning(prune(root, asking, OUTBOX), asking)
+    if warning:
+        click.echo(warning, err=True)
+
+
 @cli.command("message")
 @click.argument("manager_name")
 @click.argument("text")
