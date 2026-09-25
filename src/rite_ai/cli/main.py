@@ -6216,45 +6216,52 @@ def _start_a_manager(
         )
 
     listener = _slack_listener(root, role.name)
-    outcome = supervise(
-        root,
-        role.name,
-        engine=role.engine,
-        agent=role.agent,
-        # ⚠ LOCAL ENGINES ONLY, and a Claude Manager is unchanged because
-        # `None` means "no check". Claude's exit status IS its cycle
-        # boundary, which is why `-p` was chosen; goose's is not — it exits
-        # 0 for an unreachable provider — so a local Manager needs the
-        # endpoint checked before each cycle or a dead endpoint reads as a
-        # clean finish until the window runs out.
-        engine_ready=_engine_ready_for(role) if role.is_local else None,
-        # ⚠ **The broker, composed with THIS project's board.** A sandboxed
-        # Manager cannot start a sandboxed Worker (B9), so it asks and this
-        # runs the launch outside the boundary. Given the board the loop
-        # itself reads, so "is this a real ticket" has one answer in one
-        # place; `for_project` refuses everything when there is none.
-        broker=for_project(root, board),
-        slack=listener,
-        max_sessions=sessions,
-        window_seconds=minutes * 60.0,
-        prompt=(
-            _setup_prompt(root, role.name)
+    try:
+        outcome = supervise(
+            root,
+            role.name,
+            engine=role.engine,
+            agent=role.agent,
+            # ⚠ LOCAL ENGINES ONLY, and a Claude Manager is unchanged because
+            # `None` means "no check". Claude's exit status IS its cycle
+            # boundary, which is why `-p` was chosen; goose's is not — it exits
+            # 0 for an unreachable provider — so a local Manager needs the
+            # endpoint checked before each cycle or a dead endpoint reads as a
+            # clean finish until the window runs out.
+            engine_ready=_engine_ready_for(role) if role.is_local else None,
+            # ⚠ **The broker, composed with THIS project's board.** A sandboxed
+            # Manager cannot start a sandboxed Worker (B9), so it asks and this
+            # runs the launch outside the boundary. Given the board the loop
+            # itself reads, so "is this a real ticket" has one answer in one
+            # place; `for_project` refuses everything when there is none.
+            broker=for_project(root, board),
+            slack=listener,
+            max_sessions=sessions,
+            window_seconds=minutes * 60.0,
+            prompt=(
+                _setup_prompt(root, role.name)
+                if setting_up
+                else for_manager(
+                    role.name,
+                    extra=instructions(root, role.name, enabled=record_issues),
+                )
+            ),
+            fresh=fresh,
+            # A setup session's work is not queue work, so the queue's verdict
+            # is not the question. With no board it would answer `unknown` and
+            # stop before the Manager ever started — which is the defect this
+            # whole change is about, one level in.
+            verdict=(lambda _r: "ready")
             if setting_up
-            else for_manager(
-                role.name,
-                extra=instructions(root, role.name, enabled=record_issues),
-            )
-        ),
-        fresh=fresh,
-        # A setup session's work is not queue work, so the queue's verdict
-        # is not the question. With no board it would answer `unknown` and
-        # stop before the Manager ever started — which is the defect this
-        # whole change is about, one level in.
-        verdict=(lambda _r: "ready")
-        if setting_up
-        else (lambda r: _loop_verdict(r, board)),
-        note=lambda m: click.echo(m, err=True),
-    )
+            else (lambda r: _loop_verdict(r, board)),
+            note=lambda m: click.echo(m, err=True),
+        )
+    finally:
+        # ⚠ In a finally, so a Ctrl-C still posts the last reply. Only a
+        # killed process skips it.
+        if listener is not None:
+            for line in listener.close():
+                click.echo(line)
     click.echo(outcome.reason)
     if not outcome.ok:
         raise SystemExit(1)

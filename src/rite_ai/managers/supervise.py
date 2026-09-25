@@ -982,6 +982,10 @@ def supervise(
                     # in advance.
                     for heard in slack.poll():
                         send(root, manager, INBOX, heard)
+                    # The other direction (A4): what the Manager has said goes
+                    # out while it is still working, not only at the end.
+                    for line in getattr(slack, "post_replies", list)():
+                        say(line)
                     for line in getattr(slack, "news", list)():
                         say(line)
                 if not cycle.mail_waiting and mail_waiting(root, manager, INBOX):

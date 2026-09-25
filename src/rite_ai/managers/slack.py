@@ -79,6 +79,15 @@ thread read every 30 s is 2/min each, so ten threads stay well inside it."""
 THREADS_MAX = 10
 """The most recent roots whose threads are read; older ones are dropped."""
 
+POSTED_KEPT = 200
+"""How many posts the relay remembers. Only the recent ones are ever thread
+roots (`THREADS_MAX`), and the map is for finding a post again, not an
+archive."""
+
+READER = "slack"
+"""This relay's name as an outbox reader. `rite connect` has its own, so each
+sees every reply (A1, Decision 1)."""
+
 THREAD_HOURS = 24.0
 """A root older than this is no longer read. A check-in a day makes three
 roots a day (V060_CHECKINS), so without a horizon the set grows without
@@ -406,6 +415,10 @@ class Listener:
     project: Path | None = None
     """The project root, for the outbox and the relay's own state. None means
     this listener only listens — tests, and nothing else."""
+    _started: bool = False
+    """Has this relay ever posted for this Manager? An explicit flag rather
+    than "the state file exists", because `open` writes that file before
+    anything is posted — and that inference posted a month of old replies."""
     _turn: int = 0
     _unsaid: list[str] = field(default_factory=list)
 
@@ -594,7 +607,7 @@ class Listener:
             )
         return f"{head}\n{_quoted(text)}"
 
-    # --- what survives a restart -----------------------------------------
+    # --- the other direction: the outbox to Slack (A4) -------------------
 
     @property
     def _state_path(self) -> Path | None:
@@ -612,28 +625,45 @@ class Listener:
             return {}
         return data if isinstance(data, dict) else {}
 
-    def _save(self) -> None:
-        """Write the relay's state: how far each thread has been read — so a
-        restart neither loses a thread nor re-delivers its replies."""
+    def posted(self) -> dict[str, dict]:
+        """The relay's own record: outbox filename → where Slack put it.
+
+        ⚠ **Kept HERE, never in the message**, which stays identity-free
+        (Decision 1a). The `ts` is what a thread is rooted on and what a reply
+        is read under, so a post whose identity is thrown away is one nobody
+        can answer in a thread.
+        """
+        posted = self._state().get("posted")
+        return posted if isinstance(posted, dict) else {}
+
+    def _save(self, posted: dict[str, dict] | None = None) -> None:
+        """Write the relay's state: what was posted, and how far each thread
+        has been read — so a restart neither loses a thread nor re-delivers
+        its replies."""
         from rite_ai.state import write_atomic
 
         path = self._state_path
         if path is None:
             return
+        if posted is None:
+            posted = self.posted()
+        keep = dict(sorted(posted.items())[-POSTED_KEPT:])
         threads = {
             f"{r.channel}:{r.ts}": {"last": r.last, "label": r.label}
             for r in self.roots
         }
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            state = {"threads": threads}
+            state = {"started": self._started, "posted": keep, "threads": threads}
             write_atomic(path, json.dumps(state, indent=1) + "\n")
         except OSError as e:
             self._problem(f"cannot record the relay's state: {e}")
 
     def _restore_threads(self) -> None:
         """The threads a previous run was reading, still inside the horizon."""
-        threads = self._state().get("threads")
+        state = self._state()
+        self._started = bool(state.get("started"))
+        threads = state.get("threads")
         if not isinstance(threads, dict):
             return
         for key, value in threads.items():
@@ -650,3 +680,78 @@ class Listener:
             )
         self.roots.sort(key=lambda r: _as_ts(r.ts))
         del self.roots[:-THREADS_MAX]
+
+    @property
+    def _outward(self) -> str:
+        """Where a reply goes: the Owner's DM, or the broadcast channel when
+        there is no Owner. A reply to the Owner is not status for a channel
+        the whole workspace reads."""
+        return self.dm or self.broadcast_id
+
+    def post_replies(self, *, call=None) -> list[str]:
+        """Post what the Manager has said since this relay last looked.
+        Returns what was posted, as lines for the terminal.
+
+        ⚠ **The first time this relay runs for a Manager, earlier replies are
+        NOT posted.** A new reader's cursor is "seen nothing", which is right
+        for `rite connect` and wrong here: it would post a month of replies
+        into the Owner's DM the moment Slack was switched on. So an absent
+        state file means "start from now", said once.
+        """
+        from rite_ai.managers.mailbox import OUTBOX, mark_read, unread
+
+        target = self._outward
+        if self.project is None or not target:
+            return []
+        waiting = unread(self.project, self.manager, OUTBOX, READER)
+        posted = self.posted()
+        if not self._started:
+            mark_read(self.project, self.manager, OUTBOX, READER, waiting)
+            self._started = True
+            self._save(posted)
+            return (
+                [
+                    f"slack: {len(waiting)} earlier repl(ies) from "
+                    f"{self.manager!r} are in `rite replies`, not posted — "
+                    "Slack starts from now"
+                ]
+                if waiting
+                else []
+            )
+        lines: list[str] = []
+        for message in waiting:
+            sent = _post(
+                target, self.token, f"*{self.manager}*: {message.text}", call=call
+            )
+            if not sent.ok:
+                # Not marked read, so the next tick retries it — and the ones
+                # after it wait, so replies are never posted out of order.
+                self._problem(f"cannot post a reply: {sent.problem}")
+                break
+            posted[message.path.name] = {
+                "channel": sent.channel,
+                "ts": sent.ts,
+                "posted_at": self.clock(),
+            }
+            self._save(posted)
+            mark_read(self.project, self.manager, OUTBOX, READER, [message])
+            excerpt = " ".join(message.text.split())[:40]
+            self.remember(
+                sent.channel,
+                sent.ts,
+                self._label(f'reply "{excerpt}"', sent),
+            )
+            lines.append(
+                f"slack: posted {message.path.name} → {sent.channel} ts {sent.ts}"
+            )
+        return lines
+
+    def close(self, *, call=None) -> list[str]:
+        """The end of a run: post whatever the last cycle said.
+
+        ⚠ The wait loop only runs while a cycle is alive, and a Manager's last
+        `rite reply` is usually written just before its engine exits — so
+        without this the final reply of every run reached `rite connect` and
+        never reached Slack.
+        """
+        return self.post_replies(call=call)
