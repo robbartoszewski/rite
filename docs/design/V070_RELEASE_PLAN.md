@@ -244,7 +244,7 @@ ordinary mistakes cannot cross: a wrong path join, a broad `pkill`, a
 | MM4 | **A home for per-instance configuration.** Decided: gitignored. Location: see MMQ1 | Per MMQ1's answer: a key set in the instance file changes one machine's Manager and appears in no `git status` | MMQ1 | 1 sitting |
 | MM5 | **Pin P2 between two Managers.** The mechanism landed in `9862b59`. Its tests pin "a process outside the sandbox", not a sibling Manager's sandboxed process, and a later profile change (say, a shared grant for check-ins) could reopen the second without failing the first | A test composes two Managers' profiles in one root, runs B's stand-in engine inside B's profile, and asserts A's `kill` and A's `tmux` against B's session are refused and B survives. This plan's part 0.2 did the same by hand | — | ½ sitting |
 | MM6 | **The idempotence argument, per name.** §9.14.0 paid for amending D-50 with "one Manager per project". The code refuses per name. Write the per-name argument, including what fails closed (D-74) when two *different* Managers are asked for at once | NOT OBSERVABLE, review gate. §9.14.0 marked in place | — | ½ sitting |
-| MM7 | **`session_exists` gets its precondition (C12), before anything enumerates the tmux server.** A multi-Manager view is the first caller that asks about a name rite did not itself validate | Moot if C12 lands in 0.6.0. Otherwise `session_exists("eu:west")` refuses rather than answering False | — | ½ sitting |
+| ~~MM7~~ | **Moot: C12 landed as `0136447`**, "Make session_exists exact for any name, not only rite's". Kept so the id is not reused | — | — | — |
 
 ### Open questions — Robert's
 
@@ -262,33 +262,34 @@ What turns on it: whether the per-instance keys are **enumerated** (profile
 keys refused in the instance file) or merely layered. Layering is simpler.
 Enumeration is what keeps "a team agrees what a `planner` is" true.
 
-**MMQ2. Slack's configuration: per project, per Manager, or per instance?**
-Checked against `1cee54c` (A3b, landed on `main` while this plan was being
-written). **As shipped, `slack:` is ONE project-level section of the
-committed `config.yaml`**: `command_channel`, `broadcast_channel` and
-`owner_user` (`config/models.py`, `SlackConfig`). That differs from the v0.6.0
-plan's A6, which said "per-Manager keys under `coordination.manager_roles[]`".
-For one Manager there is no difference. **With two Managers in one root, both
-read the same command channel**, so one instruction from the Owner reaches
-both, and both act on it. That is a cross-Manager accident of exactly the kind
-§5.4.8 exists to prevent, and it arrives with the first multi-Manager project.
+**MMQ2. Several Managers, one Owner's DM: who acts on an instruction?**
+As built on `main` since A6 (`b555b20`), Slack configuration is **per
+project**: `slack.owner_user` names the Owner, whose DM with the app is the
+command channel, and `slack.broadcast_channel` is where status goes. A
+`command_channel` key is **refused by the parser**, because it let authority
+be pointed at a shared channel (D-95, SPEC 0.24.3). Per project is settled
+for v0.6.0, for a reason that holds in 0.7.0 as well: a Slack DM is one per
+user and app, so two Managers cannot each have "the Owner's DM" without a
+second app.
+
+**What stays open is the accident.** With two Managers in one root, **both
+read the one DM**, so one instruction from the Owner reaches both, and both
+act on it. That comes from the code, not from an observation. Each Manager's
+relay keeps its own cursor, in `.rite/managers/<name>/slack.json`
+(`slack.py`, `_state_path`), so each one delivers every message. The shared
+DM is therefore not split between them, and both receive all of it. Their
+posts are told apart by the `*<name>*:` prefix A4 puts on each one. That is a cross-Manager accident of exactly the kind §5.4.8 exists
+to prevent, and it arrives with the first multi-Manager project that uses
+Slack. (The first version of this question described a shipped
+`command_channel`. That shape has since been replaced, and the question is
+rewritten against what is built.)
 
 | option | what it means | turns on |
 |---|---|---|
-| (a) per-Manager command channel, in the profile | each Manager reads its own conversation | a Slack DM is one per user and app, so two Managers cannot each have "the Owner's DM" without a second app or channel-based commands |
-| (b) one command channel, addressed per Manager (`@rite planner …`) | routing by addressing | D-96 makes `@rite` a filter, not authority. Per-Manager addressing is a new rule on top of it and needs its own decision |
-| (c) the Owner's user id per instance (MMQ1), channels per profile | Robert's "per-instance config gitignored", applied to who the Owner is on this machine | `owner_user` is committed today, so this is a config migration |
-
-**Also raised now, for v0.6.0 rather than v0.7.0:** A6's text and the shipped
-shape disagree. Whichever is intended, the other should be corrected before
-v0.6.0 tags. This plan changes neither, because both belong to the Slack
-track.
-
-✅ **Settled for v0.6.0 by A6 (2026-09-25): per PROJECT**, because option (a)'s
-own "turns on" is decisive — one DM per user and app. The keys are now
-`slack.owner_user` and `slack.broadcast_channel`, and `command_channel` is
-refused by the parser (D-95). **MMQ2 itself stays open:** two Managers in one
-root still both read the one DM, which is this question's accident.
+| (a) one app per Manager | each Manager has its own DM with the Owner | every user already creates their own app (A3b). This multiplies it per Manager, and every app is its own setup |
+| (b) one DM, addressed per Manager | an instruction names the Manager it is for, and a Manager treats an unaddressed DM message as context | D-96 makes `@rite` a filter, not authority, and per-Manager addressing is a new rule on top of it. It also needs a default: one Manager, or none |
+| (c) one Manager per project reads the DM | the others receive nothing from Slack | simplest, and it makes "which Manager is the Slack one" a profile key |
+| (d) the Owner's id per instance (MMQ1) | each person's machine names its own Owner | answers a different question, who the Owner is on this machine, and not which Manager acts. Combinable with (b) or (c) |
 
 **MMQ3. The worker cap's third denominator** (`V070_MULTI_MANAGER.md` Q2).
 Per-project and machine-wide exist. Per-Manager does not. Options: (a) no
@@ -374,9 +375,16 @@ of how much they change:
    are structurally impossible** when the handle exists and is recorded before
    the first turn. The only question is whether `create-chat` can fail
    silently. CU1 measures that.
-6. **Where it runs.** Minting runs in the **supervisor**, outside the Manager
-   boundary, before the pane starts. So the supervisor needs Cursor's
-   credential too. Today only the engine inside the pane needs its own.
+6. **Where it runs: proposed, not decided.** The natural place is the
+   **supervisor**, outside the Manager boundary, before the pane starts,
+   because that is where the launch is built and where a mint that fails can
+   be refused before anything starts. The cost is that the supervisor would
+   then need Cursor's credential too, where today only the engine inside the
+   pane needs its own. The alternative, minting inside the pane as the
+   engine's first act, keeps the credential in one place and brings back the
+   partial-failure states in item 3 inside the boundary, where the supervisor
+   cannot see them. CU3 is written for the supervisor. If CU1 shows the mint
+   needs something only the pane has, revisit it.
 
 **D-63's freeze condition is untouched by this.** It says the adapter
 interface freezes when `local` binds unchanged to a conformance suite. Cursor
@@ -392,7 +400,9 @@ is a reason the interface is **not** frozen yet, which is what D-63 expected.
   CU1 measures it.
 - **Credentials.** `CURSOR_API_KEY` in the environment, or `agent login`'s
   stored login, whose location is not documented. The environment route meets
-  the `tmux -e` argv trap (C6). The stored route needs the profile to grant a
+  C6's rule (landed, `c58e4e5`): only named variables are allowed onto tmux's
+argv, so a key sent that way must be admitted by name, with the exposure
+that brings, or go another route. The stored route needs the profile to grant a
   path nobody has named yet, the way it grants `~/.claude`. Either goes
   through the per-project credential store (§10.2) under rite's vocabulary.
 - **Egress.** A Cursor Manager's model endpoint is Cursor's service. The local
@@ -414,7 +424,7 @@ is a reason the interface is **not** frozen yet, which is what D-63 expected.
 | CU1 | **Spike: does Cursor do what its docs say?** Every "open until measured" cell above, plus: `create-chat` output and failure modes; nested `--sandbox enabled` inside rite's Manager profile; which hosts it contacts (feeds EG0). Pin the version measured | A spike note under `spikes/`, in the shape of B1/B4d: every row measured or marked not measured. A two-turn token test against a real account passes or fails on the wire | — | 1–2 sittings |
 | CU2 | **Generalise the handle axis in `engines.py`**, then update `ENGINE_CONTRACT.md` from the code as it lands (B3b's rule: the module is right, and the note is the bug) | Claude's and Goose's launch commands byte-identical across B3a's 54 argv combinations, and a Cursor spelling that mints, records and resumes | CU1 | 1–2 sittings |
 | CU3 | **Mint in the supervisor, record atomically, refuse on failure** | Through `rite start` with a stub `agent`: a mint that fails produces a refusal and no pane; a mint whose record fails leaves no designation; a hostile id is refused | CU2 | 1 sitting |
-| CU4 | **Profile grants and credentials** | A sandboxed Cursor Manager authenticates with no `HOME` redirection, and its credential is absent from tmux's argv (`ps`) | CU1, C6 | 1 sitting |
+| CU4 | **Profile grants and credentials** | A sandboxed Cursor Manager authenticates with no `HOME` redirection, and its credential is absent from tmux's argv (`ps`) | CU1 | 1 sitting |
 | CU5 | **`rite doctor` for Cursor** (R6) | Logged out, the probe says so in Cursor's own words and exits non-zero | CU1 | ½ sitting |
 | CU6 | **The both-halves observation, for Cursor** | A sandboxed Cursor Manager completes two cycles, the second recalls a token from the first, and it gets a Worker started through the broker, as `4ebbbd7` did for Goose | CU3, CU4 | 1 sitting |
 
@@ -478,13 +488,27 @@ the proxy allows only the sanctioned hosts. A client that ignores
 **The work divides by transport, and part 0.4 is why.** The profile can
 already name local sockets by path, so **local-socket destinations are
 decided in the profile** and never reach the proxy: the tmux socket is denied
-there today. Others (the name resolver's socket, the keychain's services,
-anything under `/private/var/run`) can be allowed or refused the same way.
+there today. Others (the name resolver's socket, anything under
+`/private/var/run`) can be allowed or refused the same way. The keychain is
+not one of them: it is reached through `mach-lookup`, a different rule (SB5).
 **Only IP traffic needs the proxy.** ⚠ Not measured: which local sockets a
 Manager's engines and tools need once IP is loopback-only. Name resolution
 is the obvious one. A client that goes through a CONNECT proxy should not
 need to resolve names itself, but that is unverified for every client in
 question.
+
+⚠ **Loopback is not one destination.** `localhost:*` admits every listener
+on the machine: the local model endpoint (which the local tier needs), but
+also any database, dev server or admin port the operator runs. **And, with
+several Managers, each other's proxies.** If each Manager's proxy enforces its
+own list, Manager A could send through B's proxy and get B's list.
+**Measured 2026-09-25: a profile can allow one loopback port and refuse the
+rest.** With `(deny network-outbound)` and
+`(allow network-outbound (remote ip "localhost:18765"))`, port 18765 answered
+200 and port 18766 was refused (curl exit 7). So each Manager's profile can
+admit only its own proxy's port, which closes the cross-proxy route and also
+shuts out the operator's other listeners. The local model endpoint then has
+to be admitted by its port, or go through the proxy.
 
 This shape is **inferred from measurements, and is not a decision.** It is
 option (a) of EGQ1. ⚠ The first version of this plan preferred it partly
@@ -499,7 +523,7 @@ gone: `9862b59` closed the escape by denying the socket's path and left
 | EG0 | **Measure first: which destinations do real runs reach?** `V070_EGRESS.md` Q5. The v0.5.1 and v0.6.0 acceptance runs, the benchmark, a Slack-connected run, and CU1 for Cursor. Derive the default list from what was observed, as C4's allowlist was derived from 14,981 recorded invocations | A committed data file of observed destinations per engine and role, and a test that requires every default entry to trace to it | — | 1–2 sittings |
 | EG1 | **The list is rite's vocabulary** in `config.yaml`: destinations as hosts (plus ports where needed), grouped by what they are for. No proxy or yoloAI syntax (`V070_EGRESS.md` Q2) | `rite doctor` renders the list and validates it with rite's own error wording. A proxy- or yoloAI-shaped key is refused | EGQ3 | 1 sitting |
 | EG2 | **Workers: enforce where the backend can, and say where it cannot.** Docker: pass the list as `--network-allow`. Seatbelt: rite states at start that Worker egress is **not controlled** on this backend, every run. It does not say "restricted" | A docker Worker is refused a destination off the list, and the refusal names it; a seatbelt project's start line says egress is uncontrolled | EG1, EGQ2 | 1–2 sittings |
-| EG3 | **Manager enforcement** per EGQ1. If (a): profile to loopback, proxy in the supervisor, `HTTPS_PROXY` in the engine's environment. Local sockets decided in the profile by path (part 0.4) | A real Claude Manager and a real Goose Manager each complete a cycle, including a ticket read and a `git push` to the sanctioned remote. A request to an unlisted host is refused **and reported** (EG4). `tmux` from inside is refused | EG0, EG1, EGQ1 | 3–4 sittings |
+| EG3 | **Manager enforcement** per EGQ1. If (a): profile to loopback, proxy in the supervisor, `HTTPS_PROXY` in the engine's environment. Local sockets decided in the profile by path (part 0.4) | A real Claude Manager and a real Goose Manager each complete a cycle, including a ticket read and a `git push` to the sanctioned remote. A request to an unlisted host is refused **and reported** (EG4). With two Managers running, each one's profile admits only its own proxy's loopback port: A's request to B's proxy port is refused. `tmux` from inside is refused | EG0, EG1, EGQ1 | 3–4 sittings |
 | EG4 | **A refusal names the destination and the line that permits it**, the C21 shape (`V070_EGRESS.md` Q3). A client that fails on a refused CONNECT reports a network error that looks like an outage, so the report must come from rite's side, read from the proxy's log, not from the client's message | The refused host appears in the pane-side refusal line **and** in the next check-in digest, with the config line that would allow it | EG3 | 1 sitting |
 | EG5 | **Content scanning, on allowed destinations that publish, only** (D-100). The structural credential rule of `redact_secrets`/C7, not a list of token formats. **Model calls never scanned** | A token pasted into a `gh issue create` body on the sanctioned repo is caught and reported. An ordinary model request is not scanned, which the proxy's own counters show | EG3, EGQ5 | 2 sittings |
 | EG6 | **Demonstrable for the local tier.** With a local engine and an internal-only list, `rite doctor` shows the list and a live refusal of an outside host | On a local-tier project, doctor's output contains the policy and a refused probe to a public host | EG3 | ½ sitting |
@@ -594,6 +618,7 @@ broke the Claude login.
 | SB5 | **`(allow mach-lookup)` with no filter.** Claude Code on macOS keeps its login in the keychain, and `4ebbbd7` measured that the login is found inside the boundary, so at least that item is reachable. That is an inference, not a direct keychain probe. Not measured: whether a Manager can read **other projects'** rite credentials from it. The Worker-profile measurement (keychain content denied) does not carry over, because this profile differs | profile text | a measurement first. If reachable, per-service `mach-lookup` filtering, measured against the login |
 | SB8 | **`/tmp` and `/private/tmp` are readable and writable**, and other rite worktrees and scratch directories live there | stated by `limitations()` itself, so disclosed rather than hidden | open, and not obviously closable: the engines need a temp space. The same measure-then-narrow method as SB4 |
 | SB7 | **Which Manager may ask for which Worker.** A request names a declared Worker and a ticket. With several Managers in one root, any Manager can ask for any declared Worker. Whether Workers belong to a Manager is not decided (SBQ1) | `broker.py` validates against project-level declarations | MM, after SBQ1 |
+| C25 | **No opt-out from the Manager's sandbox**, and an operator's own hook already fails inside it. Every narrowing in this track (SB4) raises the stakes | `V060_RELEASE_PLAN.md` C25 | a decision. See the consolidated list |
 | C24 | **A requested Worker starts at the cycle boundary**, deliberately | `V060_RELEASE_PLAN.md` C24; `supervise.py::_honour_worker_requests` | a decision, not a fix. See the consolidated list |
 
 **SBQ1. Do Workers belong to a Manager?** (a) No: Workers are project-level and
@@ -684,23 +709,19 @@ it was recorded.
 | **The scenario gate** (§7.3, D-81) | v0.6.0 plan, Decision 5; SPEC 0.22.1 | Not costed, deliberately: it is a process change as much as a feature. **Needs its own design pass before a size**, and that pass must answer §9.15.3a's recorded gap first: the gate cannot reach journal entries, because they are machine-local and uncommitted |
 | **Relocate flat `.rite/` state per Manager** | §5.4.5 step 2; §9.14.9 item 3; `managers/__init__.py` ("until 0.6.0") | MM1. No v0.6.0 ticket carries it |
 | `V070_MULTI_MANAGER.md` Q1–Q4 | that note | MMQ3, MMQ4, MM, SB |
+| **C25: no opt-out from the Manager's sandbox**, Robert's | `V060_RELEASE_PLAN.md` C25, landed after this plan's second version | **A decision.** In the consolidated list as C25, because SB4 and EG3 sharpen it |
 | **C24: a requested Worker starts at the cycle boundary**, deliberately. Robert's to change | `V060_RELEASE_PLAN.md` C24, landed `5bda48a` after this plan's first version | **A decision, not a carried fix.** In the consolidated list as C24 |
 
 ### Becomes 0.7.0 if it does not land in 0.6.0
 
-The v0.6.0 plan's "can slip to v0.7.0" list. **Check each against the 0.6.0 tag
-before planning around it.**
+The v0.6.0 plan's "can slip to v0.7.0" list, **checked against `main` on
+2026-09-25.** C5, C8, C10, C11, C12, C13 and C23 have all landed (each row in
+`V060_RELEASE_PLAN.md` now names its commit), so they are not carried. What
+is left:
 
 | item | v0.6.0 id |
 |---|---|
 | Wire `harness.run_subtask` to Goose; prove on the benchmark | B4, B5. B5 has already moved to the Worker tier, which is **scheduled in no release** (below) |
-| The Manager's reply path hand-writes JSON | C5 |
-| Designation membership check. **Cursor raises the stakes again**: its handle comes from the engine, like Claude's | C8 |
-| Journal provenance (author field) | C10 |
-| `.rite/user/` separation is incidental | C11. MMQ1(b) makes it worse |
-| `session_exists` precondition | C12 = MM7 |
-| `journal.instructions()` spells out `--manager` | C13 |
-| Outbox retention policy, **undecided** | C23 |
 | A check-in window with no Manager running, **Robert to confirm** | K6 |
 | N1/N2, ticket-text cleanup and phrase reporting. **Placed last in v0.6.0 and droppable** (Robert's ruling, `beac07f`). If they are dropped for quota, they arrive here. Applying §6.6 to Slack text is accepted | the v0.6.0 plan's part N |
 
@@ -709,7 +730,7 @@ before planning around it.**
 | item | from | why it is listed |
 |---|---|---|
 | **The Worker tier**: decompose duty (RL-T7), `harness`/`runners` gaining a caller, B5 | v0.6.0 plan, B4b reshaping | "out of v0.6.0" with no destination. Needs a release named |
-| **Re-advertising `--record-issues`** once the journal is redacted | §9.15 (reversed for 0.5.1); C7 | if C7 lands, re-advertising is a decision nobody has been asked for |
+| **Re-advertising `--record-issues`**, now that the journal is redacted | §9.15 (reversed for 0.5.1 "until the leak path is closed"); C7, **landed** as `5ec5173` | ⚠ **The precondition is met and nobody has been asked.** §9.15 kept the feature unadvertised only because the journal applied no redaction. It does now, and the flag is still absent from the README, the guide and the CHANGELOG. Whether to advertise it in 0.6.0 or 0.7.0 is Robert's call. It is in the consolidated list |
 | **Pin the Goose version** | v0.6.0 plan, Decision 4 ("And pin the version") | a sentence with no ticket. No pin was found in `src/` (searched for the measured version string and for "pin") |
 | **A derived Modelfile instead of warning about the 4,096 window** | v0.6.0 plan, B8's closing section | an option recorded for a decision: it writes into the operator's Ollama library |
 | **The full ten-task benchmark**; opencode's two `--format json` defects | RL-T0 section 6 | measured on five tasks only |
@@ -737,7 +758,8 @@ before planning around it.**
 | S13 | `V070_MULTI_MANAGER.md` "Status of the file itself" | says it does not reach a fresh clone | **Corrected** |
 | S14 | `carried-limitations-register.md` D1 | "no `RITE_PROJECT_ROOT` env var exists". It does, and the marker is now a file rather than the bare directory (`cli/main.py`, `_find_project_root`) | **Annotated** after review round one: both suggested fixes are in the code. **The entry stays OPEN**, because the register's rule is that only a named run clears it |
 | S15 | `V070_EGRESS.md` | open question 1's premise (no Manager sandbox) | **Corrected**: banner pointing at §5.5 and this plan |
-| S16 | `V060_RELEASE_PLAN.md` A6 vs `1cee54c` | A6 says per-Manager keys under `manager_roles[]`. What shipped is one project-level `slack:` section | **Annotated** after review round one: A6 says what shipped, and that per-Manager keys are an open 0.7.0 question (MMQ2). Neither shape is declared the intended one, because that is MMQ2's answer |
+| S16 | `V060_RELEASE_PLAN.md` A6 vs `1cee54c` | A6 said per-Manager keys under `manager_roles[]`. What shipped was one project-level `slack:` section with a `command_channel` | **Resolved by A6 itself** (`b555b20`): per project, with `command_channel` refused. MMQ2 is rewritten against that shape |
+| S18 | `V060_RELEASE_PLAN.md` C5 and C7 rows | both read as open. C5 landed as `4c67b7e` (`rite reply`) and C7 as `5ec5173` (journal redaction) | **Annotated**: each row now names its commit |
 | S17 | this plan's own first version | part 0.2's three holes, part 0.3's "one problem", "no seatbelt profile can express a destination list", SB1/SB3/SB6 open, and SPEC §5.4.8 saying none of the four properties hold | **Corrected** after review round one, by re-measuring against `9862b59` (part 0) |
 
 ---
@@ -747,7 +769,7 @@ before planning around it.**
 | id | question | blocks |
 |---|---|---|
 | MMQ1 | where per-instance configuration lives | MM4, EGQ3 |
-| MMQ2 | Slack configuration per project, per Manager, or per instance. As shipped, all Managers in a root read one command channel | any multi-Manager project using Slack |
+| MMQ2 | several Managers read the one Owner's DM: who acts on an instruction | any multi-Manager project using Slack |
 | MMQ3 | a per-Manager worker cap | — |
 | MMQ4 | correlated failure: detect, or document | — |
 | MMQ5 | combined check-ins across Managers | — |
@@ -760,10 +782,12 @@ before planning around it.**
 | EGQ4 | redirects/DNS under iptables | EG2's documentation |
 | EGQ5 | which allowed destinations publish | EG5 |
 | SBQ1 | do Workers belong to a Manager | SB7 |
+| **C25** | **Should a Manager be startable outside its sandbox, and how?** The profile is unconditional, and a real operator's own `SessionEnd` hook already fails inside it (`V060_RELEASE_PLAN.md` C25, with options: a config key, a `--no-sandbox` flag, or widening the profile per project). **It becomes a 0.7.0 question if 0.6.0 does not answer it, and 0.7.0 makes it sharper.** SB4 narrows `~/.claude`, and EG3's loopback-only profile would cut a hook's network. Each narrowing turns more working setups into failures inside the boundary, and today there is no way out. Whatever is chosen must make the announcement say the boundary is off (the false-claim class) | SB4 and EG3 should not ship before it is answered, or they should ship with it |
 | **C24** | **Should a Worker requested mid-cycle start at once, or at the cycle boundary as it does now?** (a) At the boundary, as shipped: the cost is latency, which the Manager's prompt tells it about. (b) At once: `rite sandbox start` takes tens of seconds, so it has to run without blocking the supervisor's two-second poll (a thread or a watched subprocess), and a cycle that ends mid-launch needs a defined meaning. What turns on it: how much machinery goes into the one loop 0.6.0 spent its time simplifying. It also interacts with CU3, which adds a second piece of pre-launch work (Cursor's mint) to the same supervisor | nothing blocks on it. It is already behaviour, and Robert's to change (`V060_RELEASE_PLAN.md` C24) |
 | MEQ1 | where memory sits relative to Robert's test and K3 | memory's ask-time path |
 | `V070_MEMORY.md` Q1–Q7 | memory's architecture | any memory spec |
 | — | the Worker tier's release | B5, harness |
+| — | re-advertise `--record-issues`, now that C7 has redacted the journal: in 0.6.0, 0.7.0, or not yet | nothing. The feature works and is unadvertised (§9.15) |
 
 ## Sequencing, and where the release can be cut
 

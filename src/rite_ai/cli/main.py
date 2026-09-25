@@ -6273,7 +6273,7 @@ def _start_a_manager(
             # The same validated writer the wait loop uses, so a message heard
             # at the very end reaches the next start by THE ONE HOOK.
             for heard in listener.drain():
-                send(root, role.name, INBOX, heard)
+                send(root, role.name, INBOX, heard, sent_at=heard.sent_at)
             for line in listener.close():
                 click.echo(line)
     click.echo(outcome.reason)

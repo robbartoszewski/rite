@@ -295,3 +295,36 @@ class TestTheNetworkIsNotNarrowedInstead:
 
     def test_and_the_limitations_still_say_it_is_not_confined(self):
         assert any("network is NOT confined" in line for line in limitations())
+
+
+@on_macos
+class TestTheBoardIsStillReachable:
+    """⚠ **A regression the profile introduced, found after it shipped.**
+
+    `gh` cannot START without its config directory — not merely cannot
+    authenticate. Measured 2026-09-25 inside the shipped profile:
+
+        gh api rate_limit  ->  exit 1
+        failed to create root command: failed to read configuration:
+        open ~/.config/gh/config.yml: operation not permitted
+
+    and a `GITHUB_TOKEN` did not rescue it, because gh reads its config
+    before it looks at any credential. That took the GitHub board away from
+    every sandboxed Manager, and from `git push` over HTTPS, which uses gh
+    as its credential helper.
+    """
+
+    def test_gh_can_start(self, project):
+        if not _which("gh"):
+            pytest.skip("gh is not installed in this environment")
+        profile = write_profile(project, "lead")
+        assert _under(profile, "gh api rate_limit --jq .rate.limit >/dev/null") == 0
+
+    def test_the_grant_is_read_only(self, project):
+        """It needs to READ its configuration. Nothing needs to write it,
+        and a writable credential store is a credential an agent can
+        rewrite."""
+        text = compose(project, "lead")
+        home = Path.home()
+        assert f'(allow file-read* (subpath "{home}/.config/gh"))' in text
+        assert f'file-write* (subpath "{home}/.config/gh")' not in text

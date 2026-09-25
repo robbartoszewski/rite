@@ -15,6 +15,8 @@ INSTRUCTION.
 
 from __future__ import annotations
 
+import re
+
 from rite_ai.managers.mailbox import INBOX, delivery_note, read, send
 from rite_ai.managers.slack import THREAD_SECONDS, THREADS_MAX, Listener
 
@@ -67,8 +69,13 @@ def _opened(slack: Slack, *, owner=OWNER, clock=lambda: 200.0) -> Listener:
 def _drain(listener: Listener, slack: Slack, polls: int = 4) -> list[str]:
     out: list[str] = []
     for _ in range(polls):
-        out.extend(listener.poll(call=slack))
+        out.extend(_bare(m) for m in listener.poll(call=slack))
     return out
+
+
+def _bare(text: str) -> str:
+    """The header without its send time, which is pinned on its own below."""
+    return re.sub(r" · sent \w{3} \d\d:\d\d", "", text)
 
 
 class TestTheOwnersDMIsAnInstruction:
@@ -300,5 +307,41 @@ class TestTheNewestThreadIsReadFirst:
             listener.remember("C1", f"{150 + i}.0", "x")
         oldest = listener.roots[0]
         slack.replies[("C1", oldest.ts)] = [_said("late", "190.0", OTHER)]
-        got = listener.drain(call=slack)
+        got = [_bare(m) for m in listener.drain(call=slack)]
         assert [m.splitlines()[1] for m in got] == ["> late"]
+
+
+class TestWhenItWasSaidIsKept:
+    """Found live, 2026-09-25: a DM sent while no Manager ran reached it with
+    nothing saying when it was sent, and a DM typed after two channel messages
+    was delivered before them, because rite polls one conversation per tick."""
+
+    def test_the_header_says_when_it_was_sent(self):
+        import time
+
+        slack = Slack()
+        listener = _opened(slack)
+        slack.history["D1"].append(_said("hello", "101.0"))
+        (got,) = [m for _ in range(2) for m in listener.poll(call=slack)]
+        at = time.strftime("%a %H:%M", time.localtime(101.0))
+        assert got.startswith(f"[Owner's DM · sent {at} · addressed")
+        assert got.sent_at == 101.0
+
+    def test_messages_are_filed_in_the_order_they_were_said(self, tmp_path):
+        slack = Slack()
+        listener = _opened(slack)
+        slack.history["C1"].append(_said("first, in the channel", "101.0", OTHER))
+        slack.history["D1"].append(_said("second, in the DM", "102.0"))
+        for heard in [m for _ in range(2) for m in listener.poll(call=slack)]:
+            send(tmp_path, "lead", INBOX, heard, sent_at=heard.sent_at)
+        got = [m.text.splitlines()[1] for m in read(tmp_path, "lead", INBOX)]
+        assert got == ["> first, in the channel", "> second, in the DM"]
+
+    def test_a_backdated_name_is_refused_outside_the_inbox(self, tmp_path):
+        """The outbox is read by cursor, where a name in the past is loss."""
+        import pytest
+
+        from rite_ai.managers.mailbox import OUTBOX
+
+        with pytest.raises(ValueError):
+            send(tmp_path, "lead", OUTBOX, "x", sent_at=1.0)

@@ -9,10 +9,17 @@ post whose identity is thrown away cannot be answered in a thread.
 
 from __future__ import annotations
 
+import re
+
 from rite_ai.managers.mailbox import OUTBOX, send, unread
 from rite_ai.managers.slack import READER, Listener
 
 OWNER = "U0WNER"
+
+
+def _bare(text: str) -> str:
+    """The header without its send time, which is pinned on its own below."""
+    return re.sub(r" · sent \w{3} \d\d:\d\d", "", text)
 
 
 class Slack:
@@ -150,7 +157,7 @@ class TestAPostedReplyCanBeAnsweredInItsThread:
         ]
         got = []
         for _ in range(10):
-            got.extend(listener.poll(call=slack))
+            got.extend(_bare(m) for m in listener.poll(call=slack))
         assert got == [
             "[Owner's DM · reply in the thread under rite's reply "
             f'"shall I merge RT-14?" at {root.label.split(" at ")[-1]} · '
@@ -174,7 +181,7 @@ class TestAPostedReplyCanBeAnsweredInItsThread:
         slack.replies[("D1", root.ts)].append(
             {"user": OWNER, "text": "and tag it", "ts": f"{float(root.ts) + 2}"}
         )
-        later = [m for _ in range(10) for m in again.poll(call=slack)]
+        later = [_bare(m) for _ in range(10) for m in again.poll(call=slack)]
         assert [m.splitlines()[1] for m in later] == ["> and tag it"]
 
 
