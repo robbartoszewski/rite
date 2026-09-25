@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.5 · **Date:** 2026-09-25
+**Version:** 0.24.6 · **Date:** 2026-09-25
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -2179,7 +2179,10 @@ of it:**
   or refuse by **path**, and that is how the tmux socket is denied today. So
   a Manager's list of *hosts* cannot live in its profile. IP traffic has to
   pass through something outside the boundary that enforces it, while
-  local-socket destinations can be decided in the profile itself. How is
+  local-socket destinations can be decided in the profile itself. Within
+  loopback, a single **port** can be admitted and the rest refused
+  (`localhost:<port>`, measured). Loopback-only on its own admits every
+  local listener, another Manager's included. How the list is enforced is
   open.
 
 ⚠ **So a project whose Workers run on seatbelt gets no Worker egress control,
@@ -6569,6 +6572,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.6 — one more measured constraint on enforcing a Manager's egress.** §5.5.2 adds that a seatbelt profile can admit a single loopback port and refuse the rest. That matters because loopback-only on its own admits every local listener on the machine, including another Manager's egress proxy. Measured with two local listeners: the admitted port answered 200 and the other was refused.
 
 **Changes in 0.24.5 — a relayed message says when it was sent, and arrives in send order.** §9.16.5's examples carry `sent <day HH:MM>`. Found in the live A3 session: a DM typed after two channel messages reached the Manager before them, and a DM sent while nothing ran arrived looking as if it had been sent at the restart.
 
