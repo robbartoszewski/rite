@@ -485,9 +485,10 @@ is a reason the interface is **not** frozen yet, which is what D-63 expected.
   CU1 measures it.
 - **Credentials.** `CURSOR_API_KEY` in the environment, or `agent login`'s
   stored login, whose location is not documented. The environment route meets
-  C6's rule (landed, `c58e4e5`): only named variables are allowed onto tmux's
-argv, so a key sent that way must be admitted by name, with the exposure
-that brings, or go another route. The stored route needs the profile to grant a
+  C6's closed trap (`c58e4e5`): only named variables are allowed onto
+  tmux's argv, so a key sent that way must be admitted by name, with the
+  exposure that brings. C6's open half, how a credential reaches a pane at
+  all, applies to Cursor's key as it does to Claude's and GitHub's (C26). The stored route needs the profile to grant a
   path nobody has named yet, the way it grants `~/.claude`. Either goes
   through the per-project credential store (§10.2) under rite's vocabulary.
 - **Egress.** A Cursor Manager's model endpoint is Cursor's service. The local
@@ -851,28 +852,58 @@ is left:
 
 ## Decisions needed — consolidated
 
+**Re-stated 2026-09-26, round two, against `main` at `112939c`.** Split by
+when the answer is needed, because two Managers on one machine moved into
+v0.6.0 and several questions moved with them. Each row says what it blocks.
+"Blocks nothing" means the behaviour exists today and the question is
+whether to change it.
+
+### Due before v0.6.0 tags (Sunday)
+
+| id | question | options | blocks |
+|---|---|---|---|
+| **MMQ2** | Two Managers in one root both read the Owner's DM: **who acts on an instruction?** (SPEC §9.16.7: today, both act, and two relays are 60 calls a minute against Tier 3's "50+") | one app per Manager; per-Manager addressing in the one DM; one Slack-reading Manager per project; the Owner's id per instance | **any two-Manager project with Slack enabled**, which is the Sunday shape if Slack is on |
+| **C28** | **What does a Manager do on Linux?** It cannot start there today, and CI has been red since `cecbbdd` | run unsandboxed and say so every run; refuse to start and say why; a Linux boundary once the spike reports | **Linux as a platform** (the README claims it), and a green CI before the tag |
+| **C25** | **Can a Manager start outside its sandbox, and how?** An operator's own hook already fails inside it | a config key; a `--no-sandbox` flag; widening the profile per project. Each needs the announcement to say the boundary is off | any setup whose hooks or tools reach outside the profile. It gets sharper with C28(a), SB4 and EG3 |
+| **C6 / C26** | **How does a credential reach a Manager's pane?** The argv trap is closed, and delivery is not. Today only tmux-server inheritance, which works only when `rite start` starts the server. The GitHub board is reached anonymously from inside the sandbox (60 requests an hour, not 5000, and no private repositories) | named in `CREDENTIAL_HANDLING…md` and C26. Not yet laid out as options | **every sandboxed Manager on a private GitHub board**, and `git push` over HTTPS |
+| **MMQ5** | Two Managers mean **two standups per window** in the Owner's DM, each with its own answer thread. Keep, merge, or make it the Owner's job? | keep (works today); merge into one; the Owner composes | nothing. It is what ships unless changed |
+| **K6** | **A window with no Manager running**: built as proposed and observed (`d8b235c`). Confirm the proposal? | confirm; change | nothing. It is built |
+| **C7 → `--record-issues`** | **Re-advertise issue recording now that the journal is redacted?** §9.15 held it back only "until the leak path is closed". C7 (`5ec5173`) closed it, and the flag is still in no README, guide or CHANGELOG | advertise in 0.6.0; in 0.7.0; not yet | nothing. The feature works and is unadvertised |
+| **C24** | **Should a Worker requested mid-cycle start at once**, or at the cycle boundary as now? | boundary (latency, which the Manager is told about); at once (a non-blocking launch in the supervisor's loop) | nothing. It is behaviour. It interacts with CU3, which would add Cursor's mint to the same loop |
+
+**Also blocking Sunday, but not decisions:** C29 (every Goose Manager starts
+fresh on each run, because C8's check refuses its own designation), C30 (a
+Manager named `permissions` overwrites the allowlist) and the rest of C28's
+nine red tests. Each has a fix shape in its row. They need work, not an
+answer. Two Managers' state separation (SPEC §5.4.8 P1, P3, P4) is the
+building session's call, and the release notes must say which properties
+hold.
+
+### Due for v0.7.0
+
 | id | question | blocks |
 |---|---|---|
-| MMQ1 | where per-instance configuration lives | MM4, EGQ3 |
-| MMQ2 | several Managers read the one Owner's DM: who acts on an instruction | any multi-Manager project using Slack |
+| MMQ1 | where per-instance configuration lives (gitignored is decided) | MM4, EGQ3 |
 | MMQ3 | a per-Manager worker cap | — |
-| MMQ4 | correlated failure: detect, or document | — |
-| MMQ5 | combined check-ins across Managers | — |
-| CUQ1 | Cursor for Workers | — |
-| CUQ2 | Cursor's credential route | CU4 |
-| CUQ3 | if `-p` takes argv only | CU2, after CU1 |
-| EGQ1 | how the Manager's egress is enforced | EG3 (and SB2) |
-| EGQ2 | seatbelt projects and a configured list | EG2 |
-| EGQ3 | the list: committed, or per-instance | EG1 |
-| EGQ4 | redirects/DNS under iptables | EG2's documentation |
-| EGQ5 | which allowed destinations publish | EG5 |
+| MMQ4 | correlated failure across Managers on one machine: detect, or document | — |
 | SBQ1 | do Workers belong to a Manager | SB7 |
-| **C25** | **Should a Manager be startable outside its sandbox, and how?** The profile is unconditional, and a real operator's own `SessionEnd` hook already fails inside it (`V060_RELEASE_PLAN.md` C25, with options: a config key, a `--no-sandbox` flag, or widening the profile per project). **It becomes a 0.7.0 question if 0.6.0 does not answer it, and 0.7.0 makes it sharper.** SB4 narrows `~/.claude`, and EG3's loopback-only profile would cut a hook's network. Each narrowing turns more working setups into failures inside the boundary, and today there is no way out. Whatever is chosen must make the announcement say the boundary is off (the false-claim class) | SB4 and EG3 should not ship before it is answered, or they should ship with it |
-| **C24** | **Should a Worker requested mid-cycle start at once, or at the cycle boundary as it does now?** (a) At the boundary, as shipped: the cost is latency, which the Manager's prompt tells it about. (b) At once: `rite sandbox start` takes tens of seconds, so it has to run without blocking the supervisor's two-second poll (a thread or a watched subprocess), and a cycle that ends mid-launch needs a defined meaning. What turns on it: how much machinery goes into the one loop 0.6.0 spent its time simplifying. It also interacts with CU3, which adds a second piece of pre-launch work (Cursor's mint) to the same supervisor | nothing blocks on it. It is already behaviour, and Robert's to change (`V060_RELEASE_PLAN.md` C24) |
+| EGQ1 | how the Manager's egress is enforced | EG3 (and SB2) |
+| EGQ2 | what a seatbelt-backed project gets when an egress list is configured | EG2 |
+| EGQ3 | the egress list: committed, or per-instance | EG1 |
+| EGQ4 | redirects and DNS under yoloAI's iptables allowlist | EG2's documentation |
+| EGQ5 | which allowed destinations count as publishing | EG5 |
+| CUQ1 | Cursor for Workers | — |
+| CUQ2 | Cursor's credential route (API key or stored login) | CU4 |
+| CUQ3 | what to do if CU1 finds `-p` takes the prompt only as an argument | CU2, after CU1 |
 | MEQ1 | where memory sits relative to Robert's test and K3 | memory's ask-time path |
 | `V070_MEMORY.md` Q1–Q7 | memory's architecture | any memory spec |
-| — | the Worker tier's release | B5, harness |
-| — | re-advertise `--record-issues`, now that C7 has redacted the journal: in 0.6.0, 0.7.0, or not yet | nothing. The feature works and is unadvertised (§9.15) |
+
+### Without a release
+
+| question | blocks |
+|---|---|
+| the Worker tier's release (the decompose duty, `harness`/`runners` gaining a caller, B5) | B5, the harness |
+| will rite ever be commercial, and does Slack agree a manifest-created app is "internal customer-built" (A3b) | the polling transport, if the answer is no |
 
 ## Sequencing, and where the release can be cut
 
