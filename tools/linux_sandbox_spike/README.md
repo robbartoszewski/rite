@@ -34,7 +34,12 @@ Landlock check reports `N/A` rather than guessing.
    **bubblewrap** separately, because they fail independently: on a host that
    restricts unprivileged user namespaces, bubblewrap cannot start at all
    while Landlock still works.
-3. **The two escapes macOS shipped with** — can a confined process drive a
+3. **Nesting** — whether a profile can be re-applied inside an already
+   confined process, whether a **narrower** one works, and whether a
+   **wider** one can grant back a denied path. This is the macOS trap: there
+   only a semantically equivalent profile survived, a narrower one failed
+   too, and nothing documented it.
+4. **The two escapes macOS shipped with** — can a confined process drive a
    tmux server living outside the boundary, and can it signal a process it did
    not start. Each has a control that shows *why* the result came out as it
    did. The socket escape is also asked of Landlock directly, because the

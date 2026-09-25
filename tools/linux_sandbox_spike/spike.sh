@@ -356,6 +356,82 @@ def cmd_socket(project, sockpath):
         print("ERR child_exit=%d" % rc)
 
 
+def build_fs(paths_rw):
+    """A ruleset granting read+write beneath each path, system paths read-only."""
+    fd = make_ruleset(handled_fs=HANDLED)
+    for p in ("/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc", "/proc", "/dev"):
+        if os.path.exists(p):
+            allow(fd, p, READ_ONLY)
+    for p in paths_rw:
+        allow(fd, p, HANDLED)
+    return fd
+
+
+def can_write(path):
+    probe = os.path.join(path, ".landlock-probe.tmp")
+    try:
+        with open(probe, "w") as fh:
+            fh.write("x")
+        os.unlink(probe)
+        return True
+    except Exception:
+        return False
+
+
+def cmd_nest_narrower(project, sub):
+    """Re-apply a NARROWER ruleset inside an existing one. This is the case
+    macOS refused: there, only a semantically equivalent profile survived."""
+    def child():
+        enforce(build_fs([project]))
+        try:
+            enforce(build_fs([sub]))
+        except OSError:
+            return 3
+        if can_write(sub) and not can_write(project):
+            return 0
+        return 5 if can_write(project) else 6
+    rc = _run(child)
+    print({0: "OK narrower_nested (applied inside the first, and took effect)",
+           3: "NO narrower_refused (as macOS refuses it)",
+           5: "NO applied_but_did_not_narrow",
+           6: "NO subdir_unwritable_after_narrowing"}.get(rc, "ERR rc=%d" % rc))
+
+
+def cmd_nest_wider(project, other):
+    """Re-apply a WIDER ruleset. The security property: a nested ruleset must
+    not be able to grant back a path the outer one denied."""
+    def child():
+        enforce(build_fs([project]))
+        if can_write(other):
+            return 7
+        try:
+            enforce(build_fs([project, other]))
+        except OSError:
+            return 3
+        return 8 if can_write(other) else 0
+    rc = _run(child)
+    print({0: "OK wider_did_not_widen (rules intersect; the outer denial stands)",
+           3: "NO wider_refused",
+           7: "ERR outer_boundary_never_held — nothing measured",
+           8: "NO WIDENED — a nested ruleset granted back a denied path"}.get(rc, "ERR rc=%d" % rc))
+
+
+def cmd_nest_layers(project, limit="40"):
+    """How many times a process may restrict itself. A Manager boundary with a
+    Worker boundary inside it needs at least two."""
+    limit = int(limit)
+    def child():
+        n = 0
+        for _ in range(limit):
+            try:
+                enforce(build_fs([project]))
+                n += 1
+            except OSError:
+                break
+        return min(n, 250)
+    print("OK layers=%d (of %d attempted)" % (_run(child), limit))
+
+
 def cmd_listen(sockpath, touchfile):
     """The far side of the socket escape: a process OUTSIDE the boundary that
     does something when a confined process reaches it. Run in the background
@@ -375,6 +451,8 @@ def cmd_listen(sockpath, touchfile):
 if __name__ == "__main__":
     try:
         {"abi": cmd_abi, "fsbound": cmd_fsbound, "listen": cmd_listen,
+         "nest_narrower": cmd_nest_narrower, "nest_wider": cmd_nest_wider,
+         "nest_layers": cmd_nest_layers,
          "signal": cmd_signal, "socket": cmd_socket}[sys.argv[1]](*sys.argv[2:])
     except Exception as exc:
         print("ERR %s: %s" % (type(exc).__name__, exc))
@@ -672,6 +750,44 @@ if [ "$BWRAP_USABLE" = "yes" ]; then
   done
 else
   verdict "N/A" "build a bwrap boundary" "bwrap unusable here (${BWRAP_USABLE#no: }) — section 2 cannot run"
+fi
+
+# -----------------------------------------------------------------------------
+head1 "2b. NESTING — can a profile be re-applied inside one?"
+# -----------------------------------------------------------------------------
+# This is what bit rite on macOS. There, a sandboxed process could re-enter
+# sandbox-exec only with a SEMANTICALLY EQUIVALENT profile: a narrower one
+# failed too, which nobody had documented. rite needs the answer because a
+# Manager runs inside a boundary and starts Workers that want their own.
+if [ "${LL_BOUNDARY:-no}" != "yes" ]; then
+  verdict "N/A" "landlock nesting" "no Landlock boundary was established above; a result here would mean nothing"
+else
+  mkdir -p "$PROJ/sub"
+
+  ll nest_narrower "$PROJ" "$PROJ/sub"
+  case "$OUT" in
+    OK\ *) verdict PASS "re-apply a NARROWER ruleset inside an existing one" "$(ll_answer "$OUT")" ;;
+    NO\ *) verdict FAIL "re-apply a NARROWER ruleset inside an existing one" "$(ll_answer "$OUT")" ;;
+    *)     verdict "N/A" "landlock nesting (narrower)" "$(first_line "$OUT")" ;;
+  esac
+
+  # The one that matters for safety rather than for capability.
+  ll nest_wider "$PROJ" "$OTHER"
+  case "$OUT" in
+    OK\ *) verdict PASS "re-apply a WIDER ruleset — it must NOT grant back a denied path" "$(ll_answer "$OUT")" ;;
+    NO\ WIDENED*) verdict FAIL "re-apply a WIDER ruleset — it must NOT grant back a denied path" "$(ll_answer "$OUT") — this would break confinement" ;;
+    NO\ *) verdict FAIL "re-apply a WIDER ruleset — it must NOT grant back a denied path" "$(ll_answer "$OUT")" ;;
+    *)     verdict "N/A" "landlock nesting (wider)" "$(first_line "$OUT")" ;;
+  esac
+
+  ll nest_layers "$PROJ" 40
+  case "$OUT" in
+    OK\ layers=0*|OK\ layers=1\ *)
+      verdict FAIL "how many rulesets one process may stack" "$(ll_answer "$OUT") — a Manager boundary with a Worker boundary inside it needs at least 2" ;;
+    OK\ *)
+      verdict PASS "how many rulesets one process may stack" "$(ll_answer "$OUT")" ;;
+    *) verdict "N/A" "landlock nesting (layers)" "$(first_line "$OUT")" ;;
+  esac
 fi
 
 # -----------------------------------------------------------------------------
