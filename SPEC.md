@@ -6166,8 +6166,8 @@ Two consequences, written down so they are not discovered:
 
 #### 9.16.7. Several Managers in one project: only the Owner hears Slack (0.6.0)
 
-**Status: DECIDED 2026-09-26 (Robert: MMQ2, option (c)). The Slack half is
-BUILT; routing and replies coming up are planned in the same track, not built
+**Status: DECIDED 2026-09-26 (Robert: MMQ2, option (c)). The Slack half and
+routing are BUILT; replies coming up are planned in the same track, not built
 yet.** The 0.6.0 shape is one machine, one root: a Claude Manager as **Owner**
 plus a local secondary. The Owner is the only Manager that talks to Slack, and
 it routes work to the others.
@@ -6195,9 +6195,29 @@ the election's priority list. Its names may be on other machines, and the
 lease decides the Owner. Gating Slack on the lease is v0.7.0, and until then
 such a project behaves as before.
 
-**Planned in this track, not built at this revision:** the Owner routing work
-to a secondary, and a secondary's replies reaching the Owner. Until they
-land, a secondary's instructions come only from this machine.
+**The Owner routes, and cannot do it by writing an inbox (built).** No
+Manager may write a Manager's inbox (§5.4.8, P1), so the Owner ASKS, as it
+does for a Worker. `rite route <manager> "…"` writes a request into the
+Owner's own directory. The Owner's supervisor, outside the boundary, delivers
+it: every wait-loop tick, and at the cycle boundary. **Who is asking comes
+from the supervisor, never from the request**, and delivery happens only for
+the routing Owner, so a secondary's request is discarded and said to be. The
+secondary receives it under a header rite composes, with the Owner's text
+quoted:
+
+    [routed by the Owner Manager 'lead' · sent Sat 00:14 · INSTRUCTION]
+    > run the tests on branch fix-12 and report
+
+Observed through `rite start` with stub engines inside the real profiles:
+the secondary's next cycle prompt carried that block, and its own attempt to
+route to the Owner was refused and discarded.
+
+**A secondary's instructions come from two places only:** messages routed by
+the Owner Manager, and this machine. Never from Slack, and never from a
+sibling.
+
+**Planned in this track, not built at this revision:** a secondary's replies
+reaching the Owner.
 
 ## 10. Credentials
 
