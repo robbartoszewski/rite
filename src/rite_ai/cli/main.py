@@ -6835,8 +6835,40 @@ def message(manager_name: str, text: str) -> None:
         # never learn their message went nowhere.
         click.echo("refusing to send an empty message.", err=True)
         raise SystemExit(1)
+    from rite_ai.managers import current_manager
 
-    send(root, manager_name, INBOX, text)
+    speaking_as = current_manager()
+    if speaking_as:
+        # ⚠ **A MANAGER DOES NOT WRITE A MANAGER'S INBOX — not another's, not
+        # its own.** A message in an inbox with no bracketed line is delivered
+        # as the Owner's instruction, so this command run by a Manager would
+        # let it speak with the Owner's authority. Refused here so the Manager
+        # is told what to do instead; the Manager's sandbox profile refuses the
+        # write itself (`enclosure._manager_separation`), so unsetting the
+        # variable does not get around it.
+        click.echo(
+            f"refusing: this is Manager {speaking_as!r}, and a Manager does "
+            f"not write a Manager's inbox — a message there is delivered as "
+            f"the Owner's instruction. To answer the person, use `rite reply "
+            f'--manager {speaking_as} "…"`.',
+            err=True,
+        )
+        raise SystemExit(1)
+
+    try:
+        send(root, manager_name, INBOX, text)
+    except PermissionError:
+        # Inside a Manager's sandbox with RITE_MANAGER removed: the profile
+        # refused the write (`enclosure._manager_separation`). Said, not a
+        # traceback — an agent handed a traceback routes around it.
+        click.echo(
+            f"refusing: writing to {manager_name!r}'s inbox was refused by "
+            "this process's sandbox. A Manager does not write a Manager's "
+            "inbox, because a message there is delivered as the Owner's "
+            "instruction.",
+            err=True,
+        )
+        raise SystemExit(1) from None
     click.echo(
         f"message queued for {manager_name!r} — delivered at the start of its "
         f"next turn. `rite connect {manager_name}` reads its replies."
