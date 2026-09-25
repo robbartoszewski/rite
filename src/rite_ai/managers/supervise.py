@@ -54,7 +54,7 @@ from rite_ai.managers.enclosure import (
     write_profile,
 )
 from rite_ai.managers.engines import spelling_for
-from rite_ai.managers.mailbox import INBOX, delivery_note, how_to_reply
+from rite_ai.managers.mailbox import INBOX, delivery_note, how_to_reply, send
 from rite_ai.managers.mailbox import take as take_mail
 from rite_ai.managers.mailbox import waiting as mail_waiting
 from rite_ai.managers.permissions import (
@@ -584,6 +584,7 @@ def supervise(
     note: object = None,
     starter: object = None,
     engine_ready: object = None,
+    slack: object = None,
     resume_id_for: object = None,
     broker: object = None,
     poll: float = POLL_SECONDS,
@@ -969,6 +970,18 @@ def supervise(
             while liveness(result.session).alive:
                 if deadline is not None and clock() >= deadline:
                     break
+                if slack is not None:
+                    # ⚠ **INTO THE INBOX, NOT STRAIGHT INTO THE PROMPT.** A
+                    # Slack message becomes an ordinary mailbox file through
+                    # the same validated writer `rite message` uses, so it
+                    # reaches the Manager by THE ONE HOOK — the instruction
+                    # composed at the next cycle boundary. A second delivery
+                    # path was refused by name in 0.5.1 and this does not add
+                    # one; the mailbox already does not care who wrote a
+                    # message, which is the whole of what was done for Slack
+                    # in advance.
+                    for heard in slack.poll():
+                        send(root, manager, INBOX, heard)
                 if not cycle.mail_waiting and mail_waiting(root, manager, INBOX):
                     cycle.mail_waiting = True
                     say(
