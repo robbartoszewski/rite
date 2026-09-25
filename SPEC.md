@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.10 · **Date:** 2026-09-25
+**Version:** 0.24.11 · **Date:** 2026-09-25
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -2083,9 +2083,14 @@ governs. The four escapes were all added by authors who would have endorsed
 the rule had they been asked, which is what makes a rule the wrong instrument
 here.
 
-#### 5.4.8. Separation between Managers that share a root — the requirement (0.7.0)
+#### 5.4.8. Separation between Managers that share a root — the requirement (0.6.0 for two Managers on one machine)
 
 **Status: DECIDED (Robert, 2026-09-20: D-79, §9.14.9). Not enforced.**
+⚠ **Scope moved on 2026-09-26: two Managers on one machine are 0.6.0**
+(Robert). A Claude Manager as Owner, and a local secondary, in one root, is
+being built for 0.6.0. Several machines stay out of 0.6.0. **So the state
+table below is what 0.6.0 ships with, unless that work changes it**, and the
+Slack half of the same accident is §9.16.7.
 Several Managers run in **one** project root, each with its own
 `.rite/managers/<name>/`, and they are **strictly separated**, in Robert's
 words: *"one misbehaving manager shouldn't be able to mess with others by
@@ -2103,7 +2108,7 @@ be tested:
 | **P3** | State shared by decision (§5.4.6) is written only through its locked writer, and the list is enumerated by a test | §5.4.6 |
 | **P4** | A release or destroy names the Manager whose thing it is | §5.4.3, with a Manager field on the claim |
 
-**State on `main`, measured 2026-09-25 at `9862b59`:**
+**State on `main`, measured 2026-09-25 at `9862b59`, and reproduced at `8d5fc22` and again after `7ae2ecc` changed the profile:**
 
 - **P2 holds.** With two Managers' profiles in one root, killing the other
   Manager's engine and driving or killing its tmux session were all
@@ -6147,6 +6152,37 @@ Two consequences, written down so they are not discovered:
   latency grow with the number of channels. **Cap or rotation is OPEN**, an
   implementation choice not yet made.
 
+#### 9.16.7. Several Managers in one project: what the relay does today (0.6.0)
+
+**Status: NOT DECIDED. This subsection records behaviour, not a design.**
+Robert moved two Managers on one machine (a Claude Owner and a local
+secondary) into 0.6.0 on 2026-09-26 (§5.4.8). §9.16.6 settled several
+*projects* on one workspace. Several *Managers* in one project is the same
+accident one level down, and nothing settles it yet.
+
+**What the code does, read from `cli/main.py` (`_slack_listener`) and
+`managers/slack.py`, not observed:** every `rite start <manager>` in a
+project with Slack enabled opens its own relay. It reads the same Owner's DM
+and the same broadcast channel, with its own cursor under that Manager's
+directory. So:
+
+- **Every Manager receives every instruction.** A DM message reaches each
+  running Manager labelled INSTRUCTION (§9.16.5), and each acts on it. A
+  thread reply goes only to the relay that posted the thread's root, which
+  is §9.16.6's parenthesis again.
+- **The poll rate multiplies.** Two running Managers are two relays on the
+  project's one app: 60 `conversations.history` calls a minute against
+  Tier 3's "50+" (§9.16.6's table).
+- **Posts are told apart.** Each relay prefixes its posts with its Manager's
+  name.
+
+⚠ **So a project that runs two Managers with Slack enabled has both
+problems §9.16.6 exists to prevent, today.** Options (one app per Manager,
+per-Manager addressing, one Slack-reading Manager per project, the Owner's
+id per instance) and what turns on each are in
+`docs/design/V070_RELEASE_PLAN.md`, MMQ2. That question is now due in 0.6.0,
+not 0.7.0.
+
 ## 10. Credentials
 
 **OS keychain via Python `keyring`** (macOS Keychain, Linux Secret Service, Windows
@@ -6701,6 +6737,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.11 — two Managers are 0.6.0, and the relay does not know it.** Robert moved two Managers on one machine (a Claude Owner and a local secondary) into 0.6.0. §5.4.8 now says the requirement applies to 0.6.0 and that its state table is what 0.6.0 ships with: P2 holds, and P1, P3 and P4 do not. §9.16.7 is new and records behaviour, not a design. Every Manager's `rite start` opens its own Slack relay on the same DM, so every Manager acts on every Owner instruction, and two relays are 60 history calls a minute against Tier 3's "50+". Read from the code, not observed. What to do about it is MMQ2, now due in 0.6.0.
 
 **Changes in 0.24.10 — the upstream is not named, as §1.1 says.** §6.6.2's measurements, §9.15 and D-88 named the upstream project, which §1.1 deliberately does not name. They now say "the upstream". The phrase library's origin stays named where the licence needs it, in the code (`phrases.py`), not in this document.
 
