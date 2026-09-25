@@ -186,6 +186,27 @@ both holes with before-and-after measurements.
 
 ## Track MM — Multi-Manager
 
+⚠ **SCOPE MOVED 2026-09-26 (Robert): two Managers on one machine are
+v0.6.0, delivered Sunday.** The shape is a **Claude Manager as Owner plus a
+local secondary**, in one root, and another session is building it. **Several
+machines stay out of v0.6.0.** What that does to this track:
+
+- **The separation requirement (SPEC §5.4.8) is now a v0.6.0 requirement.**
+  Its state table is what v0.6.0 ships with unless that work changes it: P2
+  holds, and P1, P3 and P4 do not. MM1–MM3 and MM5 are the tickets that would
+  change it. **Whether they land for Sunday is the building session's call,
+  and the release notes must say which properties hold**, or v0.6.0 sells
+  separation it lacks.
+- **MMQ2 (Slack: both Managers act on one instruction) and MMQ5 (two
+  standups per window) are due in v0.6.0.** Both are behaviour today, not
+  designs (SPEC §9.16.7).
+- **Unchanged for v0.7.0:** several machines, MMQ3 (a per-Manager worker
+  cap), MMQ4 (correlated failure), and MM4 once MMQ1 is answered.
+
+This plan does not write the v0.6.0 tickets for that shape. They belong to
+the session building it, and inventing them here would be the speculative
+spec this plan's bar rules out.
+
 ### Decided — honoured here, not reopened
 
 | decision | where recorded |
@@ -210,7 +231,7 @@ This is what the specs below build on. Each line is checked against the code.
 - **A per-Manager directory, for new state only.** `manager_dir()` →
   `.rite/managers/<name>/`. The mailbox lives there
   (`mailbox.py`: `.rite/managers/<manager>/mail/<box>/`), and so will the
-  check-in queue (K2). The module says existing `.rite/` files "stay where they
+  check-in queue (K2, built as `3a4fa1f`). The module says existing `.rite/` files "stay where they
   are until 0.6.0". ⚠ **No v0.6.0 ticket moves them**, so that sentence points
   at a release that will not do it. Carried here as MM1.
 - **Per-instance records** live under `.rite/user/`: instance JSON, the
@@ -296,10 +317,15 @@ read the one DM**, so one instruction from the Owner reaches both, and both
 act on it. That comes from the code, not from an observation. Each Manager's
 relay keeps its own cursor, in `.rite/managers/<name>/slack.json`
 (`slack.py`, `_state_path`), so each one delivers every message. The shared
-DM is therefore not split between them, and both receive all of it. Their
-posts are told apart by the `*<name>*:` prefix A4 puts on each one. That is a cross-Manager accident of exactly the kind §5.4.8 exists
-to prevent, and it arrives with the first multi-Manager project that uses
-Slack. (The first version of this question described a shipped
+DM is therefore not split between them, and both receive all of it. (Their
+posts are told apart by the `*<name>*:` prefix A4 puts on each one.) Both
+acting on one instruction is a cross-Manager accident of exactly the kind
+§5.4.8 exists to prevent. It also doubles the poll on the project's one app
+(§9.16.6's table), and it is now written into SPEC §9.16.7.
+
+⚠ **Due in v0.6.0, not v0.7.0.** Robert moved two Managers on one machine
+into v0.6.0 on 2026-09-26, so the first project to run a Claude Owner and a
+local secondary with Slack enabled meets this. (The first version of this question described a shipped
 `command_channel`. That shape has since been replaced, and the question is
 rewritten against what is built.)
 
@@ -352,9 +378,13 @@ per-holder timeout. Not decided whether v0.7.0 detects it, or only documents
 it.
 
 **MMQ5. A combined check-in across Managers.** `V060_CHECKINS.md`: one digest
-per Manager is the 0.6.0 shape, and a combined standup "is not planned". With
-three Managers and three windows a day, that is nine digests. Keep, merge, or
-make it the Owner's job. Not scheduled until answered.
+per Manager is the 0.6.0 shape, and a combined standup "is not planned". K5
+as built (`401e27f`) posts each check-in to the Owner's DM. ⚠ **With two
+Managers in v0.6.0 this is due now:** the Owner receives two standups per
+window in one DM, each rooting its own answer thread. That works, because a
+thread reply reaches only the relay that posted its root (§9.16.7), but
+nobody has decided it is what they want. Keep, merge, or make it the
+Owner's job. Three windows a day with two Managers is six digests.
 
 **Also still open, from `V070_MULTI_MANAGER.md`:** what `local:<class>`
 classes are (Q3: they must come from `engine_probe`, not config), and that
@@ -704,7 +734,7 @@ different one.** The two must not be built as one filter, or counted as one.
 
 | filter | what it removes | when | built? |
 |---|---|---|---|
-| K3, the queue as a draft | questions that **resolve themselves with time**: the answer arrives through later work | at window open, for **deferred** questions only | v0.6.0, planned |
+| K3, the queue as a draft | questions that **resolve themselves with time**: the answer arrives through later work | at window open, for **deferred** questions only | v0.6.0: built, stub half observed (`c0429dd`); the real-model half open |
 | memory, applying Robert's test | questions the Manager **could answer now from what the fleet already knows** | at ask time, immediate or deferred | not designed |
 | `V080` Analysis 2's category rule | nothing. It **forces** escalation of decisions and irreversible acts whatever any model thinks | before either | not built (0.8.0 note) |
 
@@ -769,7 +799,7 @@ is left:
 | item | v0.6.0 id |
 |---|---|
 | Wire `harness.run_subtask` to Goose; prove on the benchmark | B4, B5. B5 has already moved to the Worker tier, which is **scheduled in no release** (below) |
-| A check-in window with no Manager running, **Robert to confirm** | K6 |
+| A check-in window with no Manager running: **built as proposed and observed** (`d8b235c`), and the proposal is still **Robert's to confirm** | K6 |
 | N1/N2, ticket-text cleanup and phrase reporting. **Placed last in v0.6.0 and droppable** (Robert's ruling, `beac07f`). If they are dropped for quota, they arrive here. Applying §6.6 to Slack text is accepted | the v0.6.0 plan's part N |
 
 ### Deferred without a release, and at risk of evaporating

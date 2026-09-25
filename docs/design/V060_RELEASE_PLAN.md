@@ -17,6 +17,15 @@ Three things every reader of this plan needs:
 3. **Open Interpreter is excluded** — `exec resume` cannot reach a local
    model at all.
 
+⚠ **SCOPE CHANGED 2026-09-26 (Robert): two Managers on one machine are IN,
+delivered Sunday.** The shape is a Claude Manager as Owner plus a local
+secondary, in one root. Several machines stay out. Another session is
+building it. What is already true on `main` for that shape is recorded
+elsewhere, so nobody re-derives it: SPEC §5.4.8 (process separation holds,
+state separation does not) and §9.16.7 (with Slack enabled, both Managers
+act on every Owner instruction, and two relays are over Tier 3's floor).
+The open questions due now are `V070_RELEASE_PLAN.md` MMQ2 and MMQ5.
+
 **Scope, confirmed 2026-09-23:** *"multi-manager is out, Slack is in."*
 v0.6.0 is **fixes + Slack + local models (Ollama)**. **Added 2026-09-25: check-ins
 (§ K)** — questions that do not block work are queued to a few daily windows,
