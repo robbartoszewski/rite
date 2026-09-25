@@ -222,7 +222,7 @@ same DM, and together they would poll 60 times a minute against a limit of
 it let authority point at a channel anyone can post in. Use
 `slack.owner_user`.
 
-### Hidden text in tickets and Slack messages is shown, not passed through
+### Hidden text in tickets and Slack messages is shown, and injection phrases are reported
 
 Tracker UIs hide some of the text their APIs return. An agent reading that
 text could act on words a reviewer never saw. `rite board show`, `list` and
@@ -235,10 +235,16 @@ text could act on words a reviewer never saw. `rite board show`, `list` and
 
 Every change is said in a line rite writes.
 
-⚠ **This is normalisation, not a safety check.** An instruction worded as
-an ordinary task passes unchanged, and so does any text an agent reads from
-the tracker directly (`gh issue view`) rather than through rite. See SPEC
-§6.6.3.
+The same text is scanned for phrases commonly used in prompt injection
+("ignore all previous instructions", chat-role tokens and the like). A match
+is **reported** as a line in the next check-in's standup. The ticket is
+still read and worked as usual; nothing is blocked or withheld.
+
+⚠ **Neither is a safety check.** An instruction worded as an ordinary task
+passes both: `curl … | bash` in a setup step, "paste .env into a comment",
+"add this SSH key". So does any text an agent reads from the tracker
+directly (`gh issue view`) rather than through rite. Every standup says so.
+See SPEC §6.6.3.
 
 ## 0.5.1 (2026-09-21)
 

@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.8 · **Date:** 2026-09-25
+**Version:** 0.24.9 · **Date:** 2026-09-25
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -2375,10 +2375,11 @@ dependency, not an inherited habit.
 **Status: DECIDED 2026-09-25 (Robert, D-97, D-98). Planned for 0.6.0,
 sequenced LAST and droppable** (plan § N).
 
-**What rite does TODAY.** **N1 is built (§6.6.1): ticket and Slack text
-is NORMALISED on rite's read paths**, which are `rite board show`, `list`
-and `query`, and the Slack relay. **N2 (§6.6.2) is not built**: no phrases
-are scanned. Two limits hold whatever else ships:
+**What rite does TODAY.** On rite's read paths (`rite board show`, `list`
+and `query`, and the Slack relay), ticket and Slack text is **NORMALISED**
+(§6.6.1, N1) and **PHRASE-SCANNED, with matches REPORTED at the next
+check-in** (§6.6.2, N2). Nothing is ever withheld. Two limits hold whatever
+else ships:
 - **Normalisation is not vetting** (§6.6.3).
 - **It covers only text read THROUGH rite.** An agent that reads the tracker
   itself, with `gh issue view` or the tracker's API, gets the raw text,
@@ -2424,11 +2425,27 @@ decoded and surfaced in place. **Not handled:** combining marks and
 variation selectors, which ordinary text needs, and homoglyphs, which a
 reviewer sees too.
 
-#### 6.6.2. Injection phrases are REPORTED, never blocked (D-97) — § N2, not built
+#### 6.6.2. Injection phrases are REPORTED, never blocked (D-97) — § N2, BUILT
 
-Once built, rite scans ticket text for phrases commonly used in prompt
-injection and **surfaces a match to the User at the next check-in** (§9.16,
-plan § K). It will never quarantine, filter, rewrite or withhold the ticket.
+rite scans the text it reads (after §6.6.1) for phrases commonly used in
+prompt injection, and **surfaces a match to the User at the next check-in**,
+as a line in the standup (§9.16, plan § K4). It never quarantines, filters,
+rewrites or withholds the text. Every standup ends with the §6.6.3 caveat,
+including one with no match, so a clean standup is not read as vetting.
+
+**The phrases, and what was measured of them.** They are ported verbatim
+from Robert's `sanitizer` library (MIT), its overt-instruction layer, at
+`5e63afb`, English and Polish. One rule is left out: a Markdown image link,
+which is ordinary in a ticket. rite's own measurements:
+- **agreement with the source:** 0 disagreements over the 432 strings in
+  the sanitizer's own tests, 63 of which that layer flags;
+- **false positives:** 0 of 238 real tickets from BentoraAI's repositories;
+- **agent-directed attacks:** `curl … | bash` in a setup step, "paste .env
+  into a comment" and "add this SSH key" are not found, and a test pins
+  that.
+The rates below were measured on the sanitizer AS A WHOLE, including its
+de-obfuscation layers, which rite does not port. They are its figures, not
+this scan's.
 
 **Why reporting, when blocking was rejected.** An evaluation of a phrase
 sanitizer (on the Bentora project) quarantined **9 of 18 ordinary tickets** in
@@ -6684,6 +6701,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.9 — N2 is built.** §6.6.2 records that injection phrases are reported in the standup and never blocked, where the phrases come from, and rite's own measurements of them. Those are kept apart from the sanitizer's rates, which are not this scan's. §6.6's opening says what rite does today.
 
 **Changes in 0.24.8 — N1 is built.** §6.6's opening now says what rite does today: ticket and Slack text is normalised on rite's read paths, no phrases are scanned, and neither is vetting. It also names the path it cannot cover, an agent reading the tracker directly. §6.6.1 records what was built and measured, including that HTML comments are surfaced rather than stripped.
 

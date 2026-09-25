@@ -3275,11 +3275,14 @@ def _render_tickets(result) -> None:
     hundred rows with nothing after them reads as "this is the board";
     on a busy board it is the first hundred of several hundred, and the
     difference is invisible unless the listing states it."""
+    from rite_ai import phrases
     from rite_ai.normalise import normalise
 
+    root = _find_project_root()
     for ticket in result:
         # N1: a title reads as the tracker shows it. See `rite_ai.normalise`.
         title = normalise(ticket.title)
+        phrases.report(root, f"ticket {ticket.id} (title)", title.text)
         click.echo(f"  {ticket.id}  [{ticket.status}]  {title.text}")
         if title.changed:
             click.echo(f"      {title.note('this title')}")
@@ -3465,6 +3468,13 @@ def board_show(ticket_id: str, role: str) -> None:
     # of it is a safety check (§6.6.3).
     title = normalise(ticket.title)
     body = normalise(ticket.description.strip())
+    # N2: phrases are REPORTED at the next check-in, never blocked. The text
+    # below is printed whole whatever the scan finds.
+    from rite_ai import phrases
+
+    phrases.report(
+        _find_project_root(), f"ticket {ticket.id}", f"{title.text}\n{body.text}"
+    )
     click.echo(f"{ticket.id}  [{ticket.status}]  {title.text}")
     if ticket.labels:
         click.echo(f"labels: {', '.join(ticket.labels)}")
