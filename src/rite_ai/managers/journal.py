@@ -75,7 +75,6 @@ capability is reachable and unannounced to the agent — the same class as
 from __future__ import annotations
 
 import os
-import re
 import string
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -348,9 +347,6 @@ def _field_problem(manager: str, anchor: str, required: dict[str, str]) -> str:
     return ""
 
 
-_ENV_ASSIGNMENT = re.compile(r"\b([A-Z_][A-Z0-9_]*=)([^\s]{8,})")
-
-
 def _redacted(body: str) -> str:
     """The entry with credential-shaped values removed, BY STRUCTURE (C7).
 
@@ -376,11 +372,9 @@ def _redacted(body: str) -> str:
     in a log line, an `Authorization:` header) is not recognised. No list of
     token formats was added for it — a list loses to the next format.
     """
-    from rite_ai.sandbox import redact_secrets
+    from rite_ai.sandbox import redact_assignments
 
-    return _ENV_ASSIGNMENT.sub(
-        lambda m: m.group(1) + "[redacted]", redact_secrets(body)
-    )
+    return redact_assignments(body)
 
 
 def _recorded_from(manager: str) -> str:

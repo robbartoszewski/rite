@@ -197,3 +197,43 @@ class TestTheLastReplyOfARunIsPosted:
         import rite_ai.managers.supervise as sup
 
         assert '"post_replies"' in inspect.getsource(sup.supervise)
+
+
+class TestWhatIsPostedIsRedacted:
+    """A Manager pastes command output into replies, and this posts them where
+    people read — with no Owner, into a channel the whole workspace reads."""
+
+    def test_a_credential_shaped_assignment_is_redacted_in_slack(self, tmp_path):
+        slack = Slack()
+        listener = _started(tmp_path, slack, owner="")
+        path = send(
+            tmp_path, "lead", OUTBOX, "env says GITHUB_TOKEN=ghp_SENTINEL12345 ok"
+        )
+        listener.post_replies(call=slack)
+        posted = slack.posts[-1]["text"]
+        assert "ghp_SENTINEL12345" not in posted
+        assert "GITHUB_TOKEN=[redacted]" in posted
+        # The outbox keeps what was said; only what leaves the machine changes.
+        assert "ghp_SENTINEL12345" in path.read_text()
+
+    def test_the_relays_own_token_is_redacted_wherever_it_appears(self, tmp_path):
+        slack = Slack()
+        listener = _started(tmp_path, slack, owner="")
+        listener.token = "xoxb-not-a-real-token-0000"
+        send(tmp_path, "lead", OUTBOX, "the token is xoxb-not-a-real-token-0000")
+        listener.post_replies(call=slack)
+        assert "xoxb-not-a-real-token-0000" not in slack.posts[-1]["text"]
+
+    def test_an_ordinary_reply_is_untouched(self, tmp_path):
+        slack = Slack()
+        listener = _started(tmp_path, slack, owner="")
+        send(tmp_path, "lead", OUTBOX, "ran with --sessions=3 and PYTHONPATH=src")
+        listener.post_replies(call=slack)
+        assert slack.posts[-1]["text"].endswith("--sessions=3 and PYTHONPATH=src")
+
+    def test_the_token_is_not_in_the_listeners_repr(self):
+        from rite_ai.managers.slack import Listener
+
+        assert "xoxb-secret-value" not in repr(
+            Listener(token="xoxb-secret-value", manager="m")
+        )

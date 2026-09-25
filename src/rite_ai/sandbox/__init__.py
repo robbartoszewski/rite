@@ -1669,6 +1669,30 @@ def redact_secrets(text: str, secrets: Iterable[str] = ()) -> str:
     return text
 
 
+_ENV_ASSIGNMENT = re.compile(r"\b([A-Z_][A-Z0-9_]*=)([^\s]{8,})")
+
+
+def redact_assignments(text: str, secrets: Iterable[str] = ()) -> str:
+    """`redact_secrets`, plus any environment-shaped assignment's value.
+
+    BY STRUCTURE, never by a list of token formats (C7): `UPPER_NAME=value`,
+    quoted or not, `export` or not, with a value of eight characters or more.
+    Upper case is what makes it environment-shaped, so `--sessions=3` and
+    `PYTHONPATH=src` survive and the text stays useful.
+
+    Shared by every path that sends text a Manager wrote somewhere a person
+    reads it — the journal (C7) and the Slack relay (A4) — so the two cannot
+    drift into different rules.
+
+    ⚠ Known hole, stated: a bare token that is neither in an assignment nor
+    one of `secrets` (an `Authorization:` header, a token alone on a line) is
+    not recognised.
+    """
+    return _ENV_ASSIGNMENT.sub(
+        lambda m: m.group(1) + "[redacted]", redact_secrets(text, secrets)
+    )
+
+
 def worker_pane(
     worker: str,
     ansi: bool = False,

@@ -435,8 +435,10 @@ class Listener:
     re-reading the last fifty messages as new ones on every start.
     """
 
-    token: str
-    manager: str
+    token: str = field(repr=False)
+    """⚠ `repr=False`: a dataclass repr prints every field, and a Listener in
+    a traceback or a failing assertion printed the bot token with it."""
+    manager: str = ""
     owner: str = ""
     broadcast: str = ""
     dm: str = ""
@@ -803,10 +805,17 @@ class Listener:
                 else []
             )
         lines: list[str] = []
+        from rite_ai.sandbox import redact_assignments
+
         for message in waiting:
-            sent = _post(
-                target, self.token, f"*{self.manager}*: {message.text}", call=call
-            )
+            # ⚠ REDACTED ON THE WAY OUT. A Manager pastes command output into
+            # its replies, and this posts them where people read — with no
+            # Owner, into a channel the whole workspace reads. Same structural
+            # rule as the journal (C7), plus the one secret the relay holds:
+            # its own token. The outbox file itself is left as written, so
+            # `rite connect` on this machine still sees exactly what was said.
+            text = redact_assignments(message.text, (self.token,))
+            sent = _post(target, self.token, f"*{self.manager}*: {text}", call=call)
             if not sent.ok:
                 # Not marked read, so the next tick retries it — and the ones
                 # after it wait, so replies are never posted out of order.
@@ -819,7 +828,7 @@ class Listener:
             }
             self._save(posted)
             mark_read(self.project, self.manager, OUTBOX, READER, [message])
-            excerpt = " ".join(message.text.split())[:40]
+            excerpt = " ".join(text.split())[:40]
             self.remember(
                 sent.channel,
                 sent.ts,
