@@ -234,10 +234,32 @@ def parse_managers(raw: object) -> ParsedManagers:
                 f"{type(item).__name__}"
             )
             return out
+        from rite_ai.managers import manager_name_problem
+
+        # Refused where a Manager is DECLARED, so `rite doctor` and every
+        # command that reads the config say so, rather than the first write
+        # into `.rite/user/` finding out (C30).
+        bad_name = manager_name_problem(role.name)
+        if bad_name:
+            out.error = f"coordination.managers: {bad_name}"
+            return out
         if role.name in seen:
             # Priority is the order of this list, so a duplicate name makes
             # priority ambiguous — the same reason Phase 2 already refuses one.
             out.error = f"coordination.managers lists {role.name!r} twice"
+            return out
+        folded = role.name.casefold()
+        clash = next((n for n in seen if n.casefold() == folded), "")
+        if clash:
+            # ⚠ Two names differing only in case are ONE directory on a
+            # case-insensitive volume, macOS's default, so these two
+            # Managers would share every file under .rite/ (C30's class).
+            out.error = (
+                f"coordination.managers lists {clash!r} and {role.name!r}, "
+                "which differ only in case — on a case-insensitive disk "
+                "(macOS's default) they are the same directory, so the two "
+                "Managers would overwrite each other's state. Rename one."
+            )
             return out
         seen.add(role.name)
         out.names.append(role.name)

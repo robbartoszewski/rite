@@ -55,14 +55,6 @@ UNCALLED_ON_PURPOSE = {
         "onto bytes on disk, and this is the one function in rite whose "
         "output the kernel enforces."
     ),
-    "profile_path": (
-        "Called by `write_profile` and `why_it_was_refused` in the same "
-        "file. Public because it is the one place rite decides WHERE a "
-        "Manager's profile lives — under `user_dir`, because what a Manager "
-        "may reach on this machine is a local fact and the absolute paths "
-        "inside make it meaningless anywhere else — and the refusal message "
-        "tells a user that path by name."
-    ),
     "requests_dir": (
         "Called by `instructions` and `take_requests` in the same file. "
         "Public because it is the one place rite decides WHERE a Manager "
