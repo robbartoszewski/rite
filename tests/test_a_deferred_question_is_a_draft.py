@@ -12,6 +12,7 @@ it out" is not an answer anybody can check.
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import pytest
@@ -125,7 +126,7 @@ def test_two_queued_one_withdrawn_one_asked(tmp_path, monkeypatch):
     assert "Postgres or SQLite" not in sent.split("Questions held")[-1]
     assert "2 queued, 1 withdrawn by the Manager before asking, 1 asked now" in sent
     assert f"withdrawn {a.id}: answered by docs/adr/0004.md:12 chooses SQLite" in sent
-    assert checkins.queued(root, "lead") == []
+    assert checkins._queued(root, "lead") == []
     assert not checkins._reevaluating(root, "lead")
     assert any("2 queued, 1 withdrawn" in line for line in said), said
 
@@ -153,7 +154,7 @@ def test_all_withdrawn_is_still_a_check_in(tmp_path, monkeypatch):
     )
     [sent] = _outbox(root)
     assert "1 queued, 1 withdrawn by the Manager before asking, 0 asked now" in sent
-    assert "No questions left to ask." in sent
+    assert "Questions held for this check-in" not in sent
 
 
 @pytest.mark.parametrize("kind", ["finished", "quit", "crashed"])
@@ -187,7 +188,7 @@ def test_outside_a_window_nothing_is_re_evaluated(tmp_path, monkeypatch):
     checkins.defer(root, "lead", "rename the flag?", "ticket 14")
     prompts, _ = _drive(monkeypatch, root)
     assert "re-read the questions you deferred" not in prompts[0]
-    assert len(checkins.queued(root, "lead")) == 1
+    assert len(checkins._queued(root, "lead")) == 1
 
 
 # --- the counts -----------------------------------------------------------------------
@@ -204,16 +205,41 @@ def test_early_asks_are_counted_and_named(tmp_path, monkeypatch):
     assert "1 asked early" in sent
 
 
-def test_counts_start_again_after_a_check_in(tmp_path, monkeypatch):
+def _window_opened_at(monkeypatch, opened_at: float) -> None:
+    """Control when the open window opened, so a second window can be made
+    to begin after the first check-in without waiting for a clock."""
+    monkeypatch.setattr(
+        checkins,
+        "windows",
+        lambda _root: checkins.Windows(
+            True, "check-ins: open now", open_now=True, opened_at=opened_at
+        ),
+    )
+
+
+def test_one_check_in_per_window(tmp_path, monkeypatch):
+    """The second boundary in the same window does not check in again."""
     root = _build(tmp_path)
+    _window_opened_at(monkeypatch, time.time() - 60)
     checkins.defer(root, "lead", "first", "ticket 1")
     _drive(monkeypatch, root)
+    _drive(monkeypatch, root)
+    assert len(_outbox(root)) == 1
+
+
+def test_counts_start_again_at_the_next_window(tmp_path, monkeypatch):
+    root = _build(tmp_path)
+    _window_opened_at(monkeypatch, time.time() - 60)
+    checkins.defer(root, "lead", "first", "ticket 1")
+    _drive(monkeypatch, root)
+    time.sleep(0.01)
+    _window_opened_at(monkeypatch, time.time())  # the next window opens
     checkins.defer(root, "lead", "second", "ticket 2")
     _drive(monkeypatch, root)
-    assert (
-        "1 queued, 0 withdrawn by the Manager before asking, 1 asked now"
-        in (_outbox(root)[-1])
-    )
+    sent = _outbox(root)
+    assert len(sent) == 2
+    assert "1 queued, 0 withdrawn by the Manager before asking, 1 asked now" in sent[1]
+    assert "second" in sent[1] and "first" not in sent[1]
 
 
 # --- withdrawing ----------------------------------------------------------------------
@@ -239,7 +265,7 @@ def test_a_withdrawal_with_no_anchor_is_refused_and_the_question_stays(project, 
     result = _withdraw(q.id, "--answered-by", anchor)
     assert result.exit_code == 1
     assert "refusing" in result.output
-    assert [x.id for x in checkins.queued(project, "lead")] == [q.id]
+    assert [x.id for x in checkins._queued(project, "lead")] == [q.id]
 
 
 def test_the_refusal_is_the_journals_floor_not_a_copy(project):
@@ -254,10 +280,8 @@ def test_a_withdrawal_with_an_anchor_removes_it_and_records_why(project):
     q = checkins.defer(project, "lead", "rename the flag?", "ticket 14")
     result = _withdraw(q.id, "--answered-by", "commit abc1234")
     assert result.exit_code == 0, result.output
-    assert checkins.queued(project, "lead") == []
-    [event] = [
-        e for e in checkins._ledger(project, "lead") if e["event"] == "withdrawn"
-    ]
+    assert checkins._queued(project, "lead") == []
+    [event] = [e for e in checkins.ledger(project, "lead") if e["event"] == "withdrawn"]
     assert event["answered_by"] == "commit abc1234"
 
 

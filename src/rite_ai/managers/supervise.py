@@ -380,8 +380,12 @@ def _say_refusals(
     engine: str = "",
     agent: str = "",
     pane: str = "",
-) -> None:
+) -> list[str]:
     """Tell the user what the engine refused, and how to permit it.
+
+    Returns what was refused, as the standup records it (plan § K4): each
+    refused command, or one whole-session line for an engine that refuses
+    whole sessions.
 
     ⚠ **Break 4 of B4b: this read CLAUDE's transcripts for every engine.**
     `refused_commands` scans Claude Code's transcript directory, which Goose
@@ -434,8 +438,10 @@ def _say_refusals(
                 f"config, or the environment on a path that bypasses the "
                 f"launch."
             )
-        return
-    for command in dict.fromkeys(refused_commands(root, since)):
+            return ["the whole session (it wanted an approval)"]
+        return []
+    refused = list(dict.fromkeys(refused_commands(root, since)))
+    for command in refused:
         if allowed(command):
             say(
                 f"refused: {command.strip()!r} — which rite's own allowlist "
@@ -447,6 +453,7 @@ def _say_refusals(
             )
         else:
             say(refusal(command, root))
+    return [c.strip() for c in refused]
 
 
 def _resume_id_source(engine: str, agent: str = ""):
@@ -672,6 +679,10 @@ def supervise(
     for limit in limitations():
         say(f"  - {limit}")
 
+    # ⚠ K6: no daemon, so a window that passed while nothing ran posted
+    # nothing. What is waiting, and when it will be asked, is said here.
+    say(checkins.start_line(root, manager))
+
     cycles: list[Cycle] = []
     live = ""
 
@@ -763,14 +774,12 @@ def supervise(
 
         if callable(verdict):
             answer = verdict(root)
-            if answer == "idle":
-                # ⚠ THE SAFETY NET (plan § K2). A Manager with nothing left
-                # to do was waiting on something, so a deferral was wrong:
-                # what it held for the check-in is asked now, and said.
-                said = checkins.idle_with_questions_queued(root, manager)
-                if said:
-                    say(said)
             if answer in STOP_VERDICTS:
+                # ⚠ Before stopping: a check-in due in this window goes out
+                # rather than being skipped, and idle with questions queued
+                # means a deferral was wrong, so they are asked now (K2).
+                for said in checkins.before_stopping(root, manager, answer):
+                    say(said)
                 return SuperviseResult(
                     True,
                     _why(answer, len(cycles)),
@@ -1027,11 +1036,9 @@ def supervise(
                 time.sleep(poll)
             cycle.ended_at = clock()
             cycle.attended = attended
-            # Whatever the ending: a re-evaluation's survivors are asked now.
-            said = checkins.after_cycle(root, manager)
-            if said:
-                say(said)
-            _say_refusals(root, cycle.started_at, say, engine, agent, live_pane)
+            refused = _say_refusals(
+                root, cycle.started_at, say, engine, agent, live_pane
+            )
             _honour_worker_requests(root, manager, broker, say)
             _say_if_the_sandbox_refused(root, manager, live_pane, say)
 
@@ -1046,6 +1053,40 @@ def supervise(
             observed = next_id(root, manager, cycle.started_at)
             if observed:
                 designate(root, manager, observed)
+            # ⚠ RECORDED, for the standup (plan § K4): each cycle, how it
+            # ended, and what the engine refused in it — with the session id
+            # a reader can open. Printed lines are gone by the check-in.
+            checkins.record(
+                root,
+                manager,
+                {
+                    "event": "cycle",
+                    "at": cycle.ended_at,
+                    "number": cycle.number,
+                    "session": observed or cycle.session,
+                    "started_at": cycle.started_at,
+                    "ending": how.kind,
+                },
+            )
+            for command in refused:
+                checkins.record(
+                    root,
+                    manager,
+                    {
+                        "event": "refusal",
+                        "at": cycle.ended_at,
+                        "number": cycle.number,
+                        "session": observed or cycle.session,
+                        "command": command,
+                    },
+                )
+            # A check-in prepared at this cycle's boundary goes out now,
+            # whatever the ending, AFTER this cycle is recorded so its
+            # standup includes it. A crash is not a reason to leave the User
+            # unasked.
+            said = checkins.after_cycle(root, manager)
+            if said:
+                say(said)
 
             if not how.resume:
                 return SuperviseResult(

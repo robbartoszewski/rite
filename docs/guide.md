@@ -283,6 +283,55 @@ Deferred questions since the last check-in: 2 queued, 1 withdrawn by the Manager
   withdrawn q5f9f54: answered by docs/adr/0004-storage.md:12 chooses SQLite
 ```
 
+**When no Manager is running, nothing is posted.** There is no daemon, so a
+window that passes while nothing runs goes by in silence. What was deferred
+stays queued, and the next `rite start` says so before its first session:
+
+```text
+check-ins: 1 deferred question(s) waiting for 'lead'; next at Fri 21:45 (in 5m) (schedule in Europe/Warsaw (machine local)); the last check-in went out Fri 21:35, and the next standup covers everything since
+```
+
+The next check-in's standup starts from the last check-in actually
+delivered, so the gap is reported, not lost.
+
+### The standup each check-in opens with
+
+At the first cycle boundary inside a window, a check-in is prepared, and it
+goes out as one message when that cycle ends: the standup, the deferral
+counts, and the questions that survived. A run that stops on its loop's
+verdict inside a window sends its check-in instead of skipping it.
+
+⚠ **The standup carries anchors, not prose.** rite composes it from what it
+recorded, and every line names something you can check:
+
+```text
+Observed by rite:
+- commit a6e0d8f Add the notes the Worker will need
+- Worker alpha started in sandbox rite-k4proj-a26a8d-alpha, ticket T-1 (Fri 21:34)
+- sandbox rite-k4proj-a26a8d-alpha: active at this check-in (`yoloai ls`)
+- cycle 1, session rite-mgr-k4proj-a26a8d-lead: finished (Fri 21:35–Fri 21:35)
+
+Stated by the Manager — rite did not verify these:
+- the notes the Worker needs are in NOTES.md [anchor: a6e0d8f]
+```
+
+What rite records, and where it records it:
+
+- commits: from `git log --all --since`. Work a Worker pushed and this
+  checkout never fetched is not seen.
+- Worker sandbox starts, stops and destroys: `.rite/events.jsonl`, written
+  when `yoloai` reports success.
+- board moves made through `rite board move`, with the column the ticket
+  actually landed in: also `.rite/events.jsonl`.
+- each Manager cycle, how it ended, and what the engine refused: the
+  Manager's own `checkins/ledger.jsonl`.
+
+A Manager adds lines only through
+`rite checkin note --anchor <SHA, file:line, ticket, sandbox> --observed "<what was seen>"`.
+**A note with no anchor is refused**, and a note is shown as the Manager's
+statement, never as something rite observed. The first check-in ever covers
+the previous 24 hours and says so.
+
 ## What runs on its own
 
 Nothing rite runs unattended starts a Claude session.
@@ -658,6 +707,15 @@ in the terminal saying how many arrived while it was stopped. Each run posts
 a line when it starts and another when it stops, so the last thing in your
 DM tells you whether anything is listening. The one exception is a
 `rite start` that is killed outright: it cannot post its stop line.
+
+**A check-in goes to your DM, and is mirrored to the broadcast channel.**
+The standup and the questions that survived are one message. It is posted
+in your DM, where a reply in its thread reaches the Manager as an
+instruction answering that check-in. A copy goes to the broadcast channel
+for everyone else to read, and replies under the copy reach the Manager as
+context, whoever types them. With no `owner_user`, the check-in is posted to
+the broadcast channel only, and says that answers there cannot instruct:
+answer with `rite message <manager> "…"` instead.
 
 **The first run does not replay history.** Turning Slack on starts reading
 from that run's start line, and replies already in the mailbox stay in

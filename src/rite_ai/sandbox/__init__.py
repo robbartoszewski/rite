@@ -1061,6 +1061,7 @@ def start_worker(
     env: dict[str, str] | None = None,
     allow_dirty: bool = False,
     prompt: str | None = None,
+    ticket: str = "",
 ) -> SandboxResult:
     """Launch a Worker's session inside a fresh sandbox, mounted on that
     Worker's own workspace directory (`workers/<worker>/`, §2.1's
@@ -1311,6 +1312,11 @@ def start_worker(
                 "again)"
             )
         return SandboxResult(False, f"yoloai new failed: {detail}")
+    # Recorded where rite SAW it start: `yoloai new` exited 0. The standup
+    # cites this line (plan § K4), so it carries the name a reader checks.
+    from rite_ai.reporting import events
+
+    events.record(root, "sandbox-started", worker=worker, sandbox=name, ticket=ticket)
     lines = [
         f"sandbox '{name}' started",
         f"  watch or step in: yoloai attach {name}",
@@ -1543,6 +1549,10 @@ def stop_worker(
         return SandboxResult(False, "yoloai stop timed out after 120s")
     if proc.returncode != 0:
         return SandboxResult(False, proc.stderr.strip() or proc.stdout.strip())
+    from rite_ai.reporting import events
+
+    if root is not None:
+        events.record(Path(root), "sandbox-stopped", worker=worker, sandbox=name)
     message = f"sandbox '{name}' stopped"
     at_risk = _work_only_in_sandbox(name, worker, root)
     if at_risk:
@@ -1589,6 +1599,10 @@ def destroy_worker(
         return SandboxResult(False, "yoloai destroy timed out after 120s")
     if proc.returncode != 0:
         return SandboxResult(False, proc.stderr.strip() or proc.stdout.strip())
+    from rite_ai.reporting import events
+
+    if root is not None:
+        events.record(Path(root), "sandbox-destroyed", worker=worker, sandbox=name)
     return SandboxResult(True, f"sandbox '{name}' destroyed")
 
 

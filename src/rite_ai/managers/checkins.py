@@ -101,7 +101,7 @@ def defer(root: Path, manager: str, text: str, meanwhile: str) -> Question:
     return Question(qid, text, meanwhile, queued_at, path)
 
 
-def queued(root: Path, manager: str) -> list[Question]:
+def _queued(root: Path, manager: str) -> list[Question]:
     """Every question waiting, in the order it was deferred.
 
     ⚠ **A file that will not parse is still a question somebody deferred.**
@@ -152,7 +152,7 @@ def record(root: Path, manager: str, event: dict) -> None:
         os.close(fd)
 
 
-def _ledger(root: Path, manager: str) -> list[dict]:
+def ledger(root: Path, manager: str) -> list[dict]:
     """Every recorded event, oldest first. Unreadable lines are skipped."""
     path = _checkins_dir(root, manager) / LEDGER_FILENAME
     try:
@@ -211,14 +211,14 @@ def ask_now(
     return path
 
 
-def idle_with_questions_queued(root: Path, manager: str) -> str:
+def _idle_with_questions_queued(root: Path, manager: str) -> str:
     """The safety net: the loop went idle while questions were queued.
 
     A Manager with nothing left to do was, by that fact, waiting on
     something, so at least one deferral was wrong. Everything queued is
     asked now. Returns the line to say, or "" when nothing was queued.
     """
-    waiting = queued(root, manager)
+    waiting = _queued(root, manager)
     if not waiting:
         return ""
     ask_now(
@@ -250,6 +250,9 @@ class Windows:
     usable: bool
     line: str
     open_now: bool = False
+    opened_at: float = 0.0
+    """When the open window opened (epoch seconds), to the minute. A check-in
+    is due when the last one delivered is older than this."""
 
 
 def windows(root: Path) -> Windows:
@@ -264,13 +267,29 @@ def windows(root: Path) -> Windows:
             f"check-ins: unknown — config.yaml did not parse ({config.message}); "
             "a deferred question is asked at once",
         )
-    moment = current_moment(config.schedule.timezone)
+    from datetime import datetime, timedelta
+
+    from rite_ai.schedule import minutes_open
+
+    now = datetime.now().astimezone()
+    moment = current_moment(config.schedule.timezone, now)
     when = next_checkin(config.checkins, moment)
+    opened_at = 0.0
+    back = minutes_open(config.checkins, moment)
+    if back is not None:
+        floor = now.replace(second=0, microsecond=0)
+        opened_at = (floor - timedelta(minutes=back)).timestamp()
     return Windows(
         when.open_now or bool(when.starts),
         describe_checkins(config.checkins, moment),
         open_now=when.open_now,
+        opened_at=opened_at,
     )
+
+
+def checkin_done_this_window(root: Path, manager: str, state: Windows) -> bool:
+    """Has the open window's check-in already been delivered?"""
+    return state.open_now and _last_checkin(root, manager) >= state.opened_at
 
 
 REEVALUATING_FILENAME = "reevaluating.json"
@@ -318,34 +337,119 @@ class Boundary:
 def at_boundary(root: Path, manager: str) -> Boundary:
     """Called at EVERY cycle boundary, before the cycle is launched.
 
-    ⚠ **THE QUEUE IS A DRAFT.** Inside a window with questions queued, they
-    are not asked yet. This cycle's instruction carries them, with one
-    directive: withdraw any you can now answer. What survives is asked when
-    the cycle ends (`after_cycle`). A question queued at 10:00 may have been
+    At the first boundary inside a window whose check-in is due, the
+    check-in is PREPARED here and DELIVERED when this cycle ends
+    (`after_cycle`), so the standup includes this cycle and whatever the
+    Manager noted in it.
+
+    ⚠ **THE QUEUE IS A DRAFT.** With questions queued, they are not asked
+    yet: this cycle's instruction carries them, with one directive, withdraw
+    any you can now answer. A question queued at 10:00 may have been
     answered by the Manager itself by 14:00, and an orchestrator's
     asked-then-retracted churn should never reach the User.
 
-    A marker left by a re-evaluation that was never delivered (a run killed
-    mid-cycle) is delivered here, at once, rather than re-evaluated again:
-    the Manager has already had its chance to withdraw.
+    A marker left by a check-in that was never delivered (a run killed
+    mid-cycle) is delivered here, at once: the Manager has had its chance.
     """
     if _reevaluating(root, manager):
-        said = _deliver_checkin(root, manager)
-        return Boundary(said=said)
-    waiting = queued(root, manager)
-    if not waiting or not windows(root).open_now:
+        return Boundary(said=_deliver_checkin(root, manager))
+    state = windows(root)
+    if not state.open_now or checkin_done_this_window(root, manager, state):
         return Boundary()
+    waiting = _queued(root, manager)
     write_atomic(
         _reevaluating_path(root, manager),
         json.dumps({"ids": [q.id for q in waiting], "at": time.time()}) + "\n",
     )
-    return Boundary(
-        instruction=_reevaluation_instruction(root, manager, waiting),
-        said=(
+    instruction = _standup_instruction(root, manager)
+    if waiting:
+        instruction += _reevaluation_instruction(root, manager, waiting)
+        said = (
             f"check-in: {len(waiting)} deferred question(s) go to {manager!r} "
-            "to re-read first; what it does not withdraw is asked when this "
-            "session ends"
-        ),
+            "to re-read first; the check-in goes out when this session ends"
+        )
+    else:
+        said = "check-in: due in this window; it goes out when this session ends"
+    return Boundary(instruction=instruction, said=said)
+
+
+def before_stopping(root: Path, manager: str, verdict: str) -> list[str]:
+    """The run is about to stop on the loop's verdict, at a boundary.
+
+    ⚠ **A check-in due in this window is delivered, not skipped.** No cycle
+    will run to deliver it, and a Manager with nothing to do is exactly when
+    the User should hear what happened. Its standup and every queued
+    question go out.
+
+    Otherwise, THE SAFETY NET: idle with questions queued means a deferral
+    was wrong, so they are asked now and that is said.
+    """
+    state = windows(root)
+    if _reevaluating(root, manager) or (
+        state.open_now and not checkin_done_this_window(root, manager, state)
+    ):
+        return [_deliver_checkin(root, manager)]
+    if verdict == "idle":
+        said = _idle_with_questions_queued(root, manager)
+        return [said] if said else []
+    return []
+
+
+def start_line(root: Path, manager: str) -> str:
+    """What `rite start` says about check-ins, before the first cycle (K6).
+
+    ⚠ **There is no daemon** (A5, Decision 2), so a window that passes with
+    no Manager running posts nothing. The queue persists on disk, and this
+    line is where the User learns what is waiting and when it will be
+    asked. The next check-in's standup covers everything since the last one
+    actually DELIVERED, so the gap is reported rather than lost.
+    """
+    waiting = _queued(root, manager)
+    state = windows(root)
+    last = _last_checkin(root, manager)
+    went = time.strftime("%a %H:%M", time.localtime(last))
+    since = (
+        f"; the last check-in went out {went}, and the next standup covers "
+        "everything since"
+        if last
+        else ""
+    )
+    held = f"{len(waiting)} deferred question(s) waiting for {manager!r}"
+    if not state.usable:
+        tail = "they are asked at once" if waiting else "a deferral is asked at once"
+        return f"check-ins: {held} — {state.line.removeprefix('check-ins: ')}; {tail}"
+    when = state.line.removeprefix("check-ins: ")
+    if state.open_now and not checkin_done_this_window(root, manager, state):
+        return (
+            f"check-ins: {held}; a window is {when}, so the check-in goes out "
+            f"when this run's first session ends{since}"
+        )
+    return f"check-ins: {held}; {when}{since}"
+
+
+def _standup_instruction(root: Path, manager: str) -> str:
+    """What the check-in cycle is told about the standup."""
+    from rite_ai import own_command
+
+    rite = own_command()
+    return "\n".join(
+        [
+            "",
+            "",
+            "## Check-in: a standup goes to the User when this session ends",
+            "",
+            "rite composes it from what it observed: commits, Worker sandboxes, "
+            "board moves, your cycles and what the engine refused. If there is "
+            "something the User should know that rite cannot see, state it "
+            "with what makes it checkable:",
+            f'  {rite} checkin note --manager {manager} --anchor "<SHA, '
+            'file:line, ticket id, sandbox name>" --observed "<what you saw>"',
+            'A note without an anchor is refused. "Landed abc1234; observed a '
+            'Worker authenticate" is a note; "sorted out the Worker problem" '
+            "is not. Your notes are shown as stated by you, not as observed by "
+            "rite.",
+            "",
+        ]
     )
 
 
@@ -406,7 +510,7 @@ def withdraw(root: Path, manager: str, qid: str, answered_by: str) -> str:
     )
     if problem:
         return problem
-    for q in queued(root, manager):
+    for q in _queued(root, manager):
         if q.id == qid:
             record(
                 root,
@@ -423,10 +527,44 @@ def withdraw(root: Path, manager: str, qid: str, answered_by: str) -> str:
             except FileNotFoundError:
                 pass
             return ""
-    waiting = ", ".join(q.id for q in queued(root, manager)) or "none"
+    waiting = ", ".join(q.id for q in _queued(root, manager)) or "none"
     return (
         f"no queued question {qid!r} for {manager!r} — it may already have "
         f"been asked. Queued now: {waiting}"
+    )
+
+
+def note(root: Path, manager: str, anchor: str, observed: str) -> str:
+    """Record a line the Manager states for the next standup.
+
+    Returns a refusal, or "". ⚠ **A note with no anchor is refused**, through
+    the journal's floor: "Landed abc1234; observed a Worker authenticate"
+    passes, "sorted out the Worker problem" does not. The standup labels it
+    as the Manager's statement, apart from what rite observed."""
+    from rite_ai.managers.journal import _is_blank, anchor_problem
+
+    problem = anchor_problem(anchor, "add a standup note", "a standup line", "no line")
+    if problem:
+        return problem
+    if _is_blank(observed):
+        return (
+            "refusing a standup note with no --observed: an anchor with "
+            "nothing said about it is a pointer to nothing. Say what was "
+            'SEEN there, e.g. --observed "a Worker authenticated".'
+        )
+    record(
+        root,
+        manager,
+        {"event": "note", "at": time.time(), "anchor": anchor, "observed": observed},
+    )
+    return ""
+
+
+def is_checkin(root: Path, manager: str, outbox_name: str) -> bool:
+    """Was this outbox file a check-in? Read from the ledger, not the text."""
+    return any(
+        e.get("event") == "checkin" and e.get("outbox") == outbox_name
+        for e in ledger(root, manager)
     )
 
 
@@ -459,7 +597,7 @@ class Counts:
 def _counts_since(root: Path, manager: str, since: float, asking: int) -> Counts:
     """Count the ledger since `since`. `asking` is how many are being asked
     at this check-in, which have no `asked` event yet."""
-    events = [e for e in _ledger(root, manager) if float(e.get("at") or 0) > since]
+    events = [e for e in ledger(root, manager) if float(e.get("at") or 0) > since]
     return Counts(
         queued=sum(1 for e in events if e.get("event") == "queued"),
         withdrawn=sum(1 for e in events if e.get("event") == "withdrawn"),
@@ -473,31 +611,38 @@ def _counts_since(root: Path, manager: str, since: float, asking: int) -> Counts
 def _deliver_checkin(root: Path, manager: str) -> str:
     """Ask what survived the re-evaluation, as one message, with the counts.
 
+    ONE message: the standup, the deferral counts and the questions that
+    survived, so every reader of the outbox (`rite replies`, the Slack relay)
+    carries the whole check-in.
+
     ⚠ **A check-in where every question was withdrawn is still delivered.**
     Its message is the count, and it is the evidence that the filter
     filtered.
     """
+    from rite_ai.managers import standup
     from rite_ai.managers.mailbox import OUTBOX, send
 
-    survivors = queued(root, manager)
+    survivors = _queued(root, manager)
     since = _last_checkin(root, manager)
     counts = _counts_since(root, manager, since, len(survivors))
     withdrawn = [
         e
-        for e in _ledger(root, manager)
+        for e in ledger(root, manager)
         if e.get("event") == "withdrawn" and float(e.get("at") or 0) > since
     ]
-    lines = [f"Check-in — {manager}", "", counts.line()]
+    ledger_path = (_checkins_dir(root, manager) / LEDGER_FILENAME).relative_to(root)
+    lines = [f"Check-in — {manager}", "", *standup.digest(root, manager, since)]
+    lines += ["", "Deferred questions:", f"- {counts.line()} (ledger: {ledger_path})"]
     for e in withdrawn:
-        lines.append(f"  withdrawn {e.get('id')}: answered by {e.get('answered_by')}")
-    lines.append("")
+        lines.append(f"- withdrawn {e.get('id')}: answered by {e.get('answered_by')}")
     if survivors:
-        lines.append("Questions held for this check-in:")
-        lines.extend(_question_lines(survivors))
-    else:
-        lines.append("No questions left to ask.")
-    send(root, manager, OUTBOX, "\n".join(lines))
+        lines += ["", "Questions held for this check-in:", *_question_lines(survivors)]
+    path = send(root, manager, OUTBOX, "\n".join(lines))
     now = time.time()
+    # Which outbox file IS a check-in, kept here rather than in the message
+    # (which stays identity-free, Decision 1a): the Slack relay roots the
+    # answer thread on it and mirrors it to the broadcast channel (K5).
+    record(root, manager, {"event": "checkin", "at": now, "outbox": path.name})
     for q in survivors:
         record(
             root, manager, {"event": "asked", "id": q.id, "at": now, "how": "checkin"}

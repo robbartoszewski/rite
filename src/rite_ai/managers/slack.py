@@ -838,6 +838,7 @@ class Listener:
                 else []
             )
         lines: list[str] = []
+        from rite_ai.managers.checkins import is_checkin
         from rite_ai.sandbox import redact_assignments
 
         for message in waiting:
@@ -848,6 +849,17 @@ class Listener:
             # its own token. The outbox file itself is left as written, so
             # `rite connect` on this machine still sees exactly what was said.
             text = redact_assignments(message.text, (self.token,))
+            checkin = is_checkin(self.project, self.manager, message.path.name)
+            if checkin and not self.dm:
+                # ⚠ No Owner, so no command channel: an answer typed in
+                # Slack reaches the Manager as context only. Said where the
+                # questions are, not left to be discovered (D-95).
+                text += (
+                    "\n\n_No Owner DM is configured (slack.owner_user), so a "
+                    "reply here reaches the Manager as context, not as an "
+                    f"answer it acts on. Answer with `rite message {self.manager} "
+                    '"…"` on this machine._'
+                )
             sent = _post(target, self.token, f"*{self.manager}*: {text}", call=call)
             if not sent.ok:
                 # Not marked read, so the next tick retries it — and the ones
@@ -859,17 +871,50 @@ class Listener:
                 "ts": sent.ts,
                 "posted_at": self.clock(),
             }
-            self._save(posted)
-            mark_read(self.project, self.manager, OUTBOX, READER, [message])
-            excerpt = " ".join(text.split())[:40]
-            self.remember(
-                sent.channel,
-                sent.ts,
-                self._label(f'reply "{excerpt}"', sent),
+            label = (
+                self._label("check-in", sent)
+                if checkin
+                else self._label(f'reply "{" ".join(text.split())[:40]}"', sent)
             )
+            self.remember(sent.channel, sent.ts, label)
             lines.append(
                 f"slack: posted {message.path.name} → {sent.channel} ts {sent.ts}"
             )
+            if checkin and self.dm and self.broadcast_id:
+                # ⚠ THE MIRROR (K5, D-94/D-95). The check-in's answer thread
+                # is rooted in the Owner's DM, the command channel, because
+                # an answer to a queued question is an instruction. The
+                # broadcast copy is for everyone else to read, and a reply
+                # under it reaches the Manager as context — the relay's
+                # header says so, whoever typed it.
+                mirror = _post(
+                    self.broadcast_id,
+                    self.token,
+                    f"*{self.manager}* (check-in, mirrored from the Owner's DM; "
+                    f"replies here are read as context): {text}",
+                    call=call,
+                )
+                if mirror.ok:
+                    posted[message.path.name]["mirror"] = {
+                        "channel": mirror.channel,
+                        "ts": mirror.ts,
+                    }
+                    self.remember(
+                        mirror.channel,
+                        mirror.ts,
+                        self._label("check-in (broadcast mirror)", mirror),
+                    )
+                    lines.append(
+                        f"slack: mirrored the check-in → {mirror.channel} ts "
+                        f"{mirror.ts}"
+                    )
+                else:
+                    # The DM copy went out, which is the one that matters for
+                    # answers; the mirror failing is said, not retried into a
+                    # duplicate DM post.
+                    self._problem(f"cannot mirror the check-in: {mirror.problem}")
+            self._save(posted)
+            mark_read(self.project, self.manager, OUTBOX, READER, [message])
         return lines
 
     def drain(self, *, call=None) -> tuple[str, ...]:
