@@ -157,7 +157,19 @@ HANDLED = (A_EXECUTE | A_WRITE_FILE | A_READ_FILE | A_READ_DIR
            | A_REMOVE_DIR | A_REMOVE_FILE | A_MAKE_REG | A_MAKE_DIR | A_MAKE_SOCK)
 READ_ONLY = A_EXECUTE | A_READ_FILE | A_READ_DIR
 
-libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6", use_errno=True)
+# Loaded by soname first. ctypes.util.find_library() shells out to gcc/ld
+# and needs a writable temp dir, which a confined process may not have — it
+# raises FileNotFoundError inside a boundary that denies $TMPDIR.
+def _libc():
+    for cand in ("libc.so.6", "libc.so", None):
+        try:
+            return ctypes.CDLL(cand or ctypes.util.find_library("c"), use_errno=True)
+        except Exception:
+            continue
+    raise OSError("could not load libc")
+
+
+libc = _libc()
 libc.syscall.restype = ctypes.c_long
 
 

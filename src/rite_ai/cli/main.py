@@ -961,6 +961,18 @@ def _doctor_report(problems: list[str]) -> None:
                     "run one here — `rite loop run` still works in a terminal "
                     "you leave open"
                 )
+                # ⚠ The line above is about the loop only, and on its own it
+                # reads as "tmux is optional". It is not: `managers/session.py`
+                # and `pool/__init__.py` each run every session in a tmux pane
+                # and return "tmux not found" without one. Measured on a fresh
+                # Ubuntu 24.04 image with no tmux — doctor reported nothing
+                # wrong beyond the loop line, and the absence surfaced later as
+                # a Manager that would not start.
+                click.echo(
+                    "tmux: not installed — Managers and the coordinator pool "
+                    "need it as well. Each runs its session in a tmux pane, so "
+                    "neither can start here until tmux is installed"
+                )
             else:
                 live = loop_status(root)
                 if live.unknown:
