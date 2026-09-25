@@ -239,3 +239,32 @@ questions above that belong to Robert:
 2. Is the "no daemon" requirement about **hosting** — in which case Socket
    Mode qualifies — or about **holding a connection open**, in which case it
    does not?
+
+---
+
+## Threading and mention mechanics — measured 2026-09-25
+
+A3 asked for  to be measured rather than assumed.
+Measured, against `rite-ai.slack.com` / `#all-rite`:
+
+| question | answer | evidence |
+|---|---|---|
+| does `conversations.replies` need a new scope? | **no** — `channels:history` suffices | `ok=True`, 2 messages returned |
+| does posting into a thread need one? | **no** — `chat:write` plus `thread_ts` | reply posted, `thread_ts` echoed |
+| can rite learn its own bot id for mention detection? | **yes, free** — `auth.test` needs no scope | returned `U0C49FPUP8B` |
+| does `conversations.history` include thread replies? | ⚠ **NO** | the reply's `ts` was absent from history; the root carried `reply_count: 1` |
+
+⚠ **The last row is the one that shapes the work.** Polling
+`conversations.history` alone makes every reply to a status update
+invisible. A threading relay must also poll `conversations.replies` for each
+recent thread root — **one call per active thread per tick**, not one call.
+Both methods are Tier 3 (50+/min) for an internal customer-built app, and
+being separate methods they plausibly have separate buckets, which would give
+more headroom than polling one method twice; **that separation is inference,
+not measured, and should not be relied on for a rate budget.**
+
+⚠ **And the distinction to keep sharp:** `@rite` answers *is this addressed
+to rite*. It does not answer *who may command rite* — anyone in the workspace
+can type it. Authority comes from the channel (SPEC §9.16.2, D-95). A mention
+is a noise filter, and describing it as an access control would be wrong in
+the direction that matters for an insider threat.

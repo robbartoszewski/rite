@@ -229,3 +229,33 @@ class TestASystemEventIsNotAnInstruction:
             "user": "U1",
         }
         assert _hear("C1", "t", call=_reply([plain])).texts == ("do RT-14 first",)
+
+
+class TestAReplyCanCarryAThreadRoot:
+    """⚠ SHAPE, not a feature — nothing passes a thread yet. Measured
+    2026-09-25: posting into a thread needs no scope beyond `chat:write`, only
+    a `thread_ts`. The parameter exists so A4 can record roots without this
+    signature changing under a caller."""
+
+    def test_a_thread_root_becomes_thread_ts(self):
+        sent = []
+        say(
+            "C1",
+            "t",
+            "hello",
+            thread="123.456",
+            call=lambda m, tok, p, pay: sent.append(pay) or {"ok": True},
+        )
+        assert sent[0]["thread_ts"] == "123.456"
+
+    def test_no_thread_root_sends_no_thread_ts(self):
+        """A key Slack does not expect must not appear at all — an empty
+        `thread_ts` is not the same as its absence."""
+        sent = []
+        say(
+            "C1",
+            "t",
+            "hello",
+            call=lambda m, tok, p, pay: sent.append(pay) or {"ok": True},
+        )
+        assert "thread_ts" not in sent[0]

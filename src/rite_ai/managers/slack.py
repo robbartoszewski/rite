@@ -16,10 +16,32 @@ authorisation property rather than tidiness.** Instructions are read ONLY from
 posts status, then everyone who can post in a team channel could direct it.
 `broadcast_channel` is write-only from rite's side.
 
-⚠ **Two scopes, and `channels:read` is NOT one of them.** `channels:history`
-to read a public channel and `chat:write` to post. Reading a DM needs one
-more, `im:history` — measured, Slack names it exactly. Posting a DM needs
-nothing extra: `chat.postMessage` to a user id returns the `D…` channel.
+⚠ **Two scopes for a PUBLIC CHANNEL, and `channels:read` is NOT one of
+them.** `channels:history` to read and `chat:write` to post. The claim is
+scoped to that case deliberately, because the DM is a different one. All
+measured 2026-09-25:
+
+* **reading the Owner's DM needs `im:history`** — Slack names exactly that
+  scope and nothing else;
+* **posting a DM needs nothing extra** — `chat.postMessage` to a user id
+  returns the `D…` channel;
+* **reading a thread needs nothing extra** — `conversations.replies` works on
+  `channels:history`;
+* **`auth.test` needs no scope at all**, so rite can learn its own bot id, and
+  therefore which `<@U…>` mention to look for, for free.
+
+⚠ **BUT `conversations.history` DOES NOT RETURN THREAD REPLIES. MEASURED.** A
+reply posted into a thread did not appear in the channel's history at all; the
+thread ROOT carried `reply_count: 1` instead. So polling history alone makes
+**every reply to a status update invisible**, and a threading relay has to
+poll `conversations.replies` for each recent root as well — **one call per
+active thread per tick**, not one call.
+
+⚠ **AND A DISTINCTION THAT MUST NOT BLUR.** `@rite` decides whether a message
+is ADDRESSED to rite. It does not decide WHO MAY COMMAND IT — anyone in the
+workspace can type it. Authority comes from the channel (SPEC §9.16.2, D-95):
+the Owner's DM, or the local machine. A mention is a noise filter and must
+never be written up as an access control.
 
 ⚠ **The token is read from the environment and never handled.** It goes in an
 Authorization header and is never logged, never written, and never on an
@@ -133,20 +155,29 @@ def _hear(channel: str, token: str, *, since: str = "", call=None) -> Heard:
     return Heard(texts=tuple(texts), newest=newest)
 
 
-def say(channel: str, token: str, text: str, *, call=None) -> str:
+def say(channel: str, token: str, text: str, *, thread: str = "", call=None) -> str:
     """Post `text`. Returns "" on success or a problem to report.
 
     Write-only from rite's side: nothing is read back from here, so this may
     be a channel a whole team can post in without any of them being able to
     direct the Manager.
+
+    ⚠ **`thread` is SHAPE, not a feature — nothing passes it yet.** Robert's
+    threading design has the User reply in the thread of a status update, so a
+    thread root becomes a correlation id rite gets for free rather than
+    inventing one: a reply under a specific update is unambiguously about that
+    update. Measured 2026-09-25 — posting into a thread needs no scope beyond
+    `chat:write`, only a `thread_ts`. The parameter exists so A4 can record
+    roots without this signature changing under a caller.
     """
     if not channel or not token or not text.strip():
         return ""
     caller = call or _call
+    payload = {"channel": channel, "text": text}
+    if thread:
+        payload["thread_ts"] = thread
     try:
-        got = caller(
-            "chat.postMessage", token, None, {"channel": channel, "text": text}
-        )
+        got = caller("chat.postMessage", token, None, payload)
     except Exception as e:  # noqa: BLE001
         return f"{type(e).__name__}: {e}"
     return "" if got.get("ok") else f"slack refused the post: {got.get('error')}"
