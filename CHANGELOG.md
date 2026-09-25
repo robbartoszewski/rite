@@ -175,6 +175,14 @@ an anchor is refused. What survives is asked, and every check-in counts
 queued, withdrawn and asked, so whether deferral filters anything is
 measured.
 
+Each check-in opens with a standup composed by rite from what it recorded:
+commits, Worker sandbox starts and stops, `rite board move`, each Manager
+cycle and what the engine refused. Every line names a SHA, a sandbox, a
+ticket, a session or a command. A Manager adds lines only with
+`rite checkin note --anchor <x> --observed "<what was seen>"`, which is
+refused without an anchor and shown as the Manager's statement, not as
+rite's observation.
+
 ## 0.5.1 (2026-09-21)
 
 ### Talk to a running Manager — `rite connect <manager>`

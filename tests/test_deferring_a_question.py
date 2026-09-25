@@ -93,7 +93,7 @@ def test_ask_without_defer_asks_now(project):
     result = _ask("which schema?")
     assert result.exit_code == 0, result.output
     assert _outbox(root) == ["which schema?"]
-    assert checkins.queued(root, "lead") == []
+    assert checkins._queued(root, "lead") == []
 
 
 def test_while_without_defer_asks_now_and_says_so(project):
@@ -117,7 +117,7 @@ def test_defer_without_while_is_refused_and_nothing_is_queued(project, meanwhile
     result = _ask(*args)
     assert result.exit_code == 1
     assert "then it blocks you — ask now" in result.output
-    assert checkins.queued(root, "lead") == []
+    assert checkins._queued(root, "lead") == []
     assert _outbox(root) == []
 
 
@@ -129,7 +129,7 @@ def test_a_deferred_question_is_absent_from_the_outbox_before_the_window(project
     result = _ask("--defer", "rename the flag?", "--while", "doing ticket 14")
     assert result.exit_code == 0, result.output
     assert _outbox(root) == []
-    [q] = checkins.queued(root, "lead")
+    [q] = checkins._queued(root, "lead")
     assert q.text == "rename the flag?" and q.meanwhile == "doing ticket 14"
     assert f"deferred as {q.id}" in result.output
 
@@ -139,7 +139,7 @@ def test_the_queue_is_under_the_managers_own_directory(project):
     two things that were not instance records (C11, C4)."""
     root = project(CLOSED)
     _ask("--defer", "rename the flag?", "--while", "doing ticket 14")
-    [q] = checkins.queued(root, "lead")
+    [q] = checkins._queued(root, "lead")
     assert q.path.parent == root / ".rite" / "managers" / "lead" / "checkins" / "queue"
     user = root / ".rite" / "user"
     assert not user.exists() or not list(user.glob("*.json"))
@@ -160,7 +160,7 @@ def test_with_no_window_to_wait_for_it_is_asked_at_once_with_the_reason(
     [sent] = _outbox(root)
     assert "rename the flag?" in sent
     assert "there is none to wait for" in sent
-    assert checkins.queued(root, "lead") == []
+    assert checkins._queued(root, "lead") == []
 
 
 # --- the supervisor ------------------------------------------------------------------
@@ -229,7 +229,7 @@ def test_idle_with_questions_queued_asks_them_and_says_the_deferral_was_wrong(
     assert "rename the flag?" in sent and "drop python 3.11?" in sent
     assert "the deferral was wrong" in sent
     assert any("the deferral was wrong" in line for line in said), said
-    assert checkins.queued(root, "lead") == []
+    assert checkins._queued(root, "lead") == []
 
 
 def test_idle_with_nothing_queued_sends_nothing(tmp_path, monkeypatch):
@@ -243,7 +243,7 @@ def test_a_deferral_waits_at_a_boundary_outside_a_window(tmp_path, monkeypatch):
     checkins.defer(root, "lead", "rename the flag?", "doing ticket 14")
     _drive(monkeypatch, root, "ready")
     assert _outbox(root) == []
-    assert len(checkins.queued(root, "lead")) == 1
+    assert len(checkins._queued(root, "lead")) == 1
 
 
 def test_inside_a_window_the_queue_is_asked_when_the_cycle_ends(tmp_path, monkeypatch):
@@ -256,7 +256,7 @@ def test_inside_a_window_the_queue_is_asked_when_the_cycle_ends(tmp_path, monkey
     [sent] = _outbox(root)
     assert "Check-in" in sent and "rename the flag?" in sent
     assert "(meanwhile: doing ticket 14)" in sent
-    assert checkins.queued(root, "lead") == []
+    assert checkins._queued(root, "lead") == []
     assert prompts, "the cycle still runs at a check-in"
 
 
@@ -290,7 +290,7 @@ def test_a_corrupt_queue_file_is_still_a_question(tmp_path):
     where = checkins._checkins_dir(root, "lead") / checkins.QUEUE_DIRNAME
     where.mkdir(parents=True)
     (where / "1_qbroken.json").write_text("{not json: is this still asked?")
-    [q] = checkins.queued(root, "lead")
+    [q] = checkins._queued(root, "lead")
     assert "is this still asked?" in q.text
 
 
@@ -298,5 +298,5 @@ def test_asking_is_recorded_so_the_filter_can_be_counted(tmp_path):
     root = _build(tmp_path, CLOSED)
     q = checkins.defer(root, "lead", "rename the flag?", "doing ticket 14")
     checkins.ask_now(root, "lead", [q], "why", how="idle")
-    events = [(e["event"], e["id"]) for e in checkins._ledger(root, "lead")]
+    events = [(e["event"], e["id"]) for e in checkins.ledger(root, "lead")]
     assert events == [("queued", q.id), ("asked", q.id)]

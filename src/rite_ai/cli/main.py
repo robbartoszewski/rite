@@ -3352,6 +3352,19 @@ def board_move(ticket_id: str, status: str, role: str) -> None:
     if isinstance(result, BackendError):
         click.echo(result.message, err=True)
         raise SystemExit(1)
+    # Recorded where rite saw the backend accept it, with where the ticket
+    # actually LANDED — the standup cites this (plan § K4).
+    if _has_project_in_scope():
+        from rite_ai.managers import current_manager
+        from rite_ai.reporting import events
+
+        events.record(
+            _find_project_root(),
+            "board-move",
+            ticket=ticket_id,
+            status=(result if isinstance(result, str) and result else status),
+            by=current_manager(),
+        )
     if isinstance(result, str) and result:
         click.echo(
             f"{ticket_id} -> {result} — this board has no '{status}' column "
@@ -5595,6 +5608,7 @@ def sandbox_start(
         env=env,
         allow_dirty=allow_dirty,
         prompt=prompt,
+        ticket=ticket or "",
     )
     click.echo(result.message)
     if not result.ok:
@@ -6554,7 +6568,26 @@ def ask(question: str, defer: bool, meanwhile: str, manager: str) -> None:
         )
     else:
         state = checkins.windows(root)
-        if not state.usable:
+        if checkins.checkin_done_this_window(root, asking, state):
+            # The User is in a check-in window right now and this window's
+            # check-in has been delivered: holding the question for the
+            # NEXT window would make them wait hours for something they are
+            # here to answer.
+            q = checkins.defer(root, asking, question, meanwhile)
+            checkins.ask_now(
+                root,
+                asking,
+                [q],
+                f"The Manager {asking!r} deferred this, but a check-in window "
+                "is open now and its check-in has happened, so it is asked "
+                "now rather than held for the next one:",
+                how="window-open",
+            )
+            click.echo(
+                f"asked NOW, not deferred: {state.line} — the User is in "
+                "this window, and its check-in has already gone out."
+            )
+        elif not state.usable:
             # ⚠ Nowhere to wait: a question deferred to a check-in that never
             # comes is a question nobody is asked. Asked now, with the reason.
             q = checkins.defer(root, asking, question, meanwhile)
@@ -6581,6 +6614,73 @@ def ask(question: str, defer: bool, meanwhile: str, manager: str) -> None:
     warning = full_warning(prune(root, asking, OUTBOX), asking)
     if warning:
         click.echo(warning, err=True)
+
+
+@cli.group()
+def checkin() -> None:
+    """The standup a check-in opens with (plan § K4)."""
+
+
+@checkin.command("note")
+@click.option(
+    "--anchor",
+    default="",
+    help="What makes it checkable: a commit SHA, a file and line, a ticket "
+    "id, a sandbox name, a command and its output.",
+)
+@click.option(
+    "--observed",
+    default="",
+    help='What was SEEN there, e.g. "a Worker authenticated".',
+)
+@click.option(
+    "--manager",
+    default="",
+    help="Which Manager is stating it. Inside a Manager's own session it "
+    "defaults to that Manager and can be left out.",
+)
+def checkin_note(anchor: str, observed: str, manager: str) -> None:
+    """Add a line to the next standup, as something you STATE, with its anchor.
+
+    ⚠ **A note with no anchor is refused.** The standup is composed by rite
+    from what it observed; this is the only way a Manager adds to it, and
+    the line is labelled as the Manager's statement, not as rite's
+    observation. "Landed abc1234; observed a Worker authenticate" passes.
+    "Sorted out the Worker problem" has nothing to check, and is refused.
+
+    Examples:
+      rite checkin note --manager planner --anchor abc1234 \\
+          --observed "the Worker on ticket 12 authenticated and pushed"
+    """
+    from rite_ai.managers import checkins, current_manager
+
+    root = _require_project_root()
+    speaking = (manager or "").strip() or current_manager()
+    if not speaking:
+        click.echo(
+            "refusing the note: no --manager, and this process is not "
+            "running as one (no RITE_MANAGER in the environment).",
+            err=True,
+        )
+        raise SystemExit(1)
+    roles, problems = _manager_roles(root)
+    if problems:
+        click.echo("cannot read this project's Managers:", err=True)
+        for problem in problems[:3]:
+            click.echo(f"  {problem}", err=True)
+        raise SystemExit(1)
+    if speaking not in {r.name for r in roles}:
+        known = ", ".join(sorted(r.name for r in roles)) or "none declared"
+        click.echo(f"no Manager named {speaking!r} in this project — {known}", err=True)
+        raise SystemExit(1)
+    refused = checkins.note(root, speaking, anchor, observed)
+    if refused:
+        click.echo(refused, err=True)
+        raise SystemExit(1)
+    click.echo(
+        "noted for the next standup, labelled as stated by the Manager, "
+        "not observed by rite."
+    )
 
 
 @cli.group()

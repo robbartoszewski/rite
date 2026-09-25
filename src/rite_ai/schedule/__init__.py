@@ -531,6 +531,25 @@ def next_checkin(
     return CheckinWhen()
 
 
+def minutes_open(checkins: CheckinsConfig, moment: Moment) -> int | None:
+    """How many whole minutes the open check-in window has been open, or
+    None when none is open.
+
+    Bounded at a day: a window configured round the clock would otherwise
+    never have "opened", and its check-in would happen once, ever. A day's
+    bound gives it one a day."""
+    if not in_checkin(checkins, moment):
+        return None
+    minute, weekday = moment.minute_of_day, moment.weekday
+    for back in range(MINUTES_PER_DAY):
+        minute -= 1
+        if minute < 0:
+            minute, weekday = MINUTES_PER_DAY - 1, (weekday - 1) % 7
+        if not in_checkin(checkins, Moment(minute, weekday, moment.zone)):
+            return back
+    return MINUTES_PER_DAY
+
+
 def describe_checkins(checkins: CheckinsConfig, moment: Moment) -> str:
     """The one line `rite status` prints about check-ins.
 

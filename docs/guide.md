@@ -283,6 +283,44 @@ Deferred questions since the last check-in: 2 queued, 1 withdrawn by the Manager
   withdrawn q5f9f54: answered by docs/adr/0004-storage.md:12 chooses SQLite
 ```
 
+### The standup each check-in opens with
+
+At the first cycle boundary inside a window, a check-in is prepared, and it
+goes out as one message when that cycle ends: the standup, the deferral
+counts, and the questions that survived. A run that stops on its loop's
+verdict inside a window sends its check-in instead of skipping it.
+
+⚠ **The standup carries anchors, not prose.** rite composes it from what it
+recorded, and every line names something you can check:
+
+```text
+Observed by rite:
+- commit a6e0d8f Add the notes the Worker will need
+- Worker alpha started in sandbox rite-k4proj-a26a8d-alpha, ticket T-1 (Fri 21:34)
+- sandbox rite-k4proj-a26a8d-alpha: active at this check-in (`yoloai ls`)
+- cycle 1, session rite-mgr-k4proj-a26a8d-lead: finished (Fri 21:35–Fri 21:35)
+
+Stated by the Manager — rite did not verify these:
+- the notes the Worker needs are in NOTES.md [anchor: a6e0d8f]
+```
+
+What rite records, and where it records it:
+
+- commits: from `git log --all --since`. Work a Worker pushed and this
+  checkout never fetched is not seen.
+- Worker sandbox starts, stops and destroys: `.rite/events.jsonl`, written
+  when `yoloai` reports success.
+- board moves made through `rite board move`, with the column the ticket
+  actually landed in: also `.rite/events.jsonl`.
+- each Manager cycle, how it ended, and what the engine refused: the
+  Manager's own `checkins/ledger.jsonl`.
+
+A Manager adds lines only through
+`rite checkin note --anchor <SHA, file:line, ticket, sandbox> --observed "<what was seen>"`.
+**A note with no anchor is refused**, and a note is shown as the Manager's
+statement, never as something rite observed. The first check-in ever covers
+the previous 24 hours and says so.
+
 ## What runs on its own
 
 Nothing rite runs unattended starts a Claude session.
