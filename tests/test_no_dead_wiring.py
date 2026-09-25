@@ -47,6 +47,28 @@ WATCHED = (
 
 # name -> why nothing calls it. A reason is required; "not yet" is not one.
 UNCALLED_ON_PURPOSE = {
+    "requests_dir": (
+        "Called by `instructions` and `take_requests` in the same file. "
+        "Public because it is the one place rite decides WHERE a Manager "
+        "writes a Worker request — a directory of its own rather than the "
+        "mailbox outbox a human reads — and a test pins that by name."
+    ),
+    "launch_argv": (
+        "Called by `honour` in the same file. Public because the exact argv "
+        "IS the security property: two validated values, a list rather than "
+        "a string, never through a shell. A test asserts the whole list, "
+        "which a private helper would put out of reach."
+    ),
+    "honour": (
+        "Called by `for_project`'s returned handler. Public because it is "
+        "the one place a validated request becomes a real launch, and the "
+        "boundary between deciding and doing is worth being able to name."
+    ),
+    "project_capacity": (
+        "Called by `for_project`'s returned handler. Public because -1 "
+        "meaning `unknown` is a decision — an unreadable limit becomes a "
+        "refusal, not `no limit` — and the tests pin that case by name."
+    ),
     "settings_document": (
         "Called by `write_settings` in the same file. Public because it is "
         "the one place the engine's settings SHAPE is written down, and the "

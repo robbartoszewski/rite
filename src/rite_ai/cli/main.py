@@ -6100,6 +6100,8 @@ def _start_a_manager(
     # needs somebody to look at a server. Before this, both arrived as
     # "stopped on 'unknown' after 0 session(s) — this is a fault, not a
     # completion", which was neither true nor actionable for either.
+    from rite_ai.managers.broker import for_project
+
     board, board_state, board_problem = _board_for_manager(root)
     if board_state == "unreachable":
         # ⚠ NOT the setup path. This project HAS a board; it could not be
@@ -6149,6 +6151,12 @@ def _start_a_manager(
         # endpoint checked before each cycle or a dead endpoint reads as a
         # clean finish until the window runs out.
         engine_ready=_engine_ready_for(role) if role.is_local else None,
+        # ⚠ **The broker, composed with THIS project's board.** A sandboxed
+        # Manager cannot start a sandboxed Worker (B9), so it asks and this
+        # runs the launch outside the boundary. Given the board the loop
+        # itself reads, so "is this a real ticket" has one answer in one
+        # place; `for_project` refuses everything when there is none.
+        broker=for_project(root, board),
         max_sessions=sessions,
         window_seconds=minutes * 60.0,
         prompt=(

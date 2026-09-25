@@ -44,6 +44,7 @@ from rite_ai.managers import (
     forget_instance,
     manager_dir,
 )
+from rite_ai.managers.broker import take_requests
 from rite_ai.managers.engines import spelling_for
 from rite_ai.managers.mailbox import INBOX, delivery_note, how_to_reply
 from rite_ai.managers.mailbox import take as take_mail
@@ -303,6 +304,42 @@ def launch_command(
     return f"{base} < {shlex.quote(str(prompt_path))}"
 
 
+def _honour_worker_requests(root: Path, manager: str, broker, say) -> None:
+    """Start the Workers this cycle asked for, or say why not.
+
+    ⚠ **A sandboxed Manager cannot start a sandboxed Worker** — the kernel
+    refuses a second profile inside the first (B9) — so it writes a request
+    and the supervisor, outside the boundary, decides.
+
+    ⚠ **At the cycle boundary rather than in the wait loop, and the cost is
+    stated rather than hidden.** `rite sandbox start` prepares a workspace
+    and creates a sandbox, which takes tens of seconds; doing that inside
+    the two-second poll would stop the loop noticing mail or attachment for
+    its duration. So a Worker requested during a cycle starts when that
+    cycle ends, and the Manager learns the outcome in its next instruction.
+    The prompt says so, because a Manager that expected its Worker to be
+    running already would otherwise conclude the request failed.
+
+    ⚠ **Every outcome is SAID.** A refusal nobody sees is the defect C21
+    exists for, and here it is worse: a Manager that asked for something it
+    may not have is either confused or compromised.
+    """
+    pending = take_requests(root, manager)
+    if not pending:
+        return
+    if broker is None:
+        say(
+            f"{manager!r} asked to start {len(pending)} Worker(s), and this "
+            "run has no broker configured to do it. Nothing was started — "
+            "the requests are discarded rather than queued, because nothing "
+            "here would run them later."
+        )
+        return
+    for _, raw in pending:
+        ok, message = broker(raw)
+        say(("started: " if ok else "") + message)
+
+
 def _say_refusals(
     root: Path,
     since: float,
@@ -516,6 +553,7 @@ def supervise(
     starter: object = None,
     engine_ready: object = None,
     resume_id_for: object = None,
+    broker: object = None,
     poll: float = POLL_SECONDS,
     now: object = None,
 ) -> SuperviseResult:
@@ -903,6 +941,7 @@ def supervise(
             cycle.ended_at = clock()
             cycle.attended = attended
             _say_refusals(root, cycle.started_at, say, engine, agent, live_pane)
+            _honour_worker_requests(root, manager, broker, say)
 
             how = ending(result.session, human_was_present=attended, pane=live_pane)
             cycle.ending = how.kind
