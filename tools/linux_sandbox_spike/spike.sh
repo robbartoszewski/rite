@@ -610,6 +610,24 @@ if have docker; then
 else
   verdict "N/A" "command -v docker" "not installed"
 fi
+# WHY the daemon is reachable is the operator cost, not whether. Docker needs
+# root or membership of the `docker` group, and that group membership is
+# effectively root-equivalent on the host — a cost worth naming rather than
+# discovering after the appliance is built.
+if have docker; then
+  if [ "$(id -u)" = 0 ]; then
+    say "  reachable AS ROOT — this says nothing about an ordinary user; re-run"
+    say "  this script as the user rite will actually run as."
+  elif id -nG 2>/dev/null | tr ' ' '\n' | grep -qx docker; then
+    say "  reachable because $(id -un) is in the 'docker' group. ⚠ That group is"
+    say "  effectively root on this host: a member can start a container that"
+    say "  mounts / and writes anything. It is a real cost, not a formality."
+  else
+    say "  $(id -un) is NOT in the 'docker' group and is not root — so if the"
+    say "  check above passed, something else is granting access (rootless"
+    say "  docker, or a socket with loosened permissions); worth knowing which."
+  fi
+fi
 
 head2 "Engines"
 for eng in claude goose rite git tmux; do
