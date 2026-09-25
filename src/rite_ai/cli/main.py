@@ -6045,7 +6045,8 @@ def _loop_verdict(root: Path, board=None) -> str:
 
 
 def _router_for(root: Path, manager: str):
-    """The routing step for this Manager's supervisor, or None.
+    """The routing step for this Manager's supervisor, or None: route the
+    Owner's requests down (MM-3), and bring the others' replies up (MM-4).
 
     ⚠ **Built for EVERY Manager in one root, not only the Owner** —
     `routing.deliver_routes` discards a non-Owner's requests and SAYS so, and a
@@ -6056,7 +6057,7 @@ def _router_for(root: Path, manager: str):
     from rite_ai.config.managers import routing_owner, shares_one_root
     from rite_ai.config.models import ProjectConfig
     from rite_ai.config.parse import ParseError, parse_config
-    from rite_ai.managers.routing import deliver_routes
+    from rite_ai.managers.routing import collect_reports, deliver_routes
 
     parsed = parse_config(root / ".rite" / "config.yaml")
     config = parsed if not isinstance(parsed, ParseError) else ProjectConfig()
@@ -6065,7 +6066,13 @@ def _router_for(root: Path, manager: str):
     roles = list(config.coordination.manager_roles)
     owner = routing_owner(roles)
     names = [r.name for r in roles]
-    return lambda say: deliver_routes(root, manager, owner, names, say)
+
+    def step(say) -> None:
+        deliver_routes(root, manager, owner, names, say)
+        if owner and manager == owner:
+            collect_reports(root, owner, names, say)
+
+    return step
 
 
 def _slack_listener(root: Path, manager: str):
