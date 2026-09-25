@@ -145,11 +145,30 @@ def mark_read(root: Path, manager: str, box: str, reader: str, messages) -> None
     prune(root, manager, box)
 
 
-def send(root: Path, manager: str, box: str, text: str) -> Path:
-    """Put one message in a box. Returns the path written."""
+def send(
+    root: Path, manager: str, box: str, text: str, *, sent_at: float | None = None
+) -> Path:
+    """Put one message in a box. Returns the path written.
+
+    `sent_at` files a message by when it was SAID rather than when it was
+    written here — the Slack relay's case, where rite hears a message seconds
+    to hours after it was sent, and hears two conversations in the order it
+    polls them. Found live (A3, 2026-09-25): a DM typed after two channel
+    messages was delivered before them.
+
+    ⚠ **INBOX ONLY, and refused elsewhere.** The inbox is taken whole at each
+    cycle boundary, so a name in the past is simply sorted into place. A box
+    read by CURSOR is different: a name behind a reader's cursor is never
+    shown to that reader — loss, the failure the comment below records.
+    """
+    if sent_at is not None and box != INBOX:
+        raise ValueError(
+            "sent_at is for the inbox only: a box read by cursor would never "
+            "show a message named behind a reader's position"
+        )
     where = mailbox_dir(root, manager, box)
     where.mkdir(parents=True, exist_ok=True)
-    ts = time.time()
+    ts = time.time() if sent_at is None else sent_at
     # ⚠ ZERO-PADDED, because the name IS the order. `read` sorts filenames
     # and a reader's cursor is a filename comparison, so an unpadded
     # counter put `…_10.json` BEFORE `…_9.json` within one millisecond —

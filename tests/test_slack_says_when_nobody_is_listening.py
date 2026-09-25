@@ -9,9 +9,16 @@ A user who is not told reads the silence as "it is broken".
 
 from __future__ import annotations
 
+import re
+
 from rite_ai.managers.slack import HISTORY_PAGES, READ_LIMIT, Listener, _hear
 
 OWNER = "U0WNER"
+
+
+def _bare(text: str) -> str:
+    """The header without its send time, which is pinned on its own below."""
+    return re.sub(r" · sent \w{3} \d\d:\d\d", "", text)
 
 
 class Slack:
@@ -59,7 +66,7 @@ def _run(tmp_path, slack):
 
 
 def _heard(listener, slack, polls=4):
-    return [m for _ in range(polls) for m in listener.poll(call=slack)]
+    return [_bare(m) for _ in range(polls) for m in listener.poll(call=slack)]
 
 
 class TestAMessageSentWhileStoppedIsDeliveredAtTheNextStart:
