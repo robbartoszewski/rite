@@ -244,15 +244,26 @@ def test_start_refuses_without_tmux_and_says_what_to_do_instead(tmp_path, monkey
 
 
 def test_start_refuses_a_second_loop_for_one_project(tmp_path, monkeypatch):
-    """A second loop in one project is not a smaller version of one loop."""
+    """A second loop in one project is not a smaller version of one loop.
+
+    ⚠ `liveness`, not `is_alive`: `start` asks `liveness`, so stubbing
+    `is_alive` stubbed nothing. On macOS the test then passed BY ACCIDENT —
+    `/usr/bin/tmux` does not exist there, so the refusal was "cannot tell
+    whether a loop is already running", which contains the words asserted.
+    On Linux, where it exists, the real tmux was asked, no loop was found,
+    and a real loop was started in CI's tmux server. The assertion is now
+    the refusal's own sentence."""
     import rite_ai.loop.session as session
+    from rite_ai.managers.session import Liveness
 
     monkeypatch.setattr(session, "_tmux", lambda: "/usr/bin/tmux")
-    monkeypatch.setattr(session, "is_alive", lambda _name: True)
+    monkeypatch.setattr(
+        session, "liveness", lambda _name: Liveness(alive=True, known=True)
+    )
     result = _run(project(tmp_path), monkeypatch, "start")
 
     assert result.exit_code == 1
-    assert "already running" in result.output
+    assert "a loop is already running for this project as" in result.output
 
 
 def test_stop_never_kills(tmp_path, monkeypatch):
