@@ -2426,7 +2426,11 @@ kept between non-ASCII characters, where scripts and emoji use them. On a
 real GitHub issue carrying a zero-width run, a tag-character message and an
 HTML comment, GitHub's own rendering showed a reviewer two sentences, and
 `rite board show` gave an agent the same two sentences with the hidden parts
-decoded and surfaced in place. **Not handled:** combining marks and
+decoded and surfaced in place. **The same characters pasted into Slack by
+a person were KEPT by Slack's client**: all 36 were in Slack's stored copy.
+So on Slack too the normalisation is rite's, not the platform's. An HTML
+comment is not hidden in Slack, which renders no HTML, so the relay leaves
+it as the visible text it is there. **Not handled:** combining marks and
 variation selectors, which ordinary text needs, and homoglyphs, which a
 reviewer sees too.
 
