@@ -167,17 +167,19 @@ def config_to_yaml(config: ProjectConfig) -> str:
             "timezone": config.schedule.timezone,
             "windows": [asdict(w) for w in config.schedule.windows],
         },
-        # Written even when empty, for the reason `slack` below gives: a
-        # section this writer omits is one `rite schedule set` deletes.
-        "checkins": {
-            "windows": [asdict(w) for w in config.checkins.windows],
-        },
         # ⚠ Written even when empty, like every other section: a section the
         # writer omits is one `rite schedule set` DELETES from a real
         # project the next time it rewrites this file.
         "slack": {
             "owner_user": config.slack.owner_user,
             "broadcast_channel": config.slack.broadcast_channel,
+        },
+        # ⚠ APPENDED after `slack`, not beside `schedule`: a section inserted
+        # mid-file reorders every existing config.yaml the next time anything
+        # rewrites it (tests/test_init_scaffold.py pins the order). Written
+        # even when empty, for the reason `slack` gives.
+        "checkins": {
+            "windows": [asdict(w) for w in config.checkins.windows],
         },
     }
     return yaml.safe_dump(
