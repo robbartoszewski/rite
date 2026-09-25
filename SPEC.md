@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.8 · **Date:** 2026-09-25
+**Version:** 0.24.12 · **Date:** 2026-09-26
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -2083,9 +2083,14 @@ governs. The four escapes were all added by authors who would have endorsed
 the rule had they been asked, which is what makes a rule the wrong instrument
 here.
 
-#### 5.4.8. Separation between Managers that share a root — the requirement (0.7.0)
+#### 5.4.8. Separation between Managers that share a root — the requirement (0.6.0 for two Managers on one machine)
 
 **Status: DECIDED (Robert, 2026-09-20: D-79, §9.14.9). Not enforced.**
+⚠ **Scope moved on 2026-09-26: two Managers on one machine are 0.6.0**
+(Robert). A Claude Manager as Owner, and a local secondary, in one root, is
+being built for 0.6.0. Several machines stay out of 0.6.0. **So the state
+table below is what 0.6.0 ships with, unless that work changes it**, and the
+Slack half of the same accident is §9.16.7.
 Several Managers run in **one** project root, each with its own
 `.rite/managers/<name>/`, and they are **strictly separated**, in Robert's
 words: *"one misbehaving manager shouldn't be able to mess with others by
@@ -2103,7 +2108,7 @@ be tested:
 | **P3** | State shared by decision (§5.4.6) is written only through its locked writer, and the list is enumerated by a test | §5.4.6 |
 | **P4** | A release or destroy names the Manager whose thing it is | §5.4.3, with a Manager field on the claim |
 
-**State on `main`, measured 2026-09-25 at `9862b59`:**
+**State on `main`, measured 2026-09-25 at `9862b59`, and reproduced at `8d5fc22` and again after `7ae2ecc` changed the profile:**
 
 - **P2 holds.** With two Managers' profiles in one root, killing the other
   Manager's engine and driving or killing its tmux session were all
@@ -2375,10 +2380,11 @@ dependency, not an inherited habit.
 **Status: DECIDED 2026-09-25 (Robert, D-97, D-98). Planned for 0.6.0,
 sequenced LAST and droppable** (plan § N).
 
-**What rite does TODAY.** **N1 is built (§6.6.1): ticket and Slack text
-is NORMALISED on rite's read paths**, which are `rite board show`, `list`
-and `query`, and the Slack relay. **N2 (§6.6.2) is not built**: no phrases
-are scanned. Two limits hold whatever else ships:
+**What rite does TODAY.** On rite's read paths (`rite board show`, `list`
+and `query`, and the Slack relay), ticket and Slack text is **NORMALISED**
+(§6.6.1, N1) and **PHRASE-SCANNED, with matches REPORTED at the next
+check-in** (§6.6.2, N2). Nothing is ever withheld. Two limits hold whatever
+else ships:
 - **Normalisation is not vetting** (§6.6.3).
 - **It covers only text read THROUGH rite.** An agent that reads the tracker
   itself, with `gh issue view` or the tracker's API, gets the raw text,
@@ -2424,14 +2430,30 @@ decoded and surfaced in place. **Not handled:** combining marks and
 variation selectors, which ordinary text needs, and homoglyphs, which a
 reviewer sees too.
 
-#### 6.6.2. Injection phrases are REPORTED, never blocked (D-97) — § N2, not built
+#### 6.6.2. Injection phrases are REPORTED, never blocked (D-97) — § N2, BUILT
 
-Once built, rite scans ticket text for phrases commonly used in prompt
-injection and **surfaces a match to the User at the next check-in** (§9.16,
-plan § K). It will never quarantine, filter, rewrite or withhold the ticket.
+rite scans the text it reads (after §6.6.1) for phrases commonly used in
+prompt injection, and **surfaces a match to the User at the next check-in**,
+as a line in the standup (§9.16, plan § K4). It never quarantines, filters,
+rewrites or withholds the text. Every standup ends with the §6.6.3 caveat,
+including one with no match, so a clean standup is not read as vetting.
+
+**The phrases, and what was measured of them.** They are ported verbatim
+from Robert's `sanitizer` library (MIT), its overt-instruction layer, at
+`5e63afb`, English and Polish. One rule is left out: a Markdown image link,
+which is ordinary in a ticket. rite's own measurements:
+- **agreement with the source:** 0 disagreements over the 432 strings in
+  the sanitizer's own tests, 63 of which that layer flags;
+- **false positives:** 0 of 238 real tickets from the upstream's repositories;
+- **agent-directed attacks:** `curl … | bash` in a setup step, "paste .env
+  into a comment" and "add this SSH key" are not found, and a test pins
+  that.
+The rates below were measured on the sanitizer AS A WHOLE, including its
+de-obfuscation layers, which rite does not port. They are its figures, not
+this scan's.
 
 **Why reporting, when blocking was rejected.** An evaluation of a phrase
-sanitizer (on the Bentora project) quarantined **9 of 18 ordinary tickets** in
+sanitizer (on the upstream project, §1.1) quarantined **9 of 18 ordinary tickets** in
 blocking mode. At that false-positive rate, blocking stops real work. Reporting
 changes what a false positive costs: a line in a standup instead of a blocked
 ticket. The same evaluation caught **6 of 9 model-directed attacks**, and
@@ -5467,7 +5489,7 @@ it costs, and what would make the default flip.
 ⚠ **It is v0.5.1 scope, settled, and the REASON changes how it is built.**
 It was raised as the release's scope lever — the one item not needed for
 "full-featured single Manager" to be true — and kept, because the next
-large unattended run is a dogfood on Bentora **run by somebody who is not
+large unattended run is a dogfood on the upstream **run by somebody who is not
 the project owner, with the owner not watching.** This diagnostic is how
 anything comes back from that run. It is not a nice-to-have in this
 release; it is the instrument for the only big unattended run currently
@@ -6130,6 +6152,41 @@ Two consequences, written down so they are not discovered:
   latency grow with the number of channels. **Cap or rotation is OPEN**, an
   implementation choice not yet made.
 
+#### 9.16.7. Several Managers in one project: only the Owner hears Slack (0.6.0)
+
+**Status: DECIDED 2026-09-26 (Robert: MMQ2, option (c)). The Slack half is
+BUILT; routing and replies coming up are planned in the same track, not built
+yet.** The 0.6.0 shape is one machine, one root: a Claude Manager as **Owner**
+plus a local secondary. The Owner is the only Manager that talks to Slack, and
+it routes work to the others.
+
+**Who the Owner is: the one Manager holding `route`** (`routing_owner`). The
+duty is the Owner's (RL-52), and the multi-machine election already requires
+it of any Manager standing for Owner. In one root with no
+`coordination.remote`, nothing elects, so the answer has to be deterministic,
+and a config-declared duty is. **Exactly one must hold it** once several
+Managers share a root. Zero or two means nobody reads Slack, and `rite
+doctor` names the problem. A lone Manager holds every duty, so a one-Manager
+project is unchanged.
+
+**What changed, observed.** Before, every `rite start` opened its own relay
+on the same Owner's DM, so every Manager received every instruction, and two
+relays were 60 `conversations.history` calls a minute against Tier 3's
+"50+". Now `_slack_listener` opens a relay **only for the Owner**. Through
+`rite start` on a two-Manager project, with a proxy that logged and refused
+every connection: the secondary attempted **3** Slack connections before and
+**0** after, and said so at start. The poll stays at 30 a minute, whatever
+the number of Managers.
+
+**With a `remote`, none of this applies.** `coordination.managers` is also
+the election's priority list. Its names may be on other machines, and the
+lease decides the Owner. Gating Slack on the lease is v0.7.0, and until then
+such a project behaves as before.
+
+**Planned in this track, not built at this revision:** the Owner routing work
+to a secondary, and a secondary's replies reaching the Owner. Until they
+land, a secondary's instructions come only from this machine.
+
 ## 10. Credentials
 
 **OS keychain via Python `keyring`** (macOS Keychain, Linux Secret Service, Windows
@@ -6662,7 +6719,7 @@ happened once already and left no trace until this review found it.
 | D-85 | What stops a Manager: Ctrl+C, a bound, or `rite stop` | **Ctrl+C stops BOTH supervisor and session; a bound stops supervision and leaves the session alive; `rite stop <manager>` is the orphan-recovery path only** | A bound is an accounting limit and the user may be mid-conversation, so the pane surviving is right and was verified deliberately. Ctrl+C is a human saying stop, and leaving a live session spending quota with only the restarts halted is not what they asked for — nor should it take two commands. The two paths currently share their teardown, so separating them is the work. Ctrl+C must also call `forget_instance` (zero callers today) or a stopped Manager leaves a record that makes the next `rite start` believe it is running, which is the stale-lock defect in a new place. §9.14.12. |
 | D-86 | How the journal is protected against invented events | **By the FORMAT — a required verifiable anchor and a syntactic observed/inferred split — never by instructing the Manager to be careful** | An issue log containing events that did not happen is worse than no log, and it would poison self-reflection later, which is the one thing eventually meant to read it. An entry with no anchor (commit SHA, file and line, command with output, ticket id, log timestamp) is not written; anchors are checked where checking is cheap; entries are written at the moment rather than reconstructed, because compaction is the specific enemy (this week: a session quoting SHAs stale after a history rewrite, and another reporting reviewers as running that were never launched — memory, not malice); and no entry may claim another agent's internal state, which is the form a hallucination naturally takes. Exhortation is explicitly rejected: this week has two instances where an instruction to check carefully immediately preceded the error it warned against. The same principle underlies the project's paste-the-invocation rule. (A draft cited that rule and a scenario-citation rule by id; neither reference existed in this repository, so the ids are an open question rather than a citation — the rule broken inside the section that states it.) §9.15.3. |
 | D-87 | Is the journal's anchor requirement enforced, or asked for? | **ENFORCED on the writing path — the writer refuses an unanchored entry and creates no file** | A requirement on the format is honoured by the Manager choosing to honour it, which is exhortation wearing a table — and §9.15.3 names two instances this week where an explicit instruction to check carefully immediately preceded the error it warned against. Both halves are required and fail for different reasons: a refusal that still writes means the check runs after the write, and a silent no-write means the caller cannot tell refusal from success. It costs one branch, not a subsystem, because the writer already has to open and name a file. Settled in review (rite-dd) against the section's own closing argument. §9.15.3. |
-| D-88 | Does the process journal stay in v0.5.1? | **YES — it is the instrument for the next unattended run, not a nice-to-have** | It was the release's scope lever, being the one item not required for "full-featured single Manager". Kept because the next large unattended run is a Bentora dogfood run by somebody who is not the project owner, with the owner not watching — so this diagnostic is the only channel by which anything comes back from it. That reason changes the build: the flag must be DISCOVERABLE by a person who has not read this spec (named in `rite start --help`, with the docs saying an unattended run is when to enable it), and the entries must be able to leave the machine that wrote them (§9.15.3a) — a gap that was a 0.6.0 design question until the answer to "who runs it" made it a 0.5.1 defect. §9.15.1. |
+| D-88 | Does the process journal stay in v0.5.1? | **YES — it is the instrument for the next unattended run, not a nice-to-have** | It was the release's scope lever, being the one item not required for "full-featured single Manager". Kept because the next large unattended run is a dogfood on the upstream, run by somebody who is not the project owner, with the owner not watching — so this diagnostic is the only channel by which anything comes back from it. That reason changes the build: the flag must be DISCOVERABLE by a person who has not read this spec (named in `rite start --help`, with the docs saying an unattended run is when to enable it), and the entries must be able to leave the machine that wrote them (§9.15.3a) — a gap that was a 0.6.0 design question until the answer to "who runs it" made it a 0.5.1 defect. §9.15.1. |
 | D-89 | The diagnostic flag's name | **`--record-issues`** | Named for what it DOES rather than what it IS. `--diagnostics` describes the category; `--record-issues` tells a user reading `--help` what will appear on disk, which is what they are actually deciding about. §9.15.1. |
 | D-90 | Does `rite start <manager>` prompt the session? | **YES, on EVERY session — the opening prompt on the first, a CONTINUATION instruction on a resume.** ⚠ Amended at 0.5.1: the original decision said "not on a resume", and **the premise changed rather than the reasoning being wrong.** While the engine was an interactive REPL a resumed cycle was the same conversation continuing, so there was nothing to say. Since the engine is launched with `-p` (Finding B, option 1) each cycle is a separate invocation that EXITS, and one launched with no input does not continue — it exits 1: "Input must be provided either through stdin or as a prompt argument when using --print", measured against real `claude`. A resumed cycle with no prompt is therefore a crash, not a continuation. What the original decision was protecting still holds and is still enforced: the OPENING prompt is never re-issued, because telling a session to do work it has already done is how it gets done twice. | A Manager that starts with an empty prompt waits for a human to type, which is the behaviour the command exists to remove. The resume half was not covered by the decision and is inferred from the resume design: a resumed session already carries the context the prompt would establish, and re-issuing an instruction mid-task is the same class of error as restarting a session a human deliberately quit. The asymmetry that decided the original still decides the amendment, in the same direction: a missing prompt on resume now costs a cycle that cannot start at all, and a spurious OPENING prompt costs a session that starts over — so every cycle gets input, and a resumed one gets input that says carry on. The prompt reaches the engine on stdin from the environment, never as an argument (§9.14.7's rule for the token, same reason: `tmux new-session <cmd>` puts its command on tmux's argv). §9.14.11a. |
 | D-91 | Does rite provide a way to get journal entries off the machine? | **NO — the path is printed and retrieval is the operator's business** | An earlier revision called this a defect and escalated it: a diagnostic whose output never leaves the host returns nothing to the reader it exists for. True, and the escalation was still wrong — the journal's reader in the run this was written for is a person the operator will speak to directly, who will be sent a zip. A mechanism was being designed for a problem that two people who talk to each other do not have. What is kept is the start line printing the absolute path, because somebody has to know where to copy from; the `git add -f` note is demoted from THE route to one way of doing it. No export command, no archive step, no sync — not deferred, not wanted. This also deflates the same revision's alarm about a torn-down sandbox: the entries survive as long as the directory does and are copied before anything is torn down. **It stops being adequate the moment the reader is not a person in the same conversation** — a team, a CI pipeline, or §9.15.4's future gate — which is the condition to watch rather than a reason to build now. §9.15.3a. |
@@ -6684,6 +6741,14 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.12 — §9.16.7: only the Owner hears Slack.** MMQ2 decided (Robert, option (c)). The Owner is the one Manager holding `route`, and only its `rite start` opens a Slack relay. Observed: a secondary went from 3 Slack connections at start to 0. The subsection used to record the opposite (every Manager's relay reads the DM), which was true until this revision. Routing and replies are marked planned.
+
+**Changes in 0.24.11 — two Managers are 0.6.0, and the relay does not know it.** Robert moved two Managers on one machine (a Claude Owner and a local secondary) into 0.6.0. §5.4.8 now says the requirement applies to 0.6.0 and that its state table is what 0.6.0 ships with: P2 holds, and P1, P3 and P4 do not. §9.16.7 is new and records behaviour, not a design. Every Manager's `rite start` opens its own Slack relay on the same DM, so every Manager acts on every Owner instruction, and two relays are 60 history calls a minute against Tier 3's "50+". Read from the code, not observed. What to do about it is MMQ2, now due in 0.6.0.
+
+**Changes in 0.24.10 — the upstream is not named, as §1.1 says.** §6.6.2's measurements, §9.15 and D-88 named the upstream project, which §1.1 deliberately does not name. They now say "the upstream". The phrase library's origin stays named where the licence needs it, in the code (`phrases.py`), not in this document.
+
+**Changes in 0.24.9 — N2 is built.** §6.6.2 records that injection phrases are reported in the standup and never blocked, where the phrases come from, and rite's own measurements of them. Those are kept apart from the sanitizer's rates, which are not this scan's. §6.6's opening says what rite does today.
 
 **Changes in 0.24.8 — N1 is built.** §6.6's opening now says what rite does today: ticket and Slack text is normalised on rite's read paths, no phrases are scanned, and neither is vetting. It also names the path it cannot cover, an agent reading the tracker directly. §6.6.1 records what was built and measured, including that HTML comments are surfaced rather than stripped.
 

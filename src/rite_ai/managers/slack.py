@@ -693,6 +693,15 @@ class Listener:
         from rite_ai.normalise import normalise
 
         cleaned = normalise((message.get("text") or "").strip())
+        # N2: reported at the next check-in, never blocked or withheld.
+        from rite_ai import phrases
+
+        where = "the Owner's DM" if channel == self.dm else self._where
+        phrases.report(
+            self.project,
+            f"the Slack message `ts {message.get('ts')}` in {where}",
+            cleaned.text,
+        )
         normalised = (
             [cleaned.note("this message").strip("[]")] if cleaned.changed else []
         )

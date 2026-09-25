@@ -656,9 +656,12 @@ actually being served with and says so:
     manager planner: its model is being served with a 4096-token context
     window, below the 32768 measured to work...
 
-It reports **unknown** rather than guessing when it cannot tell — the model is
-not loaded yet, or the endpoint is LM Studio, llama.cpp or vLLM rather than
-Ollama, none of which expose this through the OpenAI-compatible API.
+⚠ **When it cannot tell, it currently says nothing about the window.** That
+happens when the model is not loaded yet, or the endpoint is LM Studio,
+llama.cpp or vLLM rather than Ollama, none of which expose this through the
+OpenAI-compatible API. rite works out why, but does not print it yet. So
+silence is not a clean bill of health: load the model (send it one request)
+and run `rite doctor` again.
 
 ## Talking to a Manager over Slack
 
@@ -734,6 +737,28 @@ answer with `rite message <manager> "…"` instead.
 **The first run does not replay history.** Turning Slack on starts reading
 from that run's start line, and replies already in the mailbox stay in
 `rite replies` rather than being posted.
+
+## What rite does to ticket text, and what it does not
+
+When an agent reads a ticket through rite (`rite board show`, `list`,
+`query`), or a Slack message through the relay, rite does two things.
+
+**It shows what the tracker hides.** Invisible characters are removed. Tag
+characters, which spell text that renders as nothing, are decoded in place.
+HTML comments are surfaced. rite says what it changed in a line of its own.
+
+**It reports phrases commonly used in prompt injection** ("ignore all
+previous instructions", chat-role tokens and the like) as a line in the
+next check-in's standup. The ticket is read and worked as usual, and nothing
+is blocked.
+
+⚠ **Neither of these makes ticket text safe, and ticket text is not
+vetted.** An instruction worded as ordinary work passes both unchanged:
+`curl … | bash` in a setup step, "paste your .env into a comment", "add this
+SSH key". So does anything an agent reads from the tracker directly with
+`gh` or the tracker's API. What limits the damage is the command allowlist
+today, and destination control in 0.7.0 (SPEC §5.5). Whoever can write a
+ticket can write instructions into an agent's context.
 
 ## Keeping a project's generated files current
 

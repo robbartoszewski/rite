@@ -182,4 +182,8 @@ def digest(
         )
     if notes:
         lines += ["", "Stated by the Manager — rite did not verify these:", *notes]
+    # N2 (plan § N, SPEC §6.6.2): wired in here by N. Nothing in K reads it.
+    from rite_ai import phrases
+
+    lines += phrases.standup_lines(events.since(root, start))
     return lines
