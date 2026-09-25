@@ -457,6 +457,12 @@ Not objections. Several of these are Robert's.
    `V070_MEMORY.md` open question 3, and the harder instance of it.
 
 8. **What happens to a message that arrives while no Manager is running?**
+   ⚠ *Answered for Slack in v0.6.0 by design (A5, 2026-09-25; built, and the
+   delivery half not yet observed): the relay keeps each
+   conversation's cursor across runs, so the message is delivered at the next
+   start's first turn, and each run posts a stop line when it ends. Queued,
+   not refused, and said. The general question below stands for other
+   channels.*
    The common case overnight, not an edge one. Queue it and deliver on the
    next start; answer in the channel that nothing is running; or start a
    Manager on receipt — which turns a message into spend and needs a bound
