@@ -410,7 +410,7 @@ def announcement(manager: str, allow: tuple[str, ...] = DEFAULT_ALLOW) -> str:
     return (
         f"permissions: Manager {manager!r} may run {len(allow)} allowlisted "
         f"command families ({SETTINGS_FILENAME}); anything else is REFUSED "
-        f"rather than queued for approval. It runs inside a sandbox that "
-        f"bounds which files it can reach — NOT the network, and not what "
-        f"`rite` itself can do."
+        f"rather than queued for approval. It runs inside a sandbox — a "
+        f"GUARD RAIL against mistakes, not containment. See the limitations "
+        f"printed below."
     )

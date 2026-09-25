@@ -225,7 +225,14 @@ class TestTheGrantIsAnnounced:
         said = announcement("lead").lower()
         assert "unsandboxed" not in said
         assert "sandbox" in said
-        assert "not the network" in said
+        # ⚠ CORRECTED 2026-09-25: the announcement must not imply
+        # containment. The tmux server runs outside the profile, so a
+        # command sent through it runs unconfined — measured. It says
+        # "guard rail" and points at the limitations rather than listing
+        # what is bounded, because the shipped list of what was bounded
+        # turned out to contain something false.
+        assert "guard rail" in said
+        assert "not containment" in said
 
     def test_it_names_the_manager(self):
         assert "planner" in announcement("planner")

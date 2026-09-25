@@ -341,15 +341,25 @@ leaving it to be discovered:
 ```console
 permissions: Manager 'planner' may run 77 allowlisted command families
 (permissions.json); anything else is REFUSED rather than queued for
-approval. It runs inside a sandbox that bounds which files it can reach —
-NOT the network, and not what `rite` itself can do.
+approval. It runs inside a sandbox — a GUARD RAIL against mistakes, not
+containment. See the limitations printed below.
 ```
 
-⚠ **That last sentence is the important one: this is a speed bump, not a
-sandbox.** `git` runs hooks and `python -c` runs anything, so a Manager is
-still unsandboxed in your project's directory with your own file and
-network access. Workers are different: they run inside a sandbox. A Manager
-does not.
+⚠ **And read that as written: a guard rail, not containment.** ⚠ **Measured
+2026-09-25 — the tmux server runs OUTSIDE the profile, and a Manager lives
+in tmux.** A file write the profile refuses directly succeeded when sent
+through tmux, and `yoloai ls`, refused directly, listed every sandbox on
+this machine. So a determined Manager can reach other projects' files and
+start Workers without rite's broker. What the profile stops is the ordinary
+path, not the deliberate one.
+
+So treat a Manager as having your own file and network access, because a
+determined one does. `git` runs hooks, `python -c` runs anything, and the
+network is not confined at all — seatbelt has no network isolation. **What
+the profile buys is that a mistake stays inside the project**, which is
+worth having and is not the same as containment. Workers are bounded more
+tightly: they run in their own sandbox with no tmux server outside it to
+reach through.
 
 To change the list, edit your own `.claude/settings.json` — add to
 `permissions.allow` to widen it, or `permissions.deny` to narrow it. rite

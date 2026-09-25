@@ -310,8 +310,26 @@ def limitations() -> tuple[str, ...]:
     ⚠ **A boundary sold as more than it is would be worse than none**, which
     is why these are a value rite says out loud rather than a paragraph in a
     design note nobody reads at 2am.
+
+    ⚠ **CORRECTED 2026-09-25, and the previous version SHIPPED.** This list
+    claimed other projects on this machine were NOT reachable. That was
+    false: the tmux server runs outside the profile, a Manager lives in
+    tmux, and a command sent through it runs unconfined. Measured — a
+    refused write succeeded through tmux and `yoloai ls` listed nine
+    sandboxes machine-wide. The claim is corrected BEFORE the hole is
+    closed, because a false claim is the part that misleads somebody today.
     """
     return (
+        "⚠ THIS IS A GUARD RAIL, NOT CONTAINMENT. The tmux server runs "
+        "OUTSIDE the profile, and a command sent through tmux runs "
+        "unconfined. Measured: a file write the profile refuses directly "
+        "SUCCEEDED through tmux, and `yoloai ls`, refused directly, listed "
+        "every sandbox on this machine",
+        "so a determined Manager can start Workers without the broker and "
+        "can reach other projects' files. What the profile stops is the "
+        "ordinary path, not the deliberate one",
+        "/tmp and /private/tmp are readable and writable, so anything kept "
+        "there — including other rite worktrees — is reachable",
         "the network is NOT confined — seatbelt has no network isolation, so "
         "a Manager can reach anything this machine can",
         "a Manager can run `rite`, which does whatever you can do to this "
@@ -321,9 +339,6 @@ def limitations() -> tuple[str, ...]:
         "where it worked outside it",
         "ticket text from your board reaches the engine as instructions; the "
         "sandbox limits what acting on it can touch, it does not vet it",
-        "other projects on this machine, your home directory outside the "
-        "paths above, and your SSH keys are NOT reachable — that is what "
-        "this does buy",
     )
 
 
