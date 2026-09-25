@@ -244,7 +244,7 @@ ordinary mistakes cannot cross: a wrong path join, a broad `pkill`, a
 | MM4 | **A home for per-instance configuration.** Decided: gitignored. Location: see MMQ1 | Per MMQ1's answer: a key set in the instance file changes one machine's Manager and appears in no `git status` | MMQ1 | 1 sitting |
 | MM5 | **Pin P2 between two Managers.** The mechanism landed in `9862b59`. Its tests pin "a process outside the sandbox", not a sibling Manager's sandboxed process, and a later profile change (say, a shared grant for check-ins) could reopen the second without failing the first | A test composes two Managers' profiles in one root, runs B's stand-in engine inside B's profile, and asserts A's `kill` and A's `tmux` against B's session are refused and B survives. This plan's part 0.2 did the same by hand | — | ½ sitting |
 | MM6 | **The idempotence argument, per name.** §9.14.0 paid for amending D-50 with "one Manager per project". The code refuses per name. Write the per-name argument, including what fails closed (D-74) when two *different* Managers are asked for at once | NOT OBSERVABLE, review gate. §9.14.0 marked in place | — | ½ sitting |
-| MM7 | **`session_exists` gets its precondition (C12), before anything enumerates the tmux server.** A multi-Manager view is the first caller that asks about a name rite did not itself validate | Moot if C12 lands in 0.6.0. Otherwise `session_exists("eu:west")` refuses rather than answering False | — | ½ sitting |
+| ~~MM7~~ | **Moot: C12 landed as `0136447`**, "Make session_exists exact for any name, not only rite's". Kept so the id is not reused | — | — | — |
 
 ### Open questions — Robert's
 
@@ -400,7 +400,9 @@ is a reason the interface is **not** frozen yet, which is what D-63 expected.
   CU1 measures it.
 - **Credentials.** `CURSOR_API_KEY` in the environment, or `agent login`'s
   stored login, whose location is not documented. The environment route meets
-  the `tmux -e` argv trap (C6). The stored route needs the profile to grant a
+  C6's rule (landed, `c58e4e5`): only named variables are allowed onto tmux's
+argv, so a key sent that way must be admitted by name, with the exposure
+that brings, or go another route. The stored route needs the profile to grant a
   path nobody has named yet, the way it grants `~/.claude`. Either goes
   through the per-project credential store (§10.2) under rite's vocabulary.
 - **Egress.** A Cursor Manager's model endpoint is Cursor's service. The local
@@ -422,7 +424,7 @@ is a reason the interface is **not** frozen yet, which is what D-63 expected.
 | CU1 | **Spike: does Cursor do what its docs say?** Every "open until measured" cell above, plus: `create-chat` output and failure modes; nested `--sandbox enabled` inside rite's Manager profile; which hosts it contacts (feeds EG0). Pin the version measured | A spike note under `spikes/`, in the shape of B1/B4d: every row measured or marked not measured. A two-turn token test against a real account passes or fails on the wire | — | 1–2 sittings |
 | CU2 | **Generalise the handle axis in `engines.py`**, then update `ENGINE_CONTRACT.md` from the code as it lands (B3b's rule: the module is right, and the note is the bug) | Claude's and Goose's launch commands byte-identical across B3a's 54 argv combinations, and a Cursor spelling that mints, records and resumes | CU1 | 1–2 sittings |
 | CU3 | **Mint in the supervisor, record atomically, refuse on failure** | Through `rite start` with a stub `agent`: a mint that fails produces a refusal and no pane; a mint whose record fails leaves no designation; a hostile id is refused | CU2 | 1 sitting |
-| CU4 | **Profile grants and credentials** | A sandboxed Cursor Manager authenticates with no `HOME` redirection, and its credential is absent from tmux's argv (`ps`) | CU1, C6 | 1 sitting |
+| CU4 | **Profile grants and credentials** | A sandboxed Cursor Manager authenticates with no `HOME` redirection, and its credential is absent from tmux's argv (`ps`) | CU1 | 1 sitting |
 | CU5 | **`rite doctor` for Cursor** (R6) | Logged out, the probe says so in Cursor's own words and exits non-zero | CU1 | ½ sitting |
 | CU6 | **The both-halves observation, for Cursor** | A sandboxed Cursor Manager completes two cycles, the second recalls a token from the first, and it gets a Worker started through the broker, as `4ebbbd7` did for Goose | CU3, CU4 | 1 sitting |
 
@@ -712,18 +714,14 @@ it was recorded.
 
 ### Becomes 0.7.0 if it does not land in 0.6.0
 
-The v0.6.0 plan's "can slip to v0.7.0" list. **Check each against the 0.6.0 tag
-before planning around it.**
+The v0.6.0 plan's "can slip to v0.7.0" list, **checked against `main` on
+2026-09-25.** C5, C8, C10, C11, C12, C13 and C23 have all landed (each row in
+`V060_RELEASE_PLAN.md` now names its commit), so they are not carried. What
+is left:
 
 | item | v0.6.0 id |
 |---|---|
 | Wire `harness.run_subtask` to Goose; prove on the benchmark | B4, B5. B5 has already moved to the Worker tier, which is **scheduled in no release** (below) |
-| Designation membership check. **Cursor raises the stakes again**: its handle comes from the engine, like Claude's | C8 |
-| Journal provenance (author field) | C10 |
-| `.rite/user/` separation is incidental | C11. MMQ1(b) makes it worse |
-| `session_exists` precondition | C12 = MM7 |
-| `journal.instructions()` spells out `--manager` | C13 |
-| Outbox retention policy, **undecided** | C23 |
 | A check-in window with no Manager running, **Robert to confirm** | K6 |
 | N1/N2, ticket-text cleanup and phrase reporting. **Placed last in v0.6.0 and droppable** (Robert's ruling, `beac07f`). If they are dropped for quota, they arrive here. Applying §6.6 to Slack text is accepted | the v0.6.0 plan's part N |
 

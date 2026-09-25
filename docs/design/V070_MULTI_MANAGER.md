@@ -156,6 +156,13 @@ does not.
 
 ## Carried into 0.6.0 from 0.5.1 — engineering, not design
 
+⚠ *UPDATED 2026-09-25: every item below has landed on `main`.* §1 as C15, in
+parts (`2f1eecc`, `4827ea1`). §2 as C13 (`508349c`, which kept `--manager`
+and says why). §3 as C1 (`71eeb5e`). §4 as C12 (`0136447`). §5 per
+`PERMISSION_MODE_FOR_UNATTENDED_RUNS.md`, and C2/C4. §6 as C14 (`9503553`).
+§7 as C3 (`7d92df0`). The sections are kept as the record of what was
+measured. Their "OPEN" markers are from before.
+
 Five items deferred out of 0.5.1 deliberately. None blocks the design
 above; all are things the next person to work in this area should know
 before they spend an afternoon rediscovering them.
