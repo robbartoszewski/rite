@@ -28,6 +28,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 
+from rite_ai.managers.broker import REQUESTS_DIRNAME
 from rite_ai.managers.session import _tmux, session_exists
 
 SETTLE = 0.3
@@ -38,11 +39,21 @@ CONFIRM_PAUSE = 0.2
 def for_manager(manager: str, *, extra: str = "") -> str:
     """The text a Manager is given at start.
 
+    ⚠ **The Worker instructions changed shape in B9**: a Manager no longer
+    runs `rite sandbox start`, it writes a request. It runs inside a sandbox
+    now, and a sandbox cannot create another one — so the old instruction
+    would fail every time, and the Manager would have no way to know the
+    command was not the problem.
+
     `extra` is appended verbatim and is empty when there is nothing to add,
     so the caller concatenates unconditionally rather than branching — the
     same contract `journal.instructions` and `journal.start_notice` use for
     their disabled case.
     """
+    # Relative to the project root, which is the pane's working directory —
+    # this function has the Manager's name and nothing else, and the request
+    # directory is a function of exactly that.
+    requests = f".rite/managers/{manager}/{REQUESTS_DIRNAME}"
     base = (
         f"You are the Manager '{manager}' for this project, started by "
         f"`rite start {manager}`.\n"
@@ -54,26 +65,40 @@ def for_manager(manager: str, *, extra: str = "") -> str:
         "You are running in a human's foreground terminal — they can attach "
         "to this session and read along.\n"
         "\n"
-        "## Starting Workers\n"
+        "## Starting Workers — you ASK, rite starts it\n"
         "\n"
-        "Start every Worker with `rite sandbox start`, and give it its work "
-        "in the same command — nothing can type into a sandbox afterwards, "
-        "so a Worker started without work sits idle:\n"
+        "⚠ You are running inside a sandbox, and a sandbox cannot create "
+        "another one. `rite sandbox start` WILL FAIL if you run it — not "
+        "because you got the command wrong, but because the operating "
+        "system refuses a second sandbox from inside the first. So you ask "
+        "instead, by writing one small file:\n"
         "\n"
-        "    rite sandbox start <worker> --ticket <ID>\n"
-        '    rite sandbox start <worker> --prompt "..."\n'
+        "    mkdir -p " + requests + "\n"
+        '    echo \'{"worker":"<name>","ticket":"<ID>"}\' > '
+        + requests
+        + "/$(date +%s).json\n"
+        "\n"
+        "rite picks it up when this session ends, starts the Worker "
+        "outside the sandbox, and tells you what happened in your next "
+        "instruction. So do not wait for the Worker to appear during this "
+        "session — it will not, and that is not a failure.\n"
+        "\n"
+        "Those two fields are the only ones a request may carry. Anything "
+        "else in the file — an environment, a prompt, a directory — is "
+        "REFUSED, because rite chooses the rest of a Worker's launch and "
+        "will not take it from a request.\n"
         "\n"
         "`rite add worker <name>` first if the Worker does not exist yet; "
-        "`rite status` lists the ones that do. The sandbox name is printed "
-        "on start, and `yoloai attach <name>` opens it to watch.\n"
+        "`rite status` lists the ones that do. A request naming a Worker "
+        "that does not exist, or a ticket that is not on the board, is "
+        "refused and reported.\n"
         "\n"
-        "⚠ NEVER start a Worker by running `claude` (or any engine) "
-        "yourself, however convenient it looks. `rite sandbox start` is "
-        "what delivers this project's credentials to the Worker; an engine "
-        "you launch directly gets none and the Worker will fail on launch "
-        "with an authentication error, every time. If `rite sandbox start` "
-        "refuses, report the refusal and stop — do not work around it by "
-        "running the engine.\n"
+        "⚠ NEVER start a Worker by running `claude`, `goose` or any engine "
+        "yourself, however convenient it looks. The request path is what "
+        "delivers this project's credentials to the Worker; an engine you "
+        "launch directly gets none and the Worker fails on launch with an "
+        "authentication error, every time. If a request is refused, report "
+        "the refusal and stop — do not work around it.\n"
     )
     return base + extra
 

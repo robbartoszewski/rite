@@ -45,6 +45,14 @@ from rite_ai.managers import (
     manager_dir,
 )
 from rite_ai.managers.broker import take_requests
+from rite_ai.managers.enclosure import (
+    engine_tmp,
+    limitations,
+    refusal_looks_like_ours,
+    why_it_was_refused,
+    wrap,
+    write_profile,
+)
 from rite_ai.managers.engines import spelling_for
 from rite_ai.managers.mailbox import INBOX, delivery_note, how_to_reply
 from rite_ai.managers.mailbox import take as take_mail
@@ -302,6 +310,30 @@ def launch_command(
     # Redirected, not an argument: `tmux new-session` puts its command on
     # tmux's argv where `ps` shows it to every local account.
     return f"{base} < {shlex.quote(str(prompt_path))}"
+
+
+def _say_if_the_sandbox_refused(root: Path, manager: str, pane: str, say) -> None:
+    """Point at the boundary when something in the pane hit it.
+
+    ⚠ **Because it reads as rite being broken, and it is not.** The
+    operator's own Claude Code hooks still load inside the sandbox — `HOME`
+    is deliberately not redirected, so their login keeps working — and a
+    hook that runs something outside the profile fails inside the boundary
+    where it worked outside. Found by hitting it with a real `SessionEnd`
+    hook.
+
+    ⚠ **A hint, not a verdict.** `Operation not permitted` in a pane can
+    come from something rite never sandboxed, so this says "the sandbox
+    refuses things and here is its profile" rather than claiming to know
+    which line failed. Saying nothing would leave the user with a denial and
+    no idea which of the machine's several boundaries produced it.
+    """
+    from rite_ai.managers.session import pane_text_for_detection
+
+    if not pane:
+        return
+    if refusal_looks_like_ours(pane_text_for_detection(pane)):
+        say(why_it_was_refused(root, manager))
 
 
 def _honour_worker_requests(root: Path, manager: str, broker, say) -> None:
@@ -623,13 +655,20 @@ def supervise(
             f"permissions: Manager {manager!r} runs its engine with "
             f"{spelling.permission_env}={permission}. ⚠ This engine has no "
             "per-command allowlist — the mode is whole-session, so the "
-            "allowlist a `claude` Manager gets does not exist here. It runs "
-            "unsandboxed in this project's directory with your own file and "
-            "network access."
+            "allowlist a `claude` Manager gets does not exist here, and the "
+            "sandbox below is the ONLY boundary this Manager has."
         )
     else:
         permission = launch_arguments(write_settings(root))
         say(announcement(manager))
+
+    # ⚠ **Said every run, and deliberately not folded into the permission
+    # line above.** A boundary sold as more than it is would be worse than
+    # none, so what it does NOT buy is stated rather than left to be
+    # inferred from what it does.
+    say(f"sandbox: Manager {manager!r} runs inside a profile. What that does NOT do:")
+    for limit in limitations():
+        say(f"  - {limit}")
 
     cycles: list[Cycle] = []
     live = ""
@@ -942,6 +981,7 @@ def supervise(
             cycle.attended = attended
             _say_refusals(root, cycle.started_at, say, engine, agent, live_pane)
             _honour_worker_requests(root, manager, broker, say)
+            _say_if_the_sandbox_refused(root, manager, live_pane, say)
 
             how = ending(result.session, human_was_present=attended, pane=live_pane)
             cycle.ending = how.kind
@@ -1196,6 +1236,18 @@ def _default_starter(
     # its engine, both of which are already here. An engine that assigns its
     # own id has no `start` spelling, so this is "" for Claude and its argv
     # is unchanged.
+    # ⚠ **THE BOUNDARY, applied at the one place that builds the launch.**
+    # Robert's decision: Managers get a sandbox, because the allowlist is
+    # the secure default for Claude and cannot hold for Goose, whose
+    # GOOSE_MODE is whole-session. What it does and does not buy is in
+    # `enclosure.limitations()` and said out loud every run.
+    #
+    # ⚠ HOME is NOT redirected and TMPDIR is — see
+    # `enclosure.ENGINE_HOME_IS_THE_OPERATORS`. Redirecting HOME costs the
+    # Claude login; not redirecting TMPDIR either panics Goose or, if the
+    # system temp root is granted instead, leaks every other process's
+    # scratch.
+    profile = write_profile(root, manager)
     handle_spelling = spelling_for(engine, agent)
     start_handle = (
         session_name(root, manager)
@@ -1205,17 +1257,25 @@ def _default_starter(
     result = start_session(
         root,
         manager,
-        pane_env=(
-            {placement[1]: placement[2]} if placement and placement[0] == "env" else {}
-        ),
+        pane_env={
+            **(
+                {placement[1]: placement[2]}
+                if placement and placement[0] == "env"
+                else {}
+            ),
+            "TMPDIR": str(engine_tmp(root, manager)),
+        },
         engine=engine,
-        command=launch_command(
-            engine,
-            resume_id,
-            str(manager_dir(root, manager) / PROMPT_FILE),
-            permission,
-            agent,
-            start_handle,
+        command=wrap(
+            launch_command(
+                engine,
+                resume_id,
+                str(manager_dir(root, manager) / PROMPT_FILE),
+                permission,
+                agent,
+                start_handle,
+            ),
+            profile,
         ),
         prompt=prompt,
         max_sessions=max_sessions,

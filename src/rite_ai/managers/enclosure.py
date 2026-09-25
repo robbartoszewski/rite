@@ -1,0 +1,376 @@
+"""The sandbox profile a Manager runs inside (B9, piece 1).
+
+**Robert's decision: Managers get a boundary.** The allowlist is the secure
+default for Claude and cannot hold for Goose, whose `GOOSE_MODE` is
+whole-session with no per-command concept, so the sandbox is the only
+engine-independent boundary rite has.
+
+⚠ **READ `docs/design/spikes/B9-manager-sandboxing.md` BEFORE CHANGING
+ANYTHING HERE.** Two measured facts shape this module and neither is
+guessable:
+
+1. **A sandboxed Manager cannot start a sandboxed Worker.** Inside a
+   seatbelt sandbox only a SEMANTICALLY EQUIVALENT profile may be
+   re-applied — a strictly narrower one is refused too — and two yoloAI
+   sandbox profiles always differ, because each scopes its paths to its own
+   id. So `yoloai` is deliberately NOT reachable from here, and a Manager
+   asks the supervisor for a Worker instead.
+2. **The shipped Worker profile already contains `(allow network*)`**, and
+   so does this one. Seatbelt has no network isolation (D-30). That is a
+   line in the file rather than a limitation rite might mitigate.
+
+⚠ **WHAT THIS BOUNDARY IS, STATED HONESTLY.** It keeps the operator's home
+outside the named paths unreadable — Documents, Desktop, SSH keys, browser
+profiles, **and other rite projects on the same machine**. It does not
+confine the network, and it cannot constrain an agent permitted to run
+`rite`, because `rite` does what the operator can do.
+
+**A real reduction in blast radius and an unreal reduction in capability.**
+
+A boundary sold as more than it is would be worse than none, so
+`limitations()` exists to be printed rather than to be inferred.
+"""
+
+from __future__ import annotations
+
+import os
+import shlex
+from pathlib import Path
+
+from rite_ai.managers import user_dir
+from rite_ai.names import name_problem
+
+PROFILE_SUFFIX = ".sb"
+ENGINE_TMP_DIRNAME = "enginetmp"
+
+
+def profile_path(root: Path, manager: str) -> Path:
+    """Where this Manager's profile is written.
+
+    Under `user_dir` with the instance records and the permission list:
+    per-user, per-machine, never committed. What a Manager may reach on THIS
+    machine is a local fact, and the absolute paths inside the profile make
+    it meaningless anywhere else.
+    """
+    problem = name_problem(manager, kind="manager name", must_be_a_tmux_target=True)
+    if problem:
+        raise ValueError(f"refusing to build a profile path: {problem}")
+    return user_dir(root) / f"{manager}{PROFILE_SUFFIX}"
+
+
+ENGINE_HOME_IS_THE_OPERATORS = True
+"""⚠ **`HOME` is NOT redirected, and this was measured rather than chosen.**
+
+B4d recorded that Goose panics unless `HOME` points somewhere writable, and
+the obvious reading is "give the engine its own HOME". Under THIS profile
+that is both unnecessary and harmful:
+
+- **Unnecessary.** Goose starts fine with the operator's `HOME`, because the
+  profile grants `~/.config/goose` and `~/.local/share/goose` directly — it
+  has to anyway, since break 1 made that store hold the conversation handle
+  every resumed cycle names. What B4d actually found is "the engine's state
+  paths must be writable"; redirection is one way to satisfy that and this
+  profile satisfies it the other way. Under yoloAI's Worker profile, which
+  grants no part of the operator's home, redirection was the only route and
+  the panic was real.
+- **Harmful.** Claude Code's login lives under `HOME`. Measured: with `HOME`
+  redirected it answers *"Not logged in · Please run /login"*; with the
+  operator's `HOME` it finds the stored login and proceeds. Redirecting
+  would take the credential away from every existing Claude Manager.
+
+⚠ **`TMPDIR` is still redirected** — see `engine_tmp`. That one is load-
+bearing, and granting the system temp root instead was measured to leak
+every other process's scratch.
+"""
+
+
+def engine_tmp(root: Path, manager: str) -> Path:
+    """The `TMPDIR` the engine gets, and why the system one is not granted.
+
+    ⚠ **Granting `$TMPDIR` was measured to be a real leak, not a
+    theoretical one.** Goose writes `.tmpXXXX` directly in the per-user temp
+    root while loading extensions, so the naive fix is to allow
+    `/var/folders/<..>/T`. The check that was supposed to prove the profile
+    denies another project's files then PASSED them: every other process's
+    scratch on this machine lives in that same directory, and the Manager
+    could read and write all of it.
+
+    So the engine is given its own, inside the boundary, exactly as it is
+    given its own `HOME`. The system temp root is not granted at all.
+    """
+    return user_dir(root) / ENGINE_TMP_DIRNAME / manager
+
+
+def _quote(path: Path | str) -> str:
+    """A path as a seatbelt string literal.
+
+    Seatbelt profiles are S-expressions; a path containing `"` or `\\` would
+    end the literal early and the rest would be read as policy. Refused
+    rather than escaped, for the reason `session_id_problem` refuses a
+    hostile resume id: this file is parsed by something that acts on it.
+    """
+    text = str(path)
+    if '"' in text or "\\" in text:
+        raise ValueError(
+            f"refusing to put {text!r} in a sandbox profile: a quote or "
+            "backslash would end the string literal and the remainder would "
+            "be read as policy"
+        )
+    return f'"{text}"'
+
+
+def _readable(paths) -> list[str]:
+    return [f"(allow file-read* (subpath {_quote(p)}))" for p in paths]
+
+
+def _writable(paths) -> list[str]:
+    return [f"(allow file-read* file-write* (subpath {_quote(p)}))" for p in paths]
+
+
+def _system_paths() -> tuple[Path, ...]:
+    """Read-only system locations any process needs to start at all.
+
+    The same set yoloAI grants a Worker. Not narrowed: a profile that cannot
+    load `/usr/lib` does not deny an attacker anything, it just fails to run
+    a program.
+    """
+    return tuple(
+        Path(p)
+        for p in (
+            "/usr/lib",
+            "/usr/bin",
+            "/usr/sbin",
+            "/usr/share",
+            "/usr/local",
+            "/bin",
+            "/sbin",
+            "/System",
+            "/Library",
+            "/private/etc",
+            "/opt/homebrew",
+            "/Applications",
+            "/dev",
+            # Resolver and daemon sockets. Measured: without this an HTTPS
+            # request fails at the transport (curl exit 56) even though
+            # `(allow network*)` is granted — the policy blocks the lookup
+            # rather than the connection, which is the confusing shape.
+            "/private/var/run",
+            "/private/var/db",
+        )
+    )
+
+
+def _tool_paths(home: Path) -> tuple[Path, ...]:
+    """Where rite, the engines and their configuration live.
+
+    ⚠ **`~/.yoloai` is NOT here, and that is the point of the whole design.**
+    A Manager that could run `yoloai` would try to create a Worker sandbox
+    from inside a sandbox, which the kernel refuses (B9) — so it would fail
+    at the one job the Manager exists for, after appearing to start
+    correctly. It asks the supervisor instead.
+    """
+    return tuple(
+        home / p
+        for p in (
+            ".local/bin",
+            # ⚠ ALL of uv's share directory, not just `tools`. rite is a uv
+            # tool whose shebang points at an interpreter under
+            # `.local/share/uv/python`, and that interpreter dlopens
+            # `libpython3.13.dylib` from beside itself. Measured: granting
+            # only `tools` gives `Abort trap: 6` and
+            # `dyld: Library not loaded ... (file system sandbox blocked
+            # open())` — a crash rather than a refusal, which is the worst
+            # shape for a missing grant because it reads as a broken rite.
+            ".local/share/uv",
+            ".claude",
+            ".claude.json",
+            ".config/goose",
+            ".rite",
+            ".gitconfig",
+            ".config/git",
+        )
+    )
+
+
+def _engine_state_paths(home: Path) -> tuple[Path, ...]:
+    """Engine state the engine must WRITE, not merely read.
+
+    Goose keeps its session store under `~/.local/share/goose`, and since
+    break 1 that store holds the conversation handle every resumed cycle
+    names. A Manager that cannot write it cannot continue its own work.
+    """
+    return (home / ".local/share/goose", home / ".local/state/goose")
+
+
+def compose(
+    root: Path,
+    manager: str,
+    home: Path | None = None,
+    tmux_tmpdir: str = "",
+) -> str:
+    """The seatbelt profile for one Manager.
+
+    ⚠ **`(deny default)` with named allows**, the same shape yoloAI gives a
+    Worker — so what is not enumerated is refused, and a path that turns out
+    to be needed fails loudly rather than being quietly reachable.
+    """
+    where = Path(home) if home is not None else Path(os.path.expanduser("~"))
+    project = Path(root).resolve()
+    sockets = tmux_tmpdir or os.environ.get("TMUX_TMPDIR") or "/private/tmp"
+    # ⚠ The engine gets its OWN temp directory, and the system one is not
+    # granted. Goose writes `.tmpXXXX` in the per-user temp root while
+    # loading extensions — without somewhere to do that it PANICS after
+    # printing "goose is ready", so the session appears to start and then
+    # dies. Granting `$TMPDIR` fixes that and opens every other process's
+    # scratch on this machine; see `engine_tmp`.
+    temps = [Path("/tmp"), Path("/private/tmp"), Path(sockets)]
+    lines = [
+        "; Composed by rite for a Manager. Do not edit: it is rewritten every",
+        "; run, so an edit here vanishes without reporting that it did.",
+        "; What this does and does NOT buy:",
+        ";   docs/design/spikes/B9-manager-sandboxing.md",
+        "(version 1)",
+        "(deny default)",
+        "",
+        "; Starting a process at all",
+        "(allow process-exec)",
+        "(allow process-fork)",
+        "(allow signal)",
+        "(allow sysctl-read)",
+        "(allow file-read-metadata)",
+        '(allow file-read* (literal "/"))',
+        "(allow mach-lookup)",
+        "(allow ipc-posix-shm-read-data)",
+        "(allow ipc-posix-shm-write-data)",
+        "(allow ipc-posix-shm-write-create)",
+        "(allow ipc-posix-sem)",
+        "; ⚠ /dev/null must be WRITABLE, not just readable. Measured: without",
+        "; this every `cmd >/dev/null` fails with `Operation not permitted`,",
+        "; which is most of what a shell does and none of what a boundary is",
+        "; for.",
+        '(allow file-write* (subpath "/dev"))',
+        "",
+        "; ⚠ ALL NETWORK. Seatbelt has no network isolation (D-30), and a",
+        "; Manager needs the ticket backend and the engine endpoint anyway.",
+        "; The shipped Worker profile carries the same line.",
+        "(allow network*)",
+        "",
+        "; System locations",
+        *_readable(_system_paths()),
+        "",
+        "; The project this Manager manages — the WHOLE tree, because that is",
+        "; what an orchestrator works on, unlike a Worker's one workspace.",
+        *_writable([project]),
+        "",
+        "; Shared temporary space and the tmux socket this pane lives on",
+        *_writable(dict.fromkeys(temps)),
+        "",
+        "; The engine's own TMPDIR, inside the boundary. HOME is the",
+        "; operator's — see ENGINE_HOME_IS_THE_OPERATORS.",
+        *_writable([engine_tmp(root, manager)]),
+        "",
+        "; rite itself, the engines, and their configuration",
+        *_readable(_tool_paths(where)),
+        "",
+        "; Engine state that must be written, including Goose's session store",
+        *_writable(_engine_state_paths(where)),
+        "",
+        "; ⚠ Named last so they win: git identity is readable and NOT writable,",
+        "; mirroring the Worker profile. An agent that can rewrite git config",
+        "; can change what every later commit claims.",
+        f"(deny file-write* (subpath {_quote(where / '.gitconfig')}))",
+        f"(deny file-write* (subpath {_quote(where / '.config/git')}))",
+        "",
+        "; ⚠ yoloAI is unreachable ON PURPOSE. A Manager cannot create a",
+        "; sandbox from inside one (B9), so it asks the supervisor instead.",
+        f"(deny file-read* file-write* (subpath {_quote(where / '.yoloai')}))",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def write_profile(root: Path, manager: str, home: Path | None = None) -> Path:
+    """Write the profile and the engine's HOME, and return the profile path.
+
+    ⚠ **Rewritten every run**, for the reason `permissions.write_settings`
+    is: a write-once file would pin a project to whatever shipped the day it
+    was created, so widening or narrowing the surface in a later release
+    would reach new projects only.
+    """
+    path = profile_path(root, manager)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    engine_tmp(root, manager).mkdir(parents=True, exist_ok=True)
+    path.write_text(compose(root, manager, home) + "\n")
+    return path
+
+
+def limitations() -> tuple[str, ...]:
+    """What this boundary does NOT do, to be PRINTED rather than inferred.
+
+    ⚠ **A boundary sold as more than it is would be worse than none**, which
+    is why these are a value rite says out loud rather than a paragraph in a
+    design note nobody reads at 2am.
+    """
+    return (
+        "the network is NOT confined — seatbelt has no network isolation, so "
+        "a Manager can reach anything this machine can",
+        "a Manager can run `rite`, which does whatever you can do to this "
+        "project — the sandbox bounds the filesystem, not that",
+        "your own Claude Code hooks are still loaded, and one that runs "
+        "something outside the paths above will FAIL inside the boundary "
+        "where it worked outside it",
+        "ticket text from your board reaches the engine as instructions; the "
+        "sandbox limits what acting on it can touch, it does not vet it",
+        "other projects on this machine, your home directory outside the "
+        "paths above, and your SSH keys are NOT reachable — that is what "
+        "this does buy",
+    )
+
+
+def wrap(command: str, profile: Path) -> str:
+    """Put `command` inside the sandbox.
+
+    ⚠ **Prefixed rather than rebuilt.** The command already carries the
+    engine's own vocabulary and, for Claude, a stdin redirection from the
+    prompt file. The shell tmux runs this through applies the redirection
+    around the whole thing, so prefixing keeps both halves correct without
+    this module knowing anything about either.
+    """
+    return f"sandbox-exec -f {shlex.quote(str(profile))} {command}"
+
+
+def refusal_looks_like_ours(pane_text: str) -> bool:
+    """Did something in the pane fail because THIS boundary refused it?
+
+    ⚠ **Because it will read as rite being broken, and it is not.** The
+    operator's own Claude Code hooks still load inside the sandbox — `HOME`
+    is deliberately not redirected, so the login keeps working — and a hook
+    that runs something outside the profile fails inside the boundary where
+    it worked outside. Found by hitting it: a `SessionEnd` hook pointing at
+    a path the profile does not grant.
+
+    Matched to DETECT, and the pane is never relayed — the rule
+    `_authentication_looks_broken` follows, because a pane can carry
+    secrets.
+    """
+    low = (pane_text or "").lower()
+    return "operation not permitted" in low or "sandbox blocked" in low
+
+
+def why_it_was_refused(root: Path, manager: str) -> str:
+    """What to tell a user whose hook or tool just failed inside the box.
+
+    Points at the boundary rather than leaving them to guess, and says the
+    two things they can do about it.
+    """
+    return (
+        f"something in Manager {manager!r} was refused by the sandbox rite "
+        f"runs it in — that is this boundary, not a broken rite. The profile "
+        f"is at {profile_path(root, manager)} and lists every path the "
+        f"Manager may reach.\n"
+        "  If it was one of your own Claude Code hooks: hooks still load "
+        "inside the sandbox, and one that runs something outside the project "
+        "will fail here though it works outside.\n"
+        "  What this boundary does and does not buy: "
+        "docs/design/spikes/B9-manager-sandboxing.md"
+    )

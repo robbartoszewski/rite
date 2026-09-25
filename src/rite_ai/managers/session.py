@@ -1004,7 +1004,7 @@ def attachment(name: str) -> Attachment:
         )
 
 
-ALLOWED_ON_TMUX_ARGV = frozenset({MANAGER_ENV, "GOOSE_MODE"})
+ALLOWED_ON_TMUX_ARGV = frozenset({MANAGER_ENV, "GOOSE_MODE", "TMPDIR"})
 """The ONLY variables that may be passed to a pane with `tmux -e` (C6).
 
 A positive list on purpose. `-e NAME=value` puts the value on tmux's argv,
@@ -1020,7 +1020,16 @@ environment rather than on a flag, and a mode name (`auto`, `approve`) is
 not a secret — it is the same class of value as a Manager's name. It is
 listed explicitly rather than admitted by a rule like "anything ending in
 _MODE", because the next variable an engine wants here might well be a
-token."""
+token.
+
+⚠ `TMPDIR` is here for the Manager sandbox (B9), and the reason is the same
+shape: it is a PATH under the project's own `.rite/user/`, not a secret —
+`ps` showing it tells a local account where a scratch directory is, which
+the profile beside it already names. It is needed because the engine is
+given its own temp directory rather than the system one: Goose panics
+without somewhere writable to put `.tmpXXXX` while loading extensions, and
+granting the per-user temp root instead was measured to expose every other
+process's scratch on the machine."""
 
 
 def _on_tmux_argv(name: str, value: str) -> list[str]:
@@ -1237,6 +1246,17 @@ def approval_blocked(pane: str) -> bool:
     """
     low = _pane_text(pane).lower() if pane else ""
     return any(shape in low for shape in _APPROVAL_SHAPES)
+
+
+def pane_text_for_detection(name: str) -> str:
+    """What the pane shows, for DETECTION only — named so a caller outside
+    this module cannot mistake it for something to relay.
+
+    ⚠ **A pane can carry secrets** (a launch line with an injected token is
+    the measured case elsewhere in this project), so every caller matches
+    against this and returns its own words.
+    """
+    return _pane_text(name)
 
 
 def _pane_text(name: str) -> str:

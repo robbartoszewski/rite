@@ -400,12 +400,17 @@ def announcement(manager: str, allow: tuple[str, ...] = DEFAULT_ALLOW) -> str:
     ⚠ **It no longer says "will not ask before anything".** That sentence
     was true of `--dangerously-skip-permissions` and is false now; leaving
     it would be the doc-describes-reality defect C19 exists for.
+
+    ⚠ **And it no longer says "unsandboxed", for the same reason.** Managers
+    run inside a profile now (B9). What that boundary does NOT buy is said
+    separately by `enclosure.limitations()` rather than crammed in here: a
+    boundary sold as more than it is would be worse than none, and the
+    honest version is too long for one line.
     """
     return (
         f"permissions: Manager {manager!r} may run {len(allow)} allowlisted "
         f"command families ({SETTINGS_FILENAME}); anything else is REFUSED "
-        f"rather than queued for approval. It still runs unsandboxed in this "
-        f"project's directory, on this machine, with your own file and "
-        f"network access — the allowlist narrows what it reaches for, not "
-        f"what it could reach."
+        f"rather than queued for approval. It runs inside a sandbox that "
+        f"bounds which files it can reach — NOT the network, and not what "
+        f"`rite` itself can do."
     )

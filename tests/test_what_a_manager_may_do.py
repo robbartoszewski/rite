@@ -217,11 +217,15 @@ class TestTheGrantIsAnnounced:
         assert "refused" in announcement("lead").lower()
 
     def test_it_says_where_that_power_still_reaches(self):
-        """⚠ The allowlist is a speed bump, not a sandbox. A Manager is
-        still unsandboxed — unlike a Worker, which yoloAI bounds."""
+        """⚠ **CHANGED BY B9: a Manager is no longer unsandboxed**, so the
+        line that said so is gone. What the boundary does NOT buy is said
+        separately by `enclosure.limitations()` rather than crammed in
+        here — a boundary sold as more than it is would be worse than
+        none."""
         said = announcement("lead").lower()
-        assert "unsandboxed" in said
-        assert "machine" in said
+        assert "unsandboxed" not in said
+        assert "sandbox" in said
+        assert "not the network" in said
 
     def test_it_names_the_manager(self):
         assert "planner" in announcement("planner")

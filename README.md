@@ -341,9 +341,8 @@ leaving it to be discovered:
 ```console
 permissions: Manager 'planner' may run 77 allowlisted command families
 (permissions.json); anything else is REFUSED rather than queued for
-approval. It still runs unsandboxed in this project's directory, on this
-machine, with your own file and network access — the allowlist narrows what
-it reaches for, not what it could reach.
+approval. It runs inside a sandbox that bounds which files it can reach —
+NOT the network, and not what `rite` itself can do.
 ```
 
 ⚠ **That last sentence is the important one: this is a speed bump, not a

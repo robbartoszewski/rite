@@ -60,6 +60,10 @@ Error: goose-cli main thread panicked
 Inside the sandbox `HOME` is still the host's `/Users/<user>`, whose Goose
 log directory seatbelt denies. Not a degraded run — no run.
 
+⚠ **CORRECTED 2026-09-25 — redirecting `HOME` is the WRONG general fix, and
+following this section alone breaks Claude authentication.** See "The `HOME`
+correction" at the end of this note before wiring anything.
+
 **With `HOME` pointed at a writable path inside the sandbox it works:**
 
 ```
@@ -117,13 +121,52 @@ release. Stated so the answer is not read as broader than it is.
 
 ### If this is adopted, three things follow
 
-1. **`HOME` must be set for a sandboxed Goose**, or it panics at startup with
-   a message naming `tracing-appender` and nothing about configuration.
-   Whatever wires this needs to own that, and `rite doctor` should probably
-   say so rather than leaving the panic to be decoded.
+1. ⚠ **`HOME` must be set for a sandboxed Goose** — **CORRECTED 2026-09-25,
+   see below. Do not act on this line alone.** It panics at startup with a
+   message naming `tracing-appender` and nothing about configuration.
 2. **yoloAI has no `goose` agent**, so a sandboxed Goose runs under
    `--agent shell` / `idle` with rite driving it, or yoloAI gains one.
 3. **Goose's config does not travel with a changed `HOME`.** Provider, model
    and endpoint have to arrive as environment variables —
    `GOOSE_PROVIDER`, `GOOSE_MODEL`, `OLLAMA_HOST` — which is how the
    measurement above was run and is what `goose_agent.py` already does.
+
+---
+
+## ⚠ The `HOME` correction (2026-09-25, from B9)
+
+**What this note found is right. What it implies is not, and the implication
+is the part that got cited.**
+
+The panic is real: under yoloAI's Worker profile, which grants no part of the
+operator's home, Goose cannot write its log and dies. Redirecting `HOME`
+fixes it there.
+
+**But the requirement is "the engine's state paths must be writable", not
+"`HOME` must be redirected."** Redirection is one way to satisfy it. Granting
+the engine's own paths is another, and for a Manager it is the right one —
+measured in B9 while composing the Manager profile:
+
+- **Goose starts fine with the operator's `HOME`** when the profile grants
+  `~/.config/goose` and `~/.local/share/goose`. A Manager profile has to
+  grant those anyway: since B4b break 1, that store holds the conversation
+  handle every resumed cycle names.
+- ⚠ **Redirecting `HOME` costs the Claude login.** Measured, same profile,
+  same command: with `HOME` redirected `claude -p` answers *"Not logged in ·
+  Please run /login"*; with the operator's `HOME` it finds the stored login
+  and runs. **So anybody who read item 1 above and redirected `HOME` for a
+  Claude Manager would have broken authentication and had no reason to
+  suspect this note.**
+- **What IS load-bearing is `TMPDIR`.** Goose writes `.tmpXXXX` in the
+  per-user temp root while loading extensions and panics without somewhere
+  to do it. Granting the system temp root instead is a real leak — every
+  other process's scratch lives there — so the engine gets its own.
+
+**So: redirect `TMPDIR`, grant the engine's own config and state paths, and
+leave `HOME` alone.** `src/rite_ai/managers/enclosure.py` implements exactly
+that and `ENGINE_HOME_IS_THE_OPERATORS` records why.
+
+⚠ **One consequence of leaving `HOME` alone**, found by hitting it: the
+operator's own Claude Code hooks still load, and a hook that runs something
+outside the profile fails *inside* the boundary where it worked outside.
+That reads as rite being broken, so rite says which boundary refused it.

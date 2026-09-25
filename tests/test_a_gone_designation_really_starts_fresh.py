@@ -36,8 +36,12 @@ def test_the_fresh_fallback_launches_after_a_resume_dies_in_its_pane():
     work = Path(tempfile.mkdtemp(prefix="gone-"))
     root = work / "proj"
     (root / ".rite").mkdir(parents=True)
-    log = work / "launches.log"
-    engine = work / "engine"
+    # ⚠ Inside the project, because a Manager now runs in a sandbox (B9)
+    # and the profile grants the project tree, system paths and the engines'
+    # own locations — not an arbitrary temp directory beside it. A real
+    # engine lives in one of those; only a stub needs saying.
+    log = root / "launches.log"
+    engine = root / "engine"
     # Behaves like `claude -p`: a gone `--resume` exits 1 at once; a fresh
     # start reads its prompt and runs for a moment.
     engine.write_text(
