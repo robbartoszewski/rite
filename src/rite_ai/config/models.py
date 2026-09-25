@@ -94,6 +94,42 @@ class WatchdogConfig:
 
 
 @dataclass
+class SlackConfig:
+    """Which Slack conversations a Manager reads from and posts to.
+
+    ⚠ **READING AND POSTING ARE SEPARATE FIELDS, DELIBERATELY, AND THAT IS
+    AN AUTHORISATION DECISION RATHER THAN A CONVENIENCE.** If one channel
+    served both, then anyone who can post where the Manager posts can also
+    direct it — in a workspace channel that is everybody, which is the
+    disgruntled-employee shape exactly.
+
+    So `command_channel` is the only conversation instructions are taken
+    from, and `broadcast_channel` is where status is posted for a team to
+    read. A public channel may be the broadcast one while the command one is
+    a DM with the app, which is one-to-one BY CONSTRUCTION — "who is talking"
+    is then answered by the conversation existing rather than by a check rite
+    has to get right.
+
+    Both are ids rather than names (`C…` for a channel, `D…` for a DM),
+    because that is what `conversations.history` takes, and because a name
+    can be reassigned to a different conversation while an id cannot.
+    """
+
+    command_channel: str = ""
+    """Read for instructions. Empty means rite reads no Slack at all."""
+
+    broadcast_channel: str = ""
+    """Posted to for visibility. Empty means replies go only where the
+    command channel is, so a project can start with one conversation and
+    split later without the code changing."""
+
+    owner_user: str = ""
+    """The Owner's Slack user id (`U…`), from which a DM id is derivable —
+    `chat.postMessage` to a user id returns the `D…` channel, measured, with
+    no extra scope. Reserved for the DM work; nothing reads it yet."""
+
+
+@dataclass
 class PoolConfig:
     coordinator_standby: int = 2
     warn_threshold: float = 0.5
@@ -318,6 +354,7 @@ class ProjectConfig:
     schedule: ScheduleConfig = field(default_factory=ScheduleConfig)
     spec: SpecConfig = field(default_factory=SpecConfig)
     coordination: CoordinationConfig = field(default_factory=CoordinationConfig)
+    slack: SlackConfig = field(default_factory=SlackConfig)
 
 
 @dataclass

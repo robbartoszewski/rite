@@ -289,6 +289,11 @@ def test_config_yaml_key_order_matches_spec(tmp_path: Path):
         "budget",
         "coordination",
         "schedule",
+        # ⚠ APPENDED, not inserted. This list is the documented key order, and
+        # a new section goes at the END so an existing project's config.yaml
+        # is not reordered the next time anything rewrites it — a reordered
+        # file is a diff nobody asked for in a file people hand-edit.
+        "slack",
     ]
 
 

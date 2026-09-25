@@ -28,6 +28,7 @@ from .models import (
     ScanPattern,
     ScheduleConfig,
     ScheduleWindow,
+    SlackConfig,
     SpecConfig,
     TicketBackendConfig,
     WatchdogConfig,
@@ -159,6 +160,7 @@ _CONFIG_SECTIONS = {
     "publish_gate": _fields(PublishGateConfig),
     "heartbeat": _fields(HeartbeatConfig),
     "watchdog": _fields(WatchdogConfig),
+    "slack": _fields(SlackConfig),
     "pool": _fields(PoolConfig),
     "sandbox": _fields(SandboxConfig),
     "budget": _fields(BudgetConfig),
@@ -441,6 +443,15 @@ def parse_config(path: Path) -> ProjectConfig | ParseError:
         else HeartbeatConfig()
     )
 
+    slack_raw = raw.get("slack", {})
+    if not isinstance(slack_raw, dict):
+        return ParseError(str(path), "'slack' must be a mapping")
+    slack = SlackConfig(
+        command_channel=str(slack_raw.get("command_channel", "")),
+        broadcast_channel=str(slack_raw.get("broadcast_channel", "")),
+        owner_user=str(slack_raw.get("owner_user", "")),
+    )
+
     wd_raw = raw.get("watchdog", {})
     watchdog = WatchdogConfig(
         interval_minutes=wd_raw.get("interval_minutes", 5)
@@ -545,6 +556,7 @@ def parse_config(path: Path) -> ProjectConfig | ParseError:
         ),
         heartbeat=heartbeat,
         watchdog=watchdog,
+        slack=slack,
         pool=pool,
         sandbox=sandbox,
         budget=budget,

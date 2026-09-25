@@ -5992,6 +5992,44 @@ def _loop_verdict(root: Path, board=None) -> str:
         return "unknown"
 
 
+def _slack_listener(root: Path):
+    """A Slack listener for this project, or None when Slack is not set up.
+
+    ⚠ **None rather than a no-op object**, so `supervise` does no Slack work
+    at all for a project that has not configured it — and so the absence is
+    visible in the one place that decides it rather than spread across a
+    polling loop that quietly does nothing.
+
+    The token comes from the credential store (A2), which means the env tier
+    reaches it, so a sandbox or a CI runner can supply it without a keychain.
+    """
+    from rite_ai.config.models import ProjectConfig
+    from rite_ai.config.parse import ParseError, parse_config
+    from rite_ai.credentials.store import get_scoped
+    from rite_ai.managers.slack import Listener
+
+    parsed = parse_config(root / ".rite" / "config.yaml")
+    config = parsed if not isinstance(parsed, ParseError) else ProjectConfig()
+    channel = config.slack.command_channel
+    if not channel:
+        return None
+    token = get_scoped("slack_bot_token", config.credentials)
+    if not token:
+        click.echo(
+            f"slack: {channel} is configured as the command channel and no "
+            "slack_bot_token is set, so nothing will be read from it. "
+            "`rite credential set slack` stores one.",
+            err=True,
+        )
+        return None
+    click.echo(
+        f"slack: reading instructions from {channel} only. Messages arrive in "
+        "this Manager's mailbox and are delivered at the start of its next "
+        "turn."
+    )
+    return Listener(command_channel=channel, token=token)
+
+
 def _engine_ready_for(role):
     """Why this local Manager's engine cannot be used, per cycle.
 
@@ -6157,6 +6195,7 @@ def _start_a_manager(
         # itself reads, so "is this a real ticket" has one answer in one
         # place; `for_project` refuses everything when there is none.
         broker=for_project(root, board),
+        slack=_slack_listener(root),
         max_sessions=sessions,
         window_seconds=minutes * 60.0,
         prompt=(
