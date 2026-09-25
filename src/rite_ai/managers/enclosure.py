@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import os
 import shlex
+import sys
 from pathlib import Path
 
 from rite_ai.managers import user_dir
@@ -211,6 +212,48 @@ def _tool_paths(home: Path) -> tuple[Path, ...]:
     )
 
 
+def _running_rite() -> tuple[Path, ...]:
+    """The environment of the rite composing this profile, READ-ONLY.
+
+    ⚠ **The Manager's instructions name this rite by absolute path**
+    (`own_command`, `c0e4097`), so the profile must let it run, whichever
+    install that is. `_tool_paths` covers a `uv tool install` under
+    `~/.local/share/uv` and nothing else. Measured 2026-09-25 at `8d5fc22`,
+    with the instructions naming a checkout's venv rite: inside the profile it
+    died with `PermissionError: … .venv/pyvenv.cfg`. So a Manager started from
+    a dev checkout, or from any rite installed outside uv's tool directory,
+    could not run `rite reply` at all. Before `c0e4097` it silently used
+    whatever `rite` was first on PATH instead.
+
+    Three roots, each only if it exists:
+    * `sys.prefix` — the environment root, as `own_command` uses;
+    * `sys.base_prefix` — the interpreter it was built from (a pyenv or
+      framework python is not under a granted system path);
+    * the directory `rite_ai` is imported FROM — an EDITABLE install puts it
+      in the checkout (`src/`), outside the environment. The directory, not
+      the package: measured, granting only `src/rite_ai` failed with `No
+      module named 'rite_ai.cli'`, because the import system lists `src/`
+      to find the package. For a normal install it is `site-packages`,
+      already inside `sys.prefix`;
+    * and, for that editable install only, the checkout's `VERSION` file —
+      the ONE file outside `src/` it reads (`rite_ai.__version__`, SPEC
+      §8.5). The file, not the checkout.
+
+    Read-only: nothing here needs writing, and a writable copy of the code a
+    Manager runs is one it could change for its next cycle.
+    """
+    import rite_ai
+
+    package = Path(rite_ai.__file__).resolve().parent
+    roots = [
+        Path(sys.prefix),
+        Path(sys.base_prefix),
+        package.parent,
+        package.parent.parent / "VERSION",
+    ]
+    return tuple(dict.fromkeys(r.resolve() for r in roots if r.exists()))
+
+
 def _engine_state_paths(home: Path) -> tuple[Path, ...]:
     """Engine state the engine must WRITE, not merely read.
 
@@ -359,6 +402,9 @@ def compose(
         "",
         "; rite itself, the engines, and their configuration",
         *_readable(_tool_paths(where)),
+        "; ⚠ The rite composing this profile, wherever it is installed: the",
+        "; instructions name it by absolute path, so it must be runnable here.",
+        *_readable(_running_rite()),
         "",
         "; Engine state that must be written, including Goose's session store",
         *_writable(_engine_state_paths(where)),

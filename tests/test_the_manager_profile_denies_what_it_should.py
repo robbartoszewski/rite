@@ -328,3 +328,43 @@ class TestTheBoardIsStillReachable:
         home = Path.home()
         assert f'(allow file-read* (subpath "{home}/.config/gh"))' in text
         assert f'file-write* (subpath "{home}/.config/gh")' not in text
+
+
+class TestTheRiteItsInstructionsNameCanRun:
+    """The Manager's instructions name rite by ABSOLUTE PATH (`own_command`,
+    `c0e4097`). Measured 2026-09-25 at `8d5fc22`: with that path in a
+    checkout's venv, the profile refused it (`PermissionError: …
+    .venv/pyvenv.cfg`), so a Manager started from anywhere but a uv tool
+    install could not run `rite reply` at all."""
+
+    @on_macos
+    def test_the_named_rite_runs_inside_the_profile(self, project):
+        from rite_ai import own_command
+
+        profile = write_profile(project, "lead")
+        assert _under(profile, f"{own_command()} reply --help >/dev/null 2>&1") == 0
+
+    @on_macos
+    def test_it_cannot_rewrite_the_rite_it_runs(self, project):
+        """Read-only: a writable copy of its own code is one a Manager could
+        change for its next cycle."""
+        import rite_ai
+
+        package = Path(rite_ai.__file__).resolve().parent
+        if package.is_relative_to(project):
+            pytest.skip("the package lives inside the project under test")
+        target = package / "rite-probe-should-not-exist"
+        profile = write_profile(project, "lead")
+        assert _under(profile, f"touch {target}") != 0
+        assert not target.exists()
+
+    def test_a_checkout_is_granted_its_src_and_version_not_the_whole_tree(
+        self, project
+    ):
+        import rite_ai
+
+        package = Path(rite_ai.__file__).resolve().parent
+        checkout = package.parent.parent
+        text = compose(project, "lead")
+        assert f'(subpath "{checkout}")' not in text
+        assert f'(allow file-read* (subpath "{package.parent}"))' in text
