@@ -183,6 +183,11 @@ ticket, a session or a command. A Manager adds lines only with
 refused without an anchor and shown as the Manager's statement, not as
 rite's observation.
 
+With no daemon, a window that passes while no Manager runs posts nothing.
+The queue waits, `rite start` says how many questions are waiting and when
+the next check-in is, and the next standup covers everything since the
+last check-in actually delivered.
+
 ## 0.5.1 (2026-09-21)
 
 ### Talk to a running Manager — `rite connect <manager>`

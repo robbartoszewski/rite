@@ -679,6 +679,10 @@ def supervise(
     for limit in limitations():
         say(f"  - {limit}")
 
+    # ⚠ K6: no daemon, so a window that passed while nothing ran posted
+    # nothing. What is waiting, and when it will be asked, is said here.
+    say(checkins.start_line(root, manager))
+
     cycles: list[Cycle] = []
     live = ""
 

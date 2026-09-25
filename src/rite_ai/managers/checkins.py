@@ -395,6 +395,38 @@ def before_stopping(root: Path, manager: str, verdict: str) -> list[str]:
     return []
 
 
+def start_line(root: Path, manager: str) -> str:
+    """What `rite start` says about check-ins, before the first cycle (K6).
+
+    ⚠ **There is no daemon** (A5, Decision 2), so a window that passes with
+    no Manager running posts nothing. The queue persists on disk, and this
+    line is where the User learns what is waiting and when it will be
+    asked. The next check-in's standup covers everything since the last one
+    actually DELIVERED, so the gap is reported rather than lost.
+    """
+    waiting = _queued(root, manager)
+    state = windows(root)
+    last = _last_checkin(root, manager)
+    went = time.strftime("%a %H:%M", time.localtime(last))
+    since = (
+        f"; the last check-in went out {went}, and the next standup covers "
+        "everything since"
+        if last
+        else ""
+    )
+    held = f"{len(waiting)} deferred question(s) waiting for {manager!r}"
+    if not state.usable:
+        tail = "they are asked at once" if waiting else "a deferral is asked at once"
+        return f"check-ins: {held} — {state.line.removeprefix('check-ins: ')}; {tail}"
+    when = state.line.removeprefix("check-ins: ")
+    if state.open_now and not checkin_done_this_window(root, manager, state):
+        return (
+            f"check-ins: {held}; a window is {when}, so the check-in goes out "
+            f"when this run's first session ends{since}"
+        )
+    return f"check-ins: {held}; {when}{since}"
+
+
 def _standup_instruction(root: Path, manager: str) -> str:
     """What the check-in cycle is told about the standup."""
     from rite_ai import own_command

@@ -283,6 +283,17 @@ Deferred questions since the last check-in: 2 queued, 1 withdrawn by the Manager
   withdrawn q5f9f54: answered by docs/adr/0004-storage.md:12 chooses SQLite
 ```
 
+**When no Manager is running, nothing is posted.** There is no daemon, so a
+window that passes while nothing runs goes by in silence. What was deferred
+stays queued, and the next `rite start` says so before its first session:
+
+```text
+check-ins: 1 deferred question(s) waiting for 'lead'; next at Fri 21:45 (in 5m) (schedule in Europe/Warsaw (machine local)); the last check-in went out Fri 21:35, and the next standup covers everything since
+```
+
+The next check-in's standup starts from the last check-in actually
+delivered, so the gap is reported, not lost.
+
 ### The standup each check-in opens with
 
 At the first cycle boundary inside a window, a check-in is prepared, and it
