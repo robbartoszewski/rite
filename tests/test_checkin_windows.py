@@ -200,7 +200,9 @@ def test_the_writer_keeps_the_section(tmp_path):
     """`rite schedule set` rewrites config.yaml through `config_to_yaml`; a
     section it does not emit is a section it deletes."""
     config = parse_config(
-        _config(tmp_path, 'checkins:\n  windows:\n    - {days: Mon, hours: "09:00-10:00"}\n')
+        _config(
+            tmp_path, 'checkins:\n  windows:\n    - {days: Mon, hours: "09:00-10:00"}\n'
+        )
     )
     assert not isinstance(config, ParseError)
     again = parse_config(_config(tmp_path, config_to_yaml(config)))
