@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -171,3 +172,126 @@ def _which(binary: str) -> str | None:
     import shutil
 
     return shutil.which(binary, path=os.environ.get("PATH", ""))
+
+
+@on_macos
+class TestTheEscapesThatWereFoundAfterItShipped:
+    """⚠ **The first profile shipped with two holes, and both were found by
+    running rather than by reading it.** These tests exist so they cannot
+    come back quietly.
+
+    A profile refuses what a process does DIRECTLY. It does not refuse what
+    a process asks something else to do — and a Manager lives in tmux, whose
+    server runs outside the sandbox.
+    """
+
+    def _server(self, tmp_path):
+        """A tmux server of our own, so nothing here touches the
+        operator's."""
+        sockets = tmp_path / "sock"
+        sockets.mkdir()
+        env = dict(os.environ, TMUX_TMPDIR=str(sockets))
+        subprocess.run(
+            ["tmux", "new-session", "-d", "-s", "victim", "sleep 300"],
+            env=env,
+            timeout=60,
+            capture_output=True,
+        )
+        return env
+
+    def _under(self, profile, command, env):
+        return subprocess.run(
+            ["sandbox-exec", "-f", str(profile), "/bin/sh", "-c", command],
+            capture_output=True,
+            text=True,
+            timeout=90,
+            env=env,
+        ).returncode
+
+    def test_a_write_cannot_be_smuggled_through_the_tmux_server(
+        self, project, tmp_path, monkeypatch
+    ):
+        """⚠ **Measured before the fix: this SUCCEEDED.** The file appeared
+        outside the boundary, written by the tmux server on the Manager's
+        behalf."""
+        env = self._server(tmp_path)
+        monkeypatch.setenv("TMUX_TMPDIR", env["TMUX_TMPDIR"])
+        profile = write_profile(project, "lead")
+        target = tmp_path / "escaped.txt"
+        try:
+            self._under(profile, f"tmux new-session -d 'touch {target}'", env)
+            time.sleep(2)
+            assert not target.exists(), (
+                "the tmux server wrote a file on the sandbox's behalf — the "
+                "escape is open again"
+            )
+        finally:
+            subprocess.run(
+                ["tmux", "kill-server"], env=env, timeout=30, capture_output=True
+            )
+
+    def test_a_process_outside_the_sandbox_cannot_be_signalled(self, project):
+        """⚠ **Measured before the fix: the sandbox killed a process it had
+        not started.** One Manager could end another, or the supervisor
+        watching it."""
+        profile = write_profile(project, "lead")
+        victim = subprocess.Popen(["sleep", "300"])
+        try:
+            time.sleep(0.4)
+            self._under(profile, f"kill {victim.pid}", dict(os.environ))
+            time.sleep(0.4)
+            assert victim.poll() is None, (
+                "a process outside the sandbox was killed from inside it"
+            )
+        finally:
+            victim.kill()
+
+    def test_a_manager_can_still_signal_its_OWN_children(self, project):
+        """`same-sandbox`, not `self`: a Manager that cannot stop a build it
+        started is a Manager with a new problem."""
+        profile = write_profile(project, "lead")
+        assert (
+            self._under(
+                profile, "sleep 30 & p=$!; sleep 0.3; kill $p", dict(os.environ)
+            )
+            == 0
+        )
+
+    def test_the_denials_are_LAST_because_seatbelt_takes_the_last_match(self, project):
+        """⚠ Measured: the same denial placed beside the network rule
+        changed nothing, because `/private/tmp` is granted further down and
+        won."""
+        text = compose(project, "lead")
+        last_deny = text.rindex("(deny ")
+        last_temp_grant = text.rindex(
+            '(allow file-read* file-write* (subpath "/private/tmp")'
+        )
+        assert last_deny > last_temp_grant
+
+    def test_the_socket_DIRECTORY_is_denied_and_not_the_whole_temp_root(self, project):
+        """⚠ `TMUX_TMPDIR` is unset in production, which makes the temp root
+        `/private/tmp` — denying THAT would deny what this profile grants
+        three lines up, and what rite's own worktrees live in. The suite
+        sets `TMUX_TMPDIR` for socket isolation (C1), so the directory is
+        derived rather than written out."""
+        text = compose(project, "lead")
+        root = os.environ.get("TMUX_TMPDIR") or "/private/tmp"
+        assert f'(subpath "{root}/tmux-{os.getuid()}"))' in text
+        assert f'(deny network-outbound (subpath "{root}"))' not in text
+        assert '(deny file-read* file-write* (subpath "/private/tmp"))' not in text
+
+
+@on_macos
+class TestTheNetworkIsNotNarrowedInstead:
+    """⚠ The first idea was to narrow `(allow network*)` to loopback, which
+    does block the tmux socket. Measured: it also blocks every outside host,
+    which takes the ticket backend from every Manager and the API from a
+    Claude one — and seatbelt cannot express a destination allowlist, it
+    rejects a named host at load with *"host must be * or localhost"*. So
+    the socket is denied and the network is left alone."""
+
+    def test_the_network_is_still_granted(self, project):
+        assert "(allow network*)" in compose(project, "lead")
+
+    def test_and_the_limitations_still_say_it_is_not_confined(self):
+        assert any("network is NOT confined" in line for line in limitations())

@@ -202,6 +202,54 @@ def _engine_state_paths(home: Path) -> tuple[Path, ...]:
     return (home / ".local/share/goose", home / ".local/state/goose")
 
 
+def _socket_denials(socket_dirs) -> list[str]:
+    """Close the tmux escape, LAST, because seatbelt takes the last match.
+
+    ⚠ **This is the hole the first profile shipped with.** The tmux server
+    is a process outside the sandbox; talking to its socket asks that
+    process to run a command, and it runs it unconfined. A Manager lives in
+    tmux, so the socket is right there. Measured 2026-09-25 with the profile
+    rite itself composes:
+
+        touch ~/other/x                    direct        Operation not permitted
+        tmux new-session -d 'touch ...'    through tmux  exit 0, FILE CREATED
+        yoloai ls                          direct        refused
+        tmux new-session -d 'yoloai ls'    through tmux  listed 9 sandboxes
+
+    ⚠ **Denied at the END and in both spellings.** Seatbelt takes the LAST
+    matching rule, and this profile grants `/tmp` and `/private/tmp`
+    wholesale further up — a deny placed before those grants is overridden
+    and the escape still works. Measured: denying the socket beside the
+    network rule changed nothing at all. macOS resolves `/tmp` to
+    `/private/tmp`, so both are named.
+
+    ⚠ **Why not narrow the network instead**, which was the first idea:
+    `(allow network*)` does grant the socket, and loopback-only blocks it —
+    but it also blocks **every outside host**, which takes the ticket
+    backend away from every Manager and the API away from a Claude one.
+    Seatbelt cannot express a destination allowlist — it rejects any named
+    host at profile load, *"host must be * or localhost"* — so there is no
+    middle setting. Denying the socket keeps the network and closes the
+    hole; the two are separable and it was worth checking rather than
+    assuming.
+
+    **What it costs: nothing a Manager needs.** Measured with the socket
+    denied — `rite`, `rite status`, `git`, `gh`, `goose`, writes into the
+    project and writes into the request directory all still work. The
+    Manager's own pane is created by the supervisor OUTSIDE the sandbox, so
+    the engine inside never needs to talk to the server that is running it.
+    """
+    lines = [
+        "; ⚠ THE TMUX ESCAPE, closed here and nowhere else — see above.",
+        "; Last, because seatbelt takes the last matching rule and the",
+        "; temp grants further up would otherwise win.",
+    ]
+    for directory in dict.fromkeys(socket_dirs):
+        lines.append(f"(deny network-outbound (subpath {_quote(directory)}))")
+        lines.append(f"(deny file-read* file-write* (subpath {_quote(directory)}))")
+    return lines
+
+
 def compose(
     root: Path,
     manager: str,
@@ -223,7 +271,23 @@ def compose(
     # printing "goose is ready", so the session appears to start and then
     # dies. Granting `$TMPDIR` fixes that and opens every other process's
     # scratch on this machine; see `engine_tmp`.
-    temps = [Path("/tmp"), Path("/private/tmp"), Path(sockets)]
+    temps = [Path("/tmp"), Path("/private/tmp")]
+    # ⚠ **The tmux socket directory is DENIED at the end of this profile,
+    # not granted here.** It used to be granted, and that was the hole:
+    # the tmux SERVER runs outside the profile, so a command sent through
+    # it runs unconfined. Measured 2026-09-25 — a write the profile refused
+    # directly succeeded via `tmux new-session`, and `yoloai ls`, refused
+    # directly, listed every sandbox on the machine. See `_socket_denials`.
+    # ⚠ The socket DIRECTORY, not the temp root. tmux puts its socket in
+    # `<TMUX_TMPDIR>/tmux-<uid>/`, and `TMUX_TMPDIR` is unset by default —
+    # which makes the temp root `/private/tmp`. Denying that would deny the
+    # whole of `/private/tmp`, which this profile grants three lines up and
+    # which rite's own worktrees live in.
+    socket_dirs = [Path(sockets) / f"tmux-{os.getuid()}"]
+    if not str(sockets).startswith("/private"):
+        socket_dirs.append(
+            Path("/private" + str(sockets).rstrip("/")) / f"tmux-{os.getuid()}"
+        )
     lines = [
         "; Composed by rite for a Manager. Do not edit: it is rewritten every",
         "; run, so an edit here vanishes without reporting that it did.",
@@ -235,7 +299,12 @@ def compose(
         "; Starting a process at all",
         "(allow process-exec)",
         "(allow process-fork)",
-        "(allow signal)",
+        "; ⚠ SAME-SANDBOX ONLY. A blanket `(allow signal)` let a Manager",
+        "; kill any process this user owns — measured: it killed a process",
+        "; outside the sandbox that it had not started, so one Manager could",
+        "; end another, or the supervisor watching it. Its own children are",
+        "; still signalable, which is what a Manager needs.",
+        "(allow signal (target same-sandbox))",
         "(allow sysctl-read)",
         "(allow file-read-metadata)",
         '(allow file-read* (literal "/"))',
@@ -285,6 +354,7 @@ def compose(
         "; sandbox from inside one (B9), so it asks the supervisor instead.",
         f"(deny file-read* file-write* (subpath {_quote(where / '.yoloai')}))",
         "",
+        *_socket_denials(socket_dirs),
     ]
     return "\n".join(lines)
 
@@ -311,23 +381,25 @@ def limitations() -> tuple[str, ...]:
     is why these are a value rite says out loud rather than a paragraph in a
     design note nobody reads at 2am.
 
-    ⚠ **CORRECTED 2026-09-25, and the previous version SHIPPED.** This list
-    claimed other projects on this machine were NOT reachable. That was
-    false: the tmux server runs outside the profile, a Manager lives in
-    tmux, and a command sent through it runs unconfined. Measured — a
-    refused write succeeded through tmux and `yoloai ls` listed nine
-    sandboxes machine-wide. The claim is corrected BEFORE the hole is
-    closed, because a false claim is the part that misleads somebody today.
+    ⚠ **The history here is the reason to distrust any confident version of
+    this list.** It first claimed other projects were NOT reachable. That
+    shipped, and it was false — the tmux server runs outside the profile, a
+    Manager lives in tmux, and a command sent through it ran unconfined. The
+    claim was corrected first and the hole closed second, because a false
+    claim is what misleads somebody today.
+
+    **The holes are now closed and the wording is still hedged**, on
+    purpose: "these routes were tried and refused" is a statement about what
+    was measured. "It is contained" would be a statement about every route
+    that exists, which nobody here has established.
     """
     return (
-        "⚠ THIS IS A GUARD RAIL, NOT CONTAINMENT. The tmux server runs "
-        "OUTSIDE the profile, and a command sent through tmux runs "
-        "unconfined. Measured: a file write the profile refuses directly "
-        "SUCCEEDED through tmux, and `yoloai ls`, refused directly, listed "
-        "every sandbox on this machine",
-        "so a determined Manager can start Workers without the broker and "
-        "can reach other projects' files. What the profile stops is the "
-        "ordinary path, not the deliberate one",
+        "⚠ THIS BOUNDS FILES, NOT CAPABILITY, and it is not a proof of "
+        "containment — it is a set of holes that were looked for and "
+        "closed. Two were found and closed on 2026-09-25: reaching the "
+        "tmux server, which runs outside the profile and would run anything "
+        "you sent it unconfined, and signalling processes outside the "
+        "sandbox. Both were measured before and after",
         "/tmp and /private/tmp are readable and writable, so anything kept "
         "there — including other rite worktrees — is reachable",
         "the network is NOT confined — seatbelt has no network isolation, so "
@@ -339,6 +411,9 @@ def limitations() -> tuple[str, ...]:
         "where it worked outside it",
         "ticket text from your board reaches the engine as instructions; the "
         "sandbox limits what acting on it can touch, it does not vet it",
+        "what it DOES buy: your home outside the paths above, your SSH keys, "
+        "and other projects outside /tmp are not reachable — direct access "
+        "and the tmux route were both tried and both refused",
     )
 
 

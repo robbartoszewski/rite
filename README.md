@@ -345,13 +345,12 @@ approval. It runs inside a sandbox — a GUARD RAIL against mistakes, not
 containment. See the limitations printed below.
 ```
 
-⚠ **And read that as written: a guard rail, not containment.** ⚠ **Measured
-2026-09-25 — the tmux server runs OUTSIDE the profile, and a Manager lives
-in tmux.** A file write the profile refuses directly succeeded when sent
-through tmux, and `yoloai ls`, refused directly, listed every sandbox on
-this machine. So a determined Manager can reach other projects' files and
-start Workers without rite's broker. What the profile stops is the ordinary
-path, not the deliberate one.
+⚠ **Read that as written.** The profile bounds FILES, not capability, and it
+is a set of holes that were looked for and closed rather than a proof of
+containment. Two were found after the first version shipped and both are
+closed: reaching the **tmux server**, which runs outside the profile and
+would have run anything sent to it unconfined, and **signalling processes
+outside the sandbox**. Each was measured succeeding, then measured failing.
 
 So treat a Manager as having your own file and network access, because a
 determined one does. `git` runs hooks, `python -c` runs anything, and the
