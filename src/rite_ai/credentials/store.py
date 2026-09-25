@@ -34,6 +34,10 @@ KNOWN_CREDENTIALS: dict[str, str] = {
     "jira_email": "JIRA account email — the address you log in with",
     "jira_token": "JIRA API token",
     "github_token": "GitHub personal access token",
+    "slack_bot_token": (
+        "Slack bot token (xoxb-...) — for the relay that reads and writes a "
+        "Manager's mailbox"
+    ),
     "claude_token": (
         "Claude Code OAuth token — from `claude setup-token`, for sandboxed Workers"
     ),

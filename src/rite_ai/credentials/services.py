@@ -139,6 +139,36 @@ SERVICES: dict[str, Service] = {
             "instead, if you want that."
         ),
     ),
+    "slack": Service(
+        name="slack",
+        label="Slack — the relay that reads and writes a Manager's mailbox",
+        # ONE field. A bot token carries the workspace and the identity, so
+        # there is nothing else to ask for — the same shape as GitHub's PAT
+        # and for the same reason. The channel is configuration rather than a
+        # credential and belongs with the Slack settings.
+        fields=(
+            Field(
+                "bot_token",
+                "Slack bot token (starts with xoxb-)",
+                secret=True,
+                env="SLACK_BOT_TOKEN",
+            ),
+        ),
+        note=(
+            # ⚠ Named rather than discovered later. §5.3.4 decided every
+            # Worker gets every credential the project holds, and
+            # `worker_environment`'s own docstring records that a larger
+            # return is "a real increase in blast radius, which is the cost
+            # the decision accepted". Slack is the first credential in that
+            # set a Worker has no use for — the relay runs in the
+            # supervisor, on the host — so it is the first case where the
+            # accepted cost buys nothing.
+            "Read by the relay inside `rite start`, on the host. Workers "
+            "receive it too, because every Worker receives every credential "
+            "(§5.3.4) — they have no use for it, which makes this the first "
+            "credential where that rule costs without buying."
+        ),
+    ),
     "claude": Service(
         name="claude",
         label="Claude Code — the login a sandboxed Worker uses",
