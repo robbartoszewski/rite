@@ -64,6 +64,10 @@ TIMEOUT_SECONDS = 15.0
 call that takes longer than a cycle boundary is one the loop should abandon
 rather than wait behind."""
 
+HISTORY_PAGES = 10
+"""At most this many pages per read — 500 messages. Past that, the read is
+reported as incomplete rather than looping inside a 2-second tick."""
+
 READ_LIMIT = 50
 """Per poll. Enough that a burst is not lost between two ticks, small enough
 that a long-idle channel does not return its whole history on the first
@@ -105,6 +109,10 @@ class Heard:
     read. Carried forward rather than derived from the clock, because a clock
     comparison would re-read or skip around latency."""
     problem: str = ""
+    more: str = ""
+    """Slack's cursor for the next page, when there is one."""
+    skipped: bool = False
+    """True when a gap was longer than `HISTORY_PAGES` could read."""
 
     @property
     def ok(self) -> bool:
@@ -162,7 +170,29 @@ def _hear(channel: str, token: str, *, since: str = "", call=None) -> Heard:
     params = {"channel": channel, "limit": READ_LIMIT}
     if since:
         params["oldest"] = since
-    return _read("conversations.history", params, token, call=call)
+    # ⚠ PAGED, because a gap is where a burst lives (A5). History comes back
+    # newest first, `READ_LIMIT` at a time, so a Manager that was stopped
+    # while sixty messages arrived would otherwise hear the newest fifty and
+    # have its cursor moved past the other ten — lost, silently.
+    messages: list[dict] = []
+    newest = since
+    for _ in range(HISTORY_PAGES):
+        heard = _read("conversations.history", params, token, call=call)
+        if not heard.ok:
+            return heard
+        messages.extend(heard.messages)
+        if _as_ts(heard.newest) > _as_ts(newest):
+            newest = heard.newest
+        cursor = heard.more
+        if not cursor:
+            return Heard(messages=tuple(sorted(messages, key=_ts_of)), newest=newest)
+        params = {**params, "cursor": cursor}
+    return Heard(
+        messages=tuple(sorted(messages, key=_ts_of)),
+        newest=newest,
+        problem="",
+        skipped=True,
+    )
 
 
 PERSON_SUBTYPES_IN_A_THREAD = frozenset({"thread_broadcast"})
@@ -189,7 +219,7 @@ def _read(
 
     # Slack returns history newest first and replies oldest first; a Manager
     # should be told things in the order they were said, whichever it was.
-    messages = sorted(got.get("messages") or [], key=lambda m: _as_ts(m.get("ts")))
+    messages = sorted(got.get("messages") or [], key=_ts_of)
     kept, newest = [], str(params.get("oldest") or "")
     for message in messages:
         stamp = str(message.get("ts") or "")
@@ -200,7 +230,14 @@ def _read(
             continue
         if (message.get("text") or "").strip():
             kept.append(message)
-    return Heard(messages=tuple(kept), newest=newest)
+    more = ""
+    if got.get("has_more"):
+        more = str((got.get("response_metadata") or {}).get("next_cursor") or "")
+    return Heard(messages=tuple(kept), newest=newest, more=more)
+
+
+def _ts_of(message: dict) -> float:
+    return _as_ts(message.get("ts"))
 
 
 def _as_ts(value: object) -> float:
@@ -409,12 +446,16 @@ class Listener:
     """The app's own user id, from `auth.test` (no scope) — what a mention of
     rite looks like in text: `<@U…>`."""
     since: dict[str, str] = field(default_factory=dict)
+    opened: dict[str, str] = field(default_factory=dict)
+    """Each conversation's start-line `ts` for THIS run. A message older than
+    it was sent while no Manager was listening (A5)."""
     roots: list[Root] = field(default_factory=list)
     problems: list[str] = field(default_factory=list)
     clock: object = time.time
     project: Path | None = None
     """The project root, for the outbox and the relay's own state. None means
     this listener only listens — tests, and nothing else."""
+    _saved_since: dict[str, str] = field(default_factory=dict)
     _started: bool = False
     """Has this relay ever posted for this Manager? An explicit flag rather
     than "the state file exists", because `open` writes that file before
@@ -457,7 +498,7 @@ class Listener:
         the terminal; a failure is one of them, never a raise."""
         caller = call or _call
         lines: list[str] = []
-        self._restore_threads()
+        self._restore()
         try:
             self.me = str(caller("auth.test", self.token, {}).get("user_id") or "")
         except Exception:  # noqa: BLE001 - without it, mentions read as unaddressed
@@ -473,7 +514,7 @@ class Listener:
             )
             if sent.ok:
                 self.dm = sent.channel
-                self.since[self.dm] = sent.ts
+                self._start_at(self.dm, sent.ts)
                 self.remember(sent.channel, sent.ts, self._label("start line", sent))
                 lines.append(
                     f"slack: instructions come from the Owner's DM "
@@ -503,7 +544,7 @@ class Listener:
             )
             if sent.ok:
                 self.broadcast_id = sent.channel
-                self.since[self.broadcast_id] = sent.ts
+                self._start_at(self.broadcast_id, sent.ts)
                 self.remember(sent.channel, sent.ts, self._label("start line", sent))
                 lines.append(
                     f"slack: {self.broadcast} is read as context, never as instruction."
@@ -512,6 +553,19 @@ class Listener:
                 lines.append(f"slack: cannot post to {self.broadcast}: {sent.problem}")
         self._save()
         return lines
+
+    def _start_at(self, channel: str, start_line: str) -> None:
+        """Where reading begins: where the LAST run stopped, if there was one.
+
+        ⚠ **A5. A message sent while no Manager runs stays in Slack**, since
+        there is no daemon (Decision 2). Remembering the position is what
+        turns "stays in Slack" into "is delivered at the next start" rather
+        than "is skipped because the new run began reading at its own start
+        line". The first run ever begins at its start line, so switching
+        Slack on does not replay the conversation's history as instructions.
+        """
+        self.opened[channel] = start_line
+        self.since[channel] = self._saved_since.get(channel) or start_line
 
     def _label(self, what: str, sent: Posted) -> str:
         at = time.strftime("%H:%M", time.localtime(_as_ts(sent.ts)))
@@ -530,8 +584,17 @@ class Listener:
                 channel, self.token, since=self.since.get(channel, ""), call=call
             )
             if heard.ok:
-                if heard.newest:
+                if heard.skipped:
+                    self._problem(
+                        f"more than {HISTORY_PAGES * READ_LIMIT} messages were "
+                        "waiting; the oldest of them were NOT read"
+                    )
+                if heard.newest and _as_ts(heard.newest) > _as_ts(
+                    self.since.get(channel, "")
+                ):
                     self.since[channel] = heard.newest
+                    self._save()
+                self._say_the_gap(channel, heard.messages)
                 out.extend(self._relay(channel, m) for m in heard.messages)
             else:
                 # ⚠ Recorded, not raised, and not retried here. The loop's
@@ -539,6 +602,18 @@ class Listener:
                 self._problem(heard.problem)
         out.extend(self._read_a_thread(call=call))
         return tuple(out)
+
+    def _say_the_gap(self, channel: str, messages) -> None:
+        opened = self.opened.get(channel)
+        if not opened:
+            return
+        waiting = [m for m in messages if _ts_of(m) < _as_ts(opened)]
+        if waiting:
+            where = "the Owner's DM" if channel == self.dm else self._where
+            self._unsaid.append(
+                f"slack: {len(waiting)} message(s) sent in {where} while "
+                f"{self.manager!r} was not running — delivered at its next turn"
+            )
 
     def _read_a_thread(self, *, call=None) -> list[str]:
         now = self.clock()
@@ -654,15 +729,24 @@ class Listener:
         }
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            state = {"started": self._started, "posted": keep, "threads": threads}
+            state = {
+                "started": self._started,
+                "since": self.since,
+                "posted": keep,
+                "threads": threads,
+            }
             write_atomic(path, json.dumps(state, indent=1) + "\n")
         except OSError as e:
             self._problem(f"cannot record the relay's state: {e}")
 
-    def _restore_threads(self) -> None:
-        """The threads a previous run was reading, still inside the horizon."""
+    def _restore(self) -> None:
+        """Where a previous run stopped: its cursors, and the threads it was
+        reading that are still inside the horizon."""
         state = self._state()
         self._started = bool(state.get("started"))
+        since = state.get("since")
+        if isinstance(since, dict):
+            self._saved_since = {str(k): str(v) for k, v in since.items() if v}
         threads = state.get("threads")
         if not isinstance(threads, dict):
             return
@@ -747,11 +831,38 @@ class Listener:
         return lines
 
     def close(self, *, call=None) -> list[str]:
-        """The end of a run: post whatever the last cycle said.
+        """The end of a run: post whatever the last cycle said, then say in
+        Slack that nobody is listening.
 
         ⚠ The wait loop only runs while a cycle is alive, and a Manager's last
         `rite reply` is usually written just before its engine exits — so
-        without this the final reply of every run reached `rite connect` and
-        never reached Slack.
+        without the flush the final reply of every run reached `rite connect`
+        and never reached Slack.
+
+        ⚠ **A5: the silence is SAID, where the person is.** With no daemon a
+        message sent now is not read until the next `rite start`, and a user
+        who is not told reads that silence as "it is broken". The last thing
+        in each conversation is therefore a line saying so. Only a killed
+        process skips it — and then the last line is the start line, which
+        is the one case this cannot cover.
         """
-        return self.post_replies(call=call)
+        lines = self.post_replies(call=call)
+        stopped = (
+            f"rite: Manager `{self.manager}` has stopped. Nothing is reading "
+            "this now. What you send here waits in Slack, and is delivered at "
+            f"its first turn when `rite start {self.manager}` next runs."
+        )
+        for channel in (self.dm, self.broadcast_id):
+            if not channel:
+                continue
+            sent = _post(channel, self.token, stopped, call=call)
+            if not sent.ok:
+                lines.append(
+                    f"slack: could not say the Manager stopped: {sent.problem}"
+                )
+        if self.dm or self.broadcast_id:
+            lines.append(
+                "slack: said in Slack that this Manager has stopped; messages "
+                "sent now are delivered when it next starts."
+            )
+        return lines

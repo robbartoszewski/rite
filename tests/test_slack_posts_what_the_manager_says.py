@@ -186,7 +186,10 @@ class TestTheLastReplyOfARunIsPosted:
         listener = _started(tmp_path, slack)
         send(tmp_path, "lead", OUTBOX, "signing off")
         listener.close(call=slack)
-        assert slack.posts[-1]["text"] == "*lead*: signing off"
+        texts = [p["text"] for p in slack.posts]
+        assert "*lead*: signing off" in texts
+        # Before the stop line, so the last thing said is that it stopped.
+        assert "has stopped" in texts[-1]
 
     def test_the_supervisor_posts_while_the_manager_works(self):
         import inspect

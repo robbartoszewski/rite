@@ -540,6 +540,58 @@ It reports **unknown** rather than guessing when it cannot tell — the model is
 not loaded yet, or the endpoint is LM Studio, llama.cpp or vLLM rather than
 Ollama, none of which expose this through the OpenAI-compatible API.
 
+## Talking to a Manager over Slack
+
+`rite start <manager>` can listen to Slack and post the Manager's replies
+there. There is no daemon: **while `rite start` runs, Slack is read. While it
+doesn't, nothing is reading.** `rite connect` keeps working alongside it. Each
+reader has its own position in the mailbox, so each sees every reply.
+
+**Who can instruct the Manager is decided by where a message is typed**
+(SPEC §9.16):
+
+| where | what it counts as |
+|---|---|
+| **your DM with the rite app** | an **instruction**. Only you and the app are in it |
+| **the broadcast channel** (default `#all-rite`) | **context**, whoever types it, `@rite` or not |
+| a thread under something rite posted | whatever the conversation it is in counts as |
+
+`@rite` tells the Manager a message is meant for it. **It does not give
+anyone authority.** Anyone in the workspace can type it, so a mention in the
+broadcast channel is still context. Each message reaches the Manager with a
+line rite writes, saying which of these it is.
+
+**Set it up** once per project:
+
+1. Create a Slack app with the bot scopes `channels:history`, `chat:write`
+   and `im:history`. Under **App Home**, allow users to send messages in the
+   Messages tab. Install it, and `/invite @rite` into the broadcast channel.
+2. `rite credential set slack` stores the bot token (`xoxb-…`).
+3. In `.rite/config.yaml`:
+
+   ```yaml
+   slack:
+     owner_user: U0123ABCD        # your member ID: profile → ⋮ → Copy member ID
+     broadcast_channel: '#all-rite'
+   ```
+
+   With no `owner_user` Slack is **broadcast-only**, and nothing typed in
+   Slack instructs anyone.
+4. `rite doctor` posts one line to each conversation, reads it back, and
+   names Slack's own error if either fails: `missing_scope`,
+   `not_in_channel` or `channel_not_found`.
+
+**When no Manager is running**, a message you send waits in Slack. At the
+next `rite start` it is delivered at the Manager's first turn, with a line
+in the terminal saying how many arrived while it was stopped. Each run posts
+a line when it starts and another when it stops, so the last thing in your
+DM tells you whether anything is listening. The one exception is a
+`rite start` that is killed outright: it cannot post its stop line.
+
+**The first run does not replay history.** Turning Slack on starts reading
+from that run's start line, and replies already in the mailbox stay in
+`rite replies` rather than being posted.
+
 ## Keeping a project's generated files current
 
 `rite init` writes `CLAUDE.md`, `.claude/commands/`, `.claude/agents/`, the
