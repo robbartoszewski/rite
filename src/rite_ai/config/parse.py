@@ -12,9 +12,9 @@ import yaml
 
 from .managers import parse_managers
 from .models import (
+    BudgetConfig,
     CheckinsConfig,
     CheckinWindow,
-    BudgetConfig,
     CoordinationConfig,
     CredentialsConfig,
     ExpertiseEntry,

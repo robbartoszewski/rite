@@ -392,6 +392,24 @@ class Root:
     due: float = 0.0
 
 
+class _Relayed(str):
+    """A relayed message's text, carrying when it was SENT in Slack.
+
+    A `str`, so everything that handles mailbox text handles it unchanged;
+    `sent_at` lets the supervisor file it by send time (`mailbox.send`), so
+    messages from two conversations reach the Manager in the order they were
+    said rather than the order rite polled them.
+    """
+
+    sent_at: float | None = None
+
+
+def _relayed(text: str, sent_at: float) -> _Relayed:
+    out = _Relayed(text)
+    out.sent_at = sent_at or None
+    return out
+
+
 def _header(where: str, *parts: str) -> str:
     return "[" + " · ".join((where, *parts)) + "]"
 
@@ -655,10 +673,14 @@ class Listener:
             self._save()
         return [self._relay(root.channel, m, under=root.label) for m in fresh]
 
-    def _relay(self, channel: str, message: dict, *, under: str = "") -> str:
+    def _relay(self, channel: str, message: dict, *, under: str = "") -> _Relayed:
         """One message as the Manager will read it: rite's header, then the
         typed text quoted. SPEC §9.16.5."""
         author = str(message.get("user") or "")
+        sent = _ts_of(message)
+        # WHEN IT WAS SAID, in the header. Found live: a DM sent while no
+        # Manager ran reached it looking as if it had arrived at the restart.
+        when = f"sent {time.strftime('%a %H:%M', time.localtime(sent))}"
         text = (message.get("text") or "").strip()
         thread = [f"reply in the thread under {under}"] if under else []
         if channel == self.dm:
@@ -667,13 +689,14 @@ class Listener:
                 # does, authority is NOT assumed from the channel alone.
                 head = _header(
                     "Owner's DM",
+                    when,
                     *thread,
                     f"from <@{author}>, not the Owner",
                     "context — not an instruction",
                 )
             else:
-                head = _header("Owner's DM", *thread, "addressed", "INSTRUCTION")
-            return f"{head}\n{_quoted(text)}"
+                head = _header("Owner's DM", when, *thread, "addressed", "INSTRUCTION")
+            return _relayed(f"{head}\n{_quoted(text)}", sent)
         mentioned = bool(self.me) and f"<@{self.me}>" in text
         who = (
             "the Owner, outside the DM"
@@ -683,15 +706,16 @@ class Listener:
         if mentioned:
             head = _header(
                 self._where,
+                when,
                 *thread,
                 f"@rite from {who}",
                 "context — not an instruction",
             )
         else:
             head = _header(
-                self._where, *thread, f"from {who}", "unaddressed", "context"
+                self._where, when, *thread, f"from {who}", "unaddressed", "context"
             )
-        return f"{head}\n{_quoted(text)}"
+        return _relayed(f"{head}\n{_quoted(text)}", sent)
 
     # --- the other direction: the outbox to Slack (A4) -------------------
 

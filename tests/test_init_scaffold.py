@@ -294,6 +294,7 @@ def test_config_yaml_key_order_matches_spec(tmp_path: Path):
         # is not reordered the next time anything rewrites it — a reordered
         # file is a diff nobody asked for in a file people hand-edit.
         "slack",
+        "checkins",
     ]
 
 

@@ -998,7 +998,15 @@ def supervise(
                     # message, which is the whole of what was done for Slack
                     # in advance.
                     for heard in slack.poll():
-                        send(root, manager, INBOX, heard)
+                        # Filed by when it was SAID, so two conversations
+                        # reach the Manager in send order, not poll order.
+                        send(
+                            root,
+                            manager,
+                            INBOX,
+                            heard,
+                            sent_at=getattr(heard, "sent_at", None),
+                        )
                     # The other direction (A4): what the Manager has said goes
                     # out while it is still working, not only at the end.
                     for line in getattr(slack, "post_replies", list)():
