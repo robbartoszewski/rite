@@ -463,8 +463,15 @@ class Listener:
     """The Owner's DM id, learned by `open`. Empty means no command channel."""
     broadcast_id: str = ""
     me: str = ""
-    """The app's own user id, from `auth.test` (no scope) — what a mention of
-    rite looks like in text: `<@U…>`."""
+    """The app's own user id, from `auth.test` (no scope)."""
+    me_bot: str = ""
+    """The app's BOT id, from the same call. ⚠ **A mention of rite comes in
+    either form, and both were observed from people choosing `@rite` from
+    Slack's autocomplete (2026-09-25):** the Owner's arrived as `<@U0C49FPUP8B>`
+    (the user id), and a second member's as `<@B0C4DPL00A2>` (the bot id).
+    Matching the user id alone labelled her real mention "unaddressed". That
+    was right about authority and wrong about addressing, which is the
+    distinction §9.16.3 says the header must carry."""
     since: dict[str, str] = field(default_factory=dict)
     opened: dict[str, str] = field(default_factory=dict)
     """Each conversation's start-line `ts` for THIS run. A message older than
@@ -520,9 +527,11 @@ class Listener:
         lines: list[str] = []
         self._restore()
         try:
-            self.me = str(caller("auth.test", self.token, {}).get("user_id") or "")
+            who = caller("auth.test", self.token, {})
+            self.me = str(who.get("user_id") or "")
+            self.me_bot = str(who.get("bot_id") or "")
         except Exception:  # noqa: BLE001 - without it, mentions read as unaddressed
-            self.me = ""
+            self.me = self.me_bot = ""
         if self.owner:
             sent = _post(
                 self.owner,
@@ -697,7 +706,9 @@ class Listener:
             else:
                 head = _header("Owner's DM", when, *thread, "addressed", "INSTRUCTION")
             return _relayed(f"{head}\n{_quoted(text)}", sent)
-        mentioned = bool(self.me) and f"<@{self.me}>" in text
+        # A LINKED mention only. A literal "@rite" is what Slack leaves when
+        # the autocomplete was not used, and it is text, not addressing.
+        mentioned = any(f"<@{me}>" in text for me in (self.me, self.me_bot) if me)
         who = (
             "the Owner, outside the DM"
             if author and author == self.owner
