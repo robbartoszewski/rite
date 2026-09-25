@@ -262,33 +262,30 @@ What turns on it: whether the per-instance keys are **enumerated** (profile
 keys refused in the instance file) or merely layered. Layering is simpler.
 Enumeration is what keeps "a team agrees what a `planner` is" true.
 
-**MMQ2. Slack's configuration: per project, per Manager, or per instance?**
-Checked against `1cee54c` (A3b, landed on `main` while this plan was being
-written). **As shipped, `slack:` is ONE project-level section of the
-committed `config.yaml`**: `command_channel`, `broadcast_channel` and
-`owner_user` (`config/models.py`, `SlackConfig`). That differs from the v0.6.0
-plan's A6, which said "per-Manager keys under `coordination.manager_roles[]`".
-For one Manager there is no difference. **With two Managers in one root, both
-read the same command channel**, so one instruction from the Owner reaches
-both, and both act on it. That is a cross-Manager accident of exactly the kind
-§5.4.8 exists to prevent, and it arrives with the first multi-Manager project.
+**MMQ2. Several Managers, one Owner's DM: who acts on an instruction?**
+As built on `main` since A6 (`b555b20`), Slack configuration is **per
+project**: `slack.owner_user` names the Owner, whose DM with the app is the
+command channel, and `slack.broadcast_channel` is where status goes. A
+`command_channel` key is **refused by the parser**, because it let authority
+be pointed at a shared channel (D-95, SPEC 0.24.3). Per project is settled
+for v0.6.0, for a reason that holds in 0.7.0 as well: a Slack DM is one per
+user and app, so two Managers cannot each have "the Owner's DM" without a
+second app.
+
+**What stays open is the accident.** With two Managers in one root, **both
+read the one DM**, so one instruction from the Owner reaches both, and both
+act on it. That is a cross-Manager accident of exactly the kind §5.4.8 exists
+to prevent, and it arrives with the first multi-Manager project that uses
+Slack. (The first version of this question described a shipped
+`command_channel`. That shape has since been replaced, and the question is
+rewritten against what is built.)
 
 | option | what it means | turns on |
 |---|---|---|
-| (a) per-Manager command channel, in the profile | each Manager reads its own conversation | a Slack DM is one per user and app, so two Managers cannot each have "the Owner's DM" without a second app or channel-based commands |
-| (b) one command channel, addressed per Manager (`@rite planner …`) | routing by addressing | D-96 makes `@rite` a filter, not authority. Per-Manager addressing is a new rule on top of it and needs its own decision |
-| (c) the Owner's user id per instance (MMQ1), channels per profile | Robert's "per-instance config gitignored", applied to who the Owner is on this machine | `owner_user` is committed today, so this is a config migration |
-
-**Also raised now, for v0.6.0 rather than v0.7.0:** A6's text and the shipped
-shape disagree. Whichever is intended, the other should be corrected before
-v0.6.0 tags. This plan changes neither, because both belong to the Slack
-track.
-
-✅ **Settled for v0.6.0 by A6 (2026-09-25): per PROJECT**, because option (a)'s
-own "turns on" is decisive — one DM per user and app. The keys are now
-`slack.owner_user` and `slack.broadcast_channel`, and `command_channel` is
-refused by the parser (D-95). **MMQ2 itself stays open:** two Managers in one
-root still both read the one DM, which is this question's accident.
+| (a) one app per Manager | each Manager has its own DM with the Owner | every user already creates their own app (A3b). This multiplies it per Manager, and every app is its own setup |
+| (b) one DM, addressed per Manager | an instruction names the Manager it is for, and a Manager treats an unaddressed DM message as context | D-96 makes `@rite` a filter, not authority, and per-Manager addressing is a new rule on top of it. It also needs a default: one Manager, or none |
+| (c) one Manager per project reads the DM | the others receive nothing from Slack | simplest, and it makes "which Manager is the Slack one" a profile key |
+| (d) the Owner's id per instance (MMQ1) | each person's machine names its own Owner | answers a different question, who the Owner is on this machine, and not which Manager acts. Combinable with (b) or (c) |
 
 **MMQ3. The worker cap's third denominator** (`V070_MULTI_MANAGER.md` Q2).
 Per-project and machine-wide exist. Per-Manager does not. Options: (a) no
@@ -594,6 +591,7 @@ broke the Claude login.
 | SB5 | **`(allow mach-lookup)` with no filter.** Claude Code on macOS keeps its login in the keychain, and `4ebbbd7` measured that the login is found inside the boundary, so at least that item is reachable. That is an inference, not a direct keychain probe. Not measured: whether a Manager can read **other projects'** rite credentials from it. The Worker-profile measurement (keychain content denied) does not carry over, because this profile differs | profile text | a measurement first. If reachable, per-service `mach-lookup` filtering, measured against the login |
 | SB8 | **`/tmp` and `/private/tmp` are readable and writable**, and other rite worktrees and scratch directories live there | stated by `limitations()` itself, so disclosed rather than hidden | open, and not obviously closable: the engines need a temp space. The same measure-then-narrow method as SB4 |
 | SB7 | **Which Manager may ask for which Worker.** A request names a declared Worker and a ticket. With several Managers in one root, any Manager can ask for any declared Worker. Whether Workers belong to a Manager is not decided (SBQ1) | `broker.py` validates against project-level declarations | MM, after SBQ1 |
+| C25 | **No opt-out from the Manager's sandbox**, and an operator's own hook already fails inside it. Every narrowing in this track (SB4) raises the stakes | `V060_RELEASE_PLAN.md` C25 | a decision. See the consolidated list |
 | C24 | **A requested Worker starts at the cycle boundary**, deliberately | `V060_RELEASE_PLAN.md` C24; `supervise.py::_honour_worker_requests` | a decision, not a fix. See the consolidated list |
 
 **SBQ1. Do Workers belong to a Manager?** (a) No: Workers are project-level and
@@ -684,6 +682,7 @@ it was recorded.
 | **The scenario gate** (§7.3, D-81) | v0.6.0 plan, Decision 5; SPEC 0.22.1 | Not costed, deliberately: it is a process change as much as a feature. **Needs its own design pass before a size**, and that pass must answer §9.15.3a's recorded gap first: the gate cannot reach journal entries, because they are machine-local and uncommitted |
 | **Relocate flat `.rite/` state per Manager** | §5.4.5 step 2; §9.14.9 item 3; `managers/__init__.py` ("until 0.6.0") | MM1. No v0.6.0 ticket carries it |
 | `V070_MULTI_MANAGER.md` Q1–Q4 | that note | MMQ3, MMQ4, MM, SB |
+| **C25: no opt-out from the Manager's sandbox**, Robert's | `V060_RELEASE_PLAN.md` C25, landed after this plan's second version | **A decision.** In the consolidated list as C25, because SB4 and EG3 sharpen it |
 | **C24: a requested Worker starts at the cycle boundary**, deliberately. Robert's to change | `V060_RELEASE_PLAN.md` C24, landed `5bda48a` after this plan's first version | **A decision, not a carried fix.** In the consolidated list as C24 |
 
 ### Becomes 0.7.0 if it does not land in 0.6.0
@@ -737,7 +736,7 @@ before planning around it.**
 | S13 | `V070_MULTI_MANAGER.md` "Status of the file itself" | says it does not reach a fresh clone | **Corrected** |
 | S14 | `carried-limitations-register.md` D1 | "no `RITE_PROJECT_ROOT` env var exists". It does, and the marker is now a file rather than the bare directory (`cli/main.py`, `_find_project_root`) | **Annotated** after review round one: both suggested fixes are in the code. **The entry stays OPEN**, because the register's rule is that only a named run clears it |
 | S15 | `V070_EGRESS.md` | open question 1's premise (no Manager sandbox) | **Corrected**: banner pointing at §5.5 and this plan |
-| S16 | `V060_RELEASE_PLAN.md` A6 vs `1cee54c` | A6 says per-Manager keys under `manager_roles[]`. What shipped is one project-level `slack:` section | **Annotated** after review round one: A6 says what shipped, and that per-Manager keys are an open 0.7.0 question (MMQ2). Neither shape is declared the intended one, because that is MMQ2's answer |
+| S16 | `V060_RELEASE_PLAN.md` A6 vs `1cee54c` | A6 said per-Manager keys under `manager_roles[]`. What shipped was one project-level `slack:` section with a `command_channel` | **Resolved by A6 itself** (`b555b20`): per project, with `command_channel` refused. MMQ2 is rewritten against that shape |
 | S17 | this plan's own first version | part 0.2's three holes, part 0.3's "one problem", "no seatbelt profile can express a destination list", SB1/SB3/SB6 open, and SPEC §5.4.8 saying none of the four properties hold | **Corrected** after review round one, by re-measuring against `9862b59` (part 0) |
 
 ---
@@ -747,7 +746,7 @@ before planning around it.**
 | id | question | blocks |
 |---|---|---|
 | MMQ1 | where per-instance configuration lives | MM4, EGQ3 |
-| MMQ2 | Slack configuration per project, per Manager, or per instance. As shipped, all Managers in a root read one command channel | any multi-Manager project using Slack |
+| MMQ2 | several Managers read the one Owner's DM: who acts on an instruction | any multi-Manager project using Slack |
 | MMQ3 | a per-Manager worker cap | — |
 | MMQ4 | correlated failure: detect, or document | — |
 | MMQ5 | combined check-ins across Managers | — |
@@ -760,6 +759,7 @@ before planning around it.**
 | EGQ4 | redirects/DNS under iptables | EG2's documentation |
 | EGQ5 | which allowed destinations publish | EG5 |
 | SBQ1 | do Workers belong to a Manager | SB7 |
+| **C25** | **Should a Manager be startable outside its sandbox, and how?** The profile is unconditional, and a real operator's own `SessionEnd` hook already fails inside it (`V060_RELEASE_PLAN.md` C25, with options: a config key, a `--no-sandbox` flag, or widening the profile per project). **It becomes a 0.7.0 question if 0.6.0 does not answer it, and 0.7.0 makes it sharper.** SB4 narrows `~/.claude`, and EG3's loopback-only profile would cut a hook's network. Each narrowing turns more working setups into failures inside the boundary, and today there is no way out. Whatever is chosen must make the announcement say the boundary is off (the false-claim class) | SB4 and EG3 should not ship before it is answered, or they should ship with it |
 | **C24** | **Should a Worker requested mid-cycle start at once, or at the cycle boundary as it does now?** (a) At the boundary, as shipped: the cost is latency, which the Manager's prompt tells it about. (b) At once: `rite sandbox start` takes tens of seconds, so it has to run without blocking the supervisor's two-second poll (a thread or a watched subprocess), and a cycle that ends mid-launch needs a defined meaning. What turns on it: how much machinery goes into the one loop 0.6.0 spent its time simplifying. It also interacts with CU3, which adds a second piece of pre-launch work (Cursor's mint) to the same supervisor | nothing blocks on it. It is already behaviour, and Robert's to change (`V060_RELEASE_PLAN.md` C24) |
 | MEQ1 | where memory sits relative to Robert's test and K3 | memory's ask-time path |
 | `V070_MEMORY.md` Q1–Q7 | memory's architecture | any memory spec |
