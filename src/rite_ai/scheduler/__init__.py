@@ -848,6 +848,25 @@ def _marker(root: Path) -> str:
 
 
 def _rite_binary() -> str:
+    """The rite an OS schedule runs: THE ONE INSTALLING IT, by absolute path.
+
+    Decided 2026-09-26 (v0.6.0 wiring audit), because PATH was a maybe.
+    The binary is baked into a launchd plist or a crontab now, and run LATER
+    by launchd or cron, whose PATH does not contain `~/.local/bin`. So it
+    must be absolute, and a bare `rite` fails on every tick. What
+    `shutil.which` returns at install time is the first `rite` on the
+    installer's PATH, which in a mixed install is not the one that ran. On
+    the machine this was decided on it was an older 0.5.1, while a newer
+    rite ran the install: the broker's defect (f4afcd1) in another place.
+    `own_command()` names the rite that ran `rite scheduler install`, and a
+    uv or pipx environment keeps that path across upgrades. PATH is only the
+    fallback, for a rite whose environment has no `bin/rite`.
+    """
+    from rite_ai import own_command
+
+    own = own_command()
+    if own != "rite":
+        return own
     return shutil.which("rite") or "rite"
 
 

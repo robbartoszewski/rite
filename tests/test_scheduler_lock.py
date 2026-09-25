@@ -257,3 +257,17 @@ class TestBothSchedulerBackendsWriteToTheRotatedFile:
         )
         assert len(streams) == 2, "expected both stdout and stderr paths"
         assert set(streams) == {str(log_path(tmp_path))}
+
+
+def test_the_schedule_runs_the_rite_that_installed_it(tmp_path):
+    """Decided in the v0.6.0 wiring audit: an OS schedule is baked at install
+    and run later by launchd or cron, whose PATH lacks ~/.local/bin, so the
+    binary is absolute and is the rite that ran the install, never the first
+    one on the installer's PATH (the broker's defect, f4afcd1, in another
+    place)."""
+    from rite_ai import own_command
+    from rite_ai.scheduler import _cron_line, _launchd_plist_content, _rite_binary
+
+    assert _rite_binary() == own_command() != "rite"
+    assert f"&& {own_command()} " in _cron_line(tmp_path, 5)
+    assert f"<string>{own_command()}</string>" in _launchd_plist_content(tmp_path, 5)

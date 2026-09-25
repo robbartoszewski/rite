@@ -201,5 +201,19 @@ def spelling_for(engine: str, agent: str = "") -> Spelling:
     if not engine or engine == "claude":
         return CLAUDE
     if engine.startswith("local:"):
-        return _BY_AGENT.get(agent, SUBSTITUTED)
+        # ⚠ REFUSED, not defaulted. A local engine with no agent, or one
+        # rite has no spelling for, used to fall through to `SUBSTITUTED`,
+        # which is Claude's flags on whatever binary. That is the silent
+        # shape of a caller that dropped `agent`, and the launch path has
+        # dropped an argument three times in two days. Config already
+        # requires `agent` on every `local:*` role, so only a caller that
+        # lost it reaches this.
+        if agent not in _BY_AGENT:
+            raise ValueError(
+                f"engine {engine!r} needs an agent rite can launch "
+                f"({', '.join(sorted(_BY_AGENT))}); got {agent!r} — a caller "
+                "that dropped `agent` would otherwise launch it with Claude's "
+                "flags"
+            )
+        return _BY_AGENT[agent]
     return _BY_AGENT.get(engine, SUBSTITUTED)

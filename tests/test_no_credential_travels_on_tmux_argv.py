@@ -70,6 +70,7 @@ def test_a_real_start_puts_nothing_but_allowed_names_on_tmux_argv(monkeypatch):
         root,
         manager,
         engine="sh",
+        agent="",
         resume_id="",
         prompt="sleep 30",
         permission="",
