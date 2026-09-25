@@ -111,12 +111,16 @@ class TestTheFallbackCarriesTheMail:
         )
 
     def test_it_is_not_left_in_the_mailbox_twice(self, project):
-        """The complement: delivered means delivered. If the fix were 'do
-        not take until after the launch', this would catch the message being
-        delivered again on the next cycle."""
+        """The complement: never twice. ⚠ This asserted the inbox ended EMPTY,
+        but in this harness the fallback launch FAILS ("stop here"), so
+        nothing delivered the message — the test was pinning the loss the
+        put-back fix removes. What it protects is no duplication: the message
+        is back exactly once, for the next cycle that does start."""
         mailbox.send(project, "planner", mailbox.INBOX, MESSAGE)
         _run_with_dead_designation(project)
-        assert mailbox.read(project, "planner", mailbox.INBOX) == []
+        assert [m.text for m in mailbox.read(project, "planner", mailbox.INBOX)] == [
+            MESSAGE
+        ]
 
     def test_the_relaunch_still_gets_the_opening_instruction(self, project):
         """A fresh start gets the opening prompt, not the continuation —
@@ -220,3 +224,33 @@ class TestThereIsACommandInsteadOfAFormat:
         assert '"timestamp"' not in briefing, (
             "the briefing still asks the session to hand-write the format"
         )
+
+
+class TestARefusedCycleGivesItsMailBack:
+    """Observed in a two-Manager run: a routed instruction was taken for the
+    secondary's cycle, the launch was refused ('already running'), and the run
+    returned with the files gone and nothing having delivered them. Reproduced
+    through `rite start` on main: a second start for a running Manager left the
+    inbox with 0 messages; now 1."""
+
+    def test_the_taken_messages_are_put_back_at_their_names(self, project):
+        mailbox.send(project, "planner", mailbox.INBOX, MESSAGE)
+        (before,) = mailbox.read(project, "planner", mailbox.INBOX)
+        said: list[str] = []
+        outcome = supervise(
+            project,
+            "planner",
+            engine="fake",
+            max_sessions=1,
+            window_seconds=0,
+            verdict=lambda _r: "ready",
+            starter=lambda *a, **kw: StartResult(False, "already running"),
+            prompt="OPENING",
+            resume_id_for=lambda _r, _m, _s=0.0: "",
+            note=said.append,
+            poll=0,
+        )
+        assert not outcome.ok
+        (after,) = mailbox.read(project, "planner", mailbox.INBOX)
+        assert after.text == MESSAGE and after.path.name == before.path.name
+        assert any("put back" in line for line in said), said

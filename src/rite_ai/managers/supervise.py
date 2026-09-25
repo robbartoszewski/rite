@@ -55,7 +55,7 @@ from rite_ai.managers.enclosure import (
     write_profile,
 )
 from rite_ai.managers.engines import spelling_for
-from rite_ai.managers.mailbox import INBOX, delivery_note, how_to_reply, send
+from rite_ai.managers.mailbox import INBOX, delivery_note, how_to_reply, put_back, send
 from rite_ai.managers.mailbox import take as take_mail
 from rite_ai.managers.mailbox import waiting as mail_waiting
 from rite_ai.managers.permissions import (
@@ -1000,6 +1000,17 @@ def supervise(
                     window_seconds=window_seconds,
                 )
             if not result.ok:
+                # ⚠ THE MAIL GOES BACK. It was taken to compose this cycle's
+                # instruction, and this cycle did not start — so nothing
+                # delivered it. Observed losing a routed instruction when a
+                # second `rite start` for a running Manager was refused.
+                if waiting_for_it:
+                    kept = put_back(waiting_for_it)
+                    say(
+                        f"{kept} of {len(waiting_for_it)} message(s) taken for "
+                        f"this cycle put back in {manager!r}'s inbox — the "
+                        f"cycle did not start, so none was delivered"
+                    )
                 return SuperviseResult(False, result.message, cycles)
 
             live = result.session
