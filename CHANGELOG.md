@@ -235,6 +235,9 @@ Exactly one must hold it when several Managers share a root, and
   read the Owner's DM and would have acted on the same instruction.
 - **The Owner hands work down:** `rite route helper "…"`. The secondary gets
   it at its next turn, marked as routed by the Owner.
+- **Replies come back up:** a secondary's `rite reply` reaches the Owner at
+  its next turn, marked as context from that Manager. A secondary has no
+  authority over the Owner.
 - ⚠ **No Manager can write a Manager's inbox — another's or its own.** A
   message in an inbox is an instruction, so each Manager's sandbox refuses
   the write, and `rite message` run by a Manager refuses and says what to
