@@ -573,10 +573,8 @@ class Listener:
         at = time.strftime("%H:%M", time.localtime(_as_ts(sent.ts)))
         return f"rite's {what} at {at}"
 
-    def poll(self, *, call=None) -> tuple[str, ...]:
-        """What has been said since the last poll, as mailbox texts, each
-        with its header. At most one history read and one thread read per
-        call — the budget in `THREAD_SECONDS`."""
+    def _read_history(self, *, call=None) -> list[str]:
+        """One conversation's history, the next in turn."""
         out: list[str] = []
         channels = [c for c in (self.dm, self.broadcast_id) if c]
         if channels:
@@ -602,6 +600,13 @@ class Listener:
                 # ⚠ Recorded, not raised, and not retried here. The loop's
                 # next tick is the retry; an outage must not end a run.
                 self._problem(heard.problem)
+        return out
+
+    def poll(self, *, call=None) -> tuple[str, ...]:
+        """What has been said since the last poll, as mailbox texts, each
+        with its header. At most one history read and one thread read per
+        call — the budget in `THREAD_SECONDS`."""
+        out = self._read_history(call=call)
         out.extend(self._read_a_thread(call=call))
         return tuple(out)
 
@@ -624,7 +629,11 @@ class Listener:
         due = [r for r in self.roots if r.due <= now]
         if not due:
             return []
-        root = min(due, key=lambda r: r.due)
+        # NEWEST FIRST among those due. Found live: with ten roots, oldest
+        # first, and one read per tick, a ~30-second cycle ended before it
+        # reached the two threads a person had just replied in — the newest
+        # roots, which are the ones anyone is replying under.
+        root = min(due, key=lambda r: (r.due, -_as_ts(r.ts)))
         root.due = now + THREAD_SECONDS
         heard = _read(
             "conversations.replies",
@@ -838,6 +847,24 @@ class Listener:
                 f"slack: posted {message.path.name} → {sent.channel} ts {sent.ts}"
             )
         return lines
+
+    def drain(self, *, call=None) -> tuple[str, ...]:
+        """One last read of every conversation and every thread, at the end
+        of a run — so what was said during its final cycle is in the inbox
+        for the next start, rather than read only if the tick budget happened
+        to reach it before the engine exited. Found live: it did not.
+
+        Once per run, so outside the per-tick budget: at most two history
+        reads and `THREADS_MAX` thread reads.
+        """
+        out: list[str] = []
+        for _ in range(len([c for c in (self.dm, self.broadcast_id) if c])):
+            out.extend(self._read_history(call=call))
+        for root in list(self.roots):
+            root.due = 0.0
+        for _ in range(len(self.roots)):
+            out.extend(self._read_a_thread(call=call))
+        return tuple(out)
 
     def close(self, *, call=None) -> list[str]:
         """The end of a run: post whatever the last cycle said, then say in

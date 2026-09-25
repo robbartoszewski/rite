@@ -277,3 +277,28 @@ class TestARestartKeepsItsThreads:
         slack.replies[("D1", root.ts)].append(_said("and tag it", "102.0"))
         got = [m for m in _drain(again, slack, polls=8) if "thread" in m]
         assert [m.splitlines()[1] for m in got] == ["> and tag it"]
+
+
+class TestTheNewestThreadIsReadFirst:
+    """Found live, 2026-09-25: with ten roots read oldest first at one per
+    tick, a ~30-second cycle ended before reaching the two threads a person
+    had just replied in."""
+
+    def test_among_threads_due_the_newest_is_read_first(self):
+        slack = Slack()
+        listener = Listener(token="t", manager="lead", clock=lambda: 200.0)
+        for i in range(5):
+            listener.remember("C1", f"{100 + i}.0", "x")
+        listener.poll(call=slack)
+        read = [a["ts"] for m, a in slack.calls if m == "conversations.replies"]
+        assert read == ["104.0"]
+
+    def test_the_end_of_a_run_reads_every_thread_once(self):
+        slack = Slack()
+        listener = _opened(slack)
+        for i in range(THREADS_MAX):
+            listener.remember("C1", f"{150 + i}.0", "x")
+        oldest = listener.roots[0]
+        slack.replies[("C1", oldest.ts)] = [_said("late", "190.0", OTHER)]
+        got = listener.drain(call=slack)
+        assert [m.splitlines()[1] for m in got] == ["> late"]

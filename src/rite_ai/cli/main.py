@@ -6260,6 +6260,12 @@ def _start_a_manager(
         # ⚠ In a finally, so a Ctrl-C still posts the last reply. Only a
         # killed process skips it.
         if listener is not None:
+            from rite_ai.managers.mailbox import INBOX, send
+
+            # The same validated writer the wait loop uses, so a message heard
+            # at the very end reaches the next start by THE ONE HOOK.
+            for heard in listener.drain():
+                send(root, role.name, INBOX, heard)
             for line in listener.close():
                 click.echo(line)
     click.echo(outcome.reason)
