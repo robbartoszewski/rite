@@ -5,16 +5,16 @@ the same validated writer `rite message` uses, so it reaches the Manager by
 the instruction composed at the next cycle boundary. A second delivery path
 was refused by name in 0.5.1 and this does not add one.
 
-⚠ **READING AND POSTING ARE DIFFERENT CONVERSATIONS, and that is an
-authorisation property.** Instructions come only from `command_channel`. If
-the Manager also read where it posts status, everyone able to post in a team
-channel could direct it — the disgruntled-employee shape exactly.
+⚠ **AUTHORITY COMES FROM THE CHANNEL (SPEC §9.16.2, D-95).** Instructions
+come only from the Owner's DM with the app, found from the Owner's user id —
+never from a configured channel, which could be one the whole workspace posts
+in.
 """
 
 from __future__ import annotations
 
 from rite_ai.managers.mailbox import INBOX, read
-from rite_ai.managers.slack import Listener, _hear, say
+from rite_ai.managers.slack import Listener, _hear, _post
 from rite_ai.managers.supervise import supervise
 
 
@@ -75,14 +75,14 @@ class TestTheCursorMovesAndNothingIsLost:
         assert got.texts == () and got.newest == "21.0"
 
     def test_the_listener_carries_the_cursor_between_polls(self):
-        listener = Listener(command_channel="C1", token="t")
+        listener = Listener(token="t", manager="m", dm="D1")
         listener.poll(call=_reply([_msg("a", "20.0")]))
         assert listener.since == "20.0"
 
     def test_an_outage_does_not_move_the_cursor_or_raise(self):
         """A Slack outage must not end a Manager's run, and must not skip the
         messages it could not read."""
-        listener = Listener(command_channel="C1", token="t", since="19.0")
+        listener = Listener(token="t", manager="m", dm="D1", since="19.0")
         assert listener.poll(call=_reply([], ok=False, error="ratelimited")) == ()
         assert listener.since == "19.0"
         assert listener.problems and "ratelimited" in listener.problems[0]
@@ -108,7 +108,7 @@ class TestItDoesNothingWhenNotConfigured:
 
     def test_posting_nothing_posts_nothing(self):
         called = []
-        assert say("C1", "t", "   ", call=lambda *a, **kw: called.append(a)) == ""
+        assert _post("C1", "t", "   ", call=lambda *a, **kw: called.append(a)).ok
         assert called == []
 
 
@@ -239,7 +239,7 @@ class TestAReplyCanCarryAThreadRoot:
 
     def test_a_thread_root_becomes_thread_ts(self):
         sent = []
-        say(
+        _post(
             "C1",
             "t",
             "hello",
@@ -252,7 +252,7 @@ class TestAReplyCanCarryAThreadRoot:
         """A key Slack does not expect must not appear at all — an empty
         `thread_ts` is not the same as its absence."""
         sent = []
-        say(
+        _post(
             "C1",
             "t",
             "hello",

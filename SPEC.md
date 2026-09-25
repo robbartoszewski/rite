@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.1 · **Date:** 2026-09-25
+**Version:** 0.24.2 · **Date:** 2026-09-25
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -5930,10 +5930,16 @@ updates and check-in digests are posted there for anyone to read. Messages
 typed in it reach the Manager as context. **They never carry authority,
 whoever types them and whatever they say.**
 
-⚠ **This adds Slack scopes.** A3a established that `channels:history` and
-`chat:write` suffice for a public channel. Reading the Owner's DM needs the
-IM equivalents. The exact set is to be measured when the relay is built
-(plan § A6), not assumed here.
+⚠ **This adds one Slack scope — measured 2026-09-25 (plan § A6).** A3a
+established that `channels:history` and `chat:write` suffice for a public
+channel. **Reading the Owner's DM needs `im:history`.** Posting to it needs
+nothing more: a post to the Owner's user id returns the DM's id, which is how
+rite learns it (`conversations.open` would need `im:write`, and is not used).
+
+**Configured per project** as `slack.owner_user` (the Owner's user id) and
+`slack.broadcast_channel`. There is **no configurable command channel**: a
+`slack.command_channel` key is refused by the parser, because configuring
+authority as a channel is what lets it be pointed at one others can post in.
 
 #### 9.16.3. Unaddressed thread comments are context, never instruction (D-94)
 
@@ -6529,6 +6535,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.2 — the command channel is not configurable, and the DM's scope is measured.** §9.16.2 records what A6 measured: reading the Owner's DM needs `im:history`, and posting needs nothing beyond `chat:write` because a post to the user id returns the DM's id. It records the configuration too: `slack.owner_user` and `slack.broadcast_channel`, per project, with a shipped `slack.command_channel` refused by name because it let authority be pointed at a shared channel.
 
 **Changes in 0.24.1 — §6.6 reads true whether or not its tickets ship.** Robert placed § N (text cleanup and phrase reporting) in 0.6.0, last, so it can be dropped if quota runs out. §6.6 now opens with what rite does today, which is nothing to ticket text, stated separately from what § N would add, and marks §6.6.1 and §6.6.2 as not built. A release without N therefore does not describe behaviour rite lacks. §9.16.5's line on inbound Slack text is made conditional the same way, and the inference label on it stays, now marked accepted. D-97 and D-98 carry the placement.
 

@@ -171,9 +171,8 @@ def config_to_yaml(config: ProjectConfig) -> str:
         # writer omits is one `rite schedule set` DELETES from a real
         # project the next time it rewrites this file.
         "slack": {
-            "command_channel": config.slack.command_channel,
-            "broadcast_channel": config.slack.broadcast_channel,
             "owner_user": config.slack.owner_user,
+            "broadcast_channel": config.slack.broadcast_channel,
         },
     }
     return yaml.safe_dump(

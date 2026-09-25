@@ -349,6 +349,13 @@ def parse_config(path: Path) -> ProjectConfig | ParseError:
     if not isinstance(raw, dict):
         return ParseError(str(path), "expected a YAML mapping at top level")
 
+    # BEFORE the unknown-key check, which would answer a retired
+    # `command_channel` with "unknown key" — true, and silent about why the
+    # key went, which is the thing the person needs to know.
+    slack_problem = _slack_problem(raw.get("slack", {}))
+    if slack_problem:
+        return ParseError(str(path), slack_problem)
+
     unknown = _unknown_config_key(raw)
     if unknown:
         return ParseError(str(path), unknown)
@@ -443,13 +450,10 @@ def parse_config(path: Path) -> ProjectConfig | ParseError:
         else HeartbeatConfig()
     )
 
-    slack_raw = raw.get("slack", {})
-    if not isinstance(slack_raw, dict):
-        return ParseError(str(path), "'slack' must be a mapping")
+    slack_raw = raw.get("slack") or {}
     slack = SlackConfig(
-        command_channel=str(slack_raw.get("command_channel", "")),
-        broadcast_channel=str(slack_raw.get("broadcast_channel", "")),
-        owner_user=str(slack_raw.get("owner_user", "")),
+        owner_user=str(slack_raw.get("owner_user") or ""),
+        broadcast_channel=str(slack_raw.get("broadcast_channel") or ""),
     )
 
     wd_raw = raw.get("watchdog", {})
@@ -563,6 +567,49 @@ def parse_config(path: Path) -> ProjectConfig | ParseError:
         schedule=schedule,
         spec=spec,
     )
+
+
+_SLACK_USER = re.compile(r"^[UW][A-Z0-9]{2,}$")
+_SLACK_CHANNEL = re.compile(r"^(#[a-z0-9][a-z0-9._-]*|[CG][A-Z0-9]{2,})$")
+
+
+def _slack_problem(raw: object) -> str:
+    """What is wrong with the `slack:` section, or "" (A6, SPEC §9.16.2).
+
+    Schema-validated rather than passed through, because each mistake here is
+    one Slack answers with a bare `channel_not_found` at the first poll of a
+    run, long after the file was written.
+    """
+    if raw is None:
+        return ""
+    if not isinstance(raw, dict):
+        return "'slack' must be a mapping"
+    if "command_channel" in raw:
+        # Refused, not ignored. Ignoring it would leave a Manager that used to
+        # listen quietly deaf; reading it would keep authority configurable.
+        return (
+            "slack.command_channel is no longer read: the command channel is the "
+            "Owner's DM with the rite app (SPEC §9.16.2, D-95), so authority "
+            "cannot be pointed at a channel others can post in. Set "
+            "slack.owner_user to the Owner's Slack user id (U…) and remove "
+            "command_channel; a channel for status goes in slack.broadcast_channel"
+        )
+    owner = raw.get("owner_user") or ""
+    if owner and not (isinstance(owner, str) and _SLACK_USER.match(owner)):
+        return (
+            f"slack.owner_user {owner!r} is not a Slack user id — it looks like "
+            "U0123ABCD (profile → ⋮ → Copy member ID), not a name or an email"
+        )
+    broadcast = raw.get("broadcast_channel") or ""
+    if broadcast and not (
+        isinstance(broadcast, str) and _SLACK_CHANNEL.match(broadcast)
+    ):
+        return (
+            f"slack.broadcast_channel {broadcast!r} is neither a channel name "
+            "starting with '#' (lower case, as Slack writes it) nor a channel "
+            "id (C…)"
+        )
+    return ""
 
 
 def _unknown_config_key(raw: dict) -> str:

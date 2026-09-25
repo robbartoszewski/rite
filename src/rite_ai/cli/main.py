@@ -1157,6 +1157,9 @@ def _doctor_report(problems: list[str]) -> None:
             click.echo(f"schedule: {p}")
         problems.extend(schedule_problems)
 
+        with _doctor_check("slack", problems):
+            _doctor_slack(root, problems)
+
     return
 
 
@@ -5992,8 +5995,8 @@ def _loop_verdict(root: Path, board=None) -> str:
         return "unknown"
 
 
-def _slack_listener(root: Path):
-    """A Slack listener for this project, or None when Slack is not set up.
+def _slack_listener(root: Path, manager: str):
+    """A Slack listener for this Manager, opened, or None when Slack is off.
 
     ⚠ **None rather than a no-op object**, so `supervise` does no Slack work
     at all for a project that has not configured it — and so the absence is
@@ -6010,24 +6013,58 @@ def _slack_listener(root: Path):
 
     parsed = parse_config(root / ".rite" / "config.yaml")
     config = parsed if not isinstance(parsed, ParseError) else ProjectConfig()
-    channel = config.slack.command_channel
-    if not channel:
+    if not config.slack.enabled:
         return None
     token = get_scoped("slack_bot_token", config.credentials)
     if not token:
         click.echo(
-            f"slack: {channel} is configured as the command channel and no "
-            "slack_bot_token is set, so nothing will be read from it. "
-            "`rite credential set slack` stores one.",
+            "slack: configured, and no slack_bot_token is set, so nothing will "
+            "be read or posted. `rite credential set slack` stores one.",
             err=True,
         )
         return None
-    click.echo(
-        f"slack: reading instructions from {channel} only. Messages arrive in "
-        "this Manager's mailbox and are delivered at the start of its next "
-        "turn."
+    listener = Listener(
+        token=token,
+        manager=manager,
+        owner=config.slack.owner_user,
+        broadcast=config.slack.broadcast,
     )
-    return Listener(command_channel=channel, token=token)
+    for line in listener.open():
+        click.echo(line)
+    return listener
+
+
+def _doctor_slack(root: Path, problems: list[str]) -> None:
+    """Probe both Slack targets, naming Slack's own error (A6).
+
+    Nothing is printed for a project without Slack: a check for a feature
+    nobody turned on is noise in the one report meant to be read whole.
+    """
+    from rite_ai.config.parse import ParseError, parse_config
+    from rite_ai.credentials.store import get_scoped
+    from rite_ai.managers.slack import probe
+
+    parsed = parse_config(root / ".rite" / "config.yaml")
+    if isinstance(parsed, ParseError) or not parsed.slack.enabled:
+        return
+    slack = parsed.slack
+    if not slack.owner_user:
+        click.echo(
+            "slack: broadcast-only — no slack.owner_user, so there is no "
+            "command channel and nothing typed in Slack instructs a Manager"
+        )
+    token = get_scoped("slack_bot_token", parsed.credentials)
+    if not token:
+        click.echo("slack: NO TOKEN — `rite credential set slack` stores one")
+        problems.append("slack is configured and slack_bot_token is not set")
+        return
+    for checked in probe(slack.owner_user, slack.broadcast, token):
+        click.echo(
+            f"slack {checked.target}: {'ok' if checked.ok else 'FAILED'} — "
+            f"{checked.detail}"
+        )
+        if not checked.ok:
+            problems.append(f"slack {checked.target}: {checked.detail}")
 
 
 def _engine_ready_for(role):
@@ -6195,7 +6232,7 @@ def _start_a_manager(
         # itself reads, so "is this a real ticket" has one answer in one
         # place; `for_project` refuses everything when there is none.
         broker=for_project(root, board),
-        slack=_slack_listener(root),
+        slack=_slack_listener(root, role.name),
         max_sessions=sessions,
         window_seconds=minutes * 60.0,
         prompt=(

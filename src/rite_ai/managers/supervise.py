@@ -982,6 +982,8 @@ def supervise(
                     # in advance.
                     for heard in slack.poll():
                         send(root, manager, INBOX, heard)
+                    for line in getattr(slack, "news", list)():
+                        say(line)
                 if not cycle.mail_waiting and mail_waiting(root, manager, INBOX):
                     cycle.mail_waiting = True
                     say(

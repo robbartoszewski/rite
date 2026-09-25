@@ -93,40 +93,54 @@ class WatchdogConfig:
     interval_minutes: int = 5
 
 
+DEFAULT_BROADCAST = "#all-rite"
+
+
 @dataclass
 class SlackConfig:
-    """Which Slack conversations a Manager reads from and posts to.
+    """Who may instruct a Manager over Slack, and where status is posted
+    (A6, SPEC §9.16.2, D-95).
 
-    ⚠ **READING AND POSTING ARE SEPARATE FIELDS, DELIBERATELY, AND THAT IS
-    AN AUTHORISATION DECISION RATHER THAN A CONVENIENCE.** If one channel
-    served both, then anyone who can post where the Manager posts can also
-    direct it — in a workspace channel that is everybody, which is the
-    disgruntled-employee shape exactly.
+    ⚠ **AUTHORITY COMES FROM THE CHANNEL, SO THE COMMAND CHANNEL IS NOT
+    CONFIGURABLE.** It is the Owner's direct message with the rite app, named
+    here by the Owner's user id. Only the Owner and the app are in that
+    conversation, so "only the Owner can instruct" is a property of where a
+    message was posted rather than a check rite has to get right per message.
+    An earlier shape took a `command_channel` id, which let a project point
+    authority at a channel the whole workspace can post in. It is refused by
+    the parser, by name, rather than read.
 
-    So `command_channel` is the only conversation instructions are taken
-    from, and `broadcast_channel` is where status is posted for a team to
-    read. A public channel may be the broadcast one while the command one is
-    a DM with the app, which is one-to-one BY CONSTRUCTION — "who is talking"
-    is then answered by the conversation existing rather than by a check rite
-    has to get right.
+    `broadcast_channel` is where status is posted for anyone to read. What is
+    typed there reaches the Manager as CONTEXT and never carries authority,
+    whoever types it. A NAME is fine: `chat.postMessage` accepts one and
+    returns the id, which rite then reads by (A3a, measured), so no
+    `channels:read` scope is needed.
 
-    Both are ids rather than names (`C…` for a channel, `D…` for a DM),
-    because that is what `conversations.history` takes, and because a name
-    can be reassigned to a different conversation while an id cannot.
+    ⚠ **Per project, not per Manager.** A Slack DM is one per user and app, so
+    two Managers cannot each have "the Owner's DM" without a second app. How
+    several Managers share one DM is v0.7.0's MMQ2, not settled here.
     """
 
-    command_channel: str = ""
-    """Read for instructions. Empty means rite reads no Slack at all."""
+    owner_user: str = ""
+    """The Owner's Slack user id (`U…`). Its DM with the app is the command
+    channel. Empty means there is NO command channel: Slack is broadcast-only
+    and nothing typed in Slack is an instruction."""
 
     broadcast_channel: str = ""
-    """Posted to for visibility. Empty means replies go only where the
-    command channel is, so a project can start with one conversation and
-    split later without the code changing."""
+    """A channel name (`#all-rite`) or id (`C…`). Empty means the default,
+    `#all-rite`, once Slack is set up at all — see `broadcast`."""
 
-    owner_user: str = ""
-    """The Owner's Slack user id (`U…`), from which a DM id is derivable —
-    `chat.postMessage` to a user id returns the `D…` channel, measured, with
-    no extra scope. Reserved for the DM work; nothing reads it yet."""
+    @property
+    def enabled(self) -> bool:
+        """Is Slack set up? Either key turns it on; neither leaves it off."""
+        return bool(self.owner_user or self.broadcast_channel)
+
+    @property
+    def broadcast(self) -> str:
+        """The broadcast target in effect, or "" when Slack is off."""
+        if not self.enabled:
+            return ""
+        return self.broadcast_channel or DEFAULT_BROADCAST
 
 
 @dataclass
