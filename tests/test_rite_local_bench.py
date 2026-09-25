@@ -27,6 +27,39 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 from rite_local_bench.tasks import ALREADY_PASSING, TASKS  # noqa: E402
 
 
+def _bare_python_problem() -> str:
+    """Why the verify commands cannot run in THIS shell, or "".
+
+    Every task's `verify` is a literal command for the Worker's environment —
+    `python -m pytest -q …` — and runs through the shell here as written. A
+    machine with no bare `python` on PATH, or one whose `python` has no
+    pytest, cannot run it at all. Measured: macOS ships `python3` and no
+    `python`, and `.venv/bin/python -m pytest` does not put the venv's `bin`
+    on PATH, so all eleven verify tests failed with `python: command not
+    found` on a fresh checkout. That is the shell, not the benchmark, so it
+    is a skip with the reason — `uv run pytest` and CI put the venv's
+    `python` first on PATH and run them.
+    """
+    try:
+        done = subprocess.run(
+            ["python", "-c", "import pytest"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except FileNotFoundError:
+        return "no bare `python` on PATH (run the suite with `uv run pytest`)"
+    except subprocess.TimeoutExpired:
+        return "`python -c 'import pytest'` did not finish"
+    if done.returncode != 0:
+        return "the `python` on PATH cannot import pytest (use `uv run pytest`)"
+    return ""
+
+
+_NO_PYTHON = _bare_python_problem()
+needs_bare_python = pytest.mark.skipif(bool(_NO_PYTHON), reason=_NO_PYTHON)
+
+
 def _run_verify(
     root: Path, files: dict[str, str], verify: str
 ) -> subprocess.CompletedProcess:
@@ -37,6 +70,7 @@ def _run_verify(
     )
 
 
+@needs_bare_python
 @pytest.mark.parametrize("task", TASKS, ids=[t.id for t in TASKS])
 def test_the_verify_passes_on_the_known_good_solution(task, tmp_path: Path):
     """Otherwise the task measures the verify's bugs, and no agent can pass."""
@@ -47,6 +81,7 @@ def test_the_verify_passes_on_the_known_good_solution(task, tmp_path: Path):
     )
 
 
+@needs_bare_python
 @pytest.mark.parametrize("task", TASKS, ids=[t.id for t in TASKS])
 def test_the_verify_fails_before_the_work(task, tmp_path: Path):
     """Otherwise every agent 'completes' it by doing nothing at all."""
