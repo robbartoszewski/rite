@@ -117,7 +117,7 @@ Checked against the A tickets on 2026-09-25. Three needs:
 |---|---|---|
 | Post a status message **and keep its identity**, so threads can be rooted on it | ❌ A4 posts the outbox and says nothing about keeping `chat.postMessage`'s `ts` | A4 amended: the relay records each posted message's `ts` in its own state, keyed by outbox filename — **not** in the message, which stays identity-free (Decision 1a) |
 | **Read replies** — including replies in a thread | ❌ A3 reads `conversations.history` only. Slack documents that thread replies are fetched with `conversations.replies`; `history` returns the parent. **Not yet measured by rite** — A3's amended DoD must observe it | A3 amended: also read the threads of messages rite posted recently, within the Tier 3 budget, and deliver a thread reply labelled with what it replies to |
-| A conversation target that is **configuration**, not an assumption | ❌ No config key exists; the proof instrument defaults to `#all-rite` | New **A6**: a per-Manager channel ID in `config.yaml`, schema-validated, probed by `rite doctor` |
+| A conversation target that is **configuration**, not an assumption | ❌ No config key exists; the proof instrument defaults to `#all-rite` | New **A6**, rewritten the same day for D-95: the **Owner's DM** is the command channel (configured by user ID), and a configurable **broadcast** channel defaults to `#all-rite`; both probed by `rite doctor` |
 
 **The check-in does not need a new mailbox shape.** The digest and the
 surviving questions are posted as ONE outbox message, so `rite connect`
@@ -125,6 +125,25 @@ surviving questions are posted as ONE outbox message, so `rite connect`
 a thread on it. A reply in that thread comes back through amended A3 into the
 inbox with its context as TEXT ("in reply to the 14:00 check-in: …"). Nothing
 records a sender and no field is added to a message.
+
+### Who may answer — decided 2026-09-25 (SPEC §9.16, D-94–D-96)
+
+An answer to a queued question is an **instruction**, and an instruction needs
+**authority** (the channel) **and addressing** (a mention, or a reply to what
+rite asked). So the thread that collects answers is rooted in the **Owner's
+DM**, the command channel, which is one-to-one by construction. The digest is
+**mirrored** to the broadcast channel (default `#all-rite`). Replies there
+reach the Manager as **context**, labelled so, including an `@rite` from
+someone who is not the Owner. ⚠ `@rite` answers "is this addressed to me",
+never "may this person direct me". Anyone in the workspace can type it.
+
+### What the standup also reports
+
+Injection-phrase findings from ticket text (SPEC §6.6, D-97, plan N2) appear
+as digest lines: reported, never blocked. The digest must not imply that
+ticket text is vetted. 8 of 8 agent-directed attacks pass any text filter,
+and the control that makes that survivable is egress control
+([`V070_EGRESS.md`](V070_EGRESS.md), v0.7.0).
 
 ## Open, for Robert
 
