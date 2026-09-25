@@ -47,6 +47,8 @@ So any repo that is or was a rite project carries a tracked `.rite/` into every 
 
 **Ready-made regression test:** clone rite into `workers/w/rite/` under a project root, `cd` there, assert the resolved project root is the outer project. Mirrors the existing `TestTheSuiteDoesNotWriteIntoThisRepository` idiom — assert the property, do not trust the fixture.
 
+⚠ **UPDATED 2026-09-25: both suggested fixes are in the code.** The marker is a project-identifying file rather than the bare `.rite/` directory, and `RITE_PROJECT_ROOT` overrides the search (`cli/main.py`, `_find_project_root`, `PROJECT_ROOT_ENV`). So the sentence above saying no override exists is stale. **The entry stays OPEN** under this register's rule, until a named run clears it with evidence.
+
 **Status:** OPEN — ticket required. Worked around for the run by a single sanctioned `PATH` wrapper (pre-registration §6.3). **If the fix lands before the run starts, prefer it and drop the wrapper.**
 
 ---

@@ -6,9 +6,11 @@ profile, both observed end to end. **The `HOME` section is wrong as advice**
 and is kept only as what was believed: redirecting `HOME` costs the Claude
 login, so the profile grants the engine's own state paths and redirects
 `TMPDIR` instead (see B4d's correction and `enclosure.py`,
-`ENGINE_HOME_IS_THE_OPERATORS`). What the built boundary still leaves open
-(the tmux server, unfiltered signals, `(allow network*)`) was measured the
-same day and is in `../V070_RELEASE_PLAN.md`, part 0 and track SB.
+`ENGINE_HOME_IS_THE_OPERATORS`). Two holes in the first built profile were
+found the same day, the tmux server and unfiltered signals, and `9862b59`
+closed both, measured before and after. What is still open (`~/.claude`
+readable whole, other projects' transcripts included, and the unconfined
+network) is in `../V070_RELEASE_PLAN.md`, part 0 and track SB.
 
 **Robert put Manager sandboxing into v0.6.0**, on an argument that is sound:
 his permission decision — the allowlist as the secure default — holds for

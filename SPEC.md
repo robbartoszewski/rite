@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.1 · **Date:** 2026-09-25
+**Version:** 0.24.2 · **Date:** 2026-09-25
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -1856,12 +1856,16 @@ engine. Since `4ebbbd7` a Manager's pane runs inside a seatbelt profile that
   (`managers/broker.py`).
 
 ⚠ **What the boundary does not do** is printed on every run
-(`enclosure.limitations()`). It does not confine the network. Measured on
-2026-09-25, it also does not keep a Manager from the tmux server, which runs
-commands outside it, or from signalling processes it did not start
-(`docs/design/V070_RELEASE_PLAN.md`, part 0). The remaining containment below,
-**what a Manager is permitted to do**, still applies in full. The sandbox
-adds to it and replaces none of it.
+(`enclosure.limitations()`). It bounds files, not capability, and it does not
+confine the network. Two holes in the first version were found and closed on
+2026-09-25 (`9862b59`), and each was measured succeeding and then failing:
+the tmux server, which runs outside the profile and ran commands sent to it
+unconfined, is now unreachable (its socket directory is denied by path); and
+signals are limited to the Manager's own sandbox. **One cross-project read is
+still open.** `~/.claude` is readable whole, so a Manager can read other
+projects' Claude transcripts. See `docs/design/V070_RELEASE_PLAN.md`, part 0
+and SB4. The remaining containment below, **what a Manager is permitted to
+do**, still applies in full. The sandbox adds to it and replaces none of it.
 
 §5.3 gives Workers a sandbox. Managers do not get one, and this section is
 the other half of the design rather than an exception to it.
@@ -2099,18 +2103,22 @@ be tested:
 | **P3** | State shared by decision (§5.4.6) is written only through its locked writer, and the list is enumerated by a test | §5.4.6 |
 | **P4** | A release or destroy names the Manager whose thing it is | §5.4.3, with a Manager field on the claim |
 
-⚠ **None of the four holds on `main` today, and this section does not claim
-otherwise.** Most per-project state is still flat (§5.4.5). `Claim` has no
-Manager field (§5.4.3). And P2 was **measured open** on 2026-09-25: from
-inside a Manager's profile, a process it did not start was killed, and the
-tmux server ran a command outside the boundary
-(`docs/design/V070_RELEASE_PLAN.md`, part 0).
+**State on `main`, measured 2026-09-25 at `9862b59`:**
 
-⚠ **The Manager's sandbox is not what enforces P1.** Each Manager's profile
-grants the whole project tree, so two Managers in one root can each reach
-the other's directory. The sandbox separates a Manager from the rest of the
-machine, not from its siblings. P1 is enforced by rite's own writers, or it
-is not enforced.
+- **P2 holds.** With two Managers' profiles in one root, killing the other
+  Manager's engine and driving or killing its tmux session were all
+  refused, and the other Manager survived. It holds by exactly the two
+  mechanisms named above: `(target same-sandbox)` signals and the denied tmux
+  socket. It is not yet pinned by a test between two Managers.
+- **P1, P3 and P4 do not.** Most per-project state is still flat (§5.4.5).
+  The shared-by-decision list has no test behind it (§5.4.6). And `Claim` has
+  no Manager field (§5.4.3).
+
+⚠ **The Manager's sandbox is not what enforces P1, and was measured not to.**
+Each Manager's profile grants the whole project tree, and one Manager wrote
+into the other's `.rite/managers/<name>/`. The sandbox separates a Manager's
+**processes** from its siblings'. It does not separate their **files**. P1 is
+enforced by rite's own writers, or it is not enforced.
 
 **"By accident" is the bar, and it is not "against a hostile Manager."** A
 Manager may run `rite`, and `rite` does what the operator can. What this
@@ -2165,11 +2173,14 @@ of it:**
   **refuses** the flag. The allowlist is IPv4 only. (Read from `yoloai help
   security`, 0.11.0; not measured by rite.)
 - **A Manager** runs under seatbelt on the host (§5.4). Measured 2026-09-25:
-  a seatbelt profile can confine a process to **loopback** and nothing finer.
-  A named host is rejected when the profile loads (*"host must be * or
-  localhost in network address"*). So a Manager's destination list cannot
-  live in its profile. It has to be enforced by something outside the
-  boundary that the Manager's traffic passes through. How is open.
+  for **IP** destinations a seatbelt profile has two positions, everything or
+  **loopback**. A named host is rejected when the profile loads (*"host must
+  be * or localhost in network address"*). For **local sockets** it can allow
+  or refuse by **path**, and that is how the tmux socket is denied today. So
+  a Manager's list of *hosts* cannot live in its profile. IP traffic has to
+  pass through something outside the boundary that enforces it, while
+  local-socket destinations can be decided in the profile itself. How is
+  open.
 
 ⚠ **So a project whose Workers run on seatbelt gets no Worker egress control,
 and rite must say so rather than imply otherwise.** The words "restricted",
@@ -6519,7 +6530,7 @@ happened once already and left no trace until this review found it.
 | D-96 | What does `@rite` mean? | **"This is addressed to me" — a filter, not "do this", and NOT an access control** | A mention is still judged. Anyone in a workspace can type it, so it can never authorise. Authority (D-95) and addressing (D-96) are separate questions, and the docs must not blur them. §9.16.4. |
 | D-97 | Should rite scan ticket text for injection phrases? | **YES — report at the next check-in, NEVER block. Reverses the earlier advice against scanning** | The earlier advice rested on 9 of 18 ordinary tickets quarantined — in BLOCKING mode. Reporting makes a false positive cost a standup line, and the measured 6-of-9 catch rate on model-directed attacks becomes free signal. Named for what it does ("a phrase commonly used in prompt injection"), never "sanitized". ⚠ It catches none of 8 agent-directed attacks, and ticket text is not vetted. §6.6. **Planned 0.6.0, sequenced last and droppable (plan § N); not built.** |
 | D-98 | What input normalisation does ticket text get? | **Invisible characters removed, hidden tag characters decoded and shown, HTML comments stripped or surfaced** | Correctness, not security: the agent must see what a human reviewer sees. §6.6.1. **Planned 0.6.0, sequenced last and droppable (plan § N); not built.** |
-| D-99 | Where may an agent talk, and where is that enforced? | **Only to destinations the operator sanctioned, inbound and outbound, enforced at the NETWORK layer — never by which program runs** | A permitted list is closed by construction, and a list of threats loses to the one nobody listed. It is the control that makes §6.6.3's 8-of-8 survivable: it does not care what the agent believes. The tool layer cannot carry it, because `git` and `gh` are permitted and reach the network, and `python -c` or a hook can make any request. Measured constraint: a seatbelt profile can confine to loopback and nothing finer, so a Manager's list is enforced outside its boundary. §5.5. |
+| D-99 | Where may an agent talk, and where is that enforced? | **Only to destinations the operator sanctioned, inbound and outbound, enforced at the NETWORK layer — never by which program runs** | A permitted list is closed by construction, and a list of threats loses to the one nobody listed. It is the control that makes §6.6.3's 8-of-8 survivable: it does not care what the agent believes. The tool layer cannot carry it, because `git` and `gh` are permitted and reach the network, and `python -c` or a hook can make any request. Measured constraint: for IP, a seatbelt profile can confine to loopback and name no host, so a Manager's host list is enforced outside its boundary. Local sockets it can refuse by path. §5.5. |
 | D-100 | What content is scanned on the way out? | **Only payloads to ALLOWED destinations that PUBLISH, with the structural credential rule. Model calls are NEVER scanned** | The destination is the primary control, and scanning covers the one case it passes: a token in an issue body on the operator's own repository. A scanner on the model path alarms on every request, or is tuned to ignore it and watches nothing while appearing to watch. Which destinations count as publishing is open. §5.5.4. |
 
 ---
@@ -6529,6 +6540,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.2 — 0.24.0 was measured against a tree that had already moved, and three of its claims were wrong by the time it landed.** Re-measured at `9862b59`, which closed the tmux and signal escapes: §5.4.8 now says **P2 (process separation between Managers) holds**, measured between two Managers' profiles, and that the sandbox separates processes but not files (one Manager wrote into the other's directory). §5.4's banner no longer reports the two closed holes as open. It names the one cross-project read that is still open: `~/.claude` is readable whole, other projects' transcripts included. §5.5.2 and D-99 no longer say a seatbelt profile can express "nothing finer" than loopback. That is true for IP destinations, and false for local sockets, which can be refused by path, and that is how the tmux socket is closed. **0.24.0's history entry below is left as written**, including its "none of which holds today", because it was the claim made at the time.
 
 **Changes in 0.24.1 — §6.6 reads true whether or not its tickets ship.** Robert placed § N (text cleanup and phrase reporting) in 0.6.0, last, so it can be dropped if quota runs out. §6.6 now opens with what rite does today, which is nothing to ticket text, stated separately from what § N would add, and marks §6.6.1 and §6.6.2 as not built. A release without N therefore does not describe behaviour rite lacks. §9.16.5's line on inbound Slack text is made conditional the same way, and the inference label on it stays, now marked accepted. D-97 and D-98 carry the placement.
 

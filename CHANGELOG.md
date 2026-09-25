@@ -49,13 +49,11 @@ for rather than slipped in.
 to start Workers, a Manager once improvised a bare `claude` and the Workers
 died on launch. `rite sandbox start` is the supported route.
 
-⚠ **This is a speed bump, not a sandbox, and the announcement still says
-so.** `git` runs hooks and `python -c` runs anything. A Manager remains
-**unsandboxed**, in your project's directory, on your machine, with your own
-file and network access. What the allowlist buys is that the casual route
-to the rest of your machine is closed and a refusal is visible — not that a
-determined agent is contained. Workers are still the ones with a container
-under them.
+⚠ **The allowlist is a speed bump, not a sandbox, and the announcement
+still says so.** `git` runs hooks and `python -c` runs anything. What the
+allowlist buys is that the casual route to the rest of your machine is
+closed and a refusal is visible, not that a determined agent is contained.
+The Manager's sandbox is a separate change, below.
 
 **To change the list**, edit **your own** `.claude/settings.json` — not
 rite's file, which is rewritten from code on every run so the shipped list
@@ -67,6 +65,37 @@ and the running list cannot drift apart:
 
 **To keep 0.5.1's behaviour**, put `--dangerously-skip-permissions` back
 yourself; rite no longer passes it for you.
+
+### ⚠ BEHAVIOUR CHANGE ON UPGRADE — a Manager runs inside a sandbox
+
+**0.5.1 ran a Manager unsandboxed. This release runs it inside a macOS
+seatbelt profile** that rite writes for each Manager, under `.rite/user/`,
+and rewrites on every run. The pane's command becomes
+`sandbox-exec -f <profile> <engine …>`.
+
+**A Manager no longer starts Workers itself.** A sandbox cannot start another
+sandbox inside it, so the Manager writes a request, and `rite start`'s
+supervisor, outside the sandbox, checks it and runs `rite sandbox start`. A
+request names a declared Worker and a ticket and nothing else. The Worker
+starts **when the Manager's current cycle ends**, and the Manager is told so.
+
+**What the profile keeps out:** your home directory outside the paths it
+names, your SSH keys, and other projects outside `/tmp`. The tmux server that
+runs your Managers is out of reach too, and signals are limited to the
+Manager's own processes. Both of those routes were found open after the first
+version and closed, and each was measured succeeding and then failing.
+
+**What it does NOT do, printed on every run:** it bounds files, not
+capability. The network is not confined. `/tmp` is readable and writable. A
+Manager can run `rite`, which does what you can do to this project. And
+`~/.claude` is readable, which includes **other projects' Claude
+transcripts**. Treat a Manager as having your network access and more of your
+files than the list suggests.
+
+**If something that worked in 0.5.1 now fails with `Operation not
+permitted`**, the likely cause is one of your own Claude Code hooks. Hooks
+still load inside the sandbox, and one that reaches outside the profile fails
+there. rite points at the profile's path when it sees this.
 
 ### Two readers of one mailbox — `rite replies <manager>`
 
