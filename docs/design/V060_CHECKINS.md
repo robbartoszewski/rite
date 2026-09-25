@@ -137,10 +137,13 @@ reach the Manager as **context**, labelled so, including an `@rite` from
 someone who is not the Owner. ⚠ `@rite` answers "is this addressed to me",
 never "may this person direct me". Anyone in the workspace can type it.
 
-### What the standup also reports
+### What the standup does NOT depend on
 
-Injection-phrase findings from ticket text (SPEC §6.6, D-97, plan N2) appear
-as digest lines: reported, never blocked. The digest must not imply that
+**The standup is complete without § N.** If N2 (plan § N, SPEC §6.6, D-97)
+ships, its injection-phrase findings are appended to the digest as reported
+lines, never blocks. **K does not depend on N**, which is sequenced last so it
+can be dropped for free (Robert, 2026-09-25), and nothing in K4 or K5 may
+come to rely on it. Whether or not N ships, the digest must not imply that
 ticket text is vetted. 8 of 8 agent-directed attacks pass any text filter,
 and the control that makes that survivable is egress control
 ([`V070_EGRESS.md`](V070_EGRESS.md), v0.7.0).

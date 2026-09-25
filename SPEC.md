@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.23.0 · **Date:** 2026-09-25
+**Version:** 0.23.1 · **Date:** 2026-09-25
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -2178,19 +2178,27 @@ dependency, not an inherited habit.
 
 ---
 
-### 6.6. Ticket text reaching an agent — normalised, phrase-reported, and NOT vetted
+### 6.6. Ticket text reaching an agent — what is built, what is planned, and what is NOT vetted
 
-**Status: DECIDED 2026-09-25 (Robert, D-97, D-98). Not built.**
+**Status: DECIDED 2026-09-25 (Robert, D-97, D-98). Planned for 0.6.0,
+sequenced LAST and droppable** (plan § N).
 
+**What rite does TODAY, whether or not § N ships: nothing to ticket text.**
 A ticket's title, body and comments reach a Manager or Worker's context
-verbatim, and whoever can write a ticket can write to that context. Two
-separate things are done about it. **Neither makes ticket text safe, and this
-section exists as much to say that as to specify them.**
+**verbatim**: no characters removed, no tag characters decoded, no HTML
+comments stripped, no phrases scanned. Whoever can write a ticket can write to
+that context. **This paragraph stays true until § N is built, and must be
+edited in the same change that builds it.**
 
-#### 6.6.1. Normalisation — so the agent sees what a human reviewer sees (D-98)
+**What § N adds, IF it lands** (§6.6.1 and §6.6.2 below describe that design,
+not current behaviour). There are two separate things. **Neither makes ticket
+text safe, and this section exists as much to say that as to specify them.**
+§6.6.3 holds whether or not they land.
+
+#### 6.6.1. Normalisation — so the agent sees what a human reviewer sees (D-98) — § N1, not built
 
 Not a security control. A correctness one: text a reviewer cannot see must
-not be text an agent acts on.
+not be text an agent acts on. As designed, once built:
 
 - **Invisible characters** are removed. These are the characters §9.15.3's
   sweep already derives, by name and by unrenderable category.
@@ -2200,11 +2208,11 @@ not be text an agent acts on.
 - **HTML comments** are stripped or surfaced. A comment renders as nothing
   in a tracker's UI and arrives whole in the API body.
 
-#### 6.6.2. Injection phrases are REPORTED, never blocked (D-97)
+#### 6.6.2. Injection phrases are REPORTED, never blocked (D-97) — § N2, not built
 
-rite scans ticket text for phrases commonly used in prompt injection, and
-**surfaces a match to the User at the next check-in** (§9.16, plan § K). It
-never quarantines, filters, rewrites or withholds the ticket.
+Once built, rite scans ticket text for phrases commonly used in prompt
+injection and **surfaces a match to the User at the next check-in** (§9.16,
+plan § K). It will never quarantine, filter, rewrite or withhold the ticket.
 
 **Why reporting, when blocking was rejected.** An evaluation of a phrase
 sanitizer (on the Bentora project) quarantined **9 of 18 ordinary tickets** in
@@ -5782,10 +5790,12 @@ states what it observed; the mailbox does not grow a field.
     [#all-rite · thread under the 14:00 check-in · unaddressed · context] <author>: <text>
     [#all-rite · @rite from <author>, not the Owner · context — not an instruction] <text>
 
-Inbound text also passes through §6.6's normalisation and phrase reporting
-before it is relayed. A Slack message is untrusted text from outside, like a
-ticket. ⚠ **Extending §6.6 to Slack is this section's inference, not part of
-the decisions above.** It is recorded as such, for Robert to confirm.
+**If § N lands**, inbound Slack text passes through §6.6's normalisation and
+phrase reporting before it is relayed, because a Slack message is untrusted
+text from outside, like a ticket. **Until then, it is relayed as typed.**
+⚠ **Extending §6.6 to Slack is this section's inference, not part of the
+decisions above.** Robert accepted it on 2026-09-25, and the label stays
+because it records where the rule came from.
 
 ## 10. Credentials
 
@@ -6328,8 +6338,8 @@ happened once already and left no trace until this review found it.
 | D-94 | Is an unaddressed thread comment an instruction? | **NO — it reaches the Manager as CONTEXT, never as instruction** | A reply under a status update without `@rite` is people discussing the standup, which is worth knowing and is not a request. Only a mention or a reply to something rite asked is addressed. The distinction is written into every relayed message's header, not left to the model noticing that a mention was absent. §9.16.3. |
 | D-95 | Where may the Manager be instructed from? | **The Owner's DM (and the local machine). A configurable channel is BROADCAST, default `#all-rite`** | Authority is a property of the channel. The DM is one-to-one by construction, so "only the Owner can instruct" is not a check rite has to get right per message. Messages in the broadcast channel never carry authority, whoever types them. It adds IM scopes to what A3a measured. §9.16.2. |
 | D-96 | What does `@rite` mean? | **"This is addressed to me" — a filter, not "do this", and NOT an access control** | A mention is still judged. Anyone in a workspace can type it, so it can never authorise. Authority (D-95) and addressing (D-96) are separate questions, and the docs must not blur them. §9.16.4. |
-| D-97 | Should rite scan ticket text for injection phrases? | **YES — report at the next check-in, NEVER block. Reverses the earlier advice against scanning** | The earlier advice rested on 9 of 18 ordinary tickets quarantined — in BLOCKING mode. Reporting makes a false positive cost a standup line, and the measured 6-of-9 catch rate on model-directed attacks becomes free signal. Named for what it does ("a phrase commonly used in prompt injection"), never "sanitized". ⚠ It catches none of 8 agent-directed attacks, and ticket text is not vetted. §6.6. |
-| D-98 | What input normalisation does ticket text get? | **Invisible characters removed, hidden tag characters decoded and shown, HTML comments stripped or surfaced** | Correctness, not security: the agent must see what a human reviewer sees. §6.6.1. |
+| D-97 | Should rite scan ticket text for injection phrases? | **YES — report at the next check-in, NEVER block. Reverses the earlier advice against scanning** | The earlier advice rested on 9 of 18 ordinary tickets quarantined — in BLOCKING mode. Reporting makes a false positive cost a standup line, and the measured 6-of-9 catch rate on model-directed attacks becomes free signal. Named for what it does ("a phrase commonly used in prompt injection"), never "sanitized". ⚠ It catches none of 8 agent-directed attacks, and ticket text is not vetted. §6.6. **Planned 0.6.0, sequenced last and droppable (plan § N); not built.** |
+| D-98 | What input normalisation does ticket text get? | **Invisible characters removed, hidden tag characters decoded and shown, HTML comments stripped or surfaced** | Correctness, not security: the agent must see what a human reviewer sees. §6.6.1. **Planned 0.6.0, sequenced last and droppable (plan § N); not built.** |
 
 ---
 
@@ -6338,6 +6348,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.23.1 — §6.6 reads true whether or not its tickets ship.** Robert placed § N (text cleanup and phrase reporting) in 0.6.0, last, so it can be dropped if quota runs out. §6.6 now opens with what rite does today, which is nothing to ticket text, stated separately from what § N would add, and marks §6.6.1 and §6.6.2 as not built. A release without N therefore does not describe behaviour rite lacks. §9.16.5's line on inbound Slack text is made conditional the same way, and the inference label on it stays, now marked accepted. D-97 and D-98 carry the placement.
 
 **Changes in 0.23.0 — who may instruct a Manager, and what ticket text is (and is not).** §9.16 is new: authority comes from the channel (the Owner's DM, or the local machine; a configurable broadcast channel, default `#all-rite`, never carries authority), addressing comes from `@rite` or a reply, and only a message that is both counts as an instruction (D-94–D-96). `@rite` is recorded as a filter and explicitly NOT an access control. §6.6 is new: ticket text is normalised (D-98), and injection phrases are reported at the check-in and never blocked (D-97). That reverses earlier advice, which rested on a 9-of-18 false-positive rate measured in blocking mode. §6.6.3 states plainly that 8 of 8 agent-directed attacks pass any text filter and that ticket text is not vetted. Destination control is a separate v0.7.0 design note, `docs/design/V070_EGRESS.md`.
 

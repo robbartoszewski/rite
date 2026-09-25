@@ -144,7 +144,7 @@ Neither is a build task and both need Robert. See "Decisions needed" 1 and 2.
 | A2 | **Slack credentials through the existing store** | A bot token is a credential; `credentials/` and the gate already have the shapes. | A token is the first thing the adapter needs and the last thing that should be improvised. | — | 1 sitting |
 | ~~A3a~~ | ✅ **DONE — transport chosen AND proven.** Web API polling, `conversations.history` with `oldest`. **Observed 2026-09-25** against `rite-ai.slack.com` / `#all-rite`: a posted sentinel was readable **0.24 s** later, on the first poll of a 2.0 s loop; human-typed messages in the same channel read identically, carrying `user`/`text`/`ts`. Instrument kept at `tools/slack_probe/`. ⚠ **Only `channels:history` + `chat:write` are needed — NOT `channels:read`** *(for the broadcast channel; ⚠ 2026-09-25: the Owner's DM is the command channel, D-95, which adds IM scopes — see A6)*: `conversations.history` wants a channel ID, and `chat.postMessage` accepts a NAME and returns the ID, so the ID is discoverable rather than requiring a third scope. | — | A2 | **spent: ~1 sitting** |
 | ~~A3a-old~~ | ⚠ **Choose the Slack transport — CHOSEN, unproven** | **Web API polling** (`conversations.history` with `oldest`), because it is the only transport needing neither an inbound listener nor a held-open connection. Events API needs a public HTTPS URL (hosting, ruled out); Socket Mode needs a second token, a reconnect loop, per-event acks and caps at 10 sockets. Evidence: [`spikes/A3a-slack-transport.md`](spikes/A3a-slack-transport.md). ⚠ **The proof — a message arriving in a standalone script within 5s — has NOT been made**: it needs a workspace, an app and a bot token that do not exist yet. **Ticket stays open.** | Decides A3b's shape | A2 | 1 sitting spent, proof outstanding |
-| A3 | **Listening inside `rite start`** — ⚠ **AMENDED 2026-09-25 for check-ins (K)** | Poll Slack in the supervisor's existing wait loop — where `mail_waiting` already polls — and write inbound messages into the inbox via `send()`. ⚠ **Amended: thread replies too.** Slack documents that `conversations.history` returns a thread's PARENT, and replies are read with `conversations.replies` (same `channels:history` scope) — **not yet measured by rite, and this ticket must measure it**. Read the threads of messages rite posted recently (the roots A4 now records), and deliver a thread reply with its context as TEXT — *"in reply to the 14:00 check-in: …"* — so no field is added to a message. ⚠ **Budget:** Tier 3 is 50+/min and the history poll already uses 30/min at 2 s, so thread reads must be slower (e.g. each open root every 30 s) and bounded to recent roots — a thread per check-in, three a day, would otherwise grow without limit. ⚠ **Amended again 2026-09-25 for D-94–D-96: every relayed message carries a header naming its channel, whether it was addressed, and what it counts as** — `[Owner's DM · addressed · INSTRUCTION]`, `[#all-rite · thread under the 14:00 check-in · unaddressed · context]`, `[#all-rite · @rite from <author>, not the Owner · context — not an instruction]` (SPEC §9.16.5). **An instruction needs the command channel AND addressing.** The header is written as text, so the mailbox gains no field. `@rite` is never treated as authority. Inbound text also goes through § N's normalisation and phrase reporting (the SPEC records extending §6.6 to Slack as an inference, for Robert to confirm). **Done when OBSERVED** against the real workspace, including: an `@rite` message typed by a non-Owner in `#all-rite` reaches the Manager labelled context, not instruction; and an addressed reply in the Owner's DM reaches it labelled INSTRUCTION; plus: a human reply typed **in a thread** under a message rite posted reaches the Manager's next cycle instruction, labelled with what it replies to; and a top-level message still arrives as before. | This is "no daemon" made concrete, and it reuses the validated writer rather than adding a second one. Without thread reads, every reply to a check-in is invisible. | A2, A6, B1 | 2–3 sittings → **3–4** with threads |
+| A3 | **Listening inside `rite start`** — ⚠ **AMENDED 2026-09-25 for check-ins (K)** | Poll Slack in the supervisor's existing wait loop — where `mail_waiting` already polls — and write inbound messages into the inbox via `send()`. ⚠ **Amended: thread replies too.** Slack documents that `conversations.history` returns a thread's PARENT, and replies are read with `conversations.replies` (same `channels:history` scope) — **not yet measured by rite, and this ticket must measure it**. Read the threads of messages rite posted recently (the roots A4 now records), and deliver a thread reply with its context as TEXT — *"in reply to the 14:00 check-in: …"* — so no field is added to a message. ⚠ **Budget:** Tier 3 is 50+/min and the history poll already uses 30/min at 2 s, so thread reads must be slower (e.g. each open root every 30 s) and bounded to recent roots — a thread per check-in, three a day, would otherwise grow without limit. ⚠ **Amended again 2026-09-25 for D-94–D-96: every relayed message carries a header naming its channel, whether it was addressed, and what it counts as** — `[Owner's DM · addressed · INSTRUCTION]`, `[#all-rite · thread under the 14:00 check-in · unaddressed · context]`, `[#all-rite · @rite from <author>, not the Owner · context — not an instruction]` (SPEC §9.16.5). **An instruction needs the command channel AND addressing.** The header is written as text, so the mailbox gains no field. `@rite` is never treated as authority. ⚠ **A3 does NOT depend on § N** (the text cleanup and phrase reporting). If N lands, N wires itself into this relay; A3 is complete and correct without it. **Done when OBSERVED** against the real workspace, including: an `@rite` message typed by a non-Owner in `#all-rite` reaches the Manager labelled context, not instruction; and an addressed reply in the Owner's DM reaches it labelled INSTRUCTION; plus: a human reply typed **in a thread** under a message rite posted reaches the Manager's next cycle instruction, labelled with what it replies to; and a top-level message still arrives as before. | This is "no daemon" made concrete, and it reuses the validated writer rather than adding a second one. Without thread reads, every reply to a check-in is invisible. | A2, A6, B1 | 2–3 sittings → **3–4** with threads |
 | A4 | **Posting the outbox to Slack** — ⚠ **AMENDED 2026-09-25 for check-ins (K)** | The other direction, through whatever A1 decides. ⚠ **Amended: keep the identity of what is posted.** `chat.postMessage` returns the message's `ts` (and the channel ID); the relay records it **in its own state, keyed by the outbox filename** — never in the message, which stays identity-free (Decision 1a). That `ts` is what a thread is rooted on, and what A3 reads replies under. **Done when OBSERVED:** a Manager's `rite reply` appears in the configured channel, and the relay's state maps that outbox file to the `ts` Slack returned — checked by fetching that `ts` back from Slack. | Half a channel is not a channel. A post whose identity is thrown away cannot be replied to in a thread. | A1, A2, A6 | 1–2 sittings |
 | A5 | **Say what happens when no Manager is running** | With listening inside `rite start`, a message sent while nothing runs stays in Slack. | ⚠ A user will hit this on day one and read silence as "it is broken". Needs to be either handled or stated. | A3 | ½–1 sitting |
 | A6 | **The conversation targets are configuration** — ⚠ **ADDED 2026-09-25 for check-ins (K); REWRITTEN the same day for D-95** | **Two targets, with different authority (SPEC §9.16.2, D-95).** (1) **The command channel is the Owner's DM with the app.** Only the Owner and the app are in it, so authority is one-to-one by construction. Configured by the Owner's Slack **user ID** (`U…`). (2) **The broadcast channel is configurable and defaults to `#all-rite`.** Status updates and digests are mirrored there, and nothing typed there ever carries authority. A NAME is fine for this one: A3a measured that `chat.postMessage` accepts a name and returns the ID, which the relay then reads by, so no `channels:read` is needed. Per-Manager keys under `coordination.manager_roles[]`, schema-validated. No Owner configured means no command channel: `rite start` says Slack is broadcast-only, rather than treating the broadcast channel as one. ⚠ **The DM adds scopes to A3a's two.** Reading an IM needs the IM history scope, and opening one may need the IM write scope. **Measure the minimal set; do not assume it.** `rite doctor` probes both targets and names Slack's own error (`not_in_channel`, `channel_not_found`, `missing_scope`). | Today the only channel anywhere is the proof instrument's default. A relay that assumes a channel posts one Manager's standup where another's User reads it, and a relay that takes instructions from a shared channel lets anyone in the workspace direct the Manager. | A2 | **1 sitting** (was ½–1; the DM and the scope measurement) |
@@ -187,22 +187,41 @@ See the A table.
 | K5 | **Deliver the check-in, and take the answers back** | At window open, after K3's cycle: the digest and the surviving questions go out as **ONE outbox message** — so `rite connect` (via `rite replies`) and Slack (via A4) both carry it, and Slack roots a thread on it. ⚠ **Amended 2026-09-25 for D-95:** the thread that collects answers is rooted in the **Owner's DM**, the command channel, because an answer to a queued question is an instruction and must come from the channel that carries authority. The digest is **mirrored** to the broadcast channel, where replies arrive as context (D-94). Replies in that thread come back through A3 into the inbox as text in context. No new mailbox shape, no sender field. | Against the real workspace: at a configured window the digest appears top-level in the Manager's configured channel (A6) and in `rite replies`; the Owner's reply in the DM thread reaches the Manager's next cycle instruction labelled as an INSTRUCTION answering that check-in, and the Manager acts on it; a reply in the broadcast mirror's thread arrives labelled context. | K3, K4, A3, A4, A6 | 1–2 sittings |
 | K6 | **A window with no Manager running** | No daemon (A5, Decision 2) means a window that passes with nothing running posts nothing. Proposed, **Robert's to confirm**: the queue persists; `rite start` says how many questions are waiting and when the next check-in is; the next digest covers everything since the last one actually delivered. | Through `rite start` after a missed window: the start line names the waiting questions and the next check-in, and the following digest covers the whole gap (its commits included). | K5 | ½ sitting |
 
-**Sizes:** 9–13 sittings for K, plus ~1½ added to the Slack track by the
-amendments (A3 threads, A6). **If K slips, it slips whole** — K1–K2 without
+**Sizes:** 8½–12½ sittings for K (the sum of K1–K6; an earlier line said
+9–13), plus ~1½ added to the Slack track by the amendments (A3 threads, A6). **If K slips, it slips whole** — K1–K2 without
 K5 is a queue that never delivers, which is worse than no queue.
 
 
-## N. Untrusted text reaching an agent — ADDED 2026-09-25 (SPEC §6.6, D-97, D-98)
+## N. Untrusted text reaching an agent — v0.6.0, sequenced LAST, droppable (SPEC §6.6, D-97, D-98)
 
-**Normalise, and report injection phrases; never block. And say plainly what
-this does not do.** Ticket text reaches an agent verbatim, and whoever can
-write a ticket writes into that context. ⚠ **Release placement is Robert's to
-confirm.** N1 stands alone. N2 needs K4's digest to report into.
+**Robert's ruling, 2026-09-25:** *"let's try to go for v0.6.0, just put it at
+the end so we can skip it if we run out of quota."* So N is in the release,
+**last**, and it must stay possible to drop it for free.
+
+⚠ **THE RULE THAT KEEPS IT DROPPABLE: nothing may depend on N.** N depends on
+earlier work (N2 on K4, and both on A3 if Slack is in), and **no edge points
+the other way**. A ticket that comes to rely on the text cleanup or the phrase
+reporting makes dropping N cost something, and the intent is lost. So such a
+ticket must either wait until after N or take N's work into itself.
+**Checked 2026-09-25:** two such edges existed and have been removed. A3 said
+inbound text "goes through § N", and the check-ins note listed N2's findings
+as part of the standup. Both are now worded so that N is optional. A test,
+`tests/test_the_release_plan_can_drop_n.py`, fails if any ticket row outside
+N mentions N1, N2 or § N, so the rule does not rest on this paragraph being
+read.
+
+**The SPEC reads true either way.** §6.6 says what is built today (nothing:
+ticket text reaches an agent verbatim) separately from what N adds, so a
+release that drops N does not describe behaviour rite lacks.
+
+Ticket text reaches an agent verbatim, and whoever can write a ticket writes
+into that context. **Both tickets stand alone:** N1 without N2 and N2 without
+N1 are each whole.
 
 | # | Item | What it is | Done when OBSERVED | Depends on | Size |
 |---|---|---|---|---|---|
-| N1 | **Normalise ticket text** | Correctness, not security: the agent sees what a human reviewer sees. Invisible characters removed (the set §9.15.3's sweep derives, by name and category); Unicode tag characters **decoded and shown**, never silently dropped; HTML comments stripped or surfaced. | Through a real ticket read on a real backend: a ticket body carrying a zero-width run, a tag-character message and an HTML comment reaches the agent with the invisible run gone, the tag text shown as text, and the comment surfaced, and the tracker's own UI shows the same visible text. | — | 1–2 sittings |
-| N2 | **Report injection phrases at the check-in — never block** | A phrase scan whose finding is a line in the next digest: *"ticket X contains a phrase commonly used in prompt injection: '<phrase>'"*. **Never** quarantine, filter or withhold, and never the words "sanitized" or "checked". Reversed from earlier advice because that advice rested on **9 of 18 ordinary tickets quarantined in BLOCKING mode**. Reporting turns a false positive into one standup line, and the measured 6-of-9 catch rate on model-directed attacks into free signal. ⚠ **The docs and the digest must say it catches none of the 8 agent-directed attacks measured** (`curl … \| bash` in a setup step, "paste `.env` into a comment", add an SSH key), so nobody reads a clean digest as "tickets are vetted". | Through `rite start` on a real board: a ticket containing a known injection phrase is worked normally and appears in the next digest with its phrase; an ordinary ticket produces no line; and the digest, `rite --help` and the guide contain no claim that ticket text is sanitized or vetted. | K4 | 1–2 sittings |
+| N1 | **Normalise ticket text** | Correctness, not security: the agent sees what a human reviewer sees. Applies to ticket text **and to inbound Slack text** (accepted 2026-09-25; the SPEC keeps it labelled as an inference, because that is where it came from). N wires itself into A3's relay; A3 does not call N. Invisible characters removed (the set §9.15.3's sweep derives, by name and category); Unicode tag characters **decoded and shown**, never silently dropped; HTML comments stripped or surfaced. | Through a real ticket read on a real backend: a ticket body carrying a zero-width run, a tag-character message and an HTML comment reaches the agent with the invisible run gone, the tag text shown as text, and the comment surfaced, and the tracker's own UI shows the same visible text; the same run of characters sent as a Slack message reaches the Manager cleaned in the same way. | — (and A3, if Slack is in the release, to wire into) | 1–2 sittings |
+| N2 | **Report injection phrases at the check-in — never block** | A phrase scan whose finding is a line in the next digest: *"ticket X contains a phrase commonly used in prompt injection: '<phrase>'"*. **Never** quarantine, filter or withhold, and never the words "sanitized" or "checked". Reversed from earlier advice because that advice rested on **9 of 18 ordinary tickets quarantined in BLOCKING mode**. Reporting turns a false positive into one standup line, and the measured 6-of-9 catch rate on model-directed attacks into free signal. ⚠ **The docs and the digest must say it catches none of the 8 agent-directed attacks measured** (`curl … \| bash` in a setup step, "paste `.env` into a comment", add an SSH key), so nobody reads a clean digest as "tickets are vetted". | Also over inbound Slack text, as N1. Through `rite start` on a real board: a ticket containing a known injection phrase is worked normally and appears in the next digest with its phrase; an ordinary ticket produces no line; and the digest, `rite --help` and the guide contain no claim that ticket text is sanitized or vetted. | K4 | 1–2 sittings |
 
 **Not in N, on purpose: stopping an agent that has been fooled.** That is
 destination control, v0.7.0, [`V070_EGRESS.md`](V070_EGRESS.md): the agent
@@ -813,12 +832,12 @@ run recorded a task as TIMEOUT at 900s; re-run serialised, the same task took
 
 **Order:** ~~B1, B2~~ ✅ done → **B7 + C18** → C1, C2, C3 → A1 (once
 Decision 1 lands), A2, **A6** → A3, A4, A5 → **K1 → K2 → K3, K4 → K5 → K6**
-→ N1, N2 (N2 after K4) → B9 (the broker) → B3 → B4, B5 → C4 → B6, B8 and the rest of C as it fits.
+→ B9 (the broker) → **N1, N2 LAST** (droppable; see § N). Nothing follows N: B3, B4b, C4, B6, B8 and the C track, which this line used to list after it, have since landed or closed, and B5 moved to the Worker tier.
 
 ⚠ **Check-ins (K) added 2026-09-25, after Slack and before the broker.** K5
 needs A3's thread reads, A4's kept `ts` and A6's configured channel — the
 three amendments made to the Slack track the same day — so none of K5 can
-start before them. K1–K4 do not touch Slack and can overlap the end of A.
+start before them. K1–K4 do not touch Slack and COULD overlap the end of A, ⚠ but **only if the release is committed to reaching cut 2**. Started early and then stopped at cut 1, they are a half-built K (see the cut lines). While the stopping point is not chosen in advance, finish A first.
 
 ⚠ **B7 and C18 come first among the remaining work**, ahead of even the test
 fixes. They are one-and-a-half sittings between them, and they close the
@@ -833,6 +852,32 @@ the condition under which everything after gets built unverified.
 **A5 depends on Decision 2 and A1 on Decision 1**, so the Slack block cannot
 start until those land; if they are slow, B3 can be pulled forward without
 disturbing anything.
+
+### ⚠ Cut lines, 2026-09-25 — where Robert can stop, and what ships at each
+
+**The remaining release, in order: the rest of Slack → check-ins → the
+broker → N.** Totals are in sittings, from each ticket's own size, and are
+**cumulative from today**. ⚠ They count what is still open per `git log`, not
+per the strike-throughs in the tables, which lag: A1, A2, all four B4b
+breaks, B7 and the whole C track have landed but several of their rows are
+not marked done.
+
+| stop after | adds | cumulative | ships | nothing half-built? |
+|---|---|---|---|---|
+| **0 — today** | — | **0** | Fixes, the mailbox with per-reader cursors and retention, the local tier's doctor checks, the allowlist, the engine registry, and the Slack token stored but unused | ✅ **Yes.** The token is inert, not half a feature. ⚠ The CHANGELOG must not advertise Slack at this cut |
+| **1 — Slack** | A6, A3, A4, A5 | **5½–8** | Slack both ways: the Owner's DM as the command channel, a broadcast channel, thread replies read, "no Manager running" stated | ✅ **Yes, as the WHOLE group only.** A3 without A4 hears and cannot answer, and A4 without A3 speaks and cannot hear. A6 alone is safe but useless |
+| **2 — check-ins** | K1–K6 | **14–20½** | Windows, deferred questions re-evaluated before delivery, the anchored standup, answers taken from the DM thread | ✅ **Yes, as the WHOLE group only.** ⚠ **K1–K4 without K5 is WORSE than no K**: a queue that never delivers, holding questions a Manager believes it asked |
+| **3 — the broker** | B9's remainder | **14–29½** | A sandboxed Manager that asks for Workers | ⚠ **B9's remaining size is its owner's to state.** Two landings (eb2a88e, 4ebbbd7) report both halves observed; if they close B9, this row adds 0 and equals row 2. If not, it adds up to the planned 6–9 |
+| **4 — N (last)** | N1, N2 | **16–33½** | Ticket and Slack text normalised; injection phrases reported at the check-in | ✅ **Yes, in any subset.** N1 alone, N2 alone and both are each whole, and **nothing depends on N**, so dropping it costs nothing. SPEC §6.6 reads true either way |
+
+**Stopping anywhere else leaves something half-built**: inside Slack
+(except A6 alone) and inside K. Those are the two places where the stopping
+point must not land by accident. If quota runs short mid-group, finish the
+group or back it out; do not ship it partial.
+
+⚠ **The two sections below are the cut lines as of 2026-09-24,** kept for
+the argument they record. Every item they name as outstanding (B7, C18, C1–C3,
+A1–A5 as then scoped) has since landed or been re-scoped above.
 
 ### The minimum that makes v0.6.0 coherent
 
