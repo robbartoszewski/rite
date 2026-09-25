@@ -155,17 +155,44 @@ not bubblewrap.** It needs no privilege, survives Ubuntu's userns
 restriction, nests correctly including narrowing, and closes the signal
 escape natively.
 
-**The socket escape cannot be closed by either mechanism in rite's current
-architecture.** Landlock does not govern `connect(2)`, and a container only
+**The socket escape cannot be closed by a profile in rite's current
+architecture** — but it IS closed by confining the tmux server, which §7
+measured. Landlock does not govern `connect(2)`, and a container only
 helps if the tmux server moves *inside* the boundary — which is an
 architectural change to how rite runs Managers, not a profile setting.
+
+## 7. Option 2 was measured, and it works
+
+Added after the first version of this note recommended waiting. The reason
+the socket escape matters is not that `connect(2)` succeeds — it is that the
+thing reached is **unconfined**. So the question is whether confining the
+tmux server closes it, and that is measurable rather than arguable.
+
+Measured in a container, using rite's own `landlock.wrap` launcher:
+
+| | Result |
+|---|---|
+| **Control** — tmux server started outside any boundary | a confined client drove it and the file appeared outside: `CONTROL_WROTE` |
+| **The server started INSIDE the boundary** | the same client, the same socket, the same command — **nothing appeared outside** |
+
+So escape 1 **is** closable on Linux, today, with the code in `landlock.py`:
+start the Manager's tmux server through the same boundary as the Manager. The
+client can still reach the socket — Landlock does not stop that and nothing
+here claims it does — but what it reaches can no longer write outside the
+project, so the reach buys nothing.
+
+⚠ **This is a change in where tmux is started, not a new mechanism.** It is
+still architectural: `rite loop start` and the coordinator pool start tmux
+outside any boundary today, and a Manager's pane lives in that server. The
+same reasoning applies to macOS, where the escape is currently closed by
+denying the socket path instead.
 
 So the decision is not "can Linux be done" but **which of three**:
 
 1. **Ship Linux with the socket escape documented** as a known limitation —
    the honest version of what macOS shipped unknowingly.
-2. **Move the Manager's tmux server inside the boundary**, which closes it
-   structurally, and is the only measured route that does.
+2. **Move the Manager's tmux server inside the boundary** — now MEASURED to
+   close it (§7), and the only route that does. Closes it on macOS too.
 3. **Wait**, and ship Linux when (2) is built.
 
 The blast radius is not unlimited in any case: what the escape reaches is
