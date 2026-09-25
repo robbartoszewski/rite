@@ -246,7 +246,9 @@ Exactly one must hold it when several Managers share a root, and
 
 This applies when the project has no `coordination.remote`. With one, the
 Managers may be on other machines and the election decides the Owner, and
-nothing here changes.
+nothing here changes. **A Manager that is already running keeps its opening
+instructions** until `rite start <manager> --fresh`, so it is not told about
+the others until then.
 
 ### Hidden text in tickets and Slack messages is shown, and injection phrases are reported
 
