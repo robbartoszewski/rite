@@ -105,6 +105,25 @@ its own tmux session:
 | control: `beta` kills its own child | **succeeded**. Same-sandbox signalling still works, which a Manager needs |
 | write a file into `.rite/managers/beta/` | ⚠ **succeeded**. Each profile grants the whole project tree |
 
+**Re-measured at `8d5fc22`, 2026-09-25 evening, because the profile moved
+again.** `b9a5f76` added a read-only grant for `~/.config/gh` after the table
+above was measured. This is the same kind of change that made the first
+version stale, so all nine probes were re-run. The method was the same:
+profiles from `compose()`, a private tmux server, and `rite_ai` confirmed to
+resolve to the tree measured. **Every result reproduced.**
+- P1: temp-root write refused, directly and through tmux.
+- P2: `yoloai ls` refused (`open ~/.yoloai: operation not permitted`, and the
+  socket error through tmux).
+- P3: the outside process survived.
+- P4: HTTPS 200/301.
+- P5: 44 directories listed and another project's transcript read. The count
+  grows as sessions are created. SB4 is unchanged.
+- Two Managers: kill refused, beta survived; `send-keys` and `kill-session`
+  refused, beta's session survived; beta killed its own child; alpha wrote
+  into `.rite/managers/beta/`.
+- Also measured, for the new grant: `~/.config/gh/config.yml` is readable
+  and a write there is refused. It is read-only, as `b9a5f76` says.
+
 So **§5.4.8's P2 (process separation) holds on `main`**, by exactly the two
 mechanisms the property names. **P1 (state separation) does not**, and the
 profile is not what could make it hold. See track MM.
