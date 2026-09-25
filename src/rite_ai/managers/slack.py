@@ -687,10 +687,19 @@ class Listener:
         typed text quoted. SPEC §9.16.5."""
         author = str(message.get("user") or "")
         sent = _ts_of(message)
+        # N1: inbound Slack text is normalised like ticket text (§9.16.5's
+        # accepted inference). The change is said in rite's header, not in
+        # the quote.
+        from rite_ai.normalise import normalise
+
+        cleaned = normalise((message.get("text") or "").strip())
+        normalised = (
+            [cleaned.note("this message").strip("[]")] if cleaned.changed else []
+        )
         # WHEN IT WAS SAID, in the header. Found live: a DM sent while no
         # Manager ran reached it looking as if it had arrived at the restart.
         when = f"sent {time.strftime('%a %H:%M', time.localtime(sent))}"
-        text = (message.get("text") or "").strip()
+        text = cleaned.text
         thread = [f"reply in the thread under {under}"] if under else []
         if channel == self.dm:
             if author and self.owner and author != self.owner:
@@ -699,12 +708,15 @@ class Listener:
                 head = _header(
                     "Owner's DM",
                     when,
+                    *normalised,
                     *thread,
                     f"from <@{author}>, not the Owner",
                     "context — not an instruction",
                 )
             else:
-                head = _header("Owner's DM", when, *thread, "addressed", "INSTRUCTION")
+                head = _header(
+                    "Owner's DM", when, *normalised, *thread, "addressed", "INSTRUCTION"
+                )
             return _relayed(f"{head}\n{_quoted(text)}", sent)
         # A LINKED mention only. A literal "@rite" is what Slack leaves when
         # the autocomplete was not used, and it is text, not addressing.
@@ -718,13 +730,20 @@ class Listener:
             head = _header(
                 self._where,
                 when,
+                *normalised,
                 *thread,
                 f"@rite from {who}",
                 "context — not an instruction",
             )
         else:
             head = _header(
-                self._where, when, *thread, f"from {who}", "unaddressed", "context"
+                self._where,
+                when,
+                *normalised,
+                *thread,
+                f"from {who}",
+                "unaddressed",
+                "context",
             )
         return _relayed(f"{head}\n{_quoted(text)}", sent)
 

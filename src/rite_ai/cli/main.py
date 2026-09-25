@@ -3275,8 +3275,14 @@ def _render_tickets(result) -> None:
     hundred rows with nothing after them reads as "this is the board";
     on a busy board it is the first hundred of several hundred, and the
     difference is invisible unless the listing states it."""
+    from rite_ai.normalise import normalise
+
     for ticket in result:
-        click.echo(f"  {ticket.id}  [{ticket.status}]  {ticket.title}")
+        # N1: a title reads as the tracker shows it. See `rite_ai.normalise`.
+        title = normalise(ticket.title)
+        click.echo(f"  {ticket.id}  [{ticket.status}]  {title.text}")
+        if title.changed:
+            click.echo(f"      {title.note('this title')}")
     if getattr(result, "truncated", False):
         click.echo(
             f"  … showing the first {len(result)} — there are more. "
@@ -3452,13 +3458,24 @@ def board_show(ticket_id: str, role: str) -> None:
     if isinstance(ticket, BackendError):
         click.echo(ticket.message, err=True)
         raise SystemExit(1)
-    click.echo(f"{ticket.id}  [{ticket.status}]  {ticket.title}")
+    from rite_ai.normalise import normalise
+
+    # N1, SPEC §6.6.1: what an agent reads here is what the tracker's own UI
+    # shows a reviewer. Every change is said, in a line rite writes, and none
+    # of it is a safety check (§6.6.3).
+    title = normalise(ticket.title)
+    body = normalise(ticket.description.strip())
+    click.echo(f"{ticket.id}  [{ticket.status}]  {title.text}")
     if ticket.labels:
         click.echo(f"labels: {', '.join(ticket.labels)}")
     if ticket.url:
         click.echo(ticket.url)
     click.echo("")
-    click.echo(ticket.description.strip() or "(no description)")
+    click.echo(body.text or "(no description)")
+    for part, what in ((title, "this title"), (body, "this description")):
+        if part.changed:
+            click.echo("")
+            click.echo(part.note(what))
 
 
 @board.command("label")

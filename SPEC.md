@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.7 · **Date:** 2026-09-25
+**Version:** 0.24.8 · **Date:** 2026-09-25
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -2375,30 +2375,54 @@ dependency, not an inherited habit.
 **Status: DECIDED 2026-09-25 (Robert, D-97, D-98). Planned for 0.6.0,
 sequenced LAST and droppable** (plan § N).
 
-**What rite does TODAY, whether or not § N ships: nothing to ticket text.**
-A ticket's title, body and comments reach a Manager or Worker's context
-**verbatim**: no characters removed, no tag characters decoded, no HTML
-comments stripped, no phrases scanned. Whoever can write a ticket can write to
-that context. **This paragraph stays true until § N is built, and must be
-edited in the same change that builds it.**
+**What rite does TODAY.** **N1 is built (§6.6.1): ticket and Slack text
+is NORMALISED on rite's read paths**, which are `rite board show`, `list`
+and `query`, and the Slack relay. **N2 (§6.6.2) is not built**: no phrases
+are scanned. Two limits hold whatever else ships:
+- **Normalisation is not vetting** (§6.6.3).
+- **It covers only text read THROUGH rite.** An agent that reads the tracker
+  itself, with `gh issue view` or the tracker's API, gets the raw text,
+  because rite is not on that path.
+
+**This paragraph must be edited in the same change that builds or removes
+any part of § N.**
 
 **What § N adds, IF it lands** (§6.6.1 and §6.6.2 below describe that design,
 not current behaviour). There are two separate things. **Neither makes ticket
 text safe, and this section exists as much to say that as to specify them.**
 §6.6.3 holds whether or not they land.
 
-#### 6.6.1. Normalisation — so the agent sees what a human reviewer sees (D-98) — § N1, not built
+#### 6.6.1. Normalisation — so the agent sees what a human reviewer sees (D-98) — § N1, BUILT
 
 Not a security control. A correctness one: text a reviewer cannot see must
-not be text an agent acts on. As designed, once built:
+not be text an agent acts on. Built in `rite_ai/normalise.py`, and applied
+where §6.6's opening paragraph says. **Every change is said** in a line rite
+writes ("rite normalised this description …: removed 3 invisible
+character(s) …. This is not a safety check."), so nothing disappears
+silently:
 
 - **Invisible characters** are removed. These are the characters §9.15.3's
   sweep already derives, by name and by unrenderable category.
 - **Hidden tag characters** (the Unicode tag block, which can spell ASCII
   that renders as nothing) are **decoded and shown**, not silently dropped.
   Their presence is itself worth reporting.
-- **HTML comments** are stripped or surfaced. A comment renders as nothing
-  in a tracker's UI and arrives whole in the API body.
+- **HTML comments** are SURFACED, not stripped: `[HTML comment, not shown in
+  the tracker: "…"]`. A comment renders as nothing in a tracker's UI and
+  arrives whole in the API body.
+
+**As built, and measured.** "Invisible" is derived by rule, not listed: format
+characters (Cf), control characters other than tab and newline, and
+characters Unicode names as fillers or blanks. A test sweeps every code point
+that meets those criteria, and a positive control of ordinary multilingual
+text (Polish, Japanese, Devanagari, Persian, emoji sequences, a subdivision
+flag) must come through unchanged. The zero-width joiner and non-joiner are
+kept between non-ASCII characters, where scripts and emoji use them. On a
+real GitHub issue carrying a zero-width run, a tag-character message and an
+HTML comment, GitHub's own rendering showed a reviewer two sentences, and
+`rite board show` gave an agent the same two sentences with the hidden parts
+decoded and surfaced in place. **Not handled:** combining marks and
+variation selectors, which ordinary text needs, and homoglyphs, which a
+reviewer sees too.
 
 #### 6.6.2. Injection phrases are REPORTED, never blocked (D-97) — § N2, not built
 
@@ -6012,9 +6036,11 @@ replies (measured): at most one `conversations.replies` call per tick, each
 thread every 30 s, the ten newest roots, none older than 24 hours. **Not
 read:** threads under a person's message in the broadcast channel.
 
-**If § N lands**, inbound Slack text passes through §6.6's normalisation and
-phrase reporting before it is relayed, because a Slack message is untrusted
-text from outside, like a ticket. **Until then, it is relayed as typed.**
+**Inbound Slack text is NORMALISED (§6.6.1, N1, built)** before it is
+relayed, because a Slack message is untrusted text from outside, like a
+ticket. The change is said in rite's header, not in the quote. **Phrase
+reporting (§6.6.2, N2) applies only if it lands.** Until then no phrase is
+scanned.
 ⚠ **Extending §6.6 to Slack is this section's inference, not part of the
 decisions above.** Robert accepted it on 2026-09-25, and the label stays
 because it records where the rule came from.
@@ -6658,6 +6684,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.8 — N1 is built.** §6.6's opening now says what rite does today: ticket and Slack text is normalised on rite's read paths, no phrases are scanned, and neither is vetting. It also names the path it cannot cover, an agent reading the tracker directly. §6.6.1 records what was built and measured, including that HTML comments are surfaced rather than stripped.
 
 **Changes in 0.24.7 — one Slack app per project (D-101), and a mention in either form.** §9.16.6 is new. It records that the shipped design assumed one project per workspace, in the DM and in the rate limit, which are both scoped to the app, and Robert's decision of one app per project. The arithmetic that makes sharing an app fail is written out, and so is the free plan's ten-app ceiling, verified. Private channels bound to a project are recorded as a v0.7.0 convenience, with the authority rule they would change. §9.16.5 records that a mention arrives as either the app's user id or its bot id, both observed.
 

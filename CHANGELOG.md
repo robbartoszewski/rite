@@ -222,6 +222,24 @@ same DM, and together they would poll 60 times a minute against a limit of
 it let authority point at a channel anyone can post in. Use
 `slack.owner_user`.
 
+### Hidden text in tickets and Slack messages is shown, not passed through
+
+Tracker UIs hide some of the text their APIs return. An agent reading that
+text could act on words a reviewer never saw. `rite board show`, `list` and
+`query`, and the Slack relay, now give an agent what the tracker shows:
+- invisible characters (zero-width spaces, bidi controls, fillers) are
+  removed;
+- Unicode tag characters, which spell text that renders as nothing, are
+  decoded in place: `[hidden tag characters, decoded: "…"]`;
+- HTML comments are surfaced: `[HTML comment, not shown in the tracker: "…"]`.
+
+Every change is said in a line rite writes.
+
+⚠ **This is normalisation, not a safety check.** An instruction worded as
+an ordinary task passes unchanged, and so does any text an agent reads from
+the tracker directly (`gh issue view`) rather than through rite. See SPEC
+§6.6.3.
+
 ## 0.5.1 (2026-09-21)
 
 ### Talk to a running Manager — `rite connect <manager>`
