@@ -26,7 +26,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from rite_ai.config.models import ScheduleConfig, ScheduleWindow
+from rite_ai.config.models import CheckinsConfig, ScheduleConfig, ScheduleWindow
 
 MINUTES_PER_DAY = 1440
 
@@ -299,17 +299,26 @@ def workers_at(
     returns both together for exactly that reason.
     """
     for w in schedule.windows:
-        parsed = _parse_hours(w.hours)
-        if isinstance(parsed, ScheduleError):
-            continue
-        if weekday is not None:
-            days = parse_days(w.days)
-            if isinstance(days, ScheduleError) or weekday not in days:
-                continue
-        for start, end in _coverage(*parsed):
-            if start <= minute_of_day < end:
-                return w.workers
+        if _covers(w.hours, w.days, minute_of_day, weekday):
+            return w.workers
     return 0
+
+
+def _covers(hours: str, days: str, minute_of_day: int, weekday: int | None) -> bool:
+    """Does a window with these `hours` and `days` cover this minute?
+
+    One predicate for schedule windows AND check-in windows, so the two can
+    never read the same `"Mon-Fri"`, `"23:00-01:00"` differently. A window
+    that will not parse covers nothing — the caller's validator is what says
+    so out loud."""
+    parsed = _parse_hours(hours)
+    if isinstance(parsed, ScheduleError):
+        return False
+    if weekday is not None:
+        parsed_days = parse_days(days)
+        if isinstance(parsed_days, ScheduleError) or weekday not in parsed_days:
+            return False
+    return any(start <= minute_of_day < end for start, end in _coverage(*parsed))
 
 
 def check_worker_cap(count: int, max_concurrent_workers: int) -> str | None:
@@ -418,6 +427,131 @@ def next_open(schedule: ScheduleConfig, moment: Moment, horizon_days: int = 8) -
             day = _DAY_NAMES[weekday].capitalize()
             return f"{day} {minute // 60:02d}:{minute % 60:02d}"
     return ""
+
+
+# --- check-in windows (plan § K1) ------------------------------------------
+#
+# The same grammar, parser and clock as the schedule above, deliberately. A
+# check-in window is a schedule window without `workers`; it says when the
+# User wants to be asked things, not how many Workers run.
+
+
+def validate_checkins(checkins: CheckinsConfig) -> list[str]:
+    """Problems with `checkins.windows`, in the schedule's own words.
+
+    ⚠ Each message is the one `validate_schedule` gives for the same fault,
+    because they come from the same `_parse_hours` / `parse_days`. What
+    differs is only the consequence, which is stated: a malformed schedule
+    window contributes 0 Workers, a malformed check-in window is a check-in
+    that never happens — and a question deferred to it is never asked."""
+    problems: list[str] = []
+    for w in checkins.windows:
+        parsed = _parse_hours(w.hours)
+        if isinstance(parsed, ScheduleError):
+            problems.append(
+                f"{parsed.message} — this check-in window is ignored, so no "
+                "check-in happens there"
+            )
+            continue
+        days = parse_days(w.days)
+        if isinstance(days, ScheduleError):
+            problems.append(
+                f"{days.message} — the check-in window {w.hours!r} is ignored "
+                "entirely, so no check-in happens there"
+            )
+            continue
+        if not _coverage(*parsed):
+            problems.append(
+                f"check-in window {w.hours!r} is zero-length, so no check-in "
+                "happens there"
+            )
+    return problems
+
+
+def in_checkin(checkins: CheckinsConfig, moment: Moment) -> bool:
+    """Is a check-in window open at this moment?"""
+    return any(
+        _covers(w.hours, w.days, moment.minute_of_day, moment.weekday)
+        for w in checkins.windows
+    )
+
+
+@dataclass(frozen=True)
+class CheckinWhen:
+    """Where the clock is relative to the check-ins, for a person to read.
+
+    `open_now` with `until` is a window that is open; otherwise `starts` is
+    the next opening ("Fri 20:00") and `minutes_away` how far off it is.
+    `starts == ""` and not `open_now` means none opens within the horizon —
+    no windows configured, or none that parse."""
+
+    open_now: bool = False
+    until: str = ""
+    starts: str = ""
+    minutes_away: int = 0
+
+    def describe(self) -> str:
+        if self.open_now:
+            return f"open now, until {self.until}"
+        if not self.starts:
+            return ""
+        hours, minutes = divmod(self.minutes_away, 60)
+        away = f"{hours}h{minutes:02d}m" if hours else f"{minutes}m"
+        return f"next at {self.starts} (in {away})"
+
+
+def _label(minute: int, weekday: int) -> str:
+    return f"{_DAY_NAMES[weekday].capitalize()} {minute // 60:02d}:{minute % 60:02d}"
+
+
+def next_checkin(
+    checkins: CheckinsConfig, moment: Moment, horizon_days: int = 8
+) -> CheckinWhen:
+    """When the next check-in opens, or when the open one closes.
+
+    Searched a minute at a time, like `next_open` and for its reason: windows
+    wrap at midnight and at the week, and a closed form is where an
+    off-by-one would live. A window that wraps midnight reports its end on
+    the following day ("Sat 00:30"), since that is when it closes."""
+    minute, weekday = moment.minute_of_day, moment.weekday
+    if in_checkin(checkins, moment):
+        for _ in range(horizon_days * MINUTES_PER_DAY):
+            minute += 1
+            if minute >= MINUTES_PER_DAY:
+                minute, weekday = 0, (weekday + 1) % 7
+            if not in_checkin(checkins, Moment(minute, weekday, moment.zone)):
+                return CheckinWhen(open_now=True, until=_label(minute, weekday))
+        return CheckinWhen(open_now=True, until="(never closes)")
+    for step in range(1, horizon_days * MINUTES_PER_DAY + 1):
+        minute += 1
+        if minute >= MINUTES_PER_DAY:
+            minute, weekday = 0, (weekday + 1) % 7
+        if in_checkin(checkins, Moment(minute, weekday, moment.zone)):
+            return CheckinWhen(starts=_label(minute, weekday), minutes_away=step)
+    return CheckinWhen()
+
+
+def describe_checkins(checkins: CheckinsConfig, moment: Moment) -> str:
+    """The one line `rite status` prints about check-ins.
+
+    ⚠ **No windows is SAID, not implied.** A deferred question has nowhere to
+    wait without one, so it is asked at once — and a User who expected their
+    day to be quiet should learn why it was not from here, not from the
+    interruption."""
+    if not checkins.windows:
+        return (
+            "check-ins: none configured (checkins.windows) — a deferred "
+            "question is asked at once"
+        )
+    when = next_checkin(checkins, moment)
+    text = when.describe()
+    if not text:
+        return (
+            "check-ins: none will open — every checkins.windows entry is "
+            "malformed (`rite doctor` names them); a deferred question is "
+            "asked at once"
+        )
+    return f"check-ins: {text} ({moment.zone.describe()})"
 
 
 def current_minute_of_day(tz_name: str, now: datetime | None = None) -> int:

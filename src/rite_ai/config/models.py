@@ -223,6 +223,31 @@ class ScheduleConfig:
 
 
 @dataclass
+class CheckinWindow:
+    """One check-in window (plan § K1): a `ScheduleWindow` without `workers`.
+
+    ⚠ **Not a second time model.** `hours` and `days` are the schedule's own
+    grammar, read by the schedule's own `_parse_hours` and `parse_days`, on
+    the schedule's clock (`schedule.timezone`, machine-local when unset). A
+    second parser would drift from the first, and a second zone rule would put
+    a 14:00 check-in at 15:00 for somebody whose schedule is right."""
+
+    hours: str  # "HH:MM-HH:MM", end < start means "through midnight"
+    days: str = ""  # empty means every day, as for a schedule window
+
+
+@dataclass
+class CheckinsConfig:
+    """When the User wants to be asked things (V060_CHECKINS.md).
+
+    **No windows means no check-ins**, and that is stated wherever it matters
+    rather than implied: a question deferred to a check-in that never comes
+    is a question nobody is asked."""
+
+    windows: list[CheckinWindow] = field(default_factory=list)
+
+
+@dataclass
 class CredentialsConfig:
     """Which keychain accounts THIS project's credentials live under
     (SPEC §10.2).
@@ -366,6 +391,7 @@ class ProjectConfig:
     sandbox: SandboxConfig = field(default_factory=SandboxConfig)
     budget: BudgetConfig = field(default_factory=BudgetConfig)
     schedule: ScheduleConfig = field(default_factory=ScheduleConfig)
+    checkins: CheckinsConfig = field(default_factory=CheckinsConfig)
     spec: SpecConfig = field(default_factory=SpecConfig)
     coordination: CoordinationConfig = field(default_factory=CoordinationConfig)
     slack: SlackConfig = field(default_factory=SlackConfig)

@@ -212,6 +212,36 @@ show` lists the windows, and raising the count is a config change.
 A project with **no** schedule is unaffected: an empty schedule reports zero
 windows and the refusal is skipped rather than refusing everything.
 
+### Check-in windows — when you want to be asked
+
+`checkins.windows` says when you want to be asked things. It is the
+schedule's grammar without `workers`, read by the same parser, on the same
+clock (`schedule.timezone`, or your machine's own):
+
+```yaml
+checkins:
+  windows:
+    - {days: Mon-Fri, hours: "09:00-10:00"}
+    - {days: Mon-Fri, hours: "14:00-15:00"}
+    - {days: Mon-Fri, hours: "20:00-21:00"}
+```
+
+`rite status` names the next one, or says a window is open and when it
+closes:
+
+```console
+check-ins: next at Mon 09:00 (in 59h55m) (schedule in Europe/Warsaw (machine local))
+```
+
+**No windows means no check-ins**, and `rite status` says so rather than
+printing nothing. `rite doctor` reports a malformed window in the words it
+uses for a malformed schedule window, followed by what it costs: no check-in
+happens there.
+
+A window that wraps midnight reads `days` the way the schedule does, by the
+weekday of each minute. So `{days: Mon-Fri, hours: "23:30-00:30"}` on a
+Friday stops at midnight, as a schedule window with the same keys would.
+
 ## What runs on its own
 
 Nothing rite runs unattended starts a Claude session.

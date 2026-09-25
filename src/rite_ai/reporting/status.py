@@ -95,6 +95,9 @@ class ProjectStatus:
     read from local state, never fetched. Empty when this machine does not
     coordinate, or has not ticked yet. `rite doctor` reads the fleet live;
     this is what `status` can say without a round trip (§2.5.2)."""
+    checkins: str = ""
+    """When the next check-in opens, or that none is configured (plan § K1).
+    Empty only when the project config did not load."""
     burn_rate: BurnRateReport | None = None
     pool: PoolStatus | None = None
     pool_unreadable: str = ""
@@ -255,6 +258,14 @@ def collect_status(root: Path, board: bool = False) -> ProjectStatus:
 
     status.suspect_claims = suspect_claims(
         root, registered=names, threshold_seconds=threshold
+    )
+
+    from rite_ai.schedule import current_moment, describe_checkins
+
+    # The schedule's clock, not a second one: `schedule.timezone`, or the
+    # machine's own when it is unset.
+    status.checkins = describe_checkins(
+        project.config.checkins, current_moment(project.config.schedule.timezone)
     )
 
     tz_name = project.config.schedule.timezone or "UTC"
@@ -551,6 +562,9 @@ def format_status(status: ProjectStatus) -> str:
     if status.managers:
         lines.append("\nmanagers:")
         lines.extend(status.managers)
+
+    if status.checkins:
+        lines.append(f"\n{status.checkins}")
 
     if status.coordination:
         # Above the cost counters, because "who is Owner" is the question

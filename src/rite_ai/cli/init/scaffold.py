@@ -167,6 +167,11 @@ def config_to_yaml(config: ProjectConfig) -> str:
             "timezone": config.schedule.timezone,
             "windows": [asdict(w) for w in config.schedule.windows],
         },
+        # Written even when empty, for the reason `slack` below gives: a
+        # section this writer omits is one `rite schedule set` deletes.
+        "checkins": {
+            "windows": [asdict(w) for w in config.checkins.windows],
+        },
         # ⚠ Written even when empty, like every other section: a section the
         # writer omits is one `rite schedule set` DELETES from a real
         # project the next time it rewrites this file.

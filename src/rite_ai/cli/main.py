@@ -1157,6 +1157,14 @@ def _doctor_report(problems: list[str]) -> None:
             click.echo(f"schedule: {p}")
         problems.extend(schedule_problems)
 
+        from rite_ai.schedule import validate_checkins
+
+        # Same parser, same words as the schedule lines above; only the
+        # prefix and the stated consequence differ.
+        for p in validate_checkins(project.config.checkins):
+            click.echo(f"checkins: {p}")
+            problems.append(f"checkins: {p}")
+
         with _doctor_check("slack", problems):
             _doctor_slack(root, problems)
 

@@ -12,6 +12,8 @@ import yaml
 
 from .managers import parse_managers
 from .models import (
+    CheckinsConfig,
+    CheckinWindow,
     BudgetConfig,
     CoordinationConfig,
     CredentialsConfig,
@@ -165,6 +167,7 @@ _CONFIG_SECTIONS = {
     "sandbox": _fields(SandboxConfig),
     "budget": _fields(BudgetConfig),
     "schedule": _fields(ScheduleConfig),
+    "checkins": _fields(CheckinsConfig),
     "spec": _fields(SpecConfig),
     "coordination": _fields(CoordinationConfig),
 }
@@ -172,6 +175,7 @@ _CONFIG_KEYS = _fields(ProjectConfig)
 _EXPERTISE_KEYS = _fields(ExpertiseEntry, without=frozenset({"name"}))
 _SCAN_PATTERN_KEYS = _fields(ScanPattern)
 _WINDOW_KEYS = _fields(ScheduleWindow)
+_CHECKIN_WINDOW_KEYS = _fields(CheckinWindow)
 
 _WORKER_KEYS = _fields(WorkerManifest)
 
@@ -547,6 +551,24 @@ def parse_config(path: Path) -> ProjectConfig | ParseError:
             )
     schedule = ScheduleConfig(timezone=schedule_timezone, windows=windows)
 
+    # Read like `schedule.windows` and for the same reason: a malformed
+    # `hours` or `days` is carried through, not refused here, so that
+    # `rite doctor` can name it in the schedule's own words
+    # (`validate_checkins`) instead of every command failing to start.
+    checkins_raw = raw.get("checkins") or {}
+    checkin_windows: list[CheckinWindow] = []
+    if isinstance(checkins_raw, dict):
+        for w in checkins_raw.get("windows") or []:
+            if not isinstance(w, dict):
+                continue
+            hours = w.get("hours", "")
+            if not hours:
+                return ParseError(str(path), "check-in window missing 'hours'")
+            checkin_windows.append(
+                CheckinWindow(hours=str(hours), days=str(w.get("days", "") or ""))
+            )
+    checkins = CheckinsConfig(windows=checkin_windows)
+
     return ProjectConfig(
         ticket_backend=ticket_backend,
         credentials=credentials,
@@ -565,6 +587,7 @@ def parse_config(path: Path) -> ProjectConfig | ParseError:
         sandbox=sandbox,
         budget=budget,
         schedule=schedule,
+        checkins=checkins,
         spec=spec,
     )
 
@@ -634,8 +657,18 @@ def _unknown_config_key(raw: dict) -> str:
             return unknown
     schedule = raw.get("schedule")
     if isinstance(schedule, dict):
-        return _unknown_in_items(
+        unknown = _unknown_in_items(
             schedule.get("windows"), _WINDOW_KEYS, "schedule.windows"
+        )
+        if unknown:
+            return unknown
+    checkins = raw.get("checkins")
+    if isinstance(checkins, dict):
+        # `workers` is refused here by name: a check-in window says when the
+        # User is available, not how many Workers run, and a key read as
+        # nothing is a setting its author believes they made.
+        return _unknown_in_items(
+            checkins.get("windows"), _CHECKIN_WINDOW_KEYS, "checkins.windows"
         )
     return ""
 

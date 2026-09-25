@@ -29,6 +29,8 @@ from rite_ai.cli.init.scaffold import config_to_yaml
 from rite_ai.config.managers import ManagerRole
 from rite_ai.config.models import (
     BudgetConfig,
+    CheckinsConfig,
+    CheckinWindow,
     CoordinationConfig,
     ExpertiseEntry,
     ProjectConfig,
@@ -129,6 +131,9 @@ def _populated() -> ProjectConfig:
             windows=[ScheduleWindow(hours="09:00-17:00", workers=3)],
         ),
         budget=BudgetConfig(weekly_token_budget=12_000_000),
+        checkins=CheckinsConfig(
+            windows=[CheckinWindow(hours="09:00-10:00", days="Mon-Fri")]
+        ),
         # Phase 2 (§2.4). `managers` must be non-empty here for the same
         # reason every other collection is: an empty list round-trips
         # whether or not the serialiser writes it, so an empty one would
