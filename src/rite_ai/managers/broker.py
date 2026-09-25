@@ -191,8 +191,14 @@ def launch_argv(root: Path, request: Request) -> list[str]:
     are validated above, and this keeps them arguments even if a later
     change to those rules lets something through.
     """
+    from rite_ai import own_command
+
+    # ⚠ THE RITE THAT IS RUNNING, not the first `rite` on PATH (as
+    # `own_command` says for the Manager's instructions, `c0e4097`). Measured
+    # 2026-09-26: PATH gave an installed 0.5.1, which has no event log, so a
+    # Worker started here was never recorded and K4's standup missed it.
     return [
-        "rite",
+        own_command(),
         "sandbox",
         "start",
         request.worker,

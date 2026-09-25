@@ -78,7 +78,17 @@ class TestTheRequestCannotCarryTheCapabilityBack:
     def test_the_launch_argv_is_a_list_and_carries_nothing_else(self):
         """Never a string, and never through a shell."""
         argv = launch_argv(Path("/p"), Request("alpha", "ABC-12"))
-        assert argv == ["rite", "sandbox", "start", "alpha", "--ticket", "ABC-12"]
+        from rite_ai import own_command
+
+        # The rite that is running, never whatever `rite` PATH finds first.
+        assert argv == [
+            own_command(),
+            "sandbox",
+            "start",
+            "alpha",
+            "--ticket",
+            "ABC-12",
+        ]
 
 
 class TestAHostileRequestIsRefused:
