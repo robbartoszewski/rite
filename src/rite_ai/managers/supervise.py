@@ -45,15 +45,14 @@ from rite_ai.managers import (
     forget_instance,
     manager_dir,
 )
+
+# ⚠ THE BOUNDARY IS RESOLVED, NOT IMPORTED. These six used to come straight
+# from `enclosure`, which is seatbelt — so every Manager on every platform was
+# launched with `sandbox-exec`, and on Linux that is a Manager that starts and
+# vanishes. `boundary_for()` picks the mechanism for this machine and raises
+# when there is none.
+from rite_ai.managers.boundaries import UnsupportedPlatform, boundary_for
 from rite_ai.managers.broker import take_requests
-from rite_ai.managers.enclosure import (
-    engine_tmp,
-    limitations,
-    refusal_looks_like_ours,
-    why_it_was_refused,
-    wrap,
-    write_profile,
-)
 from rite_ai.managers.engines import spelling_for
 from rite_ai.managers.mailbox import INBOX, delivery_note, how_to_reply, send
 from rite_ai.managers.mailbox import take as take_mail
@@ -333,8 +332,15 @@ def _say_if_the_sandbox_refused(root: Path, manager: str, pane: str, say) -> Non
 
     if not pane:
         return
-    if refusal_looks_like_ours(pane_text_for_detection(pane)):
-        say(why_it_was_refused(root, manager))
+    # ⚠ Resolved here rather than held: this runs while explaining a failure,
+    # and a machine with no backend must not raise a SECOND error on top of
+    # the one being explained.
+    try:
+        confinement = boundary_for()
+    except UnsupportedPlatform:
+        return
+    if confinement.refusal_looks_like_ours(pane_text_for_detection(pane)):
+        say(confinement.why_it_was_refused(root, manager))
 
 
 def _honour_worker_requests(root: Path, manager: str, broker, say) -> None:
@@ -675,8 +681,14 @@ def supervise(
     # line above.** A boundary sold as more than it is would be worse than
     # none, so what it does NOT buy is stated rather than left to be
     # inferred from what it does.
-    say(f"sandbox: Manager {manager!r} runs inside a profile. What that does NOT do:")
-    for limit in limitations():
+    # ⚠ Named `confinement`, not `boundary`: `checkins.at_boundary` already
+    # owns that name later in this function and means a check-in window.
+    confinement = boundary_for()
+    say(
+        f"sandbox: Manager {manager!r} runs inside a {confinement.name} "
+        f"boundary ({confinement.mechanism}). What that does NOT do:"
+    )
+    for limit in confinement.limitations():
         say(f"  - {limit}")
 
     # ⚠ K6: no daemon, so a window that passed while nothing ran posted
@@ -1386,7 +1398,11 @@ def _default_starter(
     # Claude login; not redirecting TMPDIR either panics Goose or, if the
     # system temp root is granted instead, leaks every other process's
     # scratch.
-    profile = write_profile(root, manager)
+    # ⚠ Raises on a platform with no boundary, BEFORE tmux is asked to start
+    # anything. A Manager that dies in its pane is the failure this replaces,
+    # and it reports the missing binary rather than the missing platform.
+    confinement = boundary_for()
+    profile = confinement.write_profile(root, manager)
     handle_spelling = spelling_for(engine, agent)
     start_handle = (
         session_name(root, manager)
@@ -1402,11 +1418,11 @@ def _default_starter(
                 if placement and placement[0] == "env"
                 else {}
             ),
-            "TMPDIR": str(engine_tmp(root, manager)),
+            "TMPDIR": str(confinement.engine_tmp(root, manager)),
             **model_env,
         },
         engine=engine,
-        command=wrap(
+        command=confinement.wrap(
             launch_command(
                 engine,
                 resume_id,

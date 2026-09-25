@@ -716,6 +716,25 @@ def _doctor_report(problems: list[str]) -> None:
     # `init` reports this once, at creation; nothing asked again until now.
     from rite_ai.gate.hook import gate_hook_status
 
+    # Which mechanism confines a Manager on THIS machine, or that none does.
+    # A Manager is always sandboxed (B9), so "no backend" is the difference
+    # between rite working here and not.
+    #
+    # ⚠ Beside the tool rows, NOT inside the branch that needs the project
+    # config to load. It was there first, and a project with a missing
+    # brief.yaml skipped it entirely — the same "a broken config makes doctor
+    # QUIETER rather than louder" shape another comment here was written about.
+    with _doctor_check("sandbox backend", problems):
+        from rite_ai.managers.boundaries import describe as boundary_describe
+
+        described = boundary_describe()
+        click.echo(f"manager sandbox: {described}")
+        if described.startswith("UNAVAILABLE"):
+            problems.append(
+                "no Manager sandbox backend on this machine — rite will refuse "
+                "to start a Manager rather than start one unconfined"
+            )
+
     with _doctor_check("publish gate hook", problems):
         for label, repo_dir in [("project root", root)] + [
             (f"module {m.name}", root / m.path) for m in modules

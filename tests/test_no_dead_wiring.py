@@ -47,6 +47,19 @@ WATCHED = (
 
 # name -> why nothing calls it. A reason is required; "not yet" is not one.
 UNCALLED_ON_PURPOSE = {
+    "compose_policy": (
+        "Landlock's half of `compose`, called by `write_profile` in the same "
+        "file. Public for the same reason: it IS the boundary — the set of "
+        "paths the kernel will enforce — and the tests assert against the "
+        "policy it returns rather than against JSON on disk."
+    ),
+    "policy_path": (
+        "Landlock's half of `profile_path`, called by `write_profile` and "
+        "`why_it_was_refused` in the same file. Public because it is where "
+        "rite decides WHERE a Manager's policy lives, and the refusal "
+        "message tells a user that path by name so they can read what they "
+        "were denied."
+    ),
     "compose": (
         "Called by `write_profile` in the same file. Public because it IS "
         "the boundary — the text of the profile — and the tests assert "
