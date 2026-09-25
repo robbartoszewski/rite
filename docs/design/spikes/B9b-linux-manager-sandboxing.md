@@ -181,6 +181,32 @@ client can still reach the socket — Landlock does not stop that and nothing
 here claims it does — but what it reaches can no longer write outside the
 project, so the reach buys nothing.
 
+### And it stays usable, which is the other half
+
+A boundary that closes the hole by breaking rite would not be an option. So
+the same confined server was measured for the things rite actually asks of
+it, from OUTSIDE the boundary where the supervisor lives:
+
+| Asked of the confined tmux server | Result |
+|---|---|
+| `has-session -t =mgr` (liveness) | rc=0 |
+| `display-message -p '#{pane_pid}'` | answered — the pid `record_instance` stores |
+| `display-message -p '#{pane_dead}'` | answered — how a dead pane is detected |
+| the pane writing **in its project** (its real work) | allowed |
+| the pane writing **outside** | refused |
+| the pane after both | still alive |
+
+So the supervisor's whole liveness machinery keeps working — the socket lives
+in the project, and a process outside the boundary is not restricted when it
+connects to it. The Manager can do its work and cannot reach past it.
+
+⚠ One measurement here was wrong before it was right, and the wrong version
+looked like a finding: the first attempt ran the pane as
+`sh -c "while true; do sleep 1; done"`, which does not read stdin, so
+`send-keys` went nowhere and the project write reported NO. That reads as
+"the boundary denies the Manager its own project". It was the test, not the
+boundary.
+
 ⚠ **This is a change in where tmux is started, not a new mechanism.** It is
 still architectural: `rite loop start` and the coordinator pool start tmux
 outside any boundary today, and a Manager's pane lives in that server. The
