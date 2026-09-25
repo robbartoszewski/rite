@@ -34,3 +34,43 @@ def _read_version() -> str:
 
 
 __version__ = _read_version()
+
+
+def own_command() -> str:
+    """The absolute path of the `rite` that is running, for instructions.
+
+    ⚠ **An instruction that says `rite` names whatever is first on the
+    reader's PATH, which need not be the rite that wrote the instruction.**
+    Measured 2026-09-25 on this machine: a Manager resolved
+    `~/.local/bin/rite` -> **0.4.0**, while the code composing its
+    instructions was 0.5.1. It was told to run `rite reply`, which 0.4.0 does
+    not have, and got `Usage: rite [OPTIONS] COMMAND [ARGS]...`, exit 2 —
+    naming neither the version nor the path, so the Manager reads it as bad
+    syntax and retries.
+
+    Naming the binary REMOVES that class rather than detecting it. A
+    pre-flight version check was considered and deliberately not built: rite
+    has no users today and the dogfood starts on v0.6.0, so prompt text and
+    binary come from the same release and the skew cannot arise for the
+    person who matters — while a refusal would block a user mid-upgrade
+    tomorrow.
+
+    ⚠ **`sys.prefix`, not `sys.executable`.** `update.detect` measured that
+    under `uv` the interpreter resolves THROUGH a symlink to a shared
+    toolchain python under `~/.local/share/uv/python/...`, so its directory
+    is not the tool's `bin`. `sys.prefix` is the environment root in both
+    shapes, verified against this project's venv and a real
+    `uv tool install`.
+
+    Falls back to the bare name, which is today's behaviour: an instruction
+    that says `rite` is worse than one naming the right path and better than
+    one naming a path that does not exist.
+    """
+    import sys
+    from pathlib import Path
+
+    for base in (Path(sys.prefix), Path(sys.executable).parent.parent):
+        candidate = base / "bin" / "rite"
+        if candidate.is_file():
+            return str(candidate)
+    return "rite"

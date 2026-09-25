@@ -28,6 +28,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 
+from rite_ai import own_command
 from rite_ai.managers.broker import REQUESTS_DIRNAME
 from rite_ai.managers.session import _tmux, session_exists
 
@@ -54,12 +55,16 @@ def for_manager(manager: str, *, extra: str = "") -> str:
     # this function has the Manager's name and nothing else, and the request
     # directory is a function of exactly that.
     requests = f".rite/managers/{manager}/{REQUESTS_DIRNAME}"
+    # ⚠ **Absolute, for the reason `mailbox.how_to_reply` gives**: a bare
+    # `rite` names whatever is first on the Manager's PATH, which was
+    # measured to be an older release than the one writing this text.
+    rite = own_command()
     base = (
         f"You are the Manager '{manager}' for this project, started by "
         f"`rite start {manager}`.\n"
         "Read `.rite/` to orient yourself, then work the queue: "
-        "`rite loop run` prints one planned cycle — what is ready, which "
-        "Workers are free, and what is blocking. (`rite loop status` "
+        f"`{rite} loop run` prints one planned cycle — what is ready, which "
+        "Workers are free, and what is blocking. (`{rite} loop status` "
         "answers a different question: whether a loop process is "
         "running.)\n"
         "You are running in a human's foreground terminal — they can attach "
@@ -88,8 +93,8 @@ def for_manager(manager: str, *, extra: str = "") -> str:
         "REFUSED, because rite chooses the rest of a Worker's launch and "
         "will not take it from a request.\n"
         "\n"
-        "`rite add worker <name>` first if the Worker does not exist yet; "
-        "`rite status` lists the ones that do. A request naming a Worker "
+        f"`{rite} add worker <name>` first if the Worker does not exist yet; "
+        f"`{rite} status` lists the ones that do. A request naming a Worker "
         "that does not exist, or a ticket that is not on the board, is "
         "refused and reported.\n"
         "\n"

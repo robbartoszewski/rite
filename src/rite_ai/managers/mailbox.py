@@ -408,11 +408,19 @@ def how_to_reply(root: Path, manager: str) -> str:
     shown, and nobody told. `--manager` is spelled out for the reason
     `journal.instructions` spells it: a Manager on a tmux without `-e` has no
     `RITE_MANAGER` to default from.
+
+    ⚠ **The command is named by ABSOLUTE PATH** (`rite_ai.own_command`).
+    Measured: a Manager resolved a `rite` 0.4.0 from its PATH while this code
+    was 0.5.1, so `rite reply` — which 0.4.0 does not have — failed with a
+    usage message naming neither the version nor the path. Naming the binary
+    that composed the instruction removes that class.
     """
+    from rite_ai import own_command
+
     return (
         "\n\n## Talking to the User\n\n"
         f"To ask the User something or tell them something, run:\n"
-        f'  rite reply --manager {manager} "<your message>"\n'
+        f'  {own_command()} reply --manager {manager} "<your message>"\n'
         f"Do not write files into the mailbox yourself. They read your replies "
         f"with `rite connect {manager}`. Messages they send you arrive in your "
         f"instructions at the start of a turn.\n"
