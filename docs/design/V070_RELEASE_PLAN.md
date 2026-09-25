@@ -718,7 +718,6 @@ before planning around it.**
 | item | v0.6.0 id |
 |---|---|
 | Wire `harness.run_subtask` to Goose; prove on the benchmark | B4, B5. B5 has already moved to the Worker tier, which is **scheduled in no release** (below) |
-| The Manager's reply path hand-writes JSON | C5 |
 | Designation membership check. **Cursor raises the stakes again**: its handle comes from the engine, like Claude's | C8 |
 | Journal provenance (author field) | C10 |
 | `.rite/user/` separation is incidental | C11. MMQ1(b) makes it worse |
@@ -733,7 +732,7 @@ before planning around it.**
 | item | from | why it is listed |
 |---|---|---|
 | **The Worker tier**: decompose duty (RL-T7), `harness`/`runners` gaining a caller, B5 | v0.6.0 plan, B4b reshaping | "out of v0.6.0" with no destination. Needs a release named |
-| **Re-advertising `--record-issues`** once the journal is redacted | §9.15 (reversed for 0.5.1); C7 | if C7 lands, re-advertising is a decision nobody has been asked for |
+| **Re-advertising `--record-issues`**, now that the journal is redacted | §9.15 (reversed for 0.5.1 "until the leak path is closed"); C7, **landed** as `5ec5173` | ⚠ **The precondition is met and nobody has been asked.** §9.15 kept the feature unadvertised only because the journal applied no redaction. It does now, and the flag is still absent from the README, the guide and the CHANGELOG. Whether to advertise it in 0.6.0 or 0.7.0 is Robert's call. It is in the consolidated list |
 | **Pin the Goose version** | v0.6.0 plan, Decision 4 ("And pin the version") | a sentence with no ticket. No pin was found in `src/` (searched for the measured version string and for "pin") |
 | **A derived Modelfile instead of warning about the 4,096 window** | v0.6.0 plan, B8's closing section | an option recorded for a decision: it writes into the operator's Ollama library |
 | **The full ten-task benchmark**; opencode's two `--format json` defects | RL-T0 section 6 | measured on five tasks only |
@@ -762,6 +761,7 @@ before planning around it.**
 | S14 | `carried-limitations-register.md` D1 | "no `RITE_PROJECT_ROOT` env var exists". It does, and the marker is now a file rather than the bare directory (`cli/main.py`, `_find_project_root`) | **Annotated** after review round one: both suggested fixes are in the code. **The entry stays OPEN**, because the register's rule is that only a named run clears it |
 | S15 | `V070_EGRESS.md` | open question 1's premise (no Manager sandbox) | **Corrected**: banner pointing at §5.5 and this plan |
 | S16 | `V060_RELEASE_PLAN.md` A6 vs `1cee54c` | A6 said per-Manager keys under `manager_roles[]`. What shipped was one project-level `slack:` section with a `command_channel` | **Resolved by A6 itself** (`b555b20`): per project, with `command_channel` refused. MMQ2 is rewritten against that shape |
+| S18 | `V060_RELEASE_PLAN.md` C5 and C7 rows | both read as open. C5 landed as `4c67b7e` (`rite reply`) and C7 as `5ec5173` (journal redaction) | **Annotated**: each row now names its commit |
 | S17 | this plan's own first version | part 0.2's three holes, part 0.3's "one problem", "no seatbelt profile can express a destination list", SB1/SB3/SB6 open, and SPEC §5.4.8 saying none of the four properties hold | **Corrected** after review round one, by re-measuring against `9862b59` (part 0) |
 
 ---
@@ -789,6 +789,7 @@ before planning around it.**
 | MEQ1 | where memory sits relative to Robert's test and K3 | memory's ask-time path |
 | `V070_MEMORY.md` Q1–Q7 | memory's architecture | any memory spec |
 | — | the Worker tier's release | B5, harness |
+| — | re-advertise `--record-issues`, now that C7 has redacted the journal: in 0.6.0, 0.7.0, or not yet | nothing. The feature works and is unadvertised (§9.15) |
 
 ## Sequencing, and where the release can be cut
 
