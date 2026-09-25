@@ -151,6 +151,30 @@ It does not look like a setting. It looks like a model that cannot call tools
 and an agent that forgets the previous turn. `rite doctor` now asks the
 endpoint what window is actually in force and says so. See the guide.
 
+### Check-ins — most questions wait for a few windows a day
+
+`checkins.windows` in `.rite/config.yaml` names when you want to be asked
+things, in the schedule's own grammar and clock (`days`, `hours`, no
+`workers`). `rite status` names the next one, and `rite doctor` reports a
+malformed one in the schedule's words. With no windows there are no
+check-ins, and `rite status` says so.
+
+A Manager can defer a question to the next check-in with
+`rite ask --defer "<question>" --while "<what it will do meanwhile>"`.
+⚠ **Asking now stays the default.** `rite reply` and a plain `rite ask` are
+immediate. A deferral with no `--while` is refused. With no window to wait
+for, a deferral is asked at once. If the loop goes idle while questions are
+queued, they are asked at once, with a line saying the deferral was wrong.
+Every Manager is told, every cycle: ask now unless the question is clearly
+deferrable; if you are unsure whether it blocks you, it blocks you.
+
+At the check-in, deferred questions go back to the Manager first, and it
+withdraws any it has answered itself with
+`rite question withdraw <id> --answered-by <anchor>`. A withdrawal without
+an anchor is refused. What survives is asked, and every check-in counts
+queued, withdrawn and asked, so whether deferral filters anything is
+measured.
+
 ## 0.5.1 (2026-09-21)
 
 ### Talk to a running Manager — `rite connect <manager>`

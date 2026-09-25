@@ -242,6 +242,47 @@ A window that wraps midnight reads `days` the way the schedule does, by the
 weekday of each minute. So `{days: Mon-Fri, hours: "23:30-00:30"}` on a
 Friday stops at midnight, as a schedule window with the same keys would.
 
+### Questions that can wait for a check-in
+
+A Manager asks you things with `rite reply`, and that stays immediate. It can
+also **defer** a question to your next check-in, but only by naming what it
+will do meanwhile:
+
+    rite ask --defer "rename --out to --output?" --while "tickets 8 and 9, which do not touch the CLI"
+
+⚠ **The rule every Manager is given, in these words: ask now unless the
+question is clearly deferrable; if you are unsure whether it blocks you, it
+blocks you.** Deferring a question that blocks it idles a Manager until the
+next check-in, which can be hours away. Asking you one that could have waited
+costs you thirty seconds. So every doubt ends in asking:
+
+- a deferral with no `--while` is refused ("then it blocks you — ask now")
+  and nothing is queued;
+- with no check-in window configured, or none that parses, a deferral is
+  asked at once and says why;
+- if the loop runs out of work while questions are queued, at least one was
+  blocking after all. They are asked at once, with a line saying the deferral
+  was wrong, in the message and in `rite start`'s output.
+
+A deferred question waits in `.rite/managers/<name>/checkins/queue/`.
+
+**At the check-in it is re-read before it is asked.** At the first cycle
+boundary inside a window, the Manager's instruction carries what it deferred,
+with one directive: withdraw any you can now answer yourself. A withdrawal
+must say where the answer came from, through the same anchor rule as the
+journal:
+
+    rite question withdraw q3fa9c1 --answered-by "docs/adr/0004-storage.md:12 chooses SQLite"
+
+What is not withdrawn is asked when that cycle ends, whatever the ending.
+Every check-in counts what the filter did, so whether deferral filters
+anything is measured, not assumed:
+
+```text
+Deferred questions since the last check-in: 2 queued, 1 withdrawn by the Manager before asking, 1 asked now.
+  withdrawn q5f9f54: answered by docs/adr/0004-storage.md:12 chooses SQLite
+```
+
 ## What runs on its own
 
 Nothing rite runs unattended starts a Claude session.

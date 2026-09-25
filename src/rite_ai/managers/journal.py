@@ -295,6 +295,39 @@ def _refuse(problem: str) -> WriteResult:
     return WriteResult(False, problem)
 
 
+def anchor_problem(anchor: str, refusing_to: str, thing: str, instead: str) -> str:
+    """The anchor floor, or "" when `anchor` passes it.
+
+    ⚠ **One floor, used by everything that refuses an unanchored record** —
+    journal entries, and check-in withdrawals and notes. A second copy of
+    this rule is where the next invisible character would get through, the
+    way each of the three rules described above was defeated once.
+
+    `refusing_to` completes "refusing to … with no anchor", `thing` names what
+    would be unanchored and `instead` what it is worse than: "an entry nobody
+    can check is worse than no entry".
+    """
+    if not _is_blank(anchor):
+        return ""
+    if anchor.strip() and any(ch.isalnum() for ch in anchor):
+        # ⚠ Not "no anchor": the Manager wrote one, in a script with no
+        # ASCII letter or digit. Saying "no anchor" is false, and a
+        # refusal the Manager cannot act on is the one it routes around
+        # by hand-writing the file — so this names the rule and the fix.
+        return (
+            "refusing this anchor: it has no ASCII letter or digit. rite "
+            "cannot tell a wholly non-Latin anchor from characters that "
+            "render as nothing, so it requires one ASCII identifier a "
+            "reader can check — include the SHA, the file path and line, "
+            f"the ticket id, or the command. {_ANCHOR_HELP}"
+        )
+    return (
+        f"refusing to {refusing_to} with no anchor: {thing} "
+        f"nobody can check is worse than {instead}, because it reads like "
+        f"evidence. {_ANCHOR_HELP}"
+    )
+
+
 def _field_problem(manager: str, anchor: str, required: dict[str, str]) -> str:
     """Every reason this entry must not be written, or "".
 
@@ -318,24 +351,9 @@ def _field_problem(manager: str, anchor: str, required: dict[str, str]) -> str:
             "a directory on any filesystem rite supports — 200 is the limit "
             "here, and a real Manager name is a word"
         )
-    if _is_blank(anchor):
-        if anchor.strip() and any(ch.isalnum() for ch in anchor):
-            # ⚠ Not "no anchor": the Manager wrote one, in a script with no
-            # ASCII letter or digit. Saying "no anchor" is false, and a
-            # refusal the Manager cannot act on is the one it routes around
-            # by hand-writing the file — so this names the rule and the fix.
-            return (
-                "refusing this anchor: it has no ASCII letter or digit. rite "
-                "cannot tell a wholly non-Latin anchor from characters that "
-                "render as nothing, so it requires one ASCII identifier a "
-                "reader can check — include the SHA, the file path and line, "
-                f"the ticket id, or the command. {_ANCHOR_HELP}"
-            )
-        return (
-            "refusing to write a journal entry with no anchor: an entry "
-            "nobody can check is worse than no entry, because it reads like "
-            f"evidence. {_ANCHOR_HELP}"
-        )
+    problem = anchor_problem(anchor, "write a journal entry", "an entry", "no entry")
+    if problem:
+        return problem
     for field, value in required.items():
         if _is_blank(value):
             return (

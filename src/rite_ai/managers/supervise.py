@@ -38,6 +38,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from rite_ai.managers import (
+    checkins,
     designate,
     designated,
     designation_path,
@@ -762,6 +763,13 @@ def supervise(
 
         if callable(verdict):
             answer = verdict(root)
+            if answer == "idle":
+                # ⚠ THE SAFETY NET (plan § K2). A Manager with nothing left
+                # to do was waiting on something, so a deferral was wrong:
+                # what it held for the check-in is asked now, and said.
+                said = checkins.idle_with_questions_queued(root, manager)
+                if said:
+                    say(said)
             if answer in STOP_VERDICTS:
                 return SuperviseResult(
                     True,
@@ -839,13 +847,26 @@ def supervise(
             #
             # Taken, not peeked: a message delivered stays delivered, so a
             # Manager is not told the same thing every cycle until it acts.
+            # ⚠ THE QUEUE IS A DRAFT (plan § K3). Inside a check-in window,
+            # what was deferred goes into THIS cycle's instruction to be
+            # re-read, and what the Manager does not withdraw is asked when
+            # the cycle ends. Not asked here: the Manager may have answered
+            # it itself since it was deferred.
+            boundary = checkins.at_boundary(root, manager)
+            if boundary.said:
+                say(boundary.said)
             waiting_for_it = take_mail(root, manager, INBOX)
             if waiting_for_it:
                 say(f"delivering {len(waiting_for_it)} message(s) to {manager!r}")
             # Composed once, for both launches below: the fallback needs the
             # same mail and the same reply instructions, differing only in
             # which opening text it starts from.
-            extras = delivery_note(waiting_for_it) + how_to_reply(root, manager)
+            extras = (
+                delivery_note(waiting_for_it)
+                + how_to_reply(root, manager)
+                + checkins.instructions(root, manager)
+                + boundary.instruction
+            )
             fresh_prompt = prompt + extras
             cycle_prompt = cycle_prompt + extras
             result: StartResult = launch(
@@ -1006,6 +1027,10 @@ def supervise(
                 time.sleep(poll)
             cycle.ended_at = clock()
             cycle.attended = attended
+            # Whatever the ending: a re-evaluation's survivors are asked now.
+            said = checkins.after_cycle(root, manager)
+            if said:
+                say(said)
             _say_refusals(root, cycle.started_at, say, engine, agent, live_pane)
             _honour_worker_requests(root, manager, broker, say)
             _say_if_the_sandbox_refused(root, manager, live_pane, say)
