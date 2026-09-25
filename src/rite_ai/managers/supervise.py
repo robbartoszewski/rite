@@ -865,6 +865,11 @@ def supervise(
             boundary = checkins.at_boundary(root, manager)
             if boundary.said:
                 say(boundary.said)
+            if callable(router):
+                # Before the inbox is taken: a secondary's reply written while
+                # this Owner was between cycles, or not running at all, belongs
+                # in THIS cycle's instruction, not the one after.
+                router(say)
             waiting_for_it = take_mail(root, manager, INBOX)
             if waiting_for_it:
                 say(f"delivering {len(waiting_for_it)} message(s) to {manager!r}")
