@@ -410,6 +410,12 @@ def _relayed(text: str, sent_at: float) -> _Relayed:
     return out
 
 
+def _unescaped(text: str) -> str:
+    """Slack's three message-text escapes undone, `&amp;` LAST so that a
+    typed `&lt;` (sent as `&amp;lt;`) comes back as `&lt;`, not `<`."""
+    return text.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+
+
 def _header(where: str, *parts: str) -> str:
     return "[" + " · ".join((where, *parts)) + "]"
 
@@ -708,7 +714,15 @@ class Listener:
         # WHEN IT WAS SAID, in the header. Found live: a DM sent while no
         # Manager ran reached it looking as if it had arrived at the restart.
         when = f"sent {time.strftime('%a %H:%M', time.localtime(sent))}"
-        text = cleaned.text
+        # ⚠ AS THE PERSON TYPED IT. Slack escapes & < > in message text as
+        # &amp; &lt; &gt; (its own links and mentions are the only real <…>).
+        # Found live: an instruction reached the Manager as `&lt;!-- … --&gt;`,
+        # and code with `<` or `&&` in it arrives mangled. Unescaped AFTER
+        # normalisation, so an escaped `<!--`, which Slack shows as visible
+        # text, is never taken for a hidden comment, and mention detection
+        # below reads Slack's raw form, where a mention is a real `<@…>`.
+        raw = cleaned.text
+        text = _unescaped(raw)
         thread = [f"reply in the thread under {under}"] if under else []
         if channel == self.dm:
             if author and self.owner and author != self.owner:
@@ -729,7 +743,7 @@ class Listener:
             return _relayed(f"{head}\n{_quoted(text)}", sent)
         # A LINKED mention only. A literal "@rite" is what Slack leaves when
         # the autocomplete was not used, and it is text, not addressing.
-        mentioned = any(f"<@{me}>" in text for me in (self.me, self.me_bot) if me)
+        mentioned = any(f"<@{me}>" in raw for me in (self.me, self.me_bot) if me)
         who = (
             "the Owner, outside the DM"
             if author and author == self.owner
