@@ -6028,6 +6028,7 @@ def _slack_listener(root: Path, manager: str):
         manager=manager,
         owner=config.slack.owner_user,
         broadcast=config.slack.broadcast,
+        project=root,
     )
     for line in listener.open():
         click.echo(line)
@@ -6214,6 +6215,7 @@ def _start_a_manager(
             err=True,
         )
 
+    listener = _slack_listener(root, role.name)
     outcome = supervise(
         root,
         role.name,
@@ -6232,7 +6234,7 @@ def _start_a_manager(
         # itself reads, so "is this a real ticket" has one answer in one
         # place; `for_project` refuses everything when there is none.
         broker=for_project(root, board),
-        slack=_slack_listener(root, role.name),
+        slack=listener,
         max_sessions=sessions,
         window_seconds=minutes * 60.0,
         prompt=(

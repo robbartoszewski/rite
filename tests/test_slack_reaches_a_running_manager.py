@@ -77,14 +77,14 @@ class TestTheCursorMovesAndNothingIsLost:
     def test_the_listener_carries_the_cursor_between_polls(self):
         listener = Listener(token="t", manager="m", dm="D1")
         listener.poll(call=_reply([_msg("a", "20.0")]))
-        assert listener.since == "20.0"
+        assert listener.since == {"D1": "20.0"}
 
     def test_an_outage_does_not_move_the_cursor_or_raise(self):
         """A Slack outage must not end a Manager's run, and must not skip the
         messages it could not read."""
-        listener = Listener(token="t", manager="m", dm="D1", since="19.0")
+        listener = Listener(token="t", manager="m", dm="D1", since={"D1": "19.0"})
         assert listener.poll(call=_reply([], ok=False, error="ratelimited")) == ()
-        assert listener.since == "19.0"
+        assert listener.since == {"D1": "19.0"}
         assert listener.problems and "ratelimited" in listener.problems[0]
 
     def test_a_raising_transport_is_a_problem_not_a_crash(self):

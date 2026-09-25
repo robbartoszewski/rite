@@ -253,6 +253,7 @@ Measured, against `rite-ai.slack.com` / `#all-rite`:
 | does posting into a thread need one? | **no** — `chat:write` plus `thread_ts` | reply posted, `thread_ts` echoed |
 | can rite learn its own bot id for mention detection? | **yes, free** — `auth.test` needs no scope | returned `U0C49FPUP8B` |
 | does `conversations.history` include thread replies? | ⚠ **NO** | the reply's `ts` was absent from history; the root carried `reply_count: 1` |
+| does `conversations.replies` with `oldest` still return the root? | ⚠ **YES, every time** — and `oldest` is exclusive | measured 2026-09-25 (A3): `oldest`=root gave `[ROOT, reply 1, reply 2]`; `oldest`=reply 1 gave `[ROOT, reply 2]`. So the relay drops the root by `ts`, or it would re-deliver rite's own post on every thread read (it is a bot post and filtered anyway, but a human-rooted thread would not be) |
 
 ⚠ **The last row is the one that shapes the work.** Polling
 `conversations.history` alone makes every reply to a status update

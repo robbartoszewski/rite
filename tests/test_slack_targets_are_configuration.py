@@ -116,32 +116,23 @@ class TestDoctorNamesSlacksOwnError:
         ]
 
 
-class TestTheListenerHearsOnlyTheOwnersDM:
+class TestTheListenerStartsWhereItSaidItWasListening:
     def test_no_owner_is_said_to_be_broadcast_only(self):
         call, calls = _slack()
         listener = Listener(token="t", manager="m", broadcast="#all-rite")
         lines = listener.open(call=call)
         assert any("broadcast-only" in line for line in lines)
-        assert listener.poll(call=call) == ()
-        assert not any(m == "conversations.history" for m, _ in calls), (
-            "with no Owner there is no command channel, so nothing is read"
-        )
+        listener.poll(call=call)
+        read = [t for m, t in calls if m == "conversations.history"]
+        assert read == ["C1"], "with no Owner, only the broadcast channel is read"
 
-    def test_opening_learns_the_dm_and_starts_the_cursor_at_the_start_line(self):
-        """So a restart does not re-read the DM's last fifty messages as new
-        instructions."""
+    def test_opening_learns_both_ids_and_starts_each_cursor_at_its_start_line(self):
+        """So a restart does not re-read the last fifty messages as new."""
         call, _ = _slack()
         listener = Listener(token="t", manager="m", owner="U1", broadcast="#b")
         listener.open(call=call)
-        assert listener.dm == "D1" and listener.since == "100.5"
-
-    def test_the_poll_reads_the_dm_and_not_the_broadcast_channel(self):
-        call, calls = _slack()
-        listener = Listener(token="t", manager="m", owner="U1", broadcast="#b")
-        listener.open(call=call)
-        listener.poll(call=call)
-        read = [t for m, t in calls if m == "conversations.history"]
-        assert read == ["D1"]
+        assert listener.dm == "D1" and listener.broadcast_id == "C1"
+        assert listener.since == {"D1": "100.5", "C1": "100.5"}
 
     def test_a_failing_poll_is_said_once_not_every_tick(self):
         call, _ = _slack({"conversations.history": "missing_scope"})
