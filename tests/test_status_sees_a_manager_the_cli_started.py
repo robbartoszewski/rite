@@ -91,6 +91,7 @@ def test_the_starter_cannot_be_called_without_a_permission_mode():
             Path("/tmp"),
             "lead",
             engine="sleep 1",
+            agent="",
             resume_id="",
             max_sessions=1,
             window_seconds=60,
@@ -109,11 +110,44 @@ def test_the_starter_cannot_be_called_without_a_prompt():
             Path("/tmp"),
             "lead",
             engine="sleep 1",
+            agent="",
             resume_id="",
             max_sessions=1,
             window_seconds=60,
             permission="",
         )
+
+
+def test_the_starter_cannot_be_called_without_an_agent():
+    """The third argument this call site dropped (after `prompt` and
+    `permission`). `agent=""` silently meant Claude's spelling, so a Goose
+    Manager whose caller forgot it launched with Claude's flags."""
+    from rite_ai.managers.supervise import _default_starter
+
+    with pytest.raises(TypeError):
+        _default_starter(  # type: ignore[call-arg]
+            Path("/tmp"),
+            "lead",
+            engine="sleep 1",
+            resume_id="",
+            max_sessions=1,
+            window_seconds=60,
+            permission="",
+            prompt="do the thing",
+        )
+
+
+def test_a_local_engine_with_no_agent_is_refused_not_given_claudes_flags():
+    """One level down, where every launch path passes: `local:*` names a
+    tier, and without an agent there is no spelling to launch it with."""
+    from rite_ai.managers.engines import spelling_for
+
+    with pytest.raises(ValueError, match="needs an agent"):
+        spelling_for("local:small", "")
+    with pytest.raises(ValueError, match="needs an agent"):
+        spelling_for("local:small", "opencode")
+    assert spelling_for("local:small", "goose").binary == "goose"
+    assert spelling_for("claude", "").binary == "claude"
 
 
 @pytest.mark.skipif(not _HAS_TMUX, reason="tmux is not installed")
@@ -137,6 +171,7 @@ def test_a_blank_prompt_is_refused_before_a_session_is_spent(blank):
         root,
         manager,
         engine="sh",
+        agent="",
         resume_id="",
         prompt=blank,
         permission="",
@@ -165,6 +200,7 @@ def test_status_reports_a_manager_started_the_way_the_cli_starts_one():
             root,
             manager,
             engine="sh",
+            agent="",
             resume_id="",
             # The launch pipes `$RITE_PROMPT` into the engine, so the stub
             # needs something to do — this is what keeps the session alive

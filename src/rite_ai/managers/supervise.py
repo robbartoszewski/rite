@@ -1314,7 +1314,7 @@ def _default_starter(
     window_seconds,
     permission,
     prompt,
-    agent="",
+    agent,
 ):
     """Start one cycle's session. `permission` and `prompt` have NO DEFAULT,
     deliberately.
