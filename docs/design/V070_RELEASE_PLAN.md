@@ -21,8 +21,8 @@ v0.8.0 (`V080_RELAY_CHANNELS.md`). This plan adds nothing to that scope.
 - **Nothing here describes behaviour rite does not have.** Where a sentence
   says what rite does, it names the commit or the file. Where it says what
   rite *will* do, it sits under a ticket and says "not built".
-- **Measured, read or inferred, and it says which.** Four facts in part 0 were
-  measured for this plan. The Cursor facts were **read** from Cursor's
+- **Measured, read or inferred, and it says which.** Everything in part 0 was
+  measured for this plan, and re-measured against `9862b59` after review. The Cursor facts were **read** from Cursor's
   documentation, because the binary is not installed on this machine. The
   yoloAI network facts were **read** from `yoloai help security` (0.11.0).
 
@@ -34,115 +34,134 @@ releases removing.
 
 ---
 
-## Part 0 — what changed under the v0.7.0 notes, and four measurements
+## Part 0 — what changed under the v0.7.0 notes, and what was measured
 
 **Read this before any track.** The design notes this plan works from
 (`V070_EGRESS.md`, `V070_MULTI_MANAGER.md`, B9) were written before B9 landed.
 B9 changed the ground under three of them.
 
-### 0.1 A Manager now runs inside a boundary
+⚠ **REVISED after review round one.** The first version of this part was
+measured against `b85e52e`. `main` then moved twice in a few hours, and
+`9862b59` closed two of the three holes it reported. **Every probe below was
+re-run against `9862b59`**, and the prose follows the new results. The first
+version's figures are kept in 0.5, because a hole that existed and was closed
+is worth a record. Its central conclusion, that the broker's unfinished half
+and egress are one problem, **was disproven** by the fix, and 0.3 says how.
 
-`eb2a88e` and `4ebbbd7` on `main` did two things:
+### 0.1 A Manager runs inside a boundary
+
+On `main`:
 
 - the Manager's pane runs `sandbox-exec -f <profile> <engine …>`, with the
-  profile composed by `managers/enclosure.py`;
-- the Manager asks for a Worker, and a host-side broker (`managers/broker.py`)
-  validates the request and runs `rite sandbox start`.
+  profile composed by `managers/enclosure.py` (`4ebbbd7`);
+- the Manager asks for a Worker, and a host-side broker (`managers/broker.py`,
+  `eb2a88e`) validates the request and runs `rite sandbox start`, at the cycle
+  boundary (C24, deliberately; see the decisions list);
+- since `9862b59`, the profile denies the tmux socket directory and limits
+  signals to `(target same-sandbox)`.
 
 The observation in `4ebbbd7` covered both halves: a sandboxed Goose Manager
-completed a cycle, and a Worker really started from its request.
+completed a cycle, and a Worker really started from its request. `9862b59`
+re-ran a real engine cycle under the fixed profile.
 
 **Consequences for what was written earlier:**
 
 - **D-76 ("a Manager is not sandboxed") is reversed in code.** Its cell was
-  never marked. Corrected in `SPEC.md` by this plan, under §13's supersession
-  convention.
-- **§5.4's opening ("Managers do not get one") is stale, and so is §5.4.5.**
-  §5.4.5 says there is no per-Manager directory and no `RITE_MANAGER`. Both
-  exist (`managers/__init__.py`: `manager_dir`, `MANAGER_ENV`). Corrected.
+  never marked. Corrected in `SPEC.md`, under §13's supersession convention.
+- **§5.4's opening ("Managers do not get one") was stale, and so was
+  §5.4.5.** §5.4.5 said there was no per-Manager directory and no
+  `RITE_MANAGER`. Both exist (`managers/__init__.py`: `manager_dir`,
+  `MANAGER_ENV`). Corrected.
 - **`V070_EGRESS.md` open question 1** says "The Manager does not have one [a
-  sandbox]". It has one now, and part 0.3 shows it is the right place to
-  enforce egress, in a narrower way than the note hoped.
+  sandbox]". It has one now. 0.3 says what that profile can and cannot do
+  about egress.
 
-### 0.2 ⚠ Measured today: the boundary can be walked out of
+### 0.2 Measured on `9862b59`: what the boundary holds, and what it does not
 
-**Method.** Measured 2026-09-25 against `origin/main` at `b85e52e`, with
-`rite_ai` confirmed to resolve to this worktree. The profile came from
-`enclosure.compose()` itself, not a hand copy. A private tmux server ran on a
-short `TMUX_TMPDIR` so the operator's own server was never touched. Every
-probe ran `sandbox-exec -f <that profile> …`.
+**Method.** 2026-09-25, `rite_ai` confirmed to resolve to this worktree, at
+`9862b59`. The profiles came from `enclosure.compose()` itself, not hand
+copies. A private tmux server ran on a short `TMUX_TMPDIR`, so the operator's
+own server was never touched. Every probe ran `sandbox-exec -f <that
+profile> …`.
 
-| probe, from inside the Manager profile | direct | through the tmux server |
-|---|---|---|
-| write a file in the per-user temp root, which the profile does not grant | **refused**, `Operation not permitted` | **succeeded** |
-| `yoloai ls` | **refused**, `open ~/.yoloai: operation not permitted` | **succeeded**: every sandbox on the machine, other projects' included |
-| `kill -TERM` a process outside the sandbox that it did not start | **succeeded** | — |
-| HTTPS to `example.com`; to `1.1.1.1` | 200; 301 | — |
-| list `~/.claude/projects` | **succeeded**: every project's Claude transcripts | — |
+**The five probes the first version reported:**
 
-**Why the tmux route works.** The profile grants `(allow network*)` and
-read+write on `/private/tmp`, which is where the tmux socket lives. The tmux
-*server* was started outside the boundary, so a command it is asked to run
-(`tmux new-window '<cmd>'`) runs outside it too. `Bash(tmux:*)` is on the
-Claude allowlist (`permissions.py`), and Goose has no allowlist, so every
-engine can reach this route.
+| probe, from inside a Manager's profile | on `9862b59` |
+|---|---|
+| write a file in the per-user temp root, which the profile does not grant: directly / through the tmux server | **refused** / **refused**: `error connecting to …/tmux-<uid>/default (Operation not permitted)`. No file appeared |
+| `yoloai ls`: directly / through the tmux server | **refused** (`open ~/.yoloai: operation not permitted`) / **refused**, the same socket error |
+| `kill -TERM` a process outside the sandbox that it did not start | **refused**, `Operation not permitted`. The process survived |
+| HTTPS to `example.com`; to `1.1.1.1` | **200; 301**. The network is open, as `limitations()` says |
+| list `~/.claude/projects`; read the first bytes of **another** project's transcript | **42 directories listed; the other project's transcript read.** ⚠ Still open (SB4) |
 
-**What that means:**
+**Two Managers in one root** (profiles for `alpha` and `beta`, same project).
+`beta`'s engine stands in as a process running inside `beta`'s profile, in
+its own tmux session:
 
-1. **The broker can be bypassed.** A Manager that can run `yoloai` through
-   tmux can create a Worker without passing validation. The broker's own
-   commit states the design rule: *"the sandboxed process must not be able to
-   obtain, BY ASKING, the capability the sandbox removed"*. Through tmux it
-   does not even have to ask.
-2. **`enclosure.limitations()` overclaims.** It tells the operator on every
-   run that other projects on the machine "are NOT reachable — that is what
-   this does buy". Through tmux they are reachable. And `~/.claude` is
-   readable, which includes other projects' transcripts.
-3. **One Manager can kill another**, or any process the operator owns. The
-   `(allow signal)` line has no target filter.
+| probe, from inside `alpha`'s profile | result |
+|---|---|
+| `kill -TERM` `beta`'s engine (the pane's pid) | **refused**, `Operation not permitted`. `beta`'s engine survived |
+| `tmux send-keys -t beta …`; `tmux kill-session -t beta` | **refused**, the socket error. `beta`'s session survived both |
+| control: `beta` kills its own child | **succeeded**. Same-sandbox signalling still works, which a Manager needs |
+| write a file into `.rite/managers/beta/` | ⚠ **succeeded**. Each profile grants the whole project tree |
 
-⚠ **This is shipped v0.6.0 code, and this plan changes none of it.** It has
-been raised as a separate task, with the probes, so the v0.6.0 session that
-owns `enclosure.py` can fix it or change what the announcement says. Tracks SB
-and MM below say what remains for v0.7.0 whichever happens.
+So **§5.4.8's P2 (process separation) holds on `main`**, by exactly the two
+mechanisms the property names. **P1 (state separation) does not**, and the
+profile is not what could make it hold. See track MM.
 
-### 0.3 Measured today: the same line leaks both, and loopback confinement closes both
+### 0.3 The network and the tmux route are separable, and were separated
 
-Same method. Only one line of the composed profile was changed, from
-`(allow network*)` to `(allow network-outbound (remote ip "localhost:*"))`:
+The first version of this plan measured that `(allow network*)` grants the
+tmux socket (a Unix-domain socket counts as network in seatbelt), and that
+loopback-only confinement closed both. It concluded that the broker's
+unfinished half and egress were **one problem**, which would close together.
 
-| probe | shipped profile | loopback-only variant |
-|---|---|---|
-| HTTPS to `example.com` | 200 | **refused**, curl exit 6 (the name lookup is blocked) |
-| HTTPS to `1.1.1.1` | 301 | **refused**, curl exit 7 (the connection is blocked) |
-| HTTP to a server on `127.0.0.1` | 200 | **200** |
-| `tmux list-sessions` on the private socket | listed | **refused**, `Operation not permitted` |
-| `kill -TERM` an outside process | succeeded | **succeeded**: signal is a separate line |
+⚠ **That conclusion was wrong, and `9862b59` is the disproof.** The socket was
+closed **without touching `(allow network*)`**, by denying its path:
 
-**This is why the broker's unfinished half and egress control are one
-problem.** `(allow network*)` covers Unix-domain sockets as well as IP, so the
-one grant hands a Manager both the outside network and the tmux server that
-runs commands outside the boundary. Take the grant away and both close
-together.
+    (deny network-outbound (subpath "<TMUX_TMPDIR>/tmux-<uid>"))
+    (deny file-read* file-write* (subpath "<TMUX_TMPDIR>/tmux-<uid>"))
 
-⚠ **But the variant cannot ship on its own.** It also removes everything a
-Manager legitimately reaches off-machine: the ticket backend, a hosted model
-API, `git push`, Slack. That is exactly the gap an egress proxy fills (track
-EG). **What is measured is the kernel side only.** No engine, `git` or `gh`
-has been run through a proxy under this profile.
+placed **last**, because seatbelt takes the last matching rule and the
+profile grants `/tmp` wholesale further up. The outside network and loopback
+both still answer (0.2, probe 4). **So track SB and track EG sequence
+independently.** EG is no longer the thing that closes a known escape, and SB
+does not wait for it.
 
-### 0.4 Measured today: seatbelt cannot name a destination
+The first measurement still holds as a fact about the kernel. The loopback
+variant refused outside hosts (curl exit 6 by name, exit 7 by address), kept
+loopback (200), and refused the tmux socket. It is still the most likely
+shape for a Manager's egress (EG3). It is no longer the only way to close
+the tmux route.
 
-A profile containing `(allow network-outbound (remote ip "1.1.1.1:443"))` is
-**rejected at load**: `sandbox-exec: host must be * or localhost in network
-address`, exit 65.
+### 0.4 What a seatbelt profile can say about the network
 
-So **no seatbelt profile can express a destination list.** It has two
-positions only: everything, or loopback. D-30 already says seatbelt has no
-network *isolation*; this is the narrower and more useful fact that it *does*
-have loopback confinement and nothing between. Anything finer for a Manager has
-to be enforced by something the Manager's traffic passes through, outside the
-boundary.
+Two things were measured (the second on `9862b59`):
+
+- **An IP destination can only be `*` or `localhost`.** A profile containing
+  `(remote ip "1.1.1.1:443")` is rejected at load: `sandbox-exec: host must be
+  * or localhost in network address`.
+- **A Unix-socket destination can be named by path.**
+  `(deny network-outbound (subpath …))` loads and is enforced. It is how the
+  tmux socket is denied on `main` today.
+
+⚠ **So the earlier sentence "no seatbelt profile can express a destination
+list" was too broad.** For **IP** destinations it is true: everything, or
+loopback. For **local sockets** the profile can allow or refuse by path. The
+conclusion for egress survives: a list of *hosts* cannot live in a Manager's
+profile, and has to be enforced by something outside it that the Manager's
+traffic passes through. But it changes what that something must carry (track
+EG): **local-socket destinations can be refused in the profile itself**, and
+only IP traffic needs the proxy.
+
+### 0.5 The record: what the first version measured on `b85e52e`
+
+Kept because it shipped. On `b85e52e`, a write the profile refused directly
+succeeded through the tmux server. `yoloai ls`, refused directly, listed every
+sandbox on the machine through it. And a blanket `(allow signal)` let the
+sandbox kill a process outside it. `limitations()` told the operator other
+projects were unreachable. `7b5462d` corrected the claim, and `9862b59` closed
+both holes with before-and-after measurements.
 
 ---
 
@@ -186,13 +205,15 @@ This is what the specs below build on. Each line is checked against the code.
   voids that sentence, and neither was ever marked. The D-62 cell is narrowed
   in `SPEC.md` by this plan, and the idempotence argument per name is owed
   (MM6).
-- ⚠ **The sandbox does not separate Managers from each other.** Each Manager's
-  profile grants the **whole project tree** (`enclosure.compose`). Two
-  Managers in one root can each write the other's `.rite/managers/<other>/`.
-  The boundary separates *projects*, not the Managers inside one. That is not
-  a defect in B9, whose purpose was the operator's home. It does mean the
-  profile is **not** what enforces "strictly separated", and nothing should
-  cite it as though it were.
+- **The sandbox separates Managers' processes, and not their files.**
+  Measured on `9862b59` (part 0.2): from inside Manager `alpha`'s profile,
+  killing `beta`'s engine and driving or killing `beta`'s tmux session were
+  all refused, and `beta` survived. That is `(target same-sandbox)` and the
+  socket denial. But each profile grants the **whole project tree**
+  (`enclosure.compose`), and `alpha` wrote into `.rite/managers/beta/`. That
+  is not a defect in B9, whose purpose was the operator's home. It does mean
+  the profile enforces the *process* half of "strictly separated" and not
+  the *state* half, and nothing should cite it for the second.
 
 ### The requirement, as properties — SPEC §5.4.8
 
@@ -202,8 +223,8 @@ each with the thing that would enforce it and its state today. Summarised:
 | # | property | enforced by | state on `main` |
 |---|---|---|---|
 | P1 | No rite command acting as Manager A writes rite state belonging to Manager B | the name-to-path join (§5.4.2), plus a test over the command surface (§5.4.7) at **Manager** granularity | ❌ most per-project state is still flat in `.rite/` (MM1); the §5.4.7 test does not exist |
-| P2 | Manager A's processes cannot signal or drive Manager B's | the profile's `signal` target, and the tmux server being out of reach | ❌ **measured open**, part 0.2. `pkill -f goose` from one Manager's "cleanup" kills its siblings, which is the accident this decision is about |
-| P3 | State shared by decision is written only through its locked writer, and the list of it is enumerated by a test | §5.4.6 | ⚠ §5.4.6's list still names the outbox, which has since moved per-Manager. No test enumerates the list |
+| P2 | Manager A's processes cannot signal or drive Manager B's | the profile's `signal` target, and the tmux server being out of reach | ✅ **holds on `main`**, measured between two Managers' profiles on `9862b59` (part 0.2). A "cleanup" `pkill -f goose` in one Manager cannot take down its siblings. Not yet pinned by a two-Manager test (MM5) |
+| P3 | State shared by decision is written only through its locked writer, and the list of it is enumerated by a test | §5.4.6 | ⚠ §5.4.6's list named the outbox, which has moved per-Manager. Struck from the list in SPEC 0.24.0. No test enumerates the list |
 | P4 | Releasing or destroying names the Manager whose thing it is | §5.4.3 | ❌ `Claim` has no manager field, so "release only my Manager's claims" cannot be expressed (MM3) |
 
 ⚠ **"By accident" sets the bar, and the bar is not "against a hostile
@@ -221,7 +242,7 @@ ordinary mistakes cannot cross: a wrong path join, a broad `pkill`, a
 | MM2 | **The §5.4.7 test, at Manager granularity.** Every leaf command, run as Manager A (with `RITE_MANAGER=A`) with hostile arguments, writes nothing under B's directory or B's instance files | The test exists, and a deliberately planted join that writes into B's directory fails it (mutation by backup copy, never a git restore, per the v0.6.0 plan's practice note) | MM1 | 1–2 sittings |
 | MM3 | **Claims carry the Manager.** A `manager` field on `Claim`. `force_release` scoped to it, with no default that matches across Managers | Two Managers hold claims on different paths; A's force-release by path refuses to touch B's and says whose it is | — | 1–2 sittings |
 | MM4 | **A home for per-instance configuration.** Decided: gitignored. Location: see MMQ1 | Per MMQ1's answer: a key set in the instance file changes one machine's Manager and appears in no `git status` | MMQ1 | 1 sitting |
-| MM5 | **Process separation (P2).** Signal limited to the Manager's own process tree. The tmux server out of reach. Shares its fix with SB1/EG3 | From inside Manager A's boundary: `kill` of B's engine pid refused; `tmux` against the server refused; A's own engine still completes a cycle, and A's Worker still starts through the broker | SB1 | 1 sitting beyond SB1 |
+| MM5 | **Pin P2 between two Managers.** The mechanism landed in `9862b59`. Its tests pin "a process outside the sandbox", not a sibling Manager's sandboxed process, and a later profile change (say, a shared grant for check-ins) could reopen the second without failing the first | A test composes two Managers' profiles in one root, runs B's stand-in engine inside B's profile, and asserts A's `kill` and A's `tmux` against B's session are refused and B survives. This plan's part 0.2 did the same by hand | — | ½ sitting |
 | MM6 | **The idempotence argument, per name.** §9.14.0 paid for amending D-50 with "one Manager per project". The code refuses per name. Write the per-name argument, including what fails closed (D-74) when two *different* Managers are asked for at once | NOT OBSERVABLE, review gate. §9.14.0 marked in place | — | ½ sitting |
 | MM7 | **`session_exists` gets its precondition (C12), before anything enumerates the tmux server.** A multi-Manager view is the first caller that asks about a name rite did not itself validate | Moot if C12 lands in 0.6.0. Otherwise `session_exists("eu:west")` refuses rather than answering False | — | ½ sitting |
 
@@ -262,6 +283,12 @@ both, and both act on it. That is a cross-Manager accident of exactly the kind
 shape disagree. Whichever is intended, the other should be corrected before
 v0.6.0 tags. This plan changes neither, because both belong to the Slack
 track.
+
+✅ **Settled for v0.6.0 by A6 (2026-09-25): per PROJECT**, because option (a)'s
+own "turns on" is decisive — one DM per user and app. The keys are now
+`slack.owner_user` and `slack.broadcast_channel`, and `command_channel` is
+refused by the parser (D-95). **MMQ2 itself stays open:** two Managers in one
+root still both read the one DM, which is this question's accident.
 
 **MMQ3. The worker cap's third denominator** (`V070_MULTI_MANAGER.md` Q2).
 Per-project and machine-wide exist. Per-Manager does not. Options: (a) no
@@ -426,7 +453,7 @@ open.
 | Worker, apple/podman/containerd | same flags | a guardrail only: the sandbox holds `NET_ADMIN` and can flush the rules | read, same |
 | **Worker, seatbelt (rite's default `sandbox.backend`)** | none | `--network-isolated` is **refused** | read, same. D-30 |
 | every backend | `--network-none` | nothing leaves | read, same |
-| **Manager** (seatbelt, on the host, B9) | its profile | **everything, or loopback only.** A named host is rejected at load | **measured**, part 0.3 and 0.4 |
+| **Manager** (seatbelt, on the host, B9) | its profile | **IP: everything, or loopback only.** A named host is rejected at load. **Local sockets: allowed or refused by path**, as the tmux socket is refused on `main` | **measured**, part 0.3 and 0.4 |
 
 ⚠ **Two consequences a reader must not miss:**
 
@@ -441,16 +468,29 @@ open.
 
 ### The Manager: loopback confinement plus a proxy outside the boundary
 
-Part 0.4 rules out a destination list inside the profile. Part 0.3 shows the
-profile *can* confine the Manager to loopback. The shape that follows is a
-**forward proxy, run by the supervisor outside the boundary**, listening on
-loopback. The Manager's profile allows only loopback, and the proxy allows only
-the sanctioned destinations. A client that ignores `HTTPS_PROXY` cannot reach
-anything, which **fails closed**.
+Part 0.4 rules out a list of **hosts** inside the profile. Part 0.3 shows the
+profile *can* confine the Manager's IP traffic to loopback. The shape that
+follows is a **forward proxy, run by the supervisor outside the boundary**,
+listening on loopback. The Manager's profile allows only loopback for IP, and
+the proxy allows only the sanctioned hosts. A client that ignores
+`HTTPS_PROXY` cannot reach anything, which **fails closed**.
 
-This shape is **inferred from two measurements, and is not a decision.** It is
-option (a) of EGQ1. Its side effect is the reason to prefer it: the same
-profile line closes the tmux escape (SB1).
+**The work divides by transport, and part 0.4 is why.** The profile can
+already name local sockets by path, so **local-socket destinations are
+decided in the profile** and never reach the proxy: the tmux socket is denied
+there today. Others (the name resolver's socket, the keychain's services,
+anything under `/private/var/run`) can be allowed or refused the same way.
+**Only IP traffic needs the proxy.** ⚠ Not measured: which local sockets a
+Manager's engines and tools need once IP is loopback-only. Name resolution
+is the obvious one. A client that goes through a CONNECT proxy should not
+need to resolve names itself, but that is unverified for every client in
+question.
+
+This shape is **inferred from measurements, and is not a decision.** It is
+option (a) of EGQ1. ⚠ The first version of this plan preferred it partly
+because the loopback line would also close the tmux escape. That reason is
+gone: `9862b59` closed the escape by denying the socket's path and left
+`(allow network*)` alone (part 0.3). EG3 now stands on egress alone.
 
 ### Tickets
 
@@ -459,7 +499,7 @@ profile line closes the tmux escape (SB1).
 | EG0 | **Measure first: which destinations do real runs reach?** `V070_EGRESS.md` Q5. The v0.5.1 and v0.6.0 acceptance runs, the benchmark, a Slack-connected run, and CU1 for Cursor. Derive the default list from what was observed, as C4's allowlist was derived from 14,981 recorded invocations | A committed data file of observed destinations per engine and role, and a test that requires every default entry to trace to it | — | 1–2 sittings |
 | EG1 | **The list is rite's vocabulary** in `config.yaml`: destinations as hosts (plus ports where needed), grouped by what they are for. No proxy or yoloAI syntax (`V070_EGRESS.md` Q2) | `rite doctor` renders the list and validates it with rite's own error wording. A proxy- or yoloAI-shaped key is refused | EGQ3 | 1 sitting |
 | EG2 | **Workers: enforce where the backend can, and say where it cannot.** Docker: pass the list as `--network-allow`. Seatbelt: rite states at start that Worker egress is **not controlled** on this backend, every run. It does not say "restricted" | A docker Worker is refused a destination off the list, and the refusal names it; a seatbelt project's start line says egress is uncontrolled | EG1, EGQ2 | 1–2 sittings |
-| EG3 | **Manager enforcement** per EGQ1. If (a): profile to loopback, proxy in the supervisor, `HTTPS_PROXY` in the engine's environment. **Also closes SB1** | A real Claude Manager and a real Goose Manager each complete a cycle, including a ticket read and a `git push` to the sanctioned remote. A request to an unlisted host is refused **and reported** (EG4). `tmux` from inside is refused | EG0, EG1, EGQ1 | 3–4 sittings |
+| EG3 | **Manager enforcement** per EGQ1. If (a): profile to loopback, proxy in the supervisor, `HTTPS_PROXY` in the engine's environment. Local sockets decided in the profile by path (part 0.4) | A real Claude Manager and a real Goose Manager each complete a cycle, including a ticket read and a `git push` to the sanctioned remote. A request to an unlisted host is refused **and reported** (EG4). `tmux` from inside is refused | EG0, EG1, EGQ1 | 3–4 sittings |
 | EG4 | **A refusal names the destination and the line that permits it**, the C21 shape (`V070_EGRESS.md` Q3). A client that fails on a refused CONNECT reports a network error that looks like an outage, so the report must come from rite's side, read from the proxy's log, not from the client's message | The refused host appears in the pane-side refusal line **and** in the next check-in digest, with the config line that would allow it | EG3 | 1 sitting |
 | EG5 | **Content scanning, on allowed destinations that publish, only** (D-100). The structural credential rule of `redact_secrets`/C7, not a list of token formats. **Model calls never scanned** | A token pasted into a `gh issue create` body on the sanctioned repo is caught and reported. An ordinary model request is not scanned, which the proxy's own counters show | EG3, EGQ5 | 2 sittings |
 | EG6 | **Demonstrable for the local tier.** With a local engine and an internal-only list, `rite doctor` shows the list and a live refusal of an outside host | On a local-tier project, doctor's output contains the policy and a refused probe to a public host | EG3 | ½ sitting |
@@ -508,18 +548,53 @@ sandboxed Worker (the kernel refuses a non-equivalent nested profile), so it
 asks, and the broker decides. That half is built and observed (`eb2a88e`,
 `4ebbbd7`).
 
-**What remains is that the boundary the broker sits behind is not closed.**
-Each item cross-references the track that closes it.
+⚠ **REVISED after review round one.** The first version listed seven items,
+three of them measured holes. `7b5462d` and `9862b59` closed those three
+(part 0.2 re-measured them). They are recorded as closed rather than deleted.
+And the first version said this track and egress were one problem. They are
+not (part 0.3), so **SB sequences independently of EG**.
+
+### Closed on `main`
+
+| # | what it was | closed by | re-measured on `9862b59` |
+|---|---|---|---|
+| ~~SB1~~ | the tmux server ran commands outside the boundary, so the broker could be bypassed | `9862b59`: the socket directory denied by path, placed last | ✅ a write and `yoloai ls` through tmux both refused with `Operation not permitted` |
+| ~~SB3~~ | a blanket `(allow signal)` could kill any process the operator owned | `9862b59`: `(target same-sandbox)` | ✅ an outside process and a sibling Manager's engine both survived, and a Manager's own child can still be signalled |
+| ~~SB6~~ | `limitations()` claimed other projects were unreachable | `7b5462d`, then `9862b59` | ✅ it now says the profile "bounds FILES, not capability", names `/tmp` as reachable, and describes the closed routes as "tried and refused" rather than as containment |
+
+### ⚠ Open, and the one to raise first: SB4, a live cross-project read
+
+**`~/.claude` is granted readable, whole.** Measured on `9862b59` from inside
+a Manager's profile: 42 project directories under `~/.claude/projects` were
+listed, and **another project's transcript was read.** A Claude transcript
+holds that project's prompts, tool output and file contents. So any Manager
+can read every other Claude Code project's history on the machine. That
+includes projects that are not rite projects, and ones the operator would
+never think of as "in reach".
+
+⚠ **`limitations()` does not say this in these words.** It says "your home
+outside the paths above … not reachable", and `~/.claude` is one of the paths
+above. That is literally true, and nobody reading it would conclude that
+every other project's transcripts are readable. The same class as the claim
+`7b5462d` corrected.
+
+**Why it was granted, and why narrowing is not a one-line fix:**
+`~/.claude` holds the engine's settings, its hooks and its session store, and
+the grant was needed for a Claude Manager to run at all. What is not measured
+is which parts it needs. **Narrow it by measurement, not by guess.** The
+`HOME` episode (B4d's correction) is the precedent: the plausible change there
+broke the Claude login.
+
+### Open
 
 | # | what remains | evidence | closed by |
 |---|---|---|---|
-| SB1 | **The tmux server runs commands outside the boundary**, so the broker can be bypassed (`yoloai` via `tmux new-window`) | measured, part 0.2 | the v0.6.0 task if it fixes it narrowly. Otherwise **EG3**: the loopback profile refuses the socket, measured in part 0.3 |
-| SB2 | **`(allow network*)`**: the whole network, and every Unix socket | the profile's own text. Measured, part 0.3 | **EG3**. Same line as SB1, which is why the two tracks are one problem |
-| SB3 | **Unfiltered `(allow signal)`**: kill any process the operator owns | measured, part 0.2 and 0.3 (the loopback variant does not change it) | **MM5** |
-| SB4 | **`~/.claude` is readable whole**, which includes every project's transcripts | measured, part 0.2 | a narrower grant. ⚠ Not measured: which parts of `~/.claude` a Claude Manager needs. Measure before narrowing, or the login breaks the way `HOME` redirection broke it (B4d correction) |
+| **SB4** | **`~/.claude` readable whole**: every project's transcripts. See above | measured, part 0.2 | a grant narrowed to what a Claude Manager needs: its settings, its login-related files, and **this project's** transcript directory. ⚠ Measure the set first. Then observe a real Claude Manager completing a resumed cycle under the narrowed profile, and fail to read another project's transcript from inside it |
+| SB2 | **`(allow network*)`**: the whole network | the profile's text; probe 4 in part 0.2 | **EG3**, as egress work in its own right. No longer the fix for any escape (part 0.3) |
 | SB5 | **`(allow mach-lookup)` with no filter.** Claude Code on macOS keeps its login in the keychain, and `4ebbbd7` measured that the login is found inside the boundary, so at least that item is reachable. That is an inference, not a direct keychain probe. Not measured: whether a Manager can read **other projects'** rite credentials from it. The Worker-profile measurement (keychain content denied) does not carry over, because this profile differs | profile text | a measurement first. If reachable, per-service `mach-lookup` filtering, measured against the login |
-| SB6 | **`limitations()` overclaims** (part 0.2, point 2) | measured | the v0.6.0 task. If it ships unchanged, v0.7.0 corrects it before anything else in SB |
+| SB8 | **`/tmp` and `/private/tmp` are readable and writable**, and other rite worktrees and scratch directories live there | stated by `limitations()` itself, so disclosed rather than hidden | open, and not obviously closable: the engines need a temp space. The same measure-then-narrow method as SB4 |
 | SB7 | **Which Manager may ask for which Worker.** A request names a declared Worker and a ticket. With several Managers in one root, any Manager can ask for any declared Worker. Whether Workers belong to a Manager is not decided (SBQ1) | `broker.py` validates against project-level declarations | MM, after SBQ1 |
+| C24 | **A requested Worker starts at the cycle boundary**, deliberately | `V060_RELEASE_PLAN.md` C24; `supervise.py::_honour_worker_requests` | a decision, not a fix. See the consolidated list |
 
 **SBQ1. Do Workers belong to a Manager?** (a) No: Workers are project-level and
 fungible (§5.3.4), and any Manager may request any of them within the caps; (b)
@@ -609,6 +684,7 @@ it was recorded.
 | **The scenario gate** (§7.3, D-81) | v0.6.0 plan, Decision 5; SPEC 0.22.1 | Not costed, deliberately: it is a process change as much as a feature. **Needs its own design pass before a size**, and that pass must answer §9.15.3a's recorded gap first: the gate cannot reach journal entries, because they are machine-local and uncommitted |
 | **Relocate flat `.rite/` state per Manager** | §5.4.5 step 2; §9.14.9 item 3; `managers/__init__.py` ("until 0.6.0") | MM1. No v0.6.0 ticket carries it |
 | `V070_MULTI_MANAGER.md` Q1–Q4 | that note | MMQ3, MMQ4, MM, SB |
+| **C24: a requested Worker starts at the cycle boundary**, deliberately. Robert's to change | `V060_RELEASE_PLAN.md` C24, landed `5bda48a` after this plan's first version | **A decision, not a carried fix.** In the consolidated list as C24 |
 
 ### Becomes 0.7.0 if it does not land in 0.6.0
 
@@ -626,8 +702,7 @@ before planning around it.**
 | `journal.instructions()` spells out `--manager` | C13 |
 | Outbox retention policy, **undecided** | C23 |
 | A check-in window with no Manager running, **Robert to confirm** | K6 |
-| Whether §6.6's normalisation extends to Slack text, **Robert to confirm** | the SPEC records it as an inference |
-| Where N1/N2 land, **Robert to confirm** | the v0.6.0 plan's part N |
+| N1/N2, ticket-text cleanup and phrase reporting. **Placed last in v0.6.0 and droppable** (Robert's ruling, `beac07f`). If they are dropped for quota, they arrive here. Applying §6.6 to Slack text is accepted | the v0.6.0 plan's part N |
 
 ### Deferred without a release, and at risk of evaporating
 
@@ -651,18 +726,19 @@ before planning around it.**
 | S2 | `SPEC.md` §5.4.5 | "there is no per-Manager directory … no `RITE_MANAGER`" | **Corrected**: banner saying both exist and step 2 does not |
 | S3 | `SPEC.md` §5.4.6 | lists the outbox as shared, and it is now per-Manager (`mailbox.py`) | **Corrected** in place |
 | S4 | `SPEC.md` §9.14.0 / D-62 | "at most one Manager session per project"; code refuses per name | **D-62 narrowed**. §9.14.0's argument owed as MM6 |
-| S5 | `enclosure.limitations()` | "other projects … NOT reachable" | **Not changed**: v0.6.0 code. Raised as a separate task |
-| S6 | `CHANGELOG.md` Unreleased | "A Manager remains **unsandboxed**" in the allowlist entry, now false after `4ebbbd7` | **Not changed**: the release notes belong to the 0.6.0 session. Reported |
-| S7 | `V060_RELEASE_PLAN.md` B9 row | "MEASURED NOT POSSIBLE as specified", with no note that the broker shape was built | **Not changed**: the active release's plan. Reported |
+| S5 | `enclosure.limitations()` | "other projects … NOT reachable" | **Closed on `main`** by `7b5462d`/`9862b59`, re-measured (part 0.2). One gap remains: it does not name other projects' **transcripts** under `~/.claude` (SB4) |
+| S6 | `CHANGELOG.md` Unreleased, and `README.md`'s "Why you might not want it" | "A Manager remains **unsandboxed**" (CHANGELOG), and "no permission gate, unsandboxed" (README heading), both false since the allowlist and `4ebbbd7` | **Corrected** after review round one. Unreleased also gains an entry for the Manager boundary itself, which the 0.6.0 release notes did not mention at all |
+| S7 | `V060_RELEASE_PLAN.md` B9 row | "MEASURED NOT POSSIBLE as specified", with no note that the broker shape was built | **Corrected** after review round one: a DONE note naming `eb2a88e`, `4ebbbd7`, `7b5462d` and `9862b59`, with the original text kept |
 | S8 | `spikes/B9-manager-sandboxing.md` | its `HOME` section still says to point `HOME` at the sandbox, the advice `4ebbbd7` corrected in B4d. No banner saying the broker was built | **Corrected**: banner added |
 | S9 | `spikes/B4d-…md` section 3 | "Managers do NOT run sandboxed" | **Corrected**: banner line |
 | S10 | `spikes/A3a-slack-transport.md`, `A3b-…md` | "the proof is NOT made". The plan records A3a done (0.24 s) | **Corrected**: banner added |
 | S11 | `spikes/RL-T0-agent-comparison.md` section 6 | `GOOSE_MODE=auto` "not directly probed"; B4d probed it | **Corrected**: pointer added |
 | S12 | `V070_MEMORY.md`, `V080_RELAY_CHANNELS.md` status paragraphs | say the other notes are in gitignored `.docs/` | **Corrected** |
 | S13 | `V070_MULTI_MANAGER.md` "Status of the file itself" | says it does not reach a fresh clone | **Corrected** |
-| S14 | `carried-limitations-register.md` D1 | "no `RITE_PROJECT_ROOT` env var exists". It does (`cli/main.py`, `PROJECT_ROOT_ENV`) | **Not changed**: the register's rule is that only a named run clears an entry. Reported |
+| S14 | `carried-limitations-register.md` D1 | "no `RITE_PROJECT_ROOT` env var exists". It does, and the marker is now a file rather than the bare directory (`cli/main.py`, `_find_project_root`) | **Annotated** after review round one: both suggested fixes are in the code. **The entry stays OPEN**, because the register's rule is that only a named run clears it |
 | S15 | `V070_EGRESS.md` | open question 1's premise (no Manager sandbox) | **Corrected**: banner pointing at §5.5 and this plan |
-| S16 | `V060_RELEASE_PLAN.md` A6 vs `1cee54c` | A6 says per-Manager keys under `manager_roles[]`. What shipped is one project-level `slack:` section | **Not changed**: the Slack track's. Reported, and MMQ2 |
+| S16 | `V060_RELEASE_PLAN.md` A6 vs `1cee54c` | A6 says per-Manager keys under `manager_roles[]`. What shipped is one project-level `slack:` section | **Annotated** after review round one: A6 says what shipped, and that per-Manager keys are an open 0.7.0 question (MMQ2). Neither shape is declared the intended one, because that is MMQ2's answer |
+| S17 | this plan's own first version | part 0.2's three holes, part 0.3's "one problem", "no seatbelt profile can express a destination list", SB1/SB3/SB6 open, and SPEC §5.4.8 saying none of the four properties hold | **Corrected** after review round one, by re-measuring against `9862b59` (part 0) |
 
 ---
 
@@ -678,12 +754,13 @@ before planning around it.**
 | CUQ1 | Cursor for Workers | — |
 | CUQ2 | Cursor's credential route | CU4 |
 | CUQ3 | if `-p` takes argv only | CU2, after CU1 |
-| EGQ1 | how the Manager's egress is enforced | EG3, and SB1/SB2 if the v0.6.0 fix is narrow |
+| EGQ1 | how the Manager's egress is enforced | EG3 (and SB2) |
 | EGQ2 | seatbelt projects and a configured list | EG2 |
 | EGQ3 | the list: committed, or per-instance | EG1 |
 | EGQ4 | redirects/DNS under iptables | EG2's documentation |
 | EGQ5 | which allowed destinations publish | EG5 |
 | SBQ1 | do Workers belong to a Manager | SB7 |
+| **C24** | **Should a Worker requested mid-cycle start at once, or at the cycle boundary as it does now?** (a) At the boundary, as shipped: the cost is latency, which the Manager's prompt tells it about. (b) At once: `rite sandbox start` takes tens of seconds, so it has to run without blocking the supervisor's two-second poll (a thread or a watched subprocess), and a cycle that ends mid-launch needs a defined meaning. What turns on it: how much machinery goes into the one loop 0.6.0 spent its time simplifying. It also interacts with CU3, which adds a second piece of pre-launch work (Cursor's mint) to the same supervisor | nothing blocks on it. It is already behaviour, and Robert's to change (`V060_RELEASE_PLAN.md` C24) |
 | MEQ1 | where memory sits relative to Robert's test and K3 | memory's ask-time path |
 | `V070_MEMORY.md` Q1–Q7 | memory's architecture | any memory spec |
 | — | the Worker tier's release | B5, harness |
@@ -695,10 +772,12 @@ ME0–ME3, SB4/SB5's two measurements. None needs a decision, and all can run
 while the decisions above are asked.
 
 **Then** MM1 → MM2, MM3 (independent of every decision except MMQ1 for MM4);
-**then** EG1 → EG3 → EG4, which closes SB1/SB2 and enables MM5; **then** CU2 →
-CU6; EG2, EG5, EG6 as their questions land.
+**then** EG1 → EG3 → EG4; **then** CU2 → CU6; EG2, EG5, EG6 as their
+questions land. **SB4 and MM5 do not wait for egress.** The first version
+sequenced them behind EG3 on the "one problem" reading, which part 0.3
+withdraws. SB4 comes first in SB, because it is a live cross-project read.
 
-**The coherent minimum:** MM1–MM3, MM5, EG0, EG1, EG3, EG4. That is "several
+**The coherent minimum:** MM1–MM3, MM5, SB4, EG0, EG1, EG3, EG4. That is "several
 Managers in one root cannot disturb each other by accident, and a fooled
 Manager cannot send anything off-list". Cursor and memory can slip whole
 without leaving anything half-built. **Egress cannot ship without EG4**: a

@@ -321,7 +321,7 @@ guide](docs/guide.md)); watching the queue (0.5.0, above).
 
 ## Why you might not want it
 
-**A Manager runs with no permission gate, unsandboxed, on your machine.**
+**A Manager runs on your machine with your network access, behind an allowlist and a sandbox that are guard rails, not containment.**
 `rite start <manager>` launches Claude Code against a **permission
 allowlist**: a generous list of command families the Manager may run
 without asking, and a refusal for anything else. Nothing waits for an

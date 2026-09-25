@@ -9,9 +9,10 @@ scope of content scanning are now DECIDED and specified in SPEC §5.5 (D-99,
 D-100).** Planning and the open questions that remain are in
 `V070_RELEASE_PLAN.md`, tracks EG and SB. **Open question 1's premise below
 ("the Manager does not have one") is stale.** Since B9 a Manager runs inside
-a seatbelt profile. It was measured that such a profile can confine to
-loopback and nothing finer, so the Manager's list must be enforced outside
-its boundary.
+a seatbelt profile. Measured: for IP destinations such a profile can only
+allow everything or loopback, and it rejects a named host. So the Manager's
+list of hosts must be enforced outside its boundary. Local sockets it can
+refuse by path, and that is how the tmux socket is denied on `main`.
 
 ## The property
 
