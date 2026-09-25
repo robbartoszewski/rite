@@ -697,6 +697,15 @@ a line when it starts and another when it stops, so the last thing in your
 DM tells you whether anything is listening. The one exception is a
 `rite start` that is killed outright: it cannot post its stop line.
 
+**A check-in goes to your DM, and is mirrored to the broadcast channel.**
+The standup and the questions that survived are one message. It is posted
+in your DM, where a reply in its thread reaches the Manager as an
+instruction answering that check-in. A copy goes to the broadcast channel
+for everyone else to read, and replies under the copy reach the Manager as
+context, whoever types them. With no `owner_user`, the check-in is posted to
+the broadcast channel only, and says that answers there cannot instruct:
+answer with `rite message <manager> "…"` instead.
+
 **The first run does not replay history.** Turning Slack on starts reading
 from that run's start line, and replies already in the mailbox stay in
 `rite replies` rather than being posted.

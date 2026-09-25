@@ -528,6 +528,14 @@ def note(root: Path, manager: str, anchor: str, observed: str) -> str:
     return ""
 
 
+def is_checkin(root: Path, manager: str, outbox_name: str) -> bool:
+    """Was this outbox file a check-in? Read from the ledger, not the text."""
+    return any(
+        e.get("event") == "checkin" and e.get("outbox") == outbox_name
+        for e in ledger(root, manager)
+    )
+
+
 @dataclass(frozen=True)
 class Counts:
     """The filter's value, counted over one check-in period."""
@@ -597,8 +605,12 @@ def _deliver_checkin(root: Path, manager: str) -> str:
         lines.append(f"- withdrawn {e.get('id')}: answered by {e.get('answered_by')}")
     if survivors:
         lines += ["", "Questions held for this check-in:", *_question_lines(survivors)]
-    send(root, manager, OUTBOX, "\n".join(lines))
+    path = send(root, manager, OUTBOX, "\n".join(lines))
     now = time.time()
+    # Which outbox file IS a check-in, kept here rather than in the message
+    # (which stays identity-free, Decision 1a): the Slack relay roots the
+    # answer thread on it and mirrors it to the broadcast channel (K5).
+    record(root, manager, {"event": "checkin", "at": now, "outbox": path.name})
     for q in survivors:
         record(
             root, manager, {"event": "asked", "id": q.id, "at": now, "how": "checkin"}
