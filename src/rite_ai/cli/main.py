@@ -6564,6 +6564,7 @@ def ask(question: str, defer: bool, meanwhile: str, manager: str) -> None:
                 [q],
                 f"The Manager {asking!r} deferred this to a check-in, but "
                 f"there is none to wait for ({state.line}), so it is asked now:",
+                how="no-window",
             )
             click.echo(
                 f"asked NOW, not deferred: {state.line}. Configure "
@@ -6572,13 +6573,76 @@ def ask(question: str, defer: bool, meanwhile: str, manager: str) -> None:
         else:
             q = checkins.defer(root, asking, question, meanwhile)
             click.echo(
-                f"deferred as {q.id} — {state.line}. It is asked at the "
-                "first cycle boundary inside a check-in window, or at once if "
-                "your loop goes idle first."
+                f"deferred as {q.id} — {state.line}. At the check-in you "
+                "re-read it first and withdraw it if you have answered it "
+                "yourself; otherwise it is asked. It is asked at once if your "
+                "loop goes idle first."
             )
     warning = full_warning(prune(root, asking, OUTBOX), asking)
     if warning:
         click.echo(warning, err=True)
+
+
+@cli.group()
+def question() -> None:
+    """Questions a Manager deferred to a check-in (plan § K3)."""
+
+
+@question.command("withdraw")
+@click.argument("question_id")
+@click.option(
+    "--answered-by",
+    "answered_by",
+    default="",
+    help="Where the answer came from, as something a reader can check: a "
+    "commit SHA, a file and line, a ticket id, a command and its output.",
+)
+@click.option(
+    "--manager",
+    default="",
+    help="Which Manager deferred it. Inside a Manager's own session it "
+    "defaults to that Manager and can be left out.",
+)
+def question_withdraw(question_id: str, answered_by: str, manager: str) -> None:
+    """Withdraw a deferred question you have since answered yourself.
+
+    ⚠ **An anchor is required, through the journal's anchor floor.** "I
+    worked it out" is not an answer anybody can check. A withdrawal the User
+    cannot check is a question that silently disappeared.
+
+    Examples:
+      rite question withdraw q3fa9c1 --manager planner \\
+          --answered-by "docs/adr/0004-storage.md:12 chooses SQLite"
+    """
+    from rite_ai.managers import checkins, current_manager
+
+    root = _require_project_root()
+    speaking = (manager or "").strip() or current_manager()
+    if not speaking:
+        click.echo(
+            "refusing to withdraw: no --manager, and this process is not "
+            "running as one (no RITE_MANAGER in the environment).",
+            err=True,
+        )
+        raise SystemExit(1)
+    roles, problems = _manager_roles(root)
+    if problems:
+        click.echo("cannot read this project's Managers:", err=True)
+        for problem in problems[:3]:
+            click.echo(f"  {problem}", err=True)
+        raise SystemExit(1)
+    if speaking not in {r.name for r in roles}:
+        known = ", ".join(sorted(r.name for r in roles)) or "none declared"
+        click.echo(f"no Manager named {speaking!r} in this project — {known}", err=True)
+        raise SystemExit(1)
+    refused = checkins.withdraw(root, speaking, question_id, answered_by)
+    if refused:
+        click.echo(refused, err=True)
+        raise SystemExit(1)
+    click.echo(
+        f"withdrew {question_id} — answered by {answered_by}. It will not be "
+        "asked, and the check-in says it was withdrawn and why."
+    )
 
 
 @cli.command("message")

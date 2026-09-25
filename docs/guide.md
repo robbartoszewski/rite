@@ -264,8 +264,24 @@ costs you thirty seconds. So every doubt ends in asking:
   blocking after all. They are asked at once, with a line saying the deferral
   was wrong, in the message and in `rite start`'s output.
 
-A deferred question waits in `.rite/managers/<name>/checkins/queue/`, and is
-asked at the first cycle boundary inside a check-in window.
+A deferred question waits in `.rite/managers/<name>/checkins/queue/`.
+
+**At the check-in it is re-read before it is asked.** At the first cycle
+boundary inside a window, the Manager's instruction carries what it deferred,
+with one directive: withdraw any you can now answer yourself. A withdrawal
+must say where the answer came from, through the same anchor rule as the
+journal:
+
+    rite question withdraw q3fa9c1 --answered-by "docs/adr/0004-storage.md:12 chooses SQLite"
+
+What is not withdrawn is asked when that cycle ends, whatever the ending.
+Every check-in counts what the filter did, so whether deferral filters
+anything is measured, not assumed:
+
+```text
+Deferred questions since the last check-in: 2 queued, 1 withdrawn by the Manager before asking, 1 asked now.
+  withdrawn q5f9f54: answered by docs/adr/0004-storage.md:12 chooses SQLite
+```
 
 ## What runs on its own
 

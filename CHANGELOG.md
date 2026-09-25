@@ -168,6 +168,13 @@ queued, they are asked at once, with a line saying the deferral was wrong.
 Every Manager is told, every cycle: ask now unless the question is clearly
 deferrable; if you are unsure whether it blocks you, it blocks you.
 
+At the check-in, deferred questions go back to the Manager first, and it
+withdraws any it has answered itself with
+`rite question withdraw <id> --answered-by <anchor>`. A withdrawal without
+an anchor is refused. What survives is asked, and every check-in counts
+queued, withdrawn and asked, so whether deferral filters anything is
+measured.
+
 ## 0.5.1 (2026-09-21)
 
 ### Talk to a running Manager — `rite connect <manager>`

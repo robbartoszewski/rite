@@ -184,9 +184,12 @@ def _question_lines(questions: list[Question]) -> list[str]:
 
 
 def ask_now(
-    root: Path, manager: str, questions: list[Question], why: str
+    root: Path, manager: str, questions: list[Question], why: str, how: str
 ) -> Path | None:
     """Send these questions to the User NOW, as one message, with `why`.
+
+    `how` is recorded with each (`idle`, `no-window`), so the counts at the
+    next check-in can say how many were asked early, and why.
 
     ⚠ **Sent BEFORE the queue files are removed.** A crash between the two
     asks a question twice, which is recoverable. The other order can lose
@@ -200,7 +203,7 @@ def ask_now(
     path = send(root, manager, OUTBOX, text)
     now = time.time()
     for q in questions:
-        record(root, manager, {"event": "asked", "id": q.id, "at": now, "why": why})
+        record(root, manager, {"event": "asked", "id": q.id, "at": now, "how": how})
         try:
             q.path.unlink()
         except FileNotFoundError:
@@ -226,7 +229,9 @@ def idle_with_questions_queued(root: Path, manager: str) -> str:
         "then ran out of work with them still waiting. So at least one of "
         "them was blocking it after all and the deferral was wrong. Asking "
         "now instead of at the check-in:",
+        how="idle",
     )
+    _clear_reevaluation(root, manager)
     return (
         f"the loop went idle with {len(waiting)} deferred question(s) queued "
         f"for {manager!r} — the deferral was wrong about at least one, so they "
@@ -268,33 +273,245 @@ def windows(root: Path) -> Windows:
     )
 
 
-def deliver_at_checkin(root: Path, manager: str) -> str:
-    """At a cycle boundary inside a check-in window, ask what is queued.
+REEVALUATING_FILENAME = "reevaluating.json"
+LAST_CHECKIN_FILENAME = "last.json"
 
-    Called at EVERY cycle boundary, and a no-op outside a window or with
-    nothing queued. Returns the line to say, or "".
 
-    ⚠ **This is the delivery that makes a deferral whole.** A queue that
-    never delivers holds questions a Manager believes it asked, which the
-    plan calls worse than no queue. So delivery ships with the queue, not
-    after it.
+def _reevaluating_path(root: Path, manager: str) -> Path:
+    return _checkins_dir(root, manager) / REEVALUATING_FILENAME
+
+
+def _reevaluating(root: Path, manager: str) -> bool:
+    """Has a re-evaluation cycle been composed and not yet delivered?"""
+    return _reevaluating_path(root, manager).exists()
+
+
+def _clear_reevaluation(root: Path, manager: str) -> None:
+    try:
+        _reevaluating_path(root, manager).unlink()
+    except FileNotFoundError:
+        pass
+
+
+def _last_checkin(root: Path, manager: str) -> float:
+    """When the last check-in was delivered, or 0.0 if none ever was."""
+    try:
+        data = json.loads(
+            (_checkins_dir(root, manager) / LAST_CHECKIN_FILENAME).read_text()
+        )
+        return float(data.get("at") or 0.0) if isinstance(data, dict) else 0.0
+    except (OSError, ValueError, TypeError):
+        return 0.0
+
+
+@dataclass(frozen=True)
+class Boundary:
+    """What a cycle boundary does about check-ins.
+
+    `instruction` is appended to this cycle's instruction ("" for none) and
+    `said` is the line for the terminal ("" for none)."""
+
+    instruction: str = ""
+    said: str = ""
+
+
+def at_boundary(root: Path, manager: str) -> Boundary:
+    """Called at EVERY cycle boundary, before the cycle is launched.
+
+    ⚠ **THE QUEUE IS A DRAFT.** Inside a window with questions queued, they
+    are not asked yet. This cycle's instruction carries them, with one
+    directive: withdraw any you can now answer. What survives is asked when
+    the cycle ends (`after_cycle`). A question queued at 10:00 may have been
+    answered by the Manager itself by 14:00, and an orchestrator's
+    asked-then-retracted churn should never reach the User.
+
+    A marker left by a re-evaluation that was never delivered (a run killed
+    mid-cycle) is delivered here, at once, rather than re-evaluated again:
+    the Manager has already had its chance to withdraw.
     """
+    if _reevaluating(root, manager):
+        said = _deliver_checkin(root, manager)
+        return Boundary(said=said)
     waiting = queued(root, manager)
-    if not waiting:
-        return ""
-    state = windows(root)
-    if not state.open_now:
-        return ""
-    ask_now(
-        root,
-        manager,
-        waiting,
-        f"Check-in — questions the Manager {manager!r} held for this window:",
+    if not waiting or not windows(root).open_now:
+        return Boundary()
+    write_atomic(
+        _reevaluating_path(root, manager),
+        json.dumps({"ids": [q.id for q in waiting], "at": time.time()}) + "\n",
     )
+    return Boundary(
+        instruction=_reevaluation_instruction(root, manager, waiting),
+        said=(
+            f"check-in: {len(waiting)} deferred question(s) go to {manager!r} "
+            "to re-read first; what it does not withdraw is asked when this "
+            "session ends"
+        ),
+    )
+
+
+def after_cycle(root: Path, manager: str) -> str:
+    """Called when EVERY cycle ends: deliver a re-evaluation's survivors.
+
+    Whatever the ending — finished, quit, crashed — the questions go out.
+    A crash is not a reason to leave the User unasked."""
+    if not _reevaluating(root, manager):
+        return ""
+    return _deliver_checkin(root, manager)
+
+
+def _reevaluation_instruction(root: Path, manager: str, waiting: list[Question]) -> str:
+    """The directive the re-evaluation cycle carries."""
+    from rite_ai import own_command
+
+    rite = own_command()
+    return "\n".join(
+        [
+            "",
+            "",
+            "## Check-in: re-read the questions you deferred, before they are asked",
+            "",
+            "A check-in window is open. These are the questions you deferred "
+            "to it. Before they reach the User, WITHDRAW ANY YOU CAN NOW "
+            "ANSWER YOURSELF, because you found the answer or it no longer "
+            "needs deciding, and say where the answer came from:",
+            f"  {rite} question withdraw <id> --manager {manager} "
+            '--answered-by "<anchor>"',
+            "An anchor is something a reader can check: a commit SHA, a file "
+            'and line, a ticket id, a command and its output. "I worked it '
+            'out" is not one, and a withdrawal without an anchor is refused.',
+            "",
+            "Withdraw only what you can answer. Every question you do not "
+            "withdraw is asked when this session ends, so leave anything you "
+            "are unsure about.",
+            "",
+            *_question_lines(waiting),
+            "",
+        ]
+    )
+
+
+def withdraw(root: Path, manager: str, qid: str, answered_by: str) -> str:
+    """Withdraw a queued question the Manager has answered itself.
+
+    Returns a refusal, or "" when it was withdrawn. The anchor goes through
+    the journal's floor (`anchor_problem`): the same rule, not a copy.
+    """
+    from rite_ai.managers.journal import anchor_problem
+
+    problem = anchor_problem(
+        answered_by,
+        "withdraw a question",
+        "a withdrawal",
+        "asking the question",
+    )
+    if problem:
+        return problem
+    for q in queued(root, manager):
+        if q.id == qid:
+            record(
+                root,
+                manager,
+                {
+                    "event": "withdrawn",
+                    "id": q.id,
+                    "at": time.time(),
+                    "answered_by": answered_by,
+                },
+            )
+            try:
+                q.path.unlink()
+            except FileNotFoundError:
+                pass
+            return ""
+    waiting = ", ".join(q.id for q in queued(root, manager)) or "none"
     return (
-        f"check-in: asked {len(waiting)} deferred question(s) from {manager!r} "
-        "(`rite replies` shows them)"
+        f"no queued question {qid!r} for {manager!r} — it may already have "
+        f"been asked. Queued now: {waiting}"
     )
+
+
+@dataclass(frozen=True)
+class Counts:
+    """The filter's value, counted over one check-in period."""
+
+    queued: int = 0
+    withdrawn: int = 0
+    asked: int = 0
+    asked_early: int = 0
+
+    def line(self) -> str:
+        """⚠ Stated in every check-in, so "deferral filters" is measured
+        rather than believed. If `withdrawn` stays near zero for weeks,
+        deferral is not filtering, and that is worth knowing."""
+        text = (
+            f"Deferred questions since the last check-in: {self.queued} "
+            f"queued, {self.withdrawn} withdrawn by the Manager before "
+            f"asking, {self.asked} asked now"
+        )
+        if self.asked_early:
+            text += (
+                f"; {self.asked_early} asked early, because the loop went "
+                "idle or no window was open to wait for"
+            )
+        return text + "."
+
+
+def _counts_since(root: Path, manager: str, since: float, asking: int) -> Counts:
+    """Count the ledger since `since`. `asking` is how many are being asked
+    at this check-in, which have no `asked` event yet."""
+    events = [e for e in _ledger(root, manager) if float(e.get("at") or 0) > since]
+    return Counts(
+        queued=sum(1 for e in events if e.get("event") == "queued"),
+        withdrawn=sum(1 for e in events if e.get("event") == "withdrawn"),
+        asked=asking,
+        asked_early=sum(
+            1 for e in events if e.get("event") == "asked" and e.get("how") != "checkin"
+        ),
+    )
+
+
+def _deliver_checkin(root: Path, manager: str) -> str:
+    """Ask what survived the re-evaluation, as one message, with the counts.
+
+    ⚠ **A check-in where every question was withdrawn is still delivered.**
+    Its message is the count, and it is the evidence that the filter
+    filtered.
+    """
+    from rite_ai.managers.mailbox import OUTBOX, send
+
+    survivors = queued(root, manager)
+    since = _last_checkin(root, manager)
+    counts = _counts_since(root, manager, since, len(survivors))
+    withdrawn = [
+        e
+        for e in _ledger(root, manager)
+        if e.get("event") == "withdrawn" and float(e.get("at") or 0) > since
+    ]
+    lines = [f"Check-in — {manager}", "", counts.line()]
+    for e in withdrawn:
+        lines.append(f"  withdrawn {e.get('id')}: answered by {e.get('answered_by')}")
+    lines.append("")
+    if survivors:
+        lines.append("Questions held for this check-in:")
+        lines.extend(_question_lines(survivors))
+    else:
+        lines.append("No questions left to ask.")
+    send(root, manager, OUTBOX, "\n".join(lines))
+    now = time.time()
+    for q in survivors:
+        record(
+            root, manager, {"event": "asked", "id": q.id, "at": now, "how": "checkin"}
+        )
+        try:
+            q.path.unlink()
+        except FileNotFoundError:
+            pass
+    write_atomic(
+        _checkins_dir(root, manager) / LAST_CHECKIN_FILENAME,
+        json.dumps({"at": now}) + "\n",
+    )
+    _clear_reevaluation(root, manager)
+    return f"check-in: {counts.line()} (`rite replies` shows the check-in)"
 
 
 def instructions(root: Path, manager: str) -> str:

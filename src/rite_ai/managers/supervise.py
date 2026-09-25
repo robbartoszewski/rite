@@ -847,11 +847,14 @@ def supervise(
             #
             # Taken, not peeked: a message delivered stays delivered, so a
             # Manager is not told the same thing every cycle until it acts.
-            # A check-in window is open: what was deferred to it is asked
-            # now, at the boundary, where nothing is mid-turn.
-            said = checkins.deliver_at_checkin(root, manager)
-            if said:
-                say(said)
+            # ⚠ THE QUEUE IS A DRAFT (plan § K3). Inside a check-in window,
+            # what was deferred goes into THIS cycle's instruction to be
+            # re-read, and what the Manager does not withdraw is asked when
+            # the cycle ends. Not asked here: the Manager may have answered
+            # it itself since it was deferred.
+            boundary = checkins.at_boundary(root, manager)
+            if boundary.said:
+                say(boundary.said)
             waiting_for_it = take_mail(root, manager, INBOX)
             if waiting_for_it:
                 say(f"delivering {len(waiting_for_it)} message(s) to {manager!r}")
@@ -862,6 +865,7 @@ def supervise(
                 delivery_note(waiting_for_it)
                 + how_to_reply(root, manager)
                 + checkins.instructions(root, manager)
+                + boundary.instruction
             )
             fresh_prompt = prompt + extras
             cycle_prompt = cycle_prompt + extras
@@ -1023,6 +1027,10 @@ def supervise(
                 time.sleep(poll)
             cycle.ended_at = clock()
             cycle.attended = attended
+            # Whatever the ending: a re-evaluation's survivors are asked now.
+            said = checkins.after_cycle(root, manager)
+            if said:
+                say(said)
             _say_refusals(root, cycle.started_at, say, engine, agent, live_pane)
             _honour_worker_requests(root, manager, broker, say)
             _say_if_the_sandbox_refused(root, manager, live_pane, say)

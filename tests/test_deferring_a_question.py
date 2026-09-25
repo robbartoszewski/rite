@@ -246,11 +246,10 @@ def test_a_deferral_waits_at_a_boundary_outside_a_window(tmp_path, monkeypatch):
     assert len(checkins.queued(root, "lead")) == 1
 
 
-def test_inside_a_window_the_queue_is_asked_at_the_cycle_boundary(
-    tmp_path, monkeypatch
-):
+def test_inside_a_window_the_queue_is_asked_when_the_cycle_ends(tmp_path, monkeypatch):
     """The queue is whole: it delivers. A queue that never delivers holds
-    questions a Manager believes it asked."""
+    questions a Manager believes it asked. (K3 re-reads it first; see
+    test_a_deferred_question_is_a_draft.py.)"""
     root = _build(tmp_path, ALWAYS_OPEN)
     checkins.defer(root, "lead", "rename the flag?", "doing ticket 14")
     _, prompts, said = _drive(monkeypatch, root, "ready")
@@ -258,8 +257,7 @@ def test_inside_a_window_the_queue_is_asked_at_the_cycle_boundary(
     assert "Check-in" in sent and "rename the flag?" in sent
     assert "(meanwhile: doing ticket 14)" in sent
     assert checkins.queued(root, "lead") == []
-    assert any(line.startswith("check-in: asked 1") for line in said), said
-    assert prompts, "the cycle still runs after the check-in"
+    assert prompts, "the cycle still runs at a check-in"
 
 
 def test_every_cycle_is_told_the_rule_in_its_own_words(tmp_path, monkeypatch):
@@ -299,6 +297,6 @@ def test_a_corrupt_queue_file_is_still_a_question(tmp_path):
 def test_asking_is_recorded_so_the_filter_can_be_counted(tmp_path):
     root = _build(tmp_path, CLOSED)
     q = checkins.defer(root, "lead", "rename the flag?", "doing ticket 14")
-    checkins.ask_now(root, "lead", [q], "why")
+    checkins.ask_now(root, "lead", [q], "why", how="idle")
     events = [(e["event"], e["id"]) for e in checkins._ledger(root, "lead")]
     assert events == [("queued", q.id), ("asked", q.id)]
