@@ -291,8 +291,43 @@ def to_yaml_entry(role: ManagerRole) -> str | dict:
     return entry
 
 
+def routing_owner(roles: list[ManagerRole]) -> str:
+    """The Manager that talks to the User and routes to the others, or "".
+
+    ⚠ **The one Manager holding `route` in this root, and nothing else.**
+    `route` is the Owner's duty (RL-52), and the multi-machine election already
+    requires it of any Manager standing for Owner (`owner_capable`). On one
+    machine with no `coordination.remote` no election can run, so the answer
+    has to be deterministic, and a config-declared duty is: local, committed,
+    and readable by every process without a lease.
+
+    **"" when it is not exactly one**, never a guess. With two holders nothing
+    here picks between them — the election would, and it is not running — and
+    choosing by list order would hand Slack and routing to whichever Manager a
+    reorder put first. Every caller treats "" as "nobody routes and nobody
+    reads Slack", which fails closed. A lone Manager holds every duty
+    (`effective_duties`), so a one-Manager project is its own Owner unchanged.
+    """
+    holders = [r.name for r in roles if ROUTE in effective_duties(r, len(roles))]
+    return holders[0] if len(holders) == 1 else ""
+
+
+def shares_one_root(remote: str) -> bool:
+    """Whether a project's Managers must all be in this root: no `remote`.
+
+    `coordination.managers` doubles as the multi-machine election's priority
+    list. Without a remote there is nothing to coordinate through, so every
+    listed Manager runs here. With one, they may be on other machines and the
+    election, not `routing_owner`, decides who the Owner is.
+    """
+    return not remote
+
+
 def configuration_problems(
-    roles: list[ManagerRole], names: list[str] | None = None
+    roles: list[ManagerRole],
+    names: list[str] | None = None,
+    *,
+    one_root: bool = False,
 ) -> list[str]:
     """What `rite doctor` reports about a set of Managers (RL-T3).
 
@@ -330,6 +365,24 @@ def configuration_problems(
         return problems_first
     problems: list[str] = list(problems_first)
     held = {r.name: effective_duties(r, len(roles)) for r in roles}
+
+    routers = [r.name for r in roles if ROUTE in held[r.name]]
+    # ⚠ ONLY WHEN THEY SHARE THIS ROOT. `coordination.managers` is also the
+    # multi-machine election's priority list, where each name may run on a
+    # different machine and the lease picks the Owner. With no `remote` there
+    # is nowhere else for them to be, so they share this root and nothing
+    # elects — which is the case this rule is for. The caller says which.
+    if one_root and len(routers) != 1:
+        # MULTI-MANAGER, one root: exactly one Manager talks to the User and
+        # routes to the rest (`routing_owner`). Zero or several means nobody
+        # does, and that is said here rather than discovered as silence.
+        who = ", ".join(routers) if routers else "none of them"
+        problems.append(
+            f"{len(roles)} Managers share this root and {len(routers)} hold "
+            f"'route' ({who}) — exactly one must, because the one holding it "
+            "is the only Manager that reads Slack and the only one that may "
+            "route work to the others. Until then none of them does either"
+        )
 
     decomposers = [r for r in roles if DECOMPOSE in held[r.name]]
     reviewers = [r for r in roles if PLAN_REVIEW in held[r.name]]

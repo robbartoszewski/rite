@@ -43,11 +43,15 @@ def coordination_problems(config: CoordinationConfig) -> list[str]:
     # `manager_roles` alone is enough to get past the early return above: a
     # rite-local project can be several Managers on ONE machine with no
     # `remote` at all, and its roles still have to make sense.
-    from rite_ai.config.managers import configuration_problems
+    from rite_ai.config.managers import configuration_problems, shares_one_root
 
     problems.extend(
         f"coordination: {p}"
-        for p in configuration_problems(config.manager_roles, names=config.managers)
+        for p in configuration_problems(
+            config.manager_roles,
+            names=config.managers,
+            one_root=shares_one_root(config.remote),
+        )
     )
 
     if config.managers and not config.remote:

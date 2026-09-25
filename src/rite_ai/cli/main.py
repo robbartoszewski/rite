@@ -6054,6 +6054,41 @@ def _slack_listener(root: Path, manager: str):
     config = parsed if not isinstance(parsed, ParseError) else ProjectConfig()
     if not config.slack.enabled:
         return None
+    # ⚠ **ONLY THE OWNER HEARS SLACK — the Manager holding `route`.** Every
+    # Manager used to open a listener, so two Managers in one root both read
+    # the Owner's DM, both treated its messages as INSTRUCTIONS, and both acted
+    # (MMQ2's accident). They also doubled the history polling on the
+    # project's one app: 60 a minute against Tier 3's "50+" (§9.16.6). The
+    # others hear from the Owner Manager instead. Checked BEFORE the token, so
+    # a secondary never makes a Slack call at all.
+    from rite_ai.config.managers import routing_owner, shares_one_root
+
+    roles = list(config.coordination.manager_roles)
+    owner_manager = routing_owner(roles)
+    # With a `remote`, the listed Managers may be on other machines and the
+    # election decides the Owner — gating Slack on that lease is v0.7.0, and
+    # guessing here would take Slack from a multi-machine project that has it.
+    if (
+        shares_one_root(config.coordination.remote)
+        and roles
+        and manager != owner_manager
+    ):
+        click.echo(
+            (
+                f"slack: {manager!r} does not read or post Slack — only the "
+                f"Manager holding 'route' does, and that is {owner_manager!r}. "
+                f"Its instructions come from this machine."
+            )
+            if owner_manager
+            else (
+                f"slack: {manager!r} does not read or post Slack — "
+                f"{len(roles)} Managers share this root and "
+                f"not exactly one holds 'route', so none of them does. "
+                f"`rite doctor` says which."
+            ),
+            err=True,
+        )
+        return None
     token = get_scoped("slack_bot_token", config.credentials)
     if not token:
         click.echo(
