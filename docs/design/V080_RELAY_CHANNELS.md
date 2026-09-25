@@ -6,6 +6,11 @@ self-reflection (see `V070_MEMORY.md`, Analysis 8) and the v0.7.0 fixes; this
 note covers the relay only. The analysis is mine and is aimed at what building
 will have to decide.
 
+⚠ **UPDATED 2026-09-25: the status paragraph below is stale.** `.docs/` was
+replaced by this directory, and every design note, `V070_MULTI_MANAGER.md`
+included, is tracked here (see `README.md`). v0.7.0 planning, including the
+open questions this note raises, is in `V070_RELEASE_PLAN.md`.
+
 **Status of the file itself.** Committed under `docs/design/`, for the reasons
 given in `V070_MEMORY.md`'s corresponding note — the other design material
 lives in gitignored `.docs/`, where nothing is tracked, and does not reach a

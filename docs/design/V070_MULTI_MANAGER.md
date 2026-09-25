@@ -62,6 +62,11 @@ written down before it gets lost in a transcript. Nothing here is built, and
 nothing here has been reviewed yet — the open questions at the end are mine
 and are for whoever picks it up, not objections to the design.
 
+⚠ *UPDATED 2026-09-25: the status paragraph below is stale. This file is
+tracked under `docs/design/` and reaches a fresh clone. v0.7.0 planning for
+multi-Manager, including this note's open questions, is in
+`V070_RELEASE_PLAN.md`, track MM.*
+
 Status of the file itself: `.docs/` is gitignored and its committed copies are
 force-added and stale, so **this file does not reach a fresh clone**. That
 ownership decision is open (see the v0.5.0 close-out). If it is resolved by

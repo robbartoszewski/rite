@@ -1,5 +1,15 @@
 # B9 — can a Manager run inside a sandbox?
 
+⚠ **UPDATED 2026-09-25: the broker shape below was BUILT, and one section
+here is superseded.** `eb2a88e` added the broker and `4ebbbd7` applied the
+profile, both observed end to end. **The `HOME` section is wrong as advice**
+and is kept only as what was believed: redirecting `HOME` costs the Claude
+login, so the profile grants the engine's own state paths and redirects
+`TMPDIR` instead (see B4d's correction and `enclosure.py`,
+`ENGINE_HOME_IS_THE_OPERATORS`). What the built boundary still leaves open
+(the tmux server, unfiltered signals, `(allow network*)`) was measured the
+same day and is in `../V070_RELEASE_PLAN.md`, part 0 and track SB.
+
 **Robert put Manager sandboxing into v0.6.0**, on an argument that is sound:
 his permission decision — the allowlist as the secure default — holds for
 Claude and cannot hold for Goose, because `GOOSE_MODE` is whole-session with
@@ -158,6 +168,9 @@ something. If the goal is "a Manager is contained the way a Worker is", it
 does not, and no profile can.
 
 ## `HOME`, so it is not rediscovered
+
+⚠ **SUPERSEDED — do not act on this section.** See the banner at the top:
+redirecting `HOME` breaks the Claude login.
 
 Goose panics at startup when it cannot write its log, because `HOME` still
 points at the host home (B4d). The fix is to point `HOME` at the sandbox's
