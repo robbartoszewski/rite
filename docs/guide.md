@@ -656,9 +656,12 @@ actually being served with and says so:
     manager planner: its model is being served with a 4096-token context
     window, below the 32768 measured to work...
 
-It reports **unknown** rather than guessing when it cannot tell — the model is
-not loaded yet, or the endpoint is LM Studio, llama.cpp or vLLM rather than
-Ollama, none of which expose this through the OpenAI-compatible API.
+⚠ **When it cannot tell, it currently says nothing about the window.** That
+happens when the model is not loaded yet, or the endpoint is LM Studio,
+llama.cpp or vLLM rather than Ollama, none of which expose this through the
+OpenAI-compatible API. rite works out why, but does not print it yet. So
+silence is not a clean bill of health: load the model (send it one request)
+and run `rite doctor` again.
 
 ## Talking to a Manager over Slack
 
