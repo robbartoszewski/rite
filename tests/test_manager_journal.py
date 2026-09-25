@@ -416,6 +416,16 @@ def test_the_instructions_name_the_manager_on_every_command(tmp_path):
     assert "rite journal retrospective --manager lead" in text
 
 
+def test_the_instructions_name_the_rite_that_wrote_them(tmp_path):
+    """Not the first `rite` on the Manager's PATH: an installed 0.5.1 has
+    `journal` without C7's redaction (found in the v0.6.0 wiring audit)."""
+    from rite_ai import own_command
+
+    text = journal.instructions(tmp_path, "lead")
+    assert f"  {own_command()} journal observe --manager lead" in text
+    assert f"  {own_command()} journal retrospective --manager lead" in text
+
+
 def test_the_prompt_carries_the_instructions_only_with_the_flag(tmp_path):
     """The seam between this item and the prompting one, asserted end to end.
 

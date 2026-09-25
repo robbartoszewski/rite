@@ -261,6 +261,15 @@ def instructions(root: Path, manager: str, *, enabled: bool = True) -> str:
     if not enabled:
         return ""
     directory = journal_dir(root, manager).resolve()
+    # ⚠ BY ABSOLUTE PATH, as `mailbox.how_to_reply` and the check-in
+    # instructions already are (`own_command`, c0e4097). Found still bare in
+    # the v0.6.0 wiring audit, where it mattered more than anywhere: the
+    # installed 0.5.1 on this machine's PATH HAS a `journal` command but not
+    # C7's redaction, so a Manager told `rite journal observe` wrote pasted
+    # tokens to disk unredacted.
+    from rite_ai import own_command
+
+    rite = own_command()
     return (
         "\n\nYou are recording process issues this session. They go in:\n"
         f"  {directory}\n\n"
@@ -271,13 +280,13 @@ def instructions(root: Path, manager: str, *, enabled: bool = True) -> str:
         "denied. Not every failing test: a failing test is work, and work "
         "goes to the board.\n\n"
         "Record it with:\n"
-        f"  rite journal observe --manager {manager} "
+        f"  {rite} journal observe --manager {manager} "
         "--anchor <what makes it checkable> \\\n"
         "    --observed <what you saw> --expected <what should have "
         "happened>\n\n"
         "At a BOUNDARY — a ticket closing, a review round finishing, a "
         "merge landing — record what it cost instead:\n"
-        f"  rite journal retrospective --manager {manager} "
+        f"  {rite} journal retrospective --manager {manager} "
         "--anchor <what makes it checkable> \\\n"
         "    --cost <tokens, wall-clock, rounds> --changed <what changed> "
         "\\\n"
