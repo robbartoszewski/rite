@@ -54,6 +54,7 @@ from rite_ai.managers import (
 # launched with `sandbox-exec`, and on Linux that is a Manager that starts and
 # vanishes. `boundary_for()` picks the mechanism for this machine and raises
 # when there is none.
+from rite_ai.managers.board_context import board_now
 from rite_ai.managers.boundaries import UnsupportedPlatform, boundary_for
 from rite_ai.managers.broker import take_requests
 from rite_ai.managers.engines import spelling_for
@@ -768,6 +769,11 @@ def supervise(
         resume_from = ""
     continuing = bool(resume_from)
     tried_designation = continuing
+    # The board as it stood when the current cycle LAUNCHED (`board_context`).
+    # Read at launch, not when the cycle is designated: a session started with
+    # no board may configure one before it ends, and must still be recorded
+    # as having begun without one.
+    launched_under: dict | None = None
     if not fresh and not continuing and not foreign:
         # ⚠ A DIFFERENT FACT from "the one you had is gone", and it reads
         # differently on purpose — the timezone precedent, where an unset
@@ -943,6 +949,7 @@ def supervise(
             )
             fresh_prompt = prompt + extras
             cycle_prompt = cycle_prompt + extras
+            launched_under = board_now(root)
             result: StartResult = launch(
                 root,
                 manager,
@@ -1154,7 +1161,15 @@ def supervise(
             # open and warned about.
             observed = next_id(root, manager, cycle.started_at)
             if observed:
-                designate(root, manager, observed)
+                # A fresh cycle — including the fallback after a resume that
+                # did not take — records the board it began under; a continued
+                # one carries the recorded board forward.
+                designate(
+                    root,
+                    manager,
+                    observed,
+                    board=None if resume_from else launched_under,
+                )
             # ⚠ RECORDED, for the standup (plan § K4): each cycle, how it
             # ended, and what the engine refused in it — with the session id
             # a reader can open. Printed lines are gone by the check-in.
@@ -1255,7 +1270,12 @@ def supervise(
             if cycles:
                 interrupted_id = next_id(root, manager, cycles[-1].started_at)
                 if interrupted_id:
-                    designate(root, manager, interrupted_id)
+                    designate(
+                        root,
+                        manager,
+                        interrupted_id,
+                        board=None if resume_from else launched_under,
+                    )
             elif fresh and designated(root, manager):
                 say(
                     f"interrupted before the fresh session's first cycle "

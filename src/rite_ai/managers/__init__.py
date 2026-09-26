@@ -260,13 +260,30 @@ DESIGNATION_SUFFIX = ".designated.json"
 writes it and `running_instances` must skip it. See the latter for why."""
 
 
-def designate(root: Path, name: str, session_id: str) -> None:
-    """Record the session a bare `rite start <name>` should continue."""
+def designate(
+    root: Path, name: str, session_id: str, board: dict | None = None
+) -> None:
+    """Record the session a bare `rite start <name>` should continue.
+
+    `board` is the board the conversation BEGAN under (`board_context`): given
+    when a cycle launched fresh, and None when it continued, in which case
+    whatever was recorded is carried forward unchanged.
+    """
     if not session_id:
         return
     path = designation_path(root, name)
+    record: dict = {"session": session_id}
+    if board is not None:
+        record["board"] = board
+    else:
+        try:
+            before = json.loads(path.read_text())
+        except (OSError, ValueError):
+            before = None
+        if isinstance(before, dict) and isinstance(before.get("board"), dict):
+            record["board"] = before["board"]
     path.parent.mkdir(parents=True, exist_ok=True)
-    write_atomic(path, json.dumps({"session": session_id}, indent=2) + "\n")
+    write_atomic(path, json.dumps(record, indent=2) + "\n")
 
 
 def designated(root: Path, name: str) -> str:
