@@ -224,6 +224,34 @@ class TestRefresh:
         # the operator's own config shape go ANONYMOUS.
         assert ga.live_secrets(ga._gh_dir(project, "lead", home)) == [TOKEN]
 
+    def test_a_refresh_SIGNS_with_the_wall_clock_not_its_decision_time(
+        self, project, home, tmp_path
+    ):
+        """Measured against GitHub: `refresh(now=…)` signed its JWT with `now`,
+        so a refresh decided early was stamped in the future and GitHub
+        answered 401. The decision time and the signing time are separate."""
+        import time
+
+        pem, _ = _rsa_key(tmp_path)
+        sent = {}
+
+        def post(url, headers, body):
+            sent["jwt"] = headers["Authorization"].split()[-1]
+            minted = {"token": TOKEN, "expires_at": "2030-01-01T00:00:00Z"}
+            return 201, json.dumps(minted)
+
+        access = ga.Access(
+            root=project,
+            manager="lead",
+            app=("1", "99", ["owner/board"]),
+            app_key=pem,
+            home=home,
+            post=post,
+        )
+        assert access.refresh(now=time.time() + 3000) == []
+        issued = json.loads(_b64d(sent["jwt"].split(".")[1]))["iat"]
+        assert abs(issued - time.time()) < 120, "the JWT must be stamped now"
+
     def test_a_token_with_time_left_is_not_reminted(self, project, home):
         calls = []
         access = ga.Access(
