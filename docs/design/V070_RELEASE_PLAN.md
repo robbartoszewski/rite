@@ -461,65 +461,112 @@ here as relayed.
 
 ## Track PB — Publishing: what happens to a finished task
 
-**Robert, 2026-09-26 (relayed):**
+**Robert's input, 2026-09-26 (relayed; his own words quoted where given):**
 - Workers should not push at all. The Manager decides what to do with a
   finished task's result.
 - Three strategies: (1) don't push; (2) push and merge to main or a feature
   branch; (3) push and create a PR.
 - The Owner needs to know whether to merge PRs once they pass all checks,
   or leave that to the User.
-- Each strategy may involve squashing commits and applying a
-  commit-message convention.
-- **The reasoning that should drive the design:** some teams want fully
-  hands-off, some want to review every line, and **some individual
-  developers do not want to advertise to their client or team that they
-  use rite**, so they need the option to do every publishing step
-  themselves.
+- Some teams want fully hands-off, some want to review every line, and some
+  developers need to do every publishing step themselves. On that last
+  case, in his words:
+
+  > "In my 'don't advertise rite' case I don't mean that it shouldn't be
+  > visible anywhere if someone looks deep. It's just so the developer can
+  > squash commits manually, amend the commits etc. before it's ever pushed
+  > out. The team that inspects every line of code may be upset if someone
+  > pushes AI generated code at them without even looking at it themself."
+
+  *An earlier version of this entry read that case as concealment and
+  constrained commit authorship, trailers and generated-by markers. That
+  was wrong and is struck. rite's involvement being discoverable is fine.*
 - **Load-bearing:** under "don't push" the work must still be COMMITTED to
   the local project repository, or the state is lost once a Worker starts
   a new task. **"Don't push" must never mean "don't commit."**
-- **Robert's clarification:** "And by 'the manager' I mean broadly — the
-  LLM part and the automated rite part." So "the Manager decides" means the
-  Manager ROLE. The split between what the model judges and what rite does
-  deterministically is ours to draw, and it is drawn below.
+- > "And by 'the manager' I mean broadly — the LLM part and the automated
+  > rite part."
+- On squashing:
+
+  > "I think strategy 1 should have auto-squash opt-in. Reasoning — if the
+  > code produced is of good quality most of the time and the User wants to
+  > review and amend just 1 commit instead of many, then let's make it easy
+  > for them."
 
 **Recorded, not designed.** Not in v0.6.0.
 
-### Today (`main` at `48de6d2`), checked for data loss first
+### Today, checked for data loss first: NOT a v0.6.0 defect (measured)
 
-**No silent data loss found, by reading the code and running its guard
-tests (20 passed).** ⚠ **Not measured with a real sandbox:** the attempt on
-2026-09-26 was blocked because `yoloai new` hung on this Mac, even for an
-empty directory. The guard tests fake yoloAI.
-- **Pushing is the only way work persists today.** The Worker instructions
-  (`workspace/manage.py`, step 4) say: push after every commit, because in
-  a sandbox "a commit that was never pushed is gone". The sandbox works on
-  a yoloAI `:copy-all` of `workers/<name>/`. Nothing brings its commits
-  back into the project's own repositories, and rite never runs
-  `yoloai apply`.
-- **The next task cannot silently replace the copy.** The broker only runs
-  `rite sandbox start`, which yoloAI refuses while the Worker's sandbox
-  exists ("already exists"). Only a person running
-  `rite sandbox destroy` clears it, and that refuses while the copy holds
-  uncommitted changes or unpushed commits (`_work_only_in_sandbox` →
-  `unsaved_work`). yoloAI's own unapplied-work refusal stays armed unless
-  `--force`. Nothing automatic calls destroy, stop or remove.
-- **Unsandboxed Workers (the Linux default):** `rite prepare` refuses a
-  dirty tree and never discards it. Committed work stays on its own branch
-  when the next ticket's branch is checked out.
-- **So under a "don't push" strategy today, a sandboxed Worker's work is
-  stranded in a copy.** It is protected only by refusals, it blocks that
-  Worker's next task, and one `--force` by a person deletes it. That is the
-  gap Robert's load-bearing point names: strategy 1 needs a path that
-  commits the copy's work into the local project repository before the
-  sandbox goes. The same is already true today for a module whose origin
-  is a local directory (mounted read-only, so it cannot be pushed to).
+**Measured 2026-09-26 on a real seatbelt sandbox, on `main` at `d7e27f8`.**
+A scratch project was used, with a module whose origin is a real (local
+bare) repository. The Worker was registered with `rite add worker`, and its
+sandbox was created as rite creates it (same name, `:copy-all`, seatbelt
+backend) with yoloAI's `idle` agent.
+1. **The finished task's work, uncommitted, was left in the copy:**
+   `M app.txt`, `?? new.txt`.
+2. **Next task, by the broker's own command** (`rite sandbox start w
+   --ticket T2`): refused, because yoloAI says the sandbox already exists.
+   rite's hint was "`rite sandbox destroy <worker>`, then start it again".
+   The work was untouched.
+3. **`rite sandbox destroy w`: refused.** rite named the files ("svc @ main:
+   2 uncommitted (M app.txt, ?? new.txt)") and said where the copy is.
+4. **`yoloai destroy` directly, bypassing rite: refused** ("1 sandbox(es)
+   have unapplied changes"). The work was still there.
+5. **The host checkout `workers/w/svc` holds none of it.** The work exists
+   ONLY in the sandbox copy.
+
+So nothing in v0.6.0 discards it. The code agrees: the broker only
+starts; nothing automatic destroys, stops or removes; destroy checks
+uncommitted AND unpushed (`unsaved_work`); and unsandboxed `rite prepare`
+refuses a dirty tree. The guard tests pass (20). *A first attempt hung
+because a bare `yoloai new` defaults to Docker and builds an image. rite
+always passes the project's backend.*
+
+**Why strategy 1 still has no foundation today.** Pushing is the only way
+work leaves a sandbox: the Worker instructions (`workspace/manage.py`,
+step 4) say to push after every commit, because "a commit that was never
+pushed is gone". Under "don't push", step 5 above is the state: the work
+is stranded in a copy that blocks the Worker's next task, and one
+`--force` by a person deletes it. Strategy 1 first needs rite to bring
+the copy's commits into the local project repository before the sandbox
+goes. A module whose origin is a local directory, mounted read-only and so
+not pushable, is in that state today.
 
 ### Ticket
 
 | # | work | done when | depends | size |
 |---|---|---|---|---|
-| PB1 | **A per-project publishing strategy that the Manager ROLE applies to a finished task, split as drawn below.** Workers commit and do not push. The Manager role (rite and the model, for the Owner or the holder of `integrate`) applies the project's strategy: (1) keep it local, committed in the project's own repository; (2) push and merge to main or a feature branch; (3) push and open a PR, then merge on green or leave the merge to the User, per a setting the Owner reads. Squash and commit-message convention are options of each strategy | For each strategy, one real task goes from a Worker's commit to the declared end state on a real project, and under (1) the work survives the Worker's next task with nothing pushed anywhere. Under the "do not advertise rite" option, the published history is checked (below) and carries no trace of rite | a path from the sandbox copy into the local repository | design first; unsized |
+| PB1 | **A per-project publishing strategy that the Manager ROLE applies to a finished task, split as drawn below.** Workers commit and do not push. The Manager role (rite and the model, for the Owner or the holder of `integrate`) applies the project's strategy: (1) keep it local, committed in the project's own repository, nothing pushed; (2) push and merge to main or a feature branch; (3) push and open a PR, then merge on green or leave the merge to the User, per a setting the Owner reads. **Auto-squash is one opt-in setting, default off, across all strategies.** The commit-message convention is a default that stays amendable | For each strategy, one real task goes from a Worker's commit to the declared end state on a real project. Under (1): the work survives the Worker's next task, nothing reached any remote, and a person reworks it with `git rebase -i` (squash, reword, amend) on its branch without friction, both with auto-squash off and on | a path from the sandbox copy into the local repository | design first; unsized |
+
+### Strategy 1: what "a human can comfortably rework it" requires
+
+The requirement, from his quote: **strategy 1 leaves the work in a state a
+developer can comfortably rework before it goes out.** The reason is social,
+not technical: the developer does not push unreviewed AI-generated code at
+colleagues who inspect every line.
+- **Committed locally, on a branch the developer can rebase.** Not a
+  detached HEAD, and nothing done to the commits that makes `git rebase -i`
+  unpleasant.
+- **Nothing is pushed, including no push to a remote branch "for
+  safety".** The developer is the first thing between the work and their
+  team. (The shared repository below is a separate, opt-in decision, never
+  `origin`.)
+- **The commit-message convention is a starting point.** A reasonable
+  default message helps; an unamendable one does not.
+
+### Squashing: one opt-in setting, orthogonal to strategy
+
+- **Default off.** A person who has not thought about it gets the full
+  history, not a decision made for them. Opting in states that the output
+  is usually good enough to review as one change.
+- **Amendable either way.** Squashed or not, the branch must rebase cleanly
+  and be comfortable in `git rebase -i`. A squash that leaves the branch
+  awkward trades a convenience for the thing strategy 1 exists to protect.
+- **A squashed commit needs a message for the whole change,** not the last
+  commit's, and it is still a default to amend.
+- **Modelled once, not per strategy.** All three strategies plausibly want
+  the same setting. Nothing found so far says it differs by strategy; revisit
+  if the design finds a reason.
 
 ### Who does what: rite's part and the model's part
 
@@ -537,7 +584,7 @@ load-bearing half of publishing in rite rather than in a prompt.
 |---|---|
 | Which strategy is in force: per-project config, never a per-task choice | The commit message's content, within the convention rite applies |
 | Committing a finished task's work locally, so nothing is lost, whatever the model does | Whether the result is fit to publish, above rite's floors |
-| Squashing, and applying the commit-message convention | What the PR says |
+| Squashing, when opted in; applying the commit-message convention as an amendable default | What the PR says |
 | Opening the PR, pushing, and merging, as the strategy allows | Whether to ask the User before an action the strategy permits |
 | Whether merging after checks is permitted at all | |
 | **Floors the model cannot talk past:** "finished" means rite's verify command passed (R7), and nothing is published unless rite's publish gate passed. A check counts only when matched to the SHA it ran on (V060 readiness D12) | |
@@ -564,17 +611,49 @@ one.
   signing (`~/.ssh` unreadable) and his global Node pre-push hook both fail
   inside the Manager's sandbox, so no Manager can commit there. Robert's
   preferred design makes that blocker worse, not better. The Worker side
-  (yoloAI containers, a different boundary) has not been measured.
-- **"Do not advertise rite" constrains commit metadata AND content.** A
-  design that leaks rite into the published history fails the requirement
-  even if every strategy works.
-  - **Metadata to check:** author, committer, `Co-Authored-By` and other
-    trailers, generated-by markers, branch names, and PR titles and bodies.
-  - **Content to check:** what `rite init` writes into the project
-    repository, which includes `.rite/config.yaml`, `CLAUDE.md`,
-    `.claude/agents/`, `.gitignore` lines and the publish-gate CI workflow.
-  - Under strategies 2 and 3 those files reach the remote unless the design
-    keeps them out.
+  (yoloAI sandboxes, a different boundary) has not been measured.
+
+### Future improvement, linked to strategy 1: a shared repository for multi-Manager work
+
+Robert, verbatim, in the order given:
+
+> "I think that we may want to log a future improvement for strategy 1
+> that it publishes to a secondary shared repository. So managers can
+> still work uninterrupted and nothing gets pushed to origin (client's
+> repo)."
+
+> "I mean in multi manager scenario"
+
+> "Or we can make it a separate strategy"
+
+**What it is: a collaboration mechanism for several Managers.** With two
+or more Managers, "commit locally and stop" leaves each Manager's work only
+where it ran. Managers cannot build on each other's output, and the Owner
+cannot route work that depends on a secondary's finished changes. A shared
+remote that is not the client's `origin` lets them keep working. It also
+gives durability, which is secondary here.
+
+🔴 **The shared remote must be operator-chosen, with no hosted default,
+and "off" is the safest default.** For some clients, their code leaving
+their own infrastructure is unacceptable, and that is the on-premise
+constraint rite's own target users live under. A default that pushed a law
+firm's code to a convenient hosted remote would be the worst thing in this
+design. This is a setting with a compliance dimension, not a convenience
+toggle.
+
+**Open question, not decided: a variant of strategy 1, or a fourth
+strategy.**
+- **A variant of strategy 1:** "don't push to origin", with an optional
+  shared remote underneath. Three strategies, one publishing axis.
+- **A fourth strategy:** "publish to a shared repository, never to origin".
+  Simpler to configure and explain, and the Owner's merge question gets a
+  well-defined answer for it.
+- *Recorded inclination (the relaying reviewer's), not a decision:* the
+  separate strategy. The Owner must know whether it may merge, and each
+  strategy answers that differently. A sub-setting inside strategy 1 would
+  make that answer depend on two settings, and the multi-Manager routing
+  design already reads the strategy to know what a secondary may do. The
+  call is Robert's.
 
 ## Track CU — Cursor, the third engine
 
