@@ -72,6 +72,16 @@ class TestTheProfile:
         allows = [line for line in lines if line.startswith("(allow")]
         assert len(allows) == 1
 
+    def test_only_the_two_gh_files_are_granted_by_exact_path(self, project, home):
+        ga._write_token(project, "lead", TOKEN, home)
+        lines = ga.profile_lines(project, "lead", home)
+        g = ga._gh_dir(project, "lead", home)
+        assert f'(allow file-read* (literal "{g / "hosts.yml"}"))' in lines
+        assert f'(allow file-read* (literal "{g / "config.yml"}"))' in lines
+        cdir = ga._credential_dir(project, "lead", home)
+        assert not any(f'(subpath "{cdir}")' in line for line in lines)
+        assert not any("file-write" in line and str(g) in line for line in lines)
+
     def test_the_socket_denial_is_the_LAST_word_in_the_composed_profile(self, project):
         from rite_ai.managers.enclosure import compose
 
@@ -151,6 +161,15 @@ class TestTheToken:
         assert stat.S_IMODE(path.stat().st_mode) == 0o600
         assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
         assert ga.live_secrets(path.parent) == [TOKEN]
+
+    def test_gh_gets_its_CURRENT_layout_so_it_never_migrates(self, project, home):
+        """An old-layout file makes gh rewrite it on first read, which is a
+        write the read-only grant refuses (measured)."""
+        path = ga._write_token(project, "lead", TOKEN, home)
+        assert "    users:\n        x-access-token:\n" in path.read_text()
+        config = path.parent / "config.yml"
+        assert config.read_text() == 'version: "1"\n'
+        assert stat.S_IMODE(config.stat().st_mode) == 0o600
 
 
 class TestTheLaunch:
@@ -297,6 +316,31 @@ def test_inside_the_profile_no_unix_socket_is_reachable(project, tmp_path):
         assert inside.returncode != 0 and "Operation not permitted" in inside.stderr
     finally:
         listener.kill()
+
+
+@on_macos
+def test_inside_the_profile_ONLY_the_two_gh_files_are_readable(project):
+    """The directory is under no granted path (not /tmp, which the profile
+    grants, and which made an earlier version of this check vacuous)."""
+    from rite_ai.managers.enclosure import compose
+
+    path = ga._write_token(project, "lead", TOKEN)
+    other = path.parent / "other"
+    other.write_text("not granted")
+    profile = project.parent / "p.sb"
+    profile.write_text(compose(project, "lead"))
+
+    def inside(*argv):
+        return subprocess.run(
+            ["sandbox-exec", "-f", str(profile), *argv], capture_output=True, text=True
+        )
+
+    assert inside("/bin/cat", str(path)).stdout.count(TOKEN) == 2
+    assert inside("/bin/cat", str(path.parent / "config.yml")).returncode == 0
+    third = inside("/bin/cat", str(other))
+    assert third.returncode != 0 and "Operation not permitted" in third.stderr
+    write = inside("/bin/sh", "-c", f"echo x >> {path}")
+    assert write.returncode != 0 and "Operation not permitted" in write.stderr
 
 
 def test_the_journal_redacts_the_live_token_by_exact_value(project, home, monkeypatch):

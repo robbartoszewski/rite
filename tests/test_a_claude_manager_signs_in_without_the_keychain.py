@@ -79,6 +79,102 @@ def test_the_run_ends_with_the_login_removed_and_transcripts_kept(project, home)
     assert (path.parent / "projects").is_dir()
 
 
+def test_a_leftover_login_is_REMOVED_and_said(project, home):
+    """A killed run skips its `finally`, and this is a one-year token."""
+    path = cl._write_login(project, "lead", FAKE, home)
+    (path.parent / "projects").mkdir()
+    said = cl.reap_leftover(project, "lead", home)
+    assert not path.exists()
+    assert (path.parent / "projects").is_dir(), "transcripts are kept"
+    assert "did not end cleanly" in said and str(path) in said
+    assert FAKE not in said
+    assert cl.reap_leftover(project, "lead", home) == "", "nothing left, nothing said"
+
+
+def test_the_run_lock_is_held_until_the_process_lets_go(project, home):
+    from rite_ai.managers.github_access import hold_run
+
+    first = hold_run(project, "lead", home)
+    assert first is not None
+    assert hold_run(project, "lead", home) is None, "a second run is refused"
+    assert hold_run(project, "other", home) is not None, "another Manager is not"
+    os.close(first)
+    again = hold_run(project, "lead", home)
+    assert again is not None, "a run that ended, however it ended, frees it"
+    os.close(again)
+
+
+def test_the_profile_lets_claude_write_its_directory_but_NOT_its_login(project, home):
+    from rite_ai.managers.github_access import profile_lines
+
+    login = cl._write_login(project, "lead", FAKE, home)
+    lines = profile_lines(project, "lead", home)
+    deny = f'(deny file-write* (literal "{login}"))'
+    grant = f'(allow file-read* file-write* (subpath "{login.parent}"))'
+    assert lines.index(deny) > lines.index(grant), "seatbelt takes the LAST match"
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="seatbelt is macOS")
+def test_inside_the_profile_the_login_can_be_read_and_not_replaced(project):
+    from rite_ai.managers.enclosure import compose
+
+    login = cl._write_login(project, "lead", FAKE)
+    profile = project.parent / "p.sb"
+    profile.write_text(compose(project, "lead"))
+    d = login.parent
+
+    def inside(script):
+        return subprocess.run(
+            ["sandbox-exec", "-f", str(profile), "/bin/sh", "-c", script],
+            capture_output=True,
+            text=True,
+        )
+
+    assert FAKE in inside(f"cat {login}").stdout
+    assert inside(f"mkdir -p {d}/projects && echo t > {d}/projects/t").returncode == 0
+    for attempt in (
+        f"echo x > {login}",
+        f"echo x >> {login}",
+        f"echo x > {d}/new && mv {d}/new {login}",
+        f"rm {login}",
+    ):
+        got = inside(attempt)
+        assert got.returncode != 0, attempt
+    assert FAKE in login.read_text(), "the login is unchanged"
+
+
+@pytest.mark.claude_login
+def test_a_second_start_leaves_a_RUNNING_managers_login_alone(tmp_path, monkeypatch):
+    """Before the run lock, a second `rite start` rewrote and then, in its
+    `finally`, REMOVED the login of the Manager already running."""
+    from click.testing import CliRunner
+
+    from rite_ai.cli.main import cli
+    from rite_ai.managers.github_access import hold_run
+
+    monkeypatch.chdir(tmp_path)
+    CliRunner().invoke(cli, ["init", "--yes"])
+    cfg = tmp_path / ".rite" / "config.yaml"
+    cfg.write_text(
+        cfg.read_text().replace(
+            "manager_roles: []",
+            "manager_roles:\n  - {name: lead, engine: claude, preset: lead}",
+        )
+    )
+    root = tmp_path.resolve()
+    running = hold_run(root, "lead")
+    login = cl._write_login(root, "lead", FAKE)
+    try:
+        result = CliRunner().invoke(
+            cli, ["start", "lead", "--sessions", "1", "--minutes", "5"]
+        )
+    finally:
+        os.close(running)
+    assert result.exit_code == 1, result.output
+    assert "still running" in result.output
+    assert login.read_text().count(FAKE) == 1, "the running Manager's login stays"
+
+
 def test_no_claude_token_is_a_refusal_with_the_fix(project):
     refusal = cl.prepare(project, "lead", None)
     assert "claude setup-token" in refusal
@@ -98,13 +194,16 @@ def test_the_profile_no_longer_grants_the_users_claude_directory(project):
     sys.platform != "darwin" or shutil.which("claude") is None,
     reason="needs seatbelt and a real claude binary",
 )
-def test_inside_the_profile_claude_READS_its_own_file(project, home, monkeypatch):
+def test_inside_the_profile_claude_READS_its_own_file(project):
     """A fake token, rejected by Anthropic, is the success signal here: it
-    proves Claude read the file. The failure this fixes is 'Not logged in'."""
-    import rite_ai.managers.github_access as ga
+    proves Claude read the file. The failure this fixes is 'Not logged in'.
+
+    The login is under the suite's default credential root, which no profile
+    grants. An earlier version put it under /tmp, which the profile grants
+    read+write, so it proved nothing about the grant.
+    """
     from rite_ai.managers.enclosure import compose, engine_tmp
 
-    monkeypatch.setattr(ga, "_credential_root", lambda home_=None: home / "creds")
     cl._write_login(project, "lead", FAKE)
     profile = project / "p.sb"
     profile.write_text(compose(project, "lead"))
@@ -156,3 +255,4 @@ def test_rite_start_REFUSES_a_claude_manager_with_no_token(tmp_path, monkeypatch
     assert result.exit_code == 1, result.output
     assert "rite credential set claude_token" in result.output
     assert starts == [], "nothing may be launched without the login"
+

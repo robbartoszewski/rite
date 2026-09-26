@@ -19,7 +19,8 @@ local account. The environment is as bad. So:
 - **The installation token** (one hour, only the repository named, only the
   permissions named) is written to `hosts.yml` in a per-Manager `gh` config
   directory, mode 0600, OUTSIDE every path the profile grants. The profile
-  then grants that one directory read-only. The pane's environment carries
+  then grants `hosts.yml` and `config.yml`, by exact path, read-only, and
+  nothing else in that directory. The pane's environment carries
   `GH_CONFIG_DIR=<that directory>`, which is a path.
 - **`git push` over HTTPS** uses the same token through `gh auth
   git-credential`, named by `GIT_CONFIG_*` variables. They carry the helper's
@@ -91,6 +92,32 @@ def _gh_dir(root: Path, manager: str, home: Path | None = None) -> Path:
     return _credential_dir(root, manager, home) / "gh"
 
 
+def hold_run(root: Path, manager: str, home: Path | None = None) -> int | None:
+    """Claim this Manager's credential directory for this process, or None.
+
+    ⚠ **Taken BEFORE any credential is written or cleared.** The duplicate
+    check in `session.start` runs later, inside `supervise`, so without this a
+    second `rite start` for a running Manager cleared that Manager's token,
+    was then refused, and on its way out removed that Manager's Claude login.
+    An `flock` on a file here, held for the whole run: the kernel releases it
+    when the process dies however it dies, so a held lock means a live
+    supervisor, and a free one means anything left here is stale. The lock
+    file is under no path any profile grants.
+    """
+    import fcntl
+
+    d = _credential_dir(root, manager, home)
+    d.mkdir(parents=True, exist_ok=True)
+    os.chmod(d, 0o700)
+    fd = os.open(d / "run.lock", os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(fd)
+        return None
+    return fd
+
+
 # --- what the launch needs, derived from what is on disk -------------------
 
 
@@ -150,16 +177,30 @@ def profile_lines(root: Path, manager: str, home: Path | None = None) -> list[st
         f'(deny file-read* file-write* (subpath "{store_path().parent.resolve()}"))'
     )
     cdir = _credential_dir(root, manager, home)
+    g = _gh_dir(root, manager, home)
+    if (g / "hosts.yml").is_file():
+        # Measured 2026-09-26: with ONLY these two files granted, gh reads
+        # its token and git gets it through `gh auth git-credential`, and a
+        # third file in the same directory is refused.
+        lines += [
+            "; This Manager's GitHub token, READ-ONLY, by exact path.",
+            f'(allow file-read* (literal "{g / "hosts.yml"}"))',
+            f'(allow file-read* (literal "{g / "config.yml"}"))',
+        ]
     claude = cdir / "claude"
     if claude.is_dir():
-        # Claude Code writes its transcripts and session state here, so this
-        # one is read AND write. The read-only line below adds nothing to it
-        # and takes nothing away: both are allows, and no deny sits between.
-        lines.append(f'(allow file-read* file-write* (subpath "{claude}"))')
-    if cdir.is_dir():
+        # ⚠ READ AND WRITE, for a stated reason: Claude Code writes its
+        # transcripts (`projects/`), session state and settings cache into
+        # its config directory on every run (measured), and rite's resume and
+        # C8 check read those transcripts. The credential file inside it is
+        # then denied WRITE, LAST, so
+        # the Manager cannot replace the file that authenticates it. Measured
+        # 2026-09-26: with the deny, Claude still signs in, and overwriting
+        # or renaming over `.credentials.json` is refused.
+        login = claude / ".credentials.json"
         lines += [
-            "; This Manager's credential files, READ-ONLY. Written from outside.",
-            f'(allow file-read* (subpath "{cdir}"))',
+            f'(allow file-read* file-write* (subpath "{claude}"))',
+            f'(deny file-write* (literal "{login}"))',
         ]
     return lines
 
@@ -272,12 +313,21 @@ def _write_token(
     g.mkdir(parents=True, exist_ok=True)
     for d in (g, g.parent):
         os.chmod(d, 0o700)
+    # gh's CURRENT multi-account layout, and `config.yml` saying so. Without
+    # both, gh migrates the file on first read, which is a write the profile
+    # refuses (measured).
+    config = g / "config.yml"
+    write_atomic(config, 'version: "1"\n')
+    os.chmod(config, 0o600)
     path = g / "hosts.yml"
     write_atomic(
         path,
         "github.com:\n"
-        f"    oauth_token: {token}\n"
+        "    users:\n"
+        "        x-access-token:\n"
+        f"            oauth_token: {token}\n"
         "    git_protocol: https\n"
+        f"    oauth_token: {token}\n"
         "    user: x-access-token\n",
     )
     os.chmod(path, 0o600)
@@ -304,7 +354,7 @@ def live_secrets(gh_config_dir: str | os.PathLike | None = None) -> list[str]:
     found = []
     for line in text.splitlines():
         key, _, value = line.strip().partition(":")
-        if key == "oauth_token" and value.strip():
+        if key == "oauth_token" and value.strip() not in ("", *found):
             found.append(value.strip())
     return found
 

@@ -186,6 +186,16 @@ def _no_real_credential_file(tmp_path_factory, monkeypatch):
     # output depended on whatever that machine had stored.
     if "RITE_HOME_DIR" not in os.environ:
         monkeypatch.setenv("RITE_HOME_DIR", str(d / "rite-home"))
+    # ⚠ And the per-Manager credential directories (run lock, token, Claude
+    # login), which default to the operator's real Application Support.
+    import rite_ai.managers.github_access as ga
+
+    real_root = ga._credential_root
+    monkeypatch.setattr(
+        ga,
+        "_credential_root",
+        lambda home=None: real_root(home) if home is not None else d / "managers",
+    )
     yield
 
 

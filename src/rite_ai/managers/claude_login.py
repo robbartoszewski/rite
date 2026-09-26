@@ -24,6 +24,12 @@ this Manager's profile grants. The pane's environment carries
 `CLAUDE_CONFIG_DIR=<that directory>`, which is a path. The copy is removed
 when the run ends.
 
+⚠ **A run that is killed does not remove it**, and this is a one-year token,
+so "it expires soon anyway" (true of the one-hour GitHub token) does not
+apply. The next `rite start` for this Manager, holding the run lock
+(`github_access.hold_run`), finds any copy still there, knows no live run
+owns it, removes it and SAYS so (`reap_leftover`).
+
 **Stated, not reassuring:** a compromised Manager can read that file, copy the
 token out, and make model requests on the subscription until the token
 expires or is revoked. That is the cost of a Manager being able to call the
@@ -106,6 +112,24 @@ def _write_login(
 def remove_login(root: Path, manager: str, home: Path | None = None) -> None:
     """End of the run: the credential goes, the transcripts stay."""
     (_config_dir(root, manager, home) / ".credentials.json").unlink(missing_ok=True)
+
+
+def reap_leftover(root: Path, manager: str, home: Path | None = None) -> str:
+    """Remove a login copy an earlier, uncleanly ended run left. A line to say, or "".
+
+    Call ONLY while holding `github_access.hold_run`: that is what makes a copy
+    found here provably not in use.
+    """
+    path = _config_dir(root, manager, home) / ".credentials.json"
+    if not path.is_file():
+        return ""
+    path.unlink()
+    return (
+        f"claude: removed a copy of claude_token that an earlier run of Manager "
+        f"{manager!r} left at {path}. That run did not end cleanly (killed, or "
+        "the machine stopped), so it never removed its own copy. Nothing was "
+        "using it. If you did not stop that run yourself, look at why it ended."
+    )
 
 
 def prepare(root: Path, manager: str, token: str | None) -> str:

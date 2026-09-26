@@ -6590,6 +6590,24 @@ def _start_a_manager(
             err=True,
         )
 
+    # ⚠ BEFORE any credential is touched: a second start for a running
+    # Manager must not clear or remove the credentials that Manager is using.
+    from rite_ai.managers.github_access import hold_run
+
+    run_lock = hold_run(root, role.name)
+    if run_lock is None:
+        click.echo(
+            f"refusing to start Manager {role.name!r}: another `rite start` "
+            "for it is still running in this project. Nothing was changed. "
+            f"Stop that one first (`rite manager stop {role.name}`).",
+            err=True,
+        )
+        raise SystemExit(1)
+    from rite_ai.managers.claude_login import reap_leftover
+
+    leftover = reap_leftover(root, role.name)
+    if leftover:
+        click.echo(leftover, err=True)
     github = _github_access(root, role.name)
     claude_signed_in = _claude_login(root, role)
     listener = _slack_listener(root, role.name)
@@ -6645,8 +6663,10 @@ def _start_a_manager(
             note=lambda m: click.echo(m, err=True),
         )
     finally:
-        # The agent is stopped and the token file removed however the run
-        # ends. The agent's own key lifetime (-t) covers a killed process.
+        # Both credential copies go however the run ENDS. A KILLED run skips
+        # this; the next start for this Manager finds the Claude login under
+        # the run lock and removes it, saying so (`reap_leftover`), and
+        # `open_access` clears a leftover GitHub token (one hour at most).
         if github is not None:
             github.close()
         if claude_signed_in:
