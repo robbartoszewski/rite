@@ -231,6 +231,49 @@ def _path_beneath(allowed_access: int, parent_fd: int) -> ctypes.Array:
     )
 
 
+# ⚠ **SEATBELT ALLOWS EXEC OF ANY PATH; LANDLOCK DOES NOT.** The seatbelt
+# profile carries an unfiltered `(allow process-exec)`, so a Manager there can
+# execute a binary whose path no `file-read*` rule names. Landlock has no
+# separate exec permission: EXECUTE is a filesystem access right, so the binary
+# has to sit under a GRANTED path or `execve` fails with EACCES.
+#
+# ⚠ And it is the REAL path that matters, because a Landlock rule names an
+# inode. Measured 2026-09-26 on Ubuntu: the installer makes
+# `~/.local/bin/claude` a symlink to
+# `~/.local/share/claude/versions/2.1.283`. `.local/bin` was granted and the
+# versions directory was not, so a Claude Manager could not start at all —
+# `rite: could not start 'claude' inside the boundary: [Errno 13] Permission
+# denied`, exit 127, with Robert's token stored and never reached.
+#
+# Measured on macOS for contrast, so this is understood rather than assumed:
+# the Mac has the SAME symlink layout and the same ungranted target, and
+# `claude --version` returns 2.1.261 inside the shipped profile. Seatbelt is
+# not saving us by luck; it simply does not gate exec on the path.
+#
+# Resolved per binary rather than by naming the installer's directory, so a
+# different layout — npm, Homebrew, a version manager — works without a change
+# here. The PARENT is granted, not the file: a binary that loads anything from
+# beside itself needs its directory, and `.local/share/uv` is granted for
+# exactly that reason already.
+ENGINE_BINARIES = ("claude", "goose", "rite", "git", "gh", "tmux")
+
+
+def _engine_binary_paths() -> list[Path]:
+    """Where the binaries a Manager runs REALLY live, for EXECUTE."""
+    import shutil
+
+    found: list[Path] = []
+    for name in ENGINE_BINARIES:
+        where = shutil.which(name)
+        if not where:
+            continue
+        real = Path(where).resolve()
+        for candidate in (real if real.is_dir() else real.parent, real):
+            if candidate.exists():
+                found.append(candidate)
+    return list(dict.fromkeys(found))
+
+
 def policy_path(root: Path, manager: str) -> Path:
     """Where this Manager's path policy is written.
 
@@ -278,6 +321,9 @@ def compose_policy(root: Path, manager: str, home: Path | None = None) -> dict:
     readable = [p for p in system if p.exists()]
     readable += [p for p in _tool_paths(where) if p.exists()]
     readable += [p for p in _running_rite() if p.exists()]
+    # The engines' real paths — see `_engine_binary_paths`. Without these a
+    # symlinked installer layout cannot be exec'd at all.
+    readable += _engine_binary_paths()
 
     # ⚠ `/dev` must be WRITABLE, not merely readable — the same finding as
     # seatbelt's: without it every `cmd >/dev/null` fails, which is most of

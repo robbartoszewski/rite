@@ -41,6 +41,7 @@ import base64
 import json
 import os
 import subprocess
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -79,7 +80,14 @@ def _credential_root(home: Path | None = None) -> Path:
     another road.
     """
     base = Path(home) if home is not None else Path.home()
-    return base / "Library" / "Application Support" / "rite" / "managers"
+    if sys.platform == "darwin":
+        return base / "Library" / "Application Support" / "rite" / "managers"
+    # ⚠ `~/Library/Application Support` is macOS's. On Linux it made an install
+    # look unfinished — observed on the Ubuntu box, where the per-Manager
+    # credential directory was created there. `~/.local/share` is the norm, and
+    # is NOT `~/.rite`: that one is granted readable to every Manager, which is
+    # the reason this function exists at all (see the warning above).
+    return base / ".local" / "share" / "rite" / "managers"
 
 
 def _credential_dir(root: Path, manager: str, home: Path | None = None) -> Path:
