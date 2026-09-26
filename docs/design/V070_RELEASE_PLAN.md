@@ -459,6 +459,85 @@ here as relayed.
   and it does not distinguish evidence from claim at the line level.** RP1 is
   the first half of that; C31 is the second.
 
+## Track PB — Publishing: what happens to a finished task
+
+**Robert, 2026-09-26 (relayed):**
+- Workers should not push at all. The Manager decides what to do with a
+  finished task's result.
+- Three strategies: (1) don't push; (2) push and merge to main or a feature
+  branch; (3) push and create a PR.
+- The Owner needs to know whether to merge PRs once they pass all checks,
+  or leave that to the User.
+- Each strategy may involve squashing commits and applying a
+  commit-message convention.
+- **The reasoning that should drive the design:** some teams want fully
+  hands-off, some want to review every line, and **some individual
+  developers do not want to advertise to their client or team that they
+  use rite**, so they need the option to do every publishing step
+  themselves.
+- **Load-bearing:** under "don't push" the work must still be COMMITTED to
+  the local project repository, or the state is lost once a Worker starts
+  a new task. **"Don't push" must never mean "don't commit."**
+
+**Recorded, not designed.** Not in v0.6.0.
+
+### Today (`main` at `48de6d2`), checked for data loss first
+
+**No silent data loss found, by reading the code and running its guard
+tests (20 passed). Not measured with a real yoloAI sandbox in this check.**
+- **Pushing is the only way work persists today.** The Worker instructions
+  (`workspace/manage.py`, step 4) say: push after every commit, because in
+  a sandbox "a commit that was never pushed is gone". The sandbox works on
+  a yoloAI `:copy-all` of `workers/<name>/`. Nothing brings its commits
+  back into the project's own repositories, and rite never runs
+  `yoloai apply`.
+- **The next task cannot silently replace the copy.** The broker only runs
+  `rite sandbox start`, which yoloAI refuses while the Worker's sandbox
+  exists ("already exists"). Only a person running
+  `rite sandbox destroy` clears it, and that refuses while the copy holds
+  uncommitted changes or unpushed commits (`_work_only_in_sandbox` →
+  `unsaved_work`). yoloAI's own unapplied-work refusal stays armed unless
+  `--force`. Nothing automatic calls destroy, stop or remove.
+- **Unsandboxed Workers (the Linux default):** `rite prepare` refuses a
+  dirty tree and never discards it. Committed work stays on its own branch
+  when the next ticket's branch is checked out.
+- **So under a "don't push" strategy today, a sandboxed Worker's work is
+  stranded in a copy.** It is protected only by refusals, it blocks that
+  Worker's next task, and one `--force` by a person deletes it. That is the
+  gap Robert's load-bearing point names: strategy 1 needs a path that
+  commits the copy's work into the local project repository before the
+  sandbox goes. The same is already true today for a module whose origin
+  is a local directory (mounted read-only, so it cannot be pushed to).
+
+### Ticket
+
+| # | work | done when | depends | size |
+|---|---|---|---|---|
+| PB1 | **A per-project publishing strategy that the Manager applies to a finished task.** Workers commit and do not push. The Manager (Owner, or the holder of `integrate`) applies the project's strategy: (1) keep it local, committed in the project's own repository; (2) push and merge to main or a feature branch; (3) push and open a PR, then merge on green or leave the merge to the User, per a setting the Owner reads. Squash and commit-message convention are options of each strategy | For each strategy, one real task goes from a Worker's commit to the declared end state on a real project, and under (1) the work survives the Worker's next task with nothing pushed anywhere. Under the "do not advertise rite" option, the published history is checked (below) and carries no trace of rite | a path from the sandbox copy into the local repository | design first; unsized |
+
+### What the design must answer (captured, not designed)
+
+- **The Owner must know the setting.** `integrate` assumes pushing and
+  opening a PR today (`config/managers.py`: "pushing and opening the PR
+  needs a claude engine or a person"). How a secondary reports a finished
+  task upward then has to carry what was done with it under the strategy.
+- **Committing gets MORE central under strategy 1, and it is broken on
+  Robert's Mac today.** Measured 2026-09-26 (D10): his global SSH commit
+  signing (`~/.ssh` unreadable) and his global Node pre-push hook both fail
+  inside the Manager's sandbox, so no Manager can commit there. Robert's
+  preferred design makes that blocker worse, not better. The Worker side
+  (yoloAI containers, a different boundary) has not been measured.
+- **"Do not advertise rite" constrains commit metadata AND content.** A
+  design that leaks rite into the published history fails the requirement
+  even if every strategy works.
+  - **Metadata to check:** author, committer, `Co-Authored-By` and other
+    trailers, generated-by markers, branch names, and PR titles and bodies.
+  - **Content to check:** what `rite init` writes into the project
+    repository, which includes `.rite/config.yaml`, `CLAUDE.md`,
+    `.claude/agents/`, `.gitignore` lines and the publish-gate CI workflow.
+  - Under strategies 2 and 3 those files reach the remote unless the design
+    keeps them out.
+
 ## Track CU — Cursor, the third engine
 
 **Status: READ, NOT MEASURED.** From Cursor's CLI reference
