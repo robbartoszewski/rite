@@ -150,6 +150,12 @@ def profile_lines(root: Path, manager: str, home: Path | None = None) -> list[st
         f'(deny file-read* file-write* (subpath "{store_path().parent.resolve()}"))'
     )
     cdir = _credential_dir(root, manager, home)
+    claude = cdir / "claude"
+    if claude.is_dir():
+        # Claude Code writes its transcripts and session state here, so this
+        # one is read AND write. The read-only line below adds nothing to it
+        # and takes nothing away: both are allows, and no deny sits between.
+        lines.append(f'(allow file-read* file-write* (subpath "{claude}"))')
     if cdir.is_dir():
         lines += [
             "; This Manager's credential files, READ-ONLY. Written from outside.",

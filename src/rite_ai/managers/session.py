@@ -1020,6 +1020,9 @@ ALLOWED_ON_TMUX_ARGV = frozenset(
         "GIT_CONFIG_VALUE_0",
         "GIT_CONFIG_KEY_1",
         "GIT_CONFIG_VALUE_1",
+        # A PATH: where a Claude Manager's own login and transcripts are
+        # (`claude_login`). The token is in a 0600 file there, never here.
+        "CLAUDE_CONFIG_DIR",
     }
 )
 """The ONLY variables that may be passed to a pane with `tmux -e` (C6).

@@ -39,6 +39,7 @@ from pathlib import Path
 
 from rite_ai.managers import (
     checkins,
+    claude_login,
     designate,
     designated,
     designation_path,
@@ -381,6 +382,7 @@ def _say_refusals(
     engine: str = "",
     agent: str = "",
     pane: str = "",
+    manager: str = "",
 ) -> list[str]:
     """Tell the user what the engine refused, and how to permit it.
 
@@ -441,7 +443,10 @@ def _say_refusals(
             )
             return ["the whole session (it wanted an approval)"]
         return []
-    refused = list(dict.fromkeys(refused_commands(root, since)))
+    # A Claude Manager with its own config directory writes its transcripts
+    # there (`claude_login`), so that is where its refusals are.
+    base = claude_login.projects_dir(root, manager) if manager else None
+    refused = list(dict.fromkeys(refused_commands(root, since, base=base)))
     for command in refused:
         if allowed(command):
             say(
@@ -519,7 +524,11 @@ def _designation_is_ours(
     """
     if handle_is_ours:
         return designation == session_name(root, manager)
-    return belongs_to_project(root, designation)
+    # Where THIS Manager's Claude transcripts are, if it has its own
+    # config directory (`claude_login`); otherwise Claude's default.
+    return belongs_to_project(
+        root, designation, base=claude_login.projects_dir(root, manager)
+    )
 
 
 def _default_resume_id(root: Path, manager: str, since: float = 0.0) -> str:
@@ -537,7 +546,9 @@ def _default_resume_id(root: Path, manager: str, since: float = 0.0) -> str:
     """
     from rite_ai.managers.transcripts import latest_session_id
 
-    return latest_session_id(root, since=since)
+    return latest_session_id(
+        root, since=since, base=claude_login.projects_dir(root, manager)
+    )
 
 
 def _could_not_continue(manager: str) -> str:
@@ -1104,7 +1115,7 @@ def supervise(
             cycle.ended_at = clock()
             cycle.attended = attended
             refused = _say_refusals(
-                root, cycle.started_at, say, engine, agent, live_pane
+                root, cycle.started_at, say, engine, agent, live_pane, manager
             )
             _honour_worker_requests(root, manager, broker, say)
             if callable(router):
@@ -1479,6 +1490,8 @@ def _default_starter(
             # Derived from what `github_access.open_access` left on disk, so
             # there is no argument to drop.
             **github_access.pane_environment(root, manager),
+            # And WHERE a Claude Manager's own login is (`claude_login`).
+            **claude_login.pane_environment(root, manager),
         },
         engine=engine,
         command=wrap(

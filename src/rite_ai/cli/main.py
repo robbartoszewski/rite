@@ -6237,6 +6237,36 @@ def _router_for(root: Path, manager: str):
     return step
 
 
+def _claude_login(root: Path, role) -> bool:
+    """Give a Claude Manager its own login, or refuse to start it.
+
+    Inside its sandbox a Claude Manager cannot read the keychain (measured:
+    `Not logged in`), so the supervisor writes `claude_token` into THIS
+    Manager's config directory, a 0600 file only its profile can read, and
+    the pane is told the directory's path (`claude_login`). A local engine
+    needs none of this.
+    """
+    if role.is_local:
+        return False
+    from rite_ai.credentials.store import get_scoped
+    from rite_ai.managers.claude_login import prepare
+
+    refusal = prepare(
+        root, role.name, get_scoped("claude_token", _project_credentials())
+    )
+    if refusal:
+        click.echo(f"refusing to start Manager {role.name!r}: {refusal}", err=True)
+        raise SystemExit(1)
+    click.echo(
+        f"claude: Manager {role.name!r} signs in with its own copy of "
+        "claude_token (user:inference), in a 0600 file only its sandbox can "
+        "read. Your keychain login is not used, and your personal Claude "
+        "settings and hooks do not load into it.",
+        err=True,
+    )
+    return True
+
+
 def _github_access(root: Path, manager: str):
     """This run's GitHub credentials for a sandboxed Manager, or None (C6/C26).
 
@@ -6530,6 +6560,7 @@ def _start_a_manager(
         )
 
     github = _github_access(root, role.name)
+    claude_signed_in = _claude_login(root, role)
     listener = _slack_listener(root, role.name)
     try:
         outcome = supervise(
@@ -6587,6 +6618,10 @@ def _start_a_manager(
         # ends. The agent's own key lifetime (-t) covers a killed process.
         if github is not None:
             github.close()
+        if claude_signed_in:
+            from rite_ai.managers.claude_login import remove_login
+
+            remove_login(root, role.name)
         # ⚠ In a finally, so a Ctrl-C still posts the last reply. Only a
         # killed process skips it.
         if listener is not None:
