@@ -115,7 +115,8 @@ class TestARefusalDoesNotRelayWhatTmuxEchoed:
         again in what tmux said."""
         from rite_ai.managers.session import stop
 
-        name = f"s{uuid.uuid4().hex[:6]}:TOKEN={SENTINEL}"
+        head = f"s{uuid.uuid4().hex[:6]}"
+        name = f"{head}:TOKEN={SENTINEL}"
         made = subprocess.run(
             ["tmux", "new-session", "-d", "-s", name, "sleep 30"],
             capture_output=True,
@@ -123,6 +124,21 @@ class TestARefusalDoesNotRelayWhatTmuxEchoed:
         )
         assert made.returncode == 0, made.stderr
         try:
+            listed = subprocess.run(
+                ["tmux", "list-sessions", "-F", "#{session_name}"],
+                capture_output=True,
+                text=True,
+            ).stdout.splitlines()
+            if name not in listed:
+                # ⚠ Measured on tmux 3.4 (CI): the session is created as
+                # `<head>_TOKEN=…`. No session name can contain `:` there,
+                # so `stop` finds none by that name and never asks tmux to
+                # kill one — the refusal that echoed the value cannot occur.
+                # The redaction itself is tested below without tmux.
+                pytest.skip(
+                    "this tmux renames ':' in session names, so the refusal "
+                    "that echoed a value cannot be produced on it"
+                )
             refused = stop(name)
             assert not refused.ok, "tmux did not refuse, so this proves nothing"
             assert "TOKEN=[redacted]" in refused.detail, refused.detail
@@ -135,7 +151,9 @@ class TestARefusalDoesNotRelayWhatTmuxEchoed:
             ).stdout
             for line in listed.splitlines():
                 sid, _, sname = line.partition(" ")
-                if sname == name:
+                # By the unique head: on tmux 3.4 the session was RENAMED, and
+                # matching the literal name left it running in CI's server.
+                if sname.startswith(head):
                     subprocess.run(["tmux", "kill-session", "-t", sid])
 
     def test_a_value_at_the_cut_leaves_only_the_marker(self):
