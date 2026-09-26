@@ -298,3 +298,59 @@ def _suite_leaves_this_checkout_alone():
         "isolate it — a file left here is one `git add -A` away from being "
         "committed, which has happened four times."
     )
+
+
+def tmux_rewrites_target_characters() -> str:
+    """Why this tmux cannot hold a session name containing `:` or `.`, or "".
+
+    ⚠ **A PRECONDITION SOME TESTS NEED, NOT A PROPERTY RITE HAS.** Measured:
+    tmux **3.3a** silently rewrites both characters to `_`; tmux **3.7c** keeps
+    them. Two tests need a name that exercises tmux's target grammar — one
+    about `session_exists` being exact, one about a refusal not relaying what
+    tmux echoed — and on a tmux that rewrites the name they were asserting
+    their own precondition and reporting a red CI that said nothing about
+    rite. CI's runner has 3.3a, so this was four failures a day.
+
+    Both properties are covered version-independently elsewhere
+    (`test_session_exists_compares_names_and_never_parses_a_target`, and
+    `_what_tmux_said` is tested directly), so skipping the end-to-end half
+    loses the confirmation and not the coverage.
+
+    Returns the reason to skip with, or "" when this tmux can hold such a
+    name. Creates and removes one short-lived session on a private name.
+    """
+    import shutil
+    import subprocess
+    import uuid
+
+    if shutil.which("tmux") is None:
+        return "tmux is not installed"
+
+    def run(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["tmux", *args],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=30,
+        )
+
+    name = f"ritecap{uuid.uuid4().hex[:6]}.x"
+    made = run("new-session", "-d", "-s", name, "sleep 5")
+    if made.returncode != 0:
+        return f"this tmux refused to create {name!r}: {made.stderr.strip()}"
+    try:
+        if name in run("list-sessions", "-F", "#{session_name}").stdout.split():
+            return ""
+        version = run("-V").stdout.strip() or "unknown version"
+        return (
+            f"this tmux ({version}) rewrites `.` and `:` in session names — "
+            f"asked for {name!r} and it stored something else, so it cannot "
+            "hold a name that exercises tmux's target grammar"
+        )
+    finally:
+        listed = run("list-sessions", "-F", "#{session_id} #{session_name}").stdout
+        for line in listed.splitlines():
+            sid, _, sname = line.partition(" ")
+            if sname.startswith("ritecap"):
+                run("kill-session", "-t", sid)

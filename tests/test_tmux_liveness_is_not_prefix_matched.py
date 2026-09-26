@@ -51,6 +51,7 @@ import pytest
 
 from rite_ai.loop.session import is_alive as loop_is_alive
 from rite_ai.pool import is_tmux_session_alive as pool_is_alive
+from tests.conftest import tmux_rewrites_target_characters
 
 _HAS_TMUX = shutil.which("tmux") is not None
 _IN_CI = os.environ.get("CI") == "true"
@@ -131,6 +132,43 @@ def test_neither_invents_a_session_when_nothing_matches(only_the_longer_name):
 
 
 @pytest.mark.parametrize("separator", [":", "."])
+def test_session_exists_compares_names_and_never_parses_a_target(separator):
+    """THE PROPERTY, on every tmux and every platform — no session is created.
+
+    `session_exists` answers by listing session NAMES and comparing strings,
+    so the behaviour that matters can be checked by controlling what the list
+    contains. `-t =eu:west` would read session `eu`, window `west`; a string
+    comparison cannot.
+    """
+    import subprocess as sp
+
+    from rite_ai.managers import session as session_module
+
+    head, tail = "eu", "west"
+    name = f"{head}{separator}{tail}"
+
+    def fake_run(argv, **kwargs):
+        assert "list-sessions" in argv, f"session_exists asked by target: {argv}"
+        # ⚠ No `=name` and no `-t` at all: a target would be PARSED before it
+        # was matched, which is the defect C12 fixed.
+        assert "-t" not in argv, f"session_exists still addresses by target: {argv}"
+        return sp.CompletedProcess(argv, 0, stdout=f"other\n{name}\nplain\n", stderr="")
+
+    monkeypatched = pytest.MonkeyPatch()
+    monkeypatched.setattr(session_module.subprocess, "run", fake_run)
+    monkeypatched.setattr(session_module, "_tmux", lambda: "/usr/bin/tmux")
+    try:
+        assert session_module.session_exists(name), (
+            f"{name!r} was listed and reported absent"
+        )
+        assert not session_module.session_exists(head)
+        assert not session_module.session_exists(tail)
+        assert not session_module.session_exists("absent")
+    finally:
+        monkeypatched.undo()
+
+
+@pytest.mark.parametrize("separator", [":", "."])
 def test_session_exists_is_exact_for_a_name_tmux_would_parse_as_a_target(
     separator,
 ):
@@ -146,6 +184,10 @@ def test_session_exists_is_exact_for_a_name_tmux_would_parse_as_a_target(
     for everything would not pass.
     """
     from rite_ai.managers.session import session_exists
+
+    cannot = tmux_rewrites_target_characters()
+    if cannot:
+        pytest.skip(cannot)
 
     head, tail = f"pfx{uuid.uuid4().hex[:6]}", "west"
     name = f"{head}{separator}{tail}"

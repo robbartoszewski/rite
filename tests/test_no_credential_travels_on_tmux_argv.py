@@ -27,6 +27,7 @@ from rite_ai.managers.session import (
     CLAUDE_OAUTH_ENV,
     _on_tmux_argv,
 )
+from tests.conftest import tmux_rewrites_target_characters
 
 SENTINEL = "sk-ant-oat01-SENTINEL-" + "x" * 24
 
@@ -114,6 +115,15 @@ class TestARefusalDoesNotRelayWhatTmuxEchoed:
         appear ONCE, where rite repeats the name it was handed, and not
         again in what tmux said."""
         from rite_ai.managers.session import stop
+
+        # ⚠ The `:` is the whole vehicle: it makes tmux parse a WINDOW target
+        # and echo the assignment back. A tmux that rewrites it cannot produce
+        # the message this test is about — see the helper for what was
+        # measured. The redaction itself is tested directly below, without
+        # tmux, so this skip loses the confirmation and not the coverage.
+        cannot = tmux_rewrites_target_characters()
+        if cannot:
+            pytest.skip(cannot)
 
         name = f"s{uuid.uuid4().hex[:6]}:TOKEN={SENTINEL}"
         made = subprocess.run(
