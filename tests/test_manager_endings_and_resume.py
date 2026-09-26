@@ -24,11 +24,11 @@ from pathlib import Path
 import pytest
 
 import rite_ai.managers.supervise as supervise_mod
+from rite_ai.managers import session as session_module
 from rite_ai.managers.session import (
     CRASHED,
     FINISHED,
     QUIT,
-    STATUS_READS,
     UNCLEAR,
     Attachment,
     Ending,
@@ -584,7 +584,19 @@ class TestTheStatusArrivesAfterTheDeath:
             return Reply(out)
 
         monkeypatch.setattr(session_mod.subprocess, "run", fake_run)
-        monkeypatch.setattr(session_mod.time, "sleep", lambda _s: None)
+        # ⚠ **A VIRTUAL CLOCK, because the wait is now time-bounded.** Stubbing
+        # `sleep` to a no-op was right for a fixed READ COUNT and turns a
+        # deadline loop into a busy spin — measured: 915,421 reads inside a
+        # 0.6s budget. Sleeping advances this clock instead, so the deadline is
+        # exercised exactly and the test does not depend on the wall clock,
+        # which is what made the old one look flaky under load.
+        self._clock = {"now": 0.0}
+        monkeypatch.setattr(
+            session_mod.time,
+            "sleep",
+            lambda s: self._clock.__setitem__("now", self._clock["now"] + s),
+        )
+        monkeypatch.setattr(session_mod.time, "monotonic", lambda: self._clock["now"])
         # Existence is a SEPARATE question, answered by its own call, and
         # these tests are about what `ending` does once the session is
         # known to exist. Stubbed rather than scripted so the read counts
@@ -623,12 +635,38 @@ class TestTheStatusArrivesAfterTheDeath:
 
     def test_a_status_that_never_arrives_is_still_UNCLEAR(self, monkeypatch):
         """The fail-safe the waiting must not spend. Waiting can turn an
-        unknown into a known; it must never turn an unknown into a guess."""
+        unknown into a known; it must never turn an unknown into a guess.
+
+        ⚠ **THE BUDGET IS TIME, NOT A READ COUNT, and this test asserts the
+        time.** It used to assert `len(seen) == STATUS_READS`, which pinned the
+        stand-in rather than the property: a fixed count is long enough on an
+        idle machine and short enough on a loaded one, which is the defect a
+        real run hit — a Manager that exited cleanly was reported `unclear` on
+        a 4-core box under load.
+        """
         seen = self._replies(monkeypatch, ["1|"])
+        monkeypatch.setattr(session_module, "STATUS_DEADLINE", 1.5)
         how = ending("any-session", human_was_present=False)
+        waited = self._clock["now"]
+
         assert how.kind == UNCLEAR
         assert not how.resume, "waiting was allowed to invent a clean exit"
-        assert len(seen) == STATUS_READS, "it gave up before it had waited"
+        assert waited >= 1.5, f"it gave up after {waited:.2f}s, before its deadline"
+        assert len(seen) >= 2, "it did not keep asking while the budget lasted"
+        # ⚠ Backoff, not a hot loop. Pauses double from 0.1s, so 1.5s is filled
+        # by about five reads; a fixed 0.1s pause would take fifteen, and
+        # hammering a loaded box with subprocess round-trips is the thing the
+        # deadline exists to avoid.
+        assert len(seen) <= 8, f"{len(seen)} reads in {waited:.1f}s — not backing off"
+
+    def test_the_deadline_always_buys_at_least_one_read(self, monkeypatch):
+        """However tight the budget, one observation is always taken — so a
+        zero or negative deadline cannot turn into "never looked"."""
+        seen = self._replies(monkeypatch, ["1|"])
+        monkeypatch.setattr(session_module, "STATUS_DEADLINE", 0.0)
+        how = ending("any-session", human_was_present=False)
+        assert how.kind == UNCLEAR
+        assert len(seen) == 1, f"{len(seen)} reads for a zero deadline"
 
     def test_a_late_clean_status_with_a_human_present_is_QUIT(self, monkeypatch):
         """The human/agent distinction, scripted — so it is covered on a
@@ -864,24 +902,23 @@ class TestEndingAsksAboutTheManagersOwnPane:
         start` exited 0 on an OOM-killed Manager. §9.14.4 requires a fault
         be distinguishable from a completion.
 
-        ⚠ **KNOWN LOAD-SENSITIVE — it is not a real defect when it fails, and
-        it reads exactly like one.** The loop below waits at most 3 seconds
-        (30 × 0.1s) for tmux to report the death, and then asks. Under load
-        tmux can take longer, and `ending` honestly answers `unclear` — so the
-        failure message says "tmux knew, and the caller did not ask", which
-        names a defect that is not there.
+        ⚠ **THE "KNOWN LOAD-SENSITIVE" LABEL IS WITHDRAWN.** It carried one,
+        on the evidence that it failed once on a GitHub runner and passed 3/3
+        in a container. That reading was wrong: the test was faithfully
+        reproducing a real defect, and the label would have taught the next
+        person to ignore the thing that found it.
 
-        Evidence, 2026-09-26: failed once on the GitHub Linux 3.11 runner with
-        `'unclear' == 'crashed'` and `no exit status ('') across 30 reads`,
-        passed on the rerun of the same commit, and passes 3/3 in a container
-        on the same tmux 3.3a. So: the runner was busy, not broken.
+        Measured 2026-09-26 on a 4-core Ubuntu VM running two Managers and an
+        8B local model: a Manager that exited CLEANLY — `pane_dead=1`,
+        `pane_dead_status=0`, `pane_dead_signal=` empty, no OOM kill in dmesg
+        or the journal — was reported `unclear`, and a routed message had
+        nowhere to land because nothing resumed. On the same box IDLE the
+        status appears about 1.0s after the exit and the run reports correctly.
 
-        The fragility is the fixed retry budget, not the property. Whoever owns
-        this file next should make the wait bounded by TIME with a longer
-        ceiling, or assert on `pane_dead_signal` directly once the pane is
-        gone. Left as it is here deliberately — this session owns the sandbox
-        boundary, and quietly loosening another area's assertion is how a real
-        regression gets hidden behind a flake."""
+        The cause was `ending`'s fixed budget of 30 reads 0.1s apart: long
+        enough for an unloaded machine, short enough for a loaded one. It is a
+        TIME budget with backoff now (`STATUS_DEADLINE`), so this test and the
+        product no longer share a too-tight constant."""
         import os
         import signal as signals
 
@@ -895,10 +932,15 @@ class TestEndingAsksAboutTheManagersOwnPane:
                 text=True,
             ).stdout.strip()
             os.kill(int(pid), signals.SIGKILL)
-            for _ in range(30):
-                time.sleep(0.1)
+            # ⚠ Bounded by TIME, not by a read count, for the same reason
+            # `ending` is: a count is long enough on an idle box and short on a
+            # loaded one. This waits for the pane to die; `ending` then does
+            # its own time-bounded wait for the status.
+            deadline = time.monotonic() + 30.0
+            while time.monotonic() < deadline:
                 if not liveness(made.session).alive:
                     break
+                time.sleep(0.1)
             how = ending(made.session, human_was_present=False, pane=made.pane)
             assert how.kind == CRASHED, (
                 f"a SIGKILLed Manager reported {how.kind!r} — tmux knew, and "

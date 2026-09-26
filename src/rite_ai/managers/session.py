@@ -587,12 +587,29 @@ QUIT = "quit"
 CRASHED = "crashed"
 UNCLEAR = "unclear"
 
-STATUS_READS = 30
-STATUS_PAUSE = 0.1
-"""How long `ending` waits for a reap: 30 reads, 0.1s apart. Named because a
-test pins it, and a test that hardcodes the number drifts silently from the
-code the moment the number is tuned — which is how the first version of this
-wait was widened with its own regression test still asserting the old one."""
+STATUS_DEADLINE = 30.0
+STATUS_FIRST_PAUSE = 0.1
+STATUS_MAX_PAUSE = 1.0
+"""How long `ending` waits for a reap: a TIME budget with backoff, not a count.
+
+⚠ **A FIXED READ COUNT WAS THE DEFECT, AND A BIGGER COUNT WOULD BE THE SAME
+DEFECT.** It was 30 reads 0.1s apart. Measured 2026-09-26 on a 4-core Ubuntu
+VM running two Managers and an 8B local model: a Manager that exited CLEANLY —
+`pane_dead=1`, `pane_dead_status=0`, `pane_dead_signal=` empty, and no OOM kill
+anywhere in dmesg or the journal — was reported as `unclear`, because the
+status was not observed inside that window. On the same box IDLE the status
+appears about 1.0s after the command exits and the same run reports correctly.
+So the wait was long enough for an unloaded machine and not for a loaded one,
+and any other constant would be long enough for some machines and not others.
+
+The property is a deadline: keep asking until a stated number of SECONDS has
+passed, backing off so a slow box is not hammered with subprocess round-trips
+while it is the thing under load. A fast ending still answers on the first read.
+
+⚠ **Widening it cannot turn a known answer into a wrong one.** Only the
+dead-WITHOUT-status window waits; a live pane and a vanished session answer at
+once. And when the deadline does expire the answer is still UNCLEAR, so this
+changes WHEN the budget is reached, never what reaching it means."""
 
 _EXIT_STATUS_ANSWER: bool | None = None
 """Cached: whether this tmux reports an exit status is a property of the
@@ -762,9 +779,11 @@ def ending(name: str, human_was_present: bool, pane: str = "") -> Ending:
     # no ordinary caller pays this. And if the status never arrives the
     # answer is still UNCLEAR, so waiting can only turn an unknown into a
     # known and never the other way.
-    for attempt in range(STATUS_READS):
-        if attempt:
-            time.sleep(STATUS_PAUSE)
+    started = time.monotonic()
+    pause = STATUS_FIRST_PAUSE
+    reads = 0
+    while True:
+        reads += 1
         answer = ask()
         if answer is None:
             return Ending(UNCLEAR, detail="could not read the exit status")
@@ -783,8 +802,15 @@ def ending(name: str, human_was_present: bool, pane: str = "") -> Ending:
         try:
             status = int(reported)
         except ValueError:
-            continue
-        break
+            pass
+        else:
+            break
+        # ⚠ The deadline is checked AFTER a read, so the budget always buys at
+        # least one observation however tight it is set.
+        if time.monotonic() - started >= STATUS_DEADLINE:
+            break
+        time.sleep(pause)
+        pause = min(pause * 2, STATUS_MAX_PAUSE)
 
     if status is None and signal:
         # ⚠ tmux KNEW. `#{pane_dead_signal}` carries `kill`, `term`, `segv`
@@ -803,14 +829,16 @@ def ending(name: str, human_was_present: bool, pane: str = "") -> Ending:
             UNCLEAR,
             detail=(
                 "the pane is dead but tmux reported no exit status "
-                # ⚠ READS, not seconds. `STATUS_READS * STATUS_PAUSE` is the
-                # sleeping only — it omits 30 subprocess round-trips, so the
-                # message said "within 3s" for a wait measured at 4.4s
-                # against an instant tmux and 10.9s at 0.2s per call. A
-                # number nobody measured, in the sentence a human reads to
-                # judge whether tmux is sick. Reads are what this loop
-                # actually counts.
-                f"({reported!r}) across {STATUS_READS} reads, so "
+                # ⚠ BOTH, because each alone has misled a reader. The
+                # earlier message said "within 3s" from
+                # `STATUS_READS * STATUS_PAUSE`, which counted the sleeping
+                # and omitted 30 subprocess round-trips — a wait measured at
+                # 4.4s against an instant tmux and 10.9s at 0.2s per call.
+                # Reads alone say nothing about how long a loaded box was
+                # given. Now the loop is time-bounded, so the seconds are
+                # real and the reads say how often it looked.
+                f"({reported!r}) across {reads} read(s) in "
+                f"{time.monotonic() - started:.1f}s, so "
                 "whether it finished or failed is unknown"
             ),
         )
