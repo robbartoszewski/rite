@@ -301,23 +301,43 @@ class TestTheManagersOwnCredentials:
         assert str(cdir / "gh") not in granted, "the gh directory itself is granted"
         assert str(cdir) not in granted, "the credential directory itself is granted"
 
-    def test_the_login_is_readable_and_never_writable(self, tmp_path):
-        """⚠ By ENUMERATION, because Landlock cannot deny. Seatbelt grants
-        `claude/` read+write and denies the login LAST; Landlock unions its
-        grants, so `claude/` is not granted as a tree at all."""
+    def test_claude_gets_its_config_directory_as_a_tree(self, tmp_path):
+        """⚠ **THIS DIVERGES FROM SEATBELT, AND IT WAS MEASURED BEFORE IT WAS
+        ACCEPTED.** Seatbelt grants `claude/` read+write and then denies write
+        on `.credentials.json` LAST, so a macOS Manager cannot replace the file
+        that authenticates it. Landlock has no deny, so this backend first
+        granted only the EXISTING children and left the login ungranted.
+
+        That silently broke Claude Code. Observed on Ubuntu 2026-09-26, with a
+        real token and a real cycle: Claude wrote NOTHING to its config
+        directory, said nothing about it — it handled the refusals internally
+        and exited 0 — and rite then found no transcript and refused to
+        continue, so the Manager could not resume. A macOS Manager's directory
+        holds ten entries after a run (`.claude.json`, `projects`, `sessions`,
+        `shell-snapshots`, `session-env`, `backups`, …), every one created as it
+        goes; an enumeration cannot grant what does not exist yet, and
+        pre-creating that list would pin rite to one Claude version.
+
+        With the tree granted, the same cycle wrote all ten, a reply arrived,
+        and a second start resumed instead of starting fresh.
+
+        So the trade, asserted rather than left implicit: on Linux the Manager
+        can overwrite its OWN token — which it can already read — and in
+        exchange Claude works at all.
+        """
         root, home, cdir = self._laid_out(tmp_path)
         policy = landlock.compose_policy(root, "lead", home)
-        login = str(cdir / "claude" / ".credentials.json")
 
-        assert login in policy["readable"], "Claude cannot sign in"
-        assert login not in policy["writable"], (
-            "the Manager can replace the file that authenticates it"
+        assert str(cdir / "claude") in policy["writable"], (
+            "Claude Code cannot create the session state it writes on every "
+            "run, and the Manager will not resume"
         )
-        assert str(cdir / "claude") not in policy["writable"], (
-            "`claude/` is granted as a tree, which re-grants the login by union"
+        # What the narrowing still buys, and what it no longer does.
+        assert str(cdir) not in policy["writable"], (
+            "the credential directory is writable — a Manager could replace "
+            "credentials written for it from outside, including the gh token"
         )
-        # Transcripts still work: `projects/` is granted, as a tree.
-        assert str(cdir / "claude" / "projects") in policy["writable"]
+        assert str(cdir / "gh") not in policy["writable"]
 
     def test_a_symlinked_credential_file_is_not_granted(self, tmp_path):
         """🔴 Narrowing to exact files makes this MORE important, not less: a

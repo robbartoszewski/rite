@@ -754,7 +754,17 @@ class TestTheManagersCredentialsInsideTheBoundary:
             "narrowing to two exact paths is not being enforced"
         )
 
-    def test_the_login_can_be_read_and_not_replaced(self, tmp_path):
+    def test_the_login_is_readable_and_claude_can_write_its_state(self, tmp_path):
+        """⚠ **DIVERGES FROM macOS DELIBERATELY** — see
+        `test_claude_gets_its_config_directory_as_a_tree` for the measurement
+        that forced it. Seatbelt denies write on the login last; Landlock has
+        no deny, and granting only the existing children made Claude Code write
+        nothing at all and the Manager unable to resume.
+
+        What must still hold: the login is READABLE, so Claude can sign in, and
+        the rest of the credential directory stays unwritable so a Manager
+        cannot replace the gh token written for it from outside.
+        """
         root, home, cdir = self._laid_out(tmp_path)
         policy = landlock.compose_policy(root, "lead", home)
         login = cdir / "claude" / ".credentials.json"
@@ -765,25 +775,24 @@ class TestTheManagersCredentialsInsideTheBoundary:
             except OSError:
                 return 1  # Claude cannot sign in
             try:
-                with open(login, "w") as handle:
-                    handle.write("{}")
-                return 2  # overwritten
+                # The session state Claude writes on every run.
+                (cdir / "claude" / "sessions").mkdir(exist_ok=True)
+                (cdir / "claude" / ".claude.json").write_text("{}")
             except OSError:
-                pass
+                return 2  # it cannot write its state, so it cannot resume
             try:
-                # ⚠ Rename-over, not just write: the macOS test checks both,
-                # because a deny on writing a path says nothing about replacing
-                # it. Landlock handles it through REMOVE_FILE/MAKE_REG on the
-                # parent, which is not granted.
-                os.rename(str(root / "decoy"), str(login))
-                return 3  # replaced
+                (cdir / "planted").write_text("x")
+                return 3  # the credential directory is writable
             except OSError:
                 return 0
 
         outcome = self._inside(policy, attempt)
         assert outcome != 1, "the login is unreadable, so Claude cannot sign in"
-        assert outcome != 2, "the Manager overwrote the file that authenticates it"
-        assert outcome != 3, "the Manager replaced its login by rename"
+        assert outcome != 2, (
+            "Claude cannot create its session state, which is what made a "
+            "Linux Manager silently unable to resume"
+        )
+        assert outcome != 3, "the credential directory itself is writable"
         assert outcome == 0
 
     def test_the_run_lock_cannot_be_held_by_the_manager(self, tmp_path):
