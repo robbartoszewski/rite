@@ -167,8 +167,8 @@ def prepare(root: Path, manager: str, token: str | None) -> str:
     """
     if not token:
         return (
-            "a Claude Manager runs inside a sandbox, which cannot read your "
-            "keychain login, so it needs a token of its own. Run "
+            "a Claude Manager runs inside a sandbox, which cannot use the "
+            "login your own `claude` uses, so it needs a token of its own. Run "
             "`claude setup-token`, then `rite credential set claude_token` "
             "and paste what it printed"
         )
