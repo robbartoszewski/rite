@@ -47,16 +47,16 @@ enumerating the tree around it. Outside the tree nothing grants the inbox, so
 neither boundary has to take it away. The Manager is granted its own OUTBOX
 by exact path, because `rite reply` and `rite ask` write it from inside.
 
-⚠ **THE OLD IN-TREE BOX IS STILL READ, AND NOTHING IS COPIED.** A project
-mid-flight has messages in `.rite/managers/<manager>/mail/`, and a Manager
-still running an older rite keeps writing replies there. Every reader here
-reads BOTH locations merged by filename — the name is the send order, so the
-merge is the order — and a reader's old cursor counts until it writes a new
-one. Legacy messages therefore drain the normal way (`take` for the inbox,
-`prune` for the outbox) and are never moved, so there is no copy step that
-could fail halfway and no moment when a message is in neither place. Writers
-write only the new location. Both profiles keep the old in-tree `mail/`
-unwritable to every Manager, because it is still delivered from.
+⚠ **THE OLD IN-TREE BOX IS MOVED ONCE, THEN NEVER READ AGAIN.** A project
+from before 0.6.0 has messages in `.rite/managers/<manager>/mail/`. The first
+`rite start` under this rite moves them — under the run lock, outside the
+boundary, before anything reads mail — and leaves a marker (`adopt_legacy`).
+From then on nothing here reads the tree. That is the point, not a tidy-up:
+in-tree state is only as safe as the profile rule that fences it, and a
+permanent second place rite delivers from is a permanent second door. A file
+that appears in the old box after the marker — an older rite still running,
+or anything else writing the tree — is REPORTED at each start and never
+delivered, because nothing can say who wrote it.
 """
 
 from __future__ import annotations
@@ -130,8 +130,7 @@ def mail_root(root: Path, manager: str) -> Path:
 def legacy_mail_root(root: Path, manager: str) -> Path:
     """`.rite/managers/<manager>/mail/`, where the boxes lived before 0.6.0.
 
-    Read, never written — see the module docstring. Both profiles keep it
-    unwritable to Managers for as long as anything reads it.
+    Moved from once by `adopt_legacy`, and never read for delivery again.
     """
     return manager_dir(root, manager) / "mail"
 
@@ -139,11 +138,6 @@ def legacy_mail_root(root: Path, manager: str) -> Path:
 def mailbox_dir(root: Path, manager: str, box: str) -> Path:
     """`<mail_root>/<box>/` — the one place a box is written."""
     return mail_root(root, manager) / box
-
-
-def _box_dirs(root: Path, manager: str, box: str) -> tuple[Path, Path]:
-    """The box, then its pre-0.6.0 location — everything a reader reads."""
-    return mailbox_dir(root, manager, box), legacy_mail_root(root, manager) / box
 
 
 def _mark_project(root: Path, manager: str) -> None:
@@ -176,29 +170,15 @@ def _cursor_path(root: Path, manager: str, box: str, reader: str) -> Path:
     return mail_root(root, manager) / f"{box}.read" / f"{reader}.json"
 
 
-def _legacy_cursor_path(root: Path, manager: str, box: str, reader: str) -> Path:
-    require_safe_name(reader, kind="mailbox reader")
-    return legacy_mail_root(root, manager) / f"{box}.read" / f"{reader}.json"
-
-
 def _cursor(root: Path, manager: str, box: str, reader: str) -> str:
     """The last filename this reader has seen, or "" — never raises.
 
     A cursor that cannot be read is treated as "has seen nothing", which
     re-delivers rather than drops. A message twice is recoverable; a message
     nobody ever sees is the failure this channel exists to prevent.
-
-    ⚠ **The pre-0.6.0 cursor counts until this reader has a new one.** A
-    reader that lost its position when the boxes moved would be shown every
-    message again — the Slack relay would repost a month of replies. Once a
-    new cursor exists it is the reader's position: it was written after
-    reading the merged boxes, so it already accounts for the old one.
     """
     try:
-        path = _cursor_path(root, manager, box, reader)
-        if not path.exists():
-            path = _legacy_cursor_path(root, manager, box, reader)
-        data = json.loads(path.read_text())
+        data = json.loads(_cursor_path(root, manager, box, reader).read_text())
     except (OSError, ValueError, UnsafeName):
         return ""
     return str(data.get("last", "")) if isinstance(data, dict) else ""
@@ -319,12 +299,11 @@ def _processed_through(root: Path, manager: str, box: str) -> str:
     retention has kept. That second part is the cost of having no list, and
     it is the smaller one.
     """
-    cursors: set[str] = set()
-    for base in (mail_root(root, manager), legacy_mail_root(root, manager)):
-        try:
-            cursors |= {p.stem for p in (base / f"{box}.read").glob("*.json")}
-        except OSError:
-            continue
+    folder = mail_root(root, manager) / f"{box}.read"
+    try:
+        cursors = [p.stem for p in folder.glob("*.json")]
+    except OSError:
+        return ""
     positions = [_cursor(root, manager, box, reader) for reader in cursors]
     return min(positions) if positions and all(positions) else ""
 
@@ -421,14 +400,9 @@ def _as_time(value: object) -> float:
 
 
 def _messages(root: Path, manager: str, box: str) -> list[Path]:
-    """Every message file in a box and its pre-0.6.0 location, in send
-    order. Sorted by NAME, not by path: the name is the order, and a sort by
-    path would put every legacy message after every new one."""
-    found: list[Path] = []
-    for where in _box_dirs(root, manager, box):
-        if where.is_dir():
-            found += where.glob("*.json")
-    return sorted(found, key=lambda p: (p.name, str(p)))
+    """Every message file in a box, in send order."""
+    where = mailbox_dir(root, manager, box)
+    return sorted(where.glob("*.json")) if where.is_dir() else []
 
 
 def read(root: Path, manager: str, box: str) -> list[Message]:
@@ -501,9 +475,183 @@ def put_back(messages: list[Message]) -> int:
 
 def waiting(root: Path, manager: str, box: str) -> bool:
     """Is anything in this box? Cheap enough for a 2-second poll."""
-    return any(
-        where.is_dir() and any(where.glob("*.json"))
-        for where in _box_dirs(root, manager, box)
+    where = mailbox_dir(root, manager, box)
+    return where.is_dir() and any(where.glob("*.json"))
+
+
+ADOPTED_MARKER = "adopted-from-project"
+"""Beside the boxes, outside the boundary: written once the pre-0.6.0 box has
+been moved. Its presence is what makes the tree never be read again."""
+
+
+@dataclass(frozen=True)
+class Adoption:
+    """What one `adopt_legacy` did."""
+
+    moved: int = 0
+    kept: tuple[Path, ...] = ()
+    """Files left in the old box because moving them would have replaced a
+    different file, or they could not be read or written. Never deleted."""
+    after_marker: tuple[Path, ...] = ()
+    """Files found in the old box AFTER it had been moved: not delivered."""
+
+
+def _legacy_files(root: Path, manager: str) -> list[Path]:
+    old = legacy_mail_root(root, manager)
+    try:
+        return sorted(p for p in old.rglob("*") if p.is_file() or p.is_symlink())
+    except OSError:
+        return []
+
+
+def _move_one(source: Path, dest: Path) -> bool:
+    """Move one message file; True when it is safely at `dest`.
+
+    ⚠ **Written THEN removed**, so a crash between leaves it in both places
+    — delivered twice, recoverable — and never in neither. A destination
+    that already holds DIFFERENT content is not replaced: that would be loss.
+    A symlink is not followed; it is kept and reported.
+    """
+    if source.is_symlink():
+        return False
+    try:
+        text = source.read_text()
+        if dest.exists():
+            if dest.read_text() != text:
+                return False
+        else:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            write_atomic(dest, text)
+            stat = source.stat()
+            # Retention ages a message by mtime: moving must not reset it.
+            os.utime(dest, (stat.st_atime, stat.st_mtime))
+        source.unlink()
+    except OSError:
+        return False
+    return True
+
+
+def _move_cursor(source: Path, dest: Path) -> bool:
+    """Move one reader's position. Where the new box already has one, the
+    EARLIER of the two wins: re-delivering is recoverable, skipping is not."""
+    if source.is_symlink():
+        return False
+    try:
+        old = json.loads(source.read_text()).get("last", "")
+        if dest.exists():
+            new = json.loads(dest.read_text()).get("last", "")
+            old = min(str(old), str(new))
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        write_atomic(dest, json.dumps({"last": str(old)}) + "\n")
+        source.unlink()
+    except (OSError, ValueError, AttributeError):
+        return False
+    return True
+
+
+def adopt_legacy(root: Path, manager: str) -> Adoption:
+    """Move the pre-0.6.0 in-tree box to the mailbox, ONCE. Never raises.
+
+    ⚠ **Call it under the run lock, OUTSIDE the boundary, before anything
+    reads mail** — `rite start` does, straight after `hold_run`. The lock is
+    what makes "once" true: no second supervisor for this Manager is reading
+    or moving at the same time.
+
+    ⚠ **Cursors move before messages**, so no reader is ever shown moved
+    messages without its position — the Slack relay would repost them.
+
+    ⚠ **After the marker, the old box is only REPORTED.** Anything there then
+    was written after the move — by an older rite still running, or by
+    anything else that can write the project tree — and nothing can say
+    which. Delivering it would be delivering an instruction nobody can
+    attribute. It is left in place, so a person can read it and resend it.
+    """
+    marker = mail_root(root, manager) / ADOPTED_MARKER
+    files = _legacy_files(root, manager)
+    if marker.exists():
+        return Adoption(after_marker=tuple(files))
+    old = legacy_mail_root(root, manager)
+    new = mail_root(root, manager)
+    moved = 0
+    kept: list[Path] = []
+    ordered = sorted(files, key=lambda p: (not p.parent.name.endswith(".read"), p))
+    for source in ordered:
+        relative = source.relative_to(old)
+        is_cursor = (
+            len(relative.parts) == 2
+            and relative.parts[0].endswith(".read")
+            and source.suffix == ".json"
+        )
+        is_message = (
+            len(relative.parts) == 2
+            and relative.parts[0] in (INBOX, OUTBOX)
+            and source.suffix == ".json"
+        )
+        mover = _move_cursor if is_cursor else _move_one if is_message else None
+        if mover is not None and mover(source, new / relative):
+            moved += 1
+        else:
+            kept.append(source)
+    try:
+        new.mkdir(parents=True, exist_ok=True)
+        write_atomic(marker, json.dumps({"at": time.time(), "moved": moved}) + "\n")
+    except OSError:
+        # No marker, so the next start tries again — and delivers nothing
+        # from the tree meanwhile, because nothing reads it.
+        pass
+    _mark_project(root, manager)
+    for directory in (
+        sorted((p for p in old.rglob("*") if p.is_dir()), key=lambda p: -len(p.parts))
+        if old.is_dir()
+        else []
+    ):
+        try:
+            directory.rmdir()
+        except OSError:
+            pass
+    try:
+        old.rmdir()
+    except OSError:
+        pass
+    return Adoption(moved=moved, kept=tuple(kept))
+
+
+def adoption_notes(adoption: Adoption, manager: str) -> list[str]:
+    """What to say about an adoption. Nothing when there was nothing to do."""
+    notes: list[str] = []
+    if adoption.moved:
+        notes.append(
+            f"moved {adoption.moved} file(s) from Manager {manager!r}'s "
+            "pre-0.6.0 in-tree mailbox to its mailbox under ~/.rite; the "
+            "project tree is not read for mail again"
+        )
+    if adoption.kept:
+        notes.append(
+            f"⚠ {len(adoption.kept)} file(s) in {manager!r}'s old in-tree "
+            "mailbox could not be moved and were NOT delivered — they are "
+            f"left where they are: {', '.join(str(p) for p in adoption.kept[:3])}"
+        )
+    if adoption.after_marker:
+        notes.append(
+            f"⚠ {len(adoption.after_marker)} file(s) appeared in {manager!r}'s "
+            "old in-tree mailbox after it was moved, and were NOT delivered: "
+            "rite no longer reads the project tree for mail, because it cannot "
+            "tell who wrote there. If an older rite sent one, resend it with "
+            f"`rite message {manager} …`. First: "
+            f"{adoption.after_marker[0]}"
+        )
+    return notes
+
+
+def legacy_waiting(root: Path, manager: str) -> int:
+    """Messages still in the pre-0.6.0 box of a Manager not yet started
+    under this rite, for a reader to be told about. 0 once adopted."""
+    if (mail_root(root, manager) / ADOPTED_MARKER).exists():
+        return 0
+    return sum(
+        1
+        for p in _legacy_files(root, manager)
+        if p.suffix == ".json" and p.parent.name in (INBOX, OUTBOX)
     )
 
 

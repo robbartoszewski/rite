@@ -22,6 +22,7 @@ from rite_ai.managers.enclosure import write_profile
 from rite_ai.managers.mailbox import (
     INBOX,
     OUTBOX,
+    adopt_legacy,
     legacy_mail_root,
     mailbox_dir,
     read,
@@ -110,25 +111,17 @@ def test_the_inbox_is_outside_the_project_it_would_be_granted_by(two):
     assert not mailbox_dir(root, "lead", INBOX).resolve().is_relative_to(root)
 
 
-def test_the_old_in_tree_inbox_is_still_unwritable(two):
-    """rite still READS the pre-0.6.0 box until it drains, so a Manager
-    writing its own old inbox would be delivered as the Owner's word."""
-    root, lead, helper = two
-    for profile in (lead, helper):
-        old = legacy_mail_root(root, "lead") / INBOX
-        assert _under(profile, _write(old, "1_0000001_000000000003.json"), root) != 0
-    assert read(root, "lead", INBOX) == []
-
-
-def test_but_what_is_already_in_it_is_still_delivered(two):
-    """A project mid-flight loses nothing: the old box is read, merged."""
-    root, _lead, _helper = two
+def test_writing_the_old_in_tree_box_after_the_move_delivers_nothing(two):
+    """The old box is no longer fenced, because it is no longer READ: moved
+    once at start, then only reported. So a Manager that writes it — which
+    the project grant allows — is heard by nobody."""
+    root, lead, _helper = two
+    adopt_legacy(root, "lead")
     old = legacy_mail_root(root, "lead") / INBOX
-    (old / "1000000000000_0000001_000000000004.json").write_text(
-        '{"text": "old", "timestamp": 1}'
-    )
-    send(root, "lead", INBOX, "new")
-    assert [m.text for m in read(root, "lead", INBOX)] == ["old", "new"]
+    old.mkdir(parents=True, exist_ok=True)
+    assert _under(lead, _write(old, "1_0000001_000000000003.json"), root) == 0
+    assert read(root, "lead", INBOX) == []
+    assert adopt_legacy(root, "lead").after_marker
 
 
 def test_outside_any_profile_the_person_still_can(two):

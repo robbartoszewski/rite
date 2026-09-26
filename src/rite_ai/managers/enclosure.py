@@ -281,19 +281,17 @@ def _manager_separation(project: Path, manager: str) -> list[str]:
     a wrong path join in one Manager cannot write another's files.
 
     ⚠ **SINCE 0.6.0 THE MAILBOX IS OUTSIDE THE PROJECT** (`mailbox.mail_root`),
-    so no grant above reaches an inbox and none has to be taken back. Two
-    lines remain about mail, and neither is the old carve-out:
-    * the Manager's OWN OUTBOX is granted by exact path, because `rite reply`
-      and `rite ask` write it from in here, and its mail directory is readable
-      so `prune` can see the readers' cursors;
-    * the old in-tree `mail/` stays unwritable, because rite still READS it
-      until it drains (`mailbox.legacy_mail_root`), so a write there would
-      still be delivered.
+    so no grant above reaches an inbox and none has to be taken back. The
+    Manager's OWN OUTBOX is granted by exact path, because `rite reply` and
+    `rite ask` write it from in here, and its mail directory is readable so
+    `prune` can see the readers' cursors. The old in-tree `mail/` is not
+    fenced: it is moved once at start and never read again
+    (`mailbox.adopt_legacy`), so a write there delivers nothing.
     The inbox is also denied by name, LAST, which costs one line and holds
     even where rite's home sits under a granted path — `/tmp`, or a project
     that is the home directory itself.
     """
-    from rite_ai.managers.mailbox import INBOX, OUTBOX, legacy_mail_root, mail_root
+    from rite_ai.managers.mailbox import INBOX, OUTBOX, mail_root
 
     managers = project / ".rite" / "managers"
     own = managers / manager
@@ -306,8 +304,6 @@ def _manager_separation(project: Path, manager: str) -> list[str]:
         ";   they win.",
         f"(deny file-write* (subpath {_quote(managers)}))",
         f"(allow file-write* (subpath {_quote(own)}))",
-        "; The pre-0.6.0 mailbox, still read until it drains: never written.",
-        f"(deny file-write* (subpath {_quote(legacy_mail_root(project, manager))}))",
         "; This Manager's mailbox, outside the project: its outbox only.",
         f"(allow file-read* (subpath {_quote(mail)}))",
         f"(allow file-read* file-write* (subpath {_quote(mail / OUTBOX)}))",

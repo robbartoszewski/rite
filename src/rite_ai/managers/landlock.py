@@ -496,9 +496,10 @@ def _fenced_project_paths(project: Path, manager: str) -> list[Path]:
     Owner's supervisor delivers as "routed by the Owner · INSTRUCTION", and
     `prompt.txt`, which IS the next cycle's instruction. Granting the project
     as a tree would let a secondary write the Owner's route requests. So the
-    tree is still enumerated, and only one level of it changed: this
-    Manager's own `mail/`, the pre-0.6.0 box rite still reads until it
-    drains, is now left out whole.
+    tree is still enumerated. What changed is this Manager's own directory:
+    it is granted as a tree now, since there is no `mail/in` left in it to
+    carve out — the pre-0.6.0 box is moved once at start and never read again
+    (`mailbox.adopt_legacy`).
 
     ⚠ **WHAT IT COSTS, because it is a real cost and not a theoretical one.**
     The project root is not granted as a tree, so a Manager cannot create a
@@ -552,11 +553,13 @@ def _fenced_project_paths(project: Path, manager: str) -> list[Path]:
     granted += entries(project, {rite_dir})
     # Everything in `.rite` except `managers`.
     granted += entries(rite_dir, {managers})
-    # This Manager's own directory, by its children, leaving out the
-    # pre-0.6.0 `mail/` whole: rite still reads it until it drains.
+    # This Manager's own directory, AS A TREE. It used to be granted by its
+    # children so `mail/in` could be left out; the inbox has left the tree
+    # and the old box is never read again, so there is nothing left to carve.
+    # Not granted if it is a symlink, for the reason above.
     own = managers / manager
-    if own.is_dir():
-        granted += entries(own, {own / "mail"})
+    if own.is_dir() and not own.is_symlink():
+        granted.append(own)
     return granted
 
 
