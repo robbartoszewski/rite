@@ -368,6 +368,33 @@ def take(root: Path, manager: str, box: str) -> list[Message]:
     return messages
 
 
+def put_back(messages: list[Message]) -> int:
+    """Return messages `take` removed, at their ORIGINAL names. Never raises.
+
+    ⚠ **For a cycle that took its mail and then did not start.** Observed in
+    a two-Manager run: a routed instruction was taken for the secondary's
+    cycle, the launch was refused ("already running"), and the run returned
+    — the files were gone and nothing had delivered them. Silent loss, the
+    failure this channel exists to prevent. The original filename keeps its
+    place in send order, and a reader's cursor never covers the inbox.
+    Returns how many were restored; one that cannot be written is reported by
+    the count, not raised, because the caller is already on a failure path.
+    """
+    restored = 0
+    for message in messages:
+        try:
+            message.path.parent.mkdir(parents=True, exist_ok=True)
+            write_atomic(
+                message.path,
+                json.dumps({"text": message.text, "timestamp": message.timestamp})
+                + "\n",
+            )
+            restored += 1
+        except OSError:
+            pass
+    return restored
+
+
 def waiting(root: Path, manager: str, box: str) -> bool:
     """Is anything in this box? Cheap enough for a 2-second poll."""
     where = mailbox_dir(root, manager, box)
