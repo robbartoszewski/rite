@@ -50,7 +50,9 @@ def test_the_login_is_a_0600_file_in_a_0700_directory(project, home):
     assert body["accessToken"] == FAKE
     assert body["scopes"] == ["user:inference"]
     # No plan and no refresh token: rite knows neither.
-    assert set(body) == {"accessToken", "expiresAt", "scopes"}
+    # No `expiresAt`: rite cannot know when the token was minted, and
+    # Claude Code reads the file without it (measured, 401 either way).
+    assert set(body) == {"accessToken", "scopes"}
 
 
 def test_the_pane_is_told_where_the_login_is_never_the_token(project, home):
