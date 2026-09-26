@@ -100,7 +100,10 @@ def test_the_kernel_struct_sizes_are_what_the_kernel_expects():
     is a PACKED u64 + s32. Unpacked it is 16 bytes on every LP64 platform and
     the kernel reads the fd out of the wrong bytes. This runs everywhere,
     including on x86_64 CI, and needs no Landlock at all."""
-    assert ctypes.sizeof(landlock._PathBeneathAttr) == 12
+    assert landlock.PATH_BENEATH_SIZE == 12, (
+        "landlock_path_beneath_attr must be 12 packed bytes; a padded 16 makes "
+        "the kernel read the fd out of the wrong bytes"
+    )
     assert ctypes.sizeof(landlock._RulesetAttr) == 24
     assert (
         landlock.SYS_CREATE_RULESET,

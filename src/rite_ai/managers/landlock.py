@@ -59,6 +59,7 @@ import ctypes.util
 import json
 import os
 import shlex
+import struct
 import sys
 from pathlib import Path
 
@@ -204,22 +205,29 @@ class _RulesetAttr(ctypes.Structure):
     )
 
 
-class _PathBeneathAttr(ctypes.Structure):
-    # ⚠ Packed. The kernel struct is `__attribute__((packed))`, and a padded
-    # one is read as garbage: the fd lands in the wrong bytes.
-    #
-    # ⚠ `_layout_` is named explicitly where the interpreter supports it.
-    # Python 3.14 warns that `_pack_` alone implies the MSVC layout and that
-    # the implicit default becomes an error in 3.19 — surfaced by the first
-    # macOS CI run. This struct is read by a LINUX kernel, so the layout has to
-    # be the GCC one; naming it changes nothing today and stops a future
-    # interpreter choosing the Windows one.
-    if sys.version_info >= (3, 14):
-        _layout_ = "gcc-sysv"
-    _pack_ = 1
-    _fields_ = (
-        ("allowed_access", ctypes.c_uint64),
-        ("parent_fd", ctypes.c_int32),
+# ⚠ **BUILT AS BYTES, NOT AS A ctypes.Structure, AND THAT IS DELIBERATE.**
+# `landlock_path_beneath_attr` is `__u64 allowed_access; __s32 parent_fd;` with
+# `__attribute__((packed))` — 12 bytes, no trailing padding. Expressing that
+# with `ctypes` needs `_pack_ = 1`, and Python 3.14 both warns that `_pack_`
+# alone implies the MSVC layout AND refuses `_pack_` together with
+# `_layout_ = "gcc-sysv"`, raising `ValueError: _pack_ is not compatible with
+# gcc-sysv layout`. Measured on the macOS CI job: naming the layout turned a
+# deprecation warning into a hard import error, so `landlock.py` would not
+# import at all on 3.14.
+#
+# `struct.pack("=Qi", ...)` says what the kernel ABI is with no layout dialect
+# to choose: `=` is native byte order with standard sizes and NO alignment, so
+# it is 8 + 4 = 12 bytes on every platform this runs on. Asserted in
+# `PATH_BENEATH_SIZE` rather than trusted.
+PATH_BENEATH_FORMAT = "=Qi"
+PATH_BENEATH_SIZE = struct.calcsize(PATH_BENEATH_FORMAT)
+
+
+def _path_beneath(allowed_access: int, parent_fd: int) -> ctypes.Array:
+    """The packed `landlock_path_beneath_attr` the kernel expects."""
+    return ctypes.create_string_buffer(
+        struct.pack(PATH_BENEATH_FORMAT, allowed_access, parent_fd),
+        PATH_BENEATH_SIZE,
     )
 
 
@@ -627,12 +635,12 @@ def _add_rule(ruleset_fd: int, path: str, access: int) -> None:
         return
     fd = os.open(path, os.O_PATH | os.O_CLOEXEC)
     try:
-        attr = _PathBeneathAttr(access, fd)
+        attr = _path_beneath(access, fd)
         result, err = _syscall(
             SYS_ADD_RULE,
             ctypes.c_int(ruleset_fd),
             ctypes.c_uint32(1),  # LANDLOCK_RULE_PATH_BENEATH
-            ctypes.byref(attr),
+            attr,
             ctypes.c_uint32(0),
         )
         if result != 0:
