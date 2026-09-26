@@ -1,6 +1,6 @@
 # How a sandboxed Manager gets GitHub credentials — C6/C26, v0.6.0
 
-**Status: DESIGN + MEASUREMENTS, 2026-09-26. Not built.** Robert put C6/C26
+**Status: DESIGN + MEASUREMENTS, 2026-09-26. The token half is BUILT (`f3926a1`) and not yet observed; see the banner below.** Robert put C6/C26
 back into v0.6.0: a Manager that reads a private board anonymously and cannot
 `git push` over HTTPS is not useful enough to ship. This note confirms or
 refutes the proposal it was given, and states the path every credential takes
