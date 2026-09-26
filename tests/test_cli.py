@@ -14,7 +14,11 @@ def test_version():
     result = runner.invoke(cli, ["--version"])
     assert result.exit_code == 0
     assert "rite" in result.output
-    assert "0.5.1" in result.output
+    # Whatever VERSION says, which on main between releases is a DEV marker
+    # (`0.6.0.dev0`), so a main build cannot be mistaken for the release it
+    # follows. `docs/releasing.md` step 1 still requires the real bump.
+    version = (Path(__file__).resolve().parent.parent / "VERSION").read_text().strip()
+    assert version in result.output
 
 
 def test_doctor_with_no_project(tmp_path, monkeypatch):
