@@ -28,7 +28,7 @@ when the run ends.
 so "it expires soon anyway" (true of the one-hour GitHub token) does not
 apply. The next `rite start` for this Manager, holding the run lock
 (`github_access.hold_run`), finds any copy still there, knows no live run
-owns it, removes it and SAYS so (`reap_leftover`).
+owns it, removes it and SAYS so (`prepare`).
 
 **Stated, not reassuring:** a compromised Manager can read that file, copy the
 token out, and make model requests on the subscription until the token
@@ -140,31 +140,33 @@ def manager_secrets(root: Path, manager: str, home: Path | None = None) -> list[
     return live_secrets(_config_dir(root, manager, home))
 
 
-def reap_leftover(root: Path, manager: str, home: Path | None = None) -> str:
-    """Remove a login copy an earlier, uncleanly ended run left. A line to say, or "".
-
-    Call ONLY while holding `github_access.hold_run`: that is what makes a copy
-    found here provably not in use.
-    """
-    path = _config_dir(root, manager, home) / ".credentials.json"
-    if not path.is_file():
-        return ""
-    path.unlink()
-    return (
-        f"claude: removed a copy of claude_token that an earlier run of Manager "
-        f"{manager!r} left at {path}. That run did not end cleanly (killed, or "
-        "the machine stopped), so it never removed its own copy. Nothing was "
-        "using it. If you did not stop that run yourself, look at why it ended."
-    )
-
-
-def prepare(root: Path, manager: str, token: str | None) -> str:
+def prepare(root: Path, manager: str, token: str | None, say=None) -> str:
     """Write this Manager's login, or say why a Claude Manager cannot start.
 
     Returns a REFUSAL, or "". A Claude Manager with no `claude_token` would
     start and then print `Not logged in` inside its pane, which reads as a
     broken rite; it is refused here instead, with the two commands that fix it.
+
+    ⚠ **A login already here was left by a run that did not exit cleanly.**
+    The copy is removed in a `finally`, which a killed process skips, and the
+    token lives a year. The next start is the only moment that reliably
+    happens, so it is removed here, and SAID: the line matters as much as the
+    unlink. A leftover is a small problem; not noticing it is the real one,
+    and the line tells the operator their Manager was killed rather than
+    exited. Safe only because `rite start` holds this Manager's run lock
+    (`github_access.hold_run`) before calling this, so no live run owns it.
+    **Not covered:** a Manager killed and never started again leaves the file
+    indefinitely. A `doctor` row listing copies with no live run would close
+    that.
     """
+    stale = _config_dir(root, manager) / ".credentials.json"
+    if stale.is_file():
+        stale.unlink()
+        (say or (lambda _: None))(
+            f"claude: removed a login copy left at {stale} by a run of Manager "
+            f"{manager!r} that did not exit cleanly (killed, or the machine "
+            "stopped), rather than one that ended. Nothing was using it."
+        )
     if not token:
         return (
             "a Claude Manager runs inside a sandbox, which cannot use the "

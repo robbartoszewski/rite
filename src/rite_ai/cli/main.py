@@ -6283,7 +6283,10 @@ def _claude_login(root: Path, role) -> bool:
     from rite_ai.managers.claude_login import prepare
 
     refusal = prepare(
-        root, role.name, get_scoped("claude_token", _project_credentials())
+        root,
+        role.name,
+        get_scoped("claude_token", _project_credentials()),
+        say=lambda line: click.echo(line, err=True),
     )
     if refusal:
         click.echo(f"refusing to start Manager {role.name!r}: {refusal}", err=True)
@@ -6603,11 +6606,6 @@ def _start_a_manager(
             err=True,
         )
         raise SystemExit(1)
-    from rite_ai.managers.claude_login import reap_leftover
-
-    leftover = reap_leftover(root, role.name)
-    if leftover:
-        click.echo(leftover, err=True)
     github = _github_access(root, role.name)
     claude_signed_in = _claude_login(root, role)
     listener = _slack_listener(root, role.name)
@@ -6665,7 +6663,7 @@ def _start_a_manager(
     finally:
         # Both credential copies go however the run ENDS. A KILLED run skips
         # this; the next start for this Manager finds the Claude login under
-        # the run lock and removes it, saying so (`reap_leftover`), and
+        # the run lock and removes it, saying so (`claude_login.prepare`), and
         # `open_access` clears a leftover GitHub token (one hour at most).
         if github is not None:
             github.close()

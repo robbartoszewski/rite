@@ -79,16 +79,27 @@ def test_the_run_ends_with_the_login_removed_and_transcripts_kept(project, home)
     assert (path.parent / "projects").is_dir()
 
 
-def test_a_leftover_login_is_REMOVED_and_said(project, home):
+def test_a_leftover_login_is_REMOVED_and_said(project):
     """A killed run skips its `finally`, and this is a one-year token."""
-    path = cl._write_login(project, "lead", FAKE, home)
+    path = cl._write_login(project, "lead", "sk-ant-oat01-LEFTOVER")
     (path.parent / "projects").mkdir()
-    said = cl.reap_leftover(project, "lead", home)
-    assert not path.exists()
+    said = []
+    assert cl.prepare(project, "lead", FAKE, say=said.append) == ""
+    assert json.loads(path.read_text())["claudeAiOauth"]["accessToken"] == FAKE
     assert (path.parent / "projects").is_dir(), "transcripts are kept"
-    assert "did not end cleanly" in said and str(path) in said
-    assert FAKE not in said
-    assert cl.reap_leftover(project, "lead", home) == "", "nothing left, nothing said"
+    assert len(said) == 1 and "did not exit cleanly" in said[0]
+    assert "LEFTOVER" not in said[0]
+    said.clear()
+    cl.remove_login(project, "lead")
+    cl.prepare(project, "lead", FAKE, say=said.append)
+    assert said == [], "a clean previous exit says nothing"
+
+
+def test_a_leftover_is_removed_even_when_the_start_is_refused(project):
+    path = cl._write_login(project, "lead", FAKE)
+    said = []
+    assert cl.prepare(project, "lead", None, say=said.append)
+    assert not path.exists() and len(said) == 1
 
 
 def test_the_run_lock_is_held_until_the_process_lets_go(project, home):
