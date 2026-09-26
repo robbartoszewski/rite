@@ -174,9 +174,60 @@ turns"; the run log says 11.)
 
 ---
 
+## 7. Inside the Manager profile, with an API key — YES, with three grants
+
+**Measured 2026-09-27**, later the same night: rite's Manager profile from
+`origin/main` at `c2076d4`, fixture project under `$HOME` (not a granted
+temporary directory), key read from a file at run time and handed to the one
+run as `CURSOR_API_KEY` in its environment.
+
+| run | exit | result |
+|---|---|---|
+| control, no key | **1** | *"Authentication required"* |
+| key, profile + binary + per-Manager `CURSOR_CONFIG_DIR` | **1** | *"Failed to trust workspace ... Please check permissions."* |
+| key, plus the workspace's `~/.cursor/projects/<slug>/` | **0** | turn 1 `NOTED` on a rite-generated UUID |
+| same, turn 2 | **0** | **`KESTREL64`**: continuity holds inside the boundary |
+| same, turn 2 again, launched in a tmux pane | **0** | `KESTREL64` |
+
+The key never appeared on any process's argv (`ps` sampled during each run).
+
+**What a Cursor Manager's profile needs, beyond today's:**
+
+1. read `~/.local/share/cursor-agent` (the binary; without it, exit 126);
+2. read/write the Manager's own `CURSOR_CONFIG_DIR` (config and `chats/`);
+3. ⚠ read/write `~/.cursor/projects/<workspace slug>/`. **`CURSOR_CONFIG_DIR`
+   does not move it.** It holds the trust marker `.workspace-trusted`,
+   `worker.sock`, `worker.log`, and a second transcript,
+   `agent-transcripts/<chat id>/<chat id>.jsonl`. The slug is the workspace
+   path with `/` as `-`, so two Managers in one project share it. The
+   alternative to granting it is not measured.
+
+**The chat check works inside the boundary:** the chat appeared at
+`$CURSOR_CONFIG_DIR/chats/<md5 of the workspace path>/<chat id>/` with
+`meta.json` and `store.db`, as measured outside.
+
+⚠ **Given a key, the CLI tries to save the login token to the keychain**, fails
+inside the profile, and prints *"The keychain item is stuck. Delete it and sign
+in again: security delete-generic-password -s cursor-access-token ..."*. The
+turn continues. The advice is wrong in a sandbox and would delete the
+operator's own CLI login; rite must never relay it as a remedy.
+
+⚠ **`agent status` with a working key prints "Not logged in" and exits 0.** It
+answers for the stored login only, so it cannot be CU5's check for a Manager.
+
+**`worker-server`:** a turn launched in a tmux pane left one running after the
+turn exited; killing the tmux session ended it within 5 s. Launched outside
+tmux it survived for minutes (section 5). Whether it ends when the pane's
+command exits under `remain-on-exit`, as rite runs it, is not measured. It is
+a descendant of the sandboxed process, so it should carry the profile; that is
+inferred, not measured.
+
+**Expiry:** nothing in any response said. Not measured.
+
+---
+
 ## Not measured
 
-- An authenticated turn inside the Manager profile (needs an API key; CU4).
 - Exit codes for a missing model and an unreachable service during a turn.
 - Cursor's own `--sandbox enabled` nested inside rite's profile.
 - `agent --resume <id>` interactively (R4).
