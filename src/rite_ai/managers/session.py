@@ -1012,6 +1012,14 @@ ALLOWED_ON_TMUX_ARGV = frozenset(
         "GOOSE_PROVIDER",
         "GOOSE_MODEL",
         "OLLAMA_HOST",
+        # C6/C26 (`github_access`): a PATH, or a helper's NAME. None is a
+        # secret. The token itself is in a 0600 file.
+        "GH_CONFIG_DIR",
+        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_KEY_0",
+        "GIT_CONFIG_VALUE_0",
+        "GIT_CONFIG_KEY_1",
+        "GIT_CONFIG_VALUE_1",
     }
 )
 """The ONLY variables that may be passed to a pane with `tmux -e` (C6).
@@ -1047,7 +1055,13 @@ global config (measured 2026-09-25: declared `qwen3:8b`, ran
 are configuration and not secrets; a secret an endpoint needs goes in the
 role's `credential`, which never travels this way. ⚠ **A URL CAN carry one**,
 `http://user:pass@host`, so `supervise` refuses an endpoint with userinfo
-rather than put it here."""
+rather than put it here.
+
+⚠ The GitHub names (C6/C26) are here for the reason `TMPDIR` is. They say
+WHERE the credential is (`GH_CONFIG_DIR`), or which helper `git` should ask
+(`GIT_CONFIG_*`: reset, then `gh auth git-credential`). **None of them IS a
+credential.** The token is in a 0600 file, in a directory only this
+Manager's profile can read."""
 
 
 def _on_tmux_argv(name: str, value: str) -> list[str]:

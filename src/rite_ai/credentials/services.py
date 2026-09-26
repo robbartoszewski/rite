@@ -68,6 +68,11 @@ class Field:
     story for it yet, which is deliberate for anything the sandbox does
     not need."""
 
+    multiline: bool = False
+    """A private key, several lines long. A one-line prompt cannot take it,
+    and `--value` would put it on argv, so it is set only with
+    `rite credential set <key> --stdin`."""
+
 
 @dataclass(frozen=True)
 class Service:
@@ -167,6 +172,27 @@ SERVICES: dict[str, Service] = {
             "receive it too, because every Worker receives every credential "
             "(§5.3.4) — they have no use for it, which makes this the first "
             "credential where that rule costs without buying."
+        ),
+    ),
+    # ⚠ C6/C26: a credential that exists ONLY outside a Manager's sandbox.
+    # No `env`, deliberately: `worker_environment` skips a field without one,
+    # so it is never handed to a Worker (§5.3.4 would otherwise give every
+    # Worker every credential the project holds). See
+    # `managers/github_access.py` for the path each takes.
+    "github_app": Service(
+        name="github_app",
+        label="GitHub App — mints a sandboxed Manager's one-hour, one-repository token",
+        fields=(
+            Field(
+                "key",
+                "GitHub App private key (.pem)",
+                secret=True,
+                multiline=True,
+            ),
+        ),
+        note=(
+            "Read only by `rite start`, outside the sandbox. The App's id and "
+            "installation id go in config.yaml under github_app."
         ),
     ),
     "claude": Service(

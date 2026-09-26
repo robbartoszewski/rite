@@ -901,7 +901,15 @@ class Listener:
             # rule as the journal (C7), plus the one secret the relay holds:
             # its own token. The outbox file itself is left as written, so
             # `rite connect` on this machine still sees exactly what was said.
-            text = redact_assignments(message.text, (self.token,))
+            # And the Manager's live GitHub token (C6/C26), by EXACT value:
+            # the structural rule misses `oauth_token: <t>`, which is what
+            # printing the Manager's gh config shows (measured).
+            from rite_ai.managers.github_access import manager_secrets
+
+            text = redact_assignments(
+                message.text,
+                (self.token, *manager_secrets(self.project, self.manager)),
+            )
             checkin = is_checkin(self.project, self.manager, message.path.name)
             if checkin and not self.dm:
                 # ⚠ No Owner, so no command channel: an answer typed in

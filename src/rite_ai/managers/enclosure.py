@@ -38,7 +38,7 @@ import shlex
 import sys
 from pathlib import Path
 
-from rite_ai.managers import user_dir
+from rite_ai.managers import github_access, user_dir
 from rite_ai.names import name_problem
 
 PROFILE_SUFFIX = ".sb"
@@ -458,6 +458,11 @@ def compose(
         f"(deny file-read* file-write* (subpath {_quote(where / '.yoloai')}))",
         "",
         *_socket_denials(socket_dirs),
+        "",
+        # ⚠ LAST of all: the Unix-socket denial must come after
+        # `(allow network*)`, and this Manager's own agent and credential
+        # directory are allowed back after it (C6/C26, `github_access`).
+        *github_access.profile_lines(root, manager, home),
     ]
     return "\n".join(lines)
 

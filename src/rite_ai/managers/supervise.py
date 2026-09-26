@@ -43,6 +43,7 @@ from rite_ai.managers import (
     designated,
     designation_path,
     forget_instance,
+    github_access,
     manager_dir,
 )
 from rite_ai.managers.broker import take_requests
@@ -619,6 +620,7 @@ def supervise(
     starter: object = None,
     engine_ready: object = None,
     slack: object = None,
+    github: object = None,
     resume_id_for: object = None,
     broker: object = None,
     router: object = None,
@@ -780,6 +782,11 @@ def supervise(
                 f"({len(cycles)} session(s) started)",
                 cycles,
             )
+
+        if github is not None:
+            # Each cycle starts on a token with most of its hour left.
+            for line in github.refresh():
+                say(line)
 
         if callable(engine_ready):
             # ⚠ BEFORE `take_mail`. Taking mail deletes it, so a cycle
@@ -1078,6 +1085,13 @@ def supervise(
                     for line in getattr(slack, "post_replies", list)():
                         say(line)
                     for line in getattr(slack, "news", list)():
+                        say(line)
+                # ⚠ C6/C26: the token is re-minted BEFORE it lapses, from
+                # here, so a long cycle does not run out under the Manager.
+                # A failure is SAID, and the old file is left: the Manager
+                # then gets a loud 401, never a silent fall to anonymous.
+                if github is not None:
+                    for line in github.refresh():
                         say(line)
                 if not cycle.mail_waiting and mail_waiting(root, manager, INBOX):
                     cycle.mail_waiting = True
@@ -1461,6 +1475,10 @@ def _default_starter(
             ),
             "TMPDIR": str(engine_tmp(root, manager)),
             **model_env,
+            # C6/C26: WHERE the GitHub credential is, never the credential.
+            # Derived from what `github_access.open_access` left on disk, so
+            # there is no argument to drop.
+            **github_access.pane_environment(root, manager),
         },
         engine=engine,
         command=wrap(

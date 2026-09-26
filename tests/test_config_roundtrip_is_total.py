@@ -66,6 +66,11 @@ _VALID_ALTERNATES = {
     # mistake is otherwise a bare `channel_not_found` at a run's first poll.
     "slack.owner_user": "U0C4HK552HF",
     "slack.broadcast_channel": "#team-status",
+    # Validated (C6/C26): numeric ids, and the installation id must be set
+    # whenever the App id is.
+    "github_app.app_id": "123456",
+    "github_app.installation_id": "7890123",
+    "github_app.repository": "org/board",
 }
 
 

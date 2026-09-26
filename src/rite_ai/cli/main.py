@@ -1838,6 +1838,19 @@ def _set_service(service_name: str, global_: bool, root, config) -> None:
     from rite_ai.credentials.services import SERVICES, service_key
 
     svc = SERVICES[service_name]
+    multiline = [f for f in svc.fields if f.multiline]
+    if multiline:
+        # A one-line prompt would take the first line of a private key and
+        # store that, which then fails far from here, at `rite start`.
+        for f in multiline:
+            click.echo(
+                f"'{service_key(svc.name, f.name)}' is several lines long, so it "
+                f"is read from standard input:\n"
+                f"  rite credential set {service_key(svc.name, f.name)} --stdin "
+                "< <file>",
+                err=True,
+            )
+        raise SystemExit(2)
     click.echo(f"{svc.label}")
     if svc.note:
         click.echo(f"  note: {svc.note}")
@@ -1896,6 +1909,17 @@ def _set_service(service_name: str, global_: bool, root, config) -> None:
     help="Credential value. Omit it — you will be prompted, and it stays out of argv.",
 )
 @click.option(
+    "--stdin",
+    "from_stdin",
+    is_flag=True,
+    default=False,
+    help=(
+        "Read the value from standard input, whole — for a multi-line key "
+        "(`rite credential set github_app_key --stdin < app.pem`). Never on "
+        "argv, never in a one-line prompt."
+    ),
+)
+@click.option(
     "--allow-unknown",
     is_flag=True,
     default=False,
@@ -1912,7 +1936,11 @@ def _set_service(service_name: str, global_: bool, root, config) -> None:
     ),
 )
 def credential_set(
-    name: str, value: str | None, allow_unknown: bool, global_: bool
+    name: str,
+    value: str | None,
+    from_stdin: bool,
+    allow_unknown: bool,
+    global_: bool,
 ) -> None:
     """Store credentials for a SERVICE — `rite credential set jira` — or
     for one individual key. Secrets are prompted for, never passed as an
@@ -2040,6 +2068,22 @@ def credential_set(
             err=True,
         )
         raise SystemExit(2)
+
+    # ⚠ **A private key is several lines, and a one-line prompt cannot
+    # take it.** `--value` would put it on argv, where `ps` shows it to
+    # every local account. So a multi-line credential comes in on stdin,
+    # whole, and nowhere else.
+    if from_stdin:
+        if value is not None:
+            click.echo("--stdin and --value are two sources; give one.", err=True)
+            raise SystemExit(2)
+        value = click.get_text_stream("stdin").read().strip()
+        if not value:
+            click.echo(
+                f"nothing on standard input — '{name}' was not stored.", err=True
+            )
+            raise SystemExit(2)
+        value += "\n"
 
     # Prompt only AFTER the key is known to be good. Validating second
     # made the reporter type their secret twice and confirm it before
@@ -6094,6 +6138,42 @@ def _router_for(root: Path, manager: str):
     return step
 
 
+def _github_access(root: Path, manager: str):
+    """This run's GitHub credentials for a sandboxed Manager, or None (C6/C26).
+
+    Nothing configured is None and says nothing: the Manager has no GitHub
+    credential, as before. Configured and failing is a REFUSAL to start,
+    naming GitHub's own words. An unreachable credential is not an absent
+    one (the D-74 rule), and a Manager that started without the credential
+    it was configured for would read the board anonymously, which is the
+    failure this exists to remove.
+    """
+    from rite_ai.config.models import ProjectConfig
+    from rite_ai.config.parse import ParseError, parse_config
+    from rite_ai.managers.github_access import open_access
+
+    parsed = parse_config(root / ".rite" / "config.yaml")
+    config = parsed if not isinstance(parsed, ParseError) else ProjectConfig()
+    access, refusal = open_access(root, manager, config)
+    if refusal:
+        click.echo(
+            f"refusing to start Manager {manager!r}: its GitHub credential "
+            f"could not be set up: {refusal}",
+            err=True,
+        )
+        raise SystemExit(1)
+    if access is not None and access.app is not None:
+        click.echo(
+            f"github: a token for {', '.join(access.app[2])} only, valid until "
+            f"{time.strftime('%H:%M', time.localtime(access.expires_at))} and "
+            "refreshed before it lapses. The App's key stays outside the "
+            "sandbox. The Manager can read and write that repository, and "
+            "nothing else, while it runs.",
+            err=True,
+        )
+    return access
+
+
 def _slack_listener(root: Path, manager: str):
     """A Slack listener for this Manager, opened, or None when Slack is off.
 
@@ -6350,6 +6430,7 @@ def _start_a_manager(
             err=True,
         )
 
+    github = _github_access(root, role.name)
     listener = _slack_listener(root, role.name)
     try:
         outcome = supervise(
@@ -6372,6 +6453,7 @@ def _start_a_manager(
             broker=for_project(root, board),
             router=_router_for(root, role.name),
             slack=listener,
+            github=github,
             max_sessions=sessions,
             window_seconds=minutes * 60.0,
             prompt=(
@@ -6402,6 +6484,10 @@ def _start_a_manager(
             note=lambda m: click.echo(m, err=True),
         )
     finally:
+        # The agent is stopped and the token file removed however the run
+        # ends. The agent's own key lifetime (-t) covers a killed process.
+        if github is not None:
+            github.close()
         # ⚠ In a finally, so a Ctrl-C still posts the last reply. Only a
         # killed process skips it.
         if listener is not None:

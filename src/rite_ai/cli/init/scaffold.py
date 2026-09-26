@@ -181,6 +181,12 @@ def config_to_yaml(config: ProjectConfig) -> str:
         "checkins": {
             "windows": [asdict(w) for w in config.checkins.windows],
         },
+        # ⚠ APPENDED last, for `checkins`' reason: nothing existing moves.
+        "github_app": {
+            "app_id": config.github_app.app_id,
+            "installation_id": config.github_app.installation_id,
+            "repository": config.github_app.repository,
+        },
     }
     return yaml.safe_dump(
         data, sort_keys=False, default_flow_style=False, allow_unicode=True
