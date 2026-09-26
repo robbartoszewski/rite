@@ -276,7 +276,10 @@ def settings_document(allow: tuple[str, ...] = DEFAULT_ALLOW) -> dict:
     of the user's own, so every key rite writes is a key it takes away from
     them.
     """
-    return {"permissions": {"allow": list(allow)}}
+    # Plus the rite the Manager's instructions name, by absolute path
+    # (`_running_rite_rules`). Here, so the written file and this document
+    # are one definition.
+    return {"permissions": {"allow": list(allow + _running_rite_rules())}}
 
 
 def write_settings(root: Path, allow: tuple[str, ...] = DEFAULT_ALLOW) -> Path:
@@ -297,6 +300,23 @@ def write_settings(root: Path, allow: tuple[str, ...] = DEFAULT_ALLOW) -> Path:
     # error in print mode), and an ignored allowlist denies everything.
     path.write_text(json.dumps(settings_document(allow), indent=2) + "\n")
     return path
+
+
+def _running_rite_rules() -> tuple[str, ...]:
+    """The rule that lets a Manager run THE `rite` its instructions name.
+
+    ⚠ **Found by a real Claude Manager, 2026-09-26.** Since `c0e4097` a
+    Manager is told to run rite by ABSOLUTE PATH (`own_command()`), so an
+    older `rite` on PATH cannot answer for this one. `Bash(rite:*)` does not
+    match `/…/bin/rite reply …`, and the engine denied the Manager's one
+    `rite reply` of the cycle: its answer to the User never arrived. Goose
+    never met this, having no per-command allowlist. Derived from the same
+    `own_command()` that composes the instructions, so the two cannot drift.
+    """
+    from rite_ai import own_command
+
+    path = own_command()
+    return (f"Bash({path}:*)",) if path.startswith("/") else ()
 
 
 def launch_arguments(path: Path) -> str:

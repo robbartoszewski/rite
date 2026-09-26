@@ -183,8 +183,10 @@ def _tool_paths(home: Path) -> tuple[Path, ...]:
             # open())` — a crash rather than a refusal, which is the worst
             # shape for a missing grant because it reads as a broken rite.
             ".local/share/uv",
-            ".claude",
-            ".claude.json",
+            # ⚠ `~/.claude` and `~/.claude.json` are NOT granted any more
+            # (SB4). They hold every project's Claude transcripts, and a
+            # Claude Manager now signs in from a config directory of its own
+            # (`claude_login`), measured to work with no `~/.claude` grant.
             ".config/goose",
             ".rite",
             ".gitconfig",
@@ -565,9 +567,10 @@ def limitations() -> tuple[str, ...]:
         "a Manager can reach anything this machine can",
         "a Manager can run `rite`, which does whatever you can do to this "
         "project — the sandbox bounds the filesystem, not that",
-        "your own Claude Code hooks are still loaded, and one that runs "
-        "something outside the paths above will FAIL inside the boundary "
-        "where it worked outside it",
+        "a Claude Manager has a Claude config directory of its own, so your "
+        "personal Claude Code settings, hooks and MCP servers do NOT load "
+        "into it, and it signs in with its own copy of claude_token rather "
+        "than your keychain login",
         "ticket text from your board reaches the engine as instructions; the "
         "sandbox limits what acting on it can touch, it does not vet it",
         "what it DOES buy: your home outside the paths above, your SSH keys, "
@@ -619,9 +622,9 @@ def why_it_was_refused(root: Path, manager: str) -> str:
         f"runs it in — that is this boundary, not a broken rite. The profile "
         f"is at {profile_path(root, manager)} and lists every path the "
         f"Manager may reach.\n"
-        "  If it was one of your own Claude Code hooks: hooks still load "
-        "inside the sandbox, and one that runs something outside the project "
-        "will fail here though it works outside.\n"
+        "  A Claude Manager no longer loads your own Claude Code hooks, so a "
+        "hook is not the likely cause for one. A tool or script the Manager "
+        "ran that reaches outside the project is.\n"
         "  What this boundary does and does not buy: "
         "docs/design/spikes/B9-manager-sandboxing.md"
     )

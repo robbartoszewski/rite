@@ -70,7 +70,7 @@ class TestCredentialListDoesNotDemandTheRetiredModel:
 
         for w in ("alpha", "beta"):
             assert CliRunner().invoke(cli, ["add", "worker", w]).exit_code == 0
-        monkeypatch.setattr(store, "keychain_is_readable", lambda: True)
+        monkeypatch.setattr(store, "store_is_readable", lambda: True)
         monkeypatch.setattr(
             store,
             "resolve",
@@ -104,7 +104,7 @@ class TestCredentialListDoesNotDemandTheRetiredModel:
         # change: green here, `[]` on the Linux runner. Third time in this
         # area, and the same lesson as the doctor fixtures.
         _enable_sandboxing(project)
-        monkeypatch.setattr(store, "keychain_is_readable", lambda: True)
+        monkeypatch.setattr(store, "store_is_readable", lambda: True)
         monkeypatch.setattr(
             store,
             "resolve",

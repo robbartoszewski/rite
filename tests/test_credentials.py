@@ -31,14 +31,14 @@ def test_info_from_env(monkeypatch):
 def test_info_not_found(monkeypatch):
     monkeypatch.delenv("RITE_MISSING", raising=False)
     result = info("missing")
-    assert result.source in ("not_found", "keychain")
+    assert result.source in ("not_found", "file store")
 
 
 def test_store_records_registry_entry(tmp_path, monkeypatch):
     monkeypatch.setenv("RITE_HOME_DIR", str(tmp_path))
     with patch("keyring.set_password") as mock_set:
         result = store("jira_token", "secret123")
-    assert result == "keychain"
+    assert result == "file store"
     mock_set.assert_called_once_with("rite", "jira_token", "secret123")
     registry_path = tmp_path / "credentials.json"
     assert registry_path.is_file()
@@ -63,7 +63,7 @@ def test_list_for_rotation_reflects_current_source(tmp_path, monkeypatch):
         entries = list_for_rotation()
     assert len(entries) == 1
     assert entries[0].name == "jira_token"
-    assert entries[0].source == "keychain"
+    assert entries[0].source == "file store"
     assert entries[0].last_set is not None
 
 

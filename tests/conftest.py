@@ -142,6 +142,53 @@ class _InMemoryKeyring(KeyringBackend):
         self._values.pop((service, username), None)
 
 
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "claude_login: run `rite start`'s real Claude sign-in step (C6/C26) "
+        "instead of the suite's default of skipping it",
+    )
+
+
+@pytest.fixture(autouse=True)
+def _no_claude_login_step(request, monkeypatch):
+    """Skip `rite start`'s Claude sign-in step unless a test asks for it.
+
+    Since C6/C26 `rite start` refuses a Claude Manager with no `claude_token`
+    and otherwise writes that Manager's own login file. Tests that start a
+    Claude Manager through the CLI are about everything else, and a token for
+    each would be a credential in every test's store. So the step is skipped by
+    default, the way the keychain and tmux are isolated. Tests of the step
+    itself are marked `claude_login` and run it for real.
+    """
+    if request.node.get_closest_marker("claude_login"):
+        yield
+        return
+    import rite_ai.cli.main as main_mod
+
+    monkeypatch.setattr(main_mod, "_claude_login", lambda root, role: False)
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _no_real_credential_file(tmp_path_factory, monkeypatch):
+    """rite's credential FILE store, per test, never the real one.
+
+    Since C6/C26 the store is `~/.config/rite/credential-store.json`. It is
+    set through the environment, not by patching, so a `rite` started as a
+    subprocess by a test inherits the same isolated file.
+    """
+    d = tmp_path_factory.mktemp("credstore")
+    monkeypatch.setenv("RITE_CREDENTIALS_FILE", str(d / "credential-store.json"))
+    # ⚠ And rite's HOME, which holds the credential name registry. Without
+    # this the suite wrote test names into the operator's real
+    # `~/.rite/credentials.json` (7 found there on 2026-09-26), and doctor's
+    # output depended on whatever that machine had stored.
+    if "RITE_HOME_DIR" not in os.environ:
+        monkeypatch.setenv("RITE_HOME_DIR", str(d / "rite-home"))
+    yield
+
+
 @pytest.fixture(autouse=True)
 def _no_os_keychain():
     """The keychain half of `_no_network_credentials`, and it was missing.

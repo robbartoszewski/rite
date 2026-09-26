@@ -7,6 +7,7 @@ import click
 
 from rite_ai import __version__
 from rite_ai.cli.help import RiteGroup
+from rite_ai.credentials.store import STORED
 from rite_ai.state import exclusion_holds
 
 # The files that make a directory a rite PROJECT, as opposed to a directory
@@ -464,6 +465,13 @@ def doctor() -> None:
     click.echo("\nok")
 
 
+def _first_few(names: list[str], limit: int = 5) -> str:
+    """A list a person can read in one line: the first few, then a count."""
+    if len(names) <= limit:
+        return ", ".join(names)
+    return ", ".join(names[:limit]) + f" and {len(names) - limit} more"
+
+
 def _doctor_report(problems: list[str]) -> None:
     """Every check doctor runs, appending to `problems`."""
     import shutil
@@ -526,11 +534,28 @@ def _doctor_report(problems: list[str]) -> None:
         if orphan:
             click.echo(f"brief.yaml: {orphan}")
 
+    from rite_ai.credentials import file_store
     from rite_ai.credentials.store import resolve as cred_resolve
 
+    # ⚠ WHICH store, named, every run (C6/C26): a credential that silently
+    # came from somewhere else is the failure this store replaced.
+    store_line = file_store.describe()
+    click.echo(f"credential store: {store_line}")
     creds = _project_credentials()
-    for name in ["jira_token", "jira_email", "github_token"]:
-        click.echo(f"credential {name}: {cred_resolve(name, creds).describe()}")
+    if "UNUSABLE" in store_line:
+        problems.append(f"credential store: {store_line}")
+        click.echo("  (credentials not checked: the store itself cannot be read)")
+    else:
+        for name in ["jira_token", "jira_email", "github_token"]:
+            click.echo(f"credential {name}: {cred_resolve(name, creds).describe()}")
+        unmoved = file_store.not_yet_imported()
+        if unmoved:
+            click.echo(
+                f"credential store: {len(unmoved)} credential(s) rite stored "
+                "before 0.6.0 are not in the file store and are no longer "
+                f"read: {_first_few(sorted(unmoved))}. If they are in the OS "
+                "keychain, `rite credential import-keychain` copies them across"
+            )
     api_key = api_key_notice(os.environ)
     if api_key:
         click.echo(api_key)
@@ -1668,7 +1693,7 @@ def _keys_this_project_needs(config=None) -> list[str]:
         root = _find_project_root()
         workers_dir = root / "workers"
         if workers_dir.is_dir():
-            from rite_ai.credentials.store import keychain_is_readable, resolve
+            from rite_ai.credentials.store import resolve, store_is_readable
 
             creds = getattr(config, "credentials", None)
             for worker_dir in sorted(workers_dir.iterdir()):
@@ -1688,13 +1713,13 @@ def _keys_this_project_needs(config=None) -> list[str]:
                 # who did opt in still needs its status and its rotation.
                 # This function's own rule, applied to itself — "driven by
                 # what the project is configured to do".
-                # `or not keychain_is_readable()`: `.found` is False both
+                # `or not store_is_readable()`: `.found` is False both
                 # for "never provisioned" and for "this process cannot
                 # look", and dropping the row in the second case deletes
                 # the very line the sandboxed-process note below exists to
-                # qualify. `keychain_is_readable` states the rule for
+                # qualify. `store_is_readable` states the rule for
                 # itself — "a failure to CHECK is not a negative result".
-                if resolve(key, creds).found or not keychain_is_readable():
+                if resolve(key, creds).found or not store_is_readable():
                     keys.append(key)
     return keys
 
@@ -1831,8 +1856,10 @@ def _store_one(name: str, value: str, global_: bool, root, config) -> str:
     if not global_ and config is not None:
         account = namespaced(_ensure_namespace(root, config), name)
     result = store(account, value)
-    if result != "keychain":
-        click.echo(f"failed to store '{name}' — keyring not available", err=True)
+    if result != STORED:
+        click.echo(
+            f"failed to store '{name}' — credential store not writable", err=True
+        )
         click.echo(f"set RITE_{name.upper()} as an environment variable instead")
         raise SystemExit(1)
     return account
@@ -1922,7 +1949,7 @@ def _set_service(service_name: str, global_: bool, root, config) -> None:
     if stored:
         click.echo(f"\nstored {len(stored)} secret(s) for '{svc.name}' {where}:")
         for key, account in stored:
-            click.echo(f"  {key:<20} -> keychain '{account}'")
+            click.echo(f"  {key:<20} -> file store '{account}'")
     if configured:
         click.echo(
             "\nrecorded in .rite/config.yaml (commit it — not secret, "
@@ -2150,8 +2177,10 @@ def credential_set(
         scoped = True
 
     result = store(account, value)
-    if result != "keychain":
-        click.echo(f"failed to store '{name}' — keyring not available", err=True)
+    if result != STORED:
+        click.echo(
+            f"failed to store '{name}' — credential store not writable", err=True
+        )
         click.echo(f"set RITE_{name.upper()} as an environment variable instead")
         raise SystemExit(1)
 
@@ -2162,9 +2191,75 @@ def credential_set(
     # the stored name is what `rite credential remove` takes.
     where = "for this project" if scoped else "machine-wide (global fallback)"
     click.echo(
-        f"stored credential under key '{name}' {where}, in keychain as '{account}'"
+        f"stored credential under key '{name}' {where}, in the file store as "
+        f"'{account}'"
     )
     _echo_credential_status(extra, just_set=name)
+
+
+@credential.command("import-keychain")
+def credential_import_keychain() -> None:
+    """Copy credentials rite stored before 0.6.0 from the OS keychain into
+    rite's file store.
+
+    Since 0.6.0 rite reads credentials from one 0600 file on every platform
+    (see `rite doctor`'s "credential store" line), so a value set earlier and
+    still in the keychain is no longer read. This copies each name rite's
+    registry lists, and prints names, never values.
+
+    The keychain copy is LEFT where it is, and how to remove it is printed.
+    Deleting a secret is a decision for the person who owns it.
+    """
+    from rite_ai.credentials import file_store
+    from rite_ai.credentials.store import SERVICE_NAME
+
+    wanted = file_store.not_yet_imported()
+    if not wanted:
+        click.echo(
+            f"nothing to import: every credential rite has stored is in the "
+            f"file store ({file_store.store_path()})"
+        )
+        return
+    backend = file_store.os_keyring()
+    if backend is None:
+        click.echo(
+            "no OS keychain is available to import from; set each of these "
+            "again with `rite credential set`: " + ", ".join(sorted(wanted)),
+            err=True,
+        )
+        raise SystemExit(1)
+    target = file_store.FileKeyring()
+    copied, missing, unreadable = [], [], []
+    for name in sorted(wanted):
+        try:
+            value = backend.get_password(SERVICE_NAME, name)
+        except Exception as e:
+            click.echo(f"  {name}: could not be read from the keychain ({e})", err=True)
+            unreadable.append(name)
+            continue
+        if not value:
+            missing.append(name)
+            continue
+        target.set_password(SERVICE_NAME, name, value)
+        copied.append(name)
+    for name in copied:
+        click.echo(f"  imported {name}")
+    # A name the registry lists and the keychain does not hold is information,
+    # not a failure: the registry records every name ever set, including ones
+    # since deleted. A keychain that could not be READ is a failure.
+    for name in missing:
+        click.echo(
+            f"  not in the keychain: {name} (set it again with `rite credential "
+            "set` if it is still needed)"
+        )
+    click.echo(
+        f"{len(copied)} imported into {file_store.store_path()} (mode 0600). "
+        "The keychain copies were left in place; remove them with your "
+        "keychain's own tool (on macOS: security delete-generic-password "
+        f"-s {SERVICE_NAME} -a <name>)"
+    )
+    if unreadable:
+        raise SystemExit(1)
 
 
 @credential.command("check")
@@ -2184,14 +2279,15 @@ def credential_check(name: str) -> None:
         # A check that reports failure through exit code 0 is not a check —
         # every script guarding on it proceeds straight into the failure it
         # was written to prevent.
-        from rite_ai.credentials.store import keychain_is_readable
+        from rite_ai.credentials.store import store_is_readable
 
-        if not keychain_is_readable():
+        if not store_is_readable():
             # "not found" here means "could not look". Advising `credential
             # set` would be wrong: this process cannot read the keychain
             # back either way. Same distinction as `CountUnavailable`.
             click.echo(
-                "  this process cannot read the keychain at all (sandboxed?) — "
+                "  this process cannot read the credential store at all "
+                "(sandboxed?) — "
                 f"that is\n  'cannot check', not 'missing'. Set RITE_"
                 f"{name.upper()} in the environment;\n  a sandboxed Worker "
                 "receives its token through --env (D-31).",
@@ -2236,9 +2332,9 @@ def credential_list() -> None:
         GLOBAL,
         SCOPING_IS_NOT_A_SANDBOX_SHORT,
         is_known_name,
-        keychain_is_readable,
         list_for_rotation,
         resolve,
+        store_is_readable,
     )
 
     root = _find_project_root()
@@ -2358,14 +2454,15 @@ def credential_list() -> None:
                 for name in unknown:
                     click.echo(f"  rite credential remove {name}")
 
-    if not keychain_is_readable():
+    if not store_is_readable():
         # The §5 defect: in here, "not set" means "cannot look", and
         # telling someone to run `credential set` is wrong advice —
         # setting it changes nothing, because this process cannot read it
         # back either way.
         click.echo("")
         click.echo(
-            "NOTE: this process cannot read the keychain at all (sandboxed?), "
+            "NOTE: this process cannot read the credential store at all "
+            "(sandboxed?), "
             "so\n  every 'not set' above means 'cannot check', not 'missing'. "
             "A sandboxed\n  Worker receives its token through --env; setting a "
             "credential in here\n  would not change what it can read."
@@ -2460,8 +2557,8 @@ def credential_migrate(name: str, yes: bool) -> None:
     # Authorised — now the namespace may be created and persisted.
     target = namespaced(_ensure_namespace(root, config), name)
 
-    if store(target, value) != "keychain":
-        click.echo("failed to store — keyring not available", err=True)
+    if store(target, value) != STORED:
+        click.echo("failed to store — credential store not writable", err=True)
         raise SystemExit(1)
 
     click.echo(f"copied '{r.global_account}' -> '{target}'")
@@ -2540,7 +2637,9 @@ def credential_remove(name: str, yes: bool) -> None:
             )
         raise SystemExit(1)
 
-    if not yes and not click.confirm(f"remove keychain entry '{name}'?", default=False):
+    if not yes and not click.confirm(
+        f"remove stored credential '{name}'?", default=False
+    ):
         click.echo("left unchanged")
         return
 
@@ -2580,8 +2679,8 @@ def credential_rotate() -> None:
             continue
         value = click.prompt("  new value", hide_input=True, confirmation_prompt=True)
         result = store(entry.name, value)
-        if result != "keychain":
-            click.echo("  failed to store — keyring not available", err=True)
+        if result != STORED:
+            click.echo("  failed to store — credential store not writable", err=True)
             continue
         click.echo(f"  {entry.name} rotated")
 
@@ -2796,8 +2895,8 @@ def _provision_worker_token(root, worker, config) -> None:
 
     value = click.prompt("  token", hide_input=True, confirmation_prompt=True)
     result = store(cred_name, value)
-    if result != "keychain":
-        click.echo("  failed to store — keyring not available", err=True)
+    if result != STORED:
+        click.echo("  failed to store — credential store not writable", err=True)
         return
     click.echo(f"  stored as '{cred_name}'")
 
@@ -6169,6 +6268,36 @@ def _router_for(root: Path, manager: str):
     return step
 
 
+def _claude_login(root: Path, role) -> bool:
+    """Give a Claude Manager its own login, or refuse to start it.
+
+    Inside its sandbox a Claude Manager cannot read the keychain (measured:
+    `Not logged in`), so the supervisor writes `claude_token` into THIS
+    Manager's config directory, a 0600 file only its profile can read, and
+    the pane is told the directory's path (`claude_login`). A local engine
+    needs none of this.
+    """
+    if role.is_local:
+        return False
+    from rite_ai.credentials.store import get_scoped
+    from rite_ai.managers.claude_login import prepare
+
+    refusal = prepare(
+        root, role.name, get_scoped("claude_token", _project_credentials())
+    )
+    if refusal:
+        click.echo(f"refusing to start Manager {role.name!r}: {refusal}", err=True)
+        raise SystemExit(1)
+    click.echo(
+        f"claude: Manager {role.name!r} signs in with its own copy of "
+        "claude_token (user:inference), in a 0600 file only its sandbox can "
+        "read. Your keychain login is not used, and your personal Claude "
+        "settings and hooks do not load into it.",
+        err=True,
+    )
+    return True
+
+
 def _github_access(root: Path, manager: str):
     """This run's GitHub credentials for a sandboxed Manager, or None (C6/C26).
 
@@ -6462,6 +6591,7 @@ def _start_a_manager(
         )
 
     github = _github_access(root, role.name)
+    claude_signed_in = _claude_login(root, role)
     listener = _slack_listener(root, role.name)
     try:
         outcome = supervise(
@@ -6519,6 +6649,10 @@ def _start_a_manager(
         # ends. The agent's own key lifetime (-t) covers a killed process.
         if github is not None:
             github.close()
+        if claude_signed_in:
+            from rite_ai.managers.claude_login import remove_login
+
+            remove_login(root, role.name)
         # ⚠ In a finally, so a Ctrl-C still posts the last reply. Only a
         # killed process skips it.
         if listener is not None:

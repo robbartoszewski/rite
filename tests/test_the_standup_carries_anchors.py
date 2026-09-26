@@ -296,7 +296,9 @@ def test_a_refusal_is_recorded_with_its_cycle(tmp_path, monkeypatch, no_yoloai):
     import rite_ai.managers.supervise as sup
 
     root = _build(tmp_path, "checkins:\n  windows: []\n")
-    monkeypatch.setattr(sup, "refused_commands", lambda r, since: ["rm -rf build"])
+    monkeypatch.setattr(
+        sup, "refused_commands", lambda r, since, base=None: ["rm -rf build"]
+    )
     _drive(monkeypatch, root)
     [refusal] = [e for e in checkins.ledger(root, "lead") if e["event"] == "refusal"]
     assert refusal["command"] == "rm -rf build" and refusal["number"] == 1

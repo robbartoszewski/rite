@@ -106,7 +106,7 @@ def test_resolution_prefers_project_then_falls_back_to_global(monkeypatch):
         from rite_ai.credentials.store import NOT_FOUND, CredentialInfo
 
         return CredentialInfo(
-            name=name, source="keychain" if name in present else NOT_FOUND
+            name=name, source="file store" if name in present else NOT_FOUND
         )
 
     monkeypatch.setattr("rite_ai.credentials.store.info", fake_info)
@@ -160,7 +160,7 @@ class TestRemoveIsNotAmbiguous:
         monkeypatch.setattr(
             "rite_ai.credentials.store.list_for_rotation",
             lambda: [
-                RotationEntry(name=n, last_set=None, source="keychain") for n in names
+                RotationEntry(name=n, last_set=None, source="file store") for n in names
             ],
         )
 
@@ -238,7 +238,7 @@ class TestTheGlobalFallbackIsNeverSilent:
         monkeypatch.setattr(
             "rite_ai.credentials.store.info",
             lambda n: CredentialInfo(
-                name=n, source="keychain" if n == "jira_token" else NOT_FOUND
+                name=n, source="file store" if n == "jira_token" else NOT_FOUND
             ),
         )
 
@@ -273,7 +273,7 @@ class TestTheGlobalFallbackIsNeverSilent:
             "rite_ai.credentials.store.info",
             lambda n: CredentialInfo(
                 name=n,
-                source="keychain" if n == "acme-1a2b3c/jira_token" else NOT_FOUND,
+                source="file store" if n == "acme-1a2b3c/jira_token" else NOT_FOUND,
             ),
         )
         self._fresh(monkeypatch)
