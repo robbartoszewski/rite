@@ -62,7 +62,7 @@ OVERRIDES = {
 # Overriding here would count one defect twice and make Linux look worse than
 # it is, so it is counted once, at D2.
 
-STATES = ("obs", "reported", "test", "partial", "blocked", "none")
+STATES = ("obs", "accepted", "reported", "test", "partial", "blocked", "none")
 
 
 def classify(cell: str) -> str:
@@ -85,6 +85,11 @@ def classify(cell: str) -> str:
         return "obs"
     if c.startswith("✋"):
         return "reported"
+    if c.startswith("🟰"):
+        # ⚠ A divergence the owner DECIDED to accept, recorded with its
+        # reason. Not observed working, so never counted as `obs`: it is
+        # reported on its own line, so "decided" and "done" stay distinct.
+        return "accepted"
     return "unknown"
 
 
@@ -138,7 +143,16 @@ def main() -> int:
                 f"  {plat:6} observed {obs}/{n} = {pct(obs, n):>4}   "
                 + "  ".join(f"{s}={counts[s]}" for s in STATES if counts[s])
             )
-        print(f"  BOTH   observed {both}/{n} = {pct(both, n):>4}\n")
+        print(f"  BOTH   observed {both}/{n} = {pct(both, n):>4}")
+        settled = sum(
+            1
+            for r in group
+            if r["macos"] in ("obs", "accepted") and r["linux"] in ("obs", "accepted")
+        )
+        print(
+            f"  BOTH   observed or accepted by decision {settled}/{n} = "
+            f"{pct(settled, n):>4}   (accepted is NOT observed)\n"
+        )
 
     print("NOT DONE (not observed on both), and what each waits on:")
     for r in data:

@@ -583,10 +583,14 @@ See SPEC §6.6.3.
 
 - **Linux: a Manager runs inside a Landlock boundary, which is weaker than
   macOS's in two ways.** Observed on Ubuntu 24.04 ARM64:
-  - **The tmux escape is open.** Landlock does not govern `connect(2)`, so a
-    Manager can reach the tmux server's socket, and a command sent through it
-    runs outside the boundary. Observed: a file written that way appeared
-    outside the project.
+  - **The tmux escape is open, and that is a decision, not an oversight.**
+    Landlock does not govern `connect(2)`, so a Manager can reach the tmux
+    server's socket, and a command sent through it runs outside the
+    boundary. Observed: a file written that way appeared outside the
+    project. Closing it needs a mount namespace (blocked by Ubuntu's default
+    AppArmor policy) or Docker (whose group is root-equivalent on the host),
+    so it is accepted rather than closed. A test asserts it open, so a
+    kernel that closes it will say so.
   - **A Manager cannot create a new top-level file or directory in its
     project during a cycle.** Existing directories stay writable. Landlock has
     no deny rule, so keeping one Manager out of another's directory under
@@ -623,6 +627,12 @@ See SPEC §6.6.3.
   Observed on the author's machine: both, with a Node.js pre-push hook.
 - **Linux: a Claude Manager does not work yet.** See the Claude sign-in
   change above.
+- **Two Managers in one project have run only with stand-in engines**, plus
+  one run with a real Goose Owner. A real Claude Owner with a local
+  secondary has not been observed.
+- **Check-ins with a real model are observed on macOS only.** There they ran
+  inside the Manager's sandbox. On Linux, check-ins are observed with Goose
+  on a small local model.
 - **No way to start a Manager outside its sandbox.** If one of your own
   tools needs a path the profile does not grant, it fails inside the
   sandbox, and there is no option to turn the sandbox off.
