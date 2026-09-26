@@ -76,6 +76,39 @@ jobs:
           sudo apt-get install -y -qq tmux
           tmux -V
 
+      # ⚠ **THE LINUX SANDBOX EVIDENCE, ON A KERNEL WE DO NOT OWN.** Every
+      # Linux claim rite would make was measured on one Ubuntu aarch64 VM that
+      # is about to be deleted, and a machine that no longer exists is not
+      # evidence. These runners are real **x86_64**, so the same probes run
+      # here — and the environment is printed because a result without the
+      # architecture, kernel and Landlock ABI cannot be compared with the
+      # ARM64 table in docs/design/spikes/B9b-linux-manager-sandboxing.md.
+      #
+      # Every command is `|| true`-guarded: this step REPORTS, and a machine
+      # that lacks bwrap or a sysctl is a finding rather than a broken build.
+      - name: Report the Manager sandbox environment
+        run: |
+          echo "arch:   $(uname -m)"
+          echo "kernel: $(uname -r)"
+          uv run python -c "from rite_ai.managers import landlock; print('landlock ABI:', landlock.abi())" || true
+          uv run rite doctor 2>&1 | grep -i "manager sandbox" || true
+          for f in /proc/sys/kernel/apparmor_restrict_unprivileged_userns \
+                   /proc/sys/kernel/unprivileged_userns_clone; do
+            if [ -r "$f" ]; then echo "$f = $(cat "$f")"; else echo "$f = (absent)"; fi
+          done
+          if command -v bwrap >/dev/null 2>&1; then bwrap --version; else echo "bwrap: not installed"; fi
+          if unshare --user --map-root-user true 2>/dev/null; then
+            echo "unprivileged userns: permitted"
+          else
+            echo "unprivileged userns: refused"
+          fi
+
+      # Run separately as well as inside the suite, with `-rs`, so the log
+      # carries one labelled block saying which probes ran and — where one
+      # could not — why. A silent skip is how a green CI lies.
+      - name: Landlock probes
+        run: uv run pytest -rs tests/test_landlock_really_confines.py
+
       - name: Test
         run: uv run pytest
         env:
