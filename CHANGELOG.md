@@ -467,14 +467,23 @@ See SPEC §6.6.3.
 
 ### Known issues
 
-- **Linux: a Manager cannot start.** Every Manager launch goes through
-  `sandbox-exec`, which exists only on macOS. On Linux the session exits
-  immediately. This release has no Linux boundary. A Landlock-based one is
-  being measured, and it does not close every route the macOS profile
-  closes: Landlock does not govern `connect(2)`, so a confined process could
-  still reach the tmux server's socket, which runs commands outside the
-  boundary (measured on Ubuntu 24.04). Workers on Linux are unchanged:
-  `rite init` leaves Worker sandboxing off there.
+- **Linux: a Manager runs inside a Landlock boundary, which is weaker than
+  macOS's in three ways.** Observed on Ubuntu 24.04 ARM64:
+  - **The tmux escape is open.** Landlock does not govern `connect(2)`, so a
+    Manager can reach the tmux server's socket, and a command sent through it
+    runs outside the boundary. Observed: a file written that way appeared
+    outside the project.
+  - **A Manager cannot create a new top-level file or directory in its
+    project during a cycle.** Existing directories stay writable. Landlock has
+    no deny rule, so fencing the Managers' inboxes means granting the project
+    root's existing entries one by one.
+  - **On a machine where Goose has never run, a Goose Manager's first start
+    fails**, because Goose cannot create `~/.local/share/goose` or
+    `~/.config/goose` inside the boundary. Until that is fixed, run `goose`
+    once outside rite, or create both directories.
+- **Linux: Workers are not sandboxed by default.** `rite init` leaves Worker
+  sandboxing off there, because `flock` does nothing inside a Docker
+  sandbox. The Manager's Landlock boundary does not extend to Workers.
 - **A Goose Manager starts a fresh conversation on every `rite start`.**
   Within one run its cycles continue. Across runs, rite's check that a
   session belongs to this project reads only Claude's transcripts, refuses
