@@ -772,7 +772,26 @@ class TestEndingAsksAboutTheManagersOwnPane:
         `#{pane_dead_signal}` says `kill`. Before: UNCLEAR, and because
         `_stopped_because` treats anything but `crashed` as success, `rite
         start` exited 0 on an OOM-killed Manager. §9.14.4 requires a fault
-        be distinguishable from a completion."""
+        be distinguishable from a completion.
+
+        ⚠ **KNOWN LOAD-SENSITIVE — it is not a real defect when it fails, and
+        it reads exactly like one.** The loop below waits at most 3 seconds
+        (30 × 0.1s) for tmux to report the death, and then asks. Under load
+        tmux can take longer, and `ending` honestly answers `unclear` — so the
+        failure message says "tmux knew, and the caller did not ask", which
+        names a defect that is not there.
+
+        Evidence, 2026-09-26: failed once on the GitHub Linux 3.11 runner with
+        `'unclear' == 'crashed'` and `no exit status ('') across 30 reads`,
+        passed on the rerun of the same commit, and passes 3/3 in a container
+        on the same tmux 3.3a. So: the runner was busy, not broken.
+
+        The fragility is the fixed retry budget, not the property. Whoever owns
+        this file next should make the wait bounded by TIME with a longer
+        ceiling, or assert on `pane_dead_signal` directly once the pane is
+        gone. Left as it is here deliberately — this session owns the sandbox
+        boundary, and quietly loosening another area's assertion is how a real
+        regression gets hidden behind a flake."""
         import os
         import signal as signals
 
