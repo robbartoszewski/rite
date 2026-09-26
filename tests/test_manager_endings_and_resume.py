@@ -15,6 +15,7 @@ worked, which is this week's recurring shape.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import time
 import uuid
@@ -340,6 +341,95 @@ class TestTheResumeIdIsReal:
 
         (directory / "real.jsonl").write_text('{"sessionId": "abc-123"}\n')
         assert latest_session_id(Path("/a/b"), base=tmp_path) == "abc-123"
+
+    # ⚠ **TIES ARE MADE EXACT HERE, NOT HOPED FOR.** On Linux two writes in
+    # one clock tick share an mtime to the nanosecond (197 of 200 in a
+    # container), and the test above failed 24 of 30 runs there while passing
+    # on CI by luck. These set identical mtimes with `os.utime`, and every
+    # case runs with the names SWAPPED, so a tie broken by directory order
+    # fails one of the two orders on every filesystem — a test that could
+    # pass with the tie-break removed would prove nothing.
+
+    @staticmethod
+    def _session(directory, name, session_id, *moments):
+        lines = [{"sessionId": session_id, "type": "summary"}]
+        lines += [{"sessionId": session_id, "timestamp": m} for m in moments]
+        path = directory / f"{name}.jsonl"
+        path.write_text("".join(json.dumps(line) + "\n" for line in lines))
+        return path
+
+    @staticmethod
+    def _tie(*paths):
+        for path in paths:
+            os.utime(path, ns=(1_790_000_000_123_456_789,) * 2)
+
+    @pytest.mark.parametrize("stray, real", [("a", "b"), ("b", "a")])
+    def test_a_stray_file_tied_with_a_session_does_not_hide_it(
+        self, tmp_path, stray, real
+    ):
+        directory = project_transcript_dir(Path("/a/b"), base=tmp_path)
+        directory.mkdir(parents=True)
+        (directory / f"{stray}.jsonl").write_text('{"noise": 1}\n')
+        self._session(directory, real, "abc-123", "2026-09-26T10:00:00.000Z")
+        self._tie(*directory.glob("*.jsonl"))
+        assert latest_session_id(Path("/a/b"), base=tmp_path) == "abc-123"
+
+    @pytest.mark.parametrize("older, newer", [("a", "b"), ("b", "a")])
+    def test_two_tied_sessions_are_ordered_by_what_they_recorded(
+        self, tmp_path, older, newer
+    ):
+        """The case that resumed the wrong conversation."""
+        directory = project_transcript_dir(Path("/a/b"), base=tmp_path)
+        directory.mkdir(parents=True)
+        self._session(directory, older, "old-session", "2026-09-26T10:00:00.000Z")
+        self._session(directory, newer, "new-session", "2026-09-26T10:00:00.001Z")
+        self._tie(*directory.glob("*.jsonl"))
+        assert latest_session_id(Path("/a/b"), base=tmp_path) == "new-session"
+
+    @pytest.mark.parametrize("older, newer", [("a", "b"), ("b", "a")])
+    def test_the_latest_moment_counts_not_the_last_line(self, tmp_path, older, newer):
+        """176 of 213 real transcripts go backwards somewhere in the file."""
+        directory = project_transcript_dir(Path("/a/b"), base=tmp_path)
+        directory.mkdir(parents=True)
+        self._session(directory, older, "old-session", "2026-09-26T10:00:05.000Z")
+        self._session(
+            directory,
+            newer,
+            "new-session",
+            "2026-09-26T10:00:09.000Z",
+            "2026-09-26T09:00:00.000Z",
+        )
+        self._tie(*directory.glob("*.jsonl"))
+        assert latest_session_id(Path("/a/b"), base=tmp_path) == "new-session"
+
+    @pytest.mark.parametrize(
+        "first, second",
+        [
+            ("2026-09-26T10:00:00.000Z", "2026-09-26T10:00:00.000Z"),
+            ("2026-09-26T10:00:00.000Z", None),
+        ],
+        ids=["same-moment", "one-has-no-timestamp"],
+    )
+    def test_sessions_that_cannot_be_ordered_are_refused_not_guessed(
+        self, tmp_path, first, second
+    ):
+        directory = project_transcript_dir(Path("/a/b"), base=tmp_path)
+        directory.mkdir(parents=True)
+        self._session(directory, "a", "one", first)
+        self._session(directory, "b", "two", *([second] if second else []))
+        self._tie(*directory.glob("*.jsonl"))
+        assert latest_session_id(Path("/a/b"), base=tmp_path) == ""
+
+    def test_a_tie_in_float_seconds_is_not_a_tie_in_nanoseconds(self, tmp_path):
+        """`st_mtime` is a float and rounds; the newer file must still win
+        on its mtime alone, whatever its contents say."""
+        directory = project_transcript_dir(Path("/a/b"), base=tmp_path)
+        directory.mkdir(parents=True)
+        old = self._session(directory, "a", "old-session", "2026-09-26T11:00:00.000Z")
+        new = self._session(directory, "b", "new-session", "2026-09-26T10:00:00.000Z")
+        os.utime(old, ns=(1_790_000_000_123_456_700,) * 2)
+        os.utime(new, ns=(1_790_000_000_123_456_789,) * 2)
+        assert latest_session_id(Path("/a/b"), base=tmp_path) == "new-session"
 
     def test_an_absent_directory_returns_empty_rather_than_guessing(self, tmp_path):
         assert latest_session_id(Path("/nope"), base=tmp_path) == ""
