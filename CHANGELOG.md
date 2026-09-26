@@ -477,6 +477,13 @@ it let authority point at a channel anyone can post in. Use
 
 ### Several Managers in one project — an Owner that routes, `rite route`
 
+**One machine, one project root.** "Several Managers" in this release means
+several Managers on the SAME machine, in the SAME project directory.
+Managers on different machines are not part of this release: that work is
+deferred to 0.7.0. The multi-machine coordination layer from 0.4.0/0.5.0
+(Owner election, failover) is unchanged, and it has still not been run on
+two physical machines.
+
 One project root can run a Claude Manager as the **Owner** beside one or more
 secondaries, typically on a local model. **The Owner is the one Manager whose
 duties include `route`** (the `lead` preset has it; `executor` does not).
