@@ -195,6 +195,15 @@ them, which is why it is read from standard input.
 - `git push` over HTTPS created and deleted a branch on the board with the
   token, from inside the sandbox.
 
+**On Linux: expected to work, not verified against GitHub.** The App code
+is the same on both platforms. The Linux-specific part is the sandbox
+grant, and that is tested: rite's Linux CI runs kernel-level tests in which
+only the Manager's two gh files are readable inside the Landlock boundary,
+and its Claude login can be read but not replaced. No Linux Manager has
+minted a token or read a board with one. ⚠ On Linux, as on macOS, the App
+is the ONLY way a Manager gets GitHub access; it never uses your own gh
+login.
+
 The token covers ONE repository, `repository` or else the board's. An App
 installed only on the board's repository cannot push to your code
 repository, so a Manager holding the `integrate` duty cannot push or open a
@@ -604,7 +613,8 @@ See SPEC §6.6.3.
   in, `git push` over HTTPS fails, and `rite start` says so with the fix.
   With one, rite gives the Manager a one-hour token for one repository
   (observed against GitHub on macOS; see the GitHub App section). `git push`
-  uses it only for an HTTPS remote, not SSH. Not yet observed on Linux.
+  uses it only for an HTTPS remote, not SSH. On Linux: expected to work,
+  not verified against GitHub (see the GitHub App section).
 - **Your own global git settings follow a Manager into its sandbox, and
   two of them break it.** If you sign commits with a key under `~/.ssh`
   (`commit.gpgsign` with `gpg.format ssh`), a Manager's `git commit` fails,
