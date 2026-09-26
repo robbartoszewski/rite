@@ -904,11 +904,16 @@ class Listener:
             # And the Manager's live GitHub token (C6/C26), by EXACT value:
             # the structural rule misses `oauth_token: <t>`, which is what
             # printing the Manager's gh config shows (measured).
-            from rite_ai.managers.github_access import manager_secrets
+            # The same for its Claude login.
+            from rite_ai.managers import claude_login, github_access
 
             text = redact_assignments(
                 message.text,
-                (self.token, *manager_secrets(self.project, self.manager)),
+                (
+                    self.token,
+                    *github_access.manager_secrets(self.project, self.manager),
+                    *claude_login.manager_secrets(self.project, self.manager),
+                ),
             )
             checkin = is_checkin(self.project, self.manager, message.path.name)
             if checkin and not self.dm:

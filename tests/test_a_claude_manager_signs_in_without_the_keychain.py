@@ -256,3 +256,21 @@ def test_rite_start_REFUSES_a_claude_manager_with_no_token(tmp_path, monkeypatch
     assert "rite credential set claude_token" in result.output
     assert starts == [], "nothing may be launched without the login"
 
+
+def test_the_journal_redacts_the_login_by_exact_value(project, home, monkeypatch):
+    """Measured 2026-09-26: `rite journal observe` quoting `.credentials.json`
+    wrote the token verbatim. The structural rule misses the JSON shape."""
+    from rite_ai.managers.journal import _redacted
+
+    cl._write_login(project, "lead", FAKE, home)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cl._config_dir(project, "lead", home)))
+    out = _redacted(f'cat printed {{"claudeAiOauth":{{"accessToken":"{FAKE}"}}}}')
+    assert FAKE not in out and "[redacted]" in out
+
+
+def test_the_relay_reads_the_login_from_outside(project, home):
+    assert cl.manager_secrets(project, "lead", home) == []
+    cl._write_login(project, "lead", FAKE, home)
+    assert cl.manager_secrets(project, "lead", home) == [FAKE]
+    cl.remove_login(project, "lead", home)
+    assert cl.manager_secrets(project, "lead", home) == []

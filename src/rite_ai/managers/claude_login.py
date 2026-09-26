@@ -114,6 +114,32 @@ def remove_login(root: Path, manager: str, home: Path | None = None) -> None:
     (_config_dir(root, manager, home) / ".credentials.json").unlink(missing_ok=True)
 
 
+def live_secrets(config_dir: str | os.PathLike | None = None) -> list[str]:
+    """The login's token, for EXACT-VALUE redaction, or [].
+
+    Measured 2026-09-26: an observation quoting `.credentials.json` reached
+    the journal verbatim, because the structural rule does not recognise
+    `"accessToken":"<t>"`. The Manager can read its own login, so it can
+    print it. Read from `$CLAUDE_CONFIG_DIR` when not given, which is how a
+    Manager's own `rite journal` finds it from inside the sandbox.
+    """
+    d = config_dir or os.environ.get("CLAUDE_CONFIG_DIR", "")
+    if not d:
+        return []
+    try:
+        body = json.loads((Path(d) / ".credentials.json").read_text())
+        token = body["claudeAiOauth"]["accessToken"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return []
+    return [token] if isinstance(token, str) and token else []
+
+
+def manager_secrets(root: Path, manager: str, home: Path | None = None) -> list[str]:
+    """One Manager's login token, read from OUTSIDE the sandbox, for the
+    Slack relay, which runs in the supervisor."""
+    return live_secrets(_config_dir(root, manager, home))
+
+
 def reap_leftover(root: Path, manager: str, home: Path | None = None) -> str:
     """Remove a login copy an earlier, uncleanly ended run left. A line to say, or "".
 
