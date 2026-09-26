@@ -45,17 +45,20 @@ BLOCKS_TAG = {
 # would inflate the number, which is the failure this script exists to stop.
 # Each override cites what in the cell contradicts its marker.
 OVERRIDES = {
-    ("D5", "macos"): (
-        "partial",
-        'marked ✅ but the cell says "with stub engines" and "Not yet with a '
-        'real Claude Owner" — and the definition of done names Claude',
-    ),
     ("D9", "linux"): (
         "partial",
         'marked ✅ for the Slack clause, but the same cell carries "⏳ The '
         "board clause waits on the VM's GitHub login\" — half the row",
     ),
 }
+
+# ⚠ **D5's macOS override is REMOVED, because what it cited is gone.** It
+# held the cell at `partial` while the cell said "with stub engines" and "Not
+# yet with a real Claude Owner". The cell now records one concurrent run with
+# a real Claude Owner and a real Goose secondary (routing, the secondary
+# acting, the reply reaching a still-running Owner). Its open gap, that a
+# Claude Owner cannot wait for its secondary, is recorded as W11: it is
+# usability, not the property the row names.
 
 # ⚠ **D6's Linux cell is deliberately NOT overridden.** Its signal half is
 # observed and its tmux half is open, but that hole is the same one D2 counts.
