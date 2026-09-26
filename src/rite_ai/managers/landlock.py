@@ -385,13 +385,10 @@ DIRS_RITE_CREATES = (
     # cycle names — a Manager that cannot write it cannot continue its work.
     ".local/share/goose",
     ".local/state/goose",
-    # ⚠ Not reported, found by sweeping for the same pattern: `gh` cannot
-    # START without its config directory — measured on macOS, where it exits 1
-    # with `failed to read configuration` and a GITHUB_TOKEN does not rescue
-    # it. On a fresh Linux box that directory does not exist, so the grant was
-    # absent and the board would have been unreachable for the same reason as
-    # Goose, one release later.
-    ".config/gh",
+    # `~/.config/gh` is no longer here (W8): it holds the OPERATOR's gh login,
+    # in plain text on a box with no keyring, and is no longer granted. gh
+    # starts from the Manager's own config directory instead
+    # (`github_access._own_gh_config`), which rite creates before the ruleset.
     # rite's own state root, granted readable.
     ".rite",
 )

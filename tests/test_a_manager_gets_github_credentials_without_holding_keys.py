@@ -188,8 +188,19 @@ class TestTheLaunch:
         ga._write_token(project, "lead", TOKEN, home)
         assert set(ga.pane_environment(project, "lead", home)) <= ALLOWED_ON_TMUX_ARGV
 
-    def test_nothing_configured_hands_the_pane_nothing(self, project, home):
+    def test_nothing_set_up_hands_the_pane_nothing(self, project, home):
         assert ga.pane_environment(project, "lead", home) == {}
+
+    def test_no_app_still_gets_its_OWN_gh_config_never_the_operators(
+        self, project, home
+    ):
+        """W8: without its own GH_CONFIG_DIR, gh reads `~/.config/gh`, the
+        operator's login, in plain text wherever gh has no keyring."""
+        g = ga._own_gh_config(project, "lead", home)
+        env = ga.pane_environment(project, "lead", home)
+        assert env["GH_CONFIG_DIR"] == str(g)
+        assert not (g / "hosts.yml").exists(), "no App, no token"
+        assert env["GIT_CONFIG_VALUE_1"] == "!gh auth git-credential"
 
 
 class TestRefresh:
@@ -254,7 +265,9 @@ class TestOpening:
             home=home,
         )
         assert (access, refusal) == (None, "")
-        assert ga.pane_environment(project, "lead", home) == {}
+        g = ga._gh_dir(project, "lead", home)
+        assert not (g / "hosts.yml").exists(), "the leftover token is gone"
+        assert ga.pane_environment(project, "lead", home)["GH_CONFIG_DIR"] == str(g)
 
     def test_an_app_without_its_key_is_REFUSED_by_name(self, project, home):
         access, refusal = ga.open_access(

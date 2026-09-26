@@ -191,25 +191,15 @@ def _tool_paths(home: Path) -> tuple[Path, ...]:
             ".rite",
             ".gitconfig",
             ".config/git",
-            # ⚠ **`gh` cannot START without this, not merely cannot
-            # authenticate.** Measured 2026-09-25: inside the shipped
-            # profile `gh api rate_limit` exits 1 with `failed to create
-            # root command: failed to read configuration`, and a
-            # `GITHUB_TOKEN` does NOT rescue it — gh reads its config
-            # directory before it looks at any credential. That took the
-            # GitHub board away from every sandboxed Manager, and from
-            # `git push` over HTTPS, which uses gh as its credential
-            # helper.
-            #
-            # ⚠ **Necessary, and NOT sufficient.** With this grant gh starts
-            # and is ANONYMOUS — `rate_limit` returns 60 rather than the
-            # authenticated 5000 — because its stored credential is in the
-            # keychain, which it cannot reach from here. A `GITHUB_TOKEN`
-            # then works: with a deliberately bogus one the API answered
-            # **401 Bad credentials**, which is the could-not-read versus
-            # rejected distinction and proves the route is live. How that
-            # token reaches a Manager is the open half; see C26.
-            ".config/gh",
+            # ⚠ **`~/.config/gh` is NOT granted any more (W8).** It holds the
+            # OPERATOR's gh login, in plain text wherever gh has no keyring (a
+            # headless Linux box), so granting it handed a sandboxed Manager
+            # their full GitHub account without a word. gh does need a config
+            # directory to START (measured 2026-09-25: `failed to read
+            # configuration` without one), so every Manager now gets its own,
+            # named by GH_CONFIG_DIR (`github_access._own_gh_config`), holding
+            # an App token or none. And `github_access.profile_lines` denies
+            # `~/.config/gh` by name, last.
         )
     )
 
