@@ -468,7 +468,7 @@ See SPEC §6.6.3.
 ### Known issues
 
 - **Linux: a Manager runs inside a Landlock boundary, which is weaker than
-  macOS's in three ways.** Observed on Ubuntu 24.04 ARM64:
+  macOS's in two ways.** Observed on Ubuntu 24.04 ARM64:
   - **The tmux escape is open.** Landlock does not govern `connect(2)`, so a
     Manager can reach the tmux server's socket, and a command sent through it
     runs outside the boundary. Observed: a file written that way appeared
@@ -477,10 +477,6 @@ See SPEC §6.6.3.
     project during a cycle.** Existing directories stay writable. Landlock has
     no deny rule, so fencing the Managers' inboxes means granting the project
     root's existing entries one by one.
-  - **On a machine where Goose has never run, a Goose Manager's first start
-    fails**, because Goose cannot create `~/.local/share/goose` or
-    `~/.config/goose` inside the boundary. Until that is fixed, run `goose`
-    once outside rite, or create both directories.
 - **Linux: Workers are not sandboxed by default.** `rite init` leaves Worker
   sandboxing off there, because `flock` does nothing inside a Docker
   sandbox. The Manager's Landlock boundary does not extend to Workers.
