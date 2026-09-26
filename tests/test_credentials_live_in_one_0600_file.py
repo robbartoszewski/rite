@@ -139,3 +139,22 @@ def test_a_managers_profile_cannot_read_the_store(tmp_path, real_store):
         text=True,
     )
     assert inside.returncode != 0 and "Operation not permitted" in inside.stderr
+
+
+def test_set_names_the_project_DIRECTORY_not_only_the_namespace(
+    tmp_path, monkeypatch, real_store
+):
+    """A namespace is not readable as a location, and two checkouts can share
+    one. Measured 2026-09-26: an hour lost to "which project did that go to?"."""
+    from rite_ai.cli.main import cli
+
+    monkeypatch.chdir(tmp_path)
+    CliRunner().invoke(cli, ["init", "--yes"])
+    result = CliRunner().invoke(
+        cli, ["credential", "set", "jira_token", "--value", "s3cret"]
+    )
+    out = result.output
+    assert f"for this project ({tmp_path.resolve()})" in out or (
+        f"for this project ({tmp_path})" in out
+    ), out
+    assert "s3cret" not in out

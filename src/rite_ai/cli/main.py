@@ -1945,7 +1945,12 @@ def _set_service(service_name: str, global_: bool, root, config) -> None:
 
         write_config(root / ".rite", config)
 
-    where = "machine-wide (global fallback)" if global_ else "for this project"
+    # The DIRECTORY as well as the namespace: a namespace is not readable as
+    # a location, and two checkouts can share one (a copied config.yaml).
+    # Measured 2026-09-26: an hour lost to "which project did that go to?"
+    where = (
+        "machine-wide (global fallback)" if global_ else f"for this project ({root})"
+    )
     if stored:
         click.echo(f"\nstored {len(stored)} secret(s) for '{svc.name}' {where}:")
         for key, account in stored:
@@ -2189,7 +2194,7 @@ def credential_set(
     # mistyped key went unnoticed. The stored name is printed alongside
     # it because with scoping the two are no longer the same string, and
     # the stored name is what `rite credential remove` takes.
-    where = "for this project" if scoped else "machine-wide (global fallback)"
+    where = f"for this project ({root})" if scoped else "machine-wide (global fallback)"
     click.echo(
         f"stored credential under key '{name}' {where}, in the file store as "
         f"'{account}'"
