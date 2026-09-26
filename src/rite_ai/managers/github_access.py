@@ -12,10 +12,11 @@ that before changing anything here.
 passed as `tmux -e NAME=value` lands on tmux's argv, and `ps` shows it to every
 local account. The environment is as bad. So:
 
-- **The GitHub App's private key** is read from rite's credential store (the
-  keychain) by THIS process, outside the sandbox. It reaches `openssl` through
-  a pipe (`/dev/fd/N`), never a file or argv. The sandbox cannot read the
-  keychain (measured), so a Manager cannot mint its own tokens.
+- **The GitHub App's private key** is read from rite's credential store (a
+  0600 file no profile grants) by THIS process, outside the sandbox. It
+  reaches `openssl` through a pipe (`/dev/fd/N`), never a file or argv. The
+  store is denied to the sandbox by name, so a Manager cannot mint its own
+  tokens.
 - **The installation token** (one hour, only the repository named, only the
   permissions named) is written to `hosts.yml` in a per-Manager `gh` config
   directory, mode 0600, OUTSIDE every path the profile grants. The profile
