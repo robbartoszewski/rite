@@ -91,6 +91,46 @@ rite's list, `rite --version` ran and `curl --version` was refused. Without
 the list, `rite --version` was refused, which shows the list actually
 arrives.
 
+### ⚠ BEHAVIOUR CHANGE ON UPGRADE — a Claude Manager signs in with its own token
+
+A Claude Manager runs inside a sandbox, and the sandbox cannot read your
+macOS keychain, which is where Claude Code keeps your login. So **a Claude
+Manager now needs a token of its own**, once per project:
+
+    claude setup-token                  # prints a one-year token
+    rite credential set claude_token    # paste it
+
+(Or `rite credential import-keychain`, if you stored one for Workers before.)
+Without it, `rite start` refuses a Claude Manager and says those two
+commands, instead of letting it start and print `Not logged in`.
+
+The token is a `claude setup-token` token: it can make model requests on
+your subscription, and nothing else. rite gives each Manager its own copy in
+a 0600 file only that Manager's sandbox can read, and removes it when the
+run ends. It never goes on a command line or into the environment.
+
+**Three things you will notice, all on purpose:**
+
+- **Your personal Claude Code settings, hooks and MCP servers no longer
+  load into a Claude Manager.** It runs with a Claude configuration
+  directory of its own. If you relied on a hook or an MCP server inside a
+  Manager, it is not there any more. This is also why a hook of yours that
+  used to fail inside the sandbox now stays quiet.
+- **The first run after upgrading starts a fresh conversation.** A
+  Manager's conversation now lives in its own directory, so the one it had
+  under `~/.claude` cannot be continued. rite says so when it happens.
+- **`rite budget` does not yet count Manager sessions.** It reads
+  `~/.claude/projects`, and Manager transcripts are no longer there. The
+  `--sessions` ceiling on `rite start` counts sessions, not spend, and is
+  unaffected.
+
+It also closes a gap: a Manager can no longer read other projects' Claude
+transcripts, because `~/.claude` is not granted any more.
+
+**Observed** on macOS, 2026-09-26: a sandboxed Claude Manager signed in with
+a `setup-token` token, read the project with its tools, and its `rite reply`
+reached `rite replies`. **Not yet observed on Linux.**
+
 ### ⚠ BEHAVIOUR CHANGE ON UPGRADE — credentials live in one 0600 file
 
 **rite no longer reads credentials from the OS keychain.** It keeps them in
@@ -396,6 +436,11 @@ directly (`gh issue view`) rather than through rite. Every standup says so.
 See SPEC §6.6.3.
 
 ### Fixed
+
+- **A Claude Manager's `rite reply` was refused by its own allowlist.** It is
+  told to run rite by full path, and the allowlist only admitted `rite`, so
+  its answers never reached you. The full path is on the list now. Found and
+  observed with a real sandboxed Claude Manager.
 
 - **A Manager ran whatever `rite` was first on PATH.** On a machine with an
   older rite installed, it was told to run commands that version lacks and
