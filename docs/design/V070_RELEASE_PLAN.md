@@ -538,6 +538,29 @@ not pushable, is in that state today.
 |---|---|---|---|---|
 | PB1 | **A per-project publishing strategy that the Manager ROLE applies to a finished task, split as drawn below.** Workers commit and do not push. The Manager role (rite and the model, for the Owner or the holder of `integrate`) applies the project's strategy: (1) keep it local, committed in the project's own repository, nothing pushed; (2) push and merge to main or a feature branch; (3) push and open a PR, then merge on green or leave the merge to the User, per a setting the Owner reads. **Auto-squash is one opt-in setting, default off, across all strategies.** The commit-message convention is a default that stays amendable | For each strategy, one real task goes from a Worker's commit to the declared end state on a real project. Under (1): the work survives the Worker's next task, nothing reached any remote, and a person reworks it with `git rebase -i` (squash, reword, amend) on its branch without friction, both with auto-squash off and on | a path from the sandbox copy into the local repository | design first; unsized |
 
+### Decided: implement all the strategies; auto-merge only on explicit opt-in and a green matched to the head SHA
+
+Robert asked whether there is a reason not to implement all the strategies,
+since it is not much code. **Answer, to build to unless he overrules it:
+implement them all.** One clause is fixed:
+
+🔴 **Auto-merge after checks requires (a) an explicit opt-in, and (b) a green
+matched to the head SHA being merged.** "No failures" is not a green, and a
+green on any other commit is not this one's.
+
+**Why, so it is not softened later by someone who has not seen it.** The
+trap fired four separate ways on 2026-09-26, and each time "no failures"
+looked like success:
+1. A merged PR left no open PR, so no checks fired.
+2. A `CONFLICTING` PR fired no checks, because GitHub cannot compute a
+   merge ref.
+3. A poller read an older run's success.
+4. A run's SHA matched `HEAD` when read, while `main` had already moved.
+
+An Owner auto-merging on a green that describes a different tree is that
+bug with the safety off. (The same rule governs how CI is read in the
+v0.6.0 readiness list, D12.)
+
 ### Strategy 1: what "a human can comfortably rework it" requires
 
 The requirement, from his quote: **strategy 1 leaves the work in a state a
