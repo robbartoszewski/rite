@@ -44,6 +44,7 @@ from rite_ai.managers import (
     designated,
     designation_path,
     forget_instance,
+    git_settings,
     github_access,
     manager_dir,
 )
@@ -1492,6 +1493,7 @@ def _default_starter(
     # and it reports the missing binary rather than the missing platform.
     confinement = boundary_for()
     profile = confinement.write_profile(root, manager)
+    github_env = github_access.pane_environment(root, manager)
     handle_spelling = spelling_for(engine, agent)
     start_handle = (
         session_name(root, manager)
@@ -1512,7 +1514,12 @@ def _default_starter(
             # C6/C26: WHERE the GitHub credential is, never the credential.
             # Derived from what `github_access.open_access` left on disk, so
             # there is no argument to drop.
-            **github_access.pane_environment(root, manager),
+            **github_env,
+            # The operator's git signing, which would fail every commit a
+            # Manager made, turned off for this session only and numbered
+            # after github's. `rite start` says so. A global hooks path is
+            # reported there and deliberately NOT replaced (`git_settings`).
+            **git_settings.pane_environment(root, github_env),
             # And WHERE a Claude Manager's own login is (`claude_login`).
             **claude_login.pane_environment(root, manager),
         },
