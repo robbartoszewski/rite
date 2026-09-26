@@ -30,19 +30,21 @@ model. Markers: ✅ met, ❌ not met, ⏳ not yet observed.
 
 | # | observable part | status on Linux | evidence |
 |---|---|---|---|
-| A1 | Both Managers, a Claude Owner and a local-model secondary, running at once on one Linux machine in one project root | ⏳ | D5's Linux cell is "—". The Linux Claude cycle is in progress (the boundary session). On macOS it has run only with stand-in engines, plus one real Goose Owner (`c1cc840`) |
+| A1 | Both Managers, a Claude Owner and a local-model secondary, running at once on one Linux machine in one project root | ⏳ | D5's Linux cell is "—". The Linux Claude cycle is in progress (the boundary session). On macOS it has now run with real engines on both sides: a Claude Owner and a Goose/`qwen3-32b` secondary in one concurrent run, with A2–A4 observed there too (D5, 2026-09-26). That is macOS evidence and does not move this Linux cell |
 | A2 | The Owner routes to the secondary (`rite route`) | ⏳ | not observed on Linux with real engines |
 | A3 | The secondary acts on what was routed | ⏳ | not observed on Linux with real engines |
 | A4 | The secondary's reply arrives at a still-running Owner | ⏳ | not observed on Linux with real engines |
 | A5 | The inbox fence holds under real concurrent load | ⏳ | the fence is tested at kernel level on Linux (MM-2, `test_landlock_really_confines.py`), not under two Managers running at once |
-| A6 | The local half is a model that actually RUNS `rite reply` (a tool call), not one that prints it as text | ❌ | D4: `qwen3:1.7b` on the VM did not run `rite reply` when asked. A larger model (4B/8B) is not yet measured on that CPU |
+| A6 | The local half is a model that actually RUNS `rite reply` (a tool call), not one that prints it as text | ❌ | D4: `qwen3:1.7b` on the VM did not run `rite reply` when asked. A larger model (4B/8B) is not yet measured on that CPU. On macOS, `qwen3-32b-ctx32k` ran `rite reply` in both D5 runs but printed it as text in the setup-session run (2026-09-26), so even 32B is not reliable |
 
 **Rough edges are named, not hidden.** The standard is "verified enough
 for dogfood", not perfect, so a pass that carries named rough edges IS a
 pass. What is not allowed is masking one. Known so far:
-- **The Owner cannot wait for its secondary** (relayed 2026-09-26; to be
-  confirmed in A1–A4's run). It must be stated in the notes as a rough
-  edge. A retry must not paper over it.
+- **The Owner cannot wait for its secondary** (W13). OBSERVED on macOS in
+  D5's first attempt, which failed for exactly this reason; the second
+  passed only because the Owner was told how to poll. To be confirmed on
+  Linux in A1–A4's run. It must be stated in the notes as a rough edge.
+  A retry must not paper over it.
 
 **The target is Wednesday:** a functional **Claude and local** multi-Manager
 setup, **driven through Slack**, **working on macOS and Linux**. Linux is a
