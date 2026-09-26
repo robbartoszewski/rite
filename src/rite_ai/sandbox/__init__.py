@@ -1,6 +1,8 @@
 """Worker process sandboxing via yoloAI (SPEC §5.3, D-26, D-30, D-31).
 
-Optional (`sandbox.enabled` in `config.yaml`, default `false`). Wraps
+`sandbox.enabled` in `config.yaml` defaults to `true` (D-51); `rite init`
+writes `false` where no verified backend exists (Linux). ⚠ Only `rite doctor`
+reads it: `rite sandbox start` sandboxes whatever it says (C34). Wraps
 yoloAI's CLI directly (`yoloai new/stop/destroy/ls`) — this is the
 scriptable path for launching a sandbox from `rite`'s own commands or a
 shell. The MCP path (`yoloai mcp serve`) is a separate thing: a Manager
