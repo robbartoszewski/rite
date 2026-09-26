@@ -315,10 +315,40 @@ class TestTheBoardIsStillReachable:
     """
 
     def test_gh_can_start(self, project):
+        """⚠ **STARTED, not authenticated.** The measured defect was that gh
+        could not START inside the profile: it exited 1 with `failed to create
+        root command: failed to read configuration`, because it reads its
+        config directory before it looks at any credential.
+
+        Asserting exit 0 from a real API call asserted something else — that
+        this machine has a working gh login. On a CI runner gh is installed and
+        unauthenticated, so it exits 4, which means it STARTED and then could
+        not authenticate. That is the property holding, and the old assertion
+        called it a failure. Measured on the first macOS CI run.
+        """
         if not _which("gh"):
             pytest.skip("gh is not installed in this environment")
         profile = write_profile(project, "lead")
-        assert _under(profile, "gh api rate_limit --jq .rate.limit >/dev/null") == 0
+        done = subprocess.run(
+            [
+                "sandbox-exec",
+                "-f",
+                str(profile),
+                "/bin/sh",
+                "-c",
+                "gh api rate_limit --jq .rate.limit",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=90,
+        )
+        said = done.stdout + done.stderr
+        assert "failed to read configuration" not in said, (
+            f"gh could not start inside the profile: {said.strip()[:200]}"
+        )
+        assert "root command" not in said, (
+            f"gh could not start inside the profile: {said.strip()[:200]}"
+        )
 
     def test_the_grant_is_read_only(self, project):
         """It needs to READ its configuration. Nothing needs to write it,

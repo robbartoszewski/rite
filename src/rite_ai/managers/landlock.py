@@ -207,6 +207,15 @@ class _RulesetAttr(ctypes.Structure):
 class _PathBeneathAttr(ctypes.Structure):
     # ⚠ Packed. The kernel struct is `__attribute__((packed))`, and a padded
     # one is read as garbage: the fd lands in the wrong bytes.
+    #
+    # ⚠ `_layout_` is named explicitly where the interpreter supports it.
+    # Python 3.14 warns that `_pack_` alone implies the MSVC layout and that
+    # the implicit default becomes an error in 3.19 — surfaced by the first
+    # macOS CI run. This struct is read by a LINUX kernel, so the layout has to
+    # be the GCC one; naming it changes nothing today and stops a future
+    # interpreter choosing the Windows one.
+    if sys.version_info >= (3, 14):
+        _layout_ = "gcc-sysv"
     _pack_ = 1
     _fields_ = (
         ("allowed_access", ctypes.c_uint64),

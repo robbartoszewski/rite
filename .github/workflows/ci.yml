@@ -151,6 +151,17 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
+      # ⚠ **THE SAME REASONING THIS FILE ALREADY APPLIES TO THE LINUX JOB.**
+      # A hosted macOS runner has no tmux, and `test_no_manager_writes_an_inbox`
+      # drives a real one — measured on the first run of this job, where it
+      # raised `FileNotFoundError: 'tmux'` rather than skipping. Skipping would
+      # have been worse: MM-2 is one of the reasons this job exists, and a skip
+      # reports the same green as a pass.
+      - name: Install tmux
+        run: |
+          brew install tmux
+          tmux -V
+
       - name: Which sandbox backend does macOS pick
         run: |
           echo "arch:   $(uname -m)"
