@@ -953,6 +953,13 @@ def supervise(
                 max_sessions=max_sessions,
                 window_seconds=window_seconds,
             )
+            # ⚠ A DEGRADED START IS SAID. `ok` is True and the Manager is
+            # running, but something the operator needs is missing — tmux not
+            # naming the pane means a clean finish reads as `unclear` and the
+            # Manager will not resume. Measured; it used to be swallowed as an
+            # empty pane id, and the symptom surfaced three steps later.
+            if result.warning:
+                say(result.warning)
             if not result.ok and tried_designation and not cycles:
                 # ⚠ THE EXISTENCE CHECK IS ON THE SESSION, NOT THE FILE. A
                 # designation can be present and perfectly readable while

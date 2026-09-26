@@ -96,6 +96,15 @@ class StartResult:
     scratch shell exiting 0 read as the Manager finishing cleanly. The id
     is stable for the pane's life and unambiguous."""
 
+    warning: str = ""
+    """Something the caller must SAY though the start succeeded.
+
+    ⚠ Added for the one case that was silent and cost a release: tmux would
+    not say which pane the Manager is in, so `ending` addresses the session
+    instead and a clean finish reads as `unclear`. `ok` is still True — the
+    Manager is running — but the run is degraded and the operator has to be
+    told, because the symptom appears later and three steps away."""
+
 
 def _tmux() -> str | None:
     return shutil.which("tmux")
@@ -541,7 +550,22 @@ def start(
             _why_the_engine_died(name, launch, manager),
         )
 
-    pane = _pane_id(name)
+    pane, why_no_pane = _pane_id_or_why(name)
+    # ⚠ CARRIED OUT, not swallowed. Without the id, `ending` addresses the
+    # session instead of the pane, and a clean finish reads as `unclear` —
+    # measured. The start still succeeds, because a running Manager beats
+    # refusing one; but the caller is told so it does not surface later as an
+    # unexplained refusal to resume.
+    degraded = (
+        (
+            f"⚠ tmux would not say which pane Manager {manager!r} is in "
+            f"({why_no_pane}). Its exit status will be read from the session "
+            "instead, which has been measured to report a clean finish as "
+            "'unclear', so this run may not resume when it should."
+        )
+        if why_no_pane
+        else ""
+    )
     record_instance(
         root,
         ManagerInstance(
@@ -579,6 +603,7 @@ def start(
         session=name,
         attach=attach,
         pane=pane,
+        warning=degraded,
     )
 
 
@@ -1349,16 +1374,31 @@ def _pane_text(name: str) -> str:
     return (done.stdout or "") if done.returncode == 0 else ""
 
 
-def _pane_id(name: str) -> str:
-    """The id of the session's pane at the moment it was created.
+def _pane_id_or_why(name: str) -> tuple[str, str]:
+    """`(pane_id, why_not)` — the session's pane id, or the reason there isn't one.
 
-    Empty if it cannot be read, and every caller falls back to the session
-    name — which is the old behaviour, so an unreadable id degrades to the
-    previous correctness rather than to a crash.
+    ⚠ **THIS USED TO RETURN `""` FOR EVERY FAILURE, AND THAT WAS THE DEFECT.**
+    An empty string is a value meaning "no answer" that every caller then used
+    as if it were an answer: `ending` does `target = pane or name` and falls
+    back to addressing the SESSION, which the fallback's own comment called
+    "the old behaviour". Measured 2026-09-26 on a 4-core Ubuntu VM, two
+    Managers and an 8B model: the recorded pane was EMPTY for both, the panes
+    that died were `%4` and `%0` each holding `status=0`, and `ending`
+    reported "no exit status across 34 read(s) in 30.6s" — so a Manager that
+    finished cleanly was `unclear`, nothing resumed, and a routed message had
+    nowhere to land.
+
+    Nothing about that was slow: tmux answered in 1ms idle and 4-5ms under
+    load, worst 9ms, against a 30s budget. The id was never captured and the
+    failure was swallowed, so there was nothing to read in the record and no
+    message saying why.
+
+    So the reason comes back with the value, and `start_session` says it out
+    loud. A caller may still fall back, but it does so knowing.
     """
     binary = _tmux()
     if binary is None:
-        return ""
+        return "", "tmux is not on PATH"
     try:
         done = subprocess.run(
             [binary, "display-message", "-p", "-t", name, "#{pane_id}"],
@@ -1367,9 +1407,19 @@ def _pane_id(name: str) -> str:
             errors="replace",
             timeout=30,
         )
-    except (OSError, subprocess.SubprocessError):
-        return ""
-    return (done.stdout or "").strip() if done.returncode == 0 else ""
+    except (OSError, subprocess.SubprocessError) as exc:
+        return "", f"asking tmux failed: {type(exc).__name__}: {exc}"
+    if done.returncode != 0:
+        said = (done.stderr or done.stdout or "").strip()
+        return "", f"tmux exited {done.returncode}: {said or 'no output'}"
+    got = (done.stdout or "").strip()
+    if not got:
+        return "", "tmux exited 0 and printed nothing"
+    if not got.startswith("%"):
+        # A pane id is `%N`. Anything else is a format that did not expand,
+        # which would be stored and later addressed as if it were a pane.
+        return "", f"tmux printed {got!r}, which is not a pane id"
+    return got, ""
 
 
 def _remain_on_exit(name: str) -> list[str]:
