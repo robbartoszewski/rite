@@ -265,8 +265,10 @@ def compose_policy(root: Path, manager: str, home: Path | None = None) -> dict:
     # seatbelt's: without it every `cmd >/dev/null` fails, which is most of
     # what a shell does and none of what a boundary is for.
     writable = [Path("/dev")]
-    # The whole project tree, because that is what an orchestrator works on.
-    writable.append(project)
+    # ⚠ NOT the project as a tree: `_fenced_project_paths` grants it so that
+    # no Manager's inbox is writable (MM-2), which Landlock can only express by
+    # enumeration. See that function for what it costs.
+    writable += _fenced_project_paths(project, manager)
     writable.append(engine_tmp(root, manager))
     # Shared temporary space, mirroring seatbelt. ⚠ This is also where the
     # socket hole lives: see the module docstring and `limitations`.
@@ -292,6 +294,62 @@ def compose_policy(root: Path, manager: str, home: Path | None = None) -> dict:
             str(where / ".config/git"),
         ],
     }
+
+
+def _fenced_project_paths(project: Path, manager: str) -> list[Path]:
+    """The project, granted so that no Manager's inbox is writable (MM-2).
+
+    ⚠ **LANDLOCK HAS NO DENY RULE.** Seatbelt enforces MM-2 with three ordered
+    rules — deny `.rite/managers`, allow this Manager's own directory, deny its
+    own `mail/in` — and takes the last match. Landlock rules only ever GRANT,
+    and the effective access is the UNION, so there is nothing to place last.
+    A carve-out therefore has to be an ENUMERATION: grant the siblings of the
+    thing being fenced, and never its parent.
+
+    Measured 2026-09-26 in a container, all three modes, as an ordinary user:
+
+        granting the project as a tree   another's inbox WRITABLE, own WRITABLE
+        enumerating one level            another's refused, own still WRITABLE
+        enumerating two levels (this)    both REFUSED, project source writable
+
+    ⚠ **WHAT IT COSTS, because it is a real cost and not a theoretical one.**
+    The project root is no longer granted as a tree, so a Manager cannot create
+    a NEW TOP-LEVEL entry in its project during a cycle — measured:
+    `mkdir /proj/newtopdir` raises PermissionError. Everything inside an
+    existing top-level directory is unaffected, including new subdirectories:
+    `src/newpkg/` was created and written in the same run. So the limitation is
+    the project ROOT, not the project.
+
+    ⚠ **And it is a snapshot.** The enumeration happens when the policy is
+    written, which is every launch, so a directory that appears mid-cycle is
+    not covered until the next one. Seatbelt's subtree grant is dynamic and
+    this is not; that difference is the price of having no deny rule.
+
+    The alternative, if the cost is judged too high, is not a better ruleset —
+    it is moving inboxes out of the project tree, after which both platforms
+    fence them by construction.
+    """
+    managers = project / ".rite" / "managers"
+    if not managers.is_dir():
+        # No Managers yet: nothing to fence, so the project is granted whole
+        # and a first cycle is not crippled before any inbox exists.
+        return [project]
+
+    granted: list[Path] = []
+    rite_dir = project / ".rite"
+    # Every top-level entry except `.rite` — the parent must not be granted.
+    granted += [p for p in sorted(project.iterdir()) if p != rite_dir]
+    # Everything in `.rite` except `managers`.
+    granted += [p for p in sorted(rite_dir.iterdir()) if p != managers]
+    # This Manager's own directory, by its children, so `mail` is not granted
+    # as a tree — and within `mail`, every box except `in`.
+    own = managers / manager
+    if own.is_dir():
+        mail = own / "mail"
+        granted += [p for p in sorted(own.iterdir()) if p != mail]
+        if mail.is_dir():
+            granted += [p for p in sorted(mail.iterdir()) if p.name != "in"]
+    return granted
 
 
 def write_profile(root: Path, manager: str, home: Path | None = None) -> Path:
