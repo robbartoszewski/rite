@@ -483,6 +483,18 @@ Exactly one must hold it when several Managers share a root, and
   the write, and `rite message` run by a Manager refuses and says what to
   use instead. A person's `rite message` from their own shell works as
   before.
+- ⚠ **Mailboxes moved out of the project**, from `.rite/managers/<name>/mail/`
+  to `~/.rite/managers/<checkout>/<name>/mail/`. No Manager's sandbox grants
+  that location, so the inbox is out of reach on both platforms without a
+  rule carving it out of the project. The directory is keyed by the
+  checkout's path, not by the credential namespace, which every checkout of a
+  project shares. The file `project` beside it says which checkout it is.
+  **Nothing is copied on upgrade.** rite reads the old in-tree mailbox too,
+  until it is empty, and each reader keeps its place, so the Slack relay does
+  not repost old replies. A Manager still running an older rite gets a
+  message you send after upgrading when it next starts. **Restart running
+  Managers after upgrading.** `rite init`'s wipe no longer deletes a
+  project's mail.
 - ⚠ **A setup session no longer swallows an instruction.** With no ticket
   backend, a Manager's session is for setting one up, and it used to be told
   to do "nothing else". So an instruction you sent it was refused or silently
@@ -565,8 +577,15 @@ See SPEC §6.6.3.
     outside the project.
   - **A Manager cannot create a new top-level file or directory in its
     project during a cycle.** Existing directories stay writable. Landlock has
-    no deny rule, so fencing the Managers' inboxes means granting the project
-    root's existing entries one by one.
+    no deny rule, so keeping one Manager out of another's directory under
+    `.rite/managers/` means granting the project root's existing entries one
+    by one. Moving the mailboxes out of the project did not remove this. Those
+    directories also hold the Owner's route requests, which are delivered as
+    instructions.
+- **Moving a project directory strands its Managers' mail.** The mailbox is
+  keyed by the checkout's path, so after a move rite looks in a new, empty
+  mailbox. Messages sent before the move stay under `~/.rite/managers/`, in
+  the directory whose `project` file names the old path.
 - **Linux: Workers are not sandboxed by default.** `rite init` leaves Worker
   sandboxing off there, because `flock` does nothing inside a Docker
   sandbox. The Manager's Landlock boundary does not extend to Workers.
