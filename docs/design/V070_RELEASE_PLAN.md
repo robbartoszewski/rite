@@ -502,14 +502,12 @@ publish:
   squash: false
   # auto_merge: false      # opt-in, on top of pull_request only
 
-# .rite/modules.yaml (per MODULE: the shared repository is a remote, and
-# each rite module is its own repository with its own `url`)
+# .rite/modules.yaml (per module; every key optional)
 modules:
-  api:
-    path: api
-    url: git@client-host:client/api.git
+  <name>:
     publish:
-      shared_repo: git@our-host:team/api.git   # required for push_to_shared; no default
+      strategy: push_to_shared     # optional override of the project's strategy
+      shared_repo: git@…           # required when the EFFECTIVE strategy is push_to_shared; no default
 ```
 
 - **`shared_repo` is per MODULE, not per project** (Robert: "because a
@@ -547,7 +545,27 @@ modules:
   this weekend was in a mechanism that existed and had never been run.
   Auto-merge is gated hardest.
 
-### Open, for Robert: does `strategy` follow `shared_repo` down to the module?
+### Settled by Robert: `strategy` per project, with an optional per-module override
+
+The project's `strategy` applies to every module unless that module's
+`publish.strategy` overrides it, resolved key by key like `commands`. A
+task touching several modules is published per module under each module's
+EFFECTIVE strategy, and its completion report lists each module's outcome.
+
+- **Resolution is explicit and inspectable.** `rite doctor` (or an
+  equivalent) prints the EFFECTIVE strategy per module and where it came
+  from ("project default" or "module override"), plus `shared_repo` when it
+  applies. An override that silently does not apply is the failure this
+  design exists to prevent. PB1 is not done until that line is observed
+  changing when an override is added and removed.
+- **The Owner resolves per module; it does not "know one strategy".** The
+  multi-Manager routing work (Track MM) must read the EFFECTIVE value per
+  module, never the project default. A secondary's completion report
+  carries the per-module outcome, and the Owner's merge decision (per PR,
+  so per module repository) uses that module's effective strategy and
+  `auto_merge`.
+
+The code-side view it was decided on:
 
 **Code-side view, from `main`:**
 - **Keyed per module today** (`config/models.py` `Module`, `modules.yaml`):
@@ -577,20 +595,15 @@ gained commits. A secondary's completion report would then have to carry a
 per-module outcome, and the routing design would have to read module
 configuration it does not read today.
 
-**Recommendation to put to Robert: the lean holds.** Project default, with
-an optional per-module override, resolved key by key like `commands`.
-State one rule with it: **a task touching several modules is published per
-module under each module's own strategy, and the completion report lists
-each.** Every module publishing the same way (the common case) then says
-nothing extra, and the one-public, one-client-owned case is expressible.
+*(Recommendation made, and adopted by Robert as above.)*
 
 ### 🔴 Three rules on `shared_repo`: part of the design, not implementation detail
 
 1. **No default, ever.** Not `origin`, not a derived name. rite's users
    include on-premise clients for whom code leaving their infrastructure is
    the thing they are paying to avoid. A helpful guess harms exactly them.
-2. **Refuse at start, with the reason,** when `strategy: push_to_shared`
-   is set and `shared_repo` is not. The same shape as the missing
+2. **Refuse at start, with the reason,** when a module's EFFECTIVE
+   strategy is `push_to_shared` and its `shared_repo` is not set. The same shape as the missing
    `claude_token` refusal: it names the fix and the module.
 3. **Refuse when `shared_repo` resolves to the same remote as `origin`.**
    Someone will configure that by accident eventually, and it would
@@ -646,7 +659,7 @@ not pushable, is in that state today.
 
 | # | work | done when | depends | size |
 |---|---|---|---|---|
-| PB1 | **The `publish:` setting as designed above, applied to a finished task by the Manager ROLE, split as drawn below.** Workers commit and do not push. rite applies `strategy`: `commit` (committed locally on a rebasable branch, nothing pushed); `push` (push and merge to main or a feature branch); `pull_request`, the default (push and open a PR); `push_to_shared` (push to the project's `shared_repo`, never `origin`, under the three rules above). Also `squash` (opt-in, default off) and `auto_merge` (opt-in, `pull_request` only, green matched to the head SHA) | **Each value observed, not just built.** One real task per `strategy` goes from a Worker's commit to its end state on a real project. Under `commit`: the work survives the Worker's next task, nothing reached any remote, and a person reworks it with `git rebase -i` without friction, squash off and on. `push_to_shared`: observed refusing with no `shared_repo`, and refusing when `shared_repo` is `origin` in another spelling (SSH vs HTTPS). `auto_merge`: observed REFUSING to merge on each of the four stale-green shapes, and merging on a green whose SHA is the PR's head | a path from the sandbox copy into the local repository | design settled; unsized |
+| PB1 | **The `publish:` design above, final.** Workers never push; the Manager ROLE publishes, split as drawn below (whatever loses work or publishes something unintended is rite's). `strategy` (`commit`, `push`, `pull_request` default, `push_to_shared`) per project with an optional per-module override; `shared_repo` per module under the three rules; `squash` opt-in, default off, every strategy; `auto_merge` opt-in on `pull_request`, green matched to the head SHA | **Each value observed, not just built.** One real task per `strategy` goes from a Worker's commit to its end state on a real project. Under `commit`: the work survives the Worker's next task, nothing reached any remote, and a person reworks it with `git rebase -i` without friction, squash off and on. An override observed taking effect: the effective-strategy line changes with it, and a two-module task is published per module and reported per module. `push_to_shared`: observed refusing with no `shared_repo`, and refusing when it is the module's `origin` in another spelling. `auto_merge`: observed REFUSING on each of the four stale-green shapes, and merging on a green whose SHA is the PR's head | a path from the sandbox copy into the local repository; Track MM reading the effective value | design final; unsized |
 
 ### Auto-merge: explicit opt-in, and a green matched to the head SHA
 
