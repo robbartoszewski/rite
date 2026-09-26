@@ -6634,6 +6634,7 @@ def _start_a_manager(
     minutes: float | None,
     record_issues: bool = False,
     fresh: bool = False,
+    keep_conversation: bool = False,
 ) -> None:
     """Start one Manager, refusing without a ceiling (D-68)."""
     if sessions is None:
@@ -6748,10 +6749,41 @@ def _start_a_manager(
         )
         click.echo(
             "  One session only: a setup session needs you at the terminal, "
-            "so it is not resumed. Run `rite start` again when the board is "
-            "configured.",
+            "so it is not resumed. When the board is configured, start a new "
+            f"conversation that knows it: `rite start {role.name} --fresh`.",
             err=True,
         )
+
+    # 🔴 A conversation keeps the instructions it BEGAN with. Continuing one
+    # that began under another board — none, removed, or a different repo —
+    # leaves the Manager working from that board: measured, a Manager that
+    # began with none declined routed work as a duplicate once one existed.
+    # Refused before anything is touched, with both ways forward; never
+    # silently made fresh, because that discards the conversation.
+    from rite_ai.managers.board_context import board_now, record_board, refusal
+
+    if fresh and keep_conversation:
+        click.echo(
+            "refusing to start: --fresh starts a new conversation and "
+            "--keep-conversation continues the old one. Choose one.",
+            err=True,
+        )
+        raise SystemExit(1)
+    if not fresh:
+        refused = refusal(root, role.name, sessions=sessions, minutes=minutes)
+        if refused and not keep_conversation:
+            click.echo(refused, err=True)
+            raise SystemExit(1)
+        if refused and keep_conversation:
+            now = board_now(root) or {"type": "none"}
+            record_board(root, role.name, now)
+            click.echo(
+                f"continuing the conversation of Manager {role.name!r} as asked, "
+                "although it began under another board, or one rite cannot "
+                "name. It is recorded as running under the current board "
+                "from now on.",
+                err=True,
+            )
 
     # ⚠ BEFORE any credential is touched: a second start for a running
     # Manager must not clear or remove the credentials that Manager is using.
@@ -7625,6 +7657,15 @@ def manager_stop(name: str) -> None:
     "continues.",
 )
 @click.option(
+    "--keep-conversation",
+    is_flag=True,
+    default=False,
+    help="Continue this Manager's last conversation even though the board "
+    "configured now is not the one it began with. rite refuses a bare start "
+    "in that case, because the conversation keeps its old instructions; this "
+    "continues it anyway and records the current board.",
+)
+@click.option(
     "--record-issues",
     is_flag=True,
     default=False,
@@ -7645,6 +7686,7 @@ def start_cmd(
     minutes: float | None,
     record_issues: bool,
     fresh: bool,
+    keep_conversation: bool,
 ) -> None:
     """Bring rite up — assess state and act.
 
@@ -7701,14 +7743,30 @@ def start_cmd(
             if not chosen.ok:
                 click.echo(chosen.problem, err=True)
                 raise SystemExit(1)
-            _start_a_manager(here, chosen.role, sessions, minutes, record_issues, fresh)
+            _start_a_manager(
+                here,
+                chosen.role,
+                sessions,
+                minutes,
+                record_issues,
+                fresh,
+                keep_conversation,
+            )
             return
     elif roles:
         from rite_ai.managers import manager_to_start
 
         chosen = manager_to_start(roles, directory)
         if chosen.ok:
-            _start_a_manager(here, chosen.role, sessions, minutes, record_issues, fresh)
+            _start_a_manager(
+                here,
+                chosen.role,
+                sessions,
+                minutes,
+                record_issues,
+                fresh,
+                keep_conversation,
+            )
             return
         # Not a Manager name: fall through to directory/alias resolution,
         # which is what `rite start /path` and `rite start <alias>` need.

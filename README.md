@@ -382,7 +382,9 @@ not start another, whatever `--sessions` says. It says so when it starts.
 
 A bare `rite start <manager>` **continues that Manager's last session** — the
 work it did yesterday is reachable today — and `--fresh` starts a new one
-instead. Nothing to continue is not an error: a first run, or a session the
+instead. If the project's board has changed since that session began,
+`rite start` refuses and asks you to choose, because the session would keep
+working from the old board. Nothing to continue is not an error: a first run, or a session the
 provider has forgotten, starts fresh and says which.
 
 **No gates on your code.** Your sessions run your tests and linters — that is

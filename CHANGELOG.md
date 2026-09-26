@@ -524,6 +524,18 @@ See SPEC §6.6.3.
   Continuation silently started fresh for those projects.
 - **`rite doctor` tells "could not ask tmux" from "no loop is running"**,
   and says `unknown` rather than reporting a loop as stopped.
+- **A Manager no longer continues a conversation that began under a
+  different board.** A conversation keeps the instructions it started with.
+  So a Manager first started with no board, continued after one was
+  configured, still believed there was none, and declined the work routed to
+  it as a duplicate. rite now records which board each conversation began
+  under. If the board has since been configured, removed, or pointed
+  elsewhere, a bare `rite start` refuses before starting anything and gives
+  both commands: `--fresh` for a new conversation that knows the board, or
+  `--keep-conversation` to continue the old one anyway. A conversation
+  started by an earlier build is refused the same way when a board is now
+  configured, because rite cannot tell what it began under. rite never
+  starts fresh on its own.
 - **Commit signing no longer stops a Manager's commits.** With
   `commit.gpgsign` (or `tag.gpgsign`) on, every commit a Manager made
   failed, because its sandbox cannot read your signing key. rite now turns
