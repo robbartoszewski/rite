@@ -171,3 +171,8 @@
 # is the venv config file it could not read. The username was replaced with
 # an ellipsis before it was ever committed — the rule matches the shape, not
 # a name. Reproduced in the commit message for the same reason.
+f3926a14bc8e1968814a79894c545174211ec24d:tests/test_a_manager_gets_github_credentials_without_holding_keys.py:github-app-token:sha256-3d30d20c911c7fb67e468b2d387c5a77  # fake GitHub App token `ghs_THISisAfakeTOKENforTESTS…0000`, the fixture github_access writes, reads and removes; it must look like a real one to test that path
+938c8b51024108fdf5bac90851ad1ce167278029:tests/test_slack_posts_what_the_manager_says.py:generic-api-key:sha256-22cf162f17fa118b6ca480e71d4ec43c  # `ghp_SENTINEL12345`, a sentinel the test asserts is REDACTED before a reply is posted to Slack; it has to be credential-shaped to test that
+5ec51738258febbe765d611f10adf64844dbe3b8:tests/test_manager_journal.py:generic-api-key:sha256-e1f98e923ca00b35814abfb3f8eb94ed  # `ghp_SENTINEL0123456789abcdef` in a pasted `env | grep TOKEN` the test asserts never reaches the journal file (C7); credential-shaped on purpose
+5ec51738258febbe765d611f10adf64844dbe3b8:tests/test_manager_journal.py:generic-api-key:sha256-935d29b804bd15c480d63112c395aa17  # `jira-SENTINEL-0123456789` in the same pasted `.envrc`, asserted redacted from the journal (C7); a sentinel, not a key
+-:tests/test_manager_endings_and_resume.py:rite-hardcoded-macos-home-directory-path:sha256-de8e727d8eec7aca0b1cd0d1f7883d35  # a macOS home path COPIED from a directory Claude Code created on a real machine, with the username anonymised to one letter; the test's point is that the expectation is observed, not derived, so the path must stay as observed
