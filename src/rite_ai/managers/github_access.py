@@ -428,9 +428,13 @@ class Access:
             return []
         app_id, installation_id, repos = self.app
         try:
-            got = _mint(
-                app_id, installation_id, self.app_key, repos, post=self.post, now=t
-            )
+            # ⚠ Signed with the WALL CLOCK, never `now`. `now` decides whether a
+            # refresh is due; a JWT stamped with it is stamped at a time that
+            # is not now. Measured against GitHub on 2026-09-26: a refresh
+            # decided "5 minutes before expiry" signed a JWT ~55 minutes in the
+            # future and GitHub answered `401 Bad credentials`, so the refresh
+            # path had never minted anything real.
+            got = _mint(app_id, installation_id, self.app_key, repos, post=self.post)
         except _MintError as e:
             when = time.strftime("%H:%M", time.localtime(self.expires_at))
             return [
