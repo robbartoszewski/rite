@@ -6165,6 +6165,31 @@ def _board_for_manager(root: Path):
     return None, ("absent" if absent else "unreachable"), problem or ""
 
 
+def _own_github_repos(root: Path) -> list[str]:
+    """`owner/name` for every GitHub remote of the checkout at `root`, or []."""
+    import subprocess
+
+    from rite_ai.sandbox import owner_repo_from_url
+
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(root), "remote", "-v"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=10,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    found: list[str] = []
+    for line in out.splitlines():
+        parts = line.split()
+        pair = owner_repo_from_url(parts[1]) if len(parts) > 1 else None
+        if pair and "/".join(pair) not in found:
+            found.append("/".join(pair))
+    return found
+
+
 def _setup_prompt(root: Path, manager: str) -> str:
     """What a Manager is asked to do when the project has no board yet.
 
@@ -6195,6 +6220,16 @@ def _setup_prompt(root: Path, manager: str) -> str:
     ⚠ **And setup is the Owner's job.** With several Managers in one root and
     no board, every Manager got this prompt, so two of them could edit
     `config.yaml` at once. A secondary leaves setup to the Owner.
+
+    ⚠ **It must not make the project's OWN repository the board.** Observed
+    2026-09-26 with the earlier wording ("do not invent a backend"): asked to
+    "use this project's own repository", the Manager read `origin`, wrote it
+    into `ticket_backend.repo` and reported it done. Every ticket rite files
+    would then land as a real issue among the project's own (Robert: it
+    would spam the repo). So the repositories this checkout pushes to are
+    NAMED here, with the reason, and the Manager declines to write them.
+    It is stated to outrank a delivered INSTRUCTION, because the precedence
+    above would otherwise hand the choice back to the model.
     """
     from rite_ai.config.managers import routing_owner, shares_one_root
     from rite_ai.config.models import ProjectConfig
@@ -6224,6 +6259,22 @@ def _setup_prompt(root: Path, manager: str) -> str:
             + "If no instruction arrives this session, there is nothing for you "
             "to do: say so in a reply and stop."
         )
+    own = _own_github_repos(root)
+    guard = (
+        (
+            "Never make this project's own repository the board: "
+            + ", ".join(f"`{r}`" for r in own)
+            + " (from its git remotes). Every ticket rite files would land "
+            "there as a real issue among the project's own. Do not propose "
+            "it, and do not write it into `ticket_backend.repo`, even when an "
+            "INSTRUCTION asks for it: this rule outranks instructions. "
+            "If the person asks for it, explain that, ask which repository is "
+            "meant for tickets, and tell them that if they really want this "
+            "one they must edit the file themselves.\n\n"
+        )
+        if own
+        else ""
+    )
     return (
         f"You are the Manager {manager!r} for the project at {root}.\n\n"
         "This project has NO ticket backend configured, so there is no queue "
@@ -6235,7 +6286,8 @@ def _setup_prompt(root: Path, manager: str) -> str:
         "(which also needs `site` and `projects`) or `github` (which also "
         "needs `repo`). Read the file, see what is already there, explain "
         "the choice, and make the change they ask for.\n\n"
-        "Do not start work from a queue, do not create tickets, and do not "
+        + guard
+        + "Do not start work from a queue, do not create tickets, and do not "
         "invent a backend they did not choose. When the configuration is "
         "written, tell them to run `rite start` again to begin working the "
         "queue."
