@@ -124,11 +124,20 @@ commands, instead of letting it start and print `Not logged in`.
 The token is a `claude setup-token` token: it can make model requests on
 your subscription, and nothing else. rite gives each Manager its own copy in
 a 0600 file only that Manager's sandbox can read. The Manager can read it,
-which is the cost of it calling the model at all. **On macOS it cannot
-replace it**: the sandbox denies writing that one file (measured). **On
-Linux it can**, because Claude must be able to write its whole config
-directory, and Linux's sandbox (Landlock) can grant a directory but cannot
-then deny one file inside it. rite removes it when the run ends. It never goes on
+which is the cost of it calling the model at all.
+
+**A platform difference: whether the Manager can REPLACE that file.**
+- **macOS: it cannot.** The sandbox denies writing that one file (measured).
+- **Linux: it can.** Claude must be able to write its whole config
+  directory, and Linux's sandbox (Landlock) has no deny rule, so anything
+  inside a directory Claude must write is writable.
+
+What replacing it buys a Manager that has already been subverted is small
+next to reading it: it can already copy the token out. Replacing it only
+changes which credential the rest of that run uses, and rite writes a fresh
+copy at the next start. Fixing it on Linux is planned for 0.7.0.
+
+rite removes the copy when the run ends. It never goes on
 a command line or into the environment, and rite redacts it from the
 Manager's journal and its Slack replies. A run that is killed cannot remove
 its copy, so the next `rite start` for that Manager removes it and says so.
