@@ -493,7 +493,46 @@ here as relayed.
   > review and amend just 1 commit instead of many, then let's make it easy
   > for them."
 
-**Recorded, not designed.** Not in v0.6.0.
+## The design, settled by Robert on 2026-09-26 (it replaces earlier wording in this track)
+
+```yaml
+publish:
+  strategy: pull_request   # commit | push | pull_request
+  remote: origin           # origin | shared
+  squash: false
+  # auto_merge: false      # opt-in, on top of pull_request only
+```
+
+- **`strategy` values are verbs, named rather than numbered.** A config
+  saying `strategy: 2` tells a reader nothing, and names let a value be
+  added without disturbing an order. This track's history below says
+  "`strategy: commit`/2/3": 1 = `commit`, 2 = `push`, 3 = `pull_request`. Robert's
+  own quotes keep the numbers he used.
+- **`pull_request` is the default** (Robert's decision). With auto-merge
+  off it is strictly safer than `push`: the work leaves the machine and is
+  visible, but nothing lands on a branch anyone depends on, and the
+  reviewer decides. The default matters because a team that inspects every
+  line is precisely the team that will not have changed it.
+- **`remote` is a separate axis, not a fourth strategy.** Robert rejected
+  `shared` as a strategy value: the others are verbs, and that one is a
+  destination. His multi-Manager case is `strategy: push, remote: shared`,
+  and `pull_request` against a shared remote is expressible too, which an
+  enum could not say.
+- 🔴 **`remote: shared` requires an explicitly configured remote and has NO
+  default.** rite's users include on-premise clients for whom code leaving
+  their infrastructure is the thing they are paying to avoid. A helpful
+  default here would be the worst outcome in the design.
+- **`squash` is orthogonal**, default off (below).
+- **Auto-merge is separate from all three**, and Robert checked this
+  specifically: opening a PR is safe, merging it is the risk. It is an
+  opt-in flag on top of `pull_request`, off by default, under the
+  green-matched-to-SHA rule below.
+- **All values are implemented** (Robert: not much code). ⚠ **Each one must
+  be OBSERVED before it is called done**, because every defect that mattered
+  this weekend was in a mechanism that existed and had never been run.
+  Auto-merge is gated hardest.
+
+Not in v0.6.0.
 
 ### Today, checked for data loss first: NOT a v0.6.0 defect (measured)
 
@@ -522,7 +561,7 @@ refuses a dirty tree. The guard tests pass (20). *A first attempt hung
 because a bare `yoloai new` defaults to Docker and builds an image. rite
 always passes the project's backend.*
 
-**Why strategy 1 still has no foundation today.** Pushing is the only way
+**Why `strategy: commit` still has no foundation today.** Pushing is the only way
 work leaves a sandbox: the Worker instructions (`workspace/manage.py`,
 step 4) say to push after every commit, because "a commit that was never
 pushed is gone". Under "don't push", step 5 above is the state: the work
@@ -536,13 +575,11 @@ not pushable, is in that state today.
 
 | # | work | done when | depends | size |
 |---|---|---|---|---|
-| PB1 | **A per-project publishing strategy that the Manager ROLE applies to a finished task, split as drawn below.** Workers commit and do not push. The Manager role (rite and the model, for the Owner or the holder of `integrate`) applies the project's strategy: (1) keep it local, committed in the project's own repository, nothing pushed; (2) push and merge to main or a feature branch; (3) push and open a PR, then merge on green or leave the merge to the User, per a setting the Owner reads. **Auto-squash is one opt-in setting, default off, across all strategies.** The commit-message convention is a default that stays amendable | For each strategy, one real task goes from a Worker's commit to the declared end state on a real project. Under (1): the work survives the Worker's next task, nothing reached any remote, and a person reworks it with `git rebase -i` (squash, reword, amend) on its branch without friction, both with auto-squash off and on | a path from the sandbox copy into the local repository | design first; unsized |
+| PB1 | **The `publish:` setting as designed above, applied to a finished task by the Manager ROLE, split as drawn below.** Workers commit and do not push. rite applies `strategy` (`commit`: committed locally on a rebasable branch, nothing pushed; `push`: push and merge to main or a feature branch; `pull_request`, the default: push and open a PR), to `remote` (`origin`, or an explicitly configured `shared` remote with no default), with `squash` (opt-in, default off) and `auto_merge` (opt-in, `pull_request` only, green matched to the head SHA) | **Each value observed, not just built:** one real task per `strategy` goes from a Worker's commit to its end state on a real project, and so does `remote: shared` with an operator-configured remote. Under `commit`: the work survives the Worker's next task, nothing reached any remote, and a person reworks it with `git rebase -i` without friction, squash off and on. `auto_merge`: observed REFUSING to merge on each of the four stale-green shapes below, and merging on a green whose SHA is the PR's head | a path from the sandbox copy into the local repository | design settled; unsized |
 
-### Decided: implement all the strategies; auto-merge only on explicit opt-in and a green matched to the head SHA
+### Auto-merge: explicit opt-in, and a green matched to the head SHA
 
-Robert asked whether there is a reason not to implement all the strategies,
-since it is not much code. **Answer, to build to unless he overrules it:
-implement them all.** One clause is fixed:
+All values are implemented. Auto-merge is the one clause gated hardest:
 
 🔴 **Auto-merge after checks requires (a) an explicit opt-in, and (b) a green
 matched to the head SHA being merged.** "No failures" is not a green, and a
@@ -563,7 +600,7 @@ v0.6.0 readiness list, D12.)
 
 ### Strategy 1: what "a human can comfortably rework it" requires
 
-The requirement, from his quote: **strategy 1 leaves the work in a state a
+The requirement, from his quote: **`strategy: commit` leaves the work in a state a
 developer can comfortably rework before it goes out.** The reason is social,
 not technical: the developer does not push unreviewed AI-generated code at
 colleagues who inspect every line.
@@ -584,7 +621,7 @@ colleagues who inspect every line.
   is usually good enough to review as one change.
 - **Amendable either way.** Squashed or not, the branch must rebase cleanly
   and be comfortable in `git rebase -i`. A squash that leaves the branch
-  awkward trades a convenience for the thing strategy 1 exists to protect.
+  awkward trades a convenience for the thing `strategy: commit` exists to protect.
 - **A squashed commit needs a message for the whole change,** not the last
   commit's, and it is still a default to amend.
 - **Modelled once, not per strategy.** All three strategies plausibly want
@@ -594,7 +631,7 @@ colleagues who inspect every line.
 ### Who does what: rite's part and the model's part
 
 **The line: anything whose failure loses work or publishes something
-unintended is rite's, not the model's.** The local commit under strategy 1
+unintended is rite's, not the model's.** The local commit under `strategy: commit`
 is the clearest case. A model that forgets to commit loses the task, which
 is exactly the failure Robert called out. The engine contract already draws
 this line once. R7 ("Leave verification to rite": `harness.run_subtask`
@@ -629,14 +666,14 @@ one.
   opening a PR today (`config/managers.py`: "pushing and opening the PR
   needs a claude engine or a person"). How a secondary reports a finished
   task upward then has to carry what was done with it under the strategy.
-- **Committing gets MORE central under strategy 1, and it is broken on
+- **Committing gets MORE central under `strategy: commit`, and it is broken on
   Robert's Mac today.** Measured 2026-09-26 (D10): his global SSH commit
   signing (`~/.ssh` unreadable) and his global Node pre-push hook both fail
   inside the Manager's sandbox, so no Manager can commit there. Robert's
   preferred design makes that blocker worse, not better. The Worker side
   (yoloAI sandboxes, a different boundary) has not been measured.
 
-### Future improvement, linked to strategy 1: a shared repository for multi-Manager work
+### `remote: shared`: a shared repository for multi-Manager work (was: a future improvement)
 
 Robert, verbatim, in the order given:
 
@@ -664,19 +701,11 @@ firm's code to a convenient hosted remote would be the worst thing in this
 design. This is a setting with a compliance dimension, not a convenience
 toggle.
 
-**Open question, not decided: a variant of strategy 1, or a fourth
-strategy.**
-- **A variant of strategy 1:** "don't push to origin", with an optional
-  shared remote underneath. Three strategies, one publishing axis.
-- **A fourth strategy:** "publish to a shared repository, never to origin".
-  Simpler to configure and explain, and the Owner's merge question gets a
-  well-defined answer for it.
-- *Recorded inclination (the relaying reviewer's), not a decision:* the
-  separate strategy. The Owner must know whether it may merge, and each
-  strategy answers that differently. A sub-setting inside strategy 1 would
-  make that answer depend on two settings, and the multi-Manager routing
-  design already reads the strategy to know what a secondary may do. The
-  call is Robert's.
+**Resolved by Robert: neither a variant nor a fourth strategy.** `shared`
+is a destination, so it is the `remote` axis (above): `strategy: push,
+remote: shared` for his multi-Manager case. The Owner's merge answer still
+depends on one setting, `strategy` (plus the `auto_merge` flag), which was
+the reason recorded for preferring a separate strategy.
 
 ## Track CU — Cursor, the third engine
 
