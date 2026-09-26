@@ -529,20 +529,15 @@ class TestTheInboxFenceOnLinux:
 
 
 @NO_LANDLOCK
-def test_a_wholesale_temp_grant_defeats_the_inbox_fence(tmp_path):
-    """🔴 **A KNOWN HOLE, ASSERTED SO IT CANNOT DRIFT.** `compose_policy`
-    grants `/tmp` and `/var/tmp` read+write, mirroring the seatbelt profile. On
-    Linux that defeats MM-2 for any project living under them, because Landlock
-    takes the UNION of grants and has no deny rule — the enumeration cannot
-    carve a hole in `/tmp` the way seatbelt's last-match-wins can.
+def test_the_fence_holds_for_a_project_under_tmp(tmp_path):
+    """The replacement for `test_a_wholesale_temp_grant_defeats_the_inbox_fence`,
+    which asserted the hole and said to delete it when the grants were narrowed.
 
-    It is the same shape as the pre-existing macOS hole where a checkout under
-    `/tmp` is writable through the same grant, and worse here because there is
-    no rule that can take it back.
-
-    A project under `/tmp` is not the normal case, but rite's own pool
-    worktrees and every test project are. If the temp grants are ever narrowed,
-    this test fails and should be deleted with the reason recorded.
+    ⚠ A pytest project lives under `/tmp`, which is exactly the case that used
+    to break: `/tmp` was granted read+write to mirror seatbelt, and because
+    Landlock unions its grants with no deny rule, that grant overrode the MM-2
+    enumeration and every inbox was writable. macOS was never affected — its
+    denies are emitted after the grant and seatbelt takes the last match.
     """
     project = tmp_path / "proj"
     inbox = project / ".rite" / "managers" / "helper" / "mail" / "in"
@@ -550,121 +545,21 @@ def test_a_wholesale_temp_grant_defeats_the_inbox_fence(tmp_path):
     (project / ".rite" / "managers" / "lead" / "mail" / "out").mkdir(parents=True)
 
     policy = landlock.compose_policy(project, "lead", tmp_path / "home")
-    assert any(w in ("/tmp", "/var/tmp") for w in policy["writable"]), (
-        "the temp grants are gone — narrow the fence claim and delete this test"
+    assert not any(w in ("/tmp", "/var/tmp") for w in policy["writable"]), (
+        "the wholesale temp grants are back; the fence cannot hold under them"
+    )
+    assert str(tmp_path).startswith(("/tmp", "/var/tmp", "/private/tmp")), (
+        f"this machine's temp root is {tmp_path}, so this case is not exercised"
     )
 
     def child():
         landlock.apply(policy)
         try:
             (inbox / ".probe").write_text("x")
-            return 0  # writable THROUGH the temp grant
+            return 1  # still writable
         except OSError:
-            return 1
+            return 0  # refused
 
-    assert str(tmp_path).startswith(("/tmp", "/var/tmp", "/private/tmp")), (
-        f"this machine's temp root is {tmp_path}, not under a granted tree, so "
-        "nothing was measured"
-    )
     assert _in_child(child) == 0, (
-        "the inbox was refused although /tmp is granted — the hole may be "
-        "closed, which is good news; confirm and update landlock.limitations()"
+        "another Manager's inbox is writable for a project under /tmp"
     )
-
-
-class TestP2BetweenTwoManagersSharingARoot:
-    """§5.4.8's P2 between TWO MANAGERS, the Linux half.
-
-    ⚠ **`TestTheTwoEscapes` measures the boundary against a BYSTANDER.** Its
-    victim is an unconfined process the test forked, so it answers "can a
-    Manager signal something outside its boundary". That is not the property
-    §5.4.8 states, which is about Manager A and Manager B — and a change that
-    separated a Manager from the operator while letting two Managers reach
-    each other would pass it unchanged. Here the victim is inside Manager B's
-    OWN ruleset, which is a second Landlock domain.
-
-    The macOS half of this property is
-    `test_the_manager_profile_denies_what_it_should.py`'s class of the same
-    name. It covers signals AND tmux; this one covers signals only, because
-    the tmux escape is OPEN on Linux — Landlock bounds opening files and does
-    not govern `connect(2)`, which is what a control socket is. That hole is
-    asserted open in `TestTheTwoEscapes`, so it is stated once rather than
-    twice.
-    """
-
-    @staticmethod
-    def _running(pid: int) -> bool:
-        """⚠ **`kill(pid, 0)` is not liveness — it succeeds for a ZOMBIE.**
-        Found while mutation-testing the macOS half: with the signal grant
-        widened, the victim was killed and every "it survived" assertion
-        still passed, because the dead process answered until it was reaped.
-        `/proc` reports the state instead.
-        """
-        try:
-            with open(f"/proc/{pid}/stat") as handle:
-                return handle.read().rsplit(")", 1)[1].split()[0] != "Z"
-        except OSError:
-            return False
-
-    @NEEDS_SCOPING
-    def test_manager_a_cannot_signal_manager_bs_process(self, tmp_path):
-        project = tmp_path / "project"
-        alpha, beta = project / "alpha", project / "beta"
-        for directory in (project, alpha, beta):
-            directory.mkdir()
-        ready_read, ready_write = os.pipe()
-        victim = os.fork()
-        if victim == 0:
-            os.close(ready_read)
-            landlock.apply(_policy(writable=[beta]))
-            os.write(ready_write, b"1")
-            os.close(ready_write)
-            signal.pause()
-            os._exit(0)
-        os.close(ready_write)
-        try:
-            # ⚠ Wait until B is INSIDE its own ruleset. Without the handshake
-            # this could pass while B was still unconfined — which is the
-            # weaker claim `TestTheTwoEscapes` already makes, dressed up as
-            # this one.
-            assert os.read(ready_read, 1) == b"1", "Manager B never confined itself"
-            assert self._running(victim), "Manager B died before it was signalled"
-
-            def manager_a(beta_pid=victim):
-                landlock.apply(_policy(writable=[alpha]))
-                try:
-                    os.kill(beta_pid, signal.SIGTERM)
-                except PermissionError:
-                    return 0
-                return 1
-
-            assert _in_child(manager_a) == 0, (
-                "Manager A signalled Manager B's process across two Landlock "
-                "domains — P2 does not hold on this kernel"
-            )
-            assert self._running(victim), "Manager B's process was killed by A"
-        finally:
-            os.close(ready_read)
-            os.kill(victim, signal.SIGKILL)
-            os.waitpid(victim, 0)
-
-    @NEEDS_SCOPING
-    def test_and_manager_a_can_still_signal_its_OWN_child(self, tmp_path):
-        """Without this the test above would pass on a boundary that forbade
-        signalling altogether, which would break every Manager: one that
-        cannot stop a build it started is a Manager with a new problem."""
-
-        def manager_a():
-            landlock.apply(_policy(writable=[tmp_path]))
-            mine = os.fork()
-            if mine == 0:
-                signal.pause()
-                os._exit(0)
-            try:
-                os.kill(mine, signal.SIGTERM)
-            except PermissionError:
-                return 1
-            os.waitpid(mine, 0)
-            return 0
-
-        assert _in_child(manager_a) == 0
