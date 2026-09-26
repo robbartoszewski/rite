@@ -276,6 +276,37 @@ def compose_policy(root: Path, manager: str, home: Path | None = None) -> dict:
     writable += [Path("/tmp"), Path("/var/tmp")]
     writable += [p for p in _engine_state_paths(where) if p.exists()]
 
+    # ⚠ **THIS MANAGER'S OWN CREDENTIAL DIRECTORY (C6/C26).** Without it a
+    # Claude Manager on Linux gets `Not logged in` — the same v0.6.0 blocker
+    # the seatbelt side fixed, left open here because the grant was emitted
+    # only by `github_access.profile_lines()`, which produces seatbelt
+    # s-expressions. Found by cross-reviewing that work against this backend:
+    # two correct pieces, and a hole neither side could see alone.
+    #
+    # ⚠ **NO WIDER THAN SEATBELT GRANTS**, deliberately, although that side is
+    # itself wider than it should be and is being narrowed separately. Matching
+    # it means the two platforms are comparable and the narrowing lands in one
+    # place rather than two:
+    #     claude/   read AND write — Claude Code writes transcripts and session
+    #               state there, so a read-only grant would break a run
+    #     cdir      read-only      — the other credential files, written from
+    #                               outside the boundary
+    #
+    # ⚠ **SYMLINKS ARE NOT FOLLOWED HERE.** A Landlock rule names the inode a
+    # path resolves to, so adding a rule for a symlink grants its TARGET —
+    # measured in review, where granting only a symlink to another Manager's
+    # `mail/in` made that inbox writable. The Manager can WRITE `claude/`, so it
+    # could plant one; a symlinked credential path is therefore skipped rather
+    # than resolved, which fails closed.
+    from rite_ai.managers import github_access
+
+    cdir = github_access._credential_dir(root, manager, where)  # noqa: PLC2701
+    claude_dir = cdir / "claude"
+    if claude_dir.is_dir() and not claude_dir.is_symlink():
+        writable.append(claude_dir)
+    if cdir.is_dir() and not cdir.is_symlink():
+        readable.append(cdir)
+
     return {
         "manager": manager,
         "project": str(project),

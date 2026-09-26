@@ -257,3 +257,57 @@ class TestAFreshMachineGetsItsGrants:
             assert not (home / untouched).exists(), (
                 f"rite created {untouched}, which it does not own"
             )
+
+
+class TestTheManagersOwnCredentialDirectory:
+    """⚠ **THE HOLE NEITHER OWNER COULD SEE ALONE (C6/C26).** The grant was
+    emitted only by `github_access.profile_lines()`, which produces seatbelt
+    s-expressions, so the Landlock policy carried none of it — and a Claude
+    Manager on Linux got `Not logged in`, the same v0.6.0 blocker the seatbelt
+    side had already fixed. Found by cross-reviewing the credential work
+    against this backend.
+    """
+
+    def _laid_out(self, tmp_path, *, symlink_claude=False):
+        from rite_ai.managers import github_access
+
+        root = tmp_path / "proj"
+        root.mkdir()
+        home = tmp_path / "home"
+        home.mkdir()
+        cdir = github_access._credential_dir(root, "lead", home)
+        if symlink_claude:
+            cdir.mkdir(parents=True)
+            (home / "elsewhere").mkdir()
+            (cdir / "claude").symlink_to(home / "elsewhere")
+        else:
+            (cdir / "claude").mkdir(parents=True)
+            (cdir / "claude" / ".credentials.json").write_text("{}")
+            (cdir / "gh").mkdir()
+        return root, home, cdir
+
+    def test_the_login_is_readable_and_no_wider_than_seatbelt_grants(self, tmp_path):
+        root, home, cdir = self._laid_out(tmp_path)
+        policy = landlock.compose_policy(root, "lead", home)
+        # `claude/` read AND write: Claude Code writes transcripts and session
+        # state there, so read-only would break a run. Same as seatbelt.
+        assert str(cdir / "claude") in policy["writable"]
+        # The rest of the directory read-only — written from OUTSIDE the
+        # boundary. Same as seatbelt.
+        assert str(cdir) in policy["readable"]
+        assert str(cdir) not in policy["writable"], (
+            "the credential directory is writable — a Manager could replace "
+            "credentials written for it from outside"
+        )
+
+    def test_a_symlinked_credential_path_is_not_granted(self, tmp_path):
+        """🔴 A Landlock rule names the INODE a path resolves to, so adding a
+        rule for a symlink grants its TARGET — measured in review, where
+        granting only a symlink to another Manager's `mail/in` made that inbox
+        writable. The Manager can WRITE `claude/`, so it could plant one.
+        Skipped rather than resolved, which fails closed."""
+        root, home, cdir = self._laid_out(tmp_path, symlink_claude=True)
+        policy = landlock.compose_policy(root, "lead", home)
+        granted = set(policy["readable"]) | set(policy["writable"])
+        assert str(cdir / "claude") not in granted
+        assert str(home / "elsewhere") not in granted
