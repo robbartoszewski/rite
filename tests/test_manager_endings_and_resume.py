@@ -684,6 +684,74 @@ class TestTheStatusArrivesAfterTheDeath:
         assert how.kind == UNCLEAR
         assert len(seen) == 1, "it waited on a pane that was simply still running"
 
+    def test_a_dead_pane_without_a_status_nudges_the_server(self, monkeypatch):
+        """🔴 tmux on Linux records an exit only when the NEXT child exits, so
+        the last Manager to end was never read. `ending` sends the server the
+        SIGCHLD it did not act on, and the status then arrives."""
+        import signal
+
+        sent: list[tuple[int, int]] = []
+        monkeypatch.setattr(
+            session_module.os, "kill", lambda pid, sig: sent.append((pid, sig))
+        )
+        self._replies(monkeypatch, ["1|||4242", "1|0||4242"])
+        how = ending("any-session", human_was_present=False)
+        assert how.kind == FINISHED, how.detail
+        assert sent == [(4242, signal.SIGCHLD)], sent
+
+    def test_nothing_is_signalled_without_a_readable_server_pid(self, monkeypatch):
+        """A pid tmux did not give — an older tmux, a garbled reply — is not
+        guessed at. The wait carries on exactly as before, then `unclear`."""
+        sent: list[tuple[int, int]] = []
+        monkeypatch.setattr(
+            session_module.os, "kill", lambda pid, sig: sent.append((pid, sig))
+        )
+        for reply in ("1|", "1|||", "1|||#{pid}", "1|||1", "1|||0"):
+            self._replies(monkeypatch, [reply])
+            monkeypatch.setattr(session_module, "STATUS_DEADLINE", 0.5)
+            assert ending("any-session", human_was_present=False).kind == UNCLEAR
+        assert sent == [], sent
+
+    def test_a_live_pane_is_never_signalled(self, monkeypatch):
+        sent: list[tuple[int, int]] = []
+        monkeypatch.setattr(
+            session_module.os, "kill", lambda pid, sig: sent.append((pid, sig))
+        )
+        self._replies(monkeypatch, ["0|||4242"])
+        ending("any-session", human_was_present=False)
+        assert sent == []
+
+
+@tmux_only
+def test_the_last_exit_on_the_server_is_read_without_standing_down(project):
+    """🔴 The defect behind "a Manager under load ends `unknown`", against
+    real tmux and with NO stand-down.
+
+    The other real-tmux tests here skip when tmux supplies no status, on the
+    grounds that it is tmux's failing and not rite's. On Linux that failing
+    was systematic — each status arrives one child exit late — so the skip
+    was hiding the one ending that matters: the last thing on the server to
+    stop. `ending` now nudges the server to reap, so this asserts outright.
+    """
+    result = start(project, "lead", command="sh", max_sessions=1)
+    assert result.ok, result.message
+    try:
+        subprocess.run(
+            ["tmux", "send-keys", "-t", result.session, "exit 7", "Enter"],
+            capture_output=True,
+        )
+        for _ in range(50):
+            if not liveness(result.session).alive:
+                break
+            time.sleep(0.1)
+        how = ending(result.session, human_was_present=False, pane=result.pane)
+        shown = "" if how.kind == CRASHED else _what_tmux_showed(result.session, how)
+    finally:
+        subprocess.run(
+            ["tmux", "kill-session", "-t", result.session], capture_output=True
+        )
+    assert how.kind == CRASHED and how.status == 7, shown
+
 
 class TestTheStandDownIsBounded:
     """⚠ `_platform_supplied_a_status` is the one shape in this file that
