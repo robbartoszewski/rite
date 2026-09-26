@@ -167,8 +167,7 @@ board, or push, create a GitHub App and install it on the repositories it
 should reach. Grant it Contents, Issues and Pull requests read and write,
 plus Metadata read. rite asks for exactly those four every time it mints a
 token, so an App granted less should have the request refused and `rite
-start` refuse with GitHub's words (read from the code; not yet observed).
-Then, inside the project:
+start` refuse with GitHub's words. Then, inside the project:
 
     # .rite/config.yaml (neither id is a secret). This App is installed
     # on robbartoszewski/rite-dogfood-board only, the board's repository.
@@ -180,9 +179,21 @@ Then, inside the project:
     rite credential set github_app_key --stdin < your-app.private-key.pem
 
 The key goes in whole, newlines included. A one-line prompt would mangle
-them, which is why it is read from standard input. **Observed:** a 28-line
-PEM stored this way reads back byte for byte, and a token request signed
-with it verifies against the key's public half.
+them, which is why it is read from standard input.
+
+**Observed against GitHub, 2026-09-26, with the App above, on macOS:**
+- GitHub issued a one-hour token for `rite-dogfood-board`, asked for with
+  exactly the four permissions.
+- Inside a Manager's sandbox, `gh` was logged in as the App
+  (`x-access-token`, from the Manager's own directory). The Manager's
+  `rite board list` read the board, which is private; so did a real
+  sandboxed Claude asked to do the same. Your own gh login was refused
+  inside the sandbox.
+- A refresh replaced the Manager's token. A token revoked mid-run gave a
+  loud `HTTP 401: Bad credentials`, never an anonymous read, and the next
+  refresh brought the read back.
+- `git push` over HTTPS created and deleted a branch on the board with the
+  token, from inside the sandbox.
 
 The token covers ONE repository, `repository` or else the board's. An App
 installed only on the board's repository cannot push to your code
@@ -569,10 +580,15 @@ See SPEC §6.6.3.
   `~/.config/gh`, where gh keeps your login, in plain text on a machine
   with no keyring. Without an App, `gh` inside the sandbox is not logged
   in, `git push` over HTTPS fails, and `rite start` says so with the fix.
-  With one, rite gives the Manager a one-hour token for one repository. On
-  macOS, `git` inside the sandbox was observed picking that token up for a
-  push; it has not yet been run against GitHub with a real App. `git push`
-  uses it only for an HTTPS remote, not SSH.
+  With one, rite gives the Manager a one-hour token for one repository
+  (observed against GitHub on macOS; see the GitHub App section). `git push`
+  uses it only for an HTTPS remote, not SSH. Not yet observed on Linux.
+- **Your own global git settings follow a Manager into its sandbox, and
+  two of them break it.** If you sign commits with a key under `~/.ssh`
+  (`commit.gpgsign` with `gpg.format ssh`), a Manager's `git commit` fails,
+  because the sandbox cannot read `~/.ssh`. A global `core.hooksPath` hook
+  that needs something the sandbox refuses fails the Manager's `git push`.
+  Observed on the author's machine: both, with a Node.js pre-push hook.
 - **Linux: a Claude Manager does not work yet.** See the Claude sign-in
   change above.
 - **No way to start a Manager outside its sandbox.** If one of your own
