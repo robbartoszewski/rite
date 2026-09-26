@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime
 from pathlib import Path
 
 from rite_ai.budget import default_transcripts_dir
@@ -118,7 +119,21 @@ def latest_session_id(root: Path, since: float = 0.0, base: Path | None = None) 
         candidates = [p for p in candidates if _mtime(p) >= since]
     if not candidates:
         return ""
-    newest = max(candidates, key=_mtime)
+    # ⚠ **A TIE IS THE COMMON CASE ON LINUX, NOT THE EXOTIC ONE.** File
+    # timestamps come from the kernel's coarse clock, so two writes in one
+    # tick share an mtime to the nanosecond — measured in a container, 197 of
+    # 200 back-to-back writes did. `max()` then kept whichever file the
+    # directory listing happened to return first, so a Manager could resume
+    # the WRONG conversation, and the test for this passed on CI by luck while
+    # failing 24 of 30 runs in the container. Ties are compared in integer
+    # nanoseconds and broken by `_break_tie`, from inside the files — never by
+    # a finer clock, which would only move the same bug to a faster machine.
+    stamps = {p: _mtime_ns(p) for p in candidates}
+    newest_ns = max(stamps.values())
+    tied = [p for p in candidates if stamps[p] == newest_ns]
+    if len(tied) > 1:
+        return _break_tie(tied)
+    newest = tied[0]
     # The filename IS the session id in this layout, but it is confirmed
     # against the file's own contents rather than trusted: a stray `.jsonl`
     # in that directory would otherwise become an id nobody can resume.
@@ -170,6 +185,83 @@ def _mtime(path: Path) -> float:
         return path.stat().st_mtime
     except OSError:
         return 0.0
+
+
+def _mtime_ns(path: Path) -> int:
+    """An exact mtime, for deciding a tie. `st_mtime` is a float, and two
+    nanosecond stamps that differ can round to one float and read as a tie."""
+    try:
+        return path.stat().st_mtime_ns
+    except OSError:
+        return 0
+
+
+def _latest_event(path: Path) -> datetime | None:
+    """The latest `timestamp` any line of a transcript records, or None.
+
+    ⚠ **THE LATEST, NOT THE LAST.** Measured across 213 Claude Code
+    transcripts on the machine this was written on: every one carried an
+    ISO-8601 UTC `timestamp` with milliseconds on most lines, and in 176 of
+    them the timestamps go BACKWARDS somewhere in the file (a resumed session
+    carries earlier history, for one). So the last line is not the file's
+    newest moment; the maximum is. It is Claude Code's own record of when an
+    event happened, written by the provider rather than by the filesystem, and
+    it is the only ordering fact inside the file.
+    """
+    latest: datetime | None = None
+    try:
+        with path.open(encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                try:
+                    data = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(data, dict):
+                    continue
+                raw = data.get("timestamp")
+                if not isinstance(raw, str):
+                    continue
+                try:
+                    when = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                except ValueError:
+                    continue
+                if when.tzinfo is None:
+                    continue
+                if latest is None or when > latest:
+                    latest = when
+    except OSError:
+        return None
+    return latest
+
+
+def _break_tie(tied: list[Path]) -> str:
+    """The session among files tied at the newest mtime, or "".
+
+    Decided from the CONTENTS, as the id itself is: a file that states no
+    usable session id is not a session and drops out. One left is the answer.
+    Several are ordered by the latest moment each records (`_latest_event`).
+
+    ⚠ **IF THEY CANNOT BE ORDERED, NOTHING IS RETURNED.** Two sessions whose
+    latest events are the same millisecond, or one with no timestamp at all,
+    have no defined order — and a guess passed to `--resume` looks identical
+    from outside to a right answer, which is the failure this module exists
+    to stop. "" makes the supervisor refuse to continue, and say so.
+    """
+    sessions = {}
+    for path in tied:
+        stated = _stated_session_id(path)
+        if stated and not session_id_problem(stated):
+            sessions[path] = stated
+    if len(sessions) == 1:
+        return next(iter(sessions.values()))
+    if not sessions:
+        return ""
+    when = {path: _latest_event(path) for path in sessions}
+    if any(moment is None for moment in when.values()):
+        return ""
+    latest = max(when.values())
+    winners = [path for path in sessions if when[path] == latest]
+    return sessions[winners[0]] if len(winners) == 1 else ""
 
 
 def _stated_session_id(path: Path) -> str:

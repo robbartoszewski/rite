@@ -77,7 +77,7 @@ from rite_ai.managers.enclosure import (  # noqa: PLC2701
 # without it. Copying them here would let the two boundaries drift on exactly
 # the paths whose absence is hardest to diagnose — a `dyld`/`ld.so` crash
 # rather than a refusal. `_system_paths` is NOT shared: that one is macOS's.
-from rite_ai.managers.mailbox import INBOX, OUTBOX
+from rite_ai.managers.mailbox import INBOX, OUTBOX, mail_root, mailbox_dir
 
 PROFILE_DIRNAME = "landlock"
 
@@ -333,6 +333,14 @@ def compose_policy(root: Path, manager: str, home: Path | None = None) -> dict:
     # no Manager's inbox is writable (MM-2), which Landlock can only express by
     # enumeration. See that function for what it costs.
     writable += _fenced_project_paths(project, manager)
+    # ⚠ **THE MAILBOX IS OUTSIDE THE PROJECT** (`mailbox.mail_root`), so no
+    # grant above reaches an inbox BY CONSTRUCTION, with nothing to enumerate
+    # around it. The Manager gets its own outbox, which `rite reply` and
+    # `rite ask` write from in here, and its mail directory read-only, so
+    # `prune` can see the readers' cursors. Its inbox is in neither list.
+    mail = mail_root(root, manager)
+    readable.append(mail)
+    writable.append(mail / OUTBOX)
     writable.append(engine_tmp(root, manager))
     # Shared temporary space, mirroring seatbelt. ⚠ This is also where the
     # socket hole lives: see the module docstring and `limitations`.
@@ -476,24 +484,37 @@ def _ensure_grantable(home: Path) -> None:
 
 
 def _fenced_project_paths(project: Path, manager: str) -> list[Path]:
-    """The project, granted so that no Manager's inbox is writable (MM-2).
+    """The project, granted so that no Manager writes another's directory (P1).
 
-    ⚠ **LANDLOCK HAS NO DENY RULE.** Seatbelt enforces MM-2 with three ordered
-    rules — deny `.rite/managers`, allow this Manager's own directory, deny its
-    own `mail/in` — and takes the last match. Landlock rules only ever GRANT,
-    and the effective access is the UNION, so there is nothing to place last.
-    A carve-out therefore has to be an ENUMERATION: grant the siblings of the
-    thing being fenced, and never its parent.
+    ⚠ **LANDLOCK HAS NO DENY RULE.** Seatbelt separates Managers with ordered
+    rules — deny `.rite/managers`, allow this Manager's own directory — and
+    takes the last match. Landlock rules only ever GRANT, and the effective
+    access is the UNION, so there is nothing to place last. A carve-out
+    therefore has to be an ENUMERATION: grant the siblings of the thing being
+    fenced, and never its parent.
 
-    Measured 2026-09-26 in a container, all three modes, as an ordinary user:
+    Measured 2026-09-26 in a container, all three modes, as an ordinary user,
+    when the inboxes were still in the tree:
 
         granting the project as a tree   another's inbox WRITABLE, own WRITABLE
         enumerating one level            another's refused, own still WRITABLE
-        enumerating two levels (this)    both REFUSED, project source writable
+        enumerating two levels           both REFUSED, project source writable
+
+    ⚠ **THE INBOXES HAVE LEFT THE TREE, AND THIS ENUMERATION HAS NOT, ON
+    PURPOSE.** Since 0.6.0 the mailbox is under rite's home, fenced by
+    construction. But `.rite/managers/<name>/` still holds what a Manager's
+    supervisor acts on with that Manager's authority — `routes/`, which the
+    Owner's supervisor delivers as "routed by the Owner · INSTRUCTION", and
+    `prompt.txt`, which IS the next cycle's instruction. Granting the project
+    as a tree would let a secondary write the Owner's route requests. So the
+    tree is still enumerated. What changed is this Manager's own directory:
+    it is granted as a tree now, since there is no `mail/in` left in it to
+    carve out — the pre-0.6.0 box is moved once at start and never read again
+    (`mailbox.adopt_legacy`).
 
     ⚠ **WHAT IT COSTS, because it is a real cost and not a theoretical one.**
-    The project root is no longer granted as a tree, so a Manager cannot create
-    a NEW TOP-LEVEL entry in its project during a cycle — measured:
+    The project root is not granted as a tree, so a Manager cannot create a
+    NEW TOP-LEVEL entry in its project during a cycle — measured:
     `mkdir /proj/newtopdir` raises PermissionError. Everything inside an
     existing top-level directory is unaffected, including new subdirectories:
     `src/newpkg/` was created and written in the same run. So the limitation is
@@ -504,9 +525,8 @@ def _fenced_project_paths(project: Path, manager: str) -> list[Path]:
     not covered until the next one. Seatbelt's subtree grant is dynamic and
     this is not; that difference is the price of having no deny rule.
 
-    The alternative, if the cost is judged too high, is not a better ruleset —
-    it is moving inboxes out of the project tree, after which both platforms
-    fence them by construction.
+    Removing both costs means moving the whole per-Manager directory out of
+    the project, as the mailbox was — not a better ruleset.
     """
     managers = project / ".rite" / "managers"
     if not managers.is_dir():
@@ -544,14 +564,13 @@ def _fenced_project_paths(project: Path, manager: str) -> list[Path]:
     granted += entries(project, {rite_dir})
     # Everything in `.rite` except `managers`.
     granted += entries(rite_dir, {managers})
-    # This Manager's own directory, by its children, so `mail` is not granted
-    # as a tree — and within `mail`, every box except `in`.
+    # This Manager's own directory, AS A TREE. It used to be granted by its
+    # children so `mail/in` could be left out; the inbox has left the tree
+    # and the old box is never read again, so there is nothing left to carve.
+    # Not granted if it is a symlink, for the reason above.
     own = managers / manager
-    if own.is_dir():
-        mail = own / "mail"
-        granted += entries(own, {mail})
-        if mail.is_dir():
-            granted += [p for p in entries(mail, set()) if p.name != "in"]
+    if own.is_dir() and not own.is_symlink():
+        granted.append(own)
     return granted
 
 
@@ -565,23 +584,21 @@ def write_profile(root: Path, manager: str, home: Path | None = None) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     engine_tmp(root, manager).mkdir(parents=True, exist_ok=True)
     # ⚠ **THE MANAGER'S OWN DIRECTORY AND MAIL BOXES ARE CREATED HERE, and
-    # that is load-bearing rather than tidy.** `_fenced_project_paths`
-    # ENUMERATES what exists, because Landlock has no deny rule — so a path
-    # absent when the policy is written is a path the Manager cannot reach for
-    # the whole cycle. `manager_dir` only computes a path; nothing had created
-    # it at this point. Found in review: on a FIRST launch, with
-    # `.rite/managers/` present because another Manager exists but this
-    # Manager's own directory not yet, the enumeration granted nothing under
-    # `managers/` at all and the Manager could not write its own journal,
-    # designation or outbox.
+    # that is load-bearing rather than tidy.** A Landlock rule names an
+    # existing inode, so a path absent when the policy is written is a path the
+    # Manager cannot reach for the whole cycle. `manager_dir` only computes a
+    # path; nothing had created it at this point. Found in review: on a FIRST
+    # launch, with `.rite/managers/` present because another Manager exists
+    # but this Manager's own directory not yet, the enumeration granted
+    # nothing under `managers/` at all and the Manager could not write its own
+    # journal, designation or outbox.
     #
-    # `mail/out` matters specifically: `rite reply` writes there from INSIDE
-    # the boundary, and it is the one mail box a Manager must be able to
-    # write. `mail/in` is created too so the fence is deterministic — it is
-    # then present, enumerated, and deliberately not granted.
-    own = manager_dir(root, manager)
-    (own / "mail" / OUTBOX).mkdir(parents=True, exist_ok=True)
-    (own / "mail" / INBOX).mkdir(parents=True, exist_ok=True)
+    # The outbox matters specifically: `rite reply` writes there from INSIDE
+    # the boundary, and it is the one mail box a Manager must be able to write.
+    # It is under rite's home now, not the project, and granted by exact path.
+    manager_dir(root, manager).mkdir(parents=True, exist_ok=True)
+    mailbox_dir(root, manager, OUTBOX).mkdir(parents=True, exist_ok=True)
+    mailbox_dir(root, manager, INBOX).mkdir(parents=True, exist_ok=True)
     # ⚠ Before composing, for the same reason and with the same resolution of
     # `home` that `compose_policy` uses — a mismatch here would create one
     # directory and grant another.

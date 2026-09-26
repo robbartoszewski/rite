@@ -195,6 +195,15 @@ them, which is why it is read from standard input.
 - `git push` over HTTPS created and deleted a branch on the board with the
   token, from inside the sandbox.
 
+**On Linux: expected to work, not verified against GitHub.** The App code
+is the same on both platforms. The Linux-specific part is the sandbox
+grant, and that is tested: rite's Linux CI runs kernel-level tests in which
+only the Manager's two gh files are readable inside the Landlock boundary,
+and its Claude login can be read but not replaced. No Linux Manager has
+minted a token or read a board with one. ⚠ On Linux, as on macOS, the App
+is the ONLY way a Manager gets GitHub access; it never uses your own gh
+login.
+
 The token covers ONE repository, `repository` or else the board's. An App
 installed only on the board's repository cannot push to your code
 repository, so a Manager holding the `integrate` duty cannot push or open a
@@ -483,6 +492,21 @@ Exactly one must hold it when several Managers share a root, and
   the write, and `rite message` run by a Manager refuses and says what to
   use instead. A person's `rite message` from their own shell works as
   before.
+- ⚠ **Mailboxes moved out of the project**, from `.rite/managers/<name>/mail/`
+  to `~/.rite/managers/<checkout>/<name>/mail/`. No Manager's sandbox grants
+  that location, so the inbox is out of reach on both platforms without a
+  rule carving it out of the project. The directory is keyed by the
+  checkout's path, not by the credential namespace, which every checkout of a
+  project shares. The file `project` beside it says which checkout it is.
+  **Upgrading moves the old mailbox once.** The first `rite start` of each
+  Manager moves its old in-tree mailbox, and each reader keeps its place, so
+  the Slack relay does not repost old replies. Until then `rite replies` says
+  how many messages are waiting there. After the move, rite never reads the
+  project tree for mail. A file that appears there later, for example from an
+  older rite still running, is reported at each start and **not delivered**,
+  because rite cannot tell who wrote it. Resend it with `rite message`.
+  **Restart running Managers after upgrading.** `rite init`'s wipe no longer
+  deletes a project's mail.
 - ⚠ **A setup session no longer swallows an instruction.** With no ticket
   backend, a Manager's session is for setting one up, and it used to be told
   to do "nothing else". So an instruction you sent it was refused or silently
@@ -559,14 +583,25 @@ See SPEC §6.6.3.
 
 - **Linux: a Manager runs inside a Landlock boundary, which is weaker than
   macOS's in two ways.** Observed on Ubuntu 24.04 ARM64:
-  - **The tmux escape is open.** Landlock does not govern `connect(2)`, so a
-    Manager can reach the tmux server's socket, and a command sent through it
-    runs outside the boundary. Observed: a file written that way appeared
-    outside the project.
+  - **The tmux escape is open, and that is a decision, not an oversight.**
+    Landlock does not govern `connect(2)`, so a Manager can reach the tmux
+    server's socket, and a command sent through it runs outside the
+    boundary. Observed: a file written that way appeared outside the
+    project. Closing it needs a mount namespace (blocked by Ubuntu's default
+    AppArmor policy) or Docker (whose group is root-equivalent on the host),
+    so it is accepted rather than closed. A test asserts it open, so a
+    kernel that closes it will say so.
   - **A Manager cannot create a new top-level file or directory in its
     project during a cycle.** Existing directories stay writable. Landlock has
-    no deny rule, so fencing the Managers' inboxes means granting the project
-    root's existing entries one by one.
+    no deny rule, so keeping one Manager out of another's directory under
+    `.rite/managers/` means granting the project root's existing entries one
+    by one. Moving the mailboxes out of the project did not remove this. Those
+    directories also hold the Owner's route requests, which are delivered as
+    instructions.
+- **Moving a project directory strands its Managers' mail.** The mailbox is
+  keyed by the checkout's path, so after a move rite looks in a new, empty
+  mailbox. Messages sent before the move stay under `~/.rite/managers/`, in
+  the directory whose `project` file names the old path.
 - **Linux: Workers are not sandboxed by default.** `rite init` leaves Worker
   sandboxing off there, because `flock` does nothing inside a Docker
   sandbox. The Manager's Landlock boundary does not extend to Workers.
@@ -582,7 +617,8 @@ See SPEC §6.6.3.
   in, `git push` over HTTPS fails, and `rite start` says so with the fix.
   With one, rite gives the Manager a one-hour token for one repository
   (observed against GitHub on macOS; see the GitHub App section). `git push`
-  uses it only for an HTTPS remote, not SSH. Not yet observed on Linux.
+  uses it only for an HTTPS remote, not SSH. On Linux: expected to work,
+  not verified against GitHub (see the GitHub App section).
 - **Your own global git settings follow a Manager into its sandbox, and
   two of them break it.** If you sign commits with a key under `~/.ssh`
   (`commit.gpgsign` with `gpg.format ssh`), a Manager's `git commit` fails,
@@ -591,6 +627,12 @@ See SPEC §6.6.3.
   Observed on the author's machine: both, with a Node.js pre-push hook.
 - **Linux: a Claude Manager does not work yet.** See the Claude sign-in
   change above.
+- **Two Managers in one project have run only with stand-in engines**, plus
+  one run with a real Goose Owner. A real Claude Owner with a local
+  secondary has not been observed.
+- **Check-ins with a real model are observed on macOS only.** There they ran
+  inside the Manager's sandbox. On Linux, check-ins are observed with Goose
+  on a small local model.
 - **No way to start a Manager outside its sandbox.** If one of your own
   tools needs a path the profile does not grant, it fails inside the
   sandbox, and there is no option to turn the sandbox off.

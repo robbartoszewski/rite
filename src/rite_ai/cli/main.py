@@ -6728,6 +6728,12 @@ def _start_a_manager(
             err=True,
         )
         raise SystemExit(1)
+    # ⚠ UNDER THE RUN LOCK, before anything reads mail: the pre-0.6.0 in-tree
+    # mailbox is moved once and never read again (`mailbox.adopt_legacy`).
+    from rite_ai.managers.mailbox import adopt_legacy, adoption_notes
+
+    for note in adoption_notes(adopt_legacy(root, role.name), role.name):
+        click.echo(note, err=True)
     github = _github_access(root, role.name)
     claude_signed_in = _claude_login(root, role)
     listener = _slack_listener(root, role.name)
@@ -6939,6 +6945,18 @@ def replies(manager_name: str, reader: str, peek: bool) -> None:
     warning = full_warning(prune(root, manager_name, OUTBOX), manager_name)
     if warning:
         click.echo(warning, err=True)
+    from rite_ai.managers.mailbox import legacy_waiting
+
+    old = legacy_waiting(root, manager_name)
+    if old:
+        # Not read from here: only `rite start`, under the run lock, moves
+        # the old box — an older rite may still be running and writing it.
+        click.echo(
+            f"⚠ {old} message(s) for or from {manager_name!r} are still in its "
+            f"pre-0.6.0 in-tree mailbox. They move, and become readable here, "
+            f"at its next `rite start`.",
+            err=True,
+        )
 
 
 @cli.command("route")

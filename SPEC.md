@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.14 · **Date:** 2026-09-26
+**Version:** 0.24.16 · **Date:** 2026-09-26
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -2043,8 +2043,9 @@ The enumeration must therefore split two kinds:
 - **Shared by decision** — the claim ledger, `pool.json`, the loop and
   scheduler locks, the coordination cache. Each stays shared and each needs
   its reason written next to it. ⚠ *The outbox was on this list. It is no
-  longer shared: the mailbox lives under `.rite/managers/<name>/mail/`
-  (`managers/mailbox.py`), one per Manager.*
+  longer shared: each Manager has its own mailbox, since 0.6.0 outside the
+  project at `~/.rite/managers/<checkout>/<name>/mail/`
+  (`managers/mailbox.py`, `mail_root`).*
 - **Shared by accident** — everything else in the flat `.rite/`, which is
   shared because nothing gave it an owner, and which §5.4.5's step 2 moves.
 
@@ -2155,6 +2156,41 @@ be tested:
   is delivered as the Owner's. So this is authority, not only tidiness, and
   it is enforced on the writer, never on the content. Most per-project state
   is still flat and still writable by either Manager (§5.4.5).
+
+  **Since 0.24.15 the mailbox is outside the project**, at
+  `~/.rite/managers/<checkout>/<name>/mail/`. No Manager's profile grants
+  it, so neither platform has to carve the inbox out of a project grant.
+  Each Manager is granted its own outbox by exact path. **Since 0.24.16
+  the old in-tree `mail/` is moved once and never read again**: the first
+  `rite start` moves it under the run lock, outside the boundary, and
+  leaves a marker, and anything that appears there afterwards is reported
+  at each start and not delivered. So the old box needs no fence, and the
+  inbox fence rests on no deny rule and no enumeration on either platform,
+  including for a project under the granted `/tmp` on Linux. **This did
+  not let Linux grant the project as a tree.**
+  `.rite/managers/<name>/` also holds `routes/`, whose requests the Owner's
+  supervisor delivers as "routed by the Owner · INSTRUCTION", and
+  `prompt.txt`. So Landlock still enumerates the project root to keep one
+  Manager out of another's directory, and a Linux Manager still cannot
+  create a new top-level entry in its project. That goes away only if the
+  whole per-Manager directory leaves the tree. The mailbox is keyed by the
+  checkout's path, not by the credential namespace, because every checkout
+  of a project shares its namespace. Measured by
+  `test_no_manager_writes_an_inbox.py` (macOS, real `sandbox-exec`) and
+  `TestTheInboxFenceOnLinux` (Landlock ABI 6, in a container). Both
+  platforms were mutation-tested: granting the new inbox on Linux, or
+  dropping the legacy deny on either platform, fails a test. Dropping
+  macOS's explicit deny on the new inbox fails nothing, as expected when
+  the fence holds by construction.
+
+  ⚠ **`.rite/user/` is already writable across Managers, on both
+  platforms, and neither move changes that.** It holds each Manager's
+  instance record, designation, permission settings, profile or Landlock
+  policy, and engine TMPDIR. Only `.rite/managers/` is fenced. So granting
+  the project as a tree would open nothing new there, and moving the
+  per-Manager directory out would fix nothing there. Do not propose the
+  directory move for `.rite/user/`'s sake. What it would buy is the root
+  grant on Linux (D17).
 - **P3 and P4 do not.** The shared-by-decision list has no test behind it
   (§5.4.6). And `Claim` has no Manager field (§5.4.3).
 
@@ -6817,6 +6853,10 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.16 — the old in-tree mailbox is moved once, then never read.** 0.24.15 read the old box merged with the new one for as long as it held anything. That left a second place rite delivered from, fenced only by a deny rule on macOS and the enumeration on Linux. Worse, on Linux a project under the granted `/tmp` had it wide open. The first `rite start` now moves the old box under the run lock, cursors first, and writes a marker. After that the tree is never read for mail, and files that appear there are reported, not delivered. The old-box fence rules are gone from both profiles, and a Manager's own directory is granted as a tree on Linux. §5.4.8 also records that `.rite/user/` is already writable across Managers, so a tree grant opens nothing new there.
+
+**Changes in 0.24.15 — the Manager mailbox leaves the project tree.** It moved from `.rite/managers/<name>/mail/` to `~/.rite/managers/<checkout>/<name>/mail/`, so no Manager's profile grants any inbox (MM-2 by construction). Keyed by a digest of the checkout's path, not by the credential namespace: 62 worktrees of rite share one namespace, and namespace-keyed inboxes would have let one checkout take another's messages. Nothing is copied on upgrade. Readers merge the old in-tree box by filename, and a reader's old cursor counts until it writes a new one. The old box stays unwritable to Managers because it is still read. §5.4.8 records what the move did NOT buy: Linux still enumerates the project root, because `.rite/managers/<name>/routes/` carries the Owner's authority too.
 
 **Changes in 0.24.14 — §5.4.8's P2 is pinned by a test between two Managers, on both platforms.** The section had recorded P2 as measured but "not yet pinned by a test between two Managers", and the tests that existed measured the boundary against a BYSTANDER — an unconfined process, or the Manager's own children — so a change that separated a Manager from the operator while letting two Managers reach each other would have passed all of them. macOS: `TestP2BetweenTwoManagersSharingARoot` in `test_the_manager_profile_denies_what_it_should.py`, six attacks from one profile at the other plus an own-child control. Linux: a class of the same name in `test_landlock_really_confines.py`, the signal half only, with the victim inside Manager B's own Landlock domain; the tmux half is OPEN on Linux and stays asserted open in `TestTheTwoEscapes` rather than restated. Both mutation-tested, and both mutations found a defect in the MEASUREMENT: `kill -0` succeeds for a zombie, so "the sibling survived" passed while the sibling was `Z <defunct>`. `ps` and `/proc` are used instead. Also corrects a `landlock.py` comment that claimed the per-Manager credential directory was "not granted by this backend at all" — true before `57469b8`, false after it, and contradicted by the code twenty lines above it.
 

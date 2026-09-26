@@ -19,7 +19,17 @@ from pathlib import Path
 import pytest
 
 from rite_ai.managers.enclosure import write_profile
-from rite_ai.managers.mailbox import INBOX, OUTBOX, mailbox_dir, read, send
+from rite_ai.managers.mailbox import (
+    INBOX,
+    OUTBOX,
+    adopt_legacy,
+    mailbox_dir,
+    read,
+    send,
+)
+from rite_ai.managers.mailbox import (
+    _legacy_mail_root as legacy_mail_root,
+)
 
 pytestmark = pytest.mark.skipif(
     sys.platform != "darwin", reason="seatbelt is macOS only"
@@ -44,6 +54,8 @@ def two(tmp_path):
     (root / ".rite").mkdir()
     for m in ("lead", "helper"):
         mailbox_dir(root, m, INBOX).mkdir(parents=True)
+        # A pre-0.6.0 project: the old in-tree boxes exist and are still read.
+        (legacy_mail_root(root, m) / INBOX).mkdir(parents=True)
     return root, write_profile(root, "lead"), write_profile(root, "helper")
 
 
@@ -89,8 +101,29 @@ def test_the_control_a_manager_still_writes_its_own_state(two):
     """A profile that refused everything would pass every test above."""
     root, _lead, helper = two
     out = mailbox_dir(root, "helper", OUTBOX)
-    assert _under(helper, f"mkdir -p '{out}' && echo x > '{out}/t.json'", root) == 0
+    # Written without `mkdir -p`: rite creates the outbox before launch, and
+    # seatbelt answers mkdir on an ungranted parent with EPERM, not EEXIST.
+    assert _under(helper, f"echo x > '{out}/t.json'", root) == 0
     assert _under(helper, f"echo x > '{root}/file-in-the-project'", root) == 0
+
+
+def test_the_inbox_is_outside_the_project_it_would_be_granted_by(two):
+    """The fence is by construction: no project grant covers an inbox."""
+    root, _lead, _helper = two
+    assert not mailbox_dir(root, "lead", INBOX).resolve().is_relative_to(root)
+
+
+def test_writing_the_old_in_tree_box_after_the_move_delivers_nothing(two):
+    """The old box is no longer fenced, because it is no longer READ: moved
+    once at start, then only reported. So a Manager that writes it — which
+    the project grant allows — is heard by nobody."""
+    root, lead, _helper = two
+    adopt_legacy(root, "lead")
+    old = legacy_mail_root(root, "lead") / INBOX
+    old.mkdir(parents=True, exist_ok=True)
+    assert _under(lead, _write(old, "1_0000001_000000000003.json"), root) == 0
+    assert read(root, "lead", INBOX) == []
+    assert adopt_legacy(root, "lead").after_marker
 
 
 def test_outside_any_profile_the_person_still_can(two):

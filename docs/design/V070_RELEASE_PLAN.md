@@ -402,6 +402,394 @@ a measured escape.
 
 ---
 
+## Track RP — Reporting: what needs action, apart from what is reading
+
+**Robert, 2026-09-26, from using rite's own reporting all weekend:**
+
+> "In rite we really need to separate the destination for prose like this
+> and for check-ins and status updates. Not saying the prose is useless, it
+> just makes it more difficult to figure out the actionable steps."
+
+**Recorded, not designed.** Not in v0.6.0.
+
+### What rite produces today, read from `main` at `8897e40`
+
+- **The check-in message** (`checkins.py:634`) is one outbox message, and
+  so one Slack post. In order: the header, then the standup
+  (`standup.digest`: "Observed by rite", "Stated by the Manager — rite did
+  not verify these", reported injection phrases), then the deferred-question
+  counts, then withdrawn questions. Only then comes "Questions held for this
+  check-in". **The part that needs Robert comes last**, after the narrative.
+- **A Manager's `rite reply`** is free text, posted to the Owner's DM as
+  written (the Slack relay only redacts it). A blocking question and a
+  paragraph explaining how something was measured arrive in the same
+  channel, with the same visual weight and no marker.
+- **The check-in mirror** copies the whole check-in to the channel, so the
+  mix is duplicated, not separated.
+- The standup's split is **evidence vs claim** ("observed" vs "stated"), and
+  that split is right. It is not the split asked for here, which is
+  **needs-action vs reading**. Nothing in rite marks a line as "needs you".
+
+Robert's reporting format (bullets, a marker for what needs him, nothing
+between scheduled reports) is not recorded in this repository; it is cited
+here as relayed.
+
+### Ticket
+
+| # | work | done when | depends | size |
+|---|---|---|---|---|
+| RP1 | **Two destinations: what needs action, apart from what is reading.** Decisions needed, blockers and questions awaiting an answer go where Robert can scan them. Narrative, reasoning and measurement detail go somewhere retrievable and out of the way. It covers the check-in message, the standup, `rite reply` and the Slack relay, which are one stream today. Open for design: where each destination is (a DM vs a thread vs a channel vs a file); how a line is classed, since today nothing carries a "needs you" marker and a Manager's free text is not structured; and whether "nothing between scheduled reports" is a rule the relay enforces | Robert reads one check-in and one day of Slack from a real run and can list what needs him from the action destination alone, without opening the other. The narrative is still retrievable. His words are the test, not a format check | — | design first; unsized |
+
+### How it relates to C31 and C32 (the v0.6.0 plan)
+
+- **C32 (a Manager volunteers standup notes): partly subsumed.** C32's cost
+  is that "Stated by the Manager" fills by default and crowds the standup.
+  With RP1, those notes go to the reading destination, so they stop
+  competing with what needs action, and most of that cost goes away. **What
+  RP1 does not answer** is C32's own decision: whether the check-in should
+  invite notes at all, and why the volunteering follows the model (1 of 6
+  inside the sandbox on `claude-sonnet-5`, 3 of 3 outside it on Opus). So
+  C32 stays open as a smaller question, and it should be decided after RP1's
+  design, not before.
+- **C31 (an anchor checked for presence, not support): linked, not
+  subsumed.** A note anchored to a line that does not support it is wrong in
+  either destination. RP1 makes it matter less for scanning, and C31 is
+  still what makes it trustworthy. The common root the three share: **the
+  channel does not distinguish what needs action from what needs reading,
+  and it does not distinguish evidence from claim at the line level.** RP1 is
+  the first half of that; C31 is the second.
+
+## Track PB — Publishing: what happens to a finished task
+
+**Robert's input, 2026-09-26 (relayed; his own words quoted where given):**
+- Workers should not push at all. The Manager decides what to do with a
+  finished task's result.
+- Three strategies: (1) don't push; (2) push and merge to main or a feature
+  branch; (3) push and create a PR.
+- The Owner needs to know whether to merge PRs once they pass all checks,
+  or leave that to the User.
+- Some teams want fully hands-off, some want to review every line, and some
+  developers need to do every publishing step themselves. On that last
+  case, in his words:
+
+  > "In my 'don't advertise rite' case I don't mean that it shouldn't be
+  > visible anywhere if someone looks deep. It's just so the developer can
+  > squash commits manually, amend the commits etc. before it's ever pushed
+  > out. The team that inspects every line of code may be upset if someone
+  > pushes AI generated code at them without even looking at it themself."
+
+  *An earlier version of this entry read that case as concealment and
+  constrained commit authorship, trailers and generated-by markers. That
+  was wrong and is struck. rite's involvement being discoverable is fine.*
+- **Load-bearing:** under "don't push" the work must still be COMMITTED to
+  the local project repository, or the state is lost once a Worker starts
+  a new task. **"Don't push" must never mean "don't commit."**
+- > "And by 'the manager' I mean broadly — the LLM part and the automated
+  > rite part."
+- On squashing:
+
+  > "I think strategy 1 should have auto-squash opt-in. Reasoning — if the
+  > code produced is of good quality most of the time and the User wants to
+  > review and amend just 1 commit instead of many, then let's make it easy
+  > for them."
+
+## The design, settled by Robert on 2026-09-26 (final; it replaces every earlier shape in this track, including a `remote` axis)
+
+```yaml
+# .rite/config.yaml (project)
+publish:
+  strategy: pull_request   # commit | push | pull_request | push_to_shared
+  squash: false
+  # auto_merge: false      # opt-in, on top of pull_request only
+
+# .rite/modules.yaml (per module; every key optional)
+modules:
+  <name>:
+    publish:
+      strategy: push_to_shared     # optional override of the project's strategy
+      shared_repo: git@…           # required when the EFFECTIVE strategy is push_to_shared; no default
+```
+
+- **`shared_repo` is per MODULE, not per project** (Robert: "because a
+  project can have multiple packages", then "rite module"). The term is
+  rite's own, **module**, in config and docs. No new concept: a rite module
+  already is one git repository with its own `url` (its origin), cloned per
+  Worker as `workers/<w>/<module>`. So a shared remote belongs beside that
+  `url`, and rule 3 compares a module's `shared_repo` with THAT module's
+  origin.
+
+- **`strategy` values are verbs, named rather than numbered.** A config
+  saying `strategy: 2` tells a reader nothing, and names let a value be
+  added without disturbing an order. This track's history below says
+  "strategy 1/2/3": 1 = `commit`, 2 = `push`, 3 = `pull_request`. Robert's
+  own quotes keep the numbers he used.
+- **`pull_request` is the default** (Robert's decision). With auto-merge
+  off it is strictly safer than `push`: the work leaves the machine and is
+  visible, but nothing lands on a branch anyone depends on, and the
+  reviewer decides. The default matters because a team that inspects every
+  line is precisely the team that will not have changed it.
+- **`push_to_shared` is a fourth strategy value, not a separate `remote`
+  axis.** Robert rejected the axis, rightly: `commit` + `remote: shared` is
+  meaningless, so two of six combinations would have been invalid. A fourth
+  value makes invalid states unrepresentable instead of needing validation
+  to reject nonsense. **Accepted cost:** `pull_request` against a shared
+  repository cannot be expressed. That is deliberate: a PR on a repository
+  that is not the client's would be reviewed by nobody in particular. If it
+  turns out to be needed, it is a fifth value, not a redesign.
+- **`squash` is orthogonal**, default off (below).
+- **Auto-merge is an opt-in flag on top of `pull_request`**, off by
+  default, under the green-matched-to-SHA rule below. Robert checked this
+  specifically: opening a PR is safe, merging it is the risk.
+- **All values are implemented** (Robert: not much code). ⚠ **Each one must
+  be OBSERVED before it is called done**, because every defect that mattered
+  this weekend was in a mechanism that existed and had never been run.
+  Auto-merge is gated hardest.
+
+### Settled by Robert: `strategy` per project, with an optional per-module override
+
+The project's `strategy` applies to every module unless that module's
+`publish.strategy` overrides it, resolved key by key like `commands`. A
+task touching several modules is published per module under each module's
+EFFECTIVE strategy, and its completion report lists each module's outcome.
+
+- **Resolution is explicit and inspectable.** `rite doctor` (or an
+  equivalent) prints the EFFECTIVE strategy per module and where it came
+  from ("project default" or "module override"), plus `shared_repo` when it
+  applies. An override that silently does not apply is the failure this
+  design exists to prevent. PB1 is not done until that line is observed
+  changing when an override is added and removed.
+- **The Owner resolves per module; it does not "know one strategy".** The
+  multi-Manager routing work (Track MM) must read the EFFECTIVE value per
+  module, never the project default. A secondary's completion report
+  carries the per-module outcome, and the Owner's merge decision (per PR,
+  so per module repository) uses that module's effective strategy and
+  `auto_merge`.
+
+The code-side view it was decided on:
+
+**Code-side view, from `main`:**
+- **Keyed per module today** (`config/models.py` `Module`, `modules.yaml`):
+  `path`, `url` (the module's own origin), `branch`, `description`, and
+  `commands`. A Worker's manifest picks a subset of modules.
+- **An override pattern already exists and fits.** `RecordedCommands`: "a
+  recorded command wins over the detected one for its own key only; an
+  unrecorded key falls back". A per-module `publish:` block that overrides
+  the project's keys one by one is the same shape. It would follow that
+  pattern, not fight it.
+- **Publishing is per repository anyway.** A push or a PR happens per module
+  repository, so rite applies a strategy per module at publish time whether
+  or not the config says so.
+- **Routing reads no module configuration** (`managers/routing.py` never
+  names modules). A ticket names a module only through an OPTIONAL
+  `module:<name>` label, at most one, which only the distribution refusal
+  reads (`coordination/refusal.py`, marked there as a proposal).
+
+**What a per-module strategy costs.** Resolution itself is cheap. It is
+rite's deterministic part, at publish time, per module repository, where
+the push or PR already happens. The Owner's merge decision is per PR, so
+per module repository, and needs no project-wide answer. **Not cheap is
+one task touching two modules with different strategies**, for example one
+committed locally and one opened as a PR. Nothing maps a finished task to
+its modules today except the diffs themselves: which module repositories
+gained commits. A secondary's completion report would then have to carry a
+per-module outcome, and the routing design would have to read module
+configuration it does not read today.
+
+*(Recommendation made, and adopted by Robert as above.)*
+
+### 🔴 Three rules on `shared_repo`: part of the design, not implementation detail
+
+1. **No default, ever.** Not `origin`, not a derived name. rite's users
+   include on-premise clients for whom code leaving their infrastructure is
+   the thing they are paying to avoid. A helpful guess harms exactly them.
+2. **Refuse at start, with the reason,** when a module's EFFECTIVE
+   strategy is `push_to_shared` and its `shared_repo` is not set. The same shape as the missing
+   `claude_token` refusal: it names the fix and the module.
+3. **Refuse when `shared_repo` resolves to the same remote as `origin`.**
+   Someone will configure that by accident eventually, and it would
+   silently INVERT the strategy's whole purpose: "never touch the client's
+   repository" becomes "always touch it", with nothing saying so.
+   **Resolve and compare; do not string-match.** `git@host:x/y.git` and
+   `https://host/x/y.git` are the same remote, and so are forms differing
+   in `.git`, a trailing slash, letter case or `ssh://`. *This is the rule
+   most likely to be dropped as over-engineering by someone who does not
+   see what it prevents. What it prevents is the one outcome this strategy
+   exists to rule out.*
+
+Not in v0.6.0.
+
+### Today, checked for data loss first: NOT a v0.6.0 defect (measured)
+
+**Measured 2026-09-26 on a real seatbelt sandbox, on `main` at `d7e27f8`.**
+A scratch project was used, with a module whose origin is a real (local
+bare) repository. The Worker was registered with `rite add worker`, and its
+sandbox was created as rite creates it (same name, `:copy-all`, seatbelt
+backend) with yoloAI's `idle` agent.
+1. **The finished task's work, uncommitted, was left in the copy:**
+   `M app.txt`, `?? new.txt`.
+2. **Next task, by the broker's own command** (`rite sandbox start w
+   --ticket T2`): refused, because yoloAI says the sandbox already exists.
+   rite's hint was "`rite sandbox destroy <worker>`, then start it again".
+   The work was untouched.
+3. **`rite sandbox destroy w`: refused.** rite named the files ("svc @ main:
+   2 uncommitted (M app.txt, ?? new.txt)") and said where the copy is.
+4. **`yoloai destroy` directly, bypassing rite: refused** ("1 sandbox(es)
+   have unapplied changes"). The work was still there.
+5. **The host checkout `workers/w/svc` holds none of it.** The work exists
+   ONLY in the sandbox copy.
+
+So nothing in v0.6.0 discards it. The code agrees: the broker only
+starts; nothing automatic destroys, stops or removes; destroy checks
+uncommitted AND unpushed (`unsaved_work`); and unsandboxed `rite prepare`
+refuses a dirty tree. The guard tests pass (20). *A first attempt hung
+because a bare `yoloai new` defaults to Docker and builds an image. rite
+always passes the project's backend.*
+
+**Why `strategy: commit` still has no foundation today.** Pushing is the only way
+work leaves a sandbox: the Worker instructions (`workspace/manage.py`,
+step 4) say to push after every commit, because "a commit that was never
+pushed is gone". Under "don't push", step 5 above is the state: the work
+is stranded in a copy that blocks the Worker's next task, and one
+`--force` by a person deletes it. Strategy 1 first needs rite to bring
+the copy's commits into the local project repository before the sandbox
+goes. A module whose origin is a local directory, mounted read-only and so
+not pushable, is in that state today.
+
+### Ticket
+
+| # | work | done when | depends | size |
+|---|---|---|---|---|
+| PB1 | **The `publish:` design above, final.** Workers never push; the Manager ROLE publishes, split as drawn below (whatever loses work or publishes something unintended is rite's). `strategy` (`commit`, `push`, `pull_request` default, `push_to_shared`) per project with an optional per-module override; `shared_repo` per module under the three rules; `squash` opt-in, default off, every strategy; `auto_merge` opt-in on `pull_request`, green matched to the head SHA | **Each value observed, not just built.** One real task per `strategy` goes from a Worker's commit to its end state on a real project. Under `commit`: the work survives the Worker's next task, nothing reached any remote, and a person reworks it with `git rebase -i` without friction, squash off and on. An override observed taking effect: the effective-strategy line changes with it, and a two-module task is published per module and reported per module. `push_to_shared`: observed refusing with no `shared_repo`, and refusing when it is the module's `origin` in another spelling. `auto_merge`: observed REFUSING on each of the four stale-green shapes, and merging on a green whose SHA is the PR's head | a path from the sandbox copy into the local repository; Track MM reading the effective value | design final; unsized |
+
+### Auto-merge: explicit opt-in, and a green matched to the head SHA
+
+All values are implemented. Auto-merge is the one clause gated hardest:
+
+🔴 **Auto-merge after checks requires (a) an explicit opt-in, and (b) a green
+matched to the head SHA being merged.** "No failures" is not a green, and a
+green on any other commit is not this one's.
+
+**Why, so it is not softened later by someone who has not seen it.** The
+trap fired four separate ways on 2026-09-26, and each time "no failures"
+looked like success:
+1. A merged PR left no open PR, so no checks fired.
+2. A `CONFLICTING` PR fired no checks, because GitHub cannot compute a
+   merge ref.
+3. A poller read an older run's success.
+4. A run's SHA matched `HEAD` when read, while `main` had already moved.
+
+An Owner auto-merging on a green that describes a different tree is that
+bug with the safety off. (The same rule governs how CI is read in the
+v0.6.0 readiness list, D12.)
+
+### Strategy 1: what "a human can comfortably rework it" requires
+
+The requirement, from his quote: **`strategy: commit` leaves the work in a state a
+developer can comfortably rework before it goes out.** The reason is social,
+not technical: the developer does not push unreviewed AI-generated code at
+colleagues who inspect every line.
+- **Committed locally, on a branch the developer can rebase.** Not a
+  detached HEAD, and nothing done to the commits that makes `git rebase -i`
+  unpleasant.
+- **Nothing is pushed, including no push to a remote branch "for
+  safety".** The developer is the first thing between the work and their
+  team. (The shared repository below is a separate, opt-in decision, never
+  `origin`.)
+- **The commit-message convention is a starting point.** A reasonable
+  default message helps; an unamendable one does not.
+
+### Squashing: one opt-in setting, orthogonal to strategy
+
+- **Default off.** A person who has not thought about it gets the full
+  history, not a decision made for them. Opting in states that the output
+  is usually good enough to review as one change.
+- **Amendable either way.** Squashed or not, the branch must rebase cleanly
+  and be comfortable in `git rebase -i`. A squash that leaves the branch
+  awkward trades a convenience for the thing `strategy: commit` exists to protect.
+- **A squashed commit needs a message for the whole change,** not the last
+  commit's, and it is still a default to amend.
+- **Modelled once, not per strategy.** All three strategies plausibly want
+  the same setting. Nothing found so far says it differs by strategy; revisit
+  if the design finds a reason.
+
+### Who does what: rite's part and the model's part
+
+**The line: anything whose failure loses work or publishes something
+unintended is rite's, not the model's.** The local commit under `strategy: commit`
+is the clearest case. A model that forgets to commit loses the task, which
+is exactly the failure Robert called out. The engine contract already draws
+this line once. R7 ("Leave verification to rite": `harness.run_subtask`
+decides `accepted` from rite's own verify command, never from the engine's
+claim) exists because an engine reported exit 0 over work that did not
+happen on all five benchmark tasks. The same reasoning puts the
+load-bearing half of publishing in rite rather than in a prompt.
+
+| rite, deterministically | the model, by judgement |
+|---|---|
+| Which strategy is in force: per-project config, never a per-task choice | The commit message's content, within the convention rite applies |
+| Committing a finished task's work locally, so nothing is lost, whatever the model does | Whether the result is fit to publish, above rite's floors |
+| Squashing, when opted in; applying the commit-message convention as an amendable default | What the PR says |
+| Opening the PR, pushing, and merging, as the strategy allows | Whether to ask the User before an action the strategy permits |
+| Whether merging after checks is permitted at all | |
+| **Floors the model cannot talk past:** "finished" means rite's verify command passed (R7), and nothing is published unless rite's publish gate passed. A check counts only when matched to the SHA it ran on (V060 readiness D12) | |
+
+**Refined against the code:** "whether the work is actually finished" is
+not the model's alone. R7 already makes rite's verify the floor, so the
+model judges only what verification cannot see.
+
+**Where it meets Multi-Manager routing (Track MM):** the strategy is
+config, so a secondary's completion report and the Owner's merge decision
+are bounded by the same setting. The Owner reads the strategy to know
+whether it may merge, and that is deterministic too. A secondary does not
+need to be trusted to have chosen a strategy, because it does not choose
+one.
+
+### What the design must answer (captured, not designed)
+
+- **The Owner must know the setting.** `integrate` assumes pushing and
+  opening a PR today (`config/managers.py`: "pushing and opening the PR
+  needs a claude engine or a person"). How a secondary reports a finished
+  task upward then has to carry what was done with it under the strategy.
+- **Committing gets MORE central under `strategy: commit`, and it is broken on
+  Robert's Mac today.** Measured 2026-09-26 (D10): his global SSH commit
+  signing (`~/.ssh` unreadable) and his global Node pre-push hook both fail
+  inside the Manager's sandbox, so no Manager can commit there. Robert's
+  preferred design makes that blocker worse, not better. The Worker side
+  (yoloAI sandboxes, a different boundary) has not been measured.
+
+### `push_to_shared`: a shared repository for multi-Manager work (was: a future improvement)
+
+Robert, verbatim, in the order given:
+
+> "I think that we may want to log a future improvement for strategy 1
+> that it publishes to a secondary shared repository. So managers can
+> still work uninterrupted and nothing gets pushed to origin (client's
+> repo)."
+
+> "I mean in multi manager scenario"
+
+> "Or we can make it a separate strategy"
+
+**What it is: a collaboration mechanism for several Managers.** With two
+or more Managers, "commit locally and stop" leaves each Manager's work only
+where it ran. Managers cannot build on each other's output, and the Owner
+cannot route work that depends on a secondary's finished changes. A shared
+remote that is not the client's `origin` lets them keep working. It also
+gives durability, which is secondary here.
+
+🔴 **The shared remote must be operator-chosen, with no hosted default,
+and "off" is the safest default.** For some clients, their code leaving
+their own infrastructure is unacceptable, and that is the on-premise
+constraint rite's own target users live under. A default that pushed a law
+firm's code to a convenient hosted remote would be the worst thing in this
+design. This is a setting with a compliance dimension, not a convenience
+toggle.
+
+**Resolved by Robert: a fourth strategy value, `push_to_shared`,** after a
+`remote` axis was tried and rejected (it made meaningless combinations
+expressible). The Owner's merge answer depends on one setting, `strategy`
+(plus the `auto_merge` flag).
+
 ## Track CU — Cursor, the third engine
 
 **Status: READ, NOT MEASURED.** From Cursor's CLI reference

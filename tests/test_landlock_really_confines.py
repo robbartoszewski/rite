@@ -71,7 +71,9 @@ def without_wholesale_temp_grants(policy):
     and it overrides everything narrower.
 
     Measured 2026-09-26: under a pytest `tmp_path`, which lives in `/tmp`, it
-    defeats the MM-2 inbox fence AND the credential narrowing — a third file in
+    defeated the MM-2 inbox fence (no longer: the inbox left the tree, see
+    `test_a_project_under_tmp_no_longer_exposes_an_inbox`) AND the credential
+    narrowing — a third file in
     the credential directory became readable, the Claude login became
     overwritable, and `run.lock` became holdable. A real install is unaffected
     because both the project and `_credential_root` sit under `$HOME`; what is
@@ -449,20 +451,35 @@ class TestTheInboxFenceOnLinux:
     """
 
     def _project(self, tmp_path, *, symlink_in_root=False):
+        from rite_ai.managers.mailbox import (
+            INBOX,
+            OUTBOX,
+            mailbox_dir,
+        )
+        from rite_ai.managers.mailbox import (
+            _legacy_mail_root as legacy_mail_root,
+        )
+
         project = tmp_path / "proj"
         (project / "src").mkdir(parents=True)
-        managers = project / ".rite" / "managers"
         for name in ("lead", "helper"):
-            (managers / name / "mail" / "in").mkdir(parents=True)
-            (managers / name / "mail" / "out").mkdir(parents=True)
+            mailbox_dir(project, name, INBOX).mkdir(parents=True)
+            mailbox_dir(project, name, OUTBOX).mkdir(parents=True)
+            # A pre-0.6.0 project: the old in-tree boxes, still read.
+            (legacy_mail_root(project, name) / INBOX).mkdir(parents=True)
+            (legacy_mail_root(project, name) / OUTBOX).mkdir(parents=True)
         (project / ".rite" / "user").mkdir(exist_ok=True)
         if symlink_in_root:
             # The bypass: a symlink in the project root aimed at a fenced inbox.
-            (project / "shortcut").symlink_to(managers / "helper" / "mail" / "in")
+            (project / "shortcut").symlink_to(mailbox_dir(project, "helper", INBOX))
         return project
 
     @staticmethod
     def _without_the_wholesale_temp_grants(policy):
+        # ⚠ Also what makes the NEW inbox a real measurement: the suite's rite
+        # home is under `/tmp`, which the policy grants wholesale. Without
+        # this the inbox would be writable through that grant and the test
+        # would prove nothing about the fence.
         return without_wholesale_temp_grants(policy)
 
     def _refused(self, policy, target) -> bool:
@@ -481,17 +498,18 @@ class TestTheInboxFenceOnLinux:
         return _in_child(child) == 0
 
     def test_no_manager_writes_an_inbox_its_own_included(self, tmp_path):
+        from rite_ai.managers.mailbox import INBOX, mailbox_dir
+
         project = self._project(tmp_path)
         policy = self._without_the_wholesale_temp_grants(
             landlock.compose_policy(project, "lead", tmp_path / "home")
         )
-        managers = project / ".rite" / "managers"
 
-        assert self._refused(policy, managers / "helper" / "mail" / "in"), (
+        assert self._refused(policy, mailbox_dir(project, "helper", INBOX)), (
             "another Manager's inbox is writable — an inbox write IS an "
             "instruction, so this is authority, not tidiness"
         )
-        assert self._refused(policy, managers / "lead" / "mail" / "in"), (
+        assert self._refused(policy, mailbox_dir(project, "lead", INBOX)), (
             "a Manager can write its OWN inbox, which promotes its own text to "
             "the Owner's"
         )
@@ -500,13 +518,14 @@ class TestTheInboxFenceOnLinux:
         """The other half: a fence that stopped a Manager working would be
         traded for the wrong thing. `rite reply` writes the outbox from INSIDE
         the boundary."""
+        from rite_ai.managers.mailbox import OUTBOX, mailbox_dir
+
         project = self._project(tmp_path)
         policy = self._without_the_wholesale_temp_grants(
             landlock.compose_policy(project, "lead", tmp_path / "home")
         )
-        managers = project / ".rite" / "managers"
 
-        assert not self._refused(policy, managers / "lead" / "mail" / "out"), (
+        assert not self._refused(policy, mailbox_dir(project, "lead", OUTBOX)), (
             "the Manager cannot write its own outbox, so it cannot reply"
         )
         assert not self._refused(policy, project / "src"), (
@@ -520,6 +539,8 @@ class TestTheInboxFenceOnLinux:
         the link and directly — so one symlink anywhere in the project root
         would have defeated MM-2 entirely. Symlinked entries are skipped, which
         fails closed."""
+        from rite_ai.managers.mailbox import INBOX, mailbox_dir
+
         project = self._project(tmp_path, symlink_in_root=True)
         raw = landlock.compose_policy(project, "lead", tmp_path / "home")
         policy = self._without_the_wholesale_temp_grants(raw)
@@ -530,53 +551,64 @@ class TestTheInboxFenceOnLinux:
         )
         # And the fence still holds through both routes.
         assert self._refused(policy, project / "shortcut")
-        assert self._refused(
-            policy, project / ".rite" / "managers" / "helper" / "mail" / "in"
-        )
+        assert self._refused(policy, mailbox_dir(project, "helper", INBOX))
 
 
 @NO_LANDLOCK
-def test_a_wholesale_temp_grant_defeats_the_inbox_fence(tmp_path):
-    """🔴 **A KNOWN HOLE, ASSERTED SO IT CANNOT DRIFT.** `compose_policy`
-    grants `/tmp` and `/var/tmp` read+write, mirroring the seatbelt profile. On
-    Linux that defeats MM-2 for any project living under them, because Landlock
-    takes the UNION of grants and has no deny rule — the enumeration cannot
-    carve a hole in `/tmp` the way seatbelt's last-match-wins can.
+def test_a_project_under_tmp_no_longer_exposes_an_inbox(tmp_path, monkeypatch):
+    """The wholesale `/tmp` grant stays, and MM-2 no longer depends on it.
 
-    It is the same shape as the pre-existing macOS hole where a checkout under
-    `/tmp` is writable through the same grant, and worse here because there is
-    no rule that can take it back.
+    ⚠ **THIS USED TO ASSERT THE OPPOSITE**, as a known hole: `compose_policy`
+    grants `/tmp` and `/var/tmp` read+write, Landlock has no deny, so for a
+    project under them — rite's own pool worktrees, every test project — the
+    in-tree inbox was writable through that grant. The inbox has left the
+    tree, and the old in-tree box is moved once and never read again, so the
+    grant now reaches nothing that is delivered.
 
-    A project under `/tmp` is not the normal case, but rite's own pool
-    worktrees and every test project are. If the temp grants are ever narrowed,
-    this test fails and should be deleted with the reason recorded.
+    Measured with the REAL policy, temp grants included, and rite's home
+    somewhere they do not cover — as it is in a real install. The control
+    shows the grant is still live: the project, under `/tmp`, is writable.
     """
-    project = tmp_path / "proj"
-    inbox = project / ".rite" / "managers" / "helper" / "mail" / "in"
-    inbox.mkdir(parents=True)
-    (project / ".rite" / "managers" / "lead" / "mail" / "out").mkdir(parents=True)
+    import shutil
+    import uuid
 
-    policy = landlock.compose_policy(project, "lead", tmp_path / "home")
-    assert any(w in ("/tmp", "/var/tmp") for w in policy["writable"]), (
-        "the temp grants are gone — narrow the fence claim and delete this test"
-    )
+    from rite_ai.managers.mailbox import INBOX, OUTBOX, mailbox_dir
 
-    def child():
-        landlock.apply(policy)
-        try:
-            (inbox / ".probe").write_text("x")
-            return 0  # writable THROUGH the temp grant
-        except OSError:
-            return 1
+    home = Path.home() / f".rite-landlock-test-{uuid.uuid4().hex[:8]}"
+    if str(home.resolve()).startswith(("/tmp", "/var/tmp")):
+        pytest.skip(f"HOME is under a temp grant ({home}), so nothing is measured")
+    monkeypatch.setenv("RITE_HOME_DIR", str(home))
+    try:
+        project = tmp_path / "proj"
+        (project / "src").mkdir(parents=True)
+        for name in ("lead", "helper"):
+            mailbox_dir(project, name, INBOX).mkdir(parents=True)
+            mailbox_dir(project, name, OUTBOX).mkdir(parents=True)
+        policy = landlock.compose_policy(project, "lead", tmp_path / "home")
+        assert any(w in ("/tmp", "/var/tmp") for w in policy["writable"]), (
+            "the temp grants are gone — this test's control no longer holds"
+        )
+        assert str(tmp_path).startswith(("/tmp", "/var/tmp")), (
+            f"tmp_path is {tmp_path}, not under a granted tree: nothing measured"
+        )
 
-    assert str(tmp_path).startswith(("/tmp", "/var/tmp", "/private/tmp")), (
-        f"this machine's temp root is {tmp_path}, not under a granted tree, so "
-        "nothing was measured"
-    )
-    assert _in_child(child) == 0, (
-        "the inbox was refused although /tmp is granted — the hole may be "
-        "closed, which is good news; confirm and update landlock.limitations()"
-    )
+        def writes(target):
+            def child():
+                landlock.apply(policy)
+                try:
+                    (Path(target) / ".probe").write_text("x")
+                    return 0
+                except OSError:
+                    return 1
+
+            return _in_child(child) == 0
+
+        assert writes(project / "src"), "control: the /tmp grant is not live"
+        assert not writes(mailbox_dir(project, "helper", INBOX))
+        assert not writes(mailbox_dir(project, "lead", INBOX))
+        assert writes(mailbox_dir(project, "lead", OUTBOX)), "cannot reply"
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
 
 
 class TestP2BetweenTwoManagersSharingARoot:
