@@ -106,11 +106,74 @@ def manager_dir(root: Path, name: str) -> Path:
     return root / ".rite" / MANAGERS_DIRNAME / name
 
 
+def _instance_filename(name: str) -> str:
+    return f"{name}.json"
+
+
 def instance_path(root: Path, name: str) -> Path:
-    problem = name_problem(name, kind="manager name", must_be_a_tmux_target=True)
+    problem = manager_name_problem(name)
     if problem:
         raise ValueError(problem)
-    return user_dir(root) / f"{name}.json"
+    return user_dir(root) / _instance_filename(name)
+
+
+def _rite_owned_user_entries() -> tuple[str, ...]:
+    """The entries rite itself keeps in `.rite/user/`, beside the ones keyed
+    by a Manager's name.
+
+    ⚠ **Every fixed-name file or directory rite writes into `user_dir` must
+    be listed here** — `tests/test_a_manager_name_cannot_be_rites_own_state.py`
+    writes all of them for a real Manager and fails on any entry that is
+    neither this Manager's nor on this list. An unlisted entry is a name some
+    Manager can collide with (C30: `permissions.json`)."""
+    from rite_ai.managers.enclosure import ENGINE_TMP_DIRNAME
+    from rite_ai.managers.permissions import SETTINGS_FILENAME
+
+    return (SETTINGS_FILENAME, ENGINE_TMP_DIRNAME)
+
+
+def _per_manager_user_entries(name: str) -> tuple[str, ...]:
+    """The entries in `.rite/user/` a Manager called `name` gets, each
+    derived from the function that builds its path, so this cannot drift
+    from where rite actually writes."""
+    from rite_ai.managers.enclosure import profile_path
+
+    here = Path(".")
+    return (
+        _instance_filename(name),
+        designation_path(here, name).name,
+        profile_path(here, name).name,
+    )
+
+
+def manager_name_problem(name: str) -> str:
+    """Why `name` cannot be a Manager's name, or "".
+
+    ⚠ **C30. `.rite/user/` holds per-Manager files keyed by name AND rite's
+    own files, in one directory.** A Manager named `permissions` had its
+    instance record at `.rite/user/permissions.json` — the permission
+    allowlist rite passes to every Manager — so starting it overwrote the
+    list, or the list was read as its record. C11 was the same collision for
+    designations. So the CLASS is refused, not the word: any name whose own
+    entries would coincide with one of rite's (`_rite_owned_user_entries`).
+    Today that is `permissions`, found by computing, not by listing."""
+    problem = name_problem(name, kind="manager name", must_be_a_tmux_target=True)
+    if problem:
+        return problem
+    # ⚠ CASE-FOLDED. macOS volumes are case-insensitive by default, so
+    # `Permissions.json` IS `permissions.json` there — measured on this
+    # machine. An exact comparison refused `permissions` and admitted
+    # `Permissions`, which collides just the same.
+    owned = {e.casefold() for e in _rite_owned_user_entries()}
+    for entry in _per_manager_user_entries(name):
+        if entry.casefold() in owned:
+            return (
+                f"a Manager cannot be called {name!r}: its state would be "
+                f"stored as .rite/user/{entry}, which is a file rite keeps "
+                "for itself, so each would overwrite the other. Choose "
+                "another name."
+            )
+    return ""
 
 
 @dataclass
