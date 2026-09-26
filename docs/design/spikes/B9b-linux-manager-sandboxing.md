@@ -9,14 +9,49 @@ is inferred or untested it says so.
 
 ## Where it was measured
 
-| Environment | Kernel | Landlock ABI | Notes |
-|---|---|---|---|
-| Ubuntu 24.04.4 VM (Parallels) | 7.0.0-31-generic, **aarch64** | **8** | unprivileged user `parallels` |
-| Docker Desktop containers (macOS host) | 6.12.68-linuxkit, aarch64 | **6** | default container, no added privileges |
+| Environment | Kernel | Arch | Landlock ABI | Notes |
+|---|---|---|---|---|
+| Ubuntu 24.04.4 VM (Parallels) | 7.0.0-31-generic | **aarch64** | **8** | unprivileged user `parallels` |
+| Docker Desktop container (macOS host) | 6.12.68-linuxkit | aarch64 | **6** | default container, no added privileges |
+| **GitHub Actions `ubuntu-latest`** | **6.17.0-1022-azure** | **x86_64** | **7** | CI, unprivileged `runner` |
 
-⚠ **Both are ARM64 and neither has a GPU.** The three Landlock syscalls
-(444/445/446) are in the architecture-neutral range, so the numbers hold on
-x86_64, but nothing here ran on x86_64.
+## Does anything differ between aarch64 and x86_64?
+
+**No.** Run 36203530284 on `ubuntu-latest`, all nine probes passed on x86_64
+with **no skips**, across Python 3.11/3.12/3.13:
+
+| Probe | aarch64 (ABI 8 / 6) | x86_64 (ABI 7) |
+|---|---|---|
+| Boundary holds 4/4 | pass | pass |
+| Nesting: identical | pass | pass |
+| Nesting: **narrower** applies and takes effect | pass | pass |
+| Nesting: **wider** cannot grant back | pass | pass |
+| Stack depth ≥ 2 (kernel limit 16) | pass | pass |
+| Boundary survives `fork`+`exec`, child narrows | pass | pass |
+| Escape 2 (signals) CLOSED by scoping, with control | pass | pass |
+| 🔴 Escape 1 (socket) still OPEN | pass (open) | pass (open) |
+| Kernel struct sizes (packed, 12/24 bytes) | pass | pass |
+
+The three things that could plausibly have differed, and did not:
+
+* **The syscall numbers.** 444/445/446 are hardcoded. A wrong number returns
+  no ABI, and the x86_64 runner reported ABI 7 — so they are right there.
+* **The packed struct.** `landlock_path_beneath_attr` is a packed u64 + s32 =
+  12 bytes; unpacked it is 16 on every LP64 platform and the kernel reads the
+  fd out of the wrong bytes. Asserted directly, and it holds on both.
+* **Landlock's semantics** — intersection, the layer limit, `connect(2)` not
+  being governed — are generic LSM logic, and behaved identically.
+
+⚠ **The AppArmor posture is the same trap on both.** The runner reports
+`apparmor_restrict_unprivileged_userns = 1` and
+`unprivileged_userns_clone = 1`, and `unshare --user --map-root-user` is
+**refused** — exactly as on the VM. So the bubblewrap route is unavailable on
+a stock GitHub runner too, for the same reason, and the knob that *looks*
+like the answer says the opposite of the truth on both architectures.
+`bwrap` is not installed there at all.
+
+⚠ **Neither environment has a GPU**, so nothing here says anything about
+local-model work.
 
 ## 1. Can the boundary be built?
 
