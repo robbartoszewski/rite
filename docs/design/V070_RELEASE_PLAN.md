@@ -478,13 +478,19 @@ here as relayed.
 - **Load-bearing:** under "don't push" the work must still be COMMITTED to
   the local project repository, or the state is lost once a Worker starts
   a new task. **"Don't push" must never mean "don't commit."**
+- **Robert's clarification:** "And by 'the manager' I mean broadly — the
+  LLM part and the automated rite part." So "the Manager decides" means the
+  Manager ROLE. The split between what the model judges and what rite does
+  deterministically is ours to draw, and it is drawn below.
 
 **Recorded, not designed.** Not in v0.6.0.
 
 ### Today (`main` at `48de6d2`), checked for data loss first
 
 **No silent data loss found, by reading the code and running its guard
-tests (20 passed). Not measured with a real yoloAI sandbox in this check.**
+tests (20 passed).** ⚠ **Not measured with a real sandbox:** the attempt on
+2026-09-26 was blocked because `yoloai new` hung on this Mac, even for an
+empty directory. The guard tests fake yoloAI.
 - **Pushing is the only way work persists today.** The Worker instructions
   (`workspace/manage.py`, step 4) say: push after every commit, because in
   a sandbox "a commit that was never pushed is gone". The sandbox works on
@@ -513,7 +519,39 @@ tests (20 passed). Not measured with a real yoloAI sandbox in this check.**
 
 | # | work | done when | depends | size |
 |---|---|---|---|---|
-| PB1 | **A per-project publishing strategy that the Manager applies to a finished task.** Workers commit and do not push. The Manager (Owner, or the holder of `integrate`) applies the project's strategy: (1) keep it local, committed in the project's own repository; (2) push and merge to main or a feature branch; (3) push and open a PR, then merge on green or leave the merge to the User, per a setting the Owner reads. Squash and commit-message convention are options of each strategy | For each strategy, one real task goes from a Worker's commit to the declared end state on a real project, and under (1) the work survives the Worker's next task with nothing pushed anywhere. Under the "do not advertise rite" option, the published history is checked (below) and carries no trace of rite | a path from the sandbox copy into the local repository | design first; unsized |
+| PB1 | **A per-project publishing strategy that the Manager ROLE applies to a finished task, split as drawn below.** Workers commit and do not push. The Manager role (rite and the model, for the Owner or the holder of `integrate`) applies the project's strategy: (1) keep it local, committed in the project's own repository; (2) push and merge to main or a feature branch; (3) push and open a PR, then merge on green or leave the merge to the User, per a setting the Owner reads. Squash and commit-message convention are options of each strategy | For each strategy, one real task goes from a Worker's commit to the declared end state on a real project, and under (1) the work survives the Worker's next task with nothing pushed anywhere. Under the "do not advertise rite" option, the published history is checked (below) and carries no trace of rite | a path from the sandbox copy into the local repository | design first; unsized |
+
+### Who does what: rite's part and the model's part
+
+**The line: anything whose failure loses work or publishes something
+unintended is rite's, not the model's.** The local commit under strategy 1
+is the clearest case. A model that forgets to commit loses the task, which
+is exactly the failure Robert called out. The engine contract already draws
+this line once. R7 ("Leave verification to rite": `harness.run_subtask`
+decides `accepted` from rite's own verify command, never from the engine's
+claim) exists because an engine reported exit 0 over work that did not
+happen on all five benchmark tasks. The same reasoning puts the
+load-bearing half of publishing in rite rather than in a prompt.
+
+| rite, deterministically | the model, by judgement |
+|---|---|
+| Which strategy is in force: per-project config, never a per-task choice | The commit message's content, within the convention rite applies |
+| Committing a finished task's work locally, so nothing is lost, whatever the model does | Whether the result is fit to publish, above rite's floors |
+| Squashing, and applying the commit-message convention | What the PR says |
+| Opening the PR, pushing, and merging, as the strategy allows | Whether to ask the User before an action the strategy permits |
+| Whether merging after checks is permitted at all | |
+| **Floors the model cannot talk past:** "finished" means rite's verify command passed (R7), and nothing is published unless rite's publish gate passed. A check counts only when matched to the SHA it ran on (V060 readiness D12) | |
+
+**Refined against the code:** "whether the work is actually finished" is
+not the model's alone. R7 already makes rite's verify the floor, so the
+model judges only what verification cannot see.
+
+**Where it meets Multi-Manager routing (Track MM):** the strategy is
+config, so a secondary's completion report and the Owner's merge decision
+are bounded by the same setting. The Owner reads the strategy to know
+whether it may merge, and that is deterministic too. A secondary does not
+need to be trusted to have chosen a strategy, because it does not choose
+one.
 
 ### What the design must answer (captured, not designed)
 
