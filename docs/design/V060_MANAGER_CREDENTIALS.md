@@ -361,6 +361,42 @@ rather than insisting on the keychain. Measuring it needs a real
 `setup-token` token, which is Robert's to create. The alternative is running
 Claude Managers unsandboxed, which reverses B9.
 
+**Built and measured since (`8a61989`, then the boundary review of it).**
+macOS Claude reads the file inside the sandbox: a real `setup-token` token
+completed a Manager cycle. The grants were then narrowed, each measured in
+the real profile:
+
+| grant | why | measured |
+|---|---|---|
+| `gh/hosts.yml`, `gh/config.yml`: read, by exact path | gh reads its token and its layout version; nothing else in the directory is needed | gh read a fake token (`401`); git got it via `gh auth git-credential`; a third file beside them refused |
+| `claude/`: read AND write | Claude Code writes `projects/`, `sessions/`, `shell-snapshots/`, `backups/` and `.claude.json` there on every run (listed after a real run), and rite's resume and C8 check read the transcripts | a real Manager signed in and replied |
+| `claude/.credentials.json`: write DENIED, last | the Manager must not replace the file that authenticates it | overwrite, append, rename-over and remove all refused; Claude still signed in |
+
+gh's current multi-account `hosts.yml` layout plus `config.yml` `version: "1"`
+is written, because an old-layout file makes gh migrate it on first read, a
+write the read-only grant refuses.
+
+**An unclean exit.** The copy is removed in a `finally`, which a killed
+process skips, and the token lives a year. The next `rite start` for the
+Manager takes a per-Manager run lock (`flock`, released by the kernel
+however the holder dies) BEFORE touching any credential, and then removes a
+leftover copy and says so. The lock came first because the duplicate check
+ran later, inside `supervise`: without it, a second `rite start` for a
+running Manager cleared that Manager's GitHub token and, on its way out,
+removed its Claude login. Both observed through the real CLI.
+
+**Redaction.** A Manager can read its own login, so it can print it. The
+journal and the Slack relay now redact it by exact value, as they do the
+GitHub token. Observed: `rite journal observe` quoting the file wrote
+`"accessToken":"[redacted]"`.
+
+**Linux** (`57469b8`, the boundary session): the login is granted there too,
+with the old, wider shape (`claude/` writable, the credential directory
+readable). Landlock has no deny rule, so the Manager can overwrite its own
+login, and it can open the run lock (a Manager holding a lock on it from a
+surviving process would make the next start refuse, a denial of service,
+not a leak). No Linux Manager has signed in yet.
+
 ## Decisions for Robert
 
 | # | decision | blocks |

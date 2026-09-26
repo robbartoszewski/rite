@@ -106,8 +106,11 @@ commands, instead of letting it start and print `Not logged in`.
 
 The token is a `claude setup-token` token: it can make model requests on
 your subscription, and nothing else. rite gives each Manager its own copy in
-a 0600 file only that Manager's sandbox can read, and removes it when the
-run ends. It never goes on a command line or into the environment.
+a 0600 file only that Manager's sandbox can read. The Manager can read it
+and cannot replace it. rite removes it when the run ends. It never goes on
+a command line or into the environment, and rite redacts it from the
+Manager's journal and its Slack replies. A run that is killed cannot remove
+its copy, so the next `rite start` for that Manager removes it and says so.
 
 **Three things you will notice, all on purpose:**
 
@@ -129,7 +132,16 @@ transcripts, because `~/.claude` is not granted any more.
 
 **Observed** on macOS, 2026-09-26: a sandboxed Claude Manager signed in with
 a `setup-token` token, read the project with its tools, and its `rite reply`
-reached `rite replies`. **Not yet observed on Linux.**
+reached `rite replies`. The same day, through `rite start`: a copy left by
+a killed run was removed and reported, a second `rite start` for a running
+Manager was refused without touching its login, and inside the sandbox
+overwriting or renaming over the login was refused.
+
+**On Linux a Claude Manager does not work in this build.** No Linux
+Manager has been observed signing in. With no token stored, `rite start`
+refuses correctly there. On Linux the Manager can also overwrite its own
+copy of the token, because Landlock cannot deny one file inside a directory
+it grants.
 
 ### ⚠ BEHAVIOUR CHANGE ON UPGRADE — credentials live in one 0600 file
 
@@ -488,16 +500,14 @@ See SPEC §6.6.3.
 - **A sandboxed Manager reaches GitHub without your credentials.** `gh`
   starts inside the sandbox, but anonymously: 60 API requests an hour
   (measured) and so no private repositories. `git push` over HTTPS uses
-  `gh` for its credential, so it has none to push with. How a
-  credential should reach a sandboxed Manager is not decided. A Claude
-  Manager's own login is inherited only when `rite start` is what starts
-  the tmux server.
-- **Other projects' Claude transcripts are readable from inside a
-  Manager's sandbox**, because `~/.claude` is granted whole. The printed
-  limitations do not say this.
+  `gh` for its credential, so it has none to push with. rite can give a
+  Manager a one-hour token from a GitHub App instead, but that has not yet
+  been run against GitHub.
+- **Linux: a Claude Manager does not work yet.** See the Claude sign-in
+  change above.
 - **No way to start a Manager outside its sandbox.** If one of your own
-  Claude Code hooks or tools needs a path the profile does not grant, it
-  fails inside the sandbox, and there is no option to turn the sandbox off.
+  tools needs a path the profile does not grant, it fails inside the
+  sandbox, and there is no option to turn the sandbox off.
 - **The network is not confined**, and `/tmp` is readable and writable by
   a Manager. Destination control is planned for 0.7.0.
 - **Ticket and Slack text is not vetted.** It is cleaned and scanned for
