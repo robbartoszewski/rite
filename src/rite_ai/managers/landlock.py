@@ -373,9 +373,11 @@ DIRS_RITE_CREATES = (
 #   * `.gitconfig` and `.config/git` are read-only grants and their absence is
 #     harmless — git simply has no user config. Creating them would be rite
 #     inventing state on the operator's behalf.
-#   * The per-Manager credential directory is not granted by this backend at
-#     all; that is a separate gap, reported against the credential work rather
-#     than papered over here.
+#   * The per-Manager credential directory IS granted (see `compose_policy`),
+#     but it is not created here: `claude_login.prepare()` writes it at start,
+#     outside the boundary, and a Manager with no `claude_token` is refused
+#     before this runs. Creating an empty one would grant a directory that
+#     holds no login.
 
 
 def _ensure_grantable(home: Path) -> None:

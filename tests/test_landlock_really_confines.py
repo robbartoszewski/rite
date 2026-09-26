@@ -403,3 +403,167 @@ class TestTheTwoEscapes:
             )
         finally:
             server.close()
+
+
+@NO_LANDLOCK
+class TestTheInboxFenceOnLinux:
+    """MM-2 on Linux, against the kernel rather than against the policy text.
+
+    ⚠ **`test_no_manager_writes_an_inbox.py` is wholly `darwin`-gated**, so
+    until this existed the inbox fence had no Linux test at all — on the
+    platform where a rule names an INODE and granting a symlink grants its
+    target. Both defects below were real and were found by review, not by a
+    test; nothing would have caught their return.
+
+    ⚠ Landlock has no deny rule: rules only GRANT and the effective access is
+    the UNION, so the fence is an ENUMERATION of siblings rather than a deny
+    placed last. That is why a symlink matters here and does not on macOS,
+    where seatbelt checks the resolved path when the file is opened.
+    """
+
+    def _project(self, tmp_path, *, symlink_in_root=False):
+        project = tmp_path / "proj"
+        (project / "src").mkdir(parents=True)
+        managers = project / ".rite" / "managers"
+        for name in ("lead", "helper"):
+            (managers / name / "mail" / "in").mkdir(parents=True)
+            (managers / name / "mail" / "out").mkdir(parents=True)
+        (project / ".rite" / "user").mkdir(exist_ok=True)
+        if symlink_in_root:
+            # The bypass: a symlink in the project root aimed at a fenced inbox.
+            (project / "shortcut").symlink_to(managers / "helper" / "mail" / "in")
+        return project
+
+    @staticmethod
+    def _without_the_wholesale_temp_grants(policy):
+        """The fence cannot hold under a wholesale `/tmp` grant, and a test
+        living in `/tmp` would measure that instead of the fence.
+
+        ⚠ **THIS IS A REAL HOLE, PINNED SEPARATELY BELOW, not a test
+        convenience.** `compose_policy` grants `/tmp` and `/var/tmp` read+write
+        to mirror seatbelt, and a pytest project lives under `/tmp` — so every
+        inbox is writable through that grant whatever the enumeration says.
+        Seatbelt can place a deny LAST and win; Landlock takes the UNION of
+        grants and has no deny, so it cannot carve `/tmp` at all.
+
+        These tests therefore drop the two temp grants, which is the only way
+        to exercise the fence itself on a machine whose temp root is `/tmp`.
+        """
+        temps = {"/tmp", "/var/tmp"}
+        return {
+            **policy,
+            "writable": [w for w in policy["writable"] if w not in temps],
+        }
+
+    def _refused(self, policy, target) -> bool:
+        def child():
+            landlock.apply(policy)
+            try:
+                with open(os.path.join(str(target), ".probe"), "w") as handle:
+                    handle.write("x")
+                os.unlink(os.path.join(str(target), ".probe"))
+                return 1  # allowed
+            except OSError:
+                return 0  # refused
+            except Exception:  # noqa: BLE001
+                return 2
+
+        return _in_child(child) == 0
+
+    def test_no_manager_writes_an_inbox_its_own_included(self, tmp_path):
+        project = self._project(tmp_path)
+        policy = self._without_the_wholesale_temp_grants(
+            landlock.compose_policy(project, "lead", tmp_path / "home")
+        )
+        managers = project / ".rite" / "managers"
+
+        assert self._refused(policy, managers / "helper" / "mail" / "in"), (
+            "another Manager's inbox is writable — an inbox write IS an "
+            "instruction, so this is authority, not tidiness"
+        )
+        assert self._refused(policy, managers / "lead" / "mail" / "in"), (
+            "a Manager can write its OWN inbox, which promotes its own text to "
+            "the Owner's"
+        )
+
+    def test_the_fence_does_not_break_the_manager(self, tmp_path):
+        """The other half: a fence that stopped a Manager working would be
+        traded for the wrong thing. `rite reply` writes the outbox from INSIDE
+        the boundary."""
+        project = self._project(tmp_path)
+        policy = self._without_the_wholesale_temp_grants(
+            landlock.compose_policy(project, "lead", tmp_path / "home")
+        )
+        managers = project / ".rite" / "managers"
+
+        assert not self._refused(policy, managers / "lead" / "mail" / "out"), (
+            "the Manager cannot write its own outbox, so it cannot reply"
+        )
+        assert not self._refused(policy, project / "src"), (
+            "the Manager cannot write its own project source"
+        )
+
+    def test_a_symlink_in_the_project_root_does_not_hand_the_fence_back(self, tmp_path):
+        """🔴 **THE DEFECT THIS PINS.** A Landlock rule names the inode a path
+        resolves to. Measured in review: granting ONLY a symlink that pointed
+        at another Manager's `mail/in` made that inbox writable both through
+        the link and directly — so one symlink anywhere in the project root
+        would have defeated MM-2 entirely. Symlinked entries are skipped, which
+        fails closed."""
+        project = self._project(tmp_path, symlink_in_root=True)
+        raw = landlock.compose_policy(project, "lead", tmp_path / "home")
+        policy = self._without_the_wholesale_temp_grants(raw)
+
+        assert str(project / "shortcut") not in raw["writable"], (
+            "a symlink in the project root was granted; it names the inode of "
+            "the inbox it points at"
+        )
+        # And the fence still holds through both routes.
+        assert self._refused(policy, project / "shortcut")
+        assert self._refused(
+            policy, project / ".rite" / "managers" / "helper" / "mail" / "in"
+        )
+
+
+@NO_LANDLOCK
+def test_a_wholesale_temp_grant_defeats_the_inbox_fence(tmp_path):
+    """🔴 **A KNOWN HOLE, ASSERTED SO IT CANNOT DRIFT.** `compose_policy`
+    grants `/tmp` and `/var/tmp` read+write, mirroring the seatbelt profile. On
+    Linux that defeats MM-2 for any project living under them, because Landlock
+    takes the UNION of grants and has no deny rule — the enumeration cannot
+    carve a hole in `/tmp` the way seatbelt's last-match-wins can.
+
+    It is the same shape as the pre-existing macOS hole where a checkout under
+    `/tmp` is writable through the same grant, and worse here because there is
+    no rule that can take it back.
+
+    A project under `/tmp` is not the normal case, but rite's own pool
+    worktrees and every test project are. If the temp grants are ever narrowed,
+    this test fails and should be deleted with the reason recorded.
+    """
+    project = tmp_path / "proj"
+    inbox = project / ".rite" / "managers" / "helper" / "mail" / "in"
+    inbox.mkdir(parents=True)
+    (project / ".rite" / "managers" / "lead" / "mail" / "out").mkdir(parents=True)
+
+    policy = landlock.compose_policy(project, "lead", tmp_path / "home")
+    assert any(w in ("/tmp", "/var/tmp") for w in policy["writable"]), (
+        "the temp grants are gone — narrow the fence claim and delete this test"
+    )
+
+    def child():
+        landlock.apply(policy)
+        try:
+            (inbox / ".probe").write_text("x")
+            return 0  # writable THROUGH the temp grant
+        except OSError:
+            return 1
+
+    assert str(tmp_path).startswith(("/tmp", "/var/tmp", "/private/tmp")), (
+        f"this machine's temp root is {tmp_path}, not under a granted tree, so "
+        "nothing was measured"
+    )
+    assert _in_child(child) == 0, (
+        "the inbox was refused although /tmp is granted — the hole may be "
+        "closed, which is good news; confirm and update landlock.limitations()"
+    )

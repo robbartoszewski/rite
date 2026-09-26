@@ -119,3 +119,54 @@ jobs:
           # violated. Give it a budget that matches the machine it runs on
           # rather than the machine it was written on.
           RITE_SOAK_SECONDS: "20"
+
+  # 🔴 **THERE WAS NO macOS CI AT ALL, AND THE BOUNDARY LIVES THERE.** This
+  # workflow ran only on ubuntu-latest, and five test files are
+  # `sys.platform != "darwin"`-gated — so the seatbelt profile, the inbox
+  # fence and the whole credential story were among the skips in the only job
+  # that ran. Every macOS row in the readiness document rested on somebody's
+  # local run.
+  #
+  # That is not a theoretical gap. In one weekend, local runs found a
+  # credential grant that existed only on seatbelt, a symlink that handed back
+  # the inbox fence, and a first-launch failure where a grant named a path that
+  # did not exist yet. None of those would have been caught here.
+  #
+  # ⚠ **The named files, not the whole suite, and the reason is honesty rather
+  # than speed.** A hosted macOS runner has no tmux, no gitleaks and no
+  # credential store, so a full run would skip the very things this job exists
+  # to check and report green. These five need none of that: they compose
+  # profiles and assert what the rules say, and `sandbox-exec` is part of
+  # macOS. The Linux job above remains the full suite.
+  boundary-and-credentials-on-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Which sandbox backend does macOS pick
+        run: |
+          echo "arch:   $(uname -m)"
+          echo "sw_vers: $(sw_vers -productVersion 2>/dev/null || echo unknown)"
+          command -v sandbox-exec >/dev/null && echo "sandbox-exec: present" || echo "sandbox-exec: MISSING"
+          uv run python -c "from rite_ai.managers.boundaries import describe; print('manager sandbox:', describe())"
+
+      # `-rs` so a skip here is visible rather than silent: these files are the
+      # macOS half of the boundary, and one of them quietly skipping would put
+      # this job back where the workflow started.
+      - name: Boundary and credential tests
+        run: |
+          uv run pytest -rs \
+            tests/test_the_manager_profile_denies_what_it_should.py \
+            tests/test_no_manager_writes_an_inbox.py \
+            tests/test_a_claude_manager_signs_in_without_the_keychain.py \
+            tests/test_a_manager_gets_github_credentials_without_holding_keys.py \
+            tests/test_credentials_live_in_one_0600_file.py \
+            tests/test_the_sandbox_backend_is_chosen_by_platform.py
