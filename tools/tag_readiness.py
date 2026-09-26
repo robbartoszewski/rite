@@ -116,6 +116,41 @@ def rows(ref: str):
         }
 
 
+def acceptance_bar(ref: str) -> tuple[str, list[tuple[str, str, str]]]:
+    """Robert's acceptance bar (section 0 of the readiness doc), read from the
+    committed doc: the verdict and each part as (id, status, part).
+
+    ⚠ **Reported separately and FIRST, and never derived from §1's rows.**
+    Rows are counted; the bar is a gate. In v0.5.0 work was declared done that
+    was not. A document whose rows were all green while this bar was unmet
+    would otherwise read 100%.
+    """
+    text = subprocess.run(
+        ["git", "show", f"{ref}:{DOC}"], capture_output=True, text=True, check=True
+    ).stdout
+    parts = []
+    for line in text.splitlines():
+        if not re.match(r"^\| A\d+ \|", line):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        mark = cells[2]
+        status = (
+            "met"
+            if mark.startswith("✅")
+            else "NOT MET"
+            if mark.startswith("❌")
+            else "not yet observed"
+        )
+        parts.append((cells[0], status, re.sub(r"\*", "", cells[1])[:90]))
+    if not parts:
+        return "UNKNOWN: no acceptance-bar parts found in section 0", parts
+    if all(s == "met" for _, s, _ in parts):
+        return "MET", parts
+    if any(s == "NOT MET" for _, s, _ in parts):
+        return "NOT MET", parts
+    return "NOT YET OBSERVED", parts
+
+
 def pct(n: int, d: int) -> str:
     return f"{100 * n / d:.0f}%" if d else "n/a"
 
@@ -129,7 +164,12 @@ def main() -> int:
     total = len(data)
     blocking = [r for r in data if r["id"] in BLOCKS_TAG]
 
-    print(f"v0.6.0 readiness — {ref} = {sha[:7]}   ({total} rows in §1)")
+    print(f"v0.6.0 readiness — {ref} = {sha[:7]}   ({total} rows in §1)\n")
+    verdict, parts = acceptance_bar(ref)
+    print(f"ACCEPTANCE BAR (Robert, the gate for the tag): {verdict}")
+    for pid, status, what in parts:
+        print(f"  {pid:3} {status:17} {what}")
+    print("  The row counts below are NOT the gate and cannot satisfy it.\n")
     print(f"done = observed on BOTH platforms. blocking rows: {len(blocking)}\n")
 
     for label, group in (("ALL ROWS", data), ("BLOCKING ONLY", blocking)):

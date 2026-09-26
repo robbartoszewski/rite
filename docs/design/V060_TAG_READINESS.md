@@ -9,6 +9,41 @@ SHAs on `main`. Rows marked
 "reported" come from the Linux session's findings as relayed on 2026-09-26,
 and were not re-measured by the author of this list.
 
+## 0. 🔴 THE ACCEPTANCE BAR: the question this document answers
+
+**Robert, 2026-09-26, set as the gate for tagging v0.6.0:**
+
+> Two Managers on the same Linux machine — Claude plus a local LLM —
+> working without issues, or at least verified enough that it's ready for
+> dogfood testing.
+
+**Why it is a gate and not a sentence:** in v0.5.0, work was declared done
+that was not. The row percentages in §1 count rows. If every row were green
+and this bar unmet, they would say 100% and be wrong. So
+`tools/tag_readiness.py` reports this bar FIRST and separately: MET, NOT
+MET or NOT YET OBSERVED. It is MET only when every part below is ✅, and no
+arithmetic over §1 can satisfy it.
+
+**"Without issues" made checkable.** Each part is observed on Linux, on one
+machine and one project root, with a real Claude Owner and a real local
+model. Markers: ✅ met, ❌ not met, ⏳ not yet observed.
+
+| # | observable part | status on Linux | evidence |
+|---|---|---|---|
+| A1 | Both Managers, a Claude Owner and a local-model secondary, running at once on one Linux machine in one project root | ⏳ | D5's Linux cell is "—". The Linux Claude cycle is in progress (the boundary session). On macOS it has run only with stand-in engines, plus one real Goose Owner (`c1cc840`) |
+| A2 | The Owner routes to the secondary (`rite route`) | ⏳ | not observed on Linux with real engines |
+| A3 | The secondary acts on what was routed | ⏳ | not observed on Linux with real engines |
+| A4 | The secondary's reply arrives at a still-running Owner | ⏳ | not observed on Linux with real engines |
+| A5 | The inbox fence holds under real concurrent load | ⏳ | the fence is tested at kernel level on Linux (MM-2, `test_landlock_really_confines.py`), not under two Managers running at once |
+| A6 | The local half is a model that actually RUNS `rite reply` (a tool call), not one that prints it as text | ❌ | D4: `qwen3:1.7b` on the VM did not run `rite reply` when asked. A larger model (4B/8B) is not yet measured on that CPU |
+
+**Rough edges are named, not hidden.** The standard is "verified enough
+for dogfood", not perfect, so a pass that carries named rough edges IS a
+pass. What is not allowed is masking one. Known so far:
+- **The Owner cannot wait for its secondary** (relayed 2026-09-26; to be
+  confirmed in A1–A4's run). It must be stated in the notes as a rough
+  edge. A retry must not paper over it.
+
 **The target is Wednesday:** a functional **Claude and local** multi-Manager
 setup, **driven through Slack**, **working on macOS and Linux**. Linux is a
 requirement, not a deferral. A slip of 1–2 days is acceptable, and shipping
