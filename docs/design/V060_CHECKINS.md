@@ -4,6 +4,11 @@
 Slack track (A) and before the broker (B9). Tickets K1–K6 in
 [`V060_RELEASE_PLAN.md`](V060_RELEASE_PLAN.md) § K. Nothing here is built.
 
+⚠ **UPDATED 2026-09-26: this status is stale in the pessimistic direction.**
+K1–K6 are all built, and each row of the v0.6.0 plan's § K says what was
+observed (K1 `112a883`, K2 `3a4fa1f`, K3 `c0429dd`, K4 `3d4c827`, K5
+`401e27f`, K6 `d8b235c`). K5's reply halves are the part still open.
+
 ## What Robert asked for
 
 A User wants to do 95% of their interaction with the AI in a few windows a
@@ -146,7 +151,8 @@ can be dropped for free (Robert, 2026-09-25), and nothing in K4 or K5 may
 come to rely on it. Whether or not N ships, the digest must not imply that
 ticket text is vetted. 8 of 8 agent-directed attacks pass any text filter,
 and the control that makes that survivable is egress control
-([`V070_EGRESS.md`](V070_EGRESS.md), v0.7.0).
+([`V070_EGRESS.md`](V070_EGRESS.md), v0.7.0; *v0.8.0 since the re-filing of
+2026-09-26*).
 
 ## Open, for Robert
 
@@ -157,4 +163,6 @@ and the control that makes that survivable is egress control
   that was delivered. Not assumed to be what he wants.
 - **Multi-Manager** is v0.7.0. One digest per Manager, per its own channel
   (A6), is the 0.6.0 shape; a combined standup across Managers is not
-  planned.
+  planned. *Since 2026-09-26 two Managers on one machine are in v0.6.0,
+  which makes this `V070_RELEASE_PLAN.md` MMQ5: two standups per window
+  ship as built, and whether to combine them is a v0.7.0 decision.*

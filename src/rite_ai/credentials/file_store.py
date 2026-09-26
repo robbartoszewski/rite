@@ -19,7 +19,7 @@ Linux alike**, so there is one code path and no keyring branch. Why each part:
   asked at Manager start breaks unattended, cron-started Managers, which are
   the case this store exists to serve. And it protects only at rest: a
   compromised Manager gets the decrypted value either way.
-- **The declared direction is the credential broker in v0.7.0**, where
+- **The declared direction is the credential broker in v0.8.0**, where
   nothing is stored for a Manager at all. This store is the v0.6.0 answer and
   is not meant to be entrenched.
 

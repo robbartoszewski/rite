@@ -1,5 +1,14 @@
 # Slack/Discord as the relay layer, 0.8.0 — Robert's design, recorded
 
+⚠ **RE-FILED 2026-09-26.** Robert re-scoped v0.8.0 as "feature-complete
+multi-machine" (`V080_RELEASE_PLAN.md`), which does not include this note.
+**The Slack control channel itself shipped in v0.6.0** (the Owner's DM,
+the broadcast channel, threads, delivery while stopped: the v0.6.0 plan's
+§ A, readiness D7), so "Nothing here is built" below is stale for that part.
+What this note adds beyond it, the escalation chain, self-reflection and
+per-topic channels, is in **no release yet** (`V070_RELEASE_PLAN.md`, "Fits
+neither release"). The file name still says 0.8.0.
+
 **Recorded, not derived.** Robert's shape for the 0.8.0 relay, written down
 before it gets lost in a transcript. Nothing here is built. 0.8.0 also carries
 self-reflection (see `V070_MEMORY.md`, Analysis 8) and the v0.7.0 fixes; this
@@ -458,7 +467,8 @@ Not objections. Several of these are Robert's.
 
 8. **What happens to a message that arrives while no Manager is running?**
    ⚠ *Answered for Slack in v0.6.0 by design (A5, 2026-09-25; built, and the
-   delivery half not yet observed): the relay keeps each
+   delivery half not yet observed; *observed since, on macOS and on Linux,
+   readiness D7*): the relay keeps each
    conversation's cursor across runs, so the message is delivered at the next
    start's first turn, and each run posts a stop line when it ends. Queued,
    not refused, and said. The general question below stands for other

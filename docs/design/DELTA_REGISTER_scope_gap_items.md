@@ -57,6 +57,13 @@ Each row: finding · class of defect · what changed · evidence.
 
 ## Not fixed — deliberately out of scope, filed as follow-ups
 
+⚠ *UPDATED 2026-09-26: four of the five have been fixed since, and the list
+said nothing. `rite doctor` checks the CI workflow (`gate/ci.py`,
+`ci_workflow_status`); `cli/main.py` has a `__main__` guard
+(`tests/test_module_entry_point.py`); rite's own `.rite/review-checklist.md`
+is tracked; and `merge.py`'s docstring now retracts the quote. Still open:
+no `concurrency:` group on the generated workflow.*
+
 - `rite doctor` has no CI-workflow check, though it has `gate_hook_status` for the disarmable layer.
 - `python -m rite_ai.cli.main` exits 0 printing nothing (no `__main__` guard).
 - No `concurrency:` group on the generated workflow: N rapid pushes run N concurrent full-history scans. Cost, not correctness.

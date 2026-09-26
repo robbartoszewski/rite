@@ -6328,7 +6328,7 @@ def _other_managers_briefing(root: Path, manager: str) -> str:
     """The start prompt's section on the other Managers in this root, or "".
 
     Only in one root: with a `remote` the election decides the Owner, and
-    telling a Manager it is or is not the Owner would be a guess (v0.7.0).
+    telling a Manager it is or is not the Owner would be a guess (v0.8.0).
     """
     from rite_ai.config.managers import routing_owner, shares_one_root
     from rite_ai.config.models import ProjectConfig
@@ -6351,7 +6351,7 @@ def _router_for(root: Path, manager: str):
     `routing.deliver_routes` discards a non-Owner's requests and SAYS so, and a
     secondary that asks to route is exactly what an operator should see.
     None only with a `remote`, where the election decides the Owner and
-    routing on that lease is v0.7.0.
+    routing on that lease is v0.8.0.
     """
     from rite_ai.config.managers import routing_owner, shares_one_root
     from rite_ai.config.models import ProjectConfig
@@ -6496,7 +6496,7 @@ def _slack_listener(root: Path, manager: str):
     roles = list(config.coordination.manager_roles)
     owner_manager = routing_owner(roles)
     # With a `remote`, the listed Managers may be on other machines and the
-    # election decides the Owner — gating Slack on that lease is v0.7.0, and
+    # election decides the Owner — gating Slack on that lease is v0.8.0, and
     # guessing here would take Slack from a multi-machine project that has it.
     if (
         shares_one_root(config.coordination.remote)

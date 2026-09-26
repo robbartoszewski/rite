@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.17 · **Date:** 2026-09-26
+**Version:** 0.24.18 · **Date:** 2026-09-26
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -1845,7 +1845,9 @@ engine. Since `4ebbbd7` a Manager's pane runs inside a seatbelt profile that
 
 - **Broad project access** did not stop it. The profile grants the whole
   project tree, and that is also why the profile does **not** separate two
-  Managers in one root from each other (§5.4.8).
+  Managers in one root from each other (§5.4.8). *Partly since MM-2: each
+  profile now refuses another Manager's directory and every inbox, and flat
+  per-project state is still shared (§5.4.8, P1).*
 - **Attachability** did not stop it either. The tmux pane is created outside
   the boundary, and a human still attaches to it.
 - **Nesting was measured true** (`docs/design/spikes/B9-manager-sandboxing.md`):
@@ -1864,7 +1866,9 @@ unconfined, is now unreachable (its socket directory is denied by path); and
 signals are limited to the Manager's own sandbox. **One cross-project read is
 still open.** `~/.claude` is readable whole, so a Manager can read other
 projects' Claude transcripts. See `docs/design/V070_RELEASE_PLAN.md`, part 0
-and SB4. The remaining containment below, **what a Manager is permitted to
+and SB4. *Closed since `8a61989`: `~/.claude` is not granted any more, and a
+Claude Manager signs in from its own `CLAUDE_CONFIG_DIR`. On Linux the tmux
+server is still reachable, by accepted divergence (readiness D2).* The remaining containment below, **what a Manager is permitted to
 do**, still applies in full. The sandbox adds to it and replaces none of it.
 
 §5.3 gives Workers a sandbox. Managers do not get one, and this section is
@@ -1990,6 +1994,8 @@ not.** A Manager session carries `RITE_MANAGER` (`managers/__init__.py`,
 `MANAGER_ENV`), set on every session `rite start` creates. So a process can
 answer "which Manager am I". And `manager_dir()` gives each Manager
 `.rite/managers/<name>/`, where NEW state lives (the mailbox, the journal).
+*The mailbox has since left the tree, for `~/.rite/managers/<checkout>/<name>/mail/`
+(§5.4.8, 0.24.15).*
 **Existing per-project state has not moved**, and no 0.6.0 ticket moves it.
 Step 2 is carried to 0.7.0 as MM1 in `docs/design/V070_RELEASE_PLAN.md`. The
 text below is the analysis as written before either landed.
@@ -2086,7 +2092,11 @@ here.
 
 #### 5.4.8. Separation between Managers that share a root — the requirement (0.6.0 for two Managers on one machine)
 
-**Status: DECIDED (Robert, 2026-09-20: D-79, §9.14.9). Not enforced.**
+**Status: DECIDED (Robert, 2026-09-20: D-79, §9.14.9). Partly enforced**
+(0.24.18: this line said "Not enforced" after the state below had changed):
+P2 holds, pinned by a test on both platforms, with its tmux half open on
+Linux; P1 holds for the per-Manager directories and every inbox, not for
+flat state; P3 and P4 do not.
 ⚠ **Scope moved on 2026-09-26: two Managers on one machine are 0.6.0**
 (Robert). A Claude Manager as Owner, and a local secondary, in one root, is
 being built for 0.6.0. Several machines stay out of 0.6.0. **So the state
@@ -2210,7 +2220,7 @@ matched by path. The tickets and the open questions (where per-instance
 configuration lives, whether Workers belong to a Manager, a per-Manager
 worker cap) are in `docs/design/V070_RELEASE_PLAN.md`, track MM.
 
-### 5.5. Egress — where an agent may talk (0.7.0)
+### 5.5. Egress — where an agent may talk (0.8.0)
 
 **Status: DECIDED (Robert, 2026-09-25: D-99, D-100). Not built.** Until it
 ships, §6.6.3's warning stands unqualified. Design, measurements and open
@@ -2454,8 +2464,9 @@ dependency, not an inherited habit.
 
 ### 6.6. Ticket text reaching an agent — what is built, what is planned, and what is NOT vetted
 
-**Status: DECIDED 2026-09-25 (Robert, D-97, D-98). Planned for 0.6.0,
-sequenced LAST and droppable** (plan § N).
+**Status: DECIDED 2026-09-25 (Robert, D-97, D-98). BUILT in 0.6.0**: N1
+and N2 both landed and were observed (the v0.6.0 plan's § N). It was
+planned for 0.6.0, sequenced last and droppable, and was not dropped.
 
 **What rite does TODAY.** On rite's read paths (`rite board show`, `list`
 and `query`, and the Slack relay), ticket and Slack text is **NORMALISED**
@@ -2471,7 +2482,8 @@ else ships:
 any part of § N.**
 
 **What § N adds, IF it lands** (§6.6.1 and §6.6.2 below describe that design,
-not current behaviour). There are two separate things. **Neither makes ticket
+not current behaviour). *It landed: both subsections are marked BUILT, and
+"What rite does TODAY" above is current behaviour.* There are two separate things. **Neither makes ticket
 text safe, and this section exists as much to say that as to specify them.**
 §6.6.3 holds whether or not they land.
 
@@ -2553,11 +2565,13 @@ key". They read as ordinary ticket requirements, and **no text filter catches
 them**, because nothing in the words distinguishes them from legitimate work.
 
 **So a reader of this document must not conclude that ticket text is
-vetted.** Today it is neither normalised nor scanned. Even once § N is built,
+vetted.** Today it is neither normalised nor scanned. *(Written before § N
+was built. It is built now, so "today" is the next sentence's case.)* Even
+once § N is built,
 it is only normalised and phrase-scanned, and an instruction to exfiltrate,
 worded as a task, still reaches the agent unflagged. What limits the damage is not
 here. It is the command allowlist (C4) today, and destination control
-(§5.5, v0.7.0, decided and not built), which makes a fooled agent harmless
+(§5.5, v0.8.0, decided and not built), which makes a fooled agent harmless
 rather than trying to stop it being fooled.
 
 ## 7. Review convention and checklists
@@ -6045,7 +6059,8 @@ the channels (plan § A6) and the headers (§ A3).** The mailbox
 (`rite message`, `rite reply`, `rite replies`, `rite connect`) shipped in 0.5.1
 and 0.6.0. The Slack relay and the check-ins that use it are planned in
 `docs/design/V060_RELEASE_PLAN.md` § A and § K, with the design in
-`docs/design/V060_CHECKINS.md`.
+`docs/design/V060_CHECKINS.md`. *Both are built and observed in 0.6.0
+(`docs/design/V060_TAG_READINESS.md`, D7 and D8).*
 
 #### 9.16.1. Two separate questions, and neither answers the other
 
@@ -6273,7 +6288,8 @@ the number of Managers.
 
 **With a `remote`, none of this applies.** `coordination.managers` is also
 the election's priority list. Its names may be on other machines, and the
-lease decides the Owner. Gating Slack on the lease is v0.7.0, and until then
+lease decides the Owner. Gating Slack on the lease is v0.8.0 (LS1 in
+`docs/design/V080_RELEASE_PLAN.md`; it said v0.7.0 before 0.24.18), and until then
 such a project behaves as before.
 
 **The Owner routes, and cannot do it by writing an inbox (built).** No
@@ -6309,6 +6325,12 @@ outbox with its own cursor and delivers each message into the Owner's inbox:
 cycle prompt carried a secondary's reply written before the Owner started.
 
 ## 10. Credentials
+
+⚠ **SUPERSEDED IN 0.6.0 for where credentials are stored:** one 0600 file
+per user on every platform, no keychain, and no silent fall to the
+environment (`a732682`; `docs/design/V060_TAG_READINESS.md` Q6; the 0.6.0
+release notes). The paragraph below describes the store of 0.5.1 and
+earlier, and is kept until this section is rewritten.
 
 **OS keychain via Python `keyring`** (macOS Keychain, Linux Secret Service, Windows
 Credential Manager), with an explicit **environment-variable fallback** for headless
@@ -6758,7 +6780,7 @@ happened once already and left no trace until this review found it.
 | D-4 | Publish gate | **gitleaks + project rules** | Deterministic, zero tokens, seconds to run. Scans all content including docs and comments. Per-finding suppression, never global off. See §11.1 for the incident this exists for. |
 | D-5 | Semantic conflicts | **File-level claims for v1** | Semantic conflicts are rare enough to handle at review time. Revisit on measurement. |
 | D-6 | Expert unavailability | **Timeout and reroute** | Configurable timeout (~2 hours). Fallback to next-best match, then Owner. Block only if Owner explicitly requires a specific person. |
-| D-7 | Credentials | **OS keychain via `keyring`** | macOS Keychain / Linux Secret Service / Windows Credential Manager. Env-var fallback for headless. Easy rotation command. No credentials in config files. |
+| D-7 | Credentials | ⚠ **Superseded in 0.6.0 for the store: one 0600 file on every platform (`a732682`, §10's banner).** Originally: **OS keychain via `keyring`** | macOS Keychain / Linux Secret Service / Windows Credential Manager. Env-var fallback for headless. Easy rotation command. No credentials in config files. |
 | D-8 | Implementation language | **Python** | The upstream is Python + Bash. The transport is REST from Python. No reason to introduce Node.js/TypeScript for a coordination tool whose users are Claude Code sessions. |
 | D-9 | `rite add module` scope | **Local only; no remote repo creation** | Keeps auth surface to ticket read/write and code push. Users create remotes with their existing tool (`gh`, `glab`, etc.) and register the URL with rite. |
 | D-10 | CLI framework | **`click`** | Better than `argparse` for nested commands. Gives `--help` on every subcommand, exit codes, and type validation for free. |
@@ -6862,6 +6884,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.18 — release filing, and status lines that had fallen behind their own sections.** Robert re-scoped the next releases: v0.7.0 is "feature-complete single-machine" and v0.8.0 "feature-complete multi-machine" (`docs/design/V070_RELEASE_PLAN.md`, `docs/design/V080_RELEASE_PLAN.md`, new). So §5.5 (egress) and §6.6.3's pointer to it say 0.8.0, and so does §9.16.7's "gating Slack on the lease". §5.4.8's status line said "Not enforced" while its own table recorded P2 pinned and P1 partly held; it now says what holds. §6.6's status said "Planned for 0.6.0" and "IF it lands" after N1 and N2 were built and observed. §9.16's status said the relay and check-ins were planned; both are built. §5.4's opening still recorded `~/.claude` as readable (closed by `8a61989`) and the mailbox as in-tree. §10 described the keychain store that 0.6.0 replaced with one 0600 file; it carries a banner, and its text is not rewritten here. Each correction is marked in place, and nothing a section specifies was changed.
 
 **Changes in 0.24.17 — §9.16's rate table is measured.** The table was arithmetic from the 2-second tick; it now carries the real workspace's figures beside it (26, 52 and 79 `conversations.history` calls a minute for one, two and three relays on one app, with no 429; the first 429 at four relays, 104 a minute). It records that the relay ignores `Retry-After` and that nothing was lost under throttling. The line saying several Managers in one project multiply the rate, pending MMQ2, is replaced: MMQ2 is decided and only the Owner opens a relay, measured at 26 a minute with two Managers.
 

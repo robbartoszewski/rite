@@ -1,5 +1,11 @@
 # Memory, 0.7.0 — Robert's design, recorded
 
+⚠ **UNSCHEDULED since 2026-09-26.** Robert re-scoped v0.7.0 as
+"feature-complete single-machine" and v0.8.0 as "feature-complete
+multi-machine", and neither names memory or self-reflection
+(`V070_RELEASE_PLAN.md`, "Fits neither release"). The "0.7.0" and "0.8.0"
+below are the releases this note was written for.
+
 **Recorded, not derived.** This is Robert's shape for the 0.7.0 memory module,
 written down before it gets lost in a transcript. Nothing here is built. The
 analysis under each part is mine; it is aimed at what building will have to

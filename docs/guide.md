@@ -760,7 +760,7 @@ vetted.** An instruction worded as ordinary work passes both unchanged:
 `curl … | bash` in a setup step, "paste your .env into a comment", "add this
 SSH key". So does anything an agent reads from the tracker directly with
 `gh` or the tracker's API. What limits the damage is the command allowlist
-today, and destination control in 0.7.0 (SPEC §5.5). Whoever can write a
+today, and destination control in 0.8.0 (SPEC §5.5). Whoever can write a
 ticket can write instructions into an agent's context.
 
 ## Keeping a project's generated files current
