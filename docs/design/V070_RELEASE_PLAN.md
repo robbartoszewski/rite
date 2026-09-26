@@ -496,12 +496,29 @@ here as relayed.
 ## The design, settled by Robert on 2026-09-26 (final; it replaces every earlier shape in this track, including a `remote` axis)
 
 ```yaml
+# .rite/config.yaml (project)
 publish:
   strategy: pull_request   # commit | push | pull_request | push_to_shared
-  shared_repo:             # required when strategy is push_to_shared; no default
   squash: false
   # auto_merge: false      # opt-in, on top of pull_request only
+
+# .rite/modules.yaml (per MODULE: the shared repository is a remote, and
+# each rite module is its own repository with its own `url`)
+modules:
+  api:
+    path: api
+    url: git@client-host:client/api.git
+    publish:
+      shared_repo: git@our-host:team/api.git   # required for push_to_shared; no default
 ```
+
+- **`shared_repo` is per MODULE, not per project** (Robert: "because a
+  project can have multiple packages", then "rite module"). The term is
+  rite's own, **module**, in config and docs. No new concept: a rite module
+  already is one git repository with its own `url` (its origin), cloned per
+  Worker as `workers/<w>/<module>`. So a shared remote belongs beside that
+  `url`, and rule 3 compares a module's `shared_repo` with THAT module's
+  origin.
 
 - **`strategy` values are verbs, named rather than numbered.** A config
   saying `strategy: 2` tells a reader nothing, and names let a value be
@@ -521,8 +538,6 @@ publish:
   repository cannot be expressed. That is deliberate: a PR on a repository
   that is not the client's would be reviewed by nobody in particular. If it
   turns out to be needed, it is a fifth value, not a redesign.
-- **`shared_repo` is per project** (Robert): simpler, matches the rest of
-  the config, and it can be widened to per machine later if users want it.
 - **`squash` is orthogonal**, default off (below).
 - **Auto-merge is an opt-in flag on top of `pull_request`**, off by
   default, under the green-matched-to-SHA rule below. Robert checked this
@@ -532,6 +547,43 @@ publish:
   this weekend was in a mechanism that existed and had never been run.
   Auto-merge is gated hardest.
 
+### Open, for Robert: does `strategy` follow `shared_repo` down to the module?
+
+**Code-side view, from `main`:**
+- **Keyed per module today** (`config/models.py` `Module`, `modules.yaml`):
+  `path`, `url` (the module's own origin), `branch`, `description`, and
+  `commands`. A Worker's manifest picks a subset of modules.
+- **An override pattern already exists and fits.** `RecordedCommands`: "a
+  recorded command wins over the detected one for its own key only; an
+  unrecorded key falls back". A per-module `publish:` block that overrides
+  the project's keys one by one is the same shape. It would follow that
+  pattern, not fight it.
+- **Publishing is per repository anyway.** A push or a PR happens per module
+  repository, so rite applies a strategy per module at publish time whether
+  or not the config says so.
+- **Routing reads no module configuration** (`managers/routing.py` never
+  names modules). A ticket names a module only through an OPTIONAL
+  `module:<name>` label, at most one, which only the distribution refusal
+  reads (`coordination/refusal.py`, marked there as a proposal).
+
+**What a per-module strategy costs.** Resolution itself is cheap. It is
+rite's deterministic part, at publish time, per module repository, where
+the push or PR already happens. The Owner's merge decision is per PR, so
+per module repository, and needs no project-wide answer. **Not cheap is
+one task touching two modules with different strategies**, for example one
+committed locally and one opened as a PR. Nothing maps a finished task to
+its modules today except the diffs themselves: which module repositories
+gained commits. A secondary's completion report would then have to carry a
+per-module outcome, and the routing design would have to read module
+configuration it does not read today.
+
+**Recommendation to put to Robert: the lean holds.** Project default, with
+an optional per-module override, resolved key by key like `commands`.
+State one rule with it: **a task touching several modules is published per
+module under each module's own strategy, and the completion report lists
+each.** Every module publishing the same way (the common case) then says
+nothing extra, and the one-public, one-client-owned case is expressible.
+
 ### 🔴 Three rules on `shared_repo`: part of the design, not implementation detail
 
 1. **No default, ever.** Not `origin`, not a derived name. rite's users
@@ -539,7 +591,7 @@ publish:
    the thing they are paying to avoid. A helpful guess harms exactly them.
 2. **Refuse at start, with the reason,** when `strategy: push_to_shared`
    is set and `shared_repo` is not. The same shape as the missing
-   `claude_token` refusal, which names the fix.
+   `claude_token` refusal: it names the fix and the module.
 3. **Refuse when `shared_repo` resolves to the same remote as `origin`.**
    Someone will configure that by accident eventually, and it would
    silently INVERT the strategy's whole purpose: "never touch the client's
