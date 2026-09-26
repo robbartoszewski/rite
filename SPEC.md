@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.13 · **Date:** 2026-09-26
+**Version:** 0.24.14 · **Date:** 2026-09-26
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -2110,11 +2110,40 @@ be tested:
 
 **State on `main`, measured 2026-09-25 at `9862b59`, and reproduced at `8d5fc22` and again after `7ae2ecc` changed the profile:**
 
-- **P2 holds.** With two Managers' profiles in one root, killing the other
+- **P2 holds, and is now PINNED BY A TEST BETWEEN TWO MANAGERS on both
+  platforms.** With two Managers' profiles in one root, killing the other
   Manager's engine and driving or killing its tmux session were all
   refused, and the other Manager survived. It holds by exactly the two
   mechanisms named above: `(target same-sandbox)` signals and the denied tmux
-  socket. It is not yet pinned by a test between two Managers.
+  socket.
+
+  **macOS** — `tests/test_the_manager_profile_denies_what_it_should.py`,
+  `TestP2BetweenTwoManagersSharingARoot`: six attacks from `alpha`'s profile
+  at `beta`'s (TERM, KILL, a `pkill -f` broad enough to match a sibling's
+  engine, and tmux send-keys / kill-session / kill-server), plus the control
+  that `alpha` can still signal its own child — without which all six would
+  pass on a profile that forbade signalling altogether.
+
+  **Linux** — `tests/test_landlock_really_confines.py`, a class of the same
+  name: the signal half only, with the victim inside Manager B's OWN Landlock
+  domain rather than unconfined, and the same own-child control. **The tmux
+  half is not tested there because it is OPEN on Linux** (Landlock bounds
+  opening files and does not govern `connect(2)`); that hole is asserted open
+  in `TestTheTwoEscapes` and stated once rather than twice.
+
+  ⚠ **The tests that existed before measured the boundary against a
+  BYSTANDER** — an unconfined process, or the Manager's own children. Neither
+  is the property this section states, and a change that separated a Manager
+  from the operator while letting two Managers reach each other would have
+  passed all of them.
+
+  ⚠ **Both halves are mutation-tested, and both found a defect in the
+  measurement rather than in the boundary.** Widening the macOS grant to a
+  blanket `(allow signal)` showed every "the sibling survived" assertion
+  still passing, because `kill -0` succeeds for a ZOMBIE — the victim was
+  `Z <defunct>` and answering yes until it was reaped. `ps` and `/proc`
+  report the state instead. Dropping `SCOPE_SIGNAL` on Linux, while keeping
+  another scope so the ruleset still builds, fails the Linux test.
 - **P1 holds for the per-Manager directories and every inbox, and not for
   flat per-project state** (updated 2026-09-26, MM-2). Each Manager's profile
   now refuses writes under `.rite/managers/` except its own directory, and
@@ -6788,6 +6817,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.14 — §5.4.8's P2 is pinned by a test between two Managers, on both platforms.** The section had recorded P2 as measured but "not yet pinned by a test between two Managers", and the tests that existed measured the boundary against a BYSTANDER — an unconfined process, or the Manager's own children — so a change that separated a Manager from the operator while letting two Managers reach each other would have passed all of them. macOS: `TestP2BetweenTwoManagersSharingARoot` in `test_the_manager_profile_denies_what_it_should.py`, six attacks from one profile at the other plus an own-child control. Linux: a class of the same name in `test_landlock_really_confines.py`, the signal half only, with the victim inside Manager B's own Landlock domain; the tmux half is OPEN on Linux and stays asserted open in `TestTheTwoEscapes` rather than restated. Both mutation-tested, and both mutations found a defect in the MEASUREMENT: `kill -0` succeeds for a zombie, so "the sibling survived" passed while the sibling was `Z <defunct>`. `ps` and `/proc` are used instead. Also corrects a `landlock.py` comment that claimed the per-Manager credential directory was "not granted by this backend at all" — true before `57469b8`, false after it, and contradicted by the code twenty lines above it.
 
 **Changes in 0.24.13 — §5.4.8's P1: no Manager writes a Manager's inbox.** Each Manager's profile refuses writes under `.rite/managers/` except its own directory, and refuses its own `mail/in` too. This matters because an inbox write is an instruction. P1 now holds for per-Manager directories and every inbox, and not for flat per-project state, which is still shared. The "measured not to" paragraph is kept and marked as the measurement before the change.
 
