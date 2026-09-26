@@ -376,6 +376,10 @@ at two ceilings you had to type — `--sessions` (how many) and `--minutes`
 (how long), neither of which has a default. Nothing about it is scheduled and
 nothing survives your shell.
 
+**A Manager needs a ticket backend to run more than once.** With no board
+configured, `rite start` runs one session to help you set one up and does
+not start another, whatever `--sessions` says. It says so when it starts.
+
 A bare `rite start <manager>` **continues that Manager's last session** — the
 work it did yesterday is reachable today — and `--fresh` starts a new one
 instead. Nothing to continue is not an error: a first run, or a session the
