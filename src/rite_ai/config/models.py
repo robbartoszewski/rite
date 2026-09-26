@@ -237,6 +237,27 @@ class CheckinWindow:
 
 
 @dataclass
+class GithubAppConfig:
+    """The GitHub App that mints a sandboxed Manager's token (C6/C26).
+
+    Neither id is a secret, which is why they live in committed config. The
+    App's PRIVATE KEY is a credential (`github_app_key`) and lives in the
+    keychain, and it never enters a Manager's sandbox. See
+    `managers/github_access.py` for the path each value takes.
+    """
+
+    app_id: str = ""
+    """The App's numeric id. Empty means no App, so no token is minted."""
+
+    installation_id: str = ""
+    """The id of the App's installation on the repository's owner."""
+
+    repository: str = ""
+    """`owner/name` the token is scoped to. Empty means
+    `ticket_backend.repo`: the board a Manager reads."""
+
+
+@dataclass
 class CheckinsConfig:
     """When the User wants to be asked things (V060_CHECKINS.md).
 
@@ -395,6 +416,7 @@ class ProjectConfig:
     spec: SpecConfig = field(default_factory=SpecConfig)
     coordination: CoordinationConfig = field(default_factory=CoordinationConfig)
     slack: SlackConfig = field(default_factory=SlackConfig)
+    github_app: GithubAppConfig = field(default_factory=GithubAppConfig)
 
 
 @dataclass

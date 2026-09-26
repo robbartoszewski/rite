@@ -38,7 +38,7 @@ import shlex
 import sys
 from pathlib import Path
 
-from rite_ai.managers import user_dir
+from rite_ai.managers import github_access, user_dir
 from rite_ai.names import name_problem
 
 PROFILE_SUFFIX = ".sb"
@@ -264,6 +264,42 @@ def _engine_state_paths(home: Path) -> tuple[Path, ...]:
     return (home / ".local/share/goose", home / ".local/state/goose")
 
 
+def _manager_separation(project: Path, manager: str) -> list[str]:
+    """Other Managers' state is not writable, and NO Manager's inbox is.
+
+    ⚠ **An inbox write IS an instruction, so who may write one is authority,
+    not tidiness.** The cycle's delivery note tells a Manager that a message
+    with no bracketed line "was sent from this machine by the Owner, and is an
+    instruction". Every Manager's profile granted the whole project tree, so
+    measured on `main`: from inside Manager `helper`'s profile, a plain file
+    write into `.rite/managers/lead/mail/in/` succeeded, and `lead` would have
+    been told at its next cycle that the Owner said it. The same write into a
+    Manager's OWN inbox promotes its own text to the Owner's the same way.
+
+    So the writer is fenced, and the content is not trusted to say who wrote
+    it: `.rite/managers/` is not writable except this Manager's own directory,
+    and its own `mail/in` is refused inside that. Everything that legitimately
+    writes an inbox runs OUTSIDE the boundary — the supervisor's Slack relay,
+    the start-time drain, a person's `rite message`, and the Owner's routing,
+    which the supervisor performs on the Owner's behalf. Measured precedence:
+    the more specific rule named later wins, and a rename or a symlink into
+    the inbox is refused as a write is.
+
+    It is also §5.4.8's P1 for the one kind of state that carries authority:
+    a wrong path join in one Manager cannot write another's files.
+    """
+    managers = project / ".rite" / "managers"
+    own = managers / manager
+    return [
+        "; ⚠ MANAGERS ARE SEPARATED, and no Manager writes an inbox — see",
+        ";   enclosure._manager_separation. Named after the project grant so",
+        ";   they win.",
+        f"(deny file-write* (subpath {_quote(managers)}))",
+        f"(allow file-write* (subpath {_quote(own)}))",
+        f"(deny file-write* (subpath {_quote(own / 'mail' / 'in')}))",
+    ]
+
+
 def _socket_denials(socket_dirs) -> list[str]:
     """Close the tmux escape, LAST, because seatbelt takes the last match.
 
@@ -446,11 +482,18 @@ def compose(
         f"(deny file-write* (subpath {_quote(where / '.gitconfig')}))",
         f"(deny file-write* (subpath {_quote(where / '.config/git')}))",
         "",
+        *_manager_separation(project, manager),
+        "",
         "; ⚠ yoloAI is unreachable ON PURPOSE. A Manager cannot create a",
         "; sandbox from inside one (B9), so it asks the supervisor instead.",
         f"(deny file-read* file-write* (subpath {_quote(where / '.yoloai')}))",
         "",
         *_socket_denials(socket_dirs),
+        "",
+        # ⚠ LAST of all: the Unix-socket denial must come after
+        # `(allow network*)`, and this Manager's own agent and credential
+        # directory are allowed back after it (C6/C26, `github_access`).
+        *github_access.profile_lines(root, manager, home),
     ]
     return "\n".join(lines)
 

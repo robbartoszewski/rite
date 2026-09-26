@@ -18,6 +18,7 @@ from .models import (
     CoordinationConfig,
     CredentialsConfig,
     ExpertiseEntry,
+    GithubAppConfig,
     HeartbeatConfig,
     Module,
     PoolConfig,
@@ -163,6 +164,7 @@ _CONFIG_SECTIONS = {
     "heartbeat": _fields(HeartbeatConfig),
     "watchdog": _fields(WatchdogConfig),
     "slack": _fields(SlackConfig),
+    "github_app": _fields(GithubAppConfig),
     "pool": _fields(PoolConfig),
     "sandbox": _fields(SandboxConfig),
     "budget": _fields(BudgetConfig),
@@ -359,6 +361,9 @@ def parse_config(path: Path) -> ProjectConfig | ParseError:
     slack_problem = _slack_problem(raw.get("slack", {}))
     if slack_problem:
         return ParseError(str(path), slack_problem)
+    app_problem = _github_app_problem(raw.get("github_app", {}))
+    if app_problem:
+        return ParseError(str(path), app_problem)
 
     unknown = _unknown_config_key(raw)
     if unknown:
@@ -452,6 +457,13 @@ def parse_config(path: Path) -> ProjectConfig | ParseError:
         )
         if isinstance(hb_raw, dict)
         else HeartbeatConfig()
+    )
+
+    app_raw = raw.get("github_app") or {}
+    github_app = GithubAppConfig(
+        app_id=str(app_raw.get("app_id") or ""),
+        installation_id=str(app_raw.get("installation_id") or ""),
+        repository=str(app_raw.get("repository") or ""),
     )
 
     slack_raw = raw.get("slack") or {}
@@ -583,6 +595,7 @@ def parse_config(path: Path) -> ProjectConfig | ParseError:
         heartbeat=heartbeat,
         watchdog=watchdog,
         slack=slack,
+        github_app=github_app,
         pool=pool,
         sandbox=sandbox,
         budget=budget,
@@ -594,6 +607,32 @@ def parse_config(path: Path) -> ProjectConfig | ParseError:
 
 _SLACK_USER = re.compile(r"^[UW][A-Z0-9]{2,}$")
 _SLACK_CHANNEL = re.compile(r"^(#[a-z0-9][a-z0-9._-]*|[CG][A-Z0-9]{2,})$")
+
+
+def _github_app_problem(raw: object) -> str:
+    """What is wrong with `github_app:`, or "" (C6/C26).
+
+    Checked here because each mistake is otherwise a 404 from GitHub at the
+    first `rite start`, naming neither the key nor the file.
+    """
+    if raw in (None, {}):
+        return ""
+    if not isinstance(raw, dict):
+        return "'github_app' must be a mapping"
+    app_id = str(raw.get("app_id") or "")
+    inst = str(raw.get("installation_id") or "")
+    repo = str(raw.get("repository") or "")
+    for key, value in (("app_id", app_id), ("installation_id", inst)):
+        if value and not value.isdigit():
+            return f"github_app.{key} {value!r} is not a number, as GitHub shows it"
+    if app_id and not inst:
+        return (
+            "github_app.app_id is set and installation_id is not — the token is "
+            "minted for an installation, shown in the App's installation URL"
+        )
+    if repo and (repo.count("/") != 1 or not all(repo.split("/"))):
+        return f"github_app.repository {repo!r} is not owner/name"
+    return ""
 
 
 def _slack_problem(raw: object) -> str:

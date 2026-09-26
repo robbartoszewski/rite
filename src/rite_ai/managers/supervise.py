@@ -43,6 +43,7 @@ from rite_ai.managers import (
     designated,
     designation_path,
     forget_instance,
+    github_access,
     manager_dir,
 )
 
@@ -54,7 +55,7 @@ from rite_ai.managers import (
 from rite_ai.managers.boundaries import UnsupportedPlatform, boundary_for
 from rite_ai.managers.broker import take_requests
 from rite_ai.managers.engines import spelling_for
-from rite_ai.managers.mailbox import INBOX, delivery_note, how_to_reply, send
+from rite_ai.managers.mailbox import INBOX, delivery_note, how_to_reply, put_back, send
 from rite_ai.managers.mailbox import take as take_mail
 from rite_ai.managers.mailbox import waiting as mail_waiting
 from rite_ai.managers.permissions import (
@@ -501,6 +502,32 @@ def _resume_id_source(engine: str, agent: str = ""):
     return chosen
 
 
+def _designation_is_ours(
+    root: Path, manager: str, designation: str, handle_is_ours: bool
+) -> bool:
+    """Whether a designation belongs to THIS project — and, where it can be
+    told, THIS Manager.
+
+    ⚠ **C29: C8's check only knew one source of handle.** For Claude the
+    provider assigns the id, so membership is answered from Claude's
+    transcripts (`belongs_to_project`). For an engine whose handle rite
+    CHOOSES (Goose, `Spelling.handle_is_ours`), the handle is
+    `session_name(root, manager)` and never appears in Claude's transcripts —
+    so every Goose Manager's own designation failed the check and every run
+    started FRESH, printing that its own session "is not one of this project's
+    conversations". The local secondary in the two-Manager shape could never
+    continue across runs, which is the property `rite start X` exists for.
+
+    For a rite-chosen handle the check is STRONGER than C8's: the name rite
+    would choose here embeds the project's hash AND the Manager's name, so
+    equality answers "this project" and "this Manager" at once — the half C8's
+    docstring says it could not answer for Claude.
+    """
+    if handle_is_ours:
+        return designation == session_name(root, manager)
+    return belongs_to_project(root, designation)
+
+
 def _default_resume_id(root: Path, manager: str, since: float = 0.0) -> str:
     """The provider session to carry on from — for an engine that ASSIGNS one.
 
@@ -599,8 +626,10 @@ def supervise(
     starter: object = None,
     engine_ready: object = None,
     slack: object = None,
+    github: object = None,
     resume_id_for: object = None,
     broker: object = None,
+    router: object = None,
     poll: float = POLL_SECONDS,
     now: object = None,
 ) -> SuperviseResult:
@@ -709,7 +738,9 @@ def supervise(
     # user starts over, works all day, and tomorrow's bare `rite start`
     # silently returns to the conversation they deliberately abandoned.
     resume_from = "" if fresh else designated(root, manager)
-    foreign = bool(resume_from) and not belongs_to_project(root, resume_from)
+    foreign = bool(resume_from) and not _designation_is_ours(
+        root, manager, resume_from, spelling_for(engine, agent).handle_is_ours
+    )
     if foreign:
         # ⚠ C8. Said in its own words, not `_could_not_continue`'s: "the
         # provider forgot it" and "it is not this project's" are different
@@ -763,6 +794,11 @@ def supervise(
                 f"({len(cycles)} session(s) started)",
                 cycles,
             )
+
+        if github is not None:
+            # Each cycle starts on a token with most of its hour left.
+            for line in github.refresh():
+                say(line)
 
         if callable(engine_ready):
             # ⚠ BEFORE `take_mail`. Taking mail deletes it, so a cycle
@@ -876,6 +912,11 @@ def supervise(
             boundary = checkins.at_boundary(root, manager)
             if boundary.said:
                 say(boundary.said)
+            if callable(router):
+                # Before the inbox is taken: a secondary's reply written while
+                # this Owner was between cycles, or not running at all, belongs
+                # in THIS cycle's instruction, not the one after.
+                router(say)
             waiting_for_it = take_mail(root, manager, INBOX)
             if waiting_for_it:
                 say(f"delivering {len(waiting_for_it)} message(s) to {manager!r}")
@@ -978,6 +1019,17 @@ def supervise(
                     window_seconds=window_seconds,
                 )
             if not result.ok:
+                # ⚠ THE MAIL GOES BACK. It was taken to compose this cycle's
+                # instruction, and this cycle did not start — so nothing
+                # delivered it. Observed losing a routed instruction when a
+                # second `rite start` for a running Manager was refused.
+                if waiting_for_it:
+                    kept = put_back(waiting_for_it)
+                    say(
+                        f"{kept} of {len(waiting_for_it)} message(s) taken for "
+                        f"this cycle put back in {manager!r}'s inbox — the "
+                        f"cycle did not start, so none was delivered"
+                    )
                 return SuperviseResult(False, result.message, cycles)
 
             live = result.session
@@ -1012,6 +1064,14 @@ def supervise(
             while liveness(result.session).alive:
                 if deadline is not None and clock() >= deadline:
                     break
+                if callable(router):
+                    # ⚠ ROUTING, in the wait loop rather than at the cycle
+                    # boundary: it is file work, not a sandbox launch, and the
+                    # Owner's cycles are long — a secondary should not wait for
+                    # one to end to receive what it was handed. The secondary
+                    # still reads it at ITS next boundary, by the one hook.
+                    # `routing.deliver_routes`: the identity is this supervisor's.
+                    router(say)
                 if slack is not None:
                     # ⚠ **INTO THE INBOX, NOT STRAIGHT INTO THE PROMPT.** A
                     # Slack message becomes an ordinary mailbox file through
@@ -1038,6 +1098,13 @@ def supervise(
                         say(line)
                     for line in getattr(slack, "news", list)():
                         say(line)
+                # ⚠ C6/C26: the token is re-minted BEFORE it lapses, from
+                # here, so a long cycle does not run out under the Manager.
+                # A failure is SAID, and the old file is left: the Manager
+                # then gets a loud 401, never a silent fall to anonymous.
+                if github is not None:
+                    for line in github.refresh():
+                        say(line)
                 if not cycle.mail_waiting and mail_waiting(root, manager, INBOX):
                     cycle.mail_waiting = True
                     say(
@@ -1052,6 +1119,10 @@ def supervise(
                 root, cycle.started_at, say, engine, agent, live_pane
             )
             _honour_worker_requests(root, manager, broker, say)
+            if callable(router):
+                # And once more at the boundary, for a request written in the
+                # cycle's last two seconds.
+                router(say)
             _say_if_the_sandbox_refused(root, manager, live_pane, say)
 
             how = ending(result.session, human_was_present=attended, pane=live_pane)
@@ -1420,6 +1491,10 @@ def _default_starter(
             ),
             "TMPDIR": str(confinement.engine_tmp(root, manager)),
             **model_env,
+            # C6/C26: WHERE the GitHub credential is, never the credential.
+            # Derived from what `github_access.open_access` left on disk, so
+            # there is no argument to drop.
+            **github_access.pane_environment(root, manager),
         },
         engine=engine,
         command=confinement.wrap(

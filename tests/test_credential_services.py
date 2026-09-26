@@ -58,11 +58,34 @@ class TestEveryServiceCarriesItsOwnFields:
         destination env var. rite must not need to know more than that.
 
         Config fields are exempt — they are not injected, they are written
-        to config.yaml, which is the point of the split."""
+        to config.yaml, which is the point of the split.
+
+        ⚠ So is the C6/C26 App key, BY NAME and for the opposite reason: it
+        must never be injected anywhere. `worker_environment` hands a Worker
+        every field that has an `env`, so giving it one would put the key
+        that mints tokens in every Worker's sandbox. The next
+        test pins that they are not."""
+        never_injected = {"github_app_key"}
         for svc in SERVICES.values():
             for f in svc.secrets:
+                if service_key(svc.name, f.name) in never_injected:
+                    assert not f.env, f"{svc.name}.{f.name} must NOT be injected"
+                    continue
                 assert f.env, f"{svc.name}.{f.name} has no destination env var"
                 assert f.env.isupper()
+
+    def test_the_github_app_key_never_reaches_a_worker(self, monkeypatch):
+        """Measured through the function that builds a Worker's environment,
+        with every credential present: the App key's value does not appear."""
+        from rite_ai.credentials import store
+
+        monkeypatch.setattr(
+            store, "get_scoped", lambda key, credentials=None: f"VALUE-OF-{key}"
+        )
+        values = set(store.worker_environment().values())
+        assert "VALUE-OF-github_app_key" not in values
+        # The control: the same stub does deliver an ordinary credential.
+        assert "VALUE-OF-github_token" in values
 
     def test_config_fields_are_not_secrets_and_name_a_config_path(self):
         """A JIRA site and board key are the same for the whole team and

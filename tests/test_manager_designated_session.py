@@ -714,3 +714,52 @@ class TestADesignationMustBeThisProjects:
         calls, said = self._run(tmp_path, monkeypatch, "MINE-1", own=True)
         assert calls[0].resume_id == "MINE-1", calls
         assert "not one of this project's" not in said, said
+
+
+class TestAGooseManagerContinuesItsOwnDesignation:
+    """C29. C8's check read only Claude's transcripts, so a Goose Manager's own
+    designation — a name rite chose — failed it, and every run started FRESH
+    with a false "not one of this project's conversations". Observed through
+    `rite start` twice with a stub goose: before, run 2 launched `goose run -n
+    <name> -i …`; after, `goose run -n <name> -r -i …`."""
+
+    def _run(self, tmp_path, monkeypatch, designation):
+        import rite_ai.managers.supervise as sup
+        from rite_ai.managers.session import session_name
+
+        root = _project(tmp_path)
+        _quiet(monkeypatch, sup)
+        designate(root, "small", designation(root, session_name))
+        calls: list = []
+        said: list[str] = []
+        supervise(
+            root,
+            "small",
+            engine="local:small",
+            agent="goose",
+            prompt="go",
+            max_sessions=1,
+            window_seconds=0,
+            verdict=lambda _r: "ready",
+            starter=_starter(calls),
+            note=said.append,
+        )
+        return calls, " ".join(said)
+
+    def test_its_own_name_is_continued(self, tmp_path, monkeypatch):
+        calls, said = self._run(
+            tmp_path, monkeypatch, lambda root, name: name(root, "small")
+        )
+        from rite_ai.managers.session import session_name
+
+        assert calls[0].resume_id == session_name(tmp_path, "small"), calls
+        assert "not one of this project's" not in said, said
+
+    def test_another_managers_name_is_not(self, tmp_path, monkeypatch):
+        """Stronger than C8 could be for Claude: the name embeds the Manager,
+        so a sibling's designation is refused, not only another project's."""
+        calls, said = self._run(
+            tmp_path, monkeypatch, lambda root, name: name(root, "other")
+        )
+        assert calls[0].resume_id == "", calls
+        assert "not one of this project's" in said, said

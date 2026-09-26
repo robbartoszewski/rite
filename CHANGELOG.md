@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+**0.6.0 in one paragraph.** A Manager now runs inside a sandbox, behind a
+permission allowlist, and asks rite for Workers rather than starting them.
+It can run on a local model through Goose. You can talk to it from Slack,
+and it saves questions that do not block it for a few check-in windows a
+day, each opening with a standup built from what rite recorded. Tracker and
+Slack text reaches it as the tracker shows it. **Tested on macOS.** On Linux
+a Manager cannot start in this release; see Known issues.
+
+**How to read this entry.** Each feature says what was run to check it.
+"Observed" means a person ran it through `rite start` or the CLI on a real
+project. Where a part was run only with a stand-in engine or a stand-in for
+Slack, it says so.
+
 ### ⚠ BEHAVIOUR CHANGE ON UPGRADE — a Manager is no longer ungated
 
 **0.5.1 launched every Manager with `--dangerously-skip-permissions`. This release
@@ -63,21 +76,44 @@ and the running list cannot drift apart:
 - to **narrow**, add to `permissions.deny` — deny beats allow, and it is
   the only direction a merge cannot express by adding.
 
-**To keep 0.5.1's behaviour**, put `--dangerously-skip-permissions` back
-yourself; rite no longer passes it for you.
+**There is no setting that restores 0.5.1's behaviour.** rite no longer
+passes `--dangerously-skip-permissions`, and it has no option to pass it
+for you. Widen the list as above instead.
+
+**This allowlist is Claude's.** A Goose Manager (below) has no per-command
+list: Goose runs whole-session in `GOOSE_MODE=auto`, which rite sets. For
+Goose, the sandbox is the boundary.
+
+**Observed** on 2026-09-24 against real Claude on five benchmark tasks. The
+first run scored 0/5, because the list allowed commands and not Claude's
+own file edits. After the fix it scored 5/5, with nothing refused. With
+rite's list, `rite --version` ran and `curl --version` was refused. Without
+the list, `rite --version` was refused, which shows the list actually
+arrives.
 
 ### ⚠ BEHAVIOUR CHANGE ON UPGRADE — a Manager runs inside a sandbox
 
 **0.5.1 ran a Manager unsandboxed. This release runs it inside a macOS
 seatbelt profile** that rite writes for each Manager, under `.rite/user/`,
 and rewrites on every run. The pane's command becomes
-`sandbox-exec -f <profile> <engine …>`.
+`sandbox-exec -f <profile> <engine …>`. **macOS only:** `sandbox-exec` does
+not exist on Linux, and this release has no Linux equivalent (Known issues).
 
 **A Manager no longer starts Workers itself.** A sandbox cannot start another
 sandbox inside it, so the Manager writes a request, and `rite start`'s
 supervisor, outside the sandbox, checks it and runs `rite sandbox start`. A
 request names a declared Worker and a ticket and nothing else. The Worker
 starts **when the Manager's current cycle ends**, and the Manager is told so.
+**Observed:** a sandboxed Goose Manager wrote a request, and a Worker
+sandbox really started from it.
+
+**A Manager's instructions name rite by its full path**, the `rite` that
+started it, not whichever `rite` is first on PATH. On a machine with an
+older rite installed, a Manager used to run that one and fail on commands it
+lacked. The sandbox lets that `rite` run wherever it is installed.
+**Observed** for a uv tool install, a pipx install and a source checkout,
+each through `rite start`, with a real Manager running `rite reply` inside
+the sandbox.
 
 **What the profile keeps out:** your home directory outside the paths it
 names, your SSH keys, and other projects outside `/tmp`. The tmux server that
@@ -87,15 +123,52 @@ version and closed, and each was measured succeeding and then failing.
 
 **What it does NOT do, printed on every run:** it bounds files, not
 capability. The network is not confined. `/tmp` is readable and writable. A
-Manager can run `rite`, which does what you can do to this project. And
-`~/.claude` is readable, which includes **other projects' Claude
-transcripts**. Treat a Manager as having your network access and more of your
-files than the list suggests.
+Manager can run `rite`, which does what you can do to this project.
+**Not in that printed list, and measured:** `~/.claude` is readable whole,
+so a Manager can read **other projects' Claude transcripts**. Treat a
+Manager as having your network access and more of your files than the list
+suggests.
 
 **If something that worked in 0.5.1 now fails with `Operation not
 permitted`**, the likely cause is one of your own Claude Code hooks. Hooks
 still load inside the sandbox, and one that reaches outside the profile fails
 there. rite points at the profile's path when it sees this.
+
+### A Manager can run on a local model, through Goose
+
+A Manager role can name a local engine served over an OpenAI-compatible
+endpoint (ollama), with Goose as the agent that drives it:
+
+```yaml
+coordination:
+  managers: [small]
+  manager_roles:
+    - {name: small, engine: 'local:small', preset: lead,
+       endpoint: 'http://localhost:11434/v1', model: 'qwen3:8b', agent: goose}
+```
+
+`rite start small` then runs Goose on **that** model inside the Manager's
+sandbox, in `GOOSE_MODE=auto`. It checks the endpoint before every cycle,
+because Goose exits 0 when its provider is unreachable, so an exit code
+cannot tell a clean cycle from a dead endpoint. It reports what Goose
+refused in Goose's own terms.
+
+**Observed** through `rite start small` on this machine: Goose ran the
+declared model (`ollama qwen3:8b` in the pane) while the global Goose
+config named a different one; it completed cycles inside the sandbox; it
+ran `rite reply` itself, and the reply reached Slack; and a Worker
+requested from inside the sandbox started. A dead endpoint, a missing
+model and a model served at 4096 tokens each stopped `rite start` before it
+spent a session, and said which. A session Goose ended because it wanted
+an approval was reported as that, not as a clean cycle.
+
+⚠ **Set `OLLAMA_CONTEXT_LENGTH`** (at least 32768). At ollama's default
+of 4096, agents appear unable to call tools or remember the last turn. See
+the guide.
+
+⚠ **Only as a Manager, and only on macOS, in this release.** A local
+Worker is not in 0.6.0. Also see Known issues: in this release a Goose
+Manager starts a fresh conversation on every `rite start`.
 
 ### Two readers of one mailbox — `rite replies <manager>`
 
@@ -149,7 +222,10 @@ agent's own system prompt.
 
 It does not look like a setting. It looks like a model that cannot call tools
 and an agent that forgets the previous turn. `rite doctor` now asks the
-endpoint what window is actually in force and says so. See the guide.
+endpoint what window is actually in force and says so. ⚠ **Only for a model
+that is loaded.** For a model that is not loaded, or an endpoint that is not
+ollama, `doctor` currently says nothing about the window. Silence is not a
+pass. See the guide.
 
 ### Check-ins — most questions wait for a few windows a day
 
@@ -182,6 +258,17 @@ ticket, a session or a command. A Manager adds lines only with
 `rite checkin note --anchor <x> --observed "<what was seen>"`, which is
 refused without an anchor and shown as the Manager's statement, not as
 rite's observation.
+
+**How much of this was observed.** On real projects through the real CLI:
+the next window, including one that wraps past midnight; the standup's lines
+for real commits and a real Worker sandbox; a note refused without an
+anchor; and a missed window covered by the next standup. **Deferring,
+re-reading and withdrawing** were run through `rite start` with a stand-in
+engine that did what a Manager does. **A real model deciding what to defer
+and what to withdraw has not been observed yet.** Check-ins are posted to
+your Slack DM and mirrored to the broadcast channel, with answers taken
+from the DM thread. That part has been run only against a stand-in for
+Slack.
 
 With no daemon, a window that passes while no Manager runs posts nothing.
 The queue waits, `rite start` says how many questions are waiting and when
@@ -222,11 +309,41 @@ same DM, and together they would poll 60 times a minute against a limit of
 it let authority point at a channel anyone can post in. Use
 `slack.owner_user`.
 
+### Several Managers in one project — an Owner that routes, `rite route`
+
+One project root can run a Claude Manager as the **Owner** beside one or more
+secondaries, typically on a local model. **The Owner is the one Manager whose
+duties include `route`** (the `lead` preset has it; `executor` does not).
+Exactly one must hold it when several Managers share a root, and
+`rite doctor` says so when none or several do.
+
+- **Only the Owner reads and posts Slack.** A secondary opens no Slack
+  connection at all, and says so when it starts. Before this, every Manager
+  read the Owner's DM and would have acted on the same instruction.
+- **The Owner hands work down:** `rite route helper "…"`. The secondary gets
+  it at its next turn, marked as routed by the Owner.
+- **Replies come back up:** a secondary's `rite reply` reaches the Owner at
+  its next turn, marked as context from that Manager. A secondary has no
+  authority over the Owner.
+- ⚠ **No Manager can write a Manager's inbox — another's or its own.** A
+  message in an inbox is an instruction, so each Manager's sandbox refuses
+  the write, and `rite message` run by a Manager refuses and says what to
+  use instead. A person's `rite message` from their own shell works as
+  before.
+
+This applies when the project has no `coordination.remote`. With one, the
+Managers may be on other machines and the election decides the Owner, and
+nothing here changes. **A Manager that is already running keeps its opening
+instructions** until `rite start <manager> --fresh`, so it is not told about
+the others until then.
+
 ### Hidden text in tickets and Slack messages is shown, and injection phrases are reported
 
 Tracker UIs hide some of the text their APIs return. An agent reading that
 text could act on words a reviewer never saw. `rite board show`, `list` and
-`query`, and the Slack relay, now give an agent what the tracker shows:
+`query`, and the Slack relay, now give an agent what the tracker shows.
+**Observed** on a real GitHub issue. The Slack half is built and not yet
+observed, because it needs a person to send the characters:
 - invisible characters (zero-width spaces, bidi controls, fillers) are
   removed;
 - Unicode tag characters, which spell text that renders as nothing, are
@@ -245,6 +362,69 @@ passes both: `curl … | bash` in a setup step, "paste .env into a comment",
 "add this SSH key". So does any text an agent reads from the tracker
 directly (`gh issue view`) rather than through rite. Every standup says so.
 See SPEC §6.6.3.
+
+### Fixed
+
+- **A Manager ran whatever `rite` was first on PATH.** On a machine with an
+  older rite installed, it was told to run commands that version lacks and
+  got a usage error. Its instructions, a Worker the broker starts, and an
+  OS schedule installed by `rite scheduler install` now all name the `rite`
+  that is running. Observed for the instructions (above). For the schedule,
+  observed in what `rite scheduler install` writes, without installing into
+  launchd or cron.
+- **A designated session that no longer exists now really starts fresh**,
+  and says so. Before, the resume failed in the pane and the run reported
+  nothing useful. Observed through `rite start` with a stand-in engine,
+  against Claude's real "No conversation found" message.
+- **A continuation now names only this project's sessions.** A designation
+  pointing at another project's Claude conversation is refused, and the
+  run starts fresh and says why. (For Goose, see Known issues.)
+- **Claude transcripts are found for project paths containing `_` or `.`.**
+  Continuation silently started fresh for those projects.
+- **`rite doctor` tells "could not ask tmux" from "no loop is running"**,
+  and says `unknown` rather than reporting a loop as stopped. Observed with
+  the tmux server frozen.
+- **A refusal no longer repeats a credential tmux echoed back**, and only
+  named variables go onto tmux's command line, which every local account
+  can read with `ps`. Observed on real tmux.
+
+### Known issues
+
+- **Linux: a Manager cannot start.** Every Manager launch goes through
+  `sandbox-exec`, which exists only on macOS. On Linux the session exits
+  immediately. This release has no Linux boundary. A Landlock-based one is
+  being measured, and it does not close every route the macOS profile
+  closes: Landlock does not govern `connect(2)`, so a confined process could
+  still reach the tmux server's socket, which runs commands outside the
+  boundary (measured on Ubuntu 24.04). Workers on Linux are unchanged:
+  `rite init` leaves Worker sandboxing off there.
+- **A Goose Manager starts a fresh conversation on every `rite start`.**
+  Within one run its cycles continue. Across runs, rite's check that a
+  session belongs to this project reads only Claude's transcripts, refuses
+  Goose's own session name, and prints that the session "is not one of this
+  project's conversations". That message is wrong.
+- **A sandboxed Manager reaches GitHub without your credentials.** `gh`
+  starts inside the sandbox, but anonymously: 60 API requests an hour
+  (measured) and so no private repositories. `git push` over HTTPS uses
+  `gh` for its credential, so it has none to push with. How a
+  credential should reach a sandboxed Manager is not decided. A Claude
+  Manager's own login is inherited only when `rite start` is what starts
+  the tmux server.
+- **Other projects' Claude transcripts are readable from inside a
+  Manager's sandbox**, because `~/.claude` is granted whole. The printed
+  limitations do not say this.
+- **No way to start a Manager outside its sandbox.** If one of your own
+  Claude Code hooks or tools needs a path the profile does not grant, it
+  fails inside the sandbox, and there is no option to turn the sandbox off.
+- **The network is not confined**, and `/tmp` is readable and writable by
+  a Manager. Destination control is planned for 0.7.0.
+- **Ticket and Slack text is not vetted.** It is cleaned and scanned for
+  phrases (above), and an instruction worded as ordinary work still
+  reaches the Manager.
+- **`rite doctor` is silent about a local model's context window** when the
+  model is not loaded, or the endpoint is not ollama.
+- **Do not name a Manager `permissions`.** Its record would share a file
+  with the permission allowlist rite passes to every Manager.
 
 ## 0.5.1 (2026-09-21)
 

@@ -401,3 +401,47 @@ def test_a_human_pm_answers_questions_but_cannot_be_the_router():
     )
     problems = configuration_problems(list(roles))
     assert any("lease" in p for p in problems)
+
+
+# --- the Owner in one root: the single `route` holder --------------------------------
+
+
+def test_the_owner_is_the_one_manager_holding_route():
+    from rite_ai.config.managers import routing_owner
+
+    roles = _roles(
+        {"name": "lead", "engine": "claude", "preset": "lead"},
+        {"name": "helper", "engine": "claude", "preset": "executor"},
+    )
+    assert routing_owner(list(roles)) == "lead"
+
+
+def test_a_lone_manager_is_its_own_owner():
+    from rite_ai.config.managers import routing_owner
+
+    assert routing_owner(list(_roles("alpha"))) == "alpha"
+
+
+@pytest.mark.parametrize("presets", [("lead", "lead"), ("executor", "executor")])
+def test_zero_or_two_route_holders_is_no_owner_never_a_guess(presets):
+    """Picking by list order would hand Slack and routing to whichever Manager
+    a reorder put first."""
+    from rite_ai.config.managers import routing_owner
+
+    roles = _roles(
+        {"name": "a", "engine": "claude", "preset": presets[0]},
+        {"name": "b", "engine": "claude", "preset": presets[1]},
+    )
+    assert routing_owner(list(roles)) == ""
+    said = configuration_problems(list(roles), one_root=True)
+    assert any("hold 'route'" in p for p in said), said
+
+
+def test_the_route_rule_is_only_for_managers_that_share_a_root():
+    """`coordination.managers` is also the multi-machine election's list; with
+    a remote, the names may be on other machines and the lease picks."""
+    roles = _roles(
+        {"name": "a", "engine": "claude", "preset": "lead"},
+        {"name": "b", "engine": "claude", "preset": "lead"},
+    )
+    assert not any("hold 'route'" in p for p in configuration_problems(list(roles)))

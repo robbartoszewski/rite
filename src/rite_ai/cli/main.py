@@ -1869,6 +1869,19 @@ def _set_service(service_name: str, global_: bool, root, config) -> None:
     from rite_ai.credentials.services import SERVICES, service_key
 
     svc = SERVICES[service_name]
+    multiline = [f for f in svc.fields if f.multiline]
+    if multiline:
+        # A one-line prompt would take the first line of a private key and
+        # store that, which then fails far from here, at `rite start`.
+        for f in multiline:
+            click.echo(
+                f"'{service_key(svc.name, f.name)}' is several lines long, so it "
+                f"is read from standard input:\n"
+                f"  rite credential set {service_key(svc.name, f.name)} --stdin "
+                "< <file>",
+                err=True,
+            )
+        raise SystemExit(2)
     click.echo(f"{svc.label}")
     if svc.note:
         click.echo(f"  note: {svc.note}")
@@ -1927,6 +1940,17 @@ def _set_service(service_name: str, global_: bool, root, config) -> None:
     help="Credential value. Omit it — you will be prompted, and it stays out of argv.",
 )
 @click.option(
+    "--stdin",
+    "from_stdin",
+    is_flag=True,
+    default=False,
+    help=(
+        "Read the value from standard input, whole — for a multi-line key "
+        "(`rite credential set github_app_key --stdin < app.pem`). Never on "
+        "argv, never in a one-line prompt."
+    ),
+)
+@click.option(
     "--allow-unknown",
     is_flag=True,
     default=False,
@@ -1943,7 +1967,11 @@ def _set_service(service_name: str, global_: bool, root, config) -> None:
     ),
 )
 def credential_set(
-    name: str, value: str | None, allow_unknown: bool, global_: bool
+    name: str,
+    value: str | None,
+    from_stdin: bool,
+    allow_unknown: bool,
+    global_: bool,
 ) -> None:
     """Store credentials for a SERVICE — `rite credential set jira` — or
     for one individual key. Secrets are prompted for, never passed as an
@@ -2071,6 +2099,22 @@ def credential_set(
             err=True,
         )
         raise SystemExit(2)
+
+    # ⚠ **A private key is several lines, and a one-line prompt cannot
+    # take it.** `--value` would put it on argv, where `ps` shows it to
+    # every local account. So a multi-line credential comes in on stdin,
+    # whole, and nowhere else.
+    if from_stdin:
+        if value is not None:
+            click.echo("--stdin and --value are two sources; give one.", err=True)
+            raise SystemExit(2)
+        value = click.get_text_stream("stdin").read().strip()
+        if not value:
+            click.echo(
+                f"nothing on standard input — '{name}' was not stored.", err=True
+            )
+            raise SystemExit(2)
+        value += "\n"
 
     # Prompt only AFTER the key is known to be good. Validating second
     # made the reporter type their secret twice and confirm it before
@@ -6075,6 +6119,92 @@ def _loop_verdict(root: Path, board=None) -> str:
         return "unknown"
 
 
+def _other_managers_briefing(root: Path, manager: str) -> str:
+    """The start prompt's section on the other Managers in this root, or "".
+
+    Only in one root: with a `remote` the election decides the Owner, and
+    telling a Manager it is or is not the Owner would be a guess (v0.7.0).
+    """
+    from rite_ai.config.managers import routing_owner, shares_one_root
+    from rite_ai.config.models import ProjectConfig
+    from rite_ai.config.parse import ParseError, parse_config
+    from rite_ai.managers.routing import briefing
+
+    parsed = parse_config(root / ".rite" / "config.yaml")
+    config = parsed if not isinstance(parsed, ParseError) else ProjectConfig()
+    if not shares_one_root(config.coordination.remote):
+        return ""
+    roles = list(config.coordination.manager_roles)
+    return briefing(manager, routing_owner(roles), roles)
+
+
+def _router_for(root: Path, manager: str):
+    """The routing step for this Manager's supervisor, or None: route the
+    Owner's requests down (MM-3), and bring the others' replies up (MM-4).
+
+    ⚠ **Built for EVERY Manager in one root, not only the Owner** —
+    `routing.deliver_routes` discards a non-Owner's requests and SAYS so, and a
+    secondary that asks to route is exactly what an operator should see.
+    None only with a `remote`, where the election decides the Owner and
+    routing on that lease is v0.7.0.
+    """
+    from rite_ai.config.managers import routing_owner, shares_one_root
+    from rite_ai.config.models import ProjectConfig
+    from rite_ai.config.parse import ParseError, parse_config
+    from rite_ai.managers.routing import collect_reports, deliver_routes
+
+    parsed = parse_config(root / ".rite" / "config.yaml")
+    config = parsed if not isinstance(parsed, ParseError) else ProjectConfig()
+    if not shares_one_root(config.coordination.remote):
+        return None
+    roles = list(config.coordination.manager_roles)
+    owner = routing_owner(roles)
+    names = [r.name for r in roles]
+
+    def step(say) -> None:
+        deliver_routes(root, manager, owner, names, say)
+        if owner and manager == owner:
+            collect_reports(root, owner, names, say)
+
+    return step
+
+
+def _github_access(root: Path, manager: str):
+    """This run's GitHub credentials for a sandboxed Manager, or None (C6/C26).
+
+    Nothing configured is None and says nothing: the Manager has no GitHub
+    credential, as before. Configured and failing is a REFUSAL to start,
+    naming GitHub's own words. An unreachable credential is not an absent
+    one (the D-74 rule), and a Manager that started without the credential
+    it was configured for would read the board anonymously, which is the
+    failure this exists to remove.
+    """
+    from rite_ai.config.models import ProjectConfig
+    from rite_ai.config.parse import ParseError, parse_config
+    from rite_ai.managers.github_access import open_access
+
+    parsed = parse_config(root / ".rite" / "config.yaml")
+    config = parsed if not isinstance(parsed, ParseError) else ProjectConfig()
+    access, refusal = open_access(root, manager, config)
+    if refusal:
+        click.echo(
+            f"refusing to start Manager {manager!r}: its GitHub credential "
+            f"could not be set up: {refusal}",
+            err=True,
+        )
+        raise SystemExit(1)
+    if access is not None and access.app is not None:
+        click.echo(
+            f"github: a token for {', '.join(access.app[2])} only, valid until "
+            f"{time.strftime('%H:%M', time.localtime(access.expires_at))} and "
+            "refreshed before it lapses. The App's key stays outside the "
+            "sandbox. The Manager can read and write that repository, and "
+            "nothing else, while it runs.",
+            err=True,
+        )
+    return access
+
+
 def _slack_listener(root: Path, manager: str):
     """A Slack listener for this Manager, opened, or None when Slack is off.
 
@@ -6094,6 +6224,42 @@ def _slack_listener(root: Path, manager: str):
     parsed = parse_config(root / ".rite" / "config.yaml")
     config = parsed if not isinstance(parsed, ParseError) else ProjectConfig()
     if not config.slack.enabled:
+        return None
+    # ⚠ **ONLY THE OWNER HEARS SLACK — the Manager holding `route`.** Every
+    # Manager used to open a listener, so two Managers in one root both read
+    # the Owner's DM, both treated its messages as INSTRUCTIONS, and both acted
+    # (MMQ2's accident). They also doubled the history polling on the
+    # project's one app: 60 a minute against Tier 3's "50+" (§9.16.6). The
+    # others hear from the Owner Manager instead. Checked BEFORE the token, so
+    # a secondary never makes a Slack call at all.
+    from rite_ai.config.managers import routing_owner, shares_one_root
+
+    roles = list(config.coordination.manager_roles)
+    owner_manager = routing_owner(roles)
+    # With a `remote`, the listed Managers may be on other machines and the
+    # election decides the Owner — gating Slack on that lease is v0.7.0, and
+    # guessing here would take Slack from a multi-machine project that has it.
+    if (
+        shares_one_root(config.coordination.remote)
+        and roles
+        and manager != owner_manager
+    ):
+        click.echo(
+            (
+                f"slack: {manager!r} does not read or post Slack — only the "
+                f"Manager holding 'route' does, and that is {owner_manager!r}. "
+                f"Its instructions come from {owner_manager!r}, which routes "
+                f"them with `rite route`, and from this machine."
+            )
+            if owner_manager
+            else (
+                f"slack: {manager!r} does not read or post Slack — "
+                f"{len(roles)} Managers share this root and "
+                f"not exactly one holds 'route', so none of them does. "
+                f"`rite doctor` says which."
+            ),
+            err=True,
+        )
         return None
     token = get_scoped("slack_bot_token", config.credentials)
     if not token:
@@ -6295,6 +6461,7 @@ def _start_a_manager(
             err=True,
         )
 
+    github = _github_access(root, role.name)
     listener = _slack_listener(root, role.name)
     try:
         outcome = supervise(
@@ -6315,15 +6482,26 @@ def _start_a_manager(
             # itself reads, so "is this a real ticket" has one answer in one
             # place; `for_project` refuses everything when there is none.
             broker=for_project(root, board),
+            router=_router_for(root, role.name),
             slack=listener,
+            github=github,
             max_sessions=sessions,
             window_seconds=minutes * 60.0,
             prompt=(
                 _setup_prompt(root, role.name)
+                # The setup session too: a secondary configuring the board as
+                # if it were alone is the confusion the briefing exists for.
+                + _other_managers_briefing(root, role.name)
+                # ⚠ And the journal instructions. `start_notice` above says
+                # "recording issues to …" for a setup session as for any
+                # other, and without these the Manager was never told how:
+                # measured, 0 mentions of `rite journal` in its prompt.
+                + instructions(root, role.name, enabled=record_issues)
                 if setting_up
                 else for_manager(
                     role.name,
-                    extra=instructions(root, role.name, enabled=record_issues),
+                    extra=instructions(root, role.name, enabled=record_issues)
+                    + _other_managers_briefing(root, role.name),
                 )
             ),
             fresh=fresh,
@@ -6337,6 +6515,10 @@ def _start_a_manager(
             note=lambda m: click.echo(m, err=True),
         )
     finally:
+        # The agent is stopped and the token file removed however the run
+        # ends. The agent's own key lifetime (-t) covers a killed process.
+        if github is not None:
+            github.close()
         # ⚠ In a finally, so a Ctrl-C still posts the last reply. Only a
         # killed process skips it.
         if listener is not None:
@@ -6472,6 +6654,73 @@ def replies(manager_name: str, reader: str, peek: bool) -> None:
         click.echo(warning, err=True)
 
 
+@cli.command("route")
+@click.argument("manager_name")
+@click.argument("text")
+def route(manager_name: str, text: str) -> None:
+    """Hand work to another Manager in this root — the Owner only.
+
+    One project root may run several Managers; the one holding `route` is the
+    Owner, the only one that reads Slack, and this is how it gives the others
+    their instructions. The text is delivered to MANAGER_NAME at its next
+    turn, under a line saying the Owner Manager routed it.
+
+    ⚠ This only ASKS. A Manager cannot write another Manager's inbox (its
+    sandbox refuses it), so the request goes into the Owner's own directory
+    and the Owner's supervisor delivers it — and delivers only for the
+    Manager holding `route`, whatever the request says.
+
+    Examples:
+      rite route helper "run the test suite on branch fix-12 and report"
+    """
+    from rite_ai.config.managers import routing_owner
+    from rite_ai.managers import current_manager
+    from rite_ai.managers.routing import request
+
+    root = _require_project_root()
+    speaking = current_manager()
+    if not speaking:
+        click.echo(
+            "refusing: `rite route` is how the Owner Manager hands work to "
+            "another Manager. From your own shell, send it directly with "
+            f'`rite message {manager_name} "…"`.',
+            err=True,
+        )
+        raise SystemExit(1)
+    roles, problems = _manager_roles(root)
+    if problems:
+        click.echo("cannot read this project's Managers:", err=True)
+        for problem in problems[:3]:
+            click.echo(f"  {problem}", err=True)
+        raise SystemExit(1)
+    owner = routing_owner(list(roles))
+    if speaking != owner:
+        click.echo(
+            f"refusing: {speaking!r} does not hold 'route'"
+            + (f" — {owner!r} does" if owner else " — no Manager here does")
+            + ". Report to the Owner with `rite reply` instead.",
+            err=True,
+        )
+        raise SystemExit(1)
+    names = [r.name for r in roles]
+    if manager_name == speaking or manager_name not in names:
+        others = ", ".join(n for n in names if n != speaking) or "none"
+        click.echo(
+            f"refusing: {manager_name!r} is not another Manager in this root "
+            f"(others: {others}).",
+            err=True,
+        )
+        raise SystemExit(1)
+    if not text.strip():
+        click.echo("refusing to route an empty message.", err=True)
+        raise SystemExit(1)
+    request(root, speaking, manager_name, text)
+    click.echo(
+        f"route queued: {manager_name!r} receives it at its next turn, marked "
+        f"as routed by {speaking!r}."
+    )
+
+
 @cli.command("reply")
 @click.argument("text")
 @click.option(
@@ -6526,8 +6775,21 @@ def reply(text: str, manager: str) -> None:
         raise SystemExit(1)
 
     send(root, speaking, OUTBOX, text)
+    from rite_ai.config.managers import routing_owner, shares_one_root
+    from rite_ai.config.parse import ParseError, parse_config
+
+    parsed = parse_config(root / ".rite" / "config.yaml")
+    one_root = not isinstance(parsed, ParseError) and shares_one_root(
+        parsed.coordination.remote
+    )
+    # Only in one root is there a router bringing this up to the Owner (MM-4).
+    owner = routing_owner(list(roles)) if one_root else ""
     click.echo(
         f"reply queued from {speaking!r} — the User reads it with `rite replies`."
+        if not owner or owner == speaking
+        else f"reply queued from {speaking!r} — the Owner Manager {owner!r} "
+        "receives it at its next turn, and a person can read it with "
+        "`rite replies`."
     )
     # C23: the store grows here, so it is bounded here too.
     warning = full_warning(prune(root, speaking, OUTBOX), speaking)
@@ -6841,8 +7103,40 @@ def message(manager_name: str, text: str) -> None:
         # never learn their message went nowhere.
         click.echo("refusing to send an empty message.", err=True)
         raise SystemExit(1)
+    from rite_ai.managers import current_manager
 
-    send(root, manager_name, INBOX, text)
+    speaking_as = current_manager()
+    if speaking_as:
+        # ⚠ **A MANAGER DOES NOT WRITE A MANAGER'S INBOX — not another's, not
+        # its own.** A message in an inbox with no bracketed line is delivered
+        # as the Owner's instruction, so this command run by a Manager would
+        # let it speak with the Owner's authority. Refused here so the Manager
+        # is told what to do instead; the Manager's sandbox profile refuses the
+        # write itself (`enclosure._manager_separation`), so unsetting the
+        # variable does not get around it.
+        click.echo(
+            f"refusing: this is Manager {speaking_as!r}, and a Manager does "
+            f"not write a Manager's inbox — a message there is delivered as "
+            f"the Owner's instruction. To answer the person, use `rite reply "
+            f'--manager {speaking_as} "…"`.',
+            err=True,
+        )
+        raise SystemExit(1)
+
+    try:
+        send(root, manager_name, INBOX, text)
+    except PermissionError:
+        # Inside a Manager's sandbox with RITE_MANAGER removed: the profile
+        # refused the write (`enclosure._manager_separation`). Said, not a
+        # traceback — an agent handed a traceback routes around it.
+        click.echo(
+            f"refusing: writing to {manager_name!r}'s inbox was refused by "
+            "this process's sandbox. A Manager does not write a Manager's "
+            "inbox, because a message there is delivered as the Owner's "
+            "instruction.",
+            err=True,
+        )
+        raise SystemExit(1) from None
     click.echo(
         f"message queued for {manager_name!r} — delivered at the start of its "
         f"next turn. `rite connect {manager_name}` reads its replies."

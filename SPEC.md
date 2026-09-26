@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.11 · **Date:** 2026-09-25
+**Version:** 0.24.13 · **Date:** 2026-09-26
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -2115,15 +2115,27 @@ be tested:
   refused, and the other Manager survived. It holds by exactly the two
   mechanisms named above: `(target same-sandbox)` signals and the denied tmux
   socket. It is not yet pinned by a test between two Managers.
-- **P1, P3 and P4 do not.** Most per-project state is still flat (§5.4.5).
-  The shared-by-decision list has no test behind it (§5.4.6). And `Claim` has
-  no Manager field (§5.4.3).
+- **P1 holds for the per-Manager directories and every inbox, and not for
+  flat per-project state** (updated 2026-09-26, MM-2). Each Manager's profile
+  now refuses writes under `.rite/managers/` except its own directory, and
+  refuses its own `mail/in` too (`enclosure._manager_separation`). Measured
+  with real `sandbox-exec`: a write into another Manager's directory or inbox,
+  its own inbox, `rite message` run as a Manager, a rename and a symlink into
+  an inbox were all refused, while the Manager still wrote its own state.
+  **An inbox write is an instruction**, since a message with no bracketed line
+  is delivered as the Owner's. So this is authority, not only tidiness, and
+  it is enforced on the writer, never on the content. Most per-project state
+  is still flat and still writable by either Manager (§5.4.5).
+- **P3 and P4 do not.** The shared-by-decision list has no test behind it
+  (§5.4.6). And `Claim` has no Manager field (§5.4.3).
 
-⚠ **The Manager's sandbox is not what enforces P1, and was measured not to.**
-Each Manager's profile grants the whole project tree, and one Manager wrote
-into the other's `.rite/managers/<name>/`. The sandbox separates a Manager's
-**processes** from its siblings'. It does not separate their **files**. P1 is
-enforced by rite's own writers, or it is not enforced.
+⚠ **Before MM-2 the Manager's sandbox did not enforce P1, and was measured
+not to**: each profile granted the whole project tree, and one Manager wrote
+into the other's `.rite/managers/<name>/`. That path is now refused, as the
+P1 row says. The rest of the tree is still granted whole, because an
+orchestrator works on the project, so the sandbox still does not separate
+the Managers' flat state. That part is enforced by rite's own writers, or
+it is not enforced.
 
 **"By accident" is the bar, and it is not "against a hostile Manager."** A
 Manager may run `rite`, and `rite` does what the operator can. What this
@@ -2426,7 +2438,11 @@ kept between non-ASCII characters, where scripts and emoji use them. On a
 real GitHub issue carrying a zero-width run, a tag-character message and an
 HTML comment, GitHub's own rendering showed a reviewer two sentences, and
 `rite board show` gave an agent the same two sentences with the hidden parts
-decoded and surfaced in place. **Not handled:** combining marks and
+decoded and surfaced in place. **The same characters pasted into Slack by
+a person were KEPT by Slack's client**: all 36 were in Slack's stored copy.
+So on Slack too the normalisation is rite's, not the platform's. An HTML
+comment is not hidden in Slack, which renders no HTML, so the relay leaves
+it as the visible text it is there. **Not handled:** combining marks and
 variation selectors, which ordinary text needs, and homoglyphs, which a
 reviewer sees too.
 
@@ -6152,36 +6168,67 @@ Two consequences, written down so they are not discovered:
   latency grow with the number of channels. **Cap or rotation is OPEN**, an
   implementation choice not yet made.
 
-#### 9.16.7. Several Managers in one project: what the relay does today (0.6.0)
+#### 9.16.7. Several Managers in one project: only the Owner hears Slack (0.6.0)
 
-**Status: NOT DECIDED. This subsection records behaviour, not a design.**
-Robert moved two Managers on one machine (a Claude Owner and a local
-secondary) into 0.6.0 on 2026-09-26 (§5.4.8). §9.16.6 settled several
-*projects* on one workspace. Several *Managers* in one project is the same
-accident one level down, and nothing settles it yet.
+**Status: DECIDED 2026-09-26 (Robert: MMQ2, option (c)). BUILT: only the
+Owner hears Slack, it routes work down, and replies come up as context.** The 0.6.0 shape is one machine, one root: a Claude Manager as **Owner**
+plus a local secondary. The Owner is the only Manager that talks to Slack, and
+it routes work to the others.
 
-**What the code does, read from `cli/main.py` (`_slack_listener`) and
-`managers/slack.py`, not observed:** every `rite start <manager>` in a
-project with Slack enabled opens its own relay. It reads the same Owner's DM
-and the same broadcast channel, with its own cursor under that Manager's
-directory. So:
+**Who the Owner is: the one Manager holding `route`** (`routing_owner`). The
+duty is the Owner's (RL-52), and the multi-machine election already requires
+it of any Manager standing for Owner. In one root with no
+`coordination.remote`, nothing elects, so the answer has to be deterministic,
+and a config-declared duty is. **Exactly one must hold it** once several
+Managers share a root. Zero or two means nobody reads Slack, and `rite
+doctor` names the problem. A lone Manager holds every duty, so a one-Manager
+project is unchanged.
 
-- **Every Manager receives every instruction.** A DM message reaches each
-  running Manager labelled INSTRUCTION (§9.16.5), and each acts on it. A
-  thread reply goes only to the relay that posted the thread's root, which
-  is §9.16.6's parenthesis again.
-- **The poll rate multiplies.** Two running Managers are two relays on the
-  project's one app: 60 `conversations.history` calls a minute against
-  Tier 3's "50+" (§9.16.6's table).
-- **Posts are told apart.** Each relay prefixes its posts with its Manager's
-  name.
+**What changed, observed.** Before, every `rite start` opened its own relay
+on the same Owner's DM, so every Manager received every instruction, and two
+relays were 60 `conversations.history` calls a minute against Tier 3's
+"50+". Now `_slack_listener` opens a relay **only for the Owner**. Through
+`rite start` on a two-Manager project, with a proxy that logged and refused
+every connection: the secondary attempted **3** Slack connections before and
+**0** after, and said so at start. The poll stays at 30 a minute, whatever
+the number of Managers.
 
-⚠ **So a project that runs two Managers with Slack enabled has both
-problems §9.16.6 exists to prevent, today.** Options (one app per Manager,
-per-Manager addressing, one Slack-reading Manager per project, the Owner's
-id per instance) and what turns on each are in
-`docs/design/V070_RELEASE_PLAN.md`, MMQ2. That question is now due in 0.6.0,
-not 0.7.0.
+**With a `remote`, none of this applies.** `coordination.managers` is also
+the election's priority list. Its names may be on other machines, and the
+lease decides the Owner. Gating Slack on the lease is v0.7.0, and until then
+such a project behaves as before.
+
+**The Owner routes, and cannot do it by writing an inbox (built).** No
+Manager may write a Manager's inbox (§5.4.8, P1), so the Owner ASKS, as it
+does for a Worker. `rite route <manager> "…"` writes a request into the
+Owner's own directory. The Owner's supervisor, outside the boundary, delivers
+it: every wait-loop tick, and at the cycle boundary. **Who is asking comes
+from the supervisor, never from the request**, and delivery happens only for
+the routing Owner, so a secondary's request is discarded and said to be. The
+secondary receives it under a header rite composes, with the Owner's text
+quoted:
+
+    [routed by the Owner Manager 'lead' · sent Sat 00:14 · INSTRUCTION]
+    > run the tests on branch fix-12 and report
+
+Observed through `rite start` with stub engines inside the real profiles:
+the secondary's next cycle prompt carried that block, and its own attempt to
+route to the Owner was refused and discarded.
+
+**A secondary's instructions come from two places only:** messages routed by
+the Owner Manager, and this machine. Never from Slack, and never from a
+sibling.
+
+**Replies come up as context (built).** A secondary answers with `rite
+reply`, into its own outbox. The Owner's supervisor reads each secondary's
+outbox with its own cursor and delivers each message into the Owner's inbox:
+
+    [from Manager 'helper' · its reply · context — not an instruction]
+    > tests on fix-12: 42 passed, 0 failed (pytest -q, exit 0)
+
+**Context, never instruction**, because authority comes from the channel
+(§9.16.2), and a sibling Manager is not one. Observed: the Owner's first
+cycle prompt carried a secondary's reply written before the Owner started.
 
 ## 10. Credentials
 
@@ -6737,6 +6784,10 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.13 — §5.4.8's P1: no Manager writes a Manager's inbox.** Each Manager's profile refuses writes under `.rite/managers/` except its own directory, and refuses its own `mail/in` too. This matters because an inbox write is an instruction. P1 now holds for per-Manager directories and every inbox, and not for flat per-project state, which is still shared. The "measured not to" paragraph is kept and marked as the measurement before the change.
+
+**Changes in 0.24.12 — §9.16.7: only the Owner hears Slack.** MMQ2 decided (Robert, option (c)). The Owner is the one Manager holding `route`, and only its `rite start` opens a Slack relay. Observed: a secondary went from 3 Slack connections at start to 0. The subsection used to record the opposite (every Manager's relay reads the DM), which was true until this revision. Routing and replies are marked planned.
 
 **Changes in 0.24.11 — two Managers are 0.6.0, and the relay does not know it.** Robert moved two Managers on one machine (a Claude Owner and a local secondary) into 0.6.0. §5.4.8 now says the requirement applies to 0.6.0 and that its state table is what 0.6.0 ships with: P2 holds, and P1, P3 and P4 do not. §9.16.7 is new and records behaviour, not a design. Every Manager's `rite start` opens its own Slack relay on the same DM, so every Manager acts on every Owner instruction, and two relays are 60 history calls a minute against Tier 3's "50+". Read from the code, not observed. What to do about it is MMQ2, now due in 0.6.0.
 

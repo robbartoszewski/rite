@@ -166,12 +166,18 @@ class TestTheThreeChecksTheBriefNamed:
 
 
 class TestItFailsClosed:
-    """⚠ D-74. An unreachable board is not an empty board."""
+    """⚠ D-74. An unreachable board is not an empty board.
+
+    ⚠ `capacity=0` (no limit) in each, so no sandbox count is taken. Without
+    it these depended on `yoloai` being installed: on CI, which has none, the
+    count could not be taken and every request was refused for THAT reason —
+    so the first failed and the other two passed without reaching the
+    condition they name."""
 
     def test_no_board_means_refuse_rather_than_assume(self, tmp_path):
         (tmp_path / "workers" / "alpha").mkdir(parents=True)
         (tmp_path / "workers" / "alpha" / "worker.yml").write_text("{}\n")
-        handle = for_project(tmp_path, board=None)
+        handle = for_project(tmp_path, board=None, capacity=0)
         ok, message = handle(_ask(worker="alpha", ticket="ABC-12"))
         assert not ok
         assert "not on this project's board" in message
@@ -184,15 +190,19 @@ class TestItFailsClosed:
             def list_tickets(self):
                 raise RuntimeError("the board is down")
 
-        ok, message = for_project(tmp_path, board=Angry())(
+        ok, message = for_project(tmp_path, board=Angry(), capacity=0)(
             _ask(worker="alpha", ticket="ABC-12")
         )
         assert not ok
+        assert "not on this project's board" in message
 
     def test_a_worker_without_a_manifest_is_not_a_worker(self, tmp_path):
         (tmp_path / "workers" / "alpha").mkdir(parents=True)
-        ok, _ = for_project(tmp_path, board=None)(_ask(worker="alpha", ticket="ABC-12"))
+        ok, message = for_project(tmp_path, board=None, capacity=0)(
+            _ask(worker="alpha", ticket="ABC-12")
+        )
         assert not ok
+        assert "no Worker called 'alpha'" in message
 
 
 class TestRequestsAreTakenOnce:

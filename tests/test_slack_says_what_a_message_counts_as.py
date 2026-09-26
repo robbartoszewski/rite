@@ -368,3 +368,36 @@ class TestAMentionComesInEitherForm:
         slack.history["C1"].append(_said("@rite hello", "101.0", OTHER))
         (got,) = _drain(listener, slack)
         assert "unaddressed · context]" in got.splitlines()[0]
+
+
+class TestTheManagerReadsWhatThePersonTyped:
+    """Found live, 2026-09-26: Slack escapes & < > in message text, and the
+    relay passed `&lt;!-- … --&gt;` straight to the Manager."""
+
+    def test_slack_escapes_are_undone(self):
+        slack = Slack()
+        listener = _opened(slack)
+        slack.history["D1"].append(
+            _said("run `a &lt; b &amp;&amp; c &gt; d`, not &amp;lt;", "101.0")
+        )
+        (got,) = _drain(listener, slack)
+        assert got.splitlines()[1] == "> run `a < b && c > d`, not &lt;"
+
+    def test_an_escaped_comment_is_visible_text_not_a_hidden_one(self):
+        """Slack shows a typed `<!-- -->` as text; it is not hidden there."""
+        slack = Slack()
+        listener = _opened(slack)
+        slack.history["D1"].append(_said("&lt;!-- note --&gt;", "101.0"))
+        (got,) = _drain(listener, slack)
+        assert got.splitlines()[1] == "> <!-- note -->"
+        assert "HTML comment" not in got
+
+    def test_a_typed_mention_is_not_a_mention(self):
+        """A person typing `<@B…>` as text arrives escaped. It must not be
+        read as addressing rite, though the Manager sees it as typed."""
+        slack = Slack()
+        listener = _opened(slack)
+        slack.history["C1"].append(_said(f"&lt;@{ME_BOT}&gt; hi", "101.0", OTHER))
+        (got,) = _drain(listener, slack)
+        assert "unaddressed" in got.splitlines()[0]
+        assert got.splitlines()[1] == f"> <@{ME_BOT}> hi"

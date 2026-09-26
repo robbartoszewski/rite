@@ -399,9 +399,14 @@ def _redacted(body: str) -> str:
     in a log line, an `Authorization:` header) is not recognised. No list of
     token formats was added for it — a list loses to the next format.
     """
+    from rite_ai.managers.github_access import live_secrets
     from rite_ai.sandbox import redact_assignments
 
-    return redact_assignments(body)
+    # ⚠ Plus the live GitHub token, by EXACT value (C6/C26). A Manager that
+    # prints its gh config writes `oauth_token: <t>`, which the structural
+    # rule does not recognise (measured). rite minted it, so the value is
+    # known, and `GH_CONFIG_DIR` says where it is from inside the sandbox.
+    return redact_assignments(body, live_secrets())
 
 
 def _recorded_from(manager: str) -> str:

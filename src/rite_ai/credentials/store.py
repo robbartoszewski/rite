@@ -41,6 +41,10 @@ KNOWN_CREDENTIALS: dict[str, str] = {
     "claude_token": (
         "Claude Code OAuth token — from `claude setup-token`, for sandboxed Workers"
     ),
+    "github_app_key": (
+        "GitHub App private key (PEM) — mints a sandboxed Manager's one-hour, "
+        "one-repository token; stays outside the sandbox. Set with --stdin"
+    ),
 }
 
 # Per-worker sandbox tokens are a family, not a fixed name — see
