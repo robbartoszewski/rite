@@ -6175,18 +6175,67 @@ def _setup_prompt(root: Path, manager: str) -> str:
     instruction.
 
     The missing pieces are named concretely so it is not guessing.
+
+    ⚠ **SETUP IS THE DEFAULT, NOT AN EXCLUSIVE MANDATE (Robert, 2026-09-26).**
+    This said "your job this session is … set one up, and
+    nothing else" and "do not start any other work". The delivery note tells
+    the same Manager that a message marked INSTRUCTION is an instruction, so
+    the two contradicted each other and the model had to choose. Observed with
+    a real engine on both sides of that choice: a Claude Owner declined a
+    person's routing instruction, citing "my explicit mandate for this
+    session (ticket-backend setup only)", and a local Goose Owner silently did
+    the setup work instead in 3 of 5 runs. Either way, a person sent an
+    instruction, rite accepted it, and the Manager did not do it.
+
+    So precedence is stated rather than left to the model: a delivered
+    instruction comes FIRST, setup resumes after, and the reply says which
+    happened — the failure was bad mostly because it was silent to the
+    person who sent it.
+
+    ⚠ **And setup is the Owner's job.** With several Managers in one root and
+    no board, every Manager got this prompt, so two of them could edit
+    `config.yaml` at once. A secondary leaves setup to the Owner.
     """
+    from rite_ai.config.managers import routing_owner, shares_one_root
+    from rite_ai.config.models import ProjectConfig
+    from rite_ai.config.parse import ParseError, parse_config
+
+    parsed = parse_config(root / ".rite" / "config.yaml")
+    config = parsed if not isinstance(parsed, ParseError) else ProjectConfig()
+    roles = list(config.coordination.manager_roles)
+    owner = routing_owner(roles) if shares_one_root(config.coordination.remote) else ""
+    precedence = (
+        "⚠ An INSTRUCTION delivered to you this session comes FIRST — a "
+        "message marked INSTRUCTION, one routed to you by the Owner Manager, "
+        "or one from this machine with no bracketed line. Do what it asks "
+        "before anything else here, then return to what follows if it is "
+        "still needed. Whatever you do, say in your reply what you did about "
+        "the instruction and where the setup stands, so the person who sent "
+        "it is never left guessing.\n\n"
+    )
+    if len(roles) > 1 and owner and manager != owner:
+        return (
+            f"You are the Manager {manager!r} for the project at {root}.\n\n"
+            "This project has NO ticket backend configured, so there is no "
+            "queue for you to work. Setting one up is the Owner's job — "
+            f"{owner!r} — so do NOT edit `.rite/config.yaml`: two Managers "
+            "editing one file at once would overwrite each other.\n\n"
+            + precedence
+            + "If no instruction arrives this session, there is nothing for you "
+            "to do: say so in a reply and stop."
+        )
     return (
         f"You are the Manager {manager!r} for the project at {root}.\n\n"
         "This project has NO ticket backend configured, so there is no queue "
-        "for you to work. Your job this session is to help the person at the "
-        "terminal set one up, and nothing else.\n\n"
-        "What is missing, concretely: `ticket_backend` in "
+        "for you to work. Your default job this session is to help the person "
+        "at the terminal set one up.\n\n"
+        + precedence
+        + "What is missing, concretely: `ticket_backend` in "
         f"`{root}/.rite/config.yaml`. It needs `type` set to either `jira` "
         "(which also needs `site` and `projects`) or `github` (which also "
         "needs `repo`). Read the file, see what is already there, explain "
         "the choice, and make the change they ask for.\n\n"
-        "Do not start any other work, do not create tickets, and do not "
+        "Do not start work from a queue, do not create tickets, and do not "
         "invent a backend they did not choose. When the configuration is "
         "written, tell them to run `rite start` again to begin working the "
         "queue."

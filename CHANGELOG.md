@@ -417,6 +417,15 @@ Exactly one must hold it when several Managers share a root, and
   the write, and `rite message` run by a Manager refuses and says what to
   use instead. A person's `rite message` from their own shell works as
   before.
+- ⚠ **A setup session no longer swallows an instruction.** With no ticket
+  backend, a Manager's session is for setting one up, and it used to be told
+  to do "nothing else". So an instruction you sent it was refused or silently
+  ignored. Now an instruction delivered that session comes first: one marked
+  INSTRUCTION, routed by the Owner, or typed on this machine. Setup resumes
+  afterwards, and the reply always says what was done about the instruction
+  and where setup stands. It still does not work a queue, create tickets or
+  choose a backend for you. With several Managers, only the Owner does setup,
+  so two Managers never edit `config.yaml` at once.
 
 This applies when the project has no `coordination.remote`. With one, the
 Managers may be on other machines and the election decides the Owner, and
