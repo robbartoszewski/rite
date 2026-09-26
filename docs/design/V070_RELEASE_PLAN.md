@@ -493,12 +493,12 @@ here as relayed.
   > review and amend just 1 commit instead of many, then let's make it easy
   > for them."
 
-## The design, settled by Robert on 2026-09-26 (it replaces earlier wording in this track)
+## The design, settled by Robert on 2026-09-26 (final; it replaces every earlier shape in this track, including a `remote` axis)
 
 ```yaml
 publish:
-  strategy: pull_request   # commit | push | pull_request
-  remote: origin           # origin | shared
+  strategy: pull_request   # commit | push | pull_request | push_to_shared
+  shared_repo:             # required when strategy is push_to_shared; no default
   squash: false
   # auto_merge: false      # opt-in, on top of pull_request only
 ```
@@ -506,31 +506,50 @@ publish:
 - **`strategy` values are verbs, named rather than numbered.** A config
   saying `strategy: 2` tells a reader nothing, and names let a value be
   added without disturbing an order. This track's history below says
-  "`strategy: commit`/2/3": 1 = `commit`, 2 = `push`, 3 = `pull_request`. Robert's
+  "strategy 1/2/3": 1 = `commit`, 2 = `push`, 3 = `pull_request`. Robert's
   own quotes keep the numbers he used.
 - **`pull_request` is the default** (Robert's decision). With auto-merge
   off it is strictly safer than `push`: the work leaves the machine and is
   visible, but nothing lands on a branch anyone depends on, and the
   reviewer decides. The default matters because a team that inspects every
   line is precisely the team that will not have changed it.
-- **`remote` is a separate axis, not a fourth strategy.** Robert rejected
-  `shared` as a strategy value: the others are verbs, and that one is a
-  destination. His multi-Manager case is `strategy: push, remote: shared`,
-  and `pull_request` against a shared remote is expressible too, which an
-  enum could not say.
-- 🔴 **`remote: shared` requires an explicitly configured remote and has NO
-  default.** rite's users include on-premise clients for whom code leaving
-  their infrastructure is the thing they are paying to avoid. A helpful
-  default here would be the worst outcome in the design.
+- **`push_to_shared` is a fourth strategy value, not a separate `remote`
+  axis.** Robert rejected the axis, rightly: `commit` + `remote: shared` is
+  meaningless, so two of six combinations would have been invalid. A fourth
+  value makes invalid states unrepresentable instead of needing validation
+  to reject nonsense. **Accepted cost:** `pull_request` against a shared
+  repository cannot be expressed. That is deliberate: a PR on a repository
+  that is not the client's would be reviewed by nobody in particular. If it
+  turns out to be needed, it is a fifth value, not a redesign.
+- **`shared_repo` is per project** (Robert): simpler, matches the rest of
+  the config, and it can be widened to per machine later if users want it.
 - **`squash` is orthogonal**, default off (below).
-- **Auto-merge is separate from all three**, and Robert checked this
-  specifically: opening a PR is safe, merging it is the risk. It is an
-  opt-in flag on top of `pull_request`, off by default, under the
-  green-matched-to-SHA rule below.
+- **Auto-merge is an opt-in flag on top of `pull_request`**, off by
+  default, under the green-matched-to-SHA rule below. Robert checked this
+  specifically: opening a PR is safe, merging it is the risk.
 - **All values are implemented** (Robert: not much code). ⚠ **Each one must
   be OBSERVED before it is called done**, because every defect that mattered
   this weekend was in a mechanism that existed and had never been run.
   Auto-merge is gated hardest.
+
+### 🔴 Three rules on `shared_repo`: part of the design, not implementation detail
+
+1. **No default, ever.** Not `origin`, not a derived name. rite's users
+   include on-premise clients for whom code leaving their infrastructure is
+   the thing they are paying to avoid. A helpful guess harms exactly them.
+2. **Refuse at start, with the reason,** when `strategy: push_to_shared`
+   is set and `shared_repo` is not. The same shape as the missing
+   `claude_token` refusal, which names the fix.
+3. **Refuse when `shared_repo` resolves to the same remote as `origin`.**
+   Someone will configure that by accident eventually, and it would
+   silently INVERT the strategy's whole purpose: "never touch the client's
+   repository" becomes "always touch it", with nothing saying so.
+   **Resolve and compare; do not string-match.** `git@host:x/y.git` and
+   `https://host/x/y.git` are the same remote, and so are forms differing
+   in `.git`, a trailing slash, letter case or `ssh://`. *This is the rule
+   most likely to be dropped as over-engineering by someone who does not
+   see what it prevents. What it prevents is the one outcome this strategy
+   exists to rule out.*
 
 Not in v0.6.0.
 
@@ -575,7 +594,7 @@ not pushable, is in that state today.
 
 | # | work | done when | depends | size |
 |---|---|---|---|---|
-| PB1 | **The `publish:` setting as designed above, applied to a finished task by the Manager ROLE, split as drawn below.** Workers commit and do not push. rite applies `strategy` (`commit`: committed locally on a rebasable branch, nothing pushed; `push`: push and merge to main or a feature branch; `pull_request`, the default: push and open a PR), to `remote` (`origin`, or an explicitly configured `shared` remote with no default), with `squash` (opt-in, default off) and `auto_merge` (opt-in, `pull_request` only, green matched to the head SHA) | **Each value observed, not just built:** one real task per `strategy` goes from a Worker's commit to its end state on a real project, and so does `remote: shared` with an operator-configured remote. Under `commit`: the work survives the Worker's next task, nothing reached any remote, and a person reworks it with `git rebase -i` without friction, squash off and on. `auto_merge`: observed REFUSING to merge on each of the four stale-green shapes below, and merging on a green whose SHA is the PR's head | a path from the sandbox copy into the local repository | design settled; unsized |
+| PB1 | **The `publish:` setting as designed above, applied to a finished task by the Manager ROLE, split as drawn below.** Workers commit and do not push. rite applies `strategy`: `commit` (committed locally on a rebasable branch, nothing pushed); `push` (push and merge to main or a feature branch); `pull_request`, the default (push and open a PR); `push_to_shared` (push to the project's `shared_repo`, never `origin`, under the three rules above). Also `squash` (opt-in, default off) and `auto_merge` (opt-in, `pull_request` only, green matched to the head SHA) | **Each value observed, not just built.** One real task per `strategy` goes from a Worker's commit to its end state on a real project. Under `commit`: the work survives the Worker's next task, nothing reached any remote, and a person reworks it with `git rebase -i` without friction, squash off and on. `push_to_shared`: observed refusing with no `shared_repo`, and refusing when `shared_repo` is `origin` in another spelling (SSH vs HTTPS). `auto_merge`: observed REFUSING to merge on each of the four stale-green shapes, and merging on a green whose SHA is the PR's head | a path from the sandbox copy into the local repository | design settled; unsized |
 
 ### Auto-merge: explicit opt-in, and a green matched to the head SHA
 
@@ -673,7 +692,7 @@ one.
   preferred design makes that blocker worse, not better. The Worker side
   (yoloAI sandboxes, a different boundary) has not been measured.
 
-### `remote: shared`: a shared repository for multi-Manager work (was: a future improvement)
+### `push_to_shared`: a shared repository for multi-Manager work (was: a future improvement)
 
 Robert, verbatim, in the order given:
 
@@ -701,11 +720,10 @@ firm's code to a convenient hosted remote would be the worst thing in this
 design. This is a setting with a compliance dimension, not a convenience
 toggle.
 
-**Resolved by Robert: neither a variant nor a fourth strategy.** `shared`
-is a destination, so it is the `remote` axis (above): `strategy: push,
-remote: shared` for his multi-Manager case. The Owner's merge answer still
-depends on one setting, `strategy` (plus the `auto_merge` flag), which was
-the reason recorded for preferring a separate strategy.
+**Resolved by Robert: a fourth strategy value, `push_to_shared`,** after a
+`remote` axis was tried and rejected (it made meaningless combinations
+expressible). The Owner's merge answer depends on one setting, `strategy`
+(plus the `auto_merge` flag).
 
 ## Track CU — Cursor, the third engine
 
