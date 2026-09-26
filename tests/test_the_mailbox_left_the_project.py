@@ -24,7 +24,6 @@ from rite_ai.managers.mailbox import (
     OUTBOX,
     adopt_legacy,
     adoption_notes,
-    legacy_mail_root,
     legacy_waiting,
     mail_root,
     mailbox_dir,
@@ -33,6 +32,9 @@ from rite_ai.managers.mailbox import (
     take,
     unread,
     waiting,
+)
+from rite_ai.managers.mailbox import (
+    _legacy_mail_root as legacy_mail_root,
 )
 
 OLD_NAME = "1000000000000_0000001_000000000001.json"

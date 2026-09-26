@@ -23,10 +23,12 @@ from rite_ai.managers.mailbox import (
     INBOX,
     OUTBOX,
     adopt_legacy,
-    legacy_mail_root,
     mailbox_dir,
     read,
     send,
+)
+from rite_ai.managers.mailbox import (
+    _legacy_mail_root as legacy_mail_root,
 )
 
 pytestmark = pytest.mark.skipif(

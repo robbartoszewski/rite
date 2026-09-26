@@ -127,7 +127,7 @@ def mail_root(root: Path, manager: str) -> Path:
     )
 
 
-def legacy_mail_root(root: Path, manager: str) -> Path:
+def _legacy_mail_root(root: Path, manager: str) -> Path:
     """`.rite/managers/<manager>/mail/`, where the boxes lived before 0.6.0.
 
     Moved from once by `adopt_legacy`, and never read for delivery again.
@@ -497,7 +497,7 @@ class Adoption:
 
 
 def _legacy_files(root: Path, manager: str) -> list[Path]:
-    old = legacy_mail_root(root, manager)
+    old = _legacy_mail_root(root, manager)
     try:
         return sorted(p for p in old.rglob("*") if p.is_file() or p.is_symlink())
     except OSError:
@@ -570,7 +570,7 @@ def adopt_legacy(root: Path, manager: str) -> Adoption:
     files = _legacy_files(root, manager)
     if marker.exists():
         return Adoption(after_marker=tuple(files))
-    old = legacy_mail_root(root, manager)
+    old = _legacy_mail_root(root, manager)
     new = mail_root(root, manager)
     moved = 0
     kept: list[Path] = []

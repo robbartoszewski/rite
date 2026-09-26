@@ -454,8 +454,10 @@ class TestTheInboxFenceOnLinux:
         from rite_ai.managers.mailbox import (
             INBOX,
             OUTBOX,
-            legacy_mail_root,
             mailbox_dir,
+        )
+        from rite_ai.managers.mailbox import (
+            _legacy_mail_root as legacy_mail_root,
         )
 
         project = tmp_path / "proj"
