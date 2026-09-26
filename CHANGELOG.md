@@ -426,7 +426,7 @@ it let authority point at a channel anyone can post in. Use
 **One machine, one project root.** "Several Managers" in this release means
 several Managers on the SAME machine, in the SAME project directory.
 Managers on different machines are not part of this release: that work is
-planned for 0.7.0.
+planned for 0.8.0.
 
 One project root can run a Claude Manager as the **Owner** beside one or more
 secondaries, typically on a local model. **The Owner is the one Manager whose
@@ -518,7 +518,8 @@ See SPEC §6.6.3.
   nothing useful.
 - **A continuation now names only this project's sessions.** A designation
   pointing at another project's Claude conversation is refused, and the
-  run starts fresh and says why. (For Goose, see Known issues.)
+  run starts fresh and says why. A Goose Manager's own conversation is
+  recognised as this project's, so it continues across runs too.
 - **Claude transcripts are found for project paths containing `_` or `.`.**
   Continuation silently started fresh for those projects.
 - **`rite doctor` tells "could not ask tmux" from "no loop is running"**,
@@ -544,7 +545,8 @@ See SPEC §6.6.3.
 - **Linux: a Claude Manager is not supported yet.** Use a Goose Manager on
   Linux, or run Claude Managers on macOS.
 - **The network is not confined**, and `/tmp` is readable and writable by a
-  Manager. Destination control is planned for 0.7.0.
+  Manager. Destination control is planned for 0.8.0. On Linux, no longer
+  granting `/tmp` is planned for 0.7.0.
 - **Ticket and Slack text is not vetted.** It is cleaned and scanned for
   phrases (above), and an instruction worded as ordinary work still
   reaches the Manager.
@@ -560,9 +562,6 @@ See SPEC §6.6.3.
   (`commit.gpgsign` with `gpg.format ssh`), a Manager's `git commit` fails,
   because the sandbox cannot read `~/.ssh`. A global `core.hooksPath` hook
   that needs something the sandbox refuses fails the Manager's `git push`.
-- **A Goose Manager starts a fresh conversation on every `rite start`.**
-  Within one run its cycles continue. Across runs it prints that the
-  session "is not one of this project's conversations", which is wrong.
 
 ## 0.5.1 (2026-09-21)
 
