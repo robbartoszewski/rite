@@ -6793,6 +6793,19 @@ def _start_a_manager(
             from rite_ai.managers.claude_login import remove_login
 
             remove_login(root, role.name)
+            # ⚠ SAID, because the absence is misleading on its own. This runs
+            # however the run ends, a FAILED launch included, so a post-mortem
+            # always finds the Manager's `claude/` directory empty — and that
+            # reads as a login rite never wrote. Observed on the Linux box: a
+            # Claude Manager that could not exec its engine left an empty
+            # directory, and the next question asked was whether the token had
+            # been written at all. One line converts a misleading absence into
+            # a stated fact.
+            click.echo(
+                f"claude login: removed {role.name}'s copy now the run has "
+                "ended (it is written again at the next start)",
+                err=True,
+            )
         # ⚠ In a finally, so a Ctrl-C still posts the last reply. Only a
         # killed process skips it.
         if listener is not None:
