@@ -284,7 +284,7 @@ installed anywhere else in your home directory, such as a project virtualenv,
 cannot run inside a sandbox.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/robbartoszewski/rite/v0.5.1/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/robbartoszewski/rite/v0.6.0/install.sh | sh
 ```
 
 *That is a `curl | sh` for a tool that scans your repo for secrets, so two

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.0 (2026-09-27)
 
 **0.6.0 in one paragraph.** A Manager now runs inside a sandbox, behind a
 permission allowlist, and asks rite for Workers rather than starting them.
@@ -20,8 +20,7 @@ Known issues.
 ### Upgrading from 0.5.1: three steps, in this order
 
 1. **Install this release, and check that it is the one that runs.**
-   `rite --version` must NOT say `0.5.1`. Until the release is tagged, a
-   build from `main` says `0.6.0.dev0`. A second, older `rite` earlier on
+   `rite --version` must say `0.6.0`. A second, older `rite` earlier on
    your PATH is the usual reason a command below is refused as unknown.
 2. **Copy your credentials into the new store, once:**
    `rite credential import-keychain`. This release no longer reads the
