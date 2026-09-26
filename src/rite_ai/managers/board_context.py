@@ -100,7 +100,7 @@ def refusal(root: Path, manager: str, *, sessions: int, minutes: float) -> str:
     keep = f"rite start {manager} --keep-conversation {bounds}"
     if recorded:
         head = (
-            f"refusing to continue Manager {manager!r}'s conversation: it "
+            f"refusing to continue the conversation of Manager {manager!r}: it "
             f"began when this project's board was {_describe(then or {})}, "
             f"and the board is now {_describe(now)}."
         )
@@ -112,7 +112,7 @@ def refusal(root: Path, manager: str, *, sessions: int, minutes: float) -> str:
         )
     else:
         head = (
-            f"refusing to continue Manager {manager!r}'s conversation: this "
+            f"refusing to continue the conversation of Manager {manager!r}: this "
             f"project's board is now {_describe(now)}, and rite cannot tell "
             f"which board that conversation began with. It was started by an "
             f"earlier build of rite, which did not record it."

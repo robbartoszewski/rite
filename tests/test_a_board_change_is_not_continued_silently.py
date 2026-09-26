@@ -58,6 +58,7 @@ class TestTheRefusal:
         assert "rite start lead --fresh --sessions 3 --minutes 90" in said
         assert "rite start lead --keep-conversation --sessions 3 --minutes 90" in said
         assert "Nothing was started" in said
+        assert "'lead''s" not in said, "a quoted name ran into its possessive"
         assert "setup session" not in said, "a user should not need rite's jargon"
 
     def test_a_board_removed_since_is_refused(self, tmp_path):

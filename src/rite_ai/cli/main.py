@@ -6778,7 +6778,7 @@ def _start_a_manager(
             now = board_now(root) or {"type": "none"}
             record_board(root, role.name, now)
             click.echo(
-                f"continuing Manager {role.name!r}'s conversation as asked, "
+                f"continuing the conversation of Manager {role.name!r} as asked, "
                 "although it began under another board, or one rite cannot "
                 "name. It is recorded as running under the current board "
                 "from now on.",
