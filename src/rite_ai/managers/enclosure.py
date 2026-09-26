@@ -279,16 +279,39 @@ def _manager_separation(project: Path, manager: str) -> list[str]:
 
     It is also §5.4.8's P1 for the one kind of state that carries authority:
     a wrong path join in one Manager cannot write another's files.
+
+    ⚠ **SINCE 0.6.0 THE MAILBOX IS OUTSIDE THE PROJECT** (`mailbox.mail_root`),
+    so no grant above reaches an inbox and none has to be taken back. Two
+    lines remain about mail, and neither is the old carve-out:
+    * the Manager's OWN OUTBOX is granted by exact path, because `rite reply`
+      and `rite ask` write it from in here, and its mail directory is readable
+      so `prune` can see the readers' cursors;
+    * the old in-tree `mail/` stays unwritable, because rite still READS it
+      until it drains (`mailbox.legacy_mail_root`), so a write there would
+      still be delivered.
+    The inbox is also denied by name, LAST, which costs one line and holds
+    even where rite's home sits under a granted path — `/tmp`, or a project
+    that is the home directory itself.
     """
+    from rite_ai.managers.mailbox import INBOX, OUTBOX, legacy_mail_root, mail_root
+
     managers = project / ".rite" / "managers"
     own = managers / manager
+    # Resolved, because seatbelt matches the path the kernel resolved: a
+    # rite home reached through a symlink would otherwise grant nothing.
+    mail = mail_root(project, manager).resolve()
     return [
         "; ⚠ MANAGERS ARE SEPARATED, and no Manager writes an inbox — see",
         ";   enclosure._manager_separation. Named after the project grant so",
         ";   they win.",
         f"(deny file-write* (subpath {_quote(managers)}))",
         f"(allow file-write* (subpath {_quote(own)}))",
-        f"(deny file-write* (subpath {_quote(own / 'mail' / 'in')}))",
+        "; The pre-0.6.0 mailbox, still read until it drains: never written.",
+        f"(deny file-write* (subpath {_quote(legacy_mail_root(project, manager))}))",
+        "; This Manager's mailbox, outside the project: its outbox only.",
+        f"(allow file-read* (subpath {_quote(mail)}))",
+        f"(allow file-read* file-write* (subpath {_quote(mail / OUTBOX)}))",
+        f"(deny file-write* (subpath {_quote(mail / INBOX)}))",
     ]
 
 
@@ -501,6 +524,13 @@ def write_profile(root: Path, manager: str, home: Path | None = None) -> Path:
     path = profile_path(root, manager)
     path.parent.mkdir(parents=True, exist_ok=True)
     engine_tmp(root, manager).mkdir(parents=True, exist_ok=True)
+    # ⚠ The outbox is CREATED here, outside the boundary: the Manager is
+    # granted the outbox and not its parents, so from inside it could not
+    # make the directory it is allowed to write.
+    from rite_ai.managers.mailbox import INBOX, OUTBOX, mailbox_dir
+
+    for box in (OUTBOX, INBOX):
+        mailbox_dir(root, manager, box).mkdir(parents=True, exist_ok=True)
     path.write_text(compose(root, manager, home) + "\n")
     return path
 
