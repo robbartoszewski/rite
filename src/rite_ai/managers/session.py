@@ -764,8 +764,8 @@ def ending(name: str, human_was_present: bool, pane: str = "") -> Ending:
     # session name when the id was unreadable, which is the old behaviour.
     target = pane or name
 
-    def ask() -> tuple[bool, str, str, str] | None:
-        """(reachable, pane_dead, pane_dead_status, pane_dead_signal)."""
+    def ask() -> tuple[bool, str, str, str, str] | None:
+        """(reachable, pane_dead, pane_dead_status, pane_dead_signal, server pid)."""
         try:
             done = subprocess.run(
                 [
@@ -774,7 +774,7 @@ def ending(name: str, human_was_present: bool, pane: str = "") -> Ending:
                     "-p",
                     "-t",
                     target,
-                    "#{pane_dead}|#{pane_dead_status}|#{pane_dead_signal}",
+                    "#{pane_dead}|#{pane_dead_status}|#{pane_dead_signal}|#{pid}",
                 ],
                 capture_output=True,
                 text=True,
@@ -784,13 +784,14 @@ def ending(name: str, human_was_present: bool, pane: str = "") -> Ending:
         except (OSError, subprocess.SubprocessError):
             return None
         if done.returncode != 0:
-            return (False, "", "", "")
+            return (False, "", "", "", "")
         raw = (done.stdout or "").strip().split("|")
         return (
             True,
             raw[0] if raw else "",
             raw[1] if len(raw) > 1 else "",
             raw[2] if len(raw) > 2 else "",
+            raw[3] if len(raw) > 3 else "",
         )
 
     reported = ""
@@ -812,7 +813,7 @@ def ending(name: str, human_was_present: bool, pane: str = "") -> Ending:
         answer = ask()
         if answer is None:
             return Ending(UNCLEAR, detail="could not read the exit status")
-        reachable, dead, reported, signal = answer
+        reachable, dead, reported, signal, server = answer
         if not reachable:
             # The session is gone entirely — `remain-on-exit` did not hold
             # it, or something removed it. No status to read, so no restart.
@@ -834,6 +835,9 @@ def ending(name: str, human_was_present: bool, pane: str = "") -> Ending:
         # least one observation however tight it is set.
         if time.monotonic() - started >= STATUS_DEADLINE:
             break
+        # Dead with no status: the child is very likely an unreaped zombie
+        # whose SIGCHLD tmux has not acted on. See `_nudge_reap`.
+        _nudge_reap(server)
         time.sleep(pause)
         pause = min(pause * 2, STATUS_MAX_PAUSE)
 
@@ -1372,6 +1376,44 @@ def _pane_text(name: str) -> str:
     except (OSError, subprocess.SubprocessError):
         return ""
     return (done.stdout or "") if done.returncode == 0 else ""
+
+
+def _nudge_reap(server_pid: str) -> None:
+    """Send the tmux server a SIGCHLD, so it reaps a pane it has not reaped.
+
+    🔴 **ON LINUX THE LAST EXIT IS NEVER RECORDED — tmux RUNS ONE EXIT
+    BEHIND.** Measured 2026-09-26 on Ubuntu 24.04, tmux 3.4, libevent 2.1,
+    kernel 7.0, with no rite, no Landlock and no load: panes `a`, `b`, `c`
+    running `exit 3`, `exit 5`, `exit 7` one after another read `a:[]`, then
+    `a:[3] b:[]`, then `b:[5] c:[]`. Each status arrives only when the NEXT
+    child of the server exits. The pane's process sits as a zombie of the
+    tmux server, whose SIGCHLD is caught, not blocked and not ignored.
+
+    So a Manager that was the last thing to end waited out the whole
+    deadline and was reported `unclear` — a clean exit, not resumed. That
+    was blamed on load and then on an unread pane id; both were
+    coincidental. Load only changed whether some other child happened to
+    exit inside the window. Measured on a real Manager: pane `%4` dead,
+    `status=[]` after 30.6s; one `kill -CHLD` to the server and it read
+    `status=[0]` at once.
+
+    This is that `kill -CHLD`. tmux's handler only runs `waitpid(WNOHANG)`
+    over its own children, so a live pane is untouched and a signal with
+    nothing to reap does nothing. The pid is tmux's own `#{pid}` for the
+    server `ending` is already talking to. A pid that cannot be read, or a
+    signal that cannot be sent, leaves `ending` exactly where it was: still
+    waiting, and still `unclear` if nothing arrives.
+    """
+    try:
+        pid = int(server_pid)
+    except ValueError:
+        return
+    if pid <= 1:
+        return
+    try:
+        os.kill(pid, signal.SIGCHLD)
+    except OSError:
+        pass
 
 
 def _pane_id_or_why(name: str) -> tuple[str, str]:
