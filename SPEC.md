@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.16 · **Date:** 2026-09-26
+**Version:** 0.24.17 · **Date:** 2026-09-26
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -6187,17 +6187,26 @@ between them (§9.16.5). `conversations.replies` is a separate method with
 its own bucket. Tier 3 is documented as **"50+" a minute**, a floor rite
 cannot rely on beyond:
 
-| running relays on ONE app | `conversations.history` per minute | against 50+ |
-|---|---|---|
-| 1 | 30 | inside |
-| 2 | 60 | over the floor |
-| 3 | 90 | clearly over |
+| running relays on ONE app | `conversations.history` per minute | against 50+ | measured 2026-09-26 |
+|---|---|---|---|
+| 1 | 30 | inside | 26/min, no 429 |
+| 2 | 60 | over the floor | 52/min, no 429 |
+| 3 | 90 | clearly over | 79/min, no 429 |
+| 4 | 120 | | 104/min; first 429 about 164 s in |
+
+**Measured against the real workspace** (`docs/design/V060_TAG_READINESS.md`,
+D7). Slack enforced later than its documented floor, and not instantly. When
+it did, every 429 carried `Retry-After: 10`. The relay ignores that and keeps
+its 2-second tick, and the throttled share grew each minute while the call
+rate stayed flat. Nothing was lost, because a failed read does not advance
+the cursor, but a message waited up to 22 s. The floor is still the only
+number rite can rely on.
 
 With an app per project, each project has its own bucket and the table stops
 applying. The decision removes the constraint rather than working within it.
-⚠ **The same multiplication applies to several Managers in one project**,
-which share that project's app and DM. That is v0.7.0's MMQ2, and it is not
-settled here.
+Several Managers in one project do NOT multiply it: only the Owner opens a
+relay (MMQ2, decided as (c), §9.16.7). Measured: two Managers in one project
+make 26 `conversations.history` calls a minute, the same as one.
 
 **The ceiling this puts on a free workspace, verified.** Slack's help centre:
 a free workspace can "add up to 10 third-party or custom apps", and
@@ -6853,6 +6862,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.17 — §9.16's rate table is measured.** The table was arithmetic from the 2-second tick; it now carries the real workspace's figures beside it (26, 52 and 79 `conversations.history` calls a minute for one, two and three relays on one app, with no 429; the first 429 at four relays, 104 a minute). It records that the relay ignores `Retry-After` and that nothing was lost under throttling. The line saying several Managers in one project multiply the rate, pending MMQ2, is replaced: MMQ2 is decided and only the Owner opens a relay, measured at 26 a minute with two Managers.
 
 **Changes in 0.24.16 — the old in-tree mailbox is moved once, then never read.** 0.24.15 read the old box merged with the new one for as long as it held anything. That left a second place rite delivered from, fenced only by a deny rule on macOS and the enumeration on Linux. Worse, on Linux a project under the granted `/tmp` had it wide open. The first `rite start` now moves the old box under the run lock, cursors first, and writes a marker. After that the tree is never read for mail, and files that appear there are reported, not delivered. The old-box fence rules are gone from both profiles, and a Manager's own directory is granted as a tree on Linux. §5.4.8 also records that `.rite/user/` is already writable across Managers, so a tree grant opens nothing new there.
 
