@@ -44,7 +44,23 @@ class TestNoInvisibleCharacterSurvives:
         return out
 
     def test_the_sweep_finds_a_real_population(self):
-        assert len(self._candidates()) > 150
+        """A guard so `test_every_one_is_removed_and_named` cannot pass
+        vacuously — if `_candidates()` returned nothing, that test would be
+        green while sweeping nothing at all.
+
+        ⚠ **The floor cannot encode one Python's Unicode database.** The count
+        is derived from `unicodedata`, which ships with the interpreter, so it
+        moves with the interpreter: measured 141 on Python 3.11 and above 150
+        on 3.12 and 3.13. The assertion was `> 150`, which was true of the
+        interpreter it was written on and red in CI on 3.11 every run — the
+        proxy-versus-property shape, since the property is "a substantial
+        population" and 150 was one reading of it.
+        """
+        found = len(self._candidates())
+        assert found > 120, (
+            f"only {found} candidates — the sweep has nothing meaningful to "
+            "work with, so `test_every_one_is_removed_and_named` proves nothing"
+        )
 
     def test_every_one_is_removed_and_named(self):
         survived = []
