@@ -322,6 +322,9 @@ Exactly one must hold it when several Managers share a root, and
   read the Owner's DM and would have acted on the same instruction.
 - **The Owner hands work down:** `rite route helper "…"`. The secondary gets
   it at its next turn, marked as routed by the Owner.
+- **Replies come back up:** a secondary's `rite reply` reaches the Owner at
+  its next turn, marked as context from that Manager. A secondary has no
+  authority over the Owner.
 - ⚠ **No Manager can write a Manager's inbox — another's or its own.** A
   message in an inbox is an instruction, so each Manager's sandbox refuses
   the write, and `rite message` run by a Manager refuses and says what to
@@ -330,7 +333,9 @@ Exactly one must hold it when several Managers share a root, and
 
 This applies when the project has no `coordination.remote`. With one, the
 Managers may be on other machines and the election decides the Owner, and
-nothing here changes.
+nothing here changes. **A Manager that is already running keeps its opening
+instructions** until `rite start <manager> --fresh`, so it is not told about
+the others until then.
 
 ### Hidden text in tickets and Slack messages is shown, and injection phrases are reported
 

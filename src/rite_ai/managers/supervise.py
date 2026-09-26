@@ -495,6 +495,32 @@ def _resume_id_source(engine: str, agent: str = ""):
     return chosen
 
 
+def _designation_is_ours(
+    root: Path, manager: str, designation: str, handle_is_ours: bool
+) -> bool:
+    """Whether a designation belongs to THIS project — and, where it can be
+    told, THIS Manager.
+
+    ⚠ **C29: C8's check only knew one source of handle.** For Claude the
+    provider assigns the id, so membership is answered from Claude's
+    transcripts (`belongs_to_project`). For an engine whose handle rite
+    CHOOSES (Goose, `Spelling.handle_is_ours`), the handle is
+    `session_name(root, manager)` and never appears in Claude's transcripts —
+    so every Goose Manager's own designation failed the check and every run
+    started FRESH, printing that its own session "is not one of this project's
+    conversations". The local secondary in the two-Manager shape could never
+    continue across runs, which is the property `rite start X` exists for.
+
+    For a rite-chosen handle the check is STRONGER than C8's: the name rite
+    would choose here embeds the project's hash AND the Manager's name, so
+    equality answers "this project" and "this Manager" at once — the half C8's
+    docstring says it could not answer for Claude.
+    """
+    if handle_is_ours:
+        return designation == session_name(root, manager)
+    return belongs_to_project(root, designation)
+
+
 def _default_resume_id(root: Path, manager: str, since: float = 0.0) -> str:
     """The provider session to carry on from — for an engine that ASSIGNS one.
 
@@ -698,7 +724,9 @@ def supervise(
     # user starts over, works all day, and tomorrow's bare `rite start`
     # silently returns to the conversation they deliberately abandoned.
     resume_from = "" if fresh else designated(root, manager)
-    foreign = bool(resume_from) and not belongs_to_project(root, resume_from)
+    foreign = bool(resume_from) and not _designation_is_ours(
+        root, manager, resume_from, spelling_for(engine, agent).handle_is_ours
+    )
     if foreign:
         # ⚠ C8. Said in its own words, not `_could_not_continue`'s: "the
         # provider forgot it" and "it is not this project's" are different
@@ -865,6 +893,11 @@ def supervise(
             boundary = checkins.at_boundary(root, manager)
             if boundary.said:
                 say(boundary.said)
+            if callable(router):
+                # Before the inbox is taken: a secondary's reply written while
+                # this Owner was between cycles, or not running at all, belongs
+                # in THIS cycle's instruction, not the one after.
+                router(say)
             waiting_for_it = take_mail(root, manager, INBOX)
             if waiting_for_it:
                 say(f"delivering {len(waiting_for_it)} message(s) to {manager!r}")

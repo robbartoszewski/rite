@@ -6044,8 +6044,28 @@ def _loop_verdict(root: Path, board=None) -> str:
         return "unknown"
 
 
+def _other_managers_briefing(root: Path, manager: str) -> str:
+    """The start prompt's section on the other Managers in this root, or "".
+
+    Only in one root: with a `remote` the election decides the Owner, and
+    telling a Manager it is or is not the Owner would be a guess (v0.7.0).
+    """
+    from rite_ai.config.managers import routing_owner, shares_one_root
+    from rite_ai.config.models import ProjectConfig
+    from rite_ai.config.parse import ParseError, parse_config
+    from rite_ai.managers.routing import briefing
+
+    parsed = parse_config(root / ".rite" / "config.yaml")
+    config = parsed if not isinstance(parsed, ParseError) else ProjectConfig()
+    if not shares_one_root(config.coordination.remote):
+        return ""
+    roles = list(config.coordination.manager_roles)
+    return briefing(manager, routing_owner(roles), roles)
+
+
 def _router_for(root: Path, manager: str):
-    """The routing step for this Manager's supervisor, or None.
+    """The routing step for this Manager's supervisor, or None: route the
+    Owner's requests down (MM-3), and bring the others' replies up (MM-4).
 
     ⚠ **Built for EVERY Manager in one root, not only the Owner** —
     `routing.deliver_routes` discards a non-Owner's requests and SAYS so, and a
@@ -6056,7 +6076,7 @@ def _router_for(root: Path, manager: str):
     from rite_ai.config.managers import routing_owner, shares_one_root
     from rite_ai.config.models import ProjectConfig
     from rite_ai.config.parse import ParseError, parse_config
-    from rite_ai.managers.routing import deliver_routes
+    from rite_ai.managers.routing import collect_reports, deliver_routes
 
     parsed = parse_config(root / ".rite" / "config.yaml")
     config = parsed if not isinstance(parsed, ParseError) else ProjectConfig()
@@ -6065,7 +6085,13 @@ def _router_for(root: Path, manager: str):
     roles = list(config.coordination.manager_roles)
     owner = routing_owner(roles)
     names = [r.name for r in roles]
-    return lambda say: deliver_routes(root, manager, owner, names, say)
+
+    def step(say) -> None:
+        deliver_routes(root, manager, owner, names, say)
+        if owner and manager == owner:
+            collect_reports(root, owner, names, say)
+
+    return step
 
 
 def _slack_listener(root: Path, manager: str):
@@ -6350,10 +6376,14 @@ def _start_a_manager(
             window_seconds=minutes * 60.0,
             prompt=(
                 _setup_prompt(root, role.name)
+                # The setup session too: a secondary configuring the board as
+                # if it were alone is the confusion the briefing exists for.
+                + _other_managers_briefing(root, role.name)
                 if setting_up
                 else for_manager(
                     role.name,
-                    extra=instructions(root, role.name, enabled=record_issues),
+                    extra=instructions(root, role.name, enabled=record_issues)
+                    + _other_managers_briefing(root, role.name),
                 )
             ),
             fresh=fresh,
@@ -6623,8 +6653,21 @@ def reply(text: str, manager: str) -> None:
         raise SystemExit(1)
 
     send(root, speaking, OUTBOX, text)
+    from rite_ai.config.managers import routing_owner, shares_one_root
+    from rite_ai.config.parse import ParseError, parse_config
+
+    parsed = parse_config(root / ".rite" / "config.yaml")
+    one_root = not isinstance(parsed, ParseError) and shares_one_root(
+        parsed.coordination.remote
+    )
+    # Only in one root is there a router bringing this up to the Owner (MM-4).
+    owner = routing_owner(list(roles)) if one_root else ""
     click.echo(
         f"reply queued from {speaking!r} — the User reads it with `rite replies`."
+        if not owner or owner == speaking
+        else f"reply queued from {speaking!r} — the Owner Manager {owner!r} "
+        "receives it at its next turn, and a person can read it with "
+        "`rite replies`."
     )
     # C23: the store grows here, so it is bounded here too.
     warning = full_warning(prune(root, speaking, OUTBOX), speaking)
