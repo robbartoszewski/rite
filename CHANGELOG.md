@@ -489,12 +489,15 @@ Exactly one must hold it when several Managers share a root, and
   rule carving it out of the project. The directory is keyed by the
   checkout's path, not by the credential namespace, which every checkout of a
   project shares. The file `project` beside it says which checkout it is.
-  **Nothing is copied on upgrade.** rite reads the old in-tree mailbox too,
-  until it is empty, and each reader keeps its place, so the Slack relay does
-  not repost old replies. A Manager still running an older rite gets a
-  message you send after upgrading when it next starts. **Restart running
-  Managers after upgrading.** `rite init`'s wipe no longer deletes a
-  project's mail.
+  **Upgrading moves the old mailbox once.** The first `rite start` of each
+  Manager moves its old in-tree mailbox, and each reader keeps its place, so
+  the Slack relay does not repost old replies. Until then `rite replies` says
+  how many messages are waiting there. After the move, rite never reads the
+  project tree for mail. A file that appears there later, for example from an
+  older rite still running, is reported at each start and **not delivered**,
+  because rite cannot tell who wrote it. Resend it with `rite message`.
+  **Restart running Managers after upgrading.** `rite init`'s wipe no longer
+  deletes a project's mail.
 - ⚠ **A setup session no longer swallows an instruction.** With no ticket
   backend, a Manager's session is for setting one up, and it used to be told
   to do "nothing else". So an instruction you sent it was refused or silently
