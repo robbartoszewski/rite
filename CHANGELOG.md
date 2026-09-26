@@ -7,8 +7,11 @@ permission allowlist, and asks rite for Workers rather than starting them.
 It can run on a local model through Goose. You can talk to it from Slack,
 and it saves questions that do not block it for a few check-in windows a
 day, each opening with a standup built from what rite recorded. Tracker and
-Slack text reaches it as the tracker shows it. **Tested on macOS.** On Linux
-a Manager cannot start in this release; see Known issues.
+Slack text reaches it as the tracker shows it. **Tested on macOS, and in
+part on Linux** (one Ubuntu 24.04 ARM64 virtual machine): a Goose Manager
+started there, ran a cycle inside a Landlock boundary, and posted to Slack.
+That boundary is weaker than macOS's, and a Claude Manager does not work on
+Linux yet; see Known issues.
 
 **How to read this entry.** Each feature says what was run to check it.
 "Observed" means a person ran it through `rite start` or the CLI on a real
