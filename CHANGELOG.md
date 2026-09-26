@@ -500,12 +500,15 @@ See SPEC §6.6.3.
   session belongs to this project reads only Claude's transcripts, refuses
   Goose's own session name, and prints that the session "is not one of this
   project's conversations". That message is wrong.
-- **A sandboxed Manager reaches GitHub without your credentials.** `gh`
-  starts inside the sandbox, but anonymously: 60 API requests an hour
-  (measured) and so no private repositories. `git push` over HTTPS uses
-  `gh` for its credential, so it has none to push with. rite can give a
-  Manager a one-hour token from a GitHub App instead, but that has not yet
-  been run against GitHub.
+- **A Manager has no GitHub credential unless you configure a GitHub
+  App.** It never uses your own gh login: rite no longer lets a Manager read
+  `~/.config/gh`, where gh keeps your login, in plain text on a machine
+  with no keyring. Without an App, `gh` inside the sandbox is not logged
+  in, `git push` over HTTPS fails, and `rite start` says so with the fix.
+  With one, rite gives the Manager a one-hour token for one repository. On
+  macOS, `git` inside the sandbox was observed picking that token up for a
+  push; it has not yet been run against GitHub with a real App. `git push`
+  uses it only for an HTTPS remote, not SSH.
 - **Linux: a Claude Manager does not work yet.** See the Claude sign-in
   change above.
 - **No way to start a Manager outside its sandbox.** If one of your own
