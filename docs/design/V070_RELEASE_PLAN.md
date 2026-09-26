@@ -790,6 +790,131 @@ toggle.
 expressible). The Owner's merge answer depends on one setting, `strategy`
 (plus the `auto_merge` flag).
 
+## Track MX — Multi-machine: deferred from v0.6.0, and the Remote-Worker
+
+**Robert, 2026-09-26:** "Multi-machine hardening may be deferred to v0.7.0."
+(He wrote "v0.7.9"; confirmed a typo for v0.7.0.)
+
+This is not new scope leaving v0.6.0. Multi-Manager was already narrowed to
+**one machine, one project root** for v0.6.0, and the full multi-machine
+spec was cut. This pushes that deferred part into v0.7.0. v0.6.0's release
+notes say "one machine, one project root" in those words.
+
+### What "multi-machine hardening" covers: the properties deferred
+
+So a later reader knows what was deferred rather than inferring it:
+- **MX-P1, separation between Managers on different machines.** P2 (one
+  Manager cannot signal or drive another) is established only within one
+  root on one machine: the sandbox's `(target same-sandbox)` signal rule
+  and the denied tmux socket are per-machine mechanisms. Across machines
+  nothing equivalent has been stated, let alone measured.
+- **MX-P2, the mailbox and routing assume a shared filesystem.** Inboxes
+  and outboxes are files under the project root. `rite route` is carried
+  out by the Owner's supervisor writing the secondary's inbox on the same
+  disk (`managers/routing.py`, "who may write a Manager's inbox"). Each
+  reader's cursor and the Slack relay read those same files. None of that
+  exists across machines.
+- **MX-P3, the credential store is per machine**
+  (`~/.config/rite/credential-store.json`). It is a genuine multi-machine
+  property, not an inconvenience: it caused two misdiagnoses on
+  2026-09-26. The App key existed only on the Mac, and the VM's
+  `claude_token` had to be set again. Which credentials exist on which
+  machine must be visible, and how they are distributed is a design
+  question (the v0.7.0 credential broker).
+- **MX-P4, the 0.4.0/0.5.0 coordination layer** (Owner lease and CAS state
+  over a git remote) is implemented and exercised by the suite, and has
+  never run on two physical machines (README).
+- Also per machine, and so part of the same work: the sandbox backend
+  (seatbelt vs Landlock), the tmux server, and the per-user instance
+  records.
+
+### MX1: the Remote-Worker (Robert's proposal)
+
+**His proposal:** a new entity, the **Remote-Worker**. It is
+provider-agnostic, and the User starts it on the secondary machine. It
+listens for instructions from the Manager it is paired with, and needs
+pairing configuration.
+
+**The shape:** one Manager on the main machine and one Worker per secondary
+machine, rather than Managers spread across machines. It is cheaper than
+multi-machine multi-Manager because **a Worker holds no authority**: it
+does not poll Slack, does not route and does not decide, so MX-P2's mailbox
+and routing assumptions do not apply to it. It also keeps prompt caches
+warm: each Worker stays pinned to its own machine's Ollama, where one
+Manager fanning out across several Ollama instances would re-process its
+context on a cold instance every request.
+
+🔴 **A design property to preserve, not an implementation detail: the
+remote machine LISTENS; the Manager never reaches out.** The Manager
+therefore needs no credentials, no SSH access and no remote-execution
+capability against other machines.
+
+**Open question 1, transport. Recommendation: poll the shared repository**
+(the `push_to_shared` repository of Track PB), with results returning the
+same way.
+- It adds no listening port, no TLS and no new authenticated network
+  surface. A socket or HTTP service would mean an authenticated network
+  service on EVERY secondary machine, which is a new attack surface
+  multiplied by the fleet, for a Worker whose whole appeal is that it holds
+  no authority.
+- rite already has this mechanism: the git compare-and-swap state layer
+  (`coordination/git_backend.py`, "state is one commit on the `state`
+  branch, rewritten with `--force-with-lease`; messages are ordinary
+  commits") carries state between machines over a git remote with no
+  service. Reuse it; do not build a second transport.
+- Costs, stated: latency is the poll interval, the repository grows with
+  message commits, and each machine needs push access to the shared
+  repository (MX-P3 again).
+
+**Open question 2, pairing. 🔴 An authority problem, not a configuration
+problem.** A Remote-Worker executes what its Manager sends, so
+impersonating the Manager gives code execution on every secondary machine.
+Solve it the way the inbox was solved: structurally, never by trusting
+content. The Owner does not write a secondary's inbox; it asks, and "who is
+asking comes from the supervisor … never from the request"
+(`managers/routing.py`).
+- **Recommended shape:** at pairing, the User copies the Manager machine's
+  PUBLIC key to the Remote-Worker's machine (a public key is not a secret,
+  so MX-P3's distribution problem shrinks to copying something harmless).
+  The Manager's supervisor signs each instruction commit, outside the
+  sandbox, as it already mints tokens and launches Workers. The
+  Remote-Worker refuses any instruction not signed by the paired key, and
+  refuses replays (a sequence number inside the signed content).
+- **Belt and braces:** scope write access to the instruction ref so only
+  the Manager machine's credential can push it.
+- **What NOT to do:** a shared secret in a config file. It would be copied
+  onto every machine through a per-machine store, and anyone holding it
+  could impersonate the Manager to every Worker.
+
+**Open question 3, 🔴 sandboxing is a PREREQUISITE, not a follow-up.**
+Today there is no Linux Worker sandbox by default (v0.6.0 readiness D18).
+A Remote-Worker on Linux would be an unsandboxed process executing
+instructions received over the network. **It must not ship in that
+order.** Note that the obvious Linux sandbox, Docker, needs membership of
+the `docker` group, which is root-equivalent on the host (the reasoning
+that closed v0.6.0's D2), so a Linux Worker sandbox is itself an open
+design problem, not a checkbox.
+
+**Linked to Track PB:** `strategy: commit` cannot work for a Remote-Worker,
+because its commits would be stranded on the wrong machine. **So
+`push_to_shared` is load-bearing for MX1, not merely compatible with it**,
+and the same shared repository is the transport recommended above.
+
+**Naming: recommend its own verb, not `rite start X`.** `rite start X`
+starts a MANAGER by name from `coordination.manager_roles`, and everything
+behind it is Manager machinery: the Claude login, the Manager sandbox
+profile, Slack, the supervisor loop and routing. Overloading it would make
+the name decide whether a long-running process acts with a Manager's
+authority or a Worker's none, and a typo or a name clash could start the
+wrong kind. Something like `rite worker listen <name>` (the CLI already
+groups by noun, as in `rite manager stop` and `rite sandbox start`) keeps
+"this process holds no authority" visible in the command.
+
+| # | work | done when | depends | size |
+|---|---|---|---|---|
+| MX1 | **The Remote-Worker**, as above | A Remote-Worker on a second physical machine, sandboxed, paired by public key, takes an instruction through the shared repository and returns a result the same way. An instruction signed by any other key is refused, and so is a replayed one. The Manager machine holds no credential for the Worker machine | a Linux Worker sandbox; Track PB's `push_to_shared` | design first; unsized |
+| MX2 | **MX-P1 to MX-P4 stated and measured across two physical machines** | each property observed holding or recorded as not holding on two machines over a real network | — | design first; unsized |
+
 ## Track CU — Cursor, the third engine
 
 **Status: READ, NOT MEASURED.** From Cursor's CLI reference
