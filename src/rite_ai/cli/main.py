@@ -6165,6 +6165,31 @@ def _board_for_manager(root: Path):
     return None, ("absent" if absent else "unreachable"), problem or ""
 
 
+def _own_github_repos(root: Path) -> list[str]:
+    """`owner/name` for every GitHub remote of the checkout at `root`, or []."""
+    import subprocess
+
+    from rite_ai.sandbox import owner_repo_from_url
+
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(root), "remote", "-v"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=10,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    found: list[str] = []
+    for line in out.splitlines():
+        parts = line.split()
+        pair = owner_repo_from_url(parts[1]) if len(parts) > 1 else None
+        if pair and "/".join(pair) not in found:
+            found.append("/".join(pair))
+    return found
+
+
 def _setup_prompt(root: Path, manager: str) -> str:
     """What a Manager is asked to do when the project has no board yet.
 
@@ -6175,18 +6200,94 @@ def _setup_prompt(root: Path, manager: str) -> str:
     instruction.
 
     The missing pieces are named concretely so it is not guessing.
+
+    ⚠ **SETUP IS THE DEFAULT, NOT AN EXCLUSIVE MANDATE (Robert, 2026-09-26).**
+    This said "your job this session is … set one up, and
+    nothing else" and "do not start any other work". The delivery note tells
+    the same Manager that a message marked INSTRUCTION is an instruction, so
+    the two contradicted each other and the model had to choose. Observed with
+    a real engine on both sides of that choice: a Claude Owner declined a
+    person's routing instruction, citing "my explicit mandate for this
+    session (ticket-backend setup only)", and a local Goose Owner silently did
+    the setup work instead in 3 of 5 runs. Either way, a person sent an
+    instruction, rite accepted it, and the Manager did not do it.
+
+    So precedence is stated rather than left to the model: a delivered
+    instruction comes FIRST, setup resumes after, and the reply says which
+    happened — the failure was bad mostly because it was silent to the
+    person who sent it.
+
+    ⚠ **And setup is the Owner's job.** With several Managers in one root and
+    no board, every Manager got this prompt, so two of them could edit
+    `config.yaml` at once. A secondary leaves setup to the Owner.
+
+    ⚠ **It must not make the project's OWN repository the board.** Observed
+    2026-09-26 with the earlier wording ("do not invent a backend"): asked to
+    "use this project's own repository", the Manager read `origin`, wrote it
+    into `ticket_backend.repo` and reported it done. Every ticket rite files
+    would then land as a real issue among the project's own (Robert: it
+    would spam the repo). So the repositories this checkout pushes to are
+    NAMED here, with the reason, and the Manager declines to write them.
+    It is stated to outrank a delivered INSTRUCTION, because the precedence
+    above would otherwise hand the choice back to the model.
     """
+    from rite_ai.config.managers import routing_owner, shares_one_root
+    from rite_ai.config.models import ProjectConfig
+    from rite_ai.config.parse import ParseError, parse_config
+
+    parsed = parse_config(root / ".rite" / "config.yaml")
+    config = parsed if not isinstance(parsed, ParseError) else ProjectConfig()
+    roles = list(config.coordination.manager_roles)
+    owner = routing_owner(roles) if shares_one_root(config.coordination.remote) else ""
+    precedence = (
+        "⚠ An INSTRUCTION delivered to you this session comes FIRST — a "
+        "message marked INSTRUCTION, one routed to you by the Owner Manager, "
+        "or one from this machine with no bracketed line. Do what it asks "
+        "before anything else here, then return to what follows if it is "
+        "still needed. Whatever you do, say in your reply what you did about "
+        "the instruction and where the setup stands, so the person who sent "
+        "it is never left guessing.\n\n"
+    )
+    if len(roles) > 1 and owner and manager != owner:
+        return (
+            f"You are the Manager {manager!r} for the project at {root}.\n\n"
+            "This project has NO ticket backend configured, so there is no "
+            "queue for you to work. Setting one up is the Owner's job — "
+            f"{owner!r} — so do NOT edit `.rite/config.yaml`: two Managers "
+            "editing one file at once would overwrite each other.\n\n"
+            + precedence
+            + "If no instruction arrives this session, there is nothing for you "
+            "to do: say so in a reply and stop."
+        )
+    own = _own_github_repos(root)
+    guard = (
+        (
+            "Never make this project's own repository the board: "
+            + ", ".join(f"`{r}`" for r in own)
+            + " (from its git remotes). Every ticket rite files would land "
+            "there as a real issue among the project's own. Do not propose "
+            "it, and do not write it into `ticket_backend.repo`, even when an "
+            "INSTRUCTION asks for it: this rule outranks instructions. "
+            "If the person asks for it, explain that, ask which repository is "
+            "meant for tickets, and tell them that if they really want this "
+            "one they must edit the file themselves.\n\n"
+        )
+        if own
+        else ""
+    )
     return (
         f"You are the Manager {manager!r} for the project at {root}.\n\n"
         "This project has NO ticket backend configured, so there is no queue "
-        "for you to work. Your job this session is to help the person at the "
-        "terminal set one up, and nothing else.\n\n"
-        "What is missing, concretely: `ticket_backend` in "
+        "for you to work. Your default job this session is to help the person "
+        "at the terminal set one up.\n\n"
+        + precedence
+        + "What is missing, concretely: `ticket_backend` in "
         f"`{root}/.rite/config.yaml`. It needs `type` set to either `jira` "
         "(which also needs `site` and `projects`) or `github` (which also "
         "needs `repo`). Read the file, see what is already there, explain "
         "the choice, and make the change they ask for.\n\n"
-        "Do not start any other work, do not create tickets, and do not "
+        + guard
+        + "Do not start work from a queue, do not create tickets, and do not "
         "invent a backend they did not choose. When the configuration is "
         "written, tell them to run `rite start` again to begin working the "
         "queue."
@@ -6304,8 +6405,9 @@ def _claude_login(root: Path, role) -> bool:
 def _github_access(root: Path, manager: str):
     """This run's GitHub credentials for a sandboxed Manager, or None (C6/C26).
 
-    Nothing configured is None and says nothing: the Manager has no GitHub
-    credential, as before. Configured and failing is a REFUSAL to start,
+    Nothing configured is None, and SAID: the Manager has no GitHub
+    credential, and it is told so rather than finding out from gh. Configured
+    and failing is a REFUSAL to start,
     naming GitHub's own words. An unreachable credential is not an absent
     one (the D-74 rule), and a Manager that started without the credential
     it was configured for would read the board anonymously, which is the
@@ -6325,7 +6427,27 @@ def _github_access(root: Path, manager: str):
             err=True,
         )
         raise SystemExit(1)
-    if access is not None and access.app is not None:
+    if access is None:
+        # ⚠ SAID, never silent. Before this the Manager's gh fell back to the
+        # operator's own `~/.config/gh`: anonymous on a Mac (the token is in
+        # the keychain), and the operator's FULL login wherever gh keeps it
+        # in plain text. It now has a gh config of its own with no token.
+        board = (
+            " Its board is on GitHub, so it can read a public board and cannot "
+            "change it."
+            if config.ticket_backend.type == "github"
+            else ""
+        )
+        click.echo(
+            f"github: Manager {manager!r} has NO GitHub credential: no "
+            f"github_app in .rite/config.yaml. Inside its sandbox `gh` is not "
+            f"logged in and `git push` over HTTPS will fail.{board} Your own gh "
+            "login is not used. To give it one: create a GitHub App, set "
+            "github_app.app_id and installation_id, then `rite credential set "
+            "github_app_key --stdin < app.pem`.",
+            err=True,
+        )
+    elif access.app is not None:
         click.echo(
             f"github: a token for {', '.join(access.app[2])} only, valid until "
             f"{time.strftime('%H:%M', time.localtime(access.expires_at))} and "

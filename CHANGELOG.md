@@ -18,6 +18,20 @@ Linux yet; see Known issues.
 project. Where a part was run only with a stand-in engine or a stand-in for
 Slack, it says so.
 
+### Upgrading from 0.5.1: three steps, in this order
+
+1. **Install this release, and check that it is the one that runs.**
+   `rite --version` must NOT say `0.5.1`. Until the release is tagged, a
+   build from `main` says `0.6.0.dev0`. A second, older `rite` earlier on
+   your PATH is the usual reason a command below is refused as unknown.
+2. **Copy your credentials into the new store, once:**
+   `rite credential import-keychain`. This release no longer reads the
+   keychain (see "credentials live in one 0600 file" below). Observed: it
+   copied 13 credentials and printed their names, never their values.
+3. **For each project with a Claude Manager:** `claude setup-token`, then
+   `rite credential set claude_token` (see "a Claude Manager signs in with
+   its own token" below).
+
 ### ⚠ BEHAVIOUR CHANGE ON UPGRADE — a Manager is no longer ungated
 
 **0.5.1 launched every Manager with `--dangerously-skip-permissions`. This release
@@ -145,6 +159,47 @@ Manager has been observed signing in. With no token stored, `rite start`
 refuses correctly there. On Linux the Manager can also overwrite its own
 copy of the token, because Landlock cannot deny one file inside a directory
 it grants.
+
+### Giving a Manager GitHub access: a GitHub App
+
+A Manager never uses your own gh login. To let it read and write a GitHub
+board, or push, create a GitHub App and install it on the repositories it
+should reach. Grant it Contents, Issues and Pull requests read and write,
+plus Metadata read. rite asks for exactly those four every time it mints a
+token, so an App granted less should have the request refused and `rite
+start` refuse with GitHub's words (read from the code; not yet observed).
+Then, inside the project:
+
+    # .rite/config.yaml (neither id is a secret). This App is installed
+    # on robbartoszewski/rite-dogfood-board only, the board's repository.
+    github_app:
+      app_id: "5084143"
+      installation_id: "165090155"
+      # repository: owner/name      # optional; defaults to ticket_backend.repo
+
+    rite credential set github_app_key --stdin < your-app.private-key.pem
+
+The key goes in whole, newlines included. A one-line prompt would mangle
+them, which is why it is read from standard input. **Observed:** a 28-line
+PEM stored this way reads back byte for byte, and a token request signed
+with it verifies against the key's public half.
+
+The token covers ONE repository, `repository` or else the board's. An App
+installed only on the board's repository cannot push to your code
+repository, so a Manager holding the `integrate` duty cannot push or open a
+pull request there through it. **For rite's own project that is the case:
+the App above is installed on `rite-dogfood-board` only, so `integrate` does
+not work on the `rite` repository through it.** Pushing uses the token only
+for an HTTPS remote.
+
+⚠ **Point the board at a repository meant for tickets, never at the
+project's own code repository unless you want every ticket rite files to
+land there as an issue.** `rite init` never guesses the board from `origin`,
+and a Manager helping you set a board up is told the project's own
+repositories by name and declines to write one in, even when asked.
+Observed: asked to "use this project's own repository", it refused, said
+why, and left `config.yaml` unchanged. With the earlier wording, the same
+request had written the repository in.
 
 ### ⚠ BEHAVIOUR CHANGE ON UPGRADE — credentials live in one 0600 file
 
@@ -417,6 +472,15 @@ Exactly one must hold it when several Managers share a root, and
   the write, and `rite message` run by a Manager refuses and says what to
   use instead. A person's `rite message` from their own shell works as
   before.
+- ⚠ **A setup session no longer swallows an instruction.** With no ticket
+  backend, a Manager's session is for setting one up, and it used to be told
+  to do "nothing else". So an instruction you sent it was refused or silently
+  ignored. Now an instruction delivered that session comes first: one marked
+  INSTRUCTION, routed by the Owner, or typed on this machine. Setup resumes
+  afterwards, and the reply always says what was done about the instruction
+  and where setup stands. It still does not work a queue, create tickets or
+  choose a backend for you. With several Managers, only the Owner does setup,
+  so two Managers never edit `config.yaml` at once.
 
 This applies when the project has no `coordination.remote`. With one, the
 Managers may be on other machines and the election decides the Owner, and
@@ -500,12 +564,15 @@ See SPEC §6.6.3.
   session belongs to this project reads only Claude's transcripts, refuses
   Goose's own session name, and prints that the session "is not one of this
   project's conversations". That message is wrong.
-- **A sandboxed Manager reaches GitHub without your credentials.** `gh`
-  starts inside the sandbox, but anonymously: 60 API requests an hour
-  (measured) and so no private repositories. `git push` over HTTPS uses
-  `gh` for its credential, so it has none to push with. rite can give a
-  Manager a one-hour token from a GitHub App instead, but that has not yet
-  been run against GitHub.
+- **A Manager has no GitHub credential unless you configure a GitHub
+  App.** It never uses your own gh login: rite no longer lets a Manager read
+  `~/.config/gh`, where gh keeps your login, in plain text on a machine
+  with no keyring. Without an App, `gh` inside the sandbox is not logged
+  in, `git push` over HTTPS fails, and `rite start` says so with the fix.
+  With one, rite gives the Manager a one-hour token for one repository. On
+  macOS, `git` inside the sandbox was observed picking that token up for a
+  push; it has not yet been run against GitHub with a real App. `git push`
+  uses it only for an HTTPS remote, not SSH.
 - **Linux: a Claude Manager does not work yet.** See the Claude sign-in
   change above.
 - **No way to start a Manager outside its sandbox.** If one of your own

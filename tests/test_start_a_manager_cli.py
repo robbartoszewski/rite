@@ -178,3 +178,36 @@ class TestFreshReachesTheSupervisor:
         )
         assert result.exit_code == 0, result.output
         assert supervised[0]["fresh"] is False
+
+
+def test_the_setup_prompt_NAMES_the_projects_own_repo_and_refuses_it(tmp_path):
+    """Observed 2026-09-26 before this: asked to use "this project's own
+    repository", a setup Manager wrote `origin` into ticket_backend.repo.
+    After it, the same request was declined with the reason, config unchanged."""
+    import subprocess
+
+    from rite_ai.cli.main import _setup_prompt
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    assert "Never make this project's own repository" not in _setup_prompt(
+        tmp_path, "lead"
+    ), "no GitHub remote, nothing to name"
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(tmp_path),
+            "remote",
+            "add",
+            "origin",
+            "git@github.com:acme/widgets.git",
+        ],
+        check=True,
+    )
+    prompt = _setup_prompt(tmp_path, "lead")
+    assert "`acme/widgets`" in prompt
+    assert "do not write it into `ticket_backend.repo`" in prompt
+    # The setup prompt lets a delivered INSTRUCTION outrank it (5ff4cfa), so
+    # this rule must say it outranks instructions, or the model chooses.
+    assert "this rule outranks instructions" in prompt
+    assert "real issue" in prompt, "the reason is stated, not just the rule"

@@ -76,7 +76,32 @@ def _instructions(text: str) -> list[tuple[int, str]]:
 
 
 def _current() -> str:
-    return rite_ai.__version__
+    """The version the install instructions must name.
+
+    ⚠ **Between releases `VERSION` carries a DEV marker** (`0.6.0.dev0`), so a
+    `main` build cannot report itself as the release before it: measured, both
+    said 0.5.1, and a refused `--stdin` was the only sign the wrong one ran.
+    The instructions must then name the NEWEST RELEASE, which is what a
+    stranger can actually install, so the check stays live between releases
+    rather than skipping. At the release bump `VERSION` is release-shaped again
+    and this is simply it.
+    """
+    import subprocess
+
+    from rite_ai.cli.init.scaffold import _RELEASE_VERSION_RE
+
+    version = rite_ai.__version__
+    if _RELEASE_VERSION_RE.match(version):
+        return version
+    tags = subprocess.run(
+        ["git", "-C", str(ROOT), "tag", "-l", "v[0-9]*", "--sort=-v:refname"],
+        capture_output=True,
+        text=True,
+    ).stdout.split()
+    released = [t[1:] for t in tags if _RELEASE_VERSION_RE.match(t[1:])]
+    if not released:
+        pytest.skip(f"VERSION is {version}, a dev marker, and no release tag is here")
+    return released[0]
 
 
 @pytest.mark.parametrize("relative", BEARERS)
@@ -121,4 +146,4 @@ def test_it_agrees_with_the_version_the_cli_reports():
     above rests on that being the single source of truth SPEC §8.5 says it
     is. If those two ever diverge, this test is comparing files against
     something other than the release."""
-    assert (ROOT / "VERSION").read_text().strip() == _current()
+    assert (ROOT / "VERSION").read_text().strip() == rite_ai.__version__

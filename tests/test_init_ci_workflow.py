@@ -386,7 +386,18 @@ def test_install_sh_pins_the_same_ref_the_workflow_does():
     `v{__version__}` — they agree only while VERSION is 0.3.0, and the
     comment in the generated workflow says they are the same tag."""
     import rite_ai
+    from rite_ai.cli.init.scaffold import _RELEASE_VERSION_RE
 
+    # ⚠ Between releases VERSION carries a DEV marker, so `rite --version`
+    # cannot report a main build as the release before it (measured: both
+    # said 0.5.1). A dev version pins the workflow to `main` by design, and
+    # install.sh keeps installing the last release, so the two agree only on
+    # a release-shaped VERSION. Checked then, which is when it matters.
+    if not _RELEASE_VERSION_RE.match(rite_ai.__version__):
+        pytest.skip(
+            f"VERSION is {rite_ai.__version__}, a dev marker: install.sh pins the "
+            "last release and the workflow pins main until the release bump"
+        )
     install_sh = (REPO_ROOT / "install.sh").read_text()
     match = re.search(r'^VERSION="\$\{RITE_VERSION:-([^}]+)\}"', install_sh, re.M)
     assert match, "install.sh no longer declares a default VERSION — update this test"
