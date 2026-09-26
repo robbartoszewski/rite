@@ -7436,6 +7436,10 @@ def manager_stop(name: str) -> None:
     "--record-issues",
     is_flag=True,
     default=False,
+    # ⚠ HIDDEN: the owner's decision (SPEC §9.15, reversed "until the leak
+    # path is closed"; re-advertising is a v0.7.0 question). It works; it is
+    # not listed. The help text stays for whoever is told about it.
+    hidden=True,
     help="BETA, undocumented. Record what this Manager notices about how "
     "rite is working to a journal on disk. Off by default. The entry "
     "format may change, entries are redacted only where a value looks like "

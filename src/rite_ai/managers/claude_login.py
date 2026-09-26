@@ -47,15 +47,9 @@ from __future__ import annotations
 
 import json
 import os
-import time
 from pathlib import Path
 
 from rite_ai.state import write_atomic
-
-LIFETIME_SECONDS = 365 * 24 * 3600
-"""`claude setup-token` mints a one-year token (Claude Code's documentation).
-rite does not know when it was minted, so the expiry written is a year from
-now. Claude reports an expired token itself, loudly (401)."""
 
 
 def _config_dir(root: Path, manager: str, home: Path | None = None) -> Path:
@@ -84,9 +78,14 @@ def _write_login(
 ) -> Path:
     """This Manager's `.credentials.json`, 0600, in a 0700 directory.
 
-    Only the fields Claude Code was measured to need: the token, an expiry
-    and the scope. No plan name and no refresh token: rite knows neither, and
-    a file claiming a plan would be a claim rite cannot check.
+    Only the token and the scope. No plan name, no refresh token and ⚠ **no
+    expiry**: rite knows none of them, and each would be a claim written into
+    the file that rite cannot check. An expiry used to be written as "a year
+    from now", which overstates a token minted months ago. Measured
+    2026-09-26: with a fake token, Claude Code answered `401 OAuth access
+    token is invalid` with and without `expiresAt`, so it reads the file
+    either way and the field bought nothing. A real expired token is
+    reported by Claude itself, loudly (401).
     """
     d = _config_dir(root, manager, home)
     d.mkdir(parents=True, exist_ok=True)
@@ -99,7 +98,6 @@ def _write_login(
             {
                 "claudeAiOauth": {
                     "accessToken": token.strip(),
-                    "expiresAt": int((time.time() + LIFETIME_SECONDS) * 1000),
                     "scopes": ["user:inference"],
                 }
             }

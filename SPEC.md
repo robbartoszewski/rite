@@ -5517,6 +5517,10 @@ absent from the README, the CHANGELOG's 0.5.1 section and the guide, and
 nothing invites a user to enable it. `--record-issues` keeps working
 exactly as specified — the machinery is untouched — but it is not
 advertised, and no operator is encouraged to send its output anywhere.
+**Still reversed in 0.6.0, and that includes `rite start --help`:** the
+option is `hidden=True`, so it works but is not listed. It had been left
+visible, which advertised it in the one place a user starting a Manager
+reads. Re-advertising is an open v0.7.0 decision.
 
 The reason is scope, not doubt about the design: the journal applies **no
 redaction**, while §9.15.6 asks a Manager to record "a command with its

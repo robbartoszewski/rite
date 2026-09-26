@@ -227,36 +227,39 @@ def _start_help() -> str:
 
 
 def test_the_flag_is_named_what_it_does_and_marked_beta():
-    """D-89 and §9.15.1."""
-    text = _start_help()
-    assert "--record-issues" in text, (
+    """D-89 and §9.15.1: the flag and its help text, read from the option
+    itself because it is hidden from `rite start --help`."""
+    from rite_ai.cli.main import cli
+
+    [option] = [p for p in cli.commands["start"].params if p.name == "record_issues"]
+    assert "--record-issues" in option.opts, (
         "D-89 names the flag `--record-issues` — for what it DOES, not the "
         "category it belongs to"
     )
-    assert "beta" in text.lower(), (
+    assert "beta" in (option.help or "").lower(), (
         "§9.15.1 requires beta in the flag's help text — it is what buys the "
         "licence to change the entry format without a compatibility argument"
     )
 
 
-def test_somebody_who_does_not_know_the_feature_exists_can_find_it():
-    """§9.15's discoverability requirement, and the whole point of the item.
+def test_the_flag_is_not_advertised_but_still_works(tmp_path, monkeypatch):
+    """⚠ §9.15 as it stands: REVERSED by the owner, so issue recording ships
+    undocumented and NOTHING invites a user to enable it. This used to assert
+    the opposite, `--record-issues` visible in `rite start --help`, pinning the
+    discoverability requirement §9.15 records as not in force. Re-advertising
+    is an open v0.7.0 question (V070_RELEASE_PLAN.md), not a default.
 
-    ⚠ The stakes are not "an opt-in feature goes unused". The next large
-    unattended run is operated by somebody who is not the project owner,
-    with the owner not watching, and this is the only channel by which
-    anything comes back from it. A flag nobody finds means that run
-    produces silence and nobody learns so until it is over.
-
-    So this asserts the flag is visible where a person starting a Manager
-    looks — `rite start --help` — rather than only in a document they have
-    no reason to open.
+    Hidden is not removed: an operator who is told about it can still use it.
     """
-    text = _start_help()
-    assert "--record-issues" in text, (
-        "`--record-issues` does not appear in `rite start --help`. The "
-        "person running the dogfood has no reason to know it exists"
-    )
+    assert "--record-issues" not in _start_help()
+
+    from click.testing import CliRunner
+
+    from rite_ai.cli.main import cli
+
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(cli, ["start", "--record-issues"])
+    assert "no such option" not in result.output.lower(), result.output
 
 
 # --- §9.15.3a the entries must be able to leave the machine -------------------------
