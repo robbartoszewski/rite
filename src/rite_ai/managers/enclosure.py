@@ -457,14 +457,28 @@ def limitations() -> tuple[str, ...]:
     purpose: "these routes were tried and refused" is a statement about what
     was measured. "It is contained" would be a statement about every route
     that exists, which nobody here has established.
+
+    ⚠ **AND IT HAPPENED A SECOND TIME, WHICH IS WHY THAT HEDGE IS NOT
+    DECORATION.** On 2026-09-26 the same escape was measured again through a
+    DIFFERENT socket path: the fix denied `$TMUX_TMPDIR/tmux-<uid>/`, and a
+    tmux server on any other path under the granted `/tmp` is still
+    reachable. The list said the tmux route "was tried and refused" — true of
+    the one path that was tried, false as the reader would take it. Corrected
+    here before the hole, for the same reason as last time.
     """
     return (
         "⚠ THIS BOUNDS FILES, NOT CAPABILITY, and it is not a proof of "
-        "containment — it is a set of holes that were looked for and "
-        "closed. Two were found and closed on 2026-09-25: reaching the "
-        "tmux server, which runs outside the profile and would run anything "
-        "you sent it unconfined, and signalling processes outside the "
-        "sandbox. Both were measured before and after",
+        "containment — it is a set of holes that were looked for, some "
+        "closed and one still open. Signalling processes outside the "
+        "sandbox was found and closed on 2026-09-25, measured before and "
+        "after",
+        "🔴 A tmux SERVER ON A SOCKET PATH THIS PROFILE GRANTS IS STILL "
+        "REACHABLE, and anything sent to it runs OUTSIDE the boundary. The "
+        "default socket directory is denied, which closes the server rite "
+        "itself starts — but /tmp is granted, so a server on any other path "
+        "under it is not. Measured 2026-09-26 with a control: a direct "
+        "write to an ungranted directory was refused, and the same write "
+        "through a tmux server on a custom socket under /tmp SUCCEEDED",
         "/tmp and /private/tmp are readable and writable, so anything kept "
         "there — including other rite worktrees — is reachable",
         "the network is NOT confined — seatbelt has no network isolation, so "
@@ -477,8 +491,9 @@ def limitations() -> tuple[str, ...]:
         "ticket text from your board reaches the engine as instructions; the "
         "sandbox limits what acting on it can touch, it does not vet it",
         "what it DOES buy: your home outside the paths above, your SSH keys, "
-        "and other projects outside /tmp are not reachable — direct access "
-        "and the tmux route were both tried and both refused",
+        "and other projects outside /tmp are not reachable by DIRECT access "
+        "— that was tried and refused. The tmux route is refused for the "
+        "default socket directory only; see the line above",
     )
 
 
