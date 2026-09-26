@@ -524,6 +524,13 @@ See SPEC §6.6.3.
   Continuation silently started fresh for those projects.
 - **`rite doctor` tells "could not ask tmux" from "no loop is running"**,
   and says `unknown` rather than reporting a loop as stopped.
+- **Commit signing no longer stops a Manager's commits.** With
+  `commit.gpgsign` (or `tag.gpgsign`) on, every commit a Manager made
+  failed, because its sandbox cannot read your signing key. rite now turns
+  signing off for a Manager's commits and tags only, as it already did for a
+  Worker's. `rite start` and `rite doctor` both say so. Your own commits and
+  your git config are unchanged. If a project requires signed commits, a
+  Manager's commits will not meet that requirement.
 - **A refusal no longer repeats a credential tmux echoed back**, and only
   named variables go onto tmux's command line, which every local account
   can read with `ps`.
@@ -569,11 +576,12 @@ See SPEC §6.6.3.
   start another, whatever `--sessions` says. So on a project with no board,
   an Owner has stopped by the time a secondary replies, and the reply
   waits for your next `rite start`.
-- **Your own global git settings follow a Manager into its sandbox, and two
-  of them stop it.** If you sign commits with a key under `~/.ssh`
-  (`commit.gpgsign` with `gpg.format ssh`), a Manager's `git commit` fails,
-  because the sandbox cannot read `~/.ssh`. A global `core.hooksPath` hook
-  that needs something the sandbox refuses fails the Manager's `git push`.
+- **A global `core.hooksPath` stops a Manager's `git push`.** The sandbox
+  cannot run hooks from outside the project. rite does not bypass them,
+  because a global hook may be a guard you rely on. `rite doctor` and `rite
+  start` name the directory and give the fix, which also stops your global
+  hooks running for your own pushes in that project:
+  `git config --local core.hooksPath <the project's .git/hooks>`.
 
 ## 0.5.1 (2026-09-21)
 

@@ -1077,6 +1077,14 @@ ALLOWED_ON_TMUX_ARGV = frozenset(
         "GIT_CONFIG_VALUE_0",
         "GIT_CONFIG_KEY_1",
         "GIT_CONFIG_VALUE_1",
+        # `git_settings`: up to two more, numbered after the two above — a
+        # signing setting's name and `false`. Index 4 is headroom.
+        "GIT_CONFIG_KEY_2",
+        "GIT_CONFIG_VALUE_2",
+        "GIT_CONFIG_KEY_3",
+        "GIT_CONFIG_VALUE_3",
+        "GIT_CONFIG_KEY_4",
+        "GIT_CONFIG_VALUE_4",
         # A PATH: where a Claude Manager's own login and transcripts are
         # (`claude_login`). The token is in a 0600 file there, never here.
         "CLAUDE_CONFIG_DIR",

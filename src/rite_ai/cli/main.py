@@ -760,6 +760,27 @@ def _doctor_report(problems: list[str]) -> None:
                 "to start a Manager rather than start one unconfined"
             )
 
+    # 🔴 Doctor was SILENT here, and its silence read as approval: a global
+    # `commit.gpgsign` or `core.hooksPath` failed every commit or push a
+    # Manager made, and the user lost a whole cycle with no pointer to their
+    # own git config. `rite start` now turns signing off for a Manager's git
+    # alone, and says so: not a problem, because it is handled. A global hooks
+    # path is NOT bypassed (it may be a guard), so it IS a problem: a Manager
+    # here cannot commit or push until the operator chooses.
+    with _doctor_check("manager git", problems):
+        from rite_ai.managers.git_settings import host_git_findings
+
+        findings = host_git_findings(root)
+        for f in findings:
+            click.echo(f"manager git: {f.said}")
+            if f.value is None:
+                problems.append(f"a Manager cannot run git here: {f.key} {f.found}")
+        if not findings:
+            click.echo(
+                "manager git: nothing in your git config stops a Manager's "
+                "commit or push"
+            )
+
     with _doctor_check("publish gate hook", problems):
         for label, repo_dir in [("project root", root)] + [
             (f"module {m.name}", root / m.path) for m in modules
@@ -6464,6 +6485,18 @@ def _github_access(root: Path, manager: str):
     return access
 
 
+def _say_git_findings(root: Path, manager: str) -> None:
+    """Say which of the operator's git settings this Manager's git will not
+    use, and which will stop it. The signing override is applied at launch
+    (`git_settings`); this is the line that stops it being silent, because
+    turning off signing for someone who signs deliberately is a decision they
+    should see made. A global hooks path is only reported, never bypassed."""
+    from rite_ai.managers.git_settings import host_git_findings
+
+    for f in host_git_findings(root):
+        click.echo(f"git: Manager {manager!r}: {f.said}", err=True)
+
+
 def _slack_listener(root: Path, manager: str):
     """A Slack listener for this Manager, opened, or None when Slack is off.
 
@@ -6740,6 +6773,7 @@ def _start_a_manager(
     for note in adoption_notes(adopt_legacy(root, role.name), role.name):
         click.echo(note, err=True)
     github = _github_access(root, role.name)
+    _say_git_findings(root, role.name)
     claude_signed_in = _claude_login(root, role)
     listener = _slack_listener(root, role.name)
     try:
