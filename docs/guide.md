@@ -595,29 +595,32 @@ than inside a module is not visible to the worker. If a clone fetches from a
 directory that contains the worker's own, such as the project root itself,
 start says it cannot be mounted.
 
-## A Manager needs a token in your environment
+## A Claude Manager needs a token of its own
 
-**`rite start <manager>` runs the engine non-interactively**, so a session
-ends when its turn does and the supervisor can tell finishing from crashing
-by reading an exit status. A non-interactive engine cannot stop and ask you
-to log in, so it needs a credential it can read without you:
+**`rite start <manager>` runs Claude Code non-interactively, inside a
+sandbox**, so it cannot ask you to log in and cannot read your keychain
+login. Give each project with a Claude Manager a token of its own, once:
 
-    claude setup-token                 # prints a long-lived token
-    export CLAUDE_CODE_OAUTH_TOKEN=... # in the shell you run rite from
+    claude setup-token                  # prints a one-year token
+    rite credential set claude_token    # paste it
 
     rite start <manager> --sessions 3 --minutes 90
 
-**rite reads it from the environment and never handles it.** The pane
-inherits your shell's environment, so the token reaches the engine without
-rite storing it, logging it, or putting it on a command line — there is
-nothing for rite to redact, because rite never has the value. Do not pass
-it to rite as an argument and do not put it in `.rite/config.yaml`.
+rite keeps the token in its credential file
+(`~/.config/rite/credential-store.json`, mode 0600) and gives each Manager
+its own copy for the length of a run, in a file only that Manager's sandbox
+can read. The token never goes on a command line or into the environment,
+where `ps` would show it to every account on the machine. **You do not need
+`CLAUDE_CODE_OAUTH_TOKEN`; do not export it for rite.**
 
-Without it, `rite start` refuses before spending a session and tells you
-so. That refusal is different from the one you get when a token is present
-but the engine still could not authenticate: rite cannot tell a bad
-credential from one the engine failed to read, and it says so rather than
-guessing.
+Without a stored token, `rite start` refuses a Claude Manager before
+spending a session and prints the two commands above. A Claude Manager is
+supported on macOS in this release.
+
+## Naming a Manager
+
+**Do not name a Manager `permissions`.** Its record would share a file with
+the permission allowlist rite passes to every Manager.
 
 ## A local model needs a context window you have to set
 

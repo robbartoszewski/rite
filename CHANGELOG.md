@@ -7,16 +7,14 @@ permission allowlist, and asks rite for Workers rather than starting them.
 It can run on a local model through Goose. You can talk to it from Slack,
 and it saves questions that do not block it for a few check-in windows a
 day, each opening with a standup built from what rite recorded. Tracker and
-Slack text reaches it as the tracker shows it. **Tested on macOS, and in
-part on Linux** (one Ubuntu 24.04 ARM64 virtual machine): a Goose Manager
-started there, ran a cycle inside a Landlock boundary, and posted to Slack.
-That boundary is weaker than macOS's, and a Claude Manager does not work on
-Linux yet; see Known issues.
+Slack text reaches it as the tracker shows it. Several Managers can share
+one project on one machine, with a Claude Owner routing work to a
+local-model secondary.
 
-**How to read this entry.** Each feature says what was run to check it.
-"Observed" means a person ran it through `rite start` or the CLI on a real
-project. Where a part was run only with a stand-in engine or a stand-in for
-Slack, it says so.
+**Platforms.** Everything here runs on macOS. On Linux (tested on Ubuntu
+24.04) a Goose Manager runs inside a sandbox that is **weaker than macOS's**,
+Workers are **not sandboxed by default**, and a **Claude Manager is not
+supported yet**. See Known issues.
 
 ### Upgrading from 0.5.1: three steps, in this order
 
@@ -26,8 +24,8 @@ Slack, it says so.
    your PATH is the usual reason a command below is refused as unknown.
 2. **Copy your credentials into the new store, once:**
    `rite credential import-keychain`. This release no longer reads the
-   keychain (see "credentials live in one 0600 file" below). Observed: it
-   copied 13 credentials and printed their names, never their values.
+   keychain (see "credentials live in one 0600 file" below). It prints the
+   names it copies, never the values.
 3. **For each project with a Claude Manager:** `claude setup-token`, then
    `rite credential set claude_token` (see "a Claude Manager signs in with
    its own token" below).
@@ -101,17 +99,11 @@ for you. Widen the list as above instead.
 list: Goose runs whole-session in `GOOSE_MODE=auto`, which rite sets. For
 Goose, the sandbox is the boundary.
 
-**Observed** on 2026-09-24 against real Claude on five benchmark tasks. The
-first run scored 0/5, because the list allowed commands and not Claude's
-own file edits. After the fix it scored 5/5, with nothing refused. With
-rite's list, `rite --version` ran and `curl --version` was refused. Without
-the list, `rite --version` was refused, which shows the list actually
-arrives.
-
 ### ⚠ BEHAVIOUR CHANGE ON UPGRADE — a Claude Manager signs in with its own token
 
 A Claude Manager runs inside a sandbox, and the sandbox cannot read your
-macOS keychain, which is where Claude Code keeps your login. So **a Claude
+macOS keychain, which is where Claude Code keeps your login. (A Claude
+Manager is supported on macOS in this release, not yet on Linux.) So **a Claude
 Manager now needs a token of its own**, once per project:
 
     claude setup-token                  # prints a one-year token
@@ -160,23 +152,14 @@ its copy, so the next `rite start` for that Manager removes it and says so.
 It also closes a gap: a Manager can no longer read other projects' Claude
 transcripts, because `~/.claude` is not granted any more.
 
-**Observed** on macOS, 2026-09-26: a sandboxed Claude Manager signed in with
-a `setup-token` token, read the project with its tools, and its `rite reply`
-reached `rite replies`. The same day, through `rite start`: a copy left by
-a killed run was removed and reported, a second `rite start` for a running
-Manager was refused without touching its login, and inside the sandbox
-overwriting or renaming over the login was refused.
-
-**On Linux a Claude Manager does not work in this build.** No Linux
-Manager has been observed signing in. With no token stored, `rite start`
-refuses correctly there. On Linux the Manager can also overwrite its own
-copy of the token, because Landlock cannot deny one file inside a directory
-it grants.
-
 ### Giving a Manager GitHub access: a GitHub App
 
-A Manager never uses your own gh login. To let it read and write a GitHub
-board, or push, create a GitHub App and install it on the repositories it
+**A Manager never uses your own gh login.** Without an App it has no GitHub
+credential: `gh` inside its sandbox is not logged in, `git push` over HTTPS
+fails, and `rite start` says so with the fix. rite no longer lets a Manager
+read `~/.config/gh`, where gh keeps your login (in plain text on a machine
+with no keyring). To let it read and write a GitHub board, or push, create
+a GitHub App and install it on the repositories it
 should reach. Grant it Contents, Issues and Pull requests read and write,
 plus Metadata read. rite asks for exactly those four every time it mints a
 token, so an App granted less should have the request refused and `rite
@@ -194,28 +177,11 @@ start` refuse with GitHub's words. Then, inside the project:
 The key goes in whole, newlines included. A one-line prompt would mangle
 them, which is why it is read from standard input.
 
-**Observed against GitHub, 2026-09-26, with the App above, on macOS:**
-- GitHub issued a one-hour token for `rite-dogfood-board`, asked for with
-  exactly the four permissions.
-- Inside a Manager's sandbox, `gh` was logged in as the App
-  (`x-access-token`, from the Manager's own directory). The Manager's
-  `rite board list` read the board, which is private; so did a real
-  sandboxed Claude asked to do the same. Your own gh login was refused
-  inside the sandbox.
-- A refresh replaced the Manager's token. A token revoked mid-run gave a
-  loud `HTTP 401: Bad credentials`, never an anonymous read, and the next
-  refresh brought the read back.
-- `git push` over HTTPS created and deleted a branch on the board with the
-  token, from inside the sandbox.
-
-**On Linux: expected to work, not verified against GitHub.** The App code
-is the same on both platforms. The Linux-specific part is the sandbox
-grant, and that is tested: rite's Linux CI runs kernel-level tests in which
-only the Manager's two gh files are readable inside the Landlock boundary.
-No Linux Manager has
-minted a token or read a board with one. ⚠ On Linux, as on macOS, the App
-is the ONLY way a Manager gets GitHub access; it never uses your own gh
-login.
+rite gives the Manager a one-hour token for that one repository, refreshes
+it before it lapses, and fails loudly (`HTTP 401: Bad credentials`), never
+anonymously, if a refresh cannot happen. Verified against GitHub on macOS:
+minting, reading a private board, refresh, and `git push` over HTTPS. **On
+Linux it is expected to work but has not been verified against GitHub.**
 
 The token covers ONE repository, `repository` or else the board's. An App
 installed only on the board's repository cannot push to your code
@@ -228,11 +194,8 @@ for an HTTPS remote.
 ⚠ **Point the board at a repository meant for tickets, never at the
 project's own code repository unless you want every ticket rite files to
 land there as an issue.** `rite init` never guesses the board from `origin`,
-and a Manager helping you set a board up is told the project's own
-repositories by name and declines to write one in, even when asked.
-Observed: asked to "use this project's own repository", it refused, said
-why, and left `config.yaml` unchanged. With the earlier wording, the same
-request had written the repository in.
+and a Manager helping you set a board up declines to write the project's
+own repository in, even when asked.
 
 ### ⚠ BEHAVIOUR CHANGE ON UPGRADE — credentials live in one 0600 file
 
@@ -263,51 +226,38 @@ the file.
 - **No passphrase, on purpose for now.** A passphrase asked at start would
   stop a Manager started by cron, and it protects the file only at rest.
 
-Observed on macOS through the CLI: the file created at 0600 in a 0700
-directory; `doctor` naming it; a 0644 file refused, with `doctor` exiting 1.
-
 ### ⚠ BEHAVIOUR CHANGE ON UPGRADE — a Manager runs inside a sandbox
 
-**0.5.1 ran a Manager unsandboxed. This release runs it inside a macOS
-seatbelt profile** that rite writes for each Manager, under `.rite/user/`,
-and rewrites on every run. The pane's command becomes
-`sandbox-exec -f <profile> <engine …>`. **macOS only:** `sandbox-exec` does
-not exist on Linux, and this release has no Linux equivalent (Known issues).
+**0.5.1 ran a Manager unsandboxed. This release runs it inside a
+sandbox** that rite writes for each Manager and rewrites on every run: a
+seatbelt profile on macOS (`sandbox-exec -f <profile> <engine …>`), a
+Landlock boundary on Linux. **The Linux boundary is weaker** (Known issues).
 
 **A Manager no longer starts Workers itself.** A sandbox cannot start another
 sandbox inside it, so the Manager writes a request, and `rite start`'s
 supervisor, outside the sandbox, checks it and runs `rite sandbox start`. A
 request names a declared Worker and a ticket and nothing else. The Worker
 starts **when the Manager's current cycle ends**, and the Manager is told so.
-**Observed:** a sandboxed Goose Manager wrote a request, and a Worker
-sandbox really started from it.
 
 **A Manager's instructions name rite by its full path**, the `rite` that
 started it, not whichever `rite` is first on PATH. On a machine with an
 older rite installed, a Manager used to run that one and fail on commands it
-lacked. The sandbox lets that `rite` run wherever it is installed.
-**Observed** for a uv tool install, a pipx install and a source checkout,
-each through `rite start`, with a real Manager running `rite reply` inside
-the sandbox.
+lacked. The sandbox lets that `rite` run wherever it is installed (a uv
+tool install, pipx, or a source checkout).
 
-**What the profile keeps out:** your home directory outside the paths it
-names, your SSH keys, and other projects outside `/tmp`. The tmux server that
-runs your Managers is out of reach too, and signals are limited to the
-Manager's own processes. Both of those routes were found open after the first
-version and closed, and each was measured succeeding and then failing.
+**What the sandbox keeps out:** your home directory outside the paths it
+names, your SSH keys, and other projects outside `/tmp`. Signals are limited
+to the Manager's own processes. On macOS the tmux server that runs your
+Managers is out of reach too; **on Linux it is not** (Known issues).
 
 **What it does NOT do, printed on every run:** it bounds files, not
 capability. The network is not confined. `/tmp` is readable and writable. A
-Manager can run `rite`, which does what you can do to this project.
-**Not in that printed list, and measured:** `~/.claude` is readable whole,
-so a Manager can read **other projects' Claude transcripts**. Treat a
-Manager as having your network access and more of your files than the list
-suggests.
+Manager can run `rite`, which does what you can do to this project. Treat
+a Manager as having your network access.
 
-**If something that worked in 0.5.1 now fails with `Operation not
-permitted`**, the likely cause is one of your own Claude Code hooks. Hooks
-still load inside the sandbox, and one that reaches outside the profile fails
-there. rite points at the profile's path when it sees this.
+**If a tool of yours that worked in 0.5.1 now fails with `Operation not
+permitted`**, it needs a path the sandbox does not grant. There is no option
+to run a Manager outside its sandbox.
 
 ### A Manager can run on a local model, through Goose
 
@@ -328,22 +278,19 @@ because Goose exits 0 when its provider is unreachable, so an exit code
 cannot tell a clean cycle from a dead endpoint. It reports what Goose
 refused in Goose's own terms.
 
-**Observed** through `rite start small` on this machine: Goose ran the
-declared model (`ollama qwen3:8b` in the pane) while the global Goose
-config named a different one; it completed cycles inside the sandbox; it
-ran `rite reply` itself, and the reply reached Slack; and a Worker
-requested from inside the sandbox started. A dead endpoint, a missing
-model and a model served at 4096 tokens each stopped `rite start` before it
-spent a session, and said which. A session Goose ended because it wanted
-an approval was reported as that, not as a clean cycle.
+It runs the model the role declares, whatever your global Goose config
+says. A dead endpoint, a missing model and a model served at 4096 tokens
+each stop `rite start` before it spends a session, and say which. A
+session Goose ended because it wanted an approval is reported as that, not
+as a clean cycle. **Pick a model that can call tools**: a small one (for
+example 1.7B parameters) may print `rite reply` as text instead of running
+it.
 
 ⚠ **Set `OLLAMA_CONTEXT_LENGTH`** (at least 32768). At ollama's default
 of 4096, agents appear unable to call tools or remember the last turn. See
 the guide.
 
-⚠ **Only as a Manager, and only on macOS, in this release.** A local
-Worker is not in 0.6.0. Also see Known issues: in this release a Goose
-Manager starts a fresh conversation on every `rite start`.
+**Only as a Manager in this release.** A local Worker is not in 0.6.0.
 
 ### Two readers of one mailbox — `rite replies <manager>`
 
@@ -397,10 +344,8 @@ agent's own system prompt.
 
 It does not look like a setting. It looks like a model that cannot call tools
 and an agent that forgets the previous turn. `rite doctor` now asks the
-endpoint what window is actually in force and says so. ⚠ **Only for a model
-that is loaded.** For a model that is not loaded, or an endpoint that is not
-ollama, `doctor` currently says nothing about the window. Silence is not a
-pass. See the guide.
+endpoint what window is actually in force and says so, for a model ollama
+has loaded. See the guide.
 
 ### Check-ins — most questions wait for a few windows a day
 
@@ -434,16 +379,8 @@ ticket, a session or a command. A Manager adds lines only with
 refused without an anchor and shown as the Manager's statement, not as
 rite's observation.
 
-**How much of this was observed.** On real projects through the real CLI:
-the next window, including one that wraps past midnight; the standup's lines
-for real commits and a real Worker sandbox; a note refused without an
-anchor; and a missed window covered by the next standup. **Deferring,
-re-reading and withdrawing** were run through `rite start` with a stand-in
-engine that did what a Manager does. **A real model deciding what to defer
-and what to withdraw has not been observed yet.** Check-ins are posted to
-your Slack DM and mirrored to the broadcast channel, with answers taken
-from the DM thread. That part has been run only against a stand-in for
-Slack.
+Check-ins are posted to your Slack DM and mirrored to the broadcast
+channel, with answers taken from the DM thread.
 
 With no daemon, a window that passes while no Manager runs posts nothing.
 The queue waits, `rite start` says how many questions are waiting and when
@@ -489,9 +426,7 @@ it let authority point at a channel anyone can post in. Use
 **One machine, one project root.** "Several Managers" in this release means
 several Managers on the SAME machine, in the SAME project directory.
 Managers on different machines are not part of this release: that work is
-deferred to 0.7.0. The multi-machine coordination layer from 0.4.0/0.5.0
-(Owner election, failover) is unchanged, and it has still not been run on
-two physical machines.
+planned for 0.7.0.
 
 One project root can run a Claude Manager as the **Owner** beside one or more
 secondaries, typically on a local model. **The Owner is the one Manager whose
@@ -547,9 +482,7 @@ the others until then.
 
 Tracker UIs hide some of the text their APIs return. An agent reading that
 text could act on words a reviewer never saw. `rite board show`, `list` and
-`query`, and the Slack relay, now give an agent what the tracker shows.
-**Observed** on a real GitHub issue. The Slack half is built and not yet
-observed, because it needs a person to send the characters:
+`query`, and the Slack relay, now give an agent what the tracker shows:
 - invisible characters (zero-width spaces, bidi controls, fillers) are
   removed;
 - Unicode tag characters, which spell text that renders as nothing, are
@@ -573,98 +506,63 @@ See SPEC §6.6.3.
 
 - **A Claude Manager's `rite reply` was refused by its own allowlist.** It is
   told to run rite by full path, and the allowlist only admitted `rite`, so
-  its answers never reached you. The full path is on the list now. Found and
-  observed with a real sandboxed Claude Manager.
+  its answers never reached you. The full path is on the list now.
 
 - **A Manager ran whatever `rite` was first on PATH.** On a machine with an
   older rite installed, it was told to run commands that version lacks and
   got a usage error. Its instructions, a Worker the broker starts, and an
   OS schedule installed by `rite scheduler install` now all name the `rite`
-  that is running. Observed for the instructions (above). For the schedule,
-  observed in what `rite scheduler install` writes, without installing into
-  launchd or cron.
+  that is running.
 - **A designated session that no longer exists now really starts fresh**,
   and says so. Before, the resume failed in the pane and the run reported
-  nothing useful. Observed through `rite start` with a stand-in engine,
-  against Claude's real "No conversation found" message.
+  nothing useful.
 - **A continuation now names only this project's sessions.** A designation
   pointing at another project's Claude conversation is refused, and the
   run starts fresh and says why. (For Goose, see Known issues.)
 - **Claude transcripts are found for project paths containing `_` or `.`.**
   Continuation silently started fresh for those projects.
 - **`rite doctor` tells "could not ask tmux" from "no loop is running"**,
-  and says `unknown` rather than reporting a loop as stopped. Observed with
-  the tmux server frozen.
+  and says `unknown` rather than reporting a loop as stopped.
 - **A refusal no longer repeats a credential tmux echoed back**, and only
   named variables go onto tmux's command line, which every local account
-  can read with `ps`. Observed on real tmux.
+  can read with `ps`.
 
 ### Known issues
 
-- **Linux: a Manager runs inside a Landlock boundary, which is weaker than
-  macOS's in two ways.** Observed on Ubuntu 24.04 ARM64:
-  - **The tmux escape is open, and that is a decision, not an oversight.**
-    Landlock does not govern `connect(2)`, so a Manager can reach the tmux
-    server's socket, and a command sent through it runs outside the
-    boundary. Observed: a file written that way appeared outside the
-    project. Closing it needs a mount namespace (blocked by Ubuntu's default
-    AppArmor policy) or Docker (whose group is root-equivalent on the host),
-    so it is accepted rather than closed. A test asserts it open, so a
-    kernel that closes it will say so.
+- **Linux: the Manager's sandbox is weaker than on macOS.**
+  - **A Manager can reach the tmux server**, and a command sent through it
+    runs outside the sandbox. Closing this on Linux needs a mount namespace
+    (blocked by Ubuntu's default AppArmor policy) or Docker (whose group is
+    root-equivalent on the host), so it is accepted rather than closed.
+  - **A Claude Manager can replace its own login file** (see the Claude
+    sign-in change above).
   - **A Manager cannot create a new top-level file or directory in its
-    project during a cycle.** Existing directories stay writable. Landlock has
-    no deny rule, so keeping one Manager out of another's directory under
-    `.rite/managers/` means granting the project root's existing entries one
-    by one. Moving the mailboxes out of the project did not remove this. Those
-    directories also hold the Owner's route requests, which are delivered as
-    instructions.
+    project during a cycle.** Existing directories stay writable.
+- **Linux: Workers are not sandboxed by default.** `rite init` leaves Worker
+  sandboxing off there, because `flock` does nothing inside a Docker
+  sandbox. The Manager's sandbox does not extend to Workers.
+- **Linux: a Claude Manager is not supported yet.** Use a Goose Manager on
+  Linux, or run Claude Managers on macOS.
+- **The network is not confined**, and `/tmp` is readable and writable by a
+  Manager. Destination control is planned for 0.7.0.
+- **Ticket and Slack text is not vetted.** It is cleaned and scanned for
+  phrases (above), and an instruction worded as ordinary work still
+  reaches the Manager.
 - **Moving a project directory strands its Managers' mail.** The mailbox is
   keyed by the checkout's path, so after a move rite looks in a new, empty
   mailbox. Messages sent before the move stay under `~/.rite/managers/`, in
   the directory whose `project` file names the old path.
-- **Linux: Workers are not sandboxed by default.** `rite init` leaves Worker
-  sandboxing off there, because `flock` does nothing inside a Docker
-  sandbox. The Manager's Landlock boundary does not extend to Workers.
-- **A Goose Manager starts a fresh conversation on every `rite start`.**
-  Within one run its cycles continue. Across runs, rite's check that a
-  session belongs to this project reads only Claude's transcripts, refuses
-  Goose's own session name, and prints that the session "is not one of this
-  project's conversations". That message is wrong.
-- **A Manager has no GitHub credential unless you configure a GitHub
-  App.** It never uses your own gh login: rite no longer lets a Manager read
-  `~/.config/gh`, where gh keeps your login, in plain text on a machine
-  with no keyring. Without an App, `gh` inside the sandbox is not logged
-  in, `git push` over HTTPS fails, and `rite start` says so with the fix.
-  With one, rite gives the Manager a one-hour token for one repository
-  (observed against GitHub on macOS; see the GitHub App section). `git push`
-  uses it only for an HTTPS remote, not SSH. On Linux: expected to work,
-  not verified against GitHub (see the GitHub App section).
-- **Your own global git settings follow a Manager into its sandbox, and
-  two of them break it.** If you sign commits with a key under `~/.ssh`
+- **A Claude Owner cannot wait for a secondary's reply within one turn.**
+  If it routes work and then waits, its session ends, and the reply reaches
+  it at its next turn.
+- **Your own global git settings follow a Manager into its sandbox, and two
+  of them stop it.** If you sign commits with a key under `~/.ssh`
   (`commit.gpgsign` with `gpg.format ssh`), a Manager's `git commit` fails,
   because the sandbox cannot read `~/.ssh`. A global `core.hooksPath` hook
   that needs something the sandbox refuses fails the Manager's `git push`.
-  Observed on the author's machine: both, with a Node.js pre-push hook.
-- **Linux: a Claude Manager does not work yet.** See the Claude sign-in
-  change above.
-- **Two Managers in one project have run only with stand-in engines**, plus
-  one run with a real Goose Owner. A real Claude Owner with a local
-  secondary has not been observed.
-- **Check-ins with a real model are observed on macOS only.** There they ran
-  inside the Manager's sandbox. On Linux, check-ins are observed with Goose
-  on a small local model.
-- **No way to start a Manager outside its sandbox.** If one of your own
-  tools needs a path the profile does not grant, it fails inside the
-  sandbox, and there is no option to turn the sandbox off.
-- **The network is not confined**, and `/tmp` is readable and writable by
-  a Manager. Destination control is planned for 0.7.0.
-- **Ticket and Slack text is not vetted.** It is cleaned and scanned for
-  phrases (above), and an instruction worded as ordinary work still
-  reaches the Manager.
-- **`rite doctor` is silent about a local model's context window** when the
-  model is not loaded, or the endpoint is not ollama.
-- **Do not name a Manager `permissions`.** Its record would share a file
-  with the permission allowlist rite passes to every Manager.
+- **A Goose Manager starts a fresh conversation on every `rite start`.**
+  Within one run its cycles continue. Across runs it prints that the
+  session "is not one of this project's conversations", which is wrong.
 
 ## 0.5.1 (2026-09-21)
 

@@ -33,11 +33,8 @@ sessions to claim and who to ask.
 
 **If you run one session at a time you do not need this.** Several machines
 can share one project — they elect an Owner and the role moves on its own when
-a machine stops — but that shipped in 0.4.0 and has never been run on two
-physical machines over a real network. Treat it as implemented and unproven.
-
-*This sentence said "one machine only" until 0.5.0, which was false from the
-moment 0.4.0 shipped, and was contradicted 250 lines below by this same file.*
+a machine stops — but that has not yet been run on two physical machines over
+a real network. Treat it as implemented and unproven.
 
 ## How work moves through rite
 
@@ -263,10 +260,7 @@ worker receives a newer one — so notes of your own belong in
 
 ## Planned — not built
 
-**This section has been wrong before, in the direction that costs you most.**
-Until 0.5.0 it listed multi-machine coordination as unbuilt; that shipped in
-0.4.0, and somebody who believes a feature is absent does not go looking for
-it. What follows is what is genuinely not built, checked against the code.
+What follows is what is genuinely not built, checked against the code.
 
 - **The loop works the queue.** `rite loop` watches it and says why it is
   stopped — it prints the Worker it would start and does not start one.
@@ -276,10 +270,7 @@ it. What follows is what is genuinely not built, checked against the code.
   that executes a subtask on a local model. The rest is wired and reachable:
   assignment routes duties through the local duty router, and `rite doctor`
   probes a configured `local:<class>` endpoint rather than assuming it.
-  *This bullet said "the pieces are in the code, nothing calls them" until
-  0.5.1, which was false in both directions — and the same stale claim had
-  already been corrected once in `docs/rite-local-dogfood-decisions.md` section 8
-  without anyone propagating it here.* Dispatching Claude sessions
+  Dispatching Claude sessions
   **unattended** remains forbidden by SPEC §9.12, on purpose, because it
   spends your quota while nobody is watching. *Attended* dispatch arrived in
   0.5.1 as `rite start <manager>`, which keeps a Manager session going in
@@ -297,16 +288,6 @@ it. What follows is what is genuinely not built, checked against the code.
   the present tense and describes that mechanism. So today the table is
   reference material a session may or may not act on, which is less than
   either "built" or "not built" suggests.
-
-  *Kept visible because how this line was arrived at is worth more than the
-  line. It read "not built" (false — the config and the table ship), was
-  corrected to "a duty the Owner carries out" (also false — the generated
-  file prints a heading and a list of names, with no sentence telling anyone
-  to use it), and only then to what is above. Three passes, each correction
-  made by someone opening the generated output instead of reading the source
-  or the previous description. The version that survived is weaker than
-  either confident claim, and that is the usual shape: the true answer to
-  "is this built?" is often "partly, and less usefully than it sounds".*
 - **Nothing notices a rejected push of a Worker's work.** (`rite doctor` does
   probe whether the coordination remote accepts a push, by pushing and
   deleting a throwaway branch — a different thing.) Practical consequence,
@@ -345,20 +326,21 @@ approval. It runs inside a sandbox — a GUARD RAIL against mistakes, not
 containment. See the limitations printed below.
 ```
 
-⚠ **Read that as written.** The profile bounds FILES, not capability, and it
+⚠ **Read that as written.** The sandbox bounds FILES, not capability, and it
 is a set of holes that were looked for and closed rather than a proof of
-containment. Two were found after the first version shipped and both are
-closed: reaching the **tmux server**, which runs outside the profile and
-would have run anything sent to it unconfined, and **signalling processes
-outside the sandbox**. Each was measured succeeding, then measured failing.
+containment. Signalling processes outside the sandbox is closed on both
+platforms. Reaching the **tmux server**, which runs outside the sandbox and
+would run anything sent to it unconfined, is closed on macOS and **open on
+Linux**, where the sandbox is weaker (see the release notes).
 
 So treat a Manager as having your own file and network access, because a
 determined one does. `git` runs hooks, `python -c` runs anything, and the
 network is not confined at all — seatbelt has no network isolation. **What
 the profile buys is that a mistake stays inside the project**, which is
-worth having and is not the same as containment. Workers are bounded more
-tightly: they run in their own sandbox with no tmux server outside it to
-reach through.
+worth having and is not the same as containment. On macOS, Workers are
+bounded more tightly: they run in their own sandbox with no tmux server
+outside it to reach through. **On Linux, Workers are not sandboxed by
+default.**
 
 To change the list, edit your own `.claude/settings.json` — add to
 `permissions.allow` to widen it, or `permissions.deny` to narrow it. rite
@@ -386,9 +368,7 @@ Worker it says it would start is one you start. Nothing rite runs
 *unattended* opens a Claude session, because anything scheduled that could
 would be spending your quota with nobody watching.
 
-*This paragraph said "nothing starts a session for you" until 0.5.1, and
-`rite start <manager>` made that false.* That command starts a Manager
-session and starts the next one when the last finishes cleanly — so it opens
+`rite start <manager>` starts a Manager session and starts the next one when the last finishes cleanly — so it opens
 sessions you did not individually type. What keeps the promise above true is
 that it runs in the **foreground**, in your own terminal: it is your process,
 you can attach to the session and watch it, Ctrl-C ends the run, and it stops
@@ -406,41 +386,30 @@ what rite tells them to do — but rite does not read the results, so there is
 no coverage threshold, no accessibility pass, and no opinion on your test
 strategy.
 
-**Several machines work, and have not been run on several machines.** Owner
-election and failover shipped in 0.4.0 and are exercised by the suite,
-including against three interchangeable state backends. What has not happened
-is two physical machines on one project over a real network. Treat it as
-implemented and unproven rather than as either.
-
 **A local model tier needs `OLLAMA_CONTEXT_LENGTH` set.** Ollama serves every
 model at 4096 tokens by default, which is smaller than an agent's own system
 prompt — so the tier fails in ways that look like models unable to call tools
 and agents losing conversation history, rather than like a setting. `rite
 doctor` reports the window actually in force. See the guide.
 
-**A Manager runs on Claude Code, or on Goose for a local model.** Both are
-observed running a Manager (Goose on macOS and on a Linux VM). `CLAUDE.md`
-and `.claude/agents/` are first-class here rather than behind a provider
-abstraction. *This said "no other tool is planned", which contradicted the
-"Planned — not built" section eighty lines above in this same file:* a local
-model tier (`local:<class>`) is designed, ticketed, parsed by the config and
-probed by `rite doctor`, and what is missing is the half that runs a subtask
-on one. No other **hosted** provider is planned.
+**A Manager runs on Claude Code, or on Goose for a local model.**
+`CLAUDE.md` and `.claude/agents/` are first-class here rather than behind a
+provider abstraction. A local model tier for Workers (`local:<class>`) is
+designed, parsed by the config and probed by `rite doctor`; what is missing
+is the half that runs a subtask on one. No other **hosted** provider is
+planned.
 
 **Workers are interchangeable, so there is no capability routing.** Every
 worker holds the same project-scoped credentials, so assignment picks
 whichever is free rather than whichever *can*.
 
-**Tested on macOS 26.2**, where most of the above has been run end to end.
-Not yet run: a sandboxed worker taking a ticket all the way through (step 4),
-two Managers in one project with a real Claude Owner (only stand-in engines
-and one Goose Owner so far), and a Manager's GitHub token against GitHub.
-**Linux: run on one Ubuntu 24.04 ARM64 virtual machine (Parallels), and on
-no physical machine.** A VM is counted as a Linux run, because rite's Linux
-boundary (Landlock) and tmux run in the VM's real Linux kernel. It is still
-one machine, one distribution and one architecture. On it a Goose Manager
-ran inside its boundary and used Slack. A Claude Manager has not run on Linux.
-Windows is not attempted.
+**Platforms.** Built and tested on **macOS 26.2**. One step there has not
+yet run end to end: a sandboxed worker taking a ticket all the way through
+(step 4). **Linux is thinner**, tested on Ubuntu 24.04 (ARM64): a Goose
+Manager runs inside a sandbox that is weaker than macOS's, Workers are not
+sandboxed by default, and a Claude Manager is not supported yet. Several
+Managers share a project on **one machine, one project root**. Windows is
+not attempted.
 
 ## Documentation
 
