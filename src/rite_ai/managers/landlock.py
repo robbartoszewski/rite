@@ -382,14 +382,25 @@ def compose_policy(root: Path, manager: str, home: Path | None = None) -> dict:
             readable.append(one)
 
     if claude_dir.is_dir() and not claude_dir.is_symlink():
-        login = claude_dir / ".credentials.json"
-        for child in sorted(claude_dir.iterdir()):
-            if child.is_symlink() or child == login:
-                continue
-            writable.append(child)
-        if login.is_file() and not login.is_symlink():
-            # Readable so Claude can sign in; never writable.
-            readable.append(login)
+        # ⚠ **GRANTED AS A TREE, and the login is therefore writable here
+        # although seatbelt denies it.** Measured on Ubuntu 2026-09-26: with
+        # only the EXISTING children granted, Claude Code wrote NOTHING to its
+        # config directory and did not say why — it handled the refusals
+        # internally and exited 0. rite then found no transcript and refused to
+        # continue, so a Linux Claude Manager could not resume at all.
+        #
+        # A macOS Manager's directory holds nine entries after a run
+        # (`.claude.json`, `projects`, `sessions`, `shell-snapshots`,
+        # `session-env`, `backups`, `policy-limits.json`,
+        # `remote-settings.json`, `.last-cleanup`), all created as it goes. An
+        # enumeration cannot grant what does not exist yet, and pre-creating
+        # that list would pin rite to one Claude version.
+        #
+        # So the trade, stated rather than hidden: on Linux the Manager can
+        # overwrite the file that authenticates IT — its own token, which it
+        # can already read — and in exchange Claude works. Seatbelt keeps the
+        # deny because it has one to keep.
+        writable.append(claude_dir)
 
     return {
         "manager": manager,
