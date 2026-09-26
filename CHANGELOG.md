@@ -91,6 +91,38 @@ rite's list, `rite --version` ran and `curl --version` was refused. Without
 the list, `rite --version` was refused, which shows the list actually
 arrives.
 
+### ⚠ BEHAVIOUR CHANGE ON UPGRADE — credentials live in one 0600 file
+
+**rite no longer reads credentials from the OS keychain.** It keeps them in
+one file, `~/.config/rite/credential-store.json`, mode 0600, on macOS and
+Linux alike. On Linux the keyring failed headless and under cron, and rite
+then quietly used whatever was in the environment. From inside a Manager's
+sandbox the macOS keychain cannot be read at all.
+
+**After upgrading, run this once**, to copy what you stored before:
+
+    rite credential import-keychain
+
+It prints the names it copies, never the values, and leaves the keychain
+copies in place. Until you run it, `rite doctor` lists what is not yet in
+the file.
+
+- **A file with the wrong permissions is refused, not read.** Its mode is
+  its whole defence, so anything other than 0600 stops rite with the file's
+  name and `chmod 600 <file>`.
+- **`rite doctor` names the store in use**, and reports an unusable one as a
+  problem.
+- **A credential taken from an environment variable is said**, once, with
+  the variable's name. A value is never used silently from somewhere other
+  than where you stored it.
+- A multi-line secret, such as a private key, goes in with
+  `rite credential set <name> --stdin < <file>`: never on the command line.
+- **No passphrase, on purpose for now.** A passphrase asked at start would
+  stop a Manager started by cron, and it protects the file only at rest.
+
+Observed on macOS through the CLI: the file created at 0600 in a 0700
+directory; `doctor` naming it; a 0644 file refused, with `doctor` exiting 1.
+
 ### ⚠ BEHAVIOUR CHANGE ON UPGRADE — a Manager runs inside a sandbox
 
 **0.5.1 ran a Manager unsandboxed. This release runs it inside a macOS
