@@ -6379,6 +6379,11 @@ def _start_a_manager(
                 # The setup session too: a secondary configuring the board as
                 # if it were alone is the confusion the briefing exists for.
                 + _other_managers_briefing(root, role.name)
+                # ⚠ And the journal instructions. `start_notice` above says
+                # "recording issues to …" for a setup session as for any
+                # other, and without these the Manager was never told how:
+                # measured, 0 mentions of `rite journal` in its prompt.
+                + instructions(root, role.name, enabled=record_issues)
                 if setting_up
                 else for_manager(
                     role.name,
