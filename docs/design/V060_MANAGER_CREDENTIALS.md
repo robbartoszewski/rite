@@ -1,6 +1,6 @@
 # How a sandboxed Manager gets GitHub credentials — C6/C26, v0.6.0
 
-**Status: DESIGN + MEASUREMENTS, 2026-09-26. The token half is BUILT (`f3926a1`) and not yet observed; see the banner below.** Robert put C6/C26
+**Status: DESIGN + MEASUREMENTS, 2026-09-26. The token half is BUILT (`f3926a1`) and not yet observed; see the banner below.** *UPDATED later on 2026-09-26: OBSERVED against GitHub on macOS (`93d63f5`: mint, a private board read, refresh, expiry, and a push; readiness D10), with the App Robert created (decision 1). Linux is unverified by his decision (D10). The credential broker at the end of this note is v0.8.0 since the re-filing of the same day, where it says v0.7.0.* Robert put C6/C26
 back into v0.6.0: a Manager that reads a private board anonymously and cannot
 `git push` over HTTPS is not useful enough to ship. This note confirms or
 refutes the proposal it was given, and states the path every credential takes
@@ -194,7 +194,7 @@ which is exactly what `cat hosts.yml` prints, and it passed a bare token and
 parameter, it redacted every one. rite mints the token, so it knows the
 exact value and needs no pattern.
 
-⚠ **Neither the journal nor the Slack relay passes `secrets=` today.** A token
+⚠ **Neither the journal nor the Slack relay passes `secrets=` today.** *(True when written. Both now redact the live GitHub token and the Claude login by exact value: `journal.py`, `github_access.live_secrets()` and `claude_login.live_secrets()`; readiness D3.)* A token
 split across lines or words defeats exact matching. That limit is real, and
 it is stated rather than pattern-matched around.
 
@@ -245,7 +245,7 @@ pull requests, metadata read):
 - **read and change that repository's code, including force-pushing** to any
   branch without protection, and delete branches and tags;
 - create, edit and close its issues and pull requests, and create releases;
-- **copy the token out.** The network is not confined (0.7.0's egress work).
+- **copy the token out.** The network is not confined (0.7.0's egress work; *v0.8.0 since the re-filing*).
   They can use it from anywhere **until it expires, at most one hour**, and
   are cut off within the hour of the Manager stopping, because the
   supervisor stops refreshing;
@@ -266,7 +266,7 @@ it.
   `CLAUDE_CODE_OAUTH_TOKEN` through the **environment**, inherited from the
   tmux server. That is C6's open half for Claude, not re-measured here. This
   design does not solve it.
-- **Other projects' Claude transcripts** (`~/.claude` readable whole, SB4).
+- **Other projects' Claude transcripts** (`~/.claude` readable whole, SB4). *Closed since by `8a61989`.*
 - **The operator's SSH agent** (1). This design closes it.
 
 **For comparison, the proposal as stated** (grant the operator's agent
@@ -401,14 +401,19 @@ not a leak). No Linux Manager has signed in yet.
 
 | # | decision | blocks |
 |---|---|---|
-| 1 | **Create a GitHub App** (owner: your account), install it on the target repository or repositories, and store its private key with `rite credential set`. Permissions proposed: contents write, issues write, pull requests write, metadata read; **not** workflows or secrets | everything in this design |
+| 1 | ✅ **DONE: App `5084143`, observed against GitHub (`93d63f5`, readiness D10).** **Create a GitHub App** (owner: your account), install it on the target repository or repositories, and store its private key with `rite credential set`. Permissions proposed: contents write, issues write, pull requests write, metadata read; **not** workflows or secrets | everything in this design |
 | 2 | ✅ DECIDED: token only (Robert, final) | — |
 | 3 | ✅ SETTLED as an implementation choice: the system `openssl`, with the key passed through a pipe (no new dependency) | — |
-| 5 | **Claude's credential in a sandboxed Manager** (above) | every sandboxed Claude Manager, on both platforms |
+| 5 | ✅ **DECIDED as readiness Q1 (i) and BUILT (`8a61989`), observed on macOS (D3).** **Claude's credential in a sandboxed Manager** (above) | every sandboxed Claude Manager, on both platforms |
 | 6 | **Jira for a sandboxed Manager** (above) | Jira projects |
 | 4 | Branch protection on the default branch, recommended in the setup docs | the docs |
 
 ## First build steps, each observed
+
+*UPDATED 2026-09-26: all three are done on macOS: the socket denial
+(`f3926a1`, `702a093`), the mint, write and refresh observed against GitHub
+(`93d63f5`, readiness D10), and exact-value redaction in the journal and the
+relay (readiness D3). Linux is D10's recorded gap.*
 
 1. **The profile:** deny Unix sockets except the resolver. Observe a Claude
    and a Goose Manager each complete a cycle. This also closes the

@@ -10,7 +10,9 @@ login, so the profile grants the engine's own state paths and redirects
 found the same day, the tmux server and unfiltered signals, and `9862b59`
 closed both, measured before and after. What is still open (`~/.claude`
 readable whole, other projects' transcripts included, and the unconfined
-network) is in `../V070_RELEASE_PLAN.md`, part 0 and track SB.
+network) is in `../V070_RELEASE_PLAN.md`, part 0 and track SB. *Since:
+`~/.claude` is not granted (`8a61989`, SB4 closed), and the network is
+v0.8.0's egress work (`../V080_RELEASE_PLAN.md`, track EG).*
 
 **Robert put Manager sandboxing into v0.6.0**, on an argument that is sound:
 his permission decision — the allowlist as the secure default — holds for

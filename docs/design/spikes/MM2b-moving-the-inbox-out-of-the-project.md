@@ -1,7 +1,9 @@
 # MM-2b — moving the inbox out of the project tree
 
 Approved by Robert, to land **after** the Linux observation pass so it does not
-disturb what is being measured. This is the preparation: what moves, what it
+disturb what is being measured. *UPDATED 2026-09-26: landed (`935ceef`, then
+`965b206` and `8897e40`), SPEC 0.24.15 and 0.24.16. What it did not buy,
+the Linux root grant (readiness D17), is `V070_RELEASE_PLAN.md` MM8.* This is the preparation: what moves, what it
 costs, and two corrections to the estimate that got it approved.
 
 ## Why it is worth more than a tidy-up

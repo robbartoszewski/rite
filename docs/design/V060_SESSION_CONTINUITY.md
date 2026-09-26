@@ -172,6 +172,10 @@ continuation is the default.
 
 ## Carried to 0.6.0 from the round-one review of the designation
 
+⚠ *UPDATED 2026-09-26: all three items below have landed in 0.6.0, as the
+v0.6.0 plan's C8 (`6ef8398`, with its Goose break fixed by C29), C11
+(`4386a64`) and C17 (`45d9e86`). Kept as the record of what was found.*
+
 Found by attacking the failure and boundary cases; one was fixed in
 v0.5.1 (a malformed designation wedged `rite start` with a traceback) and
 these were not.

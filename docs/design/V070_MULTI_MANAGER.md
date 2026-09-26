@@ -6,6 +6,15 @@ decision; asked again, he confirmed **"multi-manager is out, Slack is in"** —
 which restores the scope he set two days earlier. v0.6.0 is fixes + Slack +
 local models; multi-Manager and Cursor are v0.7.0.
 
+⚠ **RE-FILED TWICE SINCE, on 2026-09-26.** First, two Managers on one
+machine in one root moved back into v0.6.0 and were built there (a Claude
+Owner routing to a local secondary; SPEC §5.4.8 and §9.16.7). Then Robert
+set v0.7.0 as "feature-complete single-machine" and v0.8.0 as
+"feature-complete multi-machine". So the rest of this note's one-machine
+questions are v0.7.0 (`V070_RELEASE_PLAN.md`, track MM), and several
+machines are v0.8.0 (`V080_RELEASE_PLAN.md`). "Nothing here is built" below
+is stale for the one-machine shape.
+
 Renamed rather than left, because a filename claiming a release is a claim a
 reader believes before they open the file, and this release spent two days
 clearing exactly that class of stale artefact. **The decisions inside are

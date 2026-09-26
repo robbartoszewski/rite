@@ -1,6 +1,10 @@
 # Egress control — v0.7.0
 
 **Status: DESIGN NOTE, 2026-09-25. v0.7.0, not v0.6.0. No tickets yet.**
+⚠ *RE-FILED 2026-09-26 to **v0.8.0** (Robert: "egress confinement" is in
+"feature-complete multi-machine"). The tickets exist since: EG0–EG6 in
+`V080_RELEASE_PLAN.md`, track EG. The file name and the "v0.7.0" below are
+from before.*
 Written on Robert's instruction so that ticket text's limits (SPEC §6.6.3)
 point at something rather than at nothing.
 
