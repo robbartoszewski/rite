@@ -402,6 +402,63 @@ a measured escape.
 
 ---
 
+## Track RP — Reporting: what needs action, apart from what is reading
+
+**Robert, 2026-09-26, from using rite's own reporting all weekend:**
+
+> "In rite we really need to separate the destination for prose like this
+> and for check-ins and status updates. Not saying the prose is useless, it
+> just makes it more difficult to figure out the actionable steps."
+
+**Recorded, not designed.** Not in v0.6.0.
+
+### What rite produces today, read from `main` at `8897e40`
+
+- **The check-in message** (`checkins.py:634`) is one outbox message, and
+  so one Slack post. In order: the header, then the standup
+  (`standup.digest`: "Observed by rite", "Stated by the Manager — rite did
+  not verify these", reported injection phrases), then the deferred-question
+  counts, then withdrawn questions. Only then comes "Questions held for this
+  check-in". **The part that needs Robert comes last**, after the narrative.
+- **A Manager's `rite reply`** is free text, posted to the Owner's DM as
+  written (the Slack relay only redacts it). A blocking question and a
+  paragraph explaining how something was measured arrive in the same
+  channel, with the same visual weight and no marker.
+- **The check-in mirror** copies the whole check-in to the channel, so the
+  mix is duplicated, not separated.
+- The standup's split is **evidence vs claim** ("observed" vs "stated"), and
+  that split is right. It is not the split asked for here, which is
+  **needs-action vs reading**. Nothing in rite marks a line as "needs you".
+
+Robert's reporting format (bullets, a marker for what needs him, nothing
+between scheduled reports) is not recorded in this repository; it is cited
+here as relayed.
+
+### Ticket
+
+| # | work | done when | depends | size |
+|---|---|---|---|---|
+| RP1 | **Two destinations: what needs action, apart from what is reading.** Decisions needed, blockers and questions awaiting an answer go where Robert can scan them. Narrative, reasoning and measurement detail go somewhere retrievable and out of the way. It covers the check-in message, the standup, `rite reply` and the Slack relay, which are one stream today. Open for design: where each destination is (a DM vs a thread vs a channel vs a file); how a line is classed, since today nothing carries a "needs you" marker and a Manager's free text is not structured; and whether "nothing between scheduled reports" is a rule the relay enforces | Robert reads one check-in and one day of Slack from a real run and can list what needs him from the action destination alone, without opening the other. The narrative is still retrievable. His words are the test, not a format check | — | design first; unsized |
+
+### How it relates to C31 and C32 (the v0.6.0 plan)
+
+- **C32 (a Manager volunteers standup notes): partly subsumed.** C32's cost
+  is that "Stated by the Manager" fills by default and crowds the standup.
+  With RP1, those notes go to the reading destination, so they stop
+  competing with what needs action, and most of that cost goes away. **What
+  RP1 does not answer** is C32's own decision: whether the check-in should
+  invite notes at all, and why the volunteering follows the model (1 of 6
+  inside the sandbox on `claude-sonnet-5`, 3 of 3 outside it on Opus). So
+  C32 stays open as a smaller question, and it should be decided after RP1's
+  design, not before.
+- **C31 (an anchor checked for presence, not support): linked, not
+  subsumed.** A note anchored to a line that does not support it is wrong in
+  either destination. RP1 makes it matter less for scanning, and C31 is
+  still what makes it trustworthy. The common root the three share: **the
+  channel does not distinguish what needs action from what needs reading,
+  and it does not distinguish evidence from claim at the line level.** RP1 is
+  the first half of that; C31 is the second.
+
 ## Track CU — Cursor, the third engine
 
 **Status: READ, NOT MEASURED.** From Cursor's CLI reference
