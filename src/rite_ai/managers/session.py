@@ -550,7 +550,7 @@ def start(
             _why_the_engine_died(name, launch, manager),
         )
 
-    pane, why_no_pane = pane_id_or_why(name)
+    pane, why_no_pane = _pane_id_or_why(name)
     # ⚠ CARRIED OUT, not swallowed. Without the id, `ending` addresses the
     # session instead of the pane, and a clean finish reads as `unclear` —
     # measured. The start still succeeds, because a running Manager beats
@@ -1374,7 +1374,7 @@ def _pane_text(name: str) -> str:
     return (done.stdout or "") if done.returncode == 0 else ""
 
 
-def pane_id_or_why(name: str) -> tuple[str, str]:
+def _pane_id_or_why(name: str) -> tuple[str, str]:
     """`(pane_id, why_not)` — the session's pane id, or the reason there isn't one.
 
     ⚠ **THIS USED TO RETURN `""` FOR EVERY FAILURE, AND THAT WAS THE DEFECT.**
