@@ -57,7 +57,7 @@ OVERRIDES = {
 # yet with a real Claude Owner". The cell now records one concurrent run with
 # a real Claude Owner and a real Goose secondary (routing, the secondary
 # acting, the reply reaching a still-running Owner). Its open gap, that a
-# Claude Owner cannot wait for its secondary, is recorded as W11: it is
+# Claude Owner cannot wait for its secondary, is recorded as W13: it is
 # usability, not the property the row names.
 
 # ⚠ **D6's Linux cell is deliberately NOT overridden.** Its signal half is
