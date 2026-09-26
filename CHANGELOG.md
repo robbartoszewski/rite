@@ -123,8 +123,12 @@ commands, instead of letting it start and print `Not logged in`.
 
 The token is a `claude setup-token` token: it can make model requests on
 your subscription, and nothing else. rite gives each Manager its own copy in
-a 0600 file only that Manager's sandbox can read. The Manager can read it
-and cannot replace it. rite removes it when the run ends. It never goes on
+a 0600 file only that Manager's sandbox can read. The Manager can read it,
+which is the cost of it calling the model at all. **On macOS it cannot
+replace it**: the sandbox denies writing that one file (measured). **On
+Linux it can**, because Claude must be able to write its whole config
+directory, and Linux's sandbox (Landlock) can grant a directory but cannot
+then deny one file inside it. rite removes it when the run ends. It never goes on
 a command line or into the environment, and rite redacts it from the
 Manager's journal and its Slack replies. A run that is killed cannot remove
 its copy, so the next `rite start` for that Manager removes it and says so.
@@ -198,8 +202,8 @@ them, which is why it is read from standard input.
 **On Linux: expected to work, not verified against GitHub.** The App code
 is the same on both platforms. The Linux-specific part is the sandbox
 grant, and that is tested: rite's Linux CI runs kernel-level tests in which
-only the Manager's two gh files are readable inside the Landlock boundary,
-and its Claude login can be read but not replaced. No Linux Manager has
+only the Manager's two gh files are readable inside the Landlock boundary.
+No Linux Manager has
 minted a token or read a board with one. ⚠ On Linux, as on macOS, the App
 is the ONLY way a Manager gets GitHub access; it never uses your own gh
 login.
