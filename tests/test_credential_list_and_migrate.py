@@ -50,7 +50,7 @@ def _stored(monkeypatch, names):
     monkeypatch.setattr(
         "rite_ai.credentials.store.list_for_rotation",
         lambda: [
-            RotationEntry(name=n, last_set=None, source="keychain") for n in names
+            RotationEntry(name=n, last_set=None, source="file store") for n in names
         ],
     )
 
@@ -157,7 +157,7 @@ class TestMigrateWritesNothingBeforeTheConfirm:
         monkeypatch.setattr(
             "rite_ai.credentials.store.info",
             lambda n: CredentialInfo(
-                name=n, source="keychain" if n == "jira_token" else NOT_FOUND
+                name=n, source="file store" if n == "jira_token" else NOT_FOUND
             ),
         )
         monkeypatch.setattr(
@@ -175,7 +175,7 @@ class TestMigrateWritesNothingBeforeTheConfirm:
         stored = []
         monkeypatch.setattr(
             "rite_ai.credentials.store.store",
-            lambda n, v: stored.append(n) or "keychain",
+            lambda n, v: stored.append(n) or "file store",
         )
 
         result = CliRunner().invoke(
@@ -195,7 +195,9 @@ class TestMigrateWritesNothingBeforeTheConfirm:
         root = _project(tmp_path)
         monkeypatch.chdir(root)
         self._global_only(monkeypatch)
-        monkeypatch.setattr("rite_ai.credentials.store.store", lambda n, v: "keychain")
+        monkeypatch.setattr(
+            "rite_ai.credentials.store.store", lambda n, v: "file store"
+        )
 
         result = CliRunner().invoke(
             cli, ["credential", "migrate", "jira_token"], input="n\n"
@@ -210,7 +212,7 @@ class TestMigrateWritesNothingBeforeTheConfirm:
         stored = []
         monkeypatch.setattr(
             "rite_ai.credentials.store.store",
-            lambda n, v: stored.append((n, v)) or "keychain",
+            lambda n, v: stored.append((n, v)) or "file store",
         )
 
         result = CliRunner().invoke(
@@ -232,7 +234,9 @@ class TestMigrateWritesNothingBeforeTheConfirm:
         root = _project(tmp_path, namespace=NS)
         monkeypatch.chdir(root)
         self._global_only(monkeypatch)
-        monkeypatch.setattr("rite_ai.credentials.store.store", lambda n, v: "keychain")
+        monkeypatch.setattr(
+            "rite_ai.credentials.store.store", lambda n, v: "file store"
+        )
 
         result = CliRunner().invoke(
             cli, ["credential", "migrate", "jira_token"], input="n\n"

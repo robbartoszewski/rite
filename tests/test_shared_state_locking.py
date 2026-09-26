@@ -148,7 +148,7 @@ class TestCredentialRegistry:
 
         result = store("jira_token", "value")
 
-        assert "keychain" in result
+        assert "file store" in result
         assert "registry unreadable" in result
         assert path.read_text() == "{not json", "the unreadable file was rewritten"
 

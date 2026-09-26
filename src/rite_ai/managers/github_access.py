@@ -141,6 +141,14 @@ def profile_lines(root: Path, manager: str, home: Path | None = None) -> list[st
         "(deny network-outbound (remote unix-socket))",
         _allow_socket(RESOLVER_SOCKET),
     ]
+    # ⚠ rite's own credential store (every project's secrets, the App key
+    # included) is under no granted path. It is denied here BY NAME as well,
+    # so a later, wider grant cannot reach it by accident.
+    from rite_ai.credentials.file_store import store_path
+
+    lines.append(
+        f'(deny file-read* file-write* (subpath "{store_path().parent.resolve()}"))'
+    )
     cdir = _credential_dir(root, manager, home)
     if cdir.is_dir():
         lines += [

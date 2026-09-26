@@ -580,7 +580,7 @@ class TestCredentialCheckExitCode:
         # `store.resolve`, which asks `info()` WHERE a credential is (§10.2's
         # project / machine-global tiers) rather than just whether it exists.
         with patch("rite_ai.credentials.store.info") as info:
-            info.return_value = MagicMock(source="keychain", describe=lambda: "env")
+            info.return_value = MagicMock(source="file store", describe=lambda: "env")
             info.return_value.name = "jira_token"
             result = CliRunner().invoke(cli, ["credential", "check", "jira_token"])
 

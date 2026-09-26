@@ -1,4 +1,14 @@
-"""Credential storage — keychain with environment variable fallback."""
+"""Credential storage: rite's 0600 file store, with a LOUD environment override.
+
+Since 2026-09-26 (C6/C26, Robert) the store is one file on every platform,
+`file_store.py`, installed below as `keyring`'s backend. The OS keychain is
+read only by `rite credential import-keychain`. An environment variable still
+outranks the file where it is set, which is how a sandboxed Worker receives a
+credential (§5.3.4). **It is never used silently:** the first use of each one
+in a process is said on stderr, naming the variable. A credential that is
+absent or unreadable is reported as that, never as a quiet fall to whatever
+else happens to be there.
+"""
 
 from __future__ import annotations
 
@@ -11,9 +21,38 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from rite_ai.credentials import file_store
+from rite_ai.credentials.file_store import CredentialStoreError
 from rite_ai.state import locked, write_atomic
 
 SERVICE_NAME = "rite"
+
+STORED = "file store"
+"""What `store()` returns on success, and `info().source` for a stored value."""
+
+# The file store is THE store, for every reader and writer in this process.
+file_store.install()
+
+_ANNOUNCED: set[str] = set()
+
+
+def _from_environment(key: str, variable: str) -> None:
+    """Say, once per process, that a credential came from the environment.
+
+    ⚠ The silent version of this is the bug the file store was built to end:
+    a keyring that failed headless and a value quietly taken from wherever
+    else it could be found. The environment is still a legitimate channel (a
+    Worker's sandbox receives its credentials that way), so it is used, and it
+    is SAID.
+    """
+    if variable in _ANNOUNCED:
+        return
+    _ANNOUNCED.add(variable)
+    print(
+        f"rite: credential '{key}' is coming from the environment variable "
+        f"{variable}, not from the file store",
+        file=sys.stderr,
+    )
 
 
 NOT_FOUND = "not_found"
@@ -90,7 +129,7 @@ def suggest_name(name: str, extra: tuple[str, ...] = ()) -> str | None:
 @dataclass
 class CredentialInfo:
     name: str
-    source: str  # "keychain" | "env" | "not_found"
+    source: str  # STORED | "env" | "not_found"
 
     @property
     def found(self) -> bool:
@@ -111,6 +150,7 @@ def get(name: str) -> str | None:
     env_key = f"RITE_{name.upper()}"
     env_val = os.environ.get(env_key)
     if env_val:
+        _from_environment(name, env_key)
         return env_val
 
     try:
@@ -119,6 +159,8 @@ def get(name: str) -> str | None:
         val = keyring.get_password(SERVICE_NAME, name)
         if val:
             return val
+    except CredentialStoreError:
+        raise
     except Exception:
         pass
 
@@ -321,10 +363,10 @@ def resolve(key: str, credentials: object | None = None) -> Resolved:
     if os.environ.get(env_key):
         return Resolved(key, ENV, env_key, p_account, g_account)
 
-    if p_account != g_account and info(p_account).source == "keychain":
+    if p_account != g_account and info(p_account).source == STORED:
         return Resolved(key, PROJECT, p_account, p_account, g_account)
 
-    if info(g_account).source == "keychain":
+    if info(g_account).source == STORED:
         return Resolved(key, GLOBAL, g_account, p_account, g_account)
 
     injected = service_env_name(key)
@@ -339,6 +381,7 @@ def get_scoped(key: str, credentials: object | None = None) -> str | None:
     to the machine-wide entry. The read counterpart of `resolve`."""
     env_val = os.environ.get(f"RITE_{key.upper()}")
     if env_val:
+        _from_environment(key, f"RITE_{key.upper()}")
         return env_val
 
     p_account = project_account(key, credentials)
@@ -349,9 +392,12 @@ def get_scoped(key: str, credentials: object | None = None) -> str | None:
     val = _keychain_get(key)
     if val:
         return val
-    # Tier 4 of `resolve`: last, for the same reason.
+    # Tier 4 of `resolve`: last, for the same reason, and SAID.
     injected = service_env_name(key)
-    return (os.environ.get(injected) or None) if injected else None
+    if injected and os.environ.get(injected):
+        _from_environment(key, injected)
+        return os.environ[injected]
+    return None
 
 
 def get_account(account: str) -> str | None:
@@ -370,6 +416,8 @@ def _keychain_get(account: str) -> str | None:
         import keyring
 
         return keyring.get_password(SERVICE_NAME, account)
+    except CredentialStoreError:
+        raise
     except Exception:
         return None
 
@@ -451,34 +499,21 @@ def worker_environment(
     return env
 
 
-def keychain_is_readable() -> bool:
-    """Whether this process can read the keychain's backing store at all.
+def store_is_readable() -> bool:
+    """Whether this process can read rite's credential store at all.
 
     Distinguishes "the credential is not there" from "this process cannot
-    see any credential", which a sandboxed Worker cannot otherwise tell
-    apart: `keyring.get_password` returns None for both. Telling someone
-    in that position to "run `rite credential set`" is wrong advice —
-    setting it changes nothing, because the same process still cannot
-    read it back. Same distinction as `SandboxStatus.known` and
-    `CountUnavailable`: a failure to CHECK is not a negative result.
-
-    macOS only for now; everywhere else this answers True, which keeps
-    the message exactly as it is today rather than inventing a confinement
-    story for a platform nobody has measured.
+    see any credential". Inside a Manager's sandbox the file store is denied
+    on purpose, and telling someone there to "run `rite credential set`"
+    would be wrong advice: the same process still could not read it back.
+    Same distinction as `SandboxStatus.known`: a failure to CHECK is not a
+    negative result.
     """
-    if sys.platform != "darwin":
-        return True
-    path = Path.home() / "Library" / "Keychains" / "login.keychain-db"
     try:
-        with open(path, "rb") as fh:
-            fh.read(1)
+        file_store._read(file_store.store_path())
         return True
-    except PermissionError:
+    except CredentialStoreError:
         return False
-    except OSError:
-        # Missing, or something else entirely — not evidence of
-        # confinement, so do not claim it.
-        return True
 
 
 def default_rite_home() -> Path:
@@ -551,6 +586,8 @@ def store(name: str, value: str) -> str:
         import keyring
 
         keyring.set_password(SERVICE_NAME, name, value)
+    except CredentialStoreError:
+        raise
     except Exception:
         return "failed"
 
@@ -564,10 +601,10 @@ def store(name: str, value: str) -> str:
             registry[name] = time.time()
             _write_registry(registry)
     except RegistryUnreadable:
-        return "keychain, registry unreadable"
+        return f"{STORED}, registry unreadable"
     except OSError:
-        return "keychain, registry not updated"
-    return "keychain"
+        return f"{STORED}, registry not updated"
+    return STORED
 
 
 def remove(name: str) -> str:
@@ -588,6 +625,8 @@ def remove(name: str) -> str:
 
         keyring.delete_password(SERVICE_NAME, name)
         removed = True
+    except CredentialStoreError:
+        raise
     except Exception:
         # Either keyring is unavailable, or there was no such password.
         # Both are survivable: the registry entry still needs clearing.
@@ -620,7 +659,9 @@ def info(name: str) -> CredentialInfo:
         import keyring
 
         if keyring.get_password(SERVICE_NAME, name):
-            return CredentialInfo(name=name, source="keychain")
+            return CredentialInfo(name=name, source=STORED)
+    except CredentialStoreError:
+        raise
     except Exception:
         pass
 
@@ -631,7 +672,7 @@ def info(name: str) -> CredentialInfo:
 class RotationEntry:
     name: str
     last_set: float | None  # epoch seconds; None if never recorded (pre-registry)
-    source: str  # display text: "keychain" | "env" | "not found"
+    source: str  # display text: STORED | "env" | "not found"
 
 
 def list_for_rotation() -> list[RotationEntry]:

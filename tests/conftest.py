@@ -143,6 +143,25 @@ class _InMemoryKeyring(KeyringBackend):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_credential_file(tmp_path_factory, monkeypatch):
+    """rite's credential FILE store, per test, never the real one.
+
+    Since C6/C26 the store is `~/.config/rite/credential-store.json`. It is
+    set through the environment, not by patching, so a `rite` started as a
+    subprocess by a test inherits the same isolated file.
+    """
+    d = tmp_path_factory.mktemp("credstore")
+    monkeypatch.setenv("RITE_CREDENTIALS_FILE", str(d / "credential-store.json"))
+    # ⚠ And rite's HOME, which holds the credential name registry. Without
+    # this the suite wrote test names into the operator's real
+    # `~/.rite/credentials.json` (7 found there on 2026-09-26), and doctor's
+    # output depended on whatever that machine had stored.
+    if "RITE_HOME_DIR" not in os.environ:
+        monkeypatch.setenv("RITE_HOME_DIR", str(d / "rite-home"))
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _no_os_keychain():
     """The keychain half of `_no_network_credentials`, and it was missing.
 
