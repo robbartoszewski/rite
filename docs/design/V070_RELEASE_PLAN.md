@@ -84,9 +84,22 @@ EGQ1–EGQ5, SB2 (closed by EG3; its row stays in track SB), PB2
 
 ### Fixes from the v0.6.0 dogfood test
 
-**Empty until the test runs.** Robert's first 24 hours of v0.6.0 dogfooding
-decide this list, so nothing is guessed into it. Each fix lands here as a
-row, with what was observed and on which platform.
+**Robert's first 24 hours of v0.6.0 dogfooding decide this list**, so nothing
+is guessed into it. Each fix lands here as a row, with what was observed and
+on which platform.
+
+**From the Linux acceptance run, not the dogfood** (2026-09-27, Parallels
+Ubuntu 24.04 ARM64 VM, kernel `7.0.0-31-generic`, 4 cores, `main` at
+`15312e3`; a Claude Owner `lead` and a Goose secondary `small` on `qwen3:8b`,
+one project root, board `robbartoszewski/rite-dogfood-board`). Box times
+CEST. Run 1 was `rite start` as authored; run 2 differed only by `--fresh`
+on both starts, and is reported as a retry.
+
+| # | observed | done when OBSERVED |
+|---|---|---|
+| DF1 | 🔴 **Configuring a board does not reset a Manager's context, and nothing warns.** Run 1: a bare `rite start` continued `lead`'s previous conversation, a setup session that had been told "This project has NO ticket backend configured". It never received the board-mode opening, and it declined the routing instruction as a duplicate: "This is the same routing instruction a third time — already completed last turn … I'm not re-routing a duplicate task. Status unchanged: still waiting on the user's choice of ticket backend." Its three sessions ran 00:57:35–00:57:57, and the run ended. `small` likewise resumed Goose session `20260926_2`. With `--fresh` (run 2) `lead` routed at once. A user who runs once, configures a board, and starts again meets exactly this: a Manager confidently declining work. | A Manager whose designated conversation began as a setup session, started again after a board is configured, either starts fresh or is told in its instruction that the board now exists, and `rite start` says which. Observed, not reasoned. |
+| DF2 | 🔴 **W13 on Linux: the Owner cannot be running when its secondary replies, as configured.** Run 2: `lead` routed at 01:00:29 and its `rite start` exited at 01:01:48 (`ceiling reached: 3 session(s) started`; sessions of 14s, 54s and 16s, the last two finding nothing). `small` received the route at 01:03:55, because a secondary takes mail only at ITS cycle boundary and its session had started at 01:00:09. Its `rite reply` was queued at 01:04:53, three minutes after the Owner had gone. **The supervisor waits only while a session is alive; between sessions it resumes at once, and it has no "routed, awaiting a reply" state.** A later cycle of the same run WOULD pick the reply up (the router runs in the Owner's wait loop and at each cycle start), so a higher `--sessions` would make it land, but only by spending a Claude session every ~30s on "no reply yet", sized to a latency rite cannot know. That is busy-polling, not waiting. | An Owner that routed work and has a reply outstanding waits between cycles WITHOUT starting a session, until the reply arrives or a stated bound passes, then starts a cycle with the reply delivered. Observed on Linux with a real local secondary: the reply is brought to the Owner and acted on within the same `rite start`. |
+| DF3 | ⚠ **Every Manager can read every Manager's mailbox, for every project on the machine.** From inside `small`'s Landlock boundary, listing `lead`'s inbox succeeded (rc 0) while a write was refused (`Permission denied`, rc 1). MM-2 is about writes and held. The read comes from `~/.rite` being granted readable wholesale (`landlock.DIRS_RITE_CREATES`, "rite's own state root"; seatbelt grants `.rite` the same way in `enclosure`), which predates the mailbox moving under `~/.rite/managers/` (`935ceef`). So it is incidental, not designed: the narrow grant for a Manager's own mail directory is also in the policy, and redundant. | From inside a Manager's boundary, listing or reading another Manager's inbox or outbox is refused, on both platforms, while its own mail directory stays readable and its outbox writable. |
 
 ## Where the tracks below stand after the re-filing
 
