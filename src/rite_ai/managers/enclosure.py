@@ -309,6 +309,37 @@ def _socket_denials(socket_dirs) -> list[str]:
     for directory in dict.fromkeys(socket_dirs):
         lines.append(f"(deny network-outbound (subpath {_quote(directory)}))")
         lines.append(f"(deny file-read* file-write* (subpath {_quote(directory)}))")
+    # ⚠ **AND EVERY OTHER UNIX SOCKET, because denying one DIRECTORY was not
+    # enough.** Measured 2026-09-26, with a control: a direct write into an
+    # ungranted directory was refused, and the same write through a tmux
+    # server on a CUSTOM socket under the granted `/tmp` succeeded. The rules
+    # above cover `$TMUX_TMPDIR/tmux-<uid>/` — the server rite starts — and a
+    # server on any other path was never covered. An operator with their own
+    # `tmux -S` anywhere, or a second Manager's server, reopened the escape.
+    #
+    # So the default flips: every filesystem socket is refused, and only what
+    # a Manager was measured to need is allowed back. The allows come AFTER
+    # the deny because seatbelt takes the last match.
+    #
+    # ⚠ **`(subpath "/")` matches PATH sockets only, not IP.** Measured:
+    # with this deny and no allows, `curl https://api.github.com/` failed with
+    # `Could not resolve host` — DNS goes to mDNSResponder over a unix socket
+    # in `/var/run` — while the shipped profile returned 200. Adding the two
+    # resolver paths back restored `http_code=200`, and the tmux escape stayed
+    # refused (`error connecting to … Operation not permitted`). So IP
+    # networking is untouched by this and `(allow network*)` above still
+    # stands; what changed is only which SOCKET FILES may be reached.
+    lines += [
+        "",
+        "; ⚠ Every other unix socket, refused. A deny on one directory left a",
+        "; tmux server on any other path reachable — measured 2026-09-26.",
+        '(deny network-outbound (subpath "/"))',
+        "; Allowed back, AFTER the deny so they win: the resolver's socket.",
+        "; Without these DNS fails inside the boundary (measured: curl could",
+        "; not resolve a host) although `(allow network*)` is granted above.",
+        '(allow network-outbound (subpath "/private/var/run"))',
+        '(allow network-outbound (subpath "/var/run"))',
+    ]
     return lines
 
 
@@ -460,11 +491,18 @@ def limitations() -> tuple[str, ...]:
 
     ⚠ **AND IT HAPPENED A SECOND TIME, WHICH IS WHY THAT HEDGE IS NOT
     DECORATION.** On 2026-09-26 the same escape was measured again through a
-    DIFFERENT socket path: the fix denied `$TMUX_TMPDIR/tmux-<uid>/`, and a
-    tmux server on any other path under the granted `/tmp` is still
+    DIFFERENT socket path: the first fix denied `$TMUX_TMPDIR/tmux-<uid>/`,
+    and a tmux server on any other path under the granted `/tmp` was still
     reachable. The list said the tmux route "was tried and refused" — true of
-    the one path that was tried, false as the reader would take it. Corrected
-    here before the hole, for the same reason as last time.
+    the one path that was tried, false as the reader would take it. The claim
+    was corrected before the hole, for the same reason as last time, and the
+    hole was then closed by refusing every unix socket rather than one
+    directory (`_socket_denials`).
+
+    ⚠ **The lesson both times was the same, and it is not about tmux.** A
+    deny aimed at the one PATH a problem was noticed at leaves the problem
+    everywhere else. Twice now the fix has had to become "refuse the class,
+    allow back what was measured to be needed".
     """
     return (
         "⚠ THIS BOUNDS FILES, NOT CAPABILITY, and it is not a proof of "
@@ -472,13 +510,12 @@ def limitations() -> tuple[str, ...]:
         "closed and one still open. Signalling processes outside the "
         "sandbox was found and closed on 2026-09-25, measured before and "
         "after",
-        "🔴 A tmux SERVER ON A SOCKET PATH THIS PROFILE GRANTS IS STILL "
-        "REACHABLE, and anything sent to it runs OUTSIDE the boundary. The "
-        "default socket directory is denied, which closes the server rite "
-        "itself starts — but /tmp is granted, so a server on any other path "
-        "under it is not. Measured 2026-09-26 with a control: a direct "
-        "write to an ungranted directory was refused, and the same write "
-        "through a tmux server on a custom socket under /tmp SUCCEEDED",
+        "the tmux route is refused for EVERY socket path, not just the "
+        "default one. Measured 2026-09-26 with a control, before and after: "
+        "a server on a custom socket under the granted /tmp ran a write the "
+        "profile refused directly, and after this profile denied every unix "
+        "socket the same attempt failed with `error connecting to … "
+        "Operation not permitted` while https still returned 200",
         "/tmp and /private/tmp are readable and writable, so anything kept "
         "there — including other rite worktrees — is reachable",
         "the network is NOT confined — seatbelt has no network isolation, so "
@@ -491,9 +528,10 @@ def limitations() -> tuple[str, ...]:
         "ticket text from your board reaches the engine as instructions; the "
         "sandbox limits what acting on it can touch, it does not vet it",
         "what it DOES buy: your home outside the paths above, your SSH keys, "
-        "and other projects outside /tmp are not reachable by DIRECT access "
-        "— that was tried and refused. The tmux route is refused for the "
-        "default socket directory only; see the line above",
+        "and other projects outside /tmp are not reachable — directly, or "
+        "through a unix socket, and both were tried and refused. ⚠ That is a "
+        "statement about the routes that were TRIED, not about every route "
+        "that exists",
     )
 
 
