@@ -418,7 +418,8 @@ prompt — so the tier fails in ways that look like models unable to call tools
 and agents losing conversation history, rather than like a setting. `rite
 doctor` reports the window actually in force. See the guide.
 
-**Claude is the only agent rite drives today, deliberately.** `CLAUDE.md`
+**A Manager runs on Claude Code, or on Goose for a local model.** Both are
+observed running a Manager (Goose on macOS and on a Linux VM). `CLAUDE.md`
 and `.claude/agents/` are first-class here rather than behind a provider
 abstraction. *This said "no other tool is planned", which contradicted the
 "Planned — not built" section eighty lines above in this same file:* a local
@@ -430,10 +431,16 @@ on one. No other **hosted** provider is planned.
 worker holds the same project-scoped credentials, so assignment picks
 whichever is free rather than whichever *can*.
 
-**Tested on macOS 26.2**, where everything above has been run end to end,
-except a sandboxed worker taking a ticket all the way through (step 4).
-Linux is implemented but unverified on real hardware. Windows is not
-attempted.
+**Tested on macOS 26.2**, where most of the above has been run end to end.
+Not yet run: a sandboxed worker taking a ticket all the way through (step 4),
+two Managers in one project with a real Claude Owner (only stand-in engines
+and one Goose Owner so far), and a Manager's GitHub token against GitHub.
+**Linux: run on one Ubuntu 24.04 ARM64 virtual machine (Parallels), and on
+no physical machine.** A VM is counted as a Linux run, because rite's Linux
+boundary (Landlock) and tmux run in the VM's real Linux kernel. It is still
+one machine, one distribution and one architecture. On it a Goose Manager
+ran inside its boundary and used Slack. A Claude Manager has not run on Linux.
+Windows is not attempted.
 
 ## Documentation
 
