@@ -6,6 +6,26 @@ back into v0.6.0: a Manager that reads a private board anonymously and cannot
 refutes the proposal it was given, and states the path every credential takes
 and what an attacker inside a compromised Manager can do with it.
 
+⚠ **DECIDED AND BUILT, 2026-09-26: the token only, no SSH grant** (Robert,
+final). Built in `f3926a1`, tested (full suite green on macOS), and **not
+yet observed against GitHub**, because that needs the App (decision 1
+below). What was built is "The design" below, minus every SSH clause:
+- a GitHub App installation token, one repository, one hour, minted by
+  `rite start` outside the sandbox;
+- the token in a 0600 `hosts.yml` named by `GH_CONFIG_DIR`;
+- `git push` over HTTPS through `gh auth git-credential`;
+- exact-value redaction in the journal and the Slack relay;
+- **every Manager's profile denies all Unix sockets except the resolver**
+  (measurements 1–3).
+
+The SSH measurements (4) and the SSH sections are kept as the record of why
+SSH was dropped. The token serves `git push` as well as `gh`, so SSH added no
+capability, and an agent key is the broader grant.
+
+Two credentials this note did not cover are added at the end: **Jira**, and
+**Claude's own login**. The second is the blocker for a sandboxed Claude
+Manager.
+
 **Citation convention:** a bare `§` is a section of `SPEC.md`.
 
 **Every result below was measured on this machine against `main` at `47b14a0`,
@@ -284,13 +304,72 @@ hand out per-request tokens, so the Manager never holds a credential at all.
 That removes the copy-it-out case and is recorded as the intended end state.
 It is not proposed for v0.6.0.
 
+## Jira: a second board credential, with no narrower scope to mint
+
+**Jira is a real, supported tracker, not only text the sanitizer scans.**
+`src/rite_ai/tickets/jira.py` is a full board backend (create, move, list,
+query, show) over Jira Cloud's REST API v3. It has been in since v0.1.0 and
+is selected by `ticket_backend.type: jira` (`tickets/__init__.py`). It
+authenticates with `jira_email` plus `jira_token` (Basic auth) from rite's
+credential store.
+
+- **Inside the sandbox that credential is almost certainly unreachable
+  today.** The keychain is unreadable there (measurement 7), so a sandboxed
+  Manager's `rite board` on a Jira project most likely fails. Inferred, not
+  measured.
+- **Its scoping story is worse than GitHub's, and there is no fix for it
+  inside rite.** An Atlassian API token is account-scoped: whatever the
+  account can reach, across every project. There is no per-project,
+  fine-grained equivalent to mint. OAuth 3LO gives granular scopes, and
+  still not per-project. The only real lever is a **dedicated service
+  account limited to one project**, which is a setup step for the user, not
+  something rite can mint.
+- **So the honest v0.6.0 position is one of these, and it is Robert's:**
+  1. refuse a sandboxed Manager on a Jira project, loudly;
+  2. require a service account, delivered by the same file route as the
+     GitHub token, with the blast radius stated as "whatever that service
+     account can do";
+  3. the v0.7.0 broker, where the board call happens outside the sandbox.
+
+## Claude's own login: a sandboxed Claude Manager cannot authenticate
+
+**Recorded in `96d340e`:** inside the Manager profile, `claude -p` prints
+`Not logged in`, with a fresh keychain login outside it. That is consistent
+with measurement 7: the keychain is unreadable inside the sandbox. The only
+route that works today is `CLAUDE_CODE_OAUTH_TOKEN` in the environment,
+which is C6's hole and is ruled out.
+
+**Read from Claude Code's authentication documentation:**
+- credentials live in the macOS keychain, falling back to
+  `~/.claude/.credentials.json` (mode 0600), which is the only store on
+  Linux;
+- `CLAUDE_CONFIG_DIR` moves that directory and the file with it;
+- the only non-interactive subscription credential is `claude setup-token`:
+  one year, model requests only;
+- `apiKeyHelper` returns an API key, meaning Console billing, not the
+  subscription.
+
+**The option that meets the constraint**: a per-Manager `CLAUDE_CONFIG_DIR`,
+outside every other grant, holding a 0600 `.credentials.json` with a
+`setup-token` token. The environment then carries a path. It would also
+end SB4: the profile would stop granting the whole of `~/.claude`.
+**Its cost, stated:** the token lives a year, covers the whole
+subscription, and is readable inside the sandbox. A compromised Manager
+can copy it out and spend the subscription until it is revoked.
+**Unmeasured:** whether macOS Claude reads that file inside the sandbox
+rather than insisting on the keychain. Measuring it needs a real
+`setup-token` token, which is Robert's to create. The alternative is running
+Claude Managers unsandboxed, which reverses B9.
+
 ## Decisions for Robert
 
 | # | decision | blocks |
 |---|---|---|
 | 1 | **Create a GitHub App** (owner: your account), install it on the target repository or repositories, and store its private key with `rite credential set`. Permissions proposed: contents write, issues write, pull requests write, metadata read; **not** workflows or secrets | everything in this design |
-| 2 | Token for `git push` too (recommended), or also SSH with a per-Manager deploy key | whether SSH is built |
-| 3 | `openssl` CLI or the `cryptography` dependency, for signing the JWT | the minting code |
+| 2 | ✅ DECIDED: token only (Robert, final) | — |
+| 3 | ✅ SETTLED as an implementation choice: the system `openssl`, with the key passed through a pipe (no new dependency) | — |
+| 5 | **Claude's credential in a sandboxed Manager** (above) | every sandboxed Claude Manager, on both platforms |
+| 6 | **Jira for a sandboxed Manager** (above) | Jira projects |
 | 4 | Branch protection on the default branch, recommended in the setup docs | the docs |
 
 ## First build steps, each observed
