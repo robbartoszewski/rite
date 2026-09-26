@@ -18,6 +18,20 @@ Linux yet; see Known issues.
 project. Where a part was run only with a stand-in engine or a stand-in for
 Slack, it says so.
 
+### Upgrading from 0.5.1: three steps, in this order
+
+1. **Install this release, and check that it is the one that runs.**
+   `rite --version` must NOT say `0.5.1`. Until the release is tagged, a
+   build from `main` says `0.6.0.dev0`. A second, older `rite` earlier on
+   your PATH is the usual reason a command below is refused as unknown.
+2. **Copy your credentials into the new store, once:**
+   `rite credential import-keychain`. This release no longer reads the
+   keychain (see "credentials live in one 0600 file" below). Observed: it
+   copied 13 credentials and printed their names, never their values.
+3. **For each project with a Claude Manager:** `claude setup-token`, then
+   `rite credential set claude_token` (see "a Claude Manager signs in with
+   its own token" below).
+
 ### ⚠ BEHAVIOUR CHANGE ON UPGRADE — a Manager is no longer ungated
 
 **0.5.1 launched every Manager with `--dangerously-skip-permissions`. This release
@@ -156,11 +170,12 @@ token, so an App granted less should have the request refused and `rite
 start` refuse with GitHub's words (read from the code; not yet observed).
 Then, inside the project:
 
-    # .rite/config.yaml (neither id is a secret)
+    # .rite/config.yaml (neither id is a secret). This App is installed
+    # on robbartoszewski/rite-dogfood-board only, the board's repository.
     github_app:
       app_id: "5084143"
       installation_id: "165090155"
-      repository: owner/board-repo   # optional; defaults to ticket_backend.repo
+      # repository: owner/name      # optional; defaults to ticket_backend.repo
 
     rite credential set github_app_key --stdin < your-app.private-key.pem
 
@@ -172,12 +187,19 @@ with it verifies against the key's public half.
 The token covers ONE repository, `repository` or else the board's. An App
 installed only on the board's repository cannot push to your code
 repository, so a Manager holding the `integrate` duty cannot push or open a
-pull request there through it. Pushing uses the token only for an HTTPS
-remote.
+pull request there through it. **For rite's own project that is the case:
+the App above is installed on `rite-dogfood-board` only, so `integrate` does
+not work on the `rite` repository through it.** Pushing uses the token only
+for an HTTPS remote.
 
 ⚠ **Point the board at a repository meant for tickets, never at the
 project's own code repository unless you want every ticket rite files to
-land there as an issue.** `rite init` never guesses the board from `origin`.
+land there as an issue.** `rite init` never guesses the board from `origin`,
+and a Manager helping you set a board up is told the project's own
+repositories by name and declines to write one in, even when asked.
+Observed: asked to "use this project's own repository", it refused, said
+why, and left `config.yaml` unchanged. With the earlier wording, the same
+request had written the repository in.
 
 ### ⚠ BEHAVIOUR CHANGE ON UPGRADE — credentials live in one 0600 file
 
