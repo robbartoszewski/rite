@@ -13,8 +13,10 @@ Manager cannot start a sandboxed Worker — the kernel refuses — which is why
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -398,3 +400,168 @@ class TestTheRiteItsInstructionsNameCanRun:
         text = compose(project, "lead")
         assert f'(subpath "{checkout}")' not in text
         assert f'(allow file-read* (subpath "{package.parent}"))' in text
+
+
+@on_macos
+class TestP2BetweenTwoManagersSharingARoot:
+    """§5.4.8's P2, pinned between **two Managers** rather than between one
+    Manager and a bystander.
+
+    ⚠ **This is the case §5.4.8 recorded as measured but NOT pinned.** The
+    tests above establish the two mechanisms — `(target same-sandbox)` and
+    the denied tmux socket — against a process outside the sandbox and
+    against the Manager's own children. Neither is the property the section
+    states, which is about A and B: an outside process is not a sibling
+    Manager, and a Manager's own child is the case that must keep working.
+    So a change that separated a Manager from the operator while letting two
+    Managers reach each other would have passed everything above.
+
+    **The bar is §5.4.8's "by accident", so the accident is what is run**:
+    a `pkill` broad enough to match a sibling's engine, and the tmux routes
+    a Manager would actually reach for.
+    """
+
+    def _profiles(self, project):
+        return write_profile(project, "alpha"), write_profile(project, "beta")
+
+    def _run(self, profile, command, env=None):
+        return subprocess.run(
+            ["sandbox-exec", "-f", str(profile), "/bin/sh", "-c", command],
+            capture_output=True,
+            text=True,
+            timeout=90,
+            env=env or dict(os.environ),
+        )
+
+    def _betas_process(self, project, beta):
+        """A long-lived process inside BETA's sandbox, and its pid.
+
+        `exec` so the pid in the file is the sleep's own and not a shell
+        that has already gone.
+        """
+        pidfile = project / "beta.pid"
+        started = subprocess.Popen(
+            [
+                "sandbox-exec",
+                "-f",
+                str(beta),
+                "/bin/sh",
+                "-c",
+                f"echo $$ > {pidfile}; exec sleep 300",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        for _ in range(100):
+            if pidfile.exists() and pidfile.read_text().strip():
+                break
+            time.sleep(0.05)
+        return started, int(pidfile.read_text().strip())
+
+    @staticmethod
+    def _running(pid: int) -> bool:
+        """⚠ **`kill -0` is not liveness — it succeeds for a ZOMBIE.**
+        Measured while mutation-testing this class: with the signal grant
+        widened to a blanket `(allow signal)`, alpha killed beta's process
+        and every "beta survived" assertion still passed, because the victim
+        was `Z <defunct>` and answering `kill -0` yes until its parent reaped
+        it. `ps` reports the state, so a reaped-or-gone process and a zombie
+        both read as not running.
+        """
+        done = subprocess.run(
+            ["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True
+        )
+        state = done.stdout.strip()
+        return bool(state) and not state.startswith("Z")
+
+    @pytest.mark.parametrize("signal_name", ["TERM", "KILL"])
+    def test_alpha_cannot_signal_betas_engine(self, project, signal_name):
+        alpha, beta = self._profiles(project)
+        started, pid = self._betas_process(project, beta)
+        try:
+            done = self._run(alpha, f"kill -{signal_name} {pid}")
+            time.sleep(0.4)
+            assert done.returncode != 0, (
+                f"alpha's kill -{signal_name} of beta's process was permitted"
+            )
+            assert self._running(pid), "beta's process was killed by alpha"
+        finally:
+            started.kill()
+
+    def test_a_broad_pkill_does_not_reach_a_sibling(self, project):
+        """The accident §5.4.8 names: a pattern wide enough to match a
+        sibling's engine, not a pid deliberately chosen."""
+        alpha, beta = self._profiles(project)
+        started, pid = self._betas_process(project, beta)
+        try:
+            self._run(alpha, "pkill -9 -f 'sleep 300'")
+            time.sleep(0.4)
+            assert self._running(pid), "a broad pkill in alpha reached beta's process"
+        finally:
+            started.kill()
+
+    @pytest.mark.parametrize(
+        "route",
+        [
+            "send-keys -t victim 'touch {target}' Enter",
+            "kill-session -t victim",
+            "kill-server",
+        ],
+    )
+    def test_alpha_cannot_drive_or_end_betas_session(
+        self, project, tmp_path, monkeypatch, route
+    ):
+        """Beta's session stands for beta's Manager pane. The tmux server
+        runs OUTSIDE both profiles, so anything it accepts runs unconfined —
+        which is why the socket rather than the command is what is denied.
+
+        ⚠ **The socket directory is a SHORT temp path, not `tmp_path`.**
+        Measured: under `tmp_path` the socket exceeded the AF_UNIX path
+        limit, tmux failed with "File name too long", and beta's session
+        never started — on which every assertion below is either vacuous or
+        an accusation about a session that was never there. Hence the
+        precondition.
+        """
+        sockets = Path(tempfile.mkdtemp(prefix="p2-", dir="/private/tmp"))
+        env = dict(os.environ, TMUX_TMPDIR=str(sockets))
+        monkeypatch.setenv("TMUX_TMPDIR", str(sockets))
+        alpha, _ = self._profiles(project)
+        target = tmp_path / "escaped.txt"
+
+        def betas_session_is_up() -> bool:
+            return (
+                subprocess.run(
+                    ["tmux", "has-session", "-t", "victim"],
+                    env=env,
+                    capture_output=True,
+                    timeout=30,
+                ).returncode
+                == 0
+            )
+
+        subprocess.run(
+            ["tmux", "new-session", "-d", "-s", "victim", "sleep 300"],
+            env=env,
+            timeout=60,
+            capture_output=True,
+        )
+        try:
+            assert betas_session_is_up(), (
+                "beta's session did not start, so this test proves nothing"
+            )
+            done = self._run(alpha, f"tmux {route.format(target=target)}", env)
+            time.sleep(1)
+            assert done.returncode != 0, f"alpha's `tmux {route}` was permitted"
+            assert not target.exists(), "alpha smuggled a write through beta's server"
+            assert betas_session_is_up(), "alpha ended beta's session"
+        finally:
+            subprocess.run(
+                ["tmux", "kill-server"], env=env, timeout=30, capture_output=True
+            )
+            shutil.rmtree(sockets, ignore_errors=True)
+
+    def test_and_alpha_can_still_signal_its_own_child(self, project):
+        """Without this the four above would pass on a profile that
+        forbade signalling altogether, which would break every Manager."""
+        alpha, _ = self._profiles(project)
+        assert self._run(alpha, "sleep 30 & p=$!; sleep 0.3; kill $p").returncode == 0
