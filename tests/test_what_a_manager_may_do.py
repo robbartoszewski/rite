@@ -508,3 +508,20 @@ class TestRiteCanSeeANonBashDenial:
             ],
         )
         assert refused_commands(root, base=base) == ["Edit"]
+
+
+def test_the_rite_the_instructions_name_is_on_the_allowlist(tmp_path):
+    """Found by a real Claude Manager (2026-09-26): told to run rite by
+    absolute path, its `rite reply` was denied, because `Bash(rite:*)` does
+    not match `/…/bin/rite reply`. The rule is derived from `own_command()`,
+    the same value the instructions use."""
+    import json
+
+    from rite_ai import own_command
+    from rite_ai.managers.permissions import write_settings
+
+    allow = json.loads(write_settings(tmp_path).read_text())["permissions"]["allow"]
+    path = own_command()
+    if path.startswith("/"):
+        assert f"Bash({path}:*)" in allow
+    assert "Bash(rite:*)" in allow
