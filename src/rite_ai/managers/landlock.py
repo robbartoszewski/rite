@@ -62,7 +62,13 @@ import shlex
 import sys
 from pathlib import Path
 
-from rite_ai.managers import user_dir
+from rite_ai.managers import manager_dir, user_dir
+from rite_ai.managers.enclosure import (  # noqa: PLC2701
+    _engine_state_paths,
+    _running_rite,
+    _tool_paths,
+    engine_tmp,
+)
 
 # ⚠ **SHARED WITH SEATBELT ON PURPOSE, NOT DUPLICATED.** These four carry
 # measured knowledge about where rite, uv's interpreter, gh's config and
@@ -70,12 +76,7 @@ from rite_ai.managers import user_dir
 # without it. Copying them here would let the two boundaries drift on exactly
 # the paths whose absence is hardest to diagnose — a `dyld`/`ld.so` crash
 # rather than a refusal. `_system_paths` is NOT shared: that one is macOS's.
-from rite_ai.managers.enclosure import (  # noqa: PLC2701
-    _engine_state_paths,
-    _running_rite,
-    _tool_paths,
-    engine_tmp,
-)
+from rite_ai.managers.mailbox import INBOX, OUTBOX
 
 PROFILE_DIRNAME = "landlock"
 
@@ -335,20 +336,44 @@ def _fenced_project_paths(project: Path, manager: str) -> list[Path]:
         # and a first cycle is not crippled before any inbox exists.
         return [project]
 
+    # ⚠ **SYMLINKS ARE SKIPPED, AND THAT IS A FENCE PROPERTY.** Landlock rules
+    # name an INODE: a rule added for a symlink grants the inode it resolves
+    # to. Measured 2026-09-26 in review — granting ONLY a symlink that pointed
+    # at another Manager's `mail/in` made that inbox writable both through the
+    # link and directly. So an enumeration that included symlinks could hand
+    # back exactly what it is carving out, and one symlink anywhere in the
+    # project root would defeat MM-2.
+    #
+    # Skipped rather than resolved-and-checked: a link whose target moves
+    # between composing and applying would pass the check and grant the new
+    # target. Not granting a symlinked entry fails closed, and the cost is
+    # that a symlink in the project root is not writable — which is the
+    # correct trade for a boundary.
+    #
+    # ⚠ NOT applied to the system paths above: on Linux `/lib` and `/lib64`
+    # ARE symlinks into `/usr`, so refusing symlinks there would deny the
+    # loader and nothing would start.
+    def entries(directory: Path, skip) -> list[Path]:
+        return [
+            p
+            for p in sorted(directory.iterdir())
+            if p not in skip and not p.is_symlink()
+        ]
+
     granted: list[Path] = []
     rite_dir = project / ".rite"
     # Every top-level entry except `.rite` — the parent must not be granted.
-    granted += [p for p in sorted(project.iterdir()) if p != rite_dir]
+    granted += entries(project, {rite_dir})
     # Everything in `.rite` except `managers`.
-    granted += [p for p in sorted(rite_dir.iterdir()) if p != managers]
+    granted += entries(rite_dir, {managers})
     # This Manager's own directory, by its children, so `mail` is not granted
     # as a tree — and within `mail`, every box except `in`.
     own = managers / manager
     if own.is_dir():
         mail = own / "mail"
-        granted += [p for p in sorted(own.iterdir()) if p != mail]
+        granted += entries(own, {mail})
         if mail.is_dir():
-            granted += [p for p in sorted(mail.iterdir()) if p.name != "in"]
+            granted += [p for p in entries(mail, set()) if p.name != "in"]
     return granted
 
 
@@ -361,6 +386,24 @@ def write_profile(root: Path, manager: str, home: Path | None = None) -> Path:
     path = policy_path(root, manager)
     path.parent.mkdir(parents=True, exist_ok=True)
     engine_tmp(root, manager).mkdir(parents=True, exist_ok=True)
+    # ⚠ **THE MANAGER'S OWN DIRECTORY AND MAIL BOXES ARE CREATED HERE, and
+    # that is load-bearing rather than tidy.** `_fenced_project_paths`
+    # ENUMERATES what exists, because Landlock has no deny rule — so a path
+    # absent when the policy is written is a path the Manager cannot reach for
+    # the whole cycle. `manager_dir` only computes a path; nothing had created
+    # it at this point. Found in review: on a FIRST launch, with
+    # `.rite/managers/` present because another Manager exists but this
+    # Manager's own directory not yet, the enumeration granted nothing under
+    # `managers/` at all and the Manager could not write its own journal,
+    # designation or outbox.
+    #
+    # `mail/out` matters specifically: `rite reply` writes there from INSIDE
+    # the boundary, and it is the one mail box a Manager must be able to
+    # write. `mail/in` is created too so the fence is deterministic — it is
+    # then present, enumerated, and deliberately not granted.
+    own = manager_dir(root, manager)
+    (own / "mail" / OUTBOX).mkdir(parents=True, exist_ok=True)
+    (own / "mail" / INBOX).mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(compose_policy(root, manager, home), indent=2) + "\n")
     return path
 
