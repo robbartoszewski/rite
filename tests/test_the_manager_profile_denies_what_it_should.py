@@ -327,9 +327,15 @@ class TestTheBoardIsStillReachable:
         unauthenticated, so it exits 4, which means it STARTED and then could
         not authenticate. That is the property holding, and the old assertion
         called it a failure. Measured on the first macOS CI run.
+
+        Since W8 gh starts from the Manager's OWN config directory, exactly as
+        the pane gets it, and never from the operator's `~/.config/gh`.
         """
+        from rite_ai.managers import github_access
+
         if not _which("gh"):
             pytest.skip("gh is not installed in this environment")
+        github_access._own_gh_config(project, "lead")
         profile = write_profile(project, "lead")
         done = subprocess.run(
             [
@@ -343,6 +349,10 @@ class TestTheBoardIsStillReachable:
             capture_output=True,
             text=True,
             timeout=90,
+            env={
+                **{k: v for k, v in os.environ.items() if not k.startswith("GH_")},
+                **github_access.pane_environment(project, "lead"),
+            },
         )
         said = done.stdout + done.stderr
         assert "failed to read configuration" not in said, (
@@ -352,14 +362,30 @@ class TestTheBoardIsStillReachable:
             f"gh could not start inside the profile: {said.strip()[:200]}"
         )
 
-    def test_the_grant_is_read_only(self, project):
-        """It needs to READ its configuration. Nothing needs to write it,
-        and a writable credential store is a credential an agent can
-        rewrite."""
+    def test_the_operators_gh_login_is_NOT_granted(self, project):
+        """W8: `~/.config/gh` holds the operator's login, in plain text
+        wherever gh has no keyring. No grant names it, and it is denied by
+        name, last."""
         text = compose(project, "lead")
-        home = Path.home()
-        assert f'(allow file-read* (subpath "{home}/.config/gh"))' in text
-        assert f'file-write* (subpath "{home}/.config/gh")' not in text
+        operator_gh = Path.home() / ".config" / "gh"
+        assert f'(allow file-read* (subpath "{operator_gh}"))' not in text
+        deny = f'(deny file-read* file-write* (subpath "{operator_gh}"))'
+        assert deny in text
+        assert text.rindex(deny) > text.index("(allow network*)")
+
+    def test_inside_the_profile_the_operators_gh_config_is_unreadable(self, project):
+        target = Path.home() / ".config" / "gh" / "config.yml"
+        if not target.is_file():
+            pytest.skip("no ~/.config/gh/config.yml on this machine to try")
+        outside = subprocess.run(["/bin/cat", str(target)], capture_output=True)
+        assert outside.returncode == 0, "the control: readable outside"
+        profile = write_profile(project, "lead")
+        inside = subprocess.run(
+            ["sandbox-exec", "-f", str(profile), "/bin/cat", str(target)],
+            capture_output=True,
+            text=True,
+        )
+        assert inside.returncode != 0 and "Operation not permitted" in inside.stderr
 
 
 class TestTheRiteItsInstructionsNameCanRun:

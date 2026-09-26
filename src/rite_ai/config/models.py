@@ -241,8 +241,9 @@ class GithubAppConfig:
     """The GitHub App that mints a sandboxed Manager's token (C6/C26).
 
     Neither id is a secret, which is why they live in committed config. The
-    App's PRIVATE KEY is a credential (`github_app_key`) and lives in the
-    keychain, and it never enters a Manager's sandbox. See
+    App's PRIVATE KEY is a credential (`github_app_key`), stored whole with
+    `rite credential set github_app_key --stdin < app.pem` in rite's 0600
+    credential file, and it never enters a Manager's sandbox. See
     `managers/github_access.py` for the path each value takes.
     """
 

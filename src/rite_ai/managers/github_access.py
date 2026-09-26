@@ -12,10 +12,11 @@ that before changing anything here.
 passed as `tmux -e NAME=value` lands on tmux's argv, and `ps` shows it to every
 local account. The environment is as bad. So:
 
-- **The GitHub App's private key** is read from rite's credential store (the
-  keychain) by THIS process, outside the sandbox. It reaches `openssl` through
-  a pipe (`/dev/fd/N`), never a file or argv. The sandbox cannot read the
-  keychain (measured), so a Manager cannot mint its own tokens.
+- **The GitHub App's private key** is read from rite's credential store (a
+  0600 file no profile grants) by THIS process, outside the sandbox. It
+  reaches `openssl` through a pipe (`/dev/fd/N`), never a file or argv. The
+  store is denied to the sandbox by name, so a Manager cannot mint its own
+  tokens.
 - **The installation token** (one hour, only the repository named, only the
   permissions named) is written to `hosts.yml` in a per-Manager `gh` config
   directory, mode 0600, OUTSIDE every path the profile grants. The profile
@@ -130,7 +131,10 @@ def pane_environment(root: Path, manager: str, home: Path | None = None) -> dict
     """
     env: dict[str, str] = {}
     g = _gh_dir(root, manager, home)
-    if (g / "hosts.yml").is_file():
+    # Keyed on `config.yml`, which EVERY Manager gets (`_own_gh_config`), with
+    # or without a token: gh must never fall back to the operator's own
+    # `~/.config/gh`, which may hold their full login in plain text.
+    if (g / "config.yml").is_file():
         env["GH_CONFIG_DIR"] = str(g)
         # Reset the helper list first (an empty value does that), so the
         # system gitconfig's `osxkeychain` is never asked, then name gh.
@@ -176,14 +180,20 @@ def profile_lines(root: Path, manager: str, home: Path | None = None) -> list[st
     lines.append(
         f'(deny file-read* file-write* (subpath "{store_path().parent.resolve()}"))'
     )
+    # ⚠ And the OPERATOR's own gh login (W8), denied by name for the same
+    # reason: in plain text wherever gh has no keyring, it is their whole
+    # GitHub account. A Manager's gh reads its own directory instead.
+    operator_gh = (Path(home) if home is not None else Path.home()) / ".config" / "gh"
+    lines.append(f'(deny file-read* file-write* (subpath "{operator_gh}"))')
     cdir = _credential_dir(root, manager, home)
     g = _gh_dir(root, manager, home)
-    if (g / "hosts.yml").is_file():
+    if (g / "config.yml").is_file():
         # Measured 2026-09-26: with ONLY these two files granted, gh reads
         # its token and git gets it through `gh auth git-credential`, and a
-        # third file in the same directory is refused.
+        # third file in the same directory is refused. With no `hosts.yml`
+        # (no App), gh starts and says `not logged into any GitHub hosts`.
         lines += [
-            "; This Manager's GitHub token, READ-ONLY, by exact path.",
+            "; This Manager's own gh config and token, READ-ONLY, by exact path.",
             f'(allow file-read* (literal "{g / "hosts.yml"}"))',
             f'(allow file-read* (literal "{g / "config.yml"}"))',
         ]
@@ -301,6 +311,29 @@ def _mint(
     return Minted(token=data["token"], expires_at=expires, repositories=repositories)
 
 
+def _own_gh_config(root: Path, manager: str, home: Path | None = None) -> Path:
+    """This Manager's own gh config directory, holding `config.yml` only.
+
+    ⚠ **Every Manager gets one, App or not.** Without it gh reads the
+    operator's `~/.config/gh`, which the profile used to grant: on a machine
+    where gh keeps its token in plain text (a headless Linux box has no
+    keyring) that is the operator's FULL GitHub login, handed to a sandboxed
+    Manager without a word. Measured on macOS: with only this directory, gh
+    starts, and with no token it says `not logged into any GitHub hosts`
+    rather than going anonymous.
+    """
+    g = _gh_dir(root, manager, home)
+    g.mkdir(parents=True, exist_ok=True)
+    for d in (g, g.parent):
+        os.chmod(d, 0o700)
+    # gh's CURRENT layout marker. Without it gh migrates its files on first
+    # read, which is a write the profile refuses (measured).
+    config = g / "config.yml"
+    write_atomic(config, 'version: "1"\n')
+    os.chmod(config, 0o600)
+    return g
+
+
 def _write_token(
     root: Path, manager: str, token: str, home: Path | None = None
 ) -> Path:
@@ -309,16 +342,8 @@ def _write_token(
     `gh` reads it on every invocation, so a refreshed token takes effect at
     the Manager's next command with nothing restarted.
     """
-    g = _gh_dir(root, manager, home)
-    g.mkdir(parents=True, exist_ok=True)
-    for d in (g, g.parent):
-        os.chmod(d, 0o700)
-    # gh's CURRENT multi-account layout, and `config.yml` saying so. Without
-    # both, gh migrates the file on first read, which is a write the profile
-    # refuses (measured).
-    config = g / "config.yml"
-    write_atomic(config, 'version: "1"\n')
-    os.chmod(config, 0o600)
+    # gh's CURRENT multi-account layout (see `_own_gh_config`).
+    g = _own_gh_config(root, manager, home)
     path = g / "hosts.yml"
     write_atomic(
         path,
@@ -461,6 +486,7 @@ def open_access(
     wants_app = bool(app_cfg and app_cfg.app_id)
     # A previous run's leftovers are never handed to this one's pane.
     _clear(root, manager, home)
+    _own_gh_config(root, manager, home)
     if not wants_app:
         return None, ""
     access = Access(root=root, manager=manager, home=home, post=post)

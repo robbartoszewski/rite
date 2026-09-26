@@ -146,6 +146,39 @@ refuses correctly there. On Linux the Manager can also overwrite its own
 copy of the token, because Landlock cannot deny one file inside a directory
 it grants.
 
+### Giving a Manager GitHub access: a GitHub App
+
+A Manager never uses your own gh login. To let it read and write a GitHub
+board, or push, create a GitHub App and install it on the repositories it
+should reach. Grant it Contents, Issues and Pull requests read and write,
+plus Metadata read. rite asks for exactly those four every time it mints a
+token, so an App granted less should have the request refused and `rite
+start` refuse with GitHub's words (read from the code; not yet observed).
+Then, inside the project:
+
+    # .rite/config.yaml (neither id is a secret)
+    github_app:
+      app_id: "5084143"
+      installation_id: "165090155"
+      repository: owner/board-repo   # optional; defaults to ticket_backend.repo
+
+    rite credential set github_app_key --stdin < your-app.private-key.pem
+
+The key goes in whole, newlines included. A one-line prompt would mangle
+them, which is why it is read from standard input. **Observed:** a 28-line
+PEM stored this way reads back byte for byte, and a token request signed
+with it verifies against the key's public half.
+
+The token covers ONE repository, `repository` or else the board's. An App
+installed only on the board's repository cannot push to your code
+repository, so a Manager holding the `integrate` duty cannot push or open a
+pull request there through it. Pushing uses the token only for an HTTPS
+remote.
+
+⚠ **Point the board at a repository meant for tickets, never at the
+project's own code repository unless you want every ticket rite files to
+land there as an issue.** `rite init` never guesses the board from `origin`.
+
 ### ⚠ BEHAVIOUR CHANGE ON UPGRADE — credentials live in one 0600 file
 
 **rite no longer reads credentials from the OS keychain.** It keeps them in
@@ -509,12 +542,15 @@ See SPEC §6.6.3.
   session belongs to this project reads only Claude's transcripts, refuses
   Goose's own session name, and prints that the session "is not one of this
   project's conversations". That message is wrong.
-- **A sandboxed Manager reaches GitHub without your credentials.** `gh`
-  starts inside the sandbox, but anonymously: 60 API requests an hour
-  (measured) and so no private repositories. `git push` over HTTPS uses
-  `gh` for its credential, so it has none to push with. rite can give a
-  Manager a one-hour token from a GitHub App instead, but that has not yet
-  been run against GitHub.
+- **A Manager has no GitHub credential unless you configure a GitHub
+  App.** It never uses your own gh login: rite no longer lets a Manager read
+  `~/.config/gh`, where gh keeps your login, in plain text on a machine
+  with no keyring. Without an App, `gh` inside the sandbox is not logged
+  in, `git push` over HTTPS fails, and `rite start` says so with the fix.
+  With one, rite gives the Manager a one-hour token for one repository. On
+  macOS, `git` inside the sandbox was observed picking that token up for a
+  push; it has not yet been run against GitHub with a real App. `git push`
+  uses it only for an HTTPS remote, not SSH.
 - **Linux: a Claude Manager does not work yet.** See the Claude sign-in
   change above.
 - **No way to start a Manager outside its sandbox.** If one of your own

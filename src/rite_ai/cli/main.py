@@ -6353,8 +6353,9 @@ def _claude_login(root: Path, role) -> bool:
 def _github_access(root: Path, manager: str):
     """This run's GitHub credentials for a sandboxed Manager, or None (C6/C26).
 
-    Nothing configured is None and says nothing: the Manager has no GitHub
-    credential, as before. Configured and failing is a REFUSAL to start,
+    Nothing configured is None, and SAID: the Manager has no GitHub
+    credential, and it is told so rather than finding out from gh. Configured
+    and failing is a REFUSAL to start,
     naming GitHub's own words. An unreachable credential is not an absent
     one (the D-74 rule), and a Manager that started without the credential
     it was configured for would read the board anonymously, which is the
@@ -6374,7 +6375,27 @@ def _github_access(root: Path, manager: str):
             err=True,
         )
         raise SystemExit(1)
-    if access is not None and access.app is not None:
+    if access is None:
+        # ⚠ SAID, never silent. Before this the Manager's gh fell back to the
+        # operator's own `~/.config/gh`: anonymous on a Mac (the token is in
+        # the keychain), and the operator's FULL login wherever gh keeps it
+        # in plain text. It now has a gh config of its own with no token.
+        board = (
+            " Its board is on GitHub, so it can read a public board and cannot "
+            "change it."
+            if config.ticket_backend.type == "github"
+            else ""
+        )
+        click.echo(
+            f"github: Manager {manager!r} has NO GitHub credential: no "
+            f"github_app in .rite/config.yaml. Inside its sandbox `gh` is not "
+            f"logged in and `git push` over HTTPS will fail.{board} Your own gh "
+            "login is not used. To give it one: create a GitHub App, set "
+            "github_app.app_id and installation_id, then `rite credential set "
+            "github_app_key --stdin < app.pem`.",
+            err=True,
+        )
+    elif access.app is not None:
         click.echo(
             f"github: a token for {', '.join(access.app[2])} only, valid until "
             f"{time.strftime('%H:%M', time.localtime(access.expires_at))} and "
