@@ -527,6 +527,13 @@ See SPEC §6.6.3.
 - **A refusal no longer repeats a credential tmux echoed back**, and only
   named variables go onto tmux's command line, which every local account
   can read with `ps`.
+- **Linux: a Manager that finished cleanly was reported "unknown" and did
+  not resume.** tmux on Linux records a session's exit status only when
+  the *next* process it runs exits, so the last Manager to end got no
+  status at all. rite now prompts tmux to collect it. This is the cause of
+  0.5.1's known issue "telling a finished Manager from a crashed one is
+  unreliable on tmux 3.4"; that issue is closed. It was not caused by load,
+  although it showed up under load.
 
 ### Known issues
 
@@ -557,6 +564,11 @@ See SPEC §6.6.3.
 - **A Claude Owner cannot wait for a secondary's reply within one turn.**
   If it routes work and then waits, its session ends, and the reply reaches
   it at its next turn.
+- **A Manager needs a ticket backend to run more than one session.** With
+  none configured, `rite start` runs a single setup session and does not
+  start another, whatever `--sessions` says. So on a project with no board,
+  an Owner has stopped by the time a secondary replies, and the reply
+  waits for your next `rite start`.
 - **Your own global git settings follow a Manager into its sandbox, and two
   of them stop it.** If you sign commits with a key under `~/.ssh`
   (`commit.gpgsign` with `gpg.format ssh`), a Manager's `git commit` fails,

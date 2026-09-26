@@ -50,55 +50,20 @@ tmux_only = pytest.mark.skipif(
     reason="needs real tmux; mocking it is the bug",
 )
 
-# ⚠ A CAPABILITY, not a platform. Measured on CI: a Linux tmux left
-# `#{pane_dead_status}` empty where macOS filled it, so `ending` answered
-# `unclear` for every outcome and the supervisor could never resume there.
-# Skipping on the capability rather than on `sys.platform` states what the
-# dependency actually is — and `exit_status_available` is the same probe the
-# CLI uses to warn a user, so this test and that warning cannot disagree.
-reports_exit_status = pytest.mark.skipif(
-    not exit_status_available(),
-    reason="this tmux does not populate #{pane_dead_status}; outcomes are unclear",
-)
+# ⚠ NO CAPABILITY SKIP. A `reports_exit_status` mark skipped these tests
+# wherever the probe said tmux "does not populate #{pane_dead_status}", and a
+# runtime stand-down skipped any single ending that came back without one —
+# "what is untested here is tmux, not rite". Both were wrong: on Linux tmux
+# records each exit only when the NEXT child of the server exits, `ending` had
+# no answer for that, and the skips encoded the defect as expected behaviour.
+# `ending` now nudges the server to reap (`_nudge_reap`), so an absent status
+# on a real session is a failure here, as it is for a user.
 
 
 @pytest.fixture
 def project(tmp_path: Path) -> Path:
     (tmp_path / ".rite").mkdir()
     return tmp_path
-
-
-def _platform_supplied_a_status(name: str, how) -> None:
-    """Skip when tmux did not feed this session a status at all.
-
-    ⚠ **This is the one dangerous shape in the file — a test that stands
-    down when the thing fails — so the reason it is right here has to be
-    checked, not asserted.**
-
-    Measured on tmux 3.4 under CI: `#{pane_dead}` is 1 and
-    `#{pane_dead_status}` stays EMPTY for six seconds and never arrives,
-    for a real session, in a run where the capability probe succeeded three
-    times. A probe's answer does not predict a session's answer, so there
-    is no machine-level gate that can work — the capability is per-session
-    on that platform.
-
-    What makes standing down acceptable is that **no logic goes untested
-    when it happens.** The whole finished/quit/crashed/unclear mapping is
-    asserted by `TestTheStatusArrivesAfterTheDeath` with scripted tmux
-    replies, deterministically, on every platform. These tests exist to
-    check the OTHER half — that real tmux, driven by `start`, actually
-    feeds that mapping — and when the platform declines to supply the
-    input there is nothing of rite's left to assert.
-
-    It skips ONLY on an absent status. A status that arrives and is read
-    wrongly still fails, which is the defect this file was written for.
-    """
-    if how.kind == UNCLEAR and "no exit status" in how.detail:
-        pytest.skip(
-            "this tmux did not supply an exit status for this session "
-            f"({how.detail}). The mapping is covered by the scripted tests; "
-            "what is untested here is tmux, not rite."
-        )
 
 
 def _what_tmux_showed(name: str, how) -> str:
@@ -151,7 +116,6 @@ class TestTheThreeEndings:
     """A restart is right for exactly one of them."""
 
     @tmux_only
-    @reports_exit_status
     def test_a_clean_unattended_exit_is_FINISHED_and_resumes(self, project):
         result = start(project, "lead", command="sh", max_sessions=1)
         assert result.ok, result.message
@@ -168,9 +132,6 @@ class TestTheThreeEndings:
         subprocess.run(
             ["tmux", "kill-session", "-t", result.session], capture_output=True
         )
-        # AFTER the kill: `skip` raises, and a skip placed before cleanup
-        # leaks a tmux session per run.
-        _platform_supplied_a_status(result.session, how)
         assert how.kind == FINISHED and how.resume, shown
 
     def test_an_absent_exit_status_is_UNCLEAR_not_zero(self, monkeypatch):
@@ -192,7 +153,6 @@ class TestTheThreeEndings:
         assert not how.resume, "an unreadable exit status permitted a resume"
 
     @tmux_only
-    @reports_exit_status
     def test_a_nonzero_exit_is_CRASHED_and_does_not_resume(self, project):
         result = start(project, "lead", command="sh", max_sessions=1)
         subprocess.run(
@@ -208,14 +168,10 @@ class TestTheThreeEndings:
         subprocess.run(
             ["tmux", "kill-session", "-t", result.session], capture_output=True
         )
-        # AFTER the kill: `skip` raises, and a skip placed before cleanup
-        # leaks a tmux session per run.
-        _platform_supplied_a_status(result.session, how)
         assert how.kind == CRASHED and how.status == 9, shown
         assert not how.resume, "a crash that repeats would repeat at the user's expense"
 
     @tmux_only
-    @reports_exit_status
     def test_a_clean_exit_with_a_human_present_is_QUIT(self, project):
         """The measured defect: this and FINISHED are the same exit status,
         so the only difference is whether somebody was there."""
@@ -233,9 +189,6 @@ class TestTheThreeEndings:
         subprocess.run(
             ["tmux", "kill-session", "-t", result.session], capture_output=True
         )
-        # AFTER the kill: `skip` raises, and a skip placed before cleanup
-        # leaks a tmux session per run.
-        _platform_supplied_a_status(result.session, how)
         assert how.kind == QUIT, shown
         assert not how.resume, "the human said stop and it restarted anyway"
 
@@ -727,11 +680,12 @@ def test_the_last_exit_on_the_server_is_read_without_standing_down(project):
     """🔴 The defect behind "a Manager under load ends `unknown`", against
     real tmux and with NO stand-down.
 
-    The other real-tmux tests here skip when tmux supplies no status, on the
-    grounds that it is tmux's failing and not rite's. On Linux that failing
-    was systematic — each status arrives one child exit late — so the skip
-    was hiding the one ending that matters: the last thing on the server to
-    stop. `ending` now nudges the server to reap, so this asserts outright.
+    The real-tmux tests here used to skip when tmux supplied no status, on
+    the grounds that it was tmux's failing and not rite's. On Linux that
+    failing was systematic — each status arrives one child exit late — so
+    the skip was hiding the one ending that matters: the last thing on the
+    server to stop. `ending` now nudges the server to reap, and nothing in
+    this file stands down on an absent status any more.
     """
     result = start(project, "lead", command="sh", max_sessions=1)
     assert result.ok, result.message
@@ -751,40 +705,6 @@ def test_the_last_exit_on_the_server_is_read_without_standing_down(project):
             ["tmux", "kill-session", "-t", result.session], capture_output=True
         )
     assert how.kind == CRASHED and how.status == 7, shown
-
-
-class TestTheStandDownIsBounded:
-    """⚠ `_platform_supplied_a_status` is the one shape in this file that
-    lets a failure pass quietly, so what it will and will not swallow is
-    itself tested. A stand-down nobody has bounded is how a suite goes
-    green by ceasing to ask.
-    """
-
-    def test_it_stands_down_when_tmux_supplied_nothing(self):
-        absent = ending.__globals__["Ending"](
-            UNCLEAR, detail="the pane is dead but tmux reported no exit status ('')"
-        )
-        with pytest.raises(BaseException) as caught:
-            _platform_supplied_a_status("any", absent)
-        assert "Skipped" in type(caught.value).__name__
-
-    @pytest.mark.parametrize(
-        "how",
-        [
-            Ending(FINISHED, detail="the command exited cleanly, unattended"),
-            Ending(CRASHED, status=9, detail="the command exited 9"),
-            Ending(QUIT, detail="it exited cleanly while somebody was attached"),
-            Ending(UNCLEAR, detail="the pane is not dead"),
-            Ending(UNCLEAR, detail="the session is gone, with its exit status"),
-        ],
-        ids=["finished", "crashed", "quit", "not-dead", "session-gone"],
-    )
-    def test_it_does_not_stand_down_on_anything_else(self, how):
-        """A status that ARRIVES and is read wrongly must still fail — that
-        is the defect this file exists for. So must a pane that never died
-        and a session that vanished, which are rite's problems, not tmux's
-        reticence."""
-        _platform_supplied_a_status("any", how)
 
 
 @tmux_only
@@ -1023,7 +943,6 @@ class TestEndingAsksAboutTheManagersOwnPane:
 
 
 @tmux_only
-@reports_exit_status
 class TestTheSecondCycleActuallyStarts:
     """⚠ **REAL tmux, REAL starter, two cycles.** The reason the resume path
     shipped unable to run is that every multi-cycle test above injects
@@ -1285,7 +1204,6 @@ def _clean_exit_ending(monkeypatch, answer, human_was_present=False):
 
 
 @tmux_only
-@reports_exit_status
 class TestALeftoverFromARunThatEndedBadly:
     """⚠ **The state a crashed run leaves, reached the way a user reaches
     it.**
@@ -1336,7 +1254,6 @@ class TestALeftoverFromARunThatEndedBadly:
                 break
             time.sleep(0.2)
         how = ending(first.session, human_was_present=False, pane=first.pane)
-        _platform_supplied_a_status(first.session, how)
         assert how.kind == FINISHED, (
             f"the agent did not end cleanly, so this is not the state under "
             f"test: {how.kind} — {how.detail}"
