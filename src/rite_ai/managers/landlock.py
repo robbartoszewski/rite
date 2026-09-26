@@ -293,36 +293,49 @@ def compose_policy(root: Path, manager: str, home: Path | None = None) -> dict:
     writable += [Path("/tmp"), Path("/var/tmp")]
     writable += [p for p in _engine_state_paths(where) if p.exists()]
 
-    # ⚠ **THIS MANAGER'S OWN CREDENTIAL DIRECTORY (C6/C26).** Without it a
-    # Claude Manager on Linux gets `Not logged in` — the same v0.6.0 blocker
-    # the seatbelt side fixed, left open here because the grant was emitted
-    # only by `github_access.profile_lines()`, which produces seatbelt
-    # s-expressions. Found by cross-reviewing that work against this backend:
-    # two correct pieces, and a hole neither side could see alone.
+    # ⚠ **THIS MANAGER'S OWN CREDENTIALS (C6/C26), MATCHED TO SEATBELT FILE
+    # FOR FILE.** The seatbelt side narrowed at `3531b51` to two GitHub files
+    # by exact path, no grant on the credential directory itself, and a deny on
+    # the Claude login so a Manager cannot replace the file that authenticates
+    # it. Mirroring the wide version was right while it was wide; leaving it
+    # wide now would be the same divergence in reverse, which is how the
+    # seatbelt-only grant got past everyone in the first place.
     #
-    # ⚠ **NO WIDER THAN SEATBELT GRANTS**, deliberately, although that side is
-    # itself wider than it should be and is being narrowed separately. Matching
-    # it means the two platforms are comparable and the narrowing lands in one
-    # place rather than two:
-    #     claude/   read AND write — Claude Code writes transcripts and session
-    #               state there, so a read-only grant would break a run
-    #     cdir      read-only      — the other credential files, written from
-    #                               outside the boundary
+    # ⚠ **THE LOGIN IS READ-ONLY BY ENUMERATION, BECAUSE LANDLOCK CANNOT DENY.**
+    # Seatbelt grants `claude/` read+write and then denies write on
+    # `.credentials.json` LAST. Landlock unions its grants, so there is nothing
+    # to place last: `claude/` is therefore NOT granted as a tree, its existing
+    # children are granted individually, and the login is granted READ-ONLY.
+    # Same trick as the inbox fence, same cost — Claude Code cannot create a
+    # NEW top-level entry in its config directory during a cycle, though
+    # anything inside an existing one (`projects/`, where transcripts go) is
+    # unaffected because those are granted as trees.
     #
-    # ⚠ **SYMLINKS ARE NOT FOLLOWED HERE.** A Landlock rule names the inode a
-    # path resolves to, so adding a rule for a symlink grants its TARGET —
-    # measured in review, where granting only a symlink to another Manager's
-    # `mail/in` made that inbox writable. The Manager can WRITE `claude/`, so it
-    # could plant one; a symlinked credential path is therefore skipped rather
-    # than resolved, which fails closed.
+    # ⚠ **SYMLINKS ARE NOT FOLLOWED, AND NARROWING MAKES THAT MORE IMPORTANT.**
+    # A Landlock rule names the inode a path resolves to, so a symlink named
+    # `hosts.yml` would grant whatever it points at — the exact-path grant is
+    # otherwise a widening primitive rather than a narrowing one.
     from rite_ai.managers import github_access
 
     cdir = github_access._credential_dir(root, manager, where)  # noqa: PLC2701
+    gh_dir = cdir / "gh"
     claude_dir = cdir / "claude"
+
+    # The two GitHub files, read-only, by exact path — not the directory.
+    for name in ("hosts.yml", "config.yml"):
+        one = gh_dir / name
+        if one.is_file() and not one.is_symlink():
+            readable.append(one)
+
     if claude_dir.is_dir() and not claude_dir.is_symlink():
-        writable.append(claude_dir)
-    if cdir.is_dir() and not cdir.is_symlink():
-        readable.append(cdir)
+        login = claude_dir / ".credentials.json"
+        for child in sorted(claude_dir.iterdir()):
+            if child.is_symlink() or child == login:
+                continue
+            writable.append(child)
+        if login.is_file() and not login.is_symlink():
+            # Readable so Claude can sign in; never writable.
+            readable.append(login)
 
     return {
         "manager": manager,

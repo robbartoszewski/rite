@@ -259,16 +259,17 @@ class TestAFreshMachineGetsItsGrants:
             )
 
 
-class TestTheManagersOwnCredentialDirectory:
-    """⚠ **THE HOLE NEITHER OWNER COULD SEE ALONE (C6/C26).** The grant was
-    emitted only by `github_access.profile_lines()`, which produces seatbelt
-    s-expressions, so the Landlock policy carried none of it — and a Claude
-    Manager on Linux got `Not logged in`, the same v0.6.0 blocker the seatbelt
-    side had already fixed. Found by cross-reviewing the credential work
-    against this backend.
+class TestTheManagersOwnCredentials:
+    """⚠ **MATCHED TO SEATBELT FILE FOR FILE (C6/C26).** The seatbelt side
+    narrowed at `3531b51` to two GitHub files by exact path, no grant on the
+    credential directory, and a deny on the Claude login so a Manager cannot
+    replace the file that authenticates it. Mirroring the wide version was
+    right while it was wide; leaving it wide afterwards would be the same
+    divergence in reverse — which is how the seatbelt-only grant got past
+    everyone in the first place.
     """
 
-    def _laid_out(self, tmp_path, *, symlink_claude=False):
+    def _laid_out(self, tmp_path, *, symlink_hosts=False):
         from rite_ai.managers import github_access
 
         root = tmp_path / "proj"
@@ -276,38 +277,56 @@ class TestTheManagersOwnCredentialDirectory:
         home = tmp_path / "home"
         home.mkdir()
         cdir = github_access._credential_dir(root, "lead", home)
-        if symlink_claude:
-            cdir.mkdir(parents=True)
-            (home / "elsewhere").mkdir()
-            (cdir / "claude").symlink_to(home / "elsewhere")
+        (cdir / "gh").mkdir(parents=True)
+        (cdir / "claude" / "projects").mkdir(parents=True)
+        (cdir / "claude" / ".credentials.json").write_text("{}")
+        (cdir / "gh" / "config.yml").write_text("c")
+        (cdir / "gh" / "other.yml").write_text("x")
+        if symlink_hosts:
+            (home / "elsewhere.yml").write_text("secret")
+            (cdir / "gh" / "hosts.yml").symlink_to(home / "elsewhere.yml")
         else:
-            (cdir / "claude").mkdir(parents=True)
-            (cdir / "claude" / ".credentials.json").write_text("{}")
-            (cdir / "gh").mkdir()
+            (cdir / "gh" / "hosts.yml").write_text("h")
         return root, home, cdir
 
-    def test_the_login_is_readable_and_no_wider_than_seatbelt_grants(self, tmp_path):
+    def test_only_the_two_github_files_are_readable(self, tmp_path):
         root, home, cdir = self._laid_out(tmp_path)
         policy = landlock.compose_policy(root, "lead", home)
-        # `claude/` read AND write: Claude Code writes transcripts and session
-        # state there, so read-only would break a run. Same as seatbelt.
-        assert str(cdir / "claude") in policy["writable"]
-        # The rest of the directory read-only — written from OUTSIDE the
-        # boundary. Same as seatbelt.
-        assert str(cdir) in policy["readable"]
-        assert str(cdir) not in policy["writable"], (
-            "the credential directory is writable — a Manager could replace "
-            "credentials written for it from outside"
-        )
+        granted = set(policy["readable"]) | set(policy["writable"])
 
-    def test_a_symlinked_credential_path_is_not_granted(self, tmp_path):
-        """🔴 A Landlock rule names the INODE a path resolves to, so adding a
-        rule for a symlink grants its TARGET — measured in review, where
-        granting only a symlink to another Manager's `mail/in` made that inbox
-        writable. The Manager can WRITE `claude/`, so it could plant one.
-        Skipped rather than resolved, which fails closed."""
-        root, home, cdir = self._laid_out(tmp_path, symlink_claude=True)
+        assert str(cdir / "gh" / "hosts.yml") in policy["readable"]
+        assert str(cdir / "gh" / "config.yml") in policy["readable"]
+        # The property the narrowing exists for: a third file is not granted.
+        assert str(cdir / "gh" / "other.yml") not in granted
+        assert str(cdir / "gh") not in granted, "the gh directory itself is granted"
+        assert str(cdir) not in granted, "the credential directory itself is granted"
+
+    def test_the_login_is_readable_and_never_writable(self, tmp_path):
+        """⚠ By ENUMERATION, because Landlock cannot deny. Seatbelt grants
+        `claude/` read+write and denies the login LAST; Landlock unions its
+        grants, so `claude/` is not granted as a tree at all."""
+        root, home, cdir = self._laid_out(tmp_path)
+        policy = landlock.compose_policy(root, "lead", home)
+        login = str(cdir / "claude" / ".credentials.json")
+
+        assert login in policy["readable"], "Claude cannot sign in"
+        assert login not in policy["writable"], (
+            "the Manager can replace the file that authenticates it"
+        )
+        assert str(cdir / "claude") not in policy["writable"], (
+            "`claude/` is granted as a tree, which re-grants the login by union"
+        )
+        # Transcripts still work: `projects/` is granted, as a tree.
+        assert str(cdir / "claude" / "projects") in policy["writable"]
+
+    def test_a_symlinked_credential_file_is_not_granted(self, tmp_path):
+        """🔴 Narrowing to exact files makes this MORE important, not less: a
+        Landlock rule names the inode a path resolves to, so a symlink named
+        `hosts.yml` would grant whatever it points at — turning an exact-path
+        grant into a widening primitive."""
+        root, home, cdir = self._laid_out(tmp_path, symlink_hosts=True)
         policy = landlock.compose_policy(root, "lead", home)
         granted = set(policy["readable"]) | set(policy["writable"])
-        assert str(cdir / "claude") not in granted
-        assert str(home / "elsewhere") not in granted
+
+        assert str(cdir / "gh" / "hosts.yml") not in granted
+        assert str(home / "elsewhere.yml") not in granted
