@@ -10,6 +10,7 @@ has no seatbelt".
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -207,3 +208,52 @@ def test_the_policy_file_lands_under_the_user_directory(tmp_path):
     written = landlock.write_profile(tmp_path, "lead", tmp_path / "home")
     assert written.exists()
     assert Path("user") in written.parents[1].parts or "user" in str(written)
+
+
+class TestAFreshMachineGetsItsGrants:
+    """⚠ **THE DIFFERENCE THAT HAS CAUSED THREE DEFECTS.** Seatbelt matches a
+    rule against a path when it is opened, so it can grant a directory that
+    does not exist yet. A Landlock rule names an INODE, resolved when the rule
+    is added, so a path that is absent is silently ungranted for the whole life
+    of the boundary — and a directory created afterwards is outside it.
+
+    Found by the Linux observation pass: on a machine where Goose had never
+    run, a Goose Manager panicked at first start because `~/.config/goose` was
+    not granted. Swept for the same pattern and `gh` was next in line — it
+    cannot START without its config directory, so a fresh box would have lost
+    the board the same way one release later.
+    """
+
+    def test_the_directories_rite_grants_are_created_first(self, tmp_path):
+        home = tmp_path / "freshhome"
+        home.mkdir()
+        project = tmp_path / "proj"
+        project.mkdir()
+
+        written = landlock.write_profile(project, "lead", home)
+        policy = json.loads(written.read_text())
+        granted = set(policy["readable"]) | set(policy["writable"])
+
+        for relative in landlock.DIRS_RITE_CREATES:
+            path = home / relative
+            assert path.is_dir(), f"{relative} was not created on a fresh machine"
+            assert str(path) in granted, (
+                f"{relative} exists but is not granted — a Landlock rule cannot "
+                "name a path that does not exist, so this is the fresh-machine bug"
+            )
+
+    def test_it_does_not_invent_state_rite_does_not_own(self, tmp_path):
+        """The complement, so the list above is not mistaken for "every path
+        the policy names". An empty `.local/share/uv` would be granted and hold
+        nothing; a `.gitconfig` rite created would be rite inventing the
+        operator's git identity."""
+        home = tmp_path / "freshhome"
+        home.mkdir()
+        project = tmp_path / "proj"
+        project.mkdir()
+        landlock.write_profile(project, "lead", home)
+
+        for untouched in (".local/share/uv", ".local/bin", ".gitconfig", ".config/git"):
+            assert not (home / untouched).exists(), (
+                f"rite created {untouched}, which it does not own"
+            )

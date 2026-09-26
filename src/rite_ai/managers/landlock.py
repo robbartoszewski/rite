@@ -297,6 +297,63 @@ def compose_policy(root: Path, manager: str, home: Path | None = None) -> dict:
     }
 
 
+# ⚠ **SEATBELT CAN GRANT A PATH BEFORE IT EXISTS. LANDLOCK CANNOT.** This is
+# the difference that has now caused three separate defects, and the next
+# person will assume the macOS semantics, so it is written here rather than
+# left to be rediscovered.
+#
+# A seatbelt rule is TEXT matched against a path when the path is opened, so
+# `(allow file-read* (subpath "~/.config/goose"))` works whether or not that
+# directory exists yet — it starts working the moment something creates it.
+# A Landlock rule names an INODE, resolved by `open(O_PATH)` when the rule is
+# ADDED. A path that does not exist cannot be named, so the grant is silently
+# absent for the whole life of the boundary, and a directory created later is
+# outside it.
+#
+# Measured on a container with an empty HOME: on a machine where Goose, gh and
+# rite have never run, NONE of the five directories below were granted, and a
+# Goose Manager panicked on first start. Found by the Linux observation pass.
+#
+# So rite creates the ones it is responsible for before composing. They are
+# all directories the tool itself would create on first run; making them early
+# only fixes WHEN.
+DIRS_RITE_CREATES = (
+    # Goose reads its config here and panics without the directory.
+    ".config/goose",
+    # Goose's session store, which holds the conversation handle every resumed
+    # cycle names — a Manager that cannot write it cannot continue its work.
+    ".local/share/goose",
+    ".local/state/goose",
+    # ⚠ Not reported, found by sweeping for the same pattern: `gh` cannot
+    # START without its config directory — measured on macOS, where it exits 1
+    # with `failed to read configuration` and a GITHUB_TOKEN does not rescue
+    # it. On a fresh Linux box that directory does not exist, so the grant was
+    # absent and the board would have been unreachable for the same reason as
+    # Goose, one release later.
+    ".config/gh",
+    # rite's own state root, granted readable.
+    ".rite",
+)
+
+# ⚠ **DELIBERATELY NOT CREATED**, so the list above is not mistaken for
+# "everything the policy names":
+#   * `.local/bin` and `.local/share/uv` exist only if that tool is installed.
+#     An empty one would be granted and hold nothing, which fixes no failure.
+#   * `.gitconfig` and `.config/git` are read-only grants and their absence is
+#     harmless — git simply has no user config. Creating them would be rite
+#     inventing state on the operator's behalf.
+#   * The per-Manager credential directory is not granted by this backend at
+#     all; that is a separate gap, reported against the credential work rather
+#     than papered over here.
+
+
+def _ensure_grantable(home: Path) -> None:
+    """Create the directories the policy will grant, because a Landlock rule
+    cannot name a path that does not exist yet. See DIRS_RITE_CREATES."""
+    for relative in DIRS_RITE_CREATES:
+        (home / relative).mkdir(parents=True, exist_ok=True)
+
+
 def _fenced_project_paths(project: Path, manager: str) -> list[Path]:
     """The project, granted so that no Manager's inbox is writable (MM-2).
 
@@ -404,6 +461,10 @@ def write_profile(root: Path, manager: str, home: Path | None = None) -> Path:
     own = manager_dir(root, manager)
     (own / "mail" / OUTBOX).mkdir(parents=True, exist_ok=True)
     (own / "mail" / INBOX).mkdir(parents=True, exist_ok=True)
+    # ⚠ Before composing, for the same reason and with the same resolution of
+    # `home` that `compose_policy` uses — a mismatch here would create one
+    # directory and grant another.
+    _ensure_grantable(Path(home) if home is not None else Path(os.path.expanduser("~")))
     path.write_text(json.dumps(compose_policy(root, manager, home), indent=2) + "\n")
     return path
 
