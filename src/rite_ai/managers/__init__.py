@@ -32,8 +32,9 @@ separate claim ledgers, and `claims_channel()` is inert unless both
 on one machine would silently not see each other's claims.
 
 **Only NEW state goes here.** Existing `.rite/` files stay where they are
-until 0.6.0. Relocating live state in a patch release breaks a project that
-upgrades mid-run, and the boundary is worth having before the move.
+until 0.6.0 (no 0.6.0 ticket moved them; it is MM1, v0.7.0). Relocating
+live state in a patch release breaks a project that upgrades mid-run, and
+the boundary is worth having before the move.
 """
 
 from __future__ import annotations

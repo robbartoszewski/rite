@@ -33,7 +33,7 @@ owns it, removes it and SAYS so (`prepare`).
 **Stated, not reassuring:** a compromised Manager can read that file, copy the
 token out, and make model requests on the subscription until the token
 expires or is revoked. That is the cost of a Manager being able to call the
-model at all. The credential broker (v0.7.0) is the declared way past it.
+model at all. The credential broker (v0.8.0) is the declared way past it.
 
 **What moves with it:** Claude writes its transcripts to
 `<this directory>/projects/`, so rite's readers (resume, the C8 check,

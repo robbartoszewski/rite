@@ -118,7 +118,8 @@ class SlackConfig:
 
     ⚠ **Per project, not per Manager.** A Slack DM is one per user and app, so
     two Managers cannot each have "the Owner's DM" without a second app. How
-    several Managers share one DM is v0.7.0's MMQ2, not settled here.
+    several Managers share one DM was MMQ2, decided as (c): only the Owner
+    opens a relay (SPEC §9.16.7).
     """
 
     owner_user: str = ""
