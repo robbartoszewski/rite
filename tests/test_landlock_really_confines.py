@@ -61,6 +61,30 @@ def _policy(readable=(), writable=()):
     }
 
 
+def without_wholesale_temp_grants(policy):
+    """A policy with `/tmp` and `/var/tmp` removed from the writable set.
+
+    ⚠ **THIS IS A REAL HOLE, NOT A TEST CONVENIENCE, and it is wider than the
+    inbox.** `compose_policy` grants those two read+write to mirror seatbelt.
+    Seatbelt can place a deny AFTER a grant and win; Landlock takes the UNION
+    of its grants and has no deny, so a wholesale temp grant cannot be carved
+    and it overrides everything narrower.
+
+    Measured 2026-09-26: under a pytest `tmp_path`, which lives in `/tmp`, it
+    defeats the MM-2 inbox fence AND the credential narrowing — a third file in
+    the credential directory became readable, the Claude login became
+    overwritable, and `run.lock` became holdable. A real install is unaffected
+    because both the project and `_credential_root` sit under `$HOME`; what is
+    exposed is scratch projects.
+
+    So every test of a NARROW property has to drop these grants, or it measures
+    the hole instead of the property. `fix/landlock-no-wholesale-temp` removes
+    them; this helper goes when that lands.
+    """
+    temps = {"/tmp", "/var/tmp"}
+    return {**policy, "writable": [w for w in policy["writable"] if w not in temps]}
+
+
 def _in_child(fn) -> int:
     """Run `fn` behind a fork, because applying a ruleset is irreversible.
 
@@ -439,24 +463,7 @@ class TestTheInboxFenceOnLinux:
 
     @staticmethod
     def _without_the_wholesale_temp_grants(policy):
-        """The fence cannot hold under a wholesale `/tmp` grant, and a test
-        living in `/tmp` would measure that instead of the fence.
-
-        ⚠ **THIS IS A REAL HOLE, PINNED SEPARATELY BELOW, not a test
-        convenience.** `compose_policy` grants `/tmp` and `/var/tmp` read+write
-        to mirror seatbelt, and a pytest project lives under `/tmp` — so every
-        inbox is writable through that grant whatever the enumeration says.
-        Seatbelt can place a deny LAST and win; Landlock takes the UNION of
-        grants and has no deny, so it cannot carve `/tmp` at all.
-
-        These tests therefore drop the two temp grants, which is the only way
-        to exercise the fence itself on a machine whose temp root is `/tmp`.
-        """
-        temps = {"/tmp", "/var/tmp"}
-        return {
-            **policy,
-            "writable": [w for w in policy["writable"] if w not in temps],
-        }
+        return without_wholesale_temp_grants(policy)
 
     def _refused(self, policy, target) -> bool:
         def child():
@@ -668,3 +675,145 @@ class TestP2BetweenTwoManagersSharingARoot:
             return 0
 
         assert _in_child(manager_a) == 0
+
+
+@NO_LANDLOCK
+class TestTheManagersCredentialsInsideTheBoundary:
+    """The Linux mirror of two macOS tests, against the KERNEL rather than the
+    policy: `test_inside_the_profile_ONLY_the_two_gh_files_are_readable` and
+    `test_inside_the_profile_the_login_can_be_read_and_not_replaced`.
+
+    ⚠ **The policy-level versions in
+    `test_the_sandbox_backend_is_chosen_by_platform.py` assert what
+    `compose_policy` RETURNS.** That is not the same claim: a correct list and
+    a ruleset that does not enforce it look identical from there. These apply
+    the ruleset and try the operations, which is what the macOS pair do inside
+    a real profile.
+
+    ⚠ Landlock has no deny rule, so where seatbelt denies the login write LAST,
+    here `claude/` is not granted as a tree at all and its children are granted
+    individually. The properties are the same; the mechanism is not.
+    """
+
+    def _laid_out(self, tmp_path):
+        from rite_ai.managers import github_access
+
+        root = tmp_path / "proj"
+        (root / "src").mkdir(parents=True)
+        (root / ".rite" / "user").mkdir(parents=True)
+        (root / "decoy").write_text("d")
+        home = tmp_path / "home"
+        home.mkdir()
+        cdir = github_access._credential_dir(root, "lead", home)
+        (cdir / "gh").mkdir(parents=True)
+        (cdir / "claude" / "projects").mkdir(parents=True)
+        (cdir / "gh" / "hosts.yml").write_text("h")
+        (cdir / "gh" / "config.yml").write_text("c")
+        (cdir / "gh" / "other.yml").write_text("x")
+        (cdir / "claude" / ".credentials.json").write_text('{"t": "SENTINEL"}')
+        # The run lock `rite start` takes before touching any credential.
+        (cdir / "run.lock").write_text("")
+        return root, home, cdir
+
+    @staticmethod
+    def _inside(policy, fn) -> int:
+        # ⚠ The credential directory lands under `/tmp` in a test, and the
+        # wholesale temp grant would override every narrow grant here — see
+        # `without_wholesale_temp_grants`. Measured: without this, a third file
+        # is readable and the login is overwritable.
+        def child():
+            landlock.apply(without_wholesale_temp_grants(policy))
+            return fn()
+
+        return _in_child(child)
+
+    def test_only_the_two_gh_files_are_readable(self, tmp_path):
+        root, home, cdir = self._laid_out(tmp_path)
+        policy = landlock.compose_policy(root, "lead", home)
+
+        def attempt():
+            def readable(path):
+                try:
+                    open(path).read()
+                    return True
+                except OSError:
+                    return False
+
+            wanted = readable(cdir / "gh" / "hosts.yml") and readable(
+                cdir / "gh" / "config.yml"
+            )
+            third = readable(cdir / "gh" / "other.yml")
+            return 0 if (wanted and not third) else (1 if not wanted else 2)
+
+        outcome = self._inside(policy, attempt)
+        assert outcome != 1, (
+            "gh cannot read its own token, so it cannot reach the board"
+        )
+        assert outcome == 0, (
+            "a third file in the credential directory is readable — the "
+            "narrowing to two exact paths is not being enforced"
+        )
+
+    def test_the_login_can_be_read_and_not_replaced(self, tmp_path):
+        root, home, cdir = self._laid_out(tmp_path)
+        policy = landlock.compose_policy(root, "lead", home)
+        login = cdir / "claude" / ".credentials.json"
+
+        def attempt():
+            try:
+                open(login).read()
+            except OSError:
+                return 1  # Claude cannot sign in
+            try:
+                with open(login, "w") as handle:
+                    handle.write("{}")
+                return 2  # overwritten
+            except OSError:
+                pass
+            try:
+                # ⚠ Rename-over, not just write: the macOS test checks both,
+                # because a deny on writing a path says nothing about replacing
+                # it. Landlock handles it through REMOVE_FILE/MAKE_REG on the
+                # parent, which is not granted.
+                os.rename(str(root / "decoy"), str(login))
+                return 3  # replaced
+            except OSError:
+                return 0
+
+        outcome = self._inside(policy, attempt)
+        assert outcome != 1, "the login is unreadable, so Claude cannot sign in"
+        assert outcome != 2, "the Manager overwrote the file that authenticates it"
+        assert outcome != 3, "the Manager replaced its login by rename"
+        assert outcome == 0
+
+    def test_the_run_lock_cannot_be_held_by_the_manager(self, tmp_path):
+        """🔴 **A SELF-INFLICTED DENIAL OF SERVICE IF IT COULD.** `rite start`
+        takes `run.lock` in the credential directory before touching any
+        credential, so a Manager able to open and hold it would make its own
+        next start refuse — presenting as "rite randomly will not start my
+        Manager". Raised against the pre-narrowing state, where the whole
+        credential directory was readable. Measured after narrowing: the file
+        cannot be opened at all, because the directory is not granted."""
+        root, home, cdir = self._laid_out(tmp_path)
+        policy = landlock.compose_policy(root, "lead", home)
+
+        def attempt():
+            import fcntl
+
+            try:
+                handle = os.open(str(cdir / "run.lock"), os.O_CREAT | os.O_RDWR, 0o600)
+            except OSError:
+                return 0  # cannot even open it
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return 2  # HELD — the next start would refuse
+            except OSError:
+                return 1  # opened but not lockable
+            finally:
+                os.close(handle)
+
+        outcome = self._inside(policy, attempt)
+        assert outcome == 0, (
+            "a confined Manager can open its own run lock; if it holds it, its "
+            "next start refuses and reads as rite being broken"
+        )
