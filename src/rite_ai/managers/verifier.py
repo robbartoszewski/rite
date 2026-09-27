@@ -149,13 +149,26 @@ def _prompt(root: Path, claim: str) -> str:
     )
 
 
-def _command(prompt_path: Path) -> str:
+def _command() -> str:
+    """The verifier's command line. ⚠ **No prompt file: the prompt arrives on
+    stdin from rite's own process** (`verify`'s `input=`).
+
+    It used to be written to `verifier-prompt.txt` in the Owner's engine
+    TMPDIR and redirected in with `<`. That directory is under
+    `.rite/user/enginetmp/`, which a SECONDARY can write on both platforms
+    (macOS grants the project as a tree; Landlock grants every entry of
+    `.rite` except `managers/`). So the Manager whose reply was being checked
+    could rewrite the instructions its checker read, between rite writing
+    the file and the engine opening it: measured, a loop in the helper's real
+    sandbox turned a false claim into CONFIRMED on the first of two attempts.
+    The verifier's whole value is independence from the thing it checks. A
+    pipe from rite's process has no path anyone else can open."""
     return (
         "claude -p --no-session-persistence --output-format json "
         f"--json-schema {shlex.quote(json.dumps(SCHEMA))} "
         f"--allowedTools {shlex.quote(' '.join(READ_ONLY_TOOLS))} "
         f"--disallowedTools {shlex.quote(' '.join(NEVER_TOOLS))} "
-        f"--permission-prompts none < {shlex.quote(str(prompt_path))}"
+        "--permission-prompts none"
     )
 
 
@@ -191,7 +204,6 @@ def verify(root: Path, owner: str, claim: str, *, runner=None) -> Verdict:
     Verdict of UNVERIFIED that says why."""
     from rite_ai.managers import claude_login
     from rite_ai.managers.boundaries import boundary_for
-    from rite_ai.state import write_atomic
 
     run = runner if callable(runner) else subprocess.run
     env = dict(os.environ)
@@ -207,13 +219,12 @@ def verify(root: Path, owner: str, claim: str, *, runner=None) -> Verdict:
     try:
         profile = boundary.write_profile(root, owner)
         env["TMPDIR"] = str(boundary.engine_tmp(root, owner))
-        prompt_path = Path(env["TMPDIR"]) / "verifier-prompt.txt"
-        prompt_path.parent.mkdir(parents=True, exist_ok=True)
-        write_atomic(prompt_path, _prompt(root, claim))
+        Path(env["TMPDIR"]).mkdir(parents=True, exist_ok=True)
         got = run(
-            ["sh", "-c", boundary.wrap(_command(prompt_path), profile)],
+            ["sh", "-c", boundary.wrap(_command(), profile)],
             cwd=str(root),
             env=env,
+            input=_prompt(root, claim),
             capture_output=True,
             text=True,
             errors="replace",
