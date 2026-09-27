@@ -32,6 +32,7 @@ window is what actually limits duration, and §9.14.5 says so.
 
 from __future__ import annotations
 
+import os
 import shlex
 import time
 from dataclasses import dataclass, field
@@ -625,6 +626,29 @@ class SuperviseResult:
 
 
 def supervise(
+    root: Path, manager: str, *, waiting: object = None, **options
+) -> SuperviseResult:
+    """Run the Manager until a bound or a stop verdict ends it — see
+    `_supervise`, which this wraps.
+
+    `waiting` (`routing.Waiting`, for a Manager in a root shared with others)
+    lets mail CAUSE a cycle. With it, this supervisor's own process is
+    recorded for the whole run, waits included, and removed however the run
+    ends: it is what another Manager's supervisor reads to know this one is
+    PROVABLY gone rather than between two cycles.
+    """
+    if waiting is None:
+        return _supervise(root, manager, **options)
+    from rite_ai.managers.routing import forget_supervisor, record_supervisor
+
+    record_supervisor(root, manager, os.getpid())
+    try:
+        return _supervise(root, manager, waiting=waiting, **options)
+    finally:
+        forget_supervisor(root, manager, os.getpid())
+
+
+def _supervise(
     root: Path,
     manager: str,
     *,
@@ -644,6 +668,7 @@ def supervise(
     resume_id_for: object = None,
     broker: object = None,
     router: object = None,
+    waiting: object = None,
     poll: float = POLL_SECONDS,
     now: object = None,
 ) -> SuperviseResult:
@@ -795,16 +820,50 @@ def supervise(
             )
 
     while True:
+        # ⚠ WHAT CAUSES THIS CYCLE. "" means the ordinary causes: the last
+        # session ended cleanly and the board says continue. "mail" means a
+        # wait below ended because mail is in the inbox (DF2), and then the
+        # ceiling and the verdict are not asked again — the mail IS the cause.
+        cause = ""
         # BOTH bounds before starting. A ceiling checked afterwards reports
         # rather than bounds, and the window is what limits cost because the
         # count does not (§9.14.5).
         if len(cycles) >= max_sessions:
-            return SuperviseResult(
-                True,
-                f"ceiling reached: {max_sessions} session(s) started. This is "
-                f"a COUNT, not a spend limit — a session may run for any "
-                f"length of time inside it.",
+            why = waiting.reason() if waiting is not None else ""
+            if not why:
+                return SuperviseResult(
+                    True,
+                    f"ceiling reached: {max_sessions} session(s) started. This "
+                    f"is a COUNT, not a spend limit — a session may run for any "
+                    f"length of time inside it.",
+                    cycles,
+                )
+            # ⚠ **THE CEILING IS SOFT WHILE ROUTES ARE OUTSTANDING (Robert,
+            # 2026-09-27), and that is said every time it bends.** It stops
+            # being a hard cap on sessions: each cycle past it is started by
+            # mail, never by the board, and waiting spends nothing — so the
+            # practical spend should fall — but it is no longer bounded by
+            # this number. The window still is.
+            stopped = _wait_for_mail(
+                root,
+                manager,
+                waiting,
+                router,
+                slack,
+                say,
+                clock,
+                deadline,
+                poll,
                 cycles,
+                live,
+            )
+            if stopped is not None:
+                return stopped
+            cause = "mail"
+            say(
+                f"the ceiling ({max_sessions} session(s)) is reached, and it is "
+                f"SOFT while {why}: mail arrived, so this cycle starts because "
+                f"of it"
             )
         if deadline is not None and clock() >= deadline:
             return SuperviseResult(
@@ -839,20 +898,44 @@ def supervise(
                     cycles,
                 )
 
-        if callable(verdict):
+        if callable(verdict) and not cause:
             answer = verdict(root)
             if answer in STOP_VERDICTS:
-                # ⚠ Before stopping: a check-in due in this window goes out
-                # rather than being skipped, and idle with questions queued
-                # means a deferral was wrong, so they are asked now (K2).
-                for said in checkins.before_stopping(root, manager, answer):
-                    say(said)
-                return SuperviseResult(
-                    True,
-                    _why(answer, len(cycles)),
-                    cycles,
-                )
-            if answer not in CONTINUE_VERDICTS:
+                why = waiting.reason() if waiting is not None else ""
+                stopped = None
+                if why:
+                    # ⚠ NOTHING ON THE BOARD IS NOT NOTHING TO DO when work is
+                    # routed (DF2): the Owner waits for what it handed out, a
+                    # secondary for what it will be handed (Robert,
+                    # 2026-09-27). Waiting spends no session, and the cycle
+                    # after it is started by mail.
+                    stopped = _wait_for_mail(
+                        root,
+                        manager,
+                        waiting,
+                        router,
+                        slack,
+                        say,
+                        clock,
+                        deadline,
+                        poll,
+                        cycles,
+                        live,
+                    )
+                    if stopped is None:
+                        cause = "mail"
+                if not cause:
+                    # ⚠ Before stopping: a check-in due in this window goes out
+                    # rather than being skipped, and idle with questions queued
+                    # means a deferral was wrong, so they are asked now (K2).
+                    for said in checkins.before_stopping(root, manager, answer):
+                        say(said)
+                    return stopped or SuperviseResult(
+                        True,
+                        _why(answer, len(cycles)),
+                        cycles,
+                    )
+            elif answer not in CONTINUE_VERDICTS:
                 # NOT a fallthrough to "carry on". Whatever this is, it is
                 # not an answer, and the next step spends money.
                 return SuperviseResult(
@@ -1172,6 +1255,14 @@ def supervise(
 
             how = ending(result.session, human_was_present=attended, pane=live_pane)
             cycle.ending = how.kind
+            if waiting is not None and how.kind != "crashed":
+                # ⚠ HANDLED = THE CYCLE THAT CARRIED IT ENDED, written only
+                # now, after the pane is gone — so anything this cycle said is
+                # already in its outbox when the Owner reads this, and a
+                # progress reply mid-cycle cannot end the Owner's wait. A
+                # crash is not handled: the work may not have happened, and
+                # the Owner learns this supervisor is gone instead.
+                waiting.handled([m.path.name for m in waiting_for_it])
             # ⚠ DESIGNATED WHATEVER THE ENDING. A cycle that quit or
             # crashed is still the conversation a user comes back to
             # tomorrow — arguably more so. Designating only resumable
@@ -1306,6 +1397,89 @@ def supervise(
             return _torn_down(
                 root, manager, live or session_name(root, manager), cycles, say
             )
+
+
+_sleep = time.sleep
+"""The wait's pause. A module attribute so a virtual-clock test can advance
+its clock here instead of sleeping."""
+
+
+def _relay_tick(root: Path, manager: str, router, slack, say) -> None:
+    """One tick of the file work a supervisor does with no engine to watch:
+    routing both ways, and the Slack relay in both directions. The same calls
+    the in-session wait loop makes, in the same order."""
+    if callable(router):
+        router(say)
+    if slack is not None:
+        for heard in slack.poll():
+            send(root, manager, INBOX, heard, sent_at=getattr(heard, "sent_at", None))
+        for line in getattr(slack, "post_replies", list)():
+            say(line)
+        for line in getattr(slack, "news", list)():
+            say(line)
+
+
+def _wait_for_mail(
+    root: Path,
+    manager: str,
+    waiting,
+    router,
+    slack,
+    say,
+    clock,
+    deadline,
+    poll: float,
+    cycles,
+    live: str,
+) -> SuperviseResult | None:
+    """Wait, with no engine running, until mail is in this Manager's inbox.
+    None means start a cycle now, BECAUSE of that mail; a result means stop.
+
+    ⚠ **WAKE ON STATE, NOT ON AN EVENT.** Anything in the inbox starts the
+    cycle — a routed instruction, a collected reply, a Slack DM — so nothing
+    has to match a reply to its request, and mail that arrived while the last
+    session ran is already there on the first tick.
+
+    ⚠ **The order inside a tick is the point.** `over()` is read BEFORE the
+    router runs: a secondary records "handled" only after its cycle ended,
+    when its reply is already in its outbox, so reading "handled" first and
+    collecting second can never end the wait with the reply one step away.
+    Reversed, a tick could collect nothing, then see the route handled, then
+    stop — the reply left for the next `rite start`.
+
+    There is no timer (Robert, 2026-09-27). It ends on mail, on `over()`, on
+    the window, or on Ctrl-C, and a wait that cannot end by itself is SAID
+    every `routing.STILL_WAITING_EVERY`.
+    """
+    waiting.begin()
+    try:
+        while True:
+            ended = waiting.over()
+            _relay_tick(root, manager, router, slack, say)
+            if mail_waiting(root, manager, INBOX):
+                return None
+            if ended:
+                return SuperviseResult(
+                    True,
+                    f"stopped after {len(cycles)} session(s): {ended}",
+                    cycles,
+                )
+            if deadline is not None and clock() >= deadline:
+                return SuperviseResult(
+                    True,
+                    f"window elapsed while waiting for mail, after "
+                    f"{len(cycles)} session(s)",
+                    cycles,
+                )
+            line = waiting.still_waiting()
+            if line:
+                say(line)
+            _sleep(poll)
+    except KeyboardInterrupt:
+        # Between cycles: the last one is designated already, at its end.
+        return _torn_down(
+            root, manager, live or session_name(root, manager), cycles, say
+        )
 
 
 def _torn_down(root, manager: str, session: str, cycles, say) -> SuperviseResult:

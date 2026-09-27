@@ -179,7 +179,7 @@ class TestItReachesTheManagerThroughTheMailbox:
 
         import rite_ai.managers.supervise as sup
 
-        source = inspect.getsource(sup.supervise)
+        source = inspect.getsource(sup._supervise)
         assert "send(\n" in source and "INBOX,\n" in source and "heard," in source
 
 
