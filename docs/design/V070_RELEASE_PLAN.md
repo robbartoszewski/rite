@@ -891,6 +891,102 @@ toggle.
 expressible). The Owner's merge answer depends on one setting, `strategy`
 (plus the `auto_merge` flag).
 
+## Track MS — Model selection as configuration
+
+**Robert, 2026-09-27:** "I think a set of properties to set in the
+configuration would be nice." **Recorded, not built**: he may have opinions
+after a day of dogfood, and a schema designed the night before is one we
+would be stuck with.
+
+### What exists today (`origin/main` at `c2076d4`, read from the code)
+
+- **Model is a property of a Manager, and only of a LOCAL one.** A
+  `manager_roles` entry has `name`, `engine` (`claude`, `human` or
+  `local:<class>`), `duties`, `preset`, `endpoint`, `model`, `agent` and
+  `credential` (`config/managers.py`). `endpoint`, `model` and `agent` are
+  **local-only and must come together** (`_LOCAL_ONLY`). `model:` on a
+  `claude` role is REFUSED.
+- **Goose** receives it as `GOOSE_MODEL` in the pane's environment
+  (`supervise.py`, `goose_agent.py`).
+- **Claude: rite passes no model.** A Claude Manager runs whatever Claude
+  Code picks for that login. A setup-token Manager was observed on
+  `claude-sonnet-5`, and why is unexplained (v0.6.0 K2).
+- **Workers: rite passes no model.** `yoloai new --agent claude` is fixed
+  (`sandbox/__init__.py`). A person can pass `--agent-arg` to
+  `rite sandbox start` (inferred, not tested, to carry `--model`), but
+  Workers the broker starts for a Manager get no agent arguments. There are
+  no local-model Workers in 0.6.0.
+- **Duties route work to MANAGERS, not to models.** Presets `lead`, `pm`,
+  `planner`, `executor`. The scheduler routes only the ENTRY stage
+  (`decompose`) by duty (`scheduler/__init__.py`). The router
+  (`local/duty_router.py`) also covers plan-review, execute, step-review and
+  integrate, but nothing live routes those (inferred from a search for
+  callers). One structural rule exists: a decomposing Manager needs a
+  plan-reviewer on a DIFFERENT ENGINE (RL-6, `config/managers.py`), and
+  "engine" means `claude` vs `local:x`, not one Claude model vs another.
+- **rite's reviewer agents pin no model** (`templates/agents/*.md`).
+- **Unknown keys are already refused** in `config.yaml`, `worker.yml`,
+  `modules.yaml` and each `manager_roles` entry (`config/parse.py`,
+  `_entry_error`): the precedent this design must follow.
+- **Documented nowhere a user reads.** README and `docs/guide.md` mention
+  neither `manager_roles` nor models. The one example is the Goose snippet
+  in the 0.6.0 release notes.
+
+### Measured for this design: a resumed Claude conversation can change model
+
+2026-09-27, Claude Code 2.1.261, the operator's own login: turn 1
+`claude -p … --model haiku` ran on `claude-haiku-4-5`. Turn 2
+`claude -p … --resume <that session> --model sonnet` ran on
+`claude-sonnet-5` in the SAME session, and recalled what turn 1 was told. So
+rite can choose a Claude model PER CYCLE, because every cycle is a fresh
+`claude -p --resume` process. **Not measured:** whether a `setup-token`
+login (`user:inference`) accepts every model, and whether a Goose session
+resumed with a different `GOOSE_MODEL` keeps its context.
+
+### The design questions, answered
+
+- **The natural unit is the CYCLE rite starts, not the duty.** A duty is
+  something a Manager does WITHIN a cycle. A `lead` cycle may decide, route
+  and review in one turn, and the model is fixed for that turn. So "a model
+  per duty" is implementable only where RITE knows what a cycle is for
+  before starting it: a check-in re-read, a setup session, a stage rite
+  routed to that Manager. **Inside a free-form cycle it is not implementable
+  as stated, and the honest answer is to declare several Managers**, one per
+  model, each holding the duties that model should do. Per Manager stays
+  the base, and "per cycle kind, where rite knows the kind" is the
+  refinement the measurement allows.
+  - **Cost to state in the docs:** switching model forfeits the prompt
+    cache, and on a local engine it means a cold instance (the reason
+    Track MX pins a Worker to its own machine's Ollama).
+- **Workers: yes, and that is where the cost lands.** A Worker is one-shot
+  per ticket, so a per-Worker or per-ticket-stage model is natural. rite
+  starts every Worker (the broker, or `rite sandbox start`), so it can pass
+  the model as an agent argument. A setting that covers only Managers would
+  miss most of the spend.
+- **Claude: rite CAN choose it,** per cycle (measured above) and per Worker
+  (as an agent argument, not yet measured). So the property covers the
+  engine most people use. Name it for what it controls, one
+  `model` per Manager or Worker plus overrides per cycle kind, not
+  "local model". Where an engine cannot honour it, say so at start rather
+  than accept it.
+- **Defaults: nothing configured means today's behaviour.** Claude Code's
+  own choice for Claude, and the role's declared model for a local engine.
+  Configuration only overrides.
+- 🔴 **Inspectable, never silent.**
+  - `rite doctor` and `rite start` print the EFFECTIVE model per Manager,
+    per cycle kind and per Worker, with its SOURCE ("Claude Code default",
+    "role", "override for review"). This is the same rule as the effective
+    publishing strategy (PB1).
+  - Unknown keys are REFUSED, as `config/parse.py` already does.
+  - A key that names a cycle kind or duty nothing reads is refused, not
+    accepted and ignored.
+  - An override that loses to something else, such as a model the login
+    cannot use, is said at start, and the run does not silently fall back.
+
+| # | work | done when | depends | size |
+|---|---|---|---|---|
+| MS1 | **Model selection as configuration, per the answers above**: a per-Manager and per-Worker `model`, overrides only for cycle kinds rite itself starts, and the effective model and its source shown in `doctor` and at start | Observed on a real project: (a) a Claude Manager whose check-in cycle runs on a different model from its work cycles, with both models visible in `doctor` and in the transcript's model record; (b) a Worker started by the broker on a configured model; (c) an unknown key, and a key naming a cycle kind rite does not start, each refused; (d) a model the login cannot use refused at start, not silently replaced | Robert's day of dogfood; the setup-token model question measured | design first; unsized |
+
 ## Track CU — Cursor, the third engine
 
 **Status: READ, NOT MEASURED.** From Cursor's CLI reference
