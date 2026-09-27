@@ -234,9 +234,9 @@ an unknown UUID and continues a known one. Two fields were added to `Spelling`
 for it:
 
 - **`handle_is_uuid`.** A chosen handle must be a canonical UUID
-  (`handle_problem`). A fresh one comes from `new_handle`, randomly and never
-  from the session's name, because a derived handle would make `--fresh`
-  continue the old chat.
+  (`handle_problem`). A fresh one is random, never derived from the
+  session's name, because a derived handle would make `--fresh` continue the
+  old chat (CU3 generates and records it).
 - **`permission_unexpressed`.** This is a third destination for permission,
   beside argv and the environment. Cursor keeps its allowlist in its own
   config file (CU8), and until rite writes it there, a permission handed to
