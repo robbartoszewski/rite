@@ -633,6 +633,11 @@ See SPEC §6.6.3.
 - **Linux: Workers are not sandboxed by default.** `rite init` leaves Worker
   sandboxing off there, because `flock` does nothing inside a Docker
   sandbox. The Manager's sandbox does not extend to Workers.
+- **A Manager can write its project's `.git/hooks` and `.rite/config.yaml`.**
+  Hooks it writes run later OUTSIDE any sandbox, when you or a Worker run
+  git, and a changed `config.yaml` changes how rite runs next. The project
+  is the Manager's workspace, so this is not fenced yet; review both before
+  trusting a Manager's changes.
 - **Linux: a Claude Manager runs, inside a weaker sandbox.** Observed on
   Ubuntu 24.04 (ARM64) as the Owner of a Goose secondary: routing, the
   secondary acting, and its reply reaching the running Owner. The Linux

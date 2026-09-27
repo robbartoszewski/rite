@@ -136,3 +136,20 @@ def test_sweep_minutes_must_be_positive():
         CoordinationConfig(managers=[OWNER, SECONDARY], sweep_minutes=0)
     )
     assert any("sweep_minutes" in p for p in problems), problems
+
+
+def test_a_quoted_sweep_minutes_does_not_crash_the_router(tmp_path, capsys):
+    """Found by the independent verification: `sweep_minutes: "30"` crashed
+    the Owner's router on every tick; only `rite doctor` checked it."""
+    from rite_ai.cli.main import _router_for
+
+    rite = tmp_path / ".rite"
+    rite.mkdir()
+    (rite / "config.yaml").write_text(
+        "coordination:\n  managers: [lead, small]\n  sweep_minutes: '30'\n"
+        "  manager_roles:\n    - name: lead\n      engine: claude\n      preset: lead\n"
+        "    - name: small\n      engine: claude\n      preset: executor\n"
+    )
+    step = _router_for(tmp_path, OWNER)
+    step(lambda _m: None)  # must not raise
+    assert "sweep_minutes" in capsys.readouterr().err

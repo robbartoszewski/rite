@@ -6408,6 +6408,24 @@ def _router_for(root: Path, manager: str):
     owner = routing_owner(roles)
     names = [r.name for r in roles]
 
+    # ⚠ Found by the independent verification: a quoted `sweep_minutes`
+    # ("30") crashed the router on every tick, and only `rite doctor` checked
+    # it. A value that is not a whole positive number falls back, and says so.
+    sweep_minutes = config.coordination.sweep_minutes
+    if (
+        isinstance(sweep_minutes, bool)
+        or not isinstance(sweep_minutes, int)
+        or (sweep_minutes <= 0)
+    ):
+        import click
+
+        click.echo(
+            f"coordination.sweep_minutes is {sweep_minutes!r}, not a whole "
+            "number of minutes above 0; using 30. `rite doctor` names it.",
+            err=True,
+        )
+        sweep_minutes = 30
+
     def step(say) -> None:
         deliver_routes(root, manager, owner, names, say)
         if owner and manager == owner:
@@ -6421,7 +6439,7 @@ def _router_for(root: Path, manager: str):
                 names,
                 say,
                 verify=lambda _sender, text: verify(root, owner, text),
-                sweep_seconds=60.0 * config.coordination.sweep_minutes,
+                sweep_seconds=60.0 * sweep_minutes,
             )
 
     return step
