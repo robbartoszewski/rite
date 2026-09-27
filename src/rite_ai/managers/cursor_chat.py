@@ -172,3 +172,14 @@ def after_turn(expected_ms: int | None, seen: Observed) -> Verdict:
         f"continue (created {seen.created_at_ms}, expected {expected_ms}): "
         "it ran WITHOUT its history, though Cursor reported success",
     )
+
+
+def config_dir(root: Path, manager: str, home: Path | None = None) -> Path:
+    """This Manager's `CURSOR_CONFIG_DIR`: beside its `claude/` and its GitHub
+    token, under no path any other profile grants. Cursor keeps its chats
+    here (`chats/`), so this is where `observe` looks. Granting it to the
+    Manager's boundary, and putting it in the pane's environment, is CU4.
+    """
+    from rite_ai.managers.github_access import _credential_dir
+
+    return _credential_dir(root, manager, home) / "cursor"

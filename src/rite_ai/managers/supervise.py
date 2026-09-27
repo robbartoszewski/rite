@@ -35,12 +35,14 @@ from __future__ import annotations
 import os
 import shlex
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from rite_ai.managers import (
     checkins,
     claude_login,
+    cursor_chat,
     designate,
     designated,
     designation_path,
@@ -48,6 +50,8 @@ from rite_ai.managers import (
     git_settings,
     github_access,
     manager_dir,
+    record_chat,
+    recorded_chat,
 )
 
 # ⚠ THE BOUNDARY IS RESOLVED, NOT IMPORTED. These six used to come straight
@@ -520,13 +524,13 @@ def _resume_id_source(engine: str, agent: str = ""):
     if spelling.handle_is_uuid:
         # ⚠ NOT `session_name`. Cursor spells start and continue alike, so a
         # handle derived from the name would make `--fresh` continue the old
-        # chat. The handle is a UUID recorded before launch, with its chat's
-        # `createdAtMs` checked after every continuation (CU3). Until that
-        # exists, refuse here rather than hand back a name Cursor rejects.
-        raise ValueError(
-            f"{spelling.binary!r} needs a recorded UUID handle (CU3), which "
-            "is not built; refused rather than continued by name"
-        )
+        # chat. The handle is a UUID `_open_chat` recorded BEFORE the first
+        # launch, so the answer is whatever is recorded.
+        def recorded(root: Path, manager: str, since: float = 0.0) -> str:
+            chat = recorded_chat(root, manager)
+            return chat.handle if chat is not None else ""
+
+        return recorded
 
     def chosen(root: Path, manager: str, since: float = 0.0) -> str:
         # Deterministic, and the same string the tmux session carries — one
@@ -565,6 +569,80 @@ def _designation_is_ours(
     return belongs_to_project(
         root, designation, base=claude_login.projects_dir(root, manager)
     )
+
+
+@dataclass
+class _Chat:
+    """A Cursor Manager's conversation across one run (CU3)."""
+
+    handle: str
+    created_ms: int | None
+    config: Path
+    expected: int | None = None
+    """What `before_turn` found for the cycle now running: None for a first
+    turn, else the creation time it must keep."""
+
+
+def _open_chat(root: Path, manager: str, fresh: bool, say):
+    """The chat this run continues, or a refusal.
+
+    ⚠ **RECORDED BEFORE ANY LAUNCH.** A fresh handle is written to the
+    designation first; if that write fails, nothing runs. A launch before the
+    record would be a chat rite could not name afterwards.
+
+    ⚠ **`--fresh` rewrites the designation up front here, unlike Claude's
+    (C17).** Claude's id exists only once a cycle has run, so an interrupted
+    `--fresh` leaves the old designation; Cursor's handle is rite's before
+    the first launch, and recording it then is what rules the race out.
+    """
+    config = cursor_chat.config_dir(root, manager)
+    existing = None if fresh else recorded_chat(root, manager)
+    if existing is not None and existing.broken:
+        return (
+            f"refusing to continue Manager {manager!r}: its conversation is "
+            f"recorded as broken ({existing.broken}). Start a new one "
+            f"deliberately with `rite start {manager} --fresh`."
+        )
+    if existing is not None and existing.handle:
+        say(f"continuing Manager {manager!r}'s Cursor chat {existing.handle}")
+        return _Chat(existing.handle, existing.created_ms, config)
+    handle = str(uuid.uuid4())
+    try:
+        record_chat(root, manager, handle)
+    except OSError as err:
+        return (
+            f"refusing to start Manager {manager!r}: the new chat's handle "
+            f"could not be recorded ({err}), and a chat rite cannot name "
+            "afterwards could not be continued"
+        )
+    say(f"Manager {manager!r} starts a new Cursor chat, {handle}")
+    return _Chat(handle, None, config)
+
+
+def _check_chat_after(root: Path, manager: str, chat: _Chat, board, say) -> str:
+    """Record what the cycle that just ran did to the chat. Returns the
+    reason the conversation is now broken, or ""."""
+    after = cursor_chat.after_turn(
+        chat.expected, cursor_chat.observe(chat.config, chat.handle)
+    )
+    if after.outcome == cursor_chat.CONFIRMED:
+        record_chat(
+            root, manager, chat.handle, created_ms=after.created_at_ms, board=board
+        )
+        chat.created_ms = after.created_at_ms
+    elif after.outcome == cursor_chat.NO_CHAT:
+        say(f"{after.reason}; the next cycle is a first turn again")
+    elif after.outcome == cursor_chat.REPLACED:
+        record_chat(
+            root, manager, chat.handle, created_ms=chat.created_ms, broken=after.reason
+        )
+        say(f"⚠ Manager {manager!r}: {after.reason}")
+        return after.reason
+    elif chat.created_ms is None and after.created_at_ms is not None:
+        # CONTINUED on a chat adopted by `before_turn`: record it now.
+        record_chat(root, manager, chat.handle, created_ms=after.created_at_ms)
+        chat.created_ms = after.created_at_ms
+    return ""
 
 
 def _default_resume_id(root: Path, manager: str, since: float = 0.0) -> str:
@@ -820,9 +898,27 @@ def _supervise(
     # Settled, not emergent: skipping would orphan the new session — the
     # user starts over, works all day, and tomorrow's bare `rite start`
     # silently returns to the conversation they deliberately abandoned.
+    # ⚠ CU3: an engine whose handle is a UUID rite chooses (Cursor) takes its
+    # handle from `_open_chat`, recorded BEFORE any launch, and never reaches
+    # the discovery, foreign-designation or fresh-fallback paths below. Each
+    # of those is correct for an engine that assigns its own id and wrong
+    # here: a UUID is never `session_name`, so the foreign check would call
+    # every Cursor designation foreign and start fresh.
+    chat: _Chat | None = None
+    if spelling.handle_is_uuid:
+        opened = _open_chat(root, manager, fresh, say)
+        if isinstance(opened, str):
+            return SuperviseResult(False, opened, [])
+        chat = opened
     resume_from = "" if fresh else designated(root, manager)
-    foreign = bool(resume_from) and not _designation_is_ours(
-        root, manager, resume_from, spelling_for(engine, agent).handle_is_ours
+    if chat is not None:
+        resume_from = chat.handle
+    foreign = (
+        chat is None
+        and bool(resume_from)
+        and not _designation_is_ours(
+            root, manager, resume_from, spelling_for(engine, agent).handle_is_ours
+        )
     )
     if foreign:
         # ⚠ C8. Said in its own words, not `_could_not_continue`'s: "the
@@ -838,13 +934,15 @@ def _supervise(
         )
         resume_from = ""
     continuing = bool(resume_from)
-    tried_designation = continuing
+    # Never for a chat: Cursor does not fail on an unknown chat (it creates
+    # one), and falling back to a NEW handle would orphan the recorded one.
+    tried_designation = continuing and chat is None
     # The board as it stood when the current cycle LAUNCHED (`board_context`).
     # Read at launch, not when the cycle is designated: a session started with
     # no board may configure one before it ends, and must still be recorded
     # as having begun without one.
     launched_under: dict | None = None
-    if not fresh and not continuing and not foreign:
+    if chat is None and not fresh and not continuing and not foreign:
         # ⚠ A DIFFERENT FACT from "the one you had is gone", and it reads
         # differently on purpose — the timezone precedent, where an unset
         # zone and a rejected one do not print the same line.
@@ -1061,6 +1159,21 @@ def _supervise(
             # carries a DIFFERENT instruction. See `CONTINUATION` for why
             # this amends D-90 rather than working around it.
             cycle_prompt = CONTINUATION if resume_from else prompt
+            if chat is not None:
+                # ⚠ BEFORE the mail is taken: a refusal here must not lose it.
+                before = cursor_chat.before_turn(
+                    chat.created_ms, cursor_chat.observe(chat.config, chat.handle)
+                )
+                if before.outcome == cursor_chat.REFUSE:
+                    return SuperviseResult(
+                        False,
+                        f"refusing to continue Manager {manager!r}: {before.reason}",
+                        cycles,
+                    )
+                chat.expected = before.created_at_ms
+                cycle_prompt = (
+                    CONTINUATION if before.outcome == cursor_chat.CONTINUE else prompt
+                )
             # ⚠ **THE ONE HOOK.** Messages are appended to the instruction
             # already composed for this cycle rather than delivered by a
             # second mechanism. The engine runs with `-p` and has read its
@@ -1334,7 +1447,12 @@ def _supervise(
             # wants to pick up, which is the mechanic the design note left
             # open and warned about.
             observed = next_id(root, manager, cycle.started_at)
-            if observed:
+            chat_broken = ""
+            if chat is not None:
+                chat_broken = _check_chat_after(
+                    root, manager, chat, launched_under, say
+                )
+            if observed and chat is None:
                 # A fresh cycle — including the fallback after a resume that
                 # did not take — records the board it began under; a continued
                 # one carries the recorded board forward.
@@ -1379,6 +1497,14 @@ def _supervise(
             if said:
                 say(said)
 
+            if chat_broken:
+                return SuperviseResult(
+                    False,
+                    f"stopped after {len(cycles)} session(s): {chat_broken}. "
+                    f"No further cycle runs on it; `rite start {manager} "
+                    "--fresh` starts a new conversation deliberately.",
+                    cycles,
+                )
             if not how.resume:
                 return SuperviseResult(
                     how.kind != "crashed",
@@ -1441,7 +1567,7 @@ def _supervise(
             # cleared here, because clearing would lose that id for good, and
             # whether `--fresh` should drop it up front is a design decision
             # rather than a fix.
-            if cycles:
+            if cycles and chat is None:
                 interrupted_id = next_id(root, manager, cycles[-1].started_at)
                 if interrupted_id:
                     designate(

@@ -281,8 +281,103 @@ def designate(
             before = None
         if isinstance(before, dict) and isinstance(before.get("board"), dict):
             record["board"] = before["board"]
+    # ⚠ A Cursor chat's record (`record_chat`) belongs to its handle, so it is
+    # carried forward while the handle is unchanged, and dropped with it.
+    # Rewriting it away would turn a confirmed chat back into "never
+    # confirmed", which `cursor_chat.before_turn` reads as a first turn.
+    chat = _read_chat(path, session_id)
+    if chat is not None:
+        record["chat"] = chat
     path.parent.mkdir(parents=True, exist_ok=True)
     write_atomic(path, json.dumps(record, indent=2) + "\n")
+
+
+def _read_chat(path: Path, session_id: str) -> dict | None:
+    try:
+        before = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(before, dict) or before.get("session") != session_id:
+        return None
+    chat = before.get("chat")
+    return chat if isinstance(chat, dict) else None
+
+
+def record_chat(
+    root: Path,
+    name: str,
+    handle: str,
+    *,
+    created_ms: int | None = None,
+    broken: str = "",
+    board: dict | None = None,
+) -> None:
+    """Record a Cursor chat's handle, and what rite has confirmed about it.
+
+    Written BEFORE the handle's first launch (with no `created_ms`), again
+    when the first turn is confirmed, and with `broken` when a turn is found
+    to have run in a replaced chat (CU3, `cursor_chat`). Atomic, like
+    `designate`; only this Manager's supervisor writes it.
+    """
+    path = designation_path(root, name)
+    record: dict = {"session": handle}
+    try:
+        before = json.loads(path.read_text())
+    except (OSError, ValueError):
+        before = None
+    if board is not None:
+        record["board"] = board
+    elif (
+        isinstance(before, dict)
+        and before.get("session") == handle
+        and isinstance(before.get("board"), dict)
+    ):
+        record["board"] = before["board"]
+    chat: dict = {"created_ms": created_ms}
+    if broken:
+        chat["broken"] = broken
+    record["chat"] = chat
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_atomic(path, json.dumps(record, indent=2) + "\n")
+
+
+@dataclass(frozen=True)
+class ChatRecord:
+    handle: str
+    created_ms: int | None
+    broken: str
+
+
+def recorded_chat(root: Path, name: str) -> ChatRecord | None:
+    """The Cursor chat this Manager continues, or None when none is recorded.
+
+    ⚠ **Not "unreadable is absent" here, unlike `designated`.** For Claude
+    an unusable designation means start fresh. For Cursor a record that says
+    `broken` must stop the next run, and a record whose `chat` part is
+    malformed cannot say whether it was confirmed, so it is reported as
+    broken rather than read as never-confirmed (which would relaunch as a
+    first turn).
+    """
+    path = designation_path(root, name)
+    try:
+        raw = json.loads(path.read_text())
+    except OSError:
+        return None
+    except ValueError:
+        return ChatRecord("", None, f"{path} is not JSON")
+    if not isinstance(raw, dict) or "chat" not in raw:
+        return None
+    handle = raw.get("session")
+    chat = raw.get("chat")
+    if not isinstance(handle, str) or not isinstance(chat, dict):
+        return ChatRecord("", None, f"{path} does not hold a usable chat record")
+    created = chat.get("created_ms")
+    if created is not None and (
+        not isinstance(created, int) or isinstance(created, bool)
+    ):
+        return ChatRecord(handle, None, f"{path} holds a malformed created_ms")
+    broken = chat.get("broken", "")
+    return ChatRecord(handle, created, broken if isinstance(broken, str) else "broken")
 
 
 def designated(root: Path, name: str) -> str:
