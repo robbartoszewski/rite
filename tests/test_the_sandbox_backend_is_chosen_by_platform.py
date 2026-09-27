@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 
 import pytest
 
@@ -202,12 +201,20 @@ class TestTheLauncherRefusesRatherThanRunUnconfined:
         assert "unconfined" in err
 
 
-def test_the_policy_file_lands_under_the_user_directory(tmp_path):
+def test_the_policy_file_lands_where_no_manager_can_write_it(tmp_path):
     """Local facts stay local: absolute paths inside are meaningless on any
-    other machine, which is why both backends write under `user_dir`."""
-    written = landlock.write_profile(tmp_path, "lead", tmp_path / "home")
+    other machine. And the launcher APPLIES this file, so it is the boundary:
+    it lives in the Manager's own credential directory, per machine and under
+    no path any Manager's policy grants, and not in `.rite/user/`, which
+    every Manager can write (measured on macOS: a secondary rewriting the
+    Owner's boundary there escaped it in 19 of 20 runs)."""
+    from rite_ai.managers import github_access
+
+    home = tmp_path / "home"
+    written = landlock.write_profile(tmp_path, "lead", home)
     assert written.exists()
-    assert Path("user") in written.parents[1].parts or "user" in str(written)
+    assert not written.is_relative_to(tmp_path / ".rite")
+    assert written.is_relative_to(github_access._credential_dir(tmp_path, "lead", home))
 
 
 class TestAFreshMachineGetsItsGrants:

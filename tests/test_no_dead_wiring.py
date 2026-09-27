@@ -53,6 +53,12 @@ UNCALLED_ON_PURPOSE = {
         "paths the kernel will enforce — and the tests assert against the "
         "policy it returns rather than against JSON on disk."
     ),
+    "profile_path": (
+        "Called by `write_profile` and `why_it_was_refused` in the same file. "
+        "Public because it is where rite decides WHERE a Manager's boundary "
+        "lives, which is a security property (no Manager may write it), and "
+        "the boundary tests assert that location directly."
+    ),
     "policy_path": (
         "Landlock's half of `profile_path`, called by `write_profile` and "
         "`why_it_was_refused` in the same file. Public because it is where "

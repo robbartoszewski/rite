@@ -42,20 +42,43 @@ from rite_ai.managers import github_access, user_dir
 from rite_ai.names import name_problem
 
 PROFILE_SUFFIX = ".sb"
+BOUNDARY_DIRNAME = "boundary"
+"""Where a Manager's boundary file lives, inside its credential directory."""
 ENGINE_TMP_DIRNAME = "enginetmp"
 
 
-def profile_path(root: Path, manager: str) -> Path:
-    """Where this Manager's profile is written.
+def profile_path(root: Path, manager: str, home: Path | None = None) -> Path:
+    """Where this Manager's profile is written: per-user, per-machine, never
+    committed. What a Manager may reach on THIS machine is a local fact, and
+    the absolute paths inside the profile make it meaningless anywhere else.
 
-    Under `user_dir` with the instance records and the permission list:
-    per-user, per-machine, never committed. What a Manager may reach on THIS
-    machine is a local fact, and the absolute paths inside the profile make
-    it meaningless anywhere else.
+    ⚠ **NOT UNDER `.rite/user/`, WHICH EVERY MANAGER CAN WRITE.** A boundary
+    must not be writable by anything it bounds, or by a peer. The file used to
+    be written to `.rite/user/`, which is writable across Managers on both
+    platforms (SPEC §5.4.8), and read by the launcher a moment later. So a
+    peer could replace a Manager's boundary between the two: measured on
+    macOS, a loop inside a SECONDARY's real profile replacing the Owner's
+    `.sb` with `(allow default)` took the Owner's verifier out of its sandbox
+    in 19 of 20 runs. A Manager's own launch reads its profile the same way
+    (read from the code, not run), and Linux's launcher reads its policy the
+    same way (not measured: no Linux box was reachable).
+    It now lives in the Manager's own credential directory, under no path any
+    Manager's profile grants, beside the login rite writes there. A copy left
+    in `.rite/user/` by an older build is removed when this is written, so
+    nothing mistakes it for the one in force.
     """
     problem = name_problem(manager, kind="manager name", must_be_a_tmux_target=True)
     if problem:
         raise ValueError(f"refusing to build a profile path: {problem}")
+    return (
+        github_access._credential_dir(root, manager, home)  # noqa: PLC2701
+        / BOUNDARY_DIRNAME
+        / f"{manager}{PROFILE_SUFFIX}"
+    )
+
+
+def _legacy_profile_path(root: Path, manager: str) -> Path:
+    """Where builds before the move wrote the profile (`profile_path`)."""
     return user_dir(root) / f"{manager}{PROFILE_SUFFIX}"
 
 
@@ -564,8 +587,9 @@ def write_profile(root: Path, manager: str, home: Path | None = None) -> Path:
     was created, so widening or narrowing the surface in a later release
     would reach new projects only.
     """
-    path = profile_path(root, manager)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path = profile_path(root, manager, home)
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    _legacy_profile_path(root, manager).unlink(missing_ok=True)
     engine_tmp(root, manager).mkdir(parents=True, exist_ok=True)
     # ⚠ The outbox is CREATED here, outside the boundary: the Manager is
     # granted the outbox and not its parents, so from inside it could not
