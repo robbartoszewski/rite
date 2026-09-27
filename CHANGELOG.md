@@ -687,11 +687,6 @@ See SPEC §6.6.3.
   macOS, where a secondary can write that directory; on Linux it can when
   `.claude/` exists before the secondary starts. rite's check of each reply
   does not load them. Review `.claude/` in a project with several Managers.
-- **Linux: a Claude Manager runs, inside a weaker sandbox.** Observed on
-  Ubuntu 24.04 (ARM64) as the Owner of a Goose secondary: routing, the
-  secondary acting, and its reply reaching the running Owner. The Linux
-  sandbox's limits above apply to it, including that it can replace its own
-  login file.
 - **The network is not confined**, and `/tmp` is readable and writable by a
   Manager. Destination control is planned for 0.8.0. On Linux, no longer
   granting `/tmp` is planned for 0.7.0.
@@ -738,12 +733,8 @@ See SPEC §6.6.3.
   not observed in use: two overlapping ticks at a window boundary could each
   hand over the same Workers, posting the handover comment on a ticket twice.
   It takes two ticks at the same moment, such as cron plus a manual `rite
-  scheduler-tick`. The crash this used to cause while listing the outbox is fixed. A fix
-  for the lock itself is planned for 0.7.0.
-  ⚠ **If `test_blast_radius_concurrent` goes red:** a `FileNotFoundError`
-  there was the listing crash and should not recur. **Any other failure (a
-  granted claim lost, or a path held twice) is this lock failing on its own.
-  It is not a flake: do not rerun it until it passes.**
+  scheduler-tick`. The crash this used to cause while listing the outbox is
+  fixed. A fix for the lock itself is planned for 0.7.0.
 - **A global `core.hooksPath` stops a Manager's commits and pushes** when
   it has a hook for them. The sandbox cannot run hooks from outside the
   project. rite does not bypass them, because a global hook may be a guard
