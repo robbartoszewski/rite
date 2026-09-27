@@ -103,11 +103,11 @@ def list_pending(root: Path) -> list[OutboxMessage]:
     and every message after it in the listing went unreported (CI: four
     occurrences in `test_blast_radius_concurrent`, on Python 3.11 and 3.12).
 
-    ⚠ **This does not make concurrent ticks safe.** Two ticks listing at once
-    is itself the open scheduler-lock defect (`scheduler/lock.py` admits
-    overlapping holders under contention), and two concurrent flushes could
-    still deliver one message twice. This only stops a consumed message
-    from being reported as a failure of the reader.
+    ⚠ **This does not make concurrent consumers safe.** Ticks no longer
+    overlap (`scheduler/lock.py` is an `flock` since 0.7.0), but the tick
+    lock does not guard `flush_outbox`, so two concurrent flushes (two
+    `rite start`s) could still deliver one message twice. This only stops a
+    consumed message from being reported as a failure of the reader.
     """
     out_dir = _outbox_dir(root)
     if not out_dir.is_dir():

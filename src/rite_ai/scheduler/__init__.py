@@ -270,20 +270,29 @@ def run_tick(root: Path) -> TickResult:
     boundary check only ACTS on a genuine transition, not a repeated
     reading of the same state).
 
-    Serialised against other ticks by `scheduler.lock` (see
-    `rite_ai.scheduler.lock` for why a pid beats a timeout). The lock lives
-    here rather than in the CLI so no caller can route around it. A tick
-    that finds the lock held returns immediately with `skipped=True` and a
-    message naming the holder."""
+    Serialised against other ticks by an `flock` the kernel holds (see
+    `rite_ai.scheduler.lock` for why no pid or timeout is involved). The lock
+    lives here rather than in the CLI so no caller can route around it. A
+    tick that finds the lock held returns immediately with `skipped=True` and
+    a message naming the holder. A tick that cannot establish exclusion at
+    all does no work and is not ok."""
     with lock.held(root) as outcome:
         if isinstance(outcome, lock.LockBusy):
             return TickResult(
                 ok=True, messages=[f"skipped: {outcome.summary}"], skipped=True
             )
-        return _run_tick_locked(root, outcome)
+        if isinstance(outcome, lock.LockUnavailable):
+            return TickResult(ok=False, messages=[outcome.summary], skipped=True)
+        result = _run_tick_locked(root)
+    if outcome.warnings:
+        # Found on release, after the work: the lock file was taken out from
+        # under this tick, so exclusion was not guaranteed for its duration.
+        result.messages.extend(outcome.warnings)
+        result.ok = False
+    return result
 
 
-def _run_tick_locked(root: Path, outcome: lock.LockAcquired) -> TickResult:
+def _run_tick_locked(root: Path) -> TickResult:
     messages: list[str] = []
 
     now = time.time()
@@ -291,11 +300,6 @@ def _run_tick_locked(root: Path, outcome: lock.LockAcquired) -> TickResult:
     if gap:
         messages.append(gap)
     _write_last_tick(root, now)
-
-    if outcome.reclaimed_from is not None or outcome.reclaim_reason:
-        # A lock left behind by a tick that died. Recovering silently would
-        # hide that a previous run was killed mid-flight.
-        messages.append(f"reclaimed stale scheduler lock: {outcome.reclaim_reason}")
 
     rotated = rotate_if_needed(log_path(root))
     if rotated:

@@ -1564,7 +1564,7 @@ Each is v0.7.0 unless it lands before the tag. The detail is in its row.
 | C15's remainder: settle checks read "could not ask tmux" as "died"; two refusals relay unredacted tmux stderr | C15 |
 | An anchor is checked for presence, not support | C31 |
 | A Manager expects `rite question list` | C33 |
-| The scheduler lock admits overlapping ticks (8 processes, 20 s, Linux: 1,352–1,617 overlaps and about 500 false reclaims). The reader crash it caused is fixed (#27); the lock is a 0.6.0 known issue. Done when the handover's own bar is met: 0 overlaps and 0 false reclaims under that stress | handover 2026-09-27, item 7 |
+| The scheduler lock admits overlapping ticks (8 processes, 20 s, Linux: 1,352–1,617 overlaps and about 500 false reclaims). The reader crash it caused is fixed (#27); the lock is a 0.6.0 known issue. Done when the handover's own bar is met: 0 overlaps and 0 false reclaims under that stress. **Status 2026-09-27: met.** The lock is now a kernel-held `flock` on a file that is never deleted, with a self-test that refuses to run where `flock` does not exclude. Same harness, three runs each: Ubuntu VM, old 618–665 overlaps and 612–692 false reclaims, new 0 and 0; macOS, old 0–1 and 85–95, new 0 and 0. The Linux figure is from the Parallels VM, not the Docker container that produced the 1,352–1,617, because Docker is stopped to save memory. Controls on both show the harness catches a broken lock | handover 2026-09-27, item 7 | handover 2026-09-27, item 7 |
 | `sandbox.enabled` does not decide whether Workers are sandboxed ("after the tag") | C34 |
 | A `rite reply` with backticks is refused and misdiagnosed | readiness W9 |
 | A Claude Owner cannot wait for its secondary (a named rough edge of v0.6.0) | readiness W13 |

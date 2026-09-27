@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.20 · **Date:** 2026-09-27
+**Version:** 0.24.21 · **Date:** 2026-09-27
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -1410,31 +1410,36 @@ stalled processes.
 unattended run from degrading over time; both are asserted in
 `tests/test_scheduler_lock.py`.
 
-**One tick at a time, guarded by a pid rather than a timeout.** A lockfile in
-`.rite/scheduler.lock` records the owning process. "Is the previous tick still
-running" is a question the OS answers exactly on the single machine Phase 1
-targets (`os.kill(pid, 0)`), whereas a duration has to be simultaneously short
-enough not to wedge the scheduler after a kill and long enough not to steal a
-slow tick's lock. A tick that finds the lock genuinely held reports the holder
-and exits 0 — contention is normal, but a silent skip would be the same defect
-as the empty scheduler log, indistinguishable from a scheduler that never
-fired. A lock whose owner is gone is reclaimed and the reclaim is reported.
-The lockfile is published with `os.link` from an already-written temp file,
-not `O_CREAT | O_EXCL`: the latter makes the path exist before its contents
-do, and twenty concurrent real ticks reliably produced a reader that saw the
-empty window and took a held lock.
+**One tick at a time, held by the kernel.** A tick takes
+`flock(LOCK_EX | LOCK_NB)` on `.rite/scheduler-tick.lock`, a file rite only
+ever opens: never unlinked, never replaced. The kernel holds the lock for as
+long as the tick's open file description exists and drops it when the process
+exits, however it exits. So there is no stale lock to reclaim, and no pid,
+liveness check or timeout decides anything. A tick that finds the lock held
+reports the holder (the pid and start time the holder recorded in the file,
+for the message only) and exits 0. Contention is normal, but a silent skip
+would be the same defect as the empty scheduler log, indistinguishable from a
+scheduler that never fired. A held lock is never taken from a live holder,
+however long it is held. Past `_HELD_TOO_LONG_SECONDS`, which a test asserts
+exceeds every bounded wait in the package, the skip message says the holder
+may be stuck, and the lock still frees itself only when that process exits.
 
-This is the stale-claim rule from §5.2 and it gets the opposite answer on
-purpose. A claim guards a human's in-flight edits and rite cannot tell a
-crashed session from a thinking one, so claims never auto-expire. A tick lock
-guards a five-minute mechanical job owned by an observable local process, so
-reclaiming it is safe where releasing a claim is not.
+**Where exclusion cannot be established, the tick does not run, exits 1 and
+says why.** Every acquisition opens the lock file a second time and asks for
+the lock again. The request must be refused, because `flock` locks belong to
+the open file description on Linux and macOS alike, so two opens conflict
+even in one process. A grant means `flock` is a no-op on that filesystem (some
+network and VM-shared ones). A lock file that cannot be opened, a symlink at
+its path, an `flock` that errors, and a path that no longer names the locked
+file refuse too. A lock file deleted during a tick is reported when that tick
+releases, because a tick that started meanwhile may have run alongside it.
 
-`_PID_REUSE_BACKSTOP_SECONDS` is the only duration involved, and only because
-a recycled pid landing on an unrelated long-lived process would otherwise
-wedge the scheduler permanently. It is derived, not chosen: a test asserts it
-exceeds the longest bounded wait anywhere in the package, so it can never fire
-on a tick that is merely slow.
+0.1.0–0.6.0 used a pid lockfile (`.rite/scheduler.lock`) that decided from
+outside whether its holder was gone, then deleted whatever file was at the
+path. With 8 processes contending for 20 s it admitted 1,352–1,617 overlapping
+holders per run in a Linux container. The same harness gives 0 against this
+design (`rite_ai.scheduler.lock` has the numbers). A 0.6.0 tick and a newer
+one use different files and do not exclude each other.
 
 **The log is bounded.** Every tick writes at least one line by design, so
 `.rite/scheduler.log` grew without limit — ~105,000 lines a year at the default
@@ -2846,7 +2851,7 @@ nobody had been assigned to ask it.
 ├── coordination-cost.json  # refusal/contention counters (§2.7.2, D-45)
 ├── schedule-state.json     # last schedule window acted on (§2.7.3)
 ├── scheduler-last-tick     # when the scheduler last ran (§9.12)
-├── scheduler.lock          # one tick at a time (§9.12)
+├── scheduler-tick.lock     # one tick at a time; an flock, never deleted (§9.12)
 ├── scheduler.log           # what cron/launchd's ticks wrote (§9.12)
 └── *.lock                  # flock sidecars, one beside each durable file
                             #   above — machinery, not state. Held while a
@@ -6999,6 +7004,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.21 — §5.1.2: the tick lock is an `flock`.** The pid lockfile did not exclude: it decided from outside whether a holder was gone (a file missing between two looks, a file that read as unusable, `kill(pid, 0)`), then deleted whatever was at the path. Measured with 8 processes for 20 s: 1,352–1,617 overlapping holders in a Linux container on 2026-09-26, and 618–665 overlaps with 612–692 false reclaims in an Ubuntu VM on 2026-09-27. The section had called that design one where the OS "answers exactly". It now describes a kernel-held `flock` on a file that is never deleted, and a self-test that refuses to run where `flock` does not exclude. Same harness, same VM: 0 overlaps and 0 reclaims, and 0 on macOS against 0–1 overlaps and 85–95 false reclaims before. The file is renamed to `scheduler-tick.lock` so a 0.6.0 tick can never delete it.
 
 **Changes in 0.24.20 — §9.16.7: the hardening of routed work.** Robert's rulings of 2026-09-27: "provably gone" is seen running then gone plus the recorded lifecycle, and each ending is named; a mail-started cap bounds the soft ceiling; byte-identical repeats are dropped and said; rite verifies every reply in a fresh session and fails closed; silence after routed work (finished without a reply, died) is told to the Owner.
 
