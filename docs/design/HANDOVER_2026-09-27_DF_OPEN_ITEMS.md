@@ -155,6 +155,10 @@ will print on Robert's Mac.** At ~03:40 no other checkout under
 the DF2 sessions, apparently run from builds older than #14. They are safe to
 remove, and removing them silences the false warning until the wording is
 fixed.
+**Removed 2026-09-27 by the DF2 session that made them**: they were its
+macOS runs on `ff38b43`, which predates #14. What they held (the routed
+messages, the replies, the routing ledger) is recorded in the readiness
+doc's W13 row.
 
 **Why not fixed.** It was found while writing this note, after the session
 was asked to stop.
