@@ -883,12 +883,39 @@ class Waiting:
             and (self.is_owner or e.get("to") == self.manager)
         )
 
+    def notes_this_run(self) -> int:
+        """Notes rite wrote to this Owner this run (finished without a reply,
+        died, stopped): at most one per routed message, by construction."""
+        if not self.is_owner:
+            return 0
+        notes = _load(_ledger_dir(self.root, self.owner) / NOTES_FILE)
+        mine = {e["name"] for e in _this_run_routes(self.root, self.owner)}
+        return sum(
+            1
+            for name, state in notes.items()
+            if name in mine and str(state).startswith("reported-")
+        )
+
     def cap(self, ceiling: int) -> int:
         """How many sessions this run may start in all, mail-started included:
-        the ceiling plus `EXTRA_SESSIONS_PER_ROUTE` per message routed this
-        run. ⚠ Counts THIS Manager's own sessions only; a verification rite
-        runs for itself is not one of them and is reported separately."""
-        return ceiling + EXTRA_SESSIONS_PER_ROUTE * self.routed_this_run()
+        the ceiling, plus `EXTRA_SESSIONS_PER_ROUTE` per message routed this
+        run for the replies, plus one per note rite itself wrote.
+
+        ⚠ **The notes have their OWN allowance, found by auditing for a budget
+        sized for one kind of session and spent by another.** The reply
+        allowance is sized for a reply and a correction. A secondary that
+        sends both and then DIES with the work outstanding needs a third
+        Owner session for rite's DIED note, and charged against the reply
+        allowance the cap would refuse it: the person would never be told the
+        work died. Notes are at most one per route, so the cap stays bounded.
+
+        ⚠ Counts THIS Manager's own sessions only; a verification rite runs
+        for itself is not one of them and is reported separately."""
+        return (
+            ceiling
+            + EXTRA_SESSIONS_PER_ROUTE * self.routed_this_run()
+            + self.notes_this_run()
+        )
 
     def reply_waiting(self) -> bool:
         """Whether the Owner's inbox holds a reply `collect_reports` brought
@@ -1108,13 +1135,18 @@ def _notice_routed_work(
     written = 0
     by_sender: dict[str, list[str]] = {}
     for e in _this_run_routes(root, owner):
-        if (managers is None or e.get("to") in managers) and not notes.get(e["name"]):
+        # ⚠ A REPLY rules out only "finished WITHOUT a reply"; it says
+        # nothing about dying later with the work unfinished. Only a note
+        # already written closes a route here.
+        if (managers is None or e.get("to") in managers) and not str(
+            notes.get(e["name"]) or ""
+        ).startswith("reported-"):
             by_sender.setdefault(e["to"], []).append(e["name"])
     for sender, names in sorted(by_sender.items()):
         if unread(root, sender, OUTBOX, _report_reader(owner)):
             continue  # something is still to be collected: not silence
         done = _handled_names(root, sender)
-        finished = [n for n in names if n in done]
+        finished = [n for n in names if n in done and notes.get(n) != "replied"]
         if finished:
             send(
                 root,

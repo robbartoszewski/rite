@@ -870,9 +870,11 @@ def _supervise(
             # ceiling of two. So past the ceiling there is a second limit, the
             # MAIL-STARTED CAP, derived from the work routed this run rather
             # than from a second number, and reaching it is said as itself.
-            stopped = _at_the_cap(manager, waiting, max_sessions, cycles, why)
-            if stopped is not None:
-                return stopped
+            # ⚠ The cap is checked when a mail-started session would BEGIN,
+            # not before waiting: waiting spends nothing, and a note rite
+            # writes during the wait (DIED, FINISHED WITHOUT A REPLY) earns
+            # its own allowance. Checked before the wait, a death after a
+            # reply and a correction was refused before its note existed.
             stopped = _wait_for_mail(
                 root,
                 manager,
@@ -1445,11 +1447,14 @@ def _at_the_cap(manager, waiting, ceiling: int, cycles, why: str):
     if len(cycles) < cap:
         return None
     routed = waiting.routed_this_run()
+    notes = waiting.notes_this_run()
     return SuperviseResult(
         True,
         f"stopped at the MAIL-STARTED CAP, not the ceiling: {len(cycles)} "
         f"session(s) started, and the cap is --sessions {ceiling} plus 2 per "
-        f"message routed this run ({routed}) = {cap}. It was reached while "
+        f"message routed this run ({routed})"
+        + (f" plus 1 per note rite wrote ({notes})" if notes else "")
+        + f" = {cap}. It was reached while "
         f"{why}. Anything still arriving waits in the inbox for the next "
         f"`rite start {manager}`.",
         cycles,

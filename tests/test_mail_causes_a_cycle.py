@@ -691,3 +691,33 @@ class TestTheMailStartedCap:
             now=lambda: world["t"],
         )
         assert result.reason.startswith("ceiling reached: 2 session(s)"), result
+
+
+class TestRitesOwnNotesAreNotChargedToTheReplyAllowance:
+    """Audit finding: a budget sized for one kind of session, spent by
+    another. A reply and a correction use the reply allowance; a DIED note
+    after them must still start a session, or the person is never told."""
+
+    def test_a_death_after_a_reply_and_a_correction_is_still_told(self, world):
+        root = world["root"]
+        _secondary_replies(
+            world,
+            [(30, "Created TOP.txt"), (90, "Correction: FAILED")],
+            handled_at=10**9,
+        )
+
+        def killed_after_both():
+            if world["t"] >= 150:
+                path = routing._ledger_dir(root, SECONDARY) / routing.SUPERVISOR_FILE
+                d = routing._load(path)
+                if d.get("pid") == os.getpid():
+                    d["pid"] = 2**22 + 12345
+                    routing._store(path, d)
+
+        world["between"].append(killed_after_both)
+        result, starts, prompts, _said = _run_owner(world, ceiling=2, cycle_secs=7)
+        assert any("DIED WITH ROUTED WORK OUTSTANDING" in p for p in prompts), (
+            result.reason,
+            starts,
+        )
+        assert "MAIL-STARTED CAP" not in result.reason, result
