@@ -578,6 +578,9 @@ def test_a_project_under_tmp_no_longer_exposes_an_inbox(tmp_path, monkeypatch):
     if str(home.resolve()).startswith(("/tmp", "/var/tmp")):
         pytest.skip(f"HOME is under a temp grant ({home}), so nothing is measured")
     monkeypatch.setenv("RITE_HOME_DIR", str(home))
+    # The mail's own location since DF3, placed where the temp grants do not
+    # reach — as it is in a real install, under the data directory.
+    monkeypatch.setenv("RITE_MAIL_DIR", str(home / "mail"))
     try:
         project = tmp_path / "proj"
         (project / "src").mkdir(parents=True)
