@@ -231,6 +231,78 @@ excludes under the same stress that measured it failing (0 overlaps, 0
 false reclaims), and the loop runs clean at a count that would have caught
 the old rate.
 
+## 8. Jira, rehearsed: not ready for a Manager-run dogfood
+
+Rehearsed on a throwaway rite project pointed at `bentora.atlassian.net`,
+project **RT** (the only Jira project rite may write to; BEN, SCRUM and RW
+were not touched), 2026-09-27. Every finding below was RUN except where it
+says "code".
+
+**Works:**
+
+- `rite init` asks for the backend type and the Jira site, but not the
+  project key. It then says to run `rite credential set jira`.
+- `rite credential set jira` asks for the site, the account email, the API
+  token (twice) and the project key. It stores `jira_email` and `jira_token`
+  in the 0600 file store as `<namespace>/jira_email` and
+  `<namespace>/jira_token`, and records `ticket_backend.site` and
+  `projects.workers` in `config.yaml`. Clear and complete.
+- The supervisor's own board read (the verdict) runs OUTSIDE the sandbox and
+  would use those credentials.
+- A missing credential gives a good message: every place rite looked, and
+  the command to set it.
+
+**Blocks a first hour on Jira**, most severe first:
+
+1. **Both stored Jira tokens are rejected: needs Robert.** Project
+   `rite-30ba7cfe` and machine-global `jira_token` both get HTTP 401 from
+   `bentora.atlassian.net`, and the site itself is up (`serverInfo` 200).
+   A new API token is needed (id.atlassian.com → Security → API tokens),
+   then `rite credential set jira`. Nothing Jira can be verified live until
+   then.
+2. **A Manager cannot read or move a Jira ticket from inside its sandbox.**
+   Readiness Q3 is still undecided. The credential file is denied to every
+   Manager by name. Run: `rite board list` under the real profile crashes
+   with a TRACEBACK (`CredentialStoreError`, uncaught). Its last line is
+   sensible: "Inside a Manager's sandbox this is expected: a Manager is not
+   given rite's credentials". GitHub has a per-Manager App token for this;
+   Jira has nothing. Workers still get Jira through the environment
+   (`$JIRA_API_TOKEN`), and the verdict still reads the board. But the
+   Manager is blind to its own board, which is most of its job. Needs the
+   Q3 decision (refuse Jira for Managers, or a service account's token by
+   the file route); at minimum, catch the error.
+3. **Finished tickets stay "ready" on Jira.** `loop._ready` sends
+   `project = RT AND labels = "scheduled"` (run, with HTTP stubbed). There is
+   no status filter, while GitHub's list returns only OPEN issues by
+   default, and nothing removes `scheduled` when a ticket is done (code).
+   So on Jira the verdict never reaches `idle` once a ticket is finished
+   while still labelled: the Manager keeps starting sessions until
+   `--sessions` or `--minutes`. The fix is to exclude
+   `statusCategory = Done` in `_ready` (or in the Jira list), with a test
+   against the JQL.
+4. **`rite doctor` passes a Jira setup whose token is rejected.** It reports
+   `jira_token: set`, `jira_email: set` and never tries them. The error's own
+   advice, `rite credential check jira_token`, likewise only reports "set".
+   Presence is measured, not validity. With credentials MISSING, doctor
+   says "not set" but not the command, which the board error does name.
+5. **`rite start` with a rejected token says** "stopped on 'unknown' after
+   0 session(s) … `rite loop status` says what is stuck". `rite loop status`
+   says only "loop: not running". `rite loop run` is the command that names
+   it ("JIRA rejected the credentials").
+6. Messages still say "keychain" (`_missing_credential`, the `rite credential
+   list` column), although 0.6.0 stores credentials in a file.
+
+**Unmeasured, because of blocker 1:**
+
+- Whether Jira's search is eventually consistent like GitHub's list (DF4).
+  It probably is, as Jira search is index-backed.
+- The live saturated/idle verdict.
+- Filing and moving on RT end to end.
+
+**Recommendation.** Dogfood the first run on **GitHub**, which is the path
+exercised all weekend. Take Jira second, after blocker 1 (a new token),
+blocker 3 (a small fix) and at least a decision on blocker 2.
+
 ## For Robert, this morning
 
 - **A false warning will print** at `rite start` (item 6): "mail is still
@@ -243,6 +315,9 @@ the old rate.
   (Their `project` files name `/private/tmp/dfcH6M2` and
   `/private/tmp/dfcjyM3`. Check nothing else has appeared there first:
   `ls ~/.rite/managers/`.)
+- **Start on GitHub, not Jira** (item 8). Jira needs a new API token
+  first: both stored tokens are rejected by `bentora.atlassian.net`. And a
+  Manager cannot read a Jira board from inside its sandbox yet.
 - **A Manager that ran without a board needs a fresh conversation once a
   board is configured:** `rite start <name> --fresh --sessions N --minutes M`.
   A bare `rite start` refuses and prints that exact command (DF1). Continuing
