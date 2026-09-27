@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from pathlib import Path
 
 from rite_ai.managers import mailbox, routing, verifier
 
@@ -72,8 +73,11 @@ class TestTheVerifierIsGivenTheClaimAndNothingElse:
     def _run(self, tmp_path, monkeypatch, runner):
         from rite_ai.managers import claude_login
 
+        config = tmp_path / "owner-login" / "claude"
         monkeypatch.setattr(
-            claude_login, "pane_environment", lambda r, m: {"CLAUDE_CONFIG_DIR": "/x"}
+            claude_login,
+            "pane_environment",
+            lambda r, m: {"CLAUDE_CONFIG_DIR": str(config)},
         )
         return verifier.verify(
             tmp_path, OWNER, "notes/HELLO.txt written", runner=runner
@@ -137,6 +141,45 @@ class TestTheVerifierIsGivenTheClaimAndNothingElse:
         assert "whatever the claim says" not in seen["input"]
         listed = sorted(p.name for p in planted.parent.iterdir())
         assert listed == ["verifier-prompt.txt"], listed  # rite wrote nothing there
+
+    def test_nothing_from_the_projects_claude_configuration_is_loaded(
+        self, tmp_path, monkeypatch
+    ):
+        """⚠ The verifier's independence must not be writable by the thing it
+        verifies. Measured on Claude Code 2.1.261: with the plain command, a
+        secondary's planted project hooks RAN, their `env` applied, a planted
+        `.mcp.json` server started, and CLAUDE.md, CLAUDE.local.md, a skill and
+        a command reached the verifier's context. Each flag closed all of it."""
+        seen = {}
+
+        def runner(argv, **kw):
+            seen["cmd"] = argv[-1]
+            return subprocess.CompletedProcess(argv, 0, _answer("confirmed"), "")
+
+        self._run(tmp_path, monkeypatch, runner)
+        for flag in ("--safe-mode", "--setting-sources user", "--strict-mcp-config"):
+            assert flag in seen["cmd"], flag
+        assert "--mcp-config" not in seen["cmd"].replace("--strict-mcp-config", "")
+
+    def test_its_temp_directory_is_not_one_a_secondary_can_write(
+        self, tmp_path, monkeypatch
+    ):
+        """Not the engine temp directory under `.rite/user/`, which a
+        secondary can write on both platforms, but a directory inside the
+        Owner's own login directory, which no other profile grants."""
+        from rite_ai.managers.boundaries import boundary_for
+
+        seen = {}
+
+        def runner(argv, **kw):
+            seen["tmp"] = kw["env"]["TMPDIR"]
+            return subprocess.CompletedProcess(argv, 0, _answer("confirmed"), "")
+
+        self._run(tmp_path, monkeypatch, runner)
+        login = tmp_path / "owner-login" / "claude"
+        assert Path(seen["tmp"]).parent == login, seen
+        shared = boundary_for().engine_tmp(tmp_path, OWNER)
+        assert not Path(seen["tmp"]).is_relative_to(shared.parent), seen
 
     def test_a_timeout_is_unverified(self, tmp_path, monkeypatch):
         def runner(argv, **kw):
