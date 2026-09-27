@@ -541,6 +541,58 @@ class TestTheWaitReadsHandledBeforeCollecting:
         assert _carrying(prompts, REPLY), (result.reason, starts, said)
 
 
+def _finishes_just_before_reason_is_read(world, monkeypatch):
+    """The secondary takes the route, replies and records it handled at the
+    instant BEFORE the Owner's supervisor reads `Waiting.reason()`, with no
+    collect after its last boundary. That is the sub-second gap between the
+    boundary's `router(say)` and the decision to stop."""
+    root = world["root"]
+    routing.record_supervisor(root, SECONDARY, os.getpid())
+    done = {"final": False}
+    real_reason = routing.Waiting.reason
+
+    def reason_after_the_secondary_finishes(self):
+        if not done["final"] and mailbox.read(root, SECONDARY, mailbox.INBOX):
+            taken = [m.path.name for m in mailbox.take(root, SECONDARY, mailbox.INBOX)]
+            mailbox.send(root, SECONDARY, mailbox.OUTBOX, REPLY)
+            routing._record_handled(root, SECONDARY, taken)
+            done.update(final=True, final_at=world["t"])
+        return real_reason(self)
+
+    monkeypatch.setattr(routing.Waiting, "reason", reason_after_the_secondary_finishes)
+    return done
+
+
+class TestTheStopDecisionCollectsFirst:
+    """⚠ Tag blocker 3. The ceiling check and the idle verdict read
+    `reason()` BEFORE anything collected from the secondaries' outboxes. A
+    reply (or rite's silent-finish note) written after the boundary's collect
+    and marked handled before that read made `reason()` say "nothing
+    outstanding, nothing waiting", and the Owner stopped with the reply
+    stranded until the next `rite start`. Pinned deterministically at both
+    reads."""
+
+    def test_at_the_ceiling(self, world, monkeypatch):
+        done = _finishes_just_before_reason_is_read(world, monkeypatch)
+        result, starts, prompts, said = _run_owner(world, ceiling=1, cycle_secs=7)
+        assert done["final"], said
+        assert _carrying(prompts, REPLY), (result.reason, starts, said)
+
+    def test_on_an_idle_board(self, world, monkeypatch):
+        done = _finishes_just_before_reason_is_read(world, monkeypatch)
+        asked = []
+
+        def board():
+            asked.append(1)
+            return "ready" if len(asked) == 1 else "idle"
+
+        result, starts, prompts, said = _run_owner(
+            world, ceiling=5, cycle_secs=7, verdict=board
+        )
+        assert done["final"], said
+        assert _carrying(prompts, REPLY), (result.reason, starts, said)
+
+
 class TestTheLedgerIsTheSupervisorsNotTheModels:
     def test_a_delivered_route_is_outstanding_until_its_cycle_is_handled(
         self, tmp_path
