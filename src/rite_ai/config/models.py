@@ -401,6 +401,17 @@ class CoordinationConfig:
     # backend", which reads exactly like "there was nothing to hand out".
     assign_unattended: bool = False
 
+    # How often, in minutes, an Owner's supervisor checks whether a Manager
+    # it routed work to has DIED (DF2 decision 3, Robert 2026-09-27: every
+    # 30 minutes, configurable). ⚠ A LATENCY bound, not a correctness one:
+    # a secondary that FINISHES without replying is noticed at once, by the
+    # event of its session ending, and a death is also noticed at once when
+    # a wait would end on it. This sweep is the backstop for a death during
+    # a long Owner session. Lowering it buys latency on the died case only,
+    # and finding nothing costs nothing: it starts an Owner session only
+    # when it has something new to say.
+    sweep_minutes: int = 30
+
 
 @dataclass
 class ProjectConfig:

@@ -249,8 +249,11 @@ class TestTheWaitEndsForAStatedReason:
                 routing.forget_supervisor(root, SECONDARY, os.getpid())
 
         world["between"].append(ends)
-        result, starts, _prompts, _said = _run_owner(world, ceiling=2, cycle_secs=7)
-        assert len(starts) == 2
+        result, starts, prompts, _said = _run_owner(world, ceiling=2, cycle_secs=7)
+        # Decision 3: stopping with the work outstanding is TOLD to the Owner
+        # first, as a note that starts its session, so the person hears it.
+        assert len(starts) == 3, starts
+        assert "STOPPED WITH ROUTED WORK OUTSTANDING" in prompts[2]
         assert "'small' finished its run" in result.reason, result
         assert "DIED" not in result.reason and "never" not in result.reason
 

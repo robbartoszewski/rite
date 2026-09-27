@@ -162,6 +162,7 @@ def config_to_yaml(config: ProjectConfig) -> str:
             "owner_lease_minutes": config.coordination.owner_lease_minutes,
             "skew_tolerance_seconds": config.coordination.skew_tolerance_seconds,
             "assign_unattended": config.coordination.assign_unattended,
+            "sweep_minutes": config.coordination.sweep_minutes,
         },
         "schedule": {
             "timezone": config.schedule.timezone,

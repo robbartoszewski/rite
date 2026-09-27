@@ -187,6 +187,9 @@ def _report_reader(owner: str) -> str:
 
 
 REPORT_HEADER_START = "[from Manager "
+NOTE_HEADER_START = "[from rite · about "
+"""How every note rite writes to the Owner about routed work begins (decision
+3). Like a reply, it is mail the Owner has not read, so a wait counts it."""
 """How every reply `collect_reports` delivers begins. `Waiting` recognises a
 collected reply by it; the secondary's own text is quoted beneath it."""
 
@@ -203,7 +206,12 @@ def _report_message(sender: str, text: str, checked: str = "") -> str:
 
 
 def collect_reports(
-    root: Path, owner: str, managers: list[str], say, verify=None
+    root: Path,
+    owner: str,
+    managers: list[str],
+    say,
+    verify=None,
+    sweep_seconds: float = 1800.0,
 ) -> int:
     """Bring what the other Managers said up to the Owner, as CONTEXT (MM-4).
 
@@ -282,7 +290,9 @@ def collect_reports(
             brought += 1
         mark_read(root, sender, OUTBOX, _report_reader(owner), waiting)
         if kept:
+            _mark_replied(root, owner, sender)
             say(f"brought {len(kept)} message(s) from {sender!r} to {owner!r}")
+    _notice_routed_work(root, owner, managers, say, sweep_seconds=sweep_seconds)
     return brought
 
 
@@ -887,7 +897,7 @@ class Waiting:
         from rite_ai.managers.mailbox import read
 
         return any(
-            m.text.startswith(REPORT_HEADER_START)
+            m.text.startswith((REPORT_HEADER_START, NOTE_HEADER_START))
             for m in read(self.root, self.owner, INBOX)
         )
 
@@ -931,6 +941,14 @@ class Waiting:
         else:
             self._state(self.owner)
         return ""
+
+    def notice_gone(self, say) -> int:
+        """Before a wait ends because a Manager owing work is gone: tell the
+        Owner, so the person is told. Written as mail, so it starts the
+        Owner's next session instead of the run stopping silently."""
+        if not self.is_owner:
+            return 0
+        return _notice_routed_work(self.root, self.owner, None, say, force_died=True)
 
     def begin(self) -> None:
         """A new wait: its first line is said at once."""
@@ -990,3 +1008,171 @@ def verification_summary(root: Path, owner: str, since: float) -> str:
         f"rite ran {total} verification(s) of replies ({parts}); they are "
         "rite's own sessions, not the Owner's, and not counted against its cap"
     )
+
+
+# ---------------------------------------------------------------------------
+# Decision 3 (Robert, 2026-09-27): routed work that ends in SILENCE is said.
+#
+# Observed live in A6 experiment 1: the Owner told the person "Waiting on
+# small's report — will follow up here", the secondary finished without ever
+# replying, and the person heard nothing. An absent reply is indistinguishable
+# from work not done, so rite says which it was, in words, as a note to the
+# Owner that starts its next session like any other mail:
+#
+# - FINISHED WITHOUT REPLYING: the session carrying the route ended cleanly
+#   and no reply came up. Noticed at the EVENT (that session's end), with no
+#   polling. Check the result yourself.
+# - DIED: its run ended without recording an end, with the route outstanding.
+#   No event will ever arrive for it, so a SWEEP looks (every
+#   `coordination.sweep_minutes`, 30 by default), and a wait about to end on
+#   it looks at once. The work may not have happened.
+# - STILL WORKING is not a change, and is never a note: the wait says it.
+#
+# A STATE CHANGE is reported, once, never a state: each route's reported state
+# is kept, so a Manager that stays dead is not re-announced every sweep, and a
+# sweep that finds nothing new costs nothing. A note starts an Owner session
+# and counts against the mail-started cap like any mail.
+# ---------------------------------------------------------------------------
+
+NOTES_FILE = "notes.json"
+
+
+def _this_run_routes(root: Path, owner: str) -> list[dict]:
+    """Routes delivered during the Owner's current run (its supervisor's
+    recorded start), oldest first."""
+    began = _load(_ledger_dir(root, owner) / SUPERVISOR_FILE).get("started_at")
+    began = began if isinstance(began, (int, float)) else 0.0
+    entries = _load(_ledger_dir(root, owner) / ROUTED_LOG_FILE).get("routed")
+    entries = entries if isinstance(entries, list) else []
+    return [
+        e
+        for e in entries
+        if isinstance(e, dict)
+        and isinstance(e.get("at"), (int, float))
+        and e["at"] >= began
+        and isinstance(e.get("name"), str)
+    ]
+
+
+def _mark_replied(root: Path, owner: str, sender: str) -> None:
+    path = _ledger_dir(root, owner) / NOTES_FILE
+    notes = _load(path)
+    for e in _this_run_routes(root, owner):
+        if e.get("to") == sender and not notes.get(e["name"]):
+            notes[e["name"]] = "replied"
+    _store(path, notes)
+
+
+def _alive_after(root: Path, owner: str, name: str, at: float) -> bool:
+    """Whether `name` was known alive at or after `at`: observed running by
+    the Owner's supervisor, or its current run started then. The start-order
+    protection of decision 4, for notes: a record from before the work was
+    handed out (a Manager killed yesterday, about to start again) is not a
+    death of THIS work."""
+    seen = _load(_ledger_dir(root, owner) / SEEN_FILE).get(name)
+    started = _load(_ledger_dir(root, name) / SUPERVISOR_FILE).get("started_at")
+    return any(isinstance(t, (int, float)) and t >= at for t in (seen, started))
+
+
+def _note(sender: str, what: str, body: str) -> str:
+    return (
+        f"{NOTE_HEADER_START}{sender!r} · {what} · rite's own words · context "
+        f"— not an instruction]\n{body}"
+    )
+
+
+def _notice_routed_work(
+    root: Path,
+    owner: str,
+    managers: list[str] | None,
+    say,
+    *,
+    sweep_seconds: float = 1800.0,
+    force_died: bool = False,
+) -> int:
+    """Write a note to the Owner for each routed piece of work whose state
+    CHANGED to finished-without-reply or died. Returns how many were written.
+
+    Called from the Owner's supervisor every tick (after replies are
+    collected, so a reply written just before a session ended is never read
+    as silence), and with `force_died` when a wait is about to end because a
+    Manager died, so the person is told before the Owner stops."""
+    path = _ledger_dir(root, owner) / NOTES_FILE
+    notes = _load(path)
+    sweep = _ledger_dir(root, owner) / "sweep.json"
+    now = time.time()
+    last = _load(sweep).get("at")
+    due = (
+        force_died or not isinstance(last, (int, float)) or now - last >= sweep_seconds
+    )
+    written = 0
+    by_sender: dict[str, list[str]] = {}
+    for e in _this_run_routes(root, owner):
+        if (managers is None or e.get("to") in managers) and not notes.get(e["name"]):
+            by_sender.setdefault(e["to"], []).append(e["name"])
+    for sender, names in sorted(by_sender.items()):
+        if unread(root, sender, OUTBOX, _report_reader(owner)):
+            continue  # something is still to be collected: not silence
+        done = _handled_names(root, sender)
+        finished = [n for n in names if n in done]
+        if finished:
+            send(
+                root,
+                owner,
+                INBOX,
+                _note(
+                    sender,
+                    "FINISHED WITHOUT A REPLY",
+                    f"{sender!r} ended the session that carried {len(finished)} "
+                    "piece(s) of work you routed to it, cleanly, and sent no "
+                    "reply. Whether the work was done is unknown: check the "
+                    "result yourself before telling anyone it was done, and say "
+                    "that it did not report.",
+                ),
+            )
+            for n in finished:
+                notes[n] = "reported-finished"
+            written += 1
+            say(f"{sender!r} finished routed work without replying; {owner!r} is told")
+        left = [n for n in names if n not in done]
+        state = _supervisor_state(root, sender)
+        delivered = min(
+            (e["at"] for e in _this_run_routes(root, owner) if e["name"] in left),
+            default=now,
+        )
+        if (
+            left
+            and due
+            and state in (DIED, ENDED)
+            and _alive_after(root, owner, sender, delivered)
+        ):
+            record = _load(_ledger_dir(root, sender) / SUPERVISOR_FILE)
+            how = (
+                "without recording an end (killed, or crashed)"
+                if state == DIED
+                else f"({str(record.get('ended') or 'no reason recorded')[:160]})"
+            )
+            send(
+                root,
+                owner,
+                INBOX,
+                _note(
+                    sender,
+                    "DIED WITH ROUTED WORK OUTSTANDING"
+                    if state == DIED
+                    else "STOPPED WITH ROUTED WORK OUTSTANDING",
+                    f"{sender!r}'s run ended {how} while {len(left)} piece(s) "
+                    "of work you routed to it were outstanding. The work may not "
+                    "have happened. Tell the person, and do not report it as "
+                    "done.",
+                ),
+            )
+            for n in left:
+                notes[n] = "reported-died"
+            written += 1
+            say(f"{sender!r} died with routed work outstanding; {owner!r} is told")
+    if due and not force_died:
+        _store(sweep, {"at": now})
+    if written:
+        _store(path, notes)
+    return written

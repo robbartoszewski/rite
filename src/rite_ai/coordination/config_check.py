@@ -94,6 +94,12 @@ def coordination_problems(config: CoordinationConfig) -> list[str]:
             "coordination: `state_branch` is empty — the state layer needs a "
             "branch to force-push (§3.3.1)"
         )
+    if not isinstance(config.sweep_minutes, int) or config.sweep_minutes <= 0:
+        problems.append(
+            f"coordination: `sweep_minutes` is {config.sweep_minutes!r} — it is "
+            "how often an Owner checks whether a Manager it routed work to has "
+            "died, and must be a whole number of minutes above 0"
+        )
     if config.owner_lease_minutes <= 0:
         problems.append(
             f"coordination: `owner_lease_minutes` is "

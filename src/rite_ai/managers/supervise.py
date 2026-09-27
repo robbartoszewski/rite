@@ -848,11 +848,18 @@ def _supervise(
         if len(cycles) >= max_sessions:
             why = waiting.reason() if waiting is not None else ""
             if not why:
+                extra = len(cycles) - max_sessions
                 return SuperviseResult(
                     True,
-                    f"ceiling reached: {max_sessions} session(s) started. This "
-                    f"is a COUNT, not a spend limit — a session may run for any "
-                    f"length of time inside it.",
+                    f"ceiling reached: {max_sessions} session(s) started"
+                    + (
+                        f", and {extra} more started by routed mail past it "
+                        f"({len(cycles)} in all)"
+                        if extra > 0
+                        else ""
+                    )
+                    + ". This is a COUNT, not a spend limit — a session may "
+                    "run for any length of time inside it.",
                     cycles,
                 )
             # ⚠ **THE CEILING IS SOFT WHILE ROUTES ARE OUTSTANDING (Robert,
@@ -885,6 +892,8 @@ def _supervise(
             if stopped is not None:
                 return stopped
             cause = "mail"
+            # Recomputed: what was true when the wait began may not be now.
+            why = waiting.reason() or why
             say(
                 f"the ceiling ({max_sessions} session(s)) is reached, and it is "
                 f"SOFT while {why}: mail arrived, so this cycle starts because "
@@ -1503,6 +1512,11 @@ def _wait_for_mail(
     try:
         while True:
             ended = waiting.over()
+            if ended:
+                # Decision 3: a wait ending because a Manager owing work is
+                # gone says so to the Owner FIRST. The note is mail, so the
+                # check below starts the Owner's session to tell the person.
+                waiting.notice_gone(say)
             _relay_tick(root, manager, router, slack, say)
             if mail_waiting(root, manager, INBOX):
                 return None

@@ -6421,6 +6421,7 @@ def _router_for(root: Path, manager: str):
                 names,
                 say,
                 verify=lambda _sender, text: verify(root, owner, text),
+                sweep_seconds=60.0 * config.coordination.sweep_minutes,
             )
 
     return step
