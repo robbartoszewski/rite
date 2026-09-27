@@ -983,9 +983,75 @@ resumed with a different `GOOSE_MODEL` keeps its context.
   - An override that loses to something else, such as a model the login
     cannot use, is said at start, and the run does not silently fall back.
 
+### Settled by Robert (2026-09-27): model selection is a WORKER concern
+
+> "I think the Manager itself can run on the same model always. However a
+> lot of the work is delegated to Workers and they can switch models for
+> different stages of the task."
+
+A Manager keeps one model for its whole life, which sidesteps any change
+of model within its conversation. Workers are short-lived and per task, so
+they switch between stages. This encodes Robert's own agent setup (a
+stronger model for design and review, a cheaper one for implementation)
+rather than inventing a pattern. **This supersedes the per-cycle Manager
+overrides above.**
+
+### The four questions that decide it, answered from the code and measured
+
+1. **Does a Worker have stages today? Only as prose.** A Worker is launched
+   for a ticket and left to it. Its `CLAUDE.md` lists numbered steps
+   (`workspace/manage.py`): branch, test and lint, verify its own fix, **7.
+   run `/review`**, PR and merge, release. No plan stage exists. rite has
+   no stage concept: nothing starts, observes or records a stage. **A model
+   per stage therefore needs a stage concept before it needs a config
+   key.**
+2. **Who decides the stage? The model, so today it can skip review.**
+   `/review` is a slash command the Worker chooses to run. `rite review`
+   only prints the checklist (`cli/main.py`, "this command does not spawn
+   agents itself"), and nothing records that review ran. By the rule
+   already applied to publishing (whatever loses work or produces something
+   unintended is rite's), **stage transitions must be rite's.** Otherwise
+   "review used the stronger model" is a claim about what the model chose
+   to do: the proxy problem again.
+3. **Does the conversation survive a change of model?**
+   - **Within one Claude Worker session, a stage can change model with no
+     context boundary:** review is already SUBAGENTS (`/review` spawns
+     `reviewer-round1` and others). Measured 2026-09-27: a subagent declared
+     with `model: haiku`, invoked from a session on `--model sonnet`, ran on
+     `claude-haiku-4-5` (both models in the session's usage record) and
+     found the planted bug. rite's reviewer agents pin no model today. A
+     subagent starts without the implementer's reasoning, by design ("fresh
+     eyes"), and sees the implementation through the diff and files.
+   - **Across a resumed Claude session**, the model can change per turn
+     with context kept (measured above).
+   - **Goose** (resume by name with a different `GOOSE_MODEL`): not
+     measured. **Cursor** (resume by UUID): not supported yet.
+   - **A fresh Worker launch per stage is a context boundary**: what carries
+     across is only the branch and the ticket, so the design must say what a
+     review stage is handed.
+4. **What does a stage boundary cost?**
+   - **As a subagent: no launch.**
+   - **As a fresh Worker launch:** a seatbelt sandbox for a small Worker
+     directory takes about 1.8 s (measured twice: 1.87 s, 1.79 s; it
+     copies the Worker directory, so it grows with checkout size), plus
+     `rite prepare`.
+   - **A local model's cold load:** 12.7 s for 1.7B on the VM (v0.6.0 D4);
+     about 23 s is reported for 8B.
+   - **A changed Claude model forfeits the prompt cache.**
+   - So three launched stages per ticket on a local tier costs tens of
+     seconds of cold load per ticket, and subagents cost none.
+
+**Consequence for MS1:** the cheapest honest shape is **rite-owned stages,
+with review as rite-pinned subagents in the same Worker session**. rite
+writes the reviewer agents' `model:` from config, and a stage rite starts
+and records, not a step the model may skip, is what makes "review ran on
+model X" checkable. Separate Worker launches per stage stay an option where
+a stage must run on a different engine (a local implementer, a Claude
+reviewer), at the costs above.
+
 | # | work | done when | depends | size |
 |---|---|---|---|---|
-| MS1 | **Model selection as configuration, per the answers above**: a per-Manager and per-Worker `model`, overrides only for cycle kinds rite itself starts, and the effective model and its source shown in `doctor` and at start | Observed on a real project: (a) a Claude Manager whose check-in cycle runs on a different model from its work cycles, with both models visible in `doctor` and in the transcript's model record; (b) a Worker started by the broker on a configured model; (c) an unknown key, and a key naming a cycle kind rite does not start, each refused; (d) a model the login cannot use refused at start, not silently replaced | Robert's day of dogfood; the setup-token model question measured | design first; unsized |
+| MS1 | **Model selection for WORKER stages, with rite-owned stage transitions** (Robert: Managers keep one model). First a stage concept rite starts and records. Then a `model` per stage for Workers, default today's behaviour, with review as reviewer subagents whose `model:` rite writes from config. The effective model per stage, and its source, shown in `doctor` and recorded per run | Observed on a real project: a Worker whose implementation runs on model A and whose review runs on model B, with B in the session's model record; a Worker that skips review is DETECTED by rite (the stage never recorded), not reported as reviewed; an unknown key or an unknown stage name refused; a model the login cannot use refused at start | a stage concept (none exists); the setup-token model question measured; Goose resume-with-another-model measured if a local stage is wanted | design first; unsized |
 
 ## Track CU — Cursor, the third engine
 
