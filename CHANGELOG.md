@@ -638,6 +638,12 @@ See SPEC §6.6.3.
   git, and a changed `config.yaml` changes how rite runs next. The project
   is the Manager's workspace, so this is not fenced yet; review both before
   trusting a Manager's changes.
+- **A secondary Manager can change what a Claude Owner runs, through the
+  project's `.claude/` directory.** Settings and hooks written there load
+  into the Owner's next session, inside the Owner's sandbox. Measured on
+  macOS, where a secondary can write that directory; on Linux it can when
+  `.claude/` exists before the secondary starts. rite's check of each reply
+  does not load them. Review `.claude/` in a project with several Managers.
 - **Linux: a Claude Manager runs, inside a weaker sandbox.** Observed on
   Ubuntu 24.04 (ARM64) as the Owner of a Goose secondary: routing, the
   secondary acting, and its reply reaching the running Owner. The Linux
@@ -661,6 +667,17 @@ See SPEC §6.6.3.
   start another, whatever `--sessions` says. So on a project with no board,
   an Owner has stopped by the time a secondary replies, and the reply
   waits for your next `rite start`.
+- **A message to a Manager is not read while its board has nothing ready.**
+  `rite start` then stops at once with "done: the board has nothing ready"
+  and starts no session, even with a `rite message` waiting in its inbox.
+  The message waits, unread, for a start that finds a ready ticket. Put the
+  work on the board as a ticket, or expect the message to wait.
+- **A local model can exhaust your machine's memory.** A local Manager's
+  model is loaded at its full context window: measured at 32k tokens,
+  `qwen3-32b` took 29 GB and `qwen3:8b` took 10 GB. rite does not check free
+  memory before it starts one. On a 48 GB Mac, such a load next to a running
+  virtual machine made macOS suspend applications. Check `ollama ps` and your
+  free memory before starting a local Manager beside other heavy work.
 - **The scheduler lock does not always keep two ticks apart.** Under a
   stress test (8 processes contending for 20 s in a Linux container), it
   admitted 1,352–1,617 overlapping holders per run, and made about 500
