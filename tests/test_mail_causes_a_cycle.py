@@ -603,3 +603,88 @@ class TestTheLedgerIsTheSupervisorsNotTheModels:
         )
         assert seen == [True]
         assert routing._supervisor_state(root, OWNER) == routing.ENDED
+
+
+def _secondary_replies(world, times_and_texts, *, handled_at):
+    """A running secondary that takes the route and replies at each (time,
+    text), then ends the cycle that carried it at `handled_at`."""
+    root = world["root"]
+    routing.record_supervisor(root, SECONDARY, os.getpid())
+    state = {"taken": [], "sent": 0, "handled": False}
+    pending = list(times_and_texts)
+
+    def step():
+        if not state["taken"]:
+            state["taken"] = [
+                m.path.name for m in mailbox.take(root, SECONDARY, mailbox.INBOX)
+            ]
+        if not state["taken"]:
+            return
+        while pending and world["t"] >= pending[0][0]:
+            mailbox.send(root, SECONDARY, mailbox.OUTBOX, pending.pop(0)[1])
+            state["sent"] += 1
+        if not state["handled"] and world["t"] >= handled_at:
+            routing._record_handled(root, SECONDARY, state["taken"])
+            state["handled"] = True
+
+    world["between"].append(step)
+    return state
+
+
+class TestTheMailStartedCap:
+    """W15 (a): past the ceiling, mail may start at most --sessions plus 2 per
+    message routed this run; one for the reply, one for a correction."""
+
+    def test_a_reply_and_its_correction_fit_inside_the_cap(self, world):
+        """The case the allowance is sized for must never hit it."""
+        _secondary_replies(
+            world,
+            [(30, "Created TOP.txt"), (90, "Correction: TOP.txt FAILED")],
+            handled_at=95,
+        )
+        result, starts, prompts, _said = _run_owner(world, ceiling=2, cycle_secs=7)
+        assert _carrying(prompts, "Created TOP.txt")
+        assert _carrying(prompts, "Correction: TOP.txt FAILED")
+        assert "CAP" not in result.reason, result
+        assert len(starts) <= 2 + 2 * 1
+
+    def test_a_secondary_repeating_itself_stops_at_the_cap_and_says_so(self, world):
+        """The observed W15 case: three replies drove five Owner sessions
+        against a ceiling of two. Now the fifth is refused, as the CAP."""
+        _secondary_replies(
+            world,
+            [(30, "written"), (90, "written again"), (150, "written, third")],
+            handled_at=200,
+        )
+        result, starts, _prompts, _said = _run_owner(world, ceiling=2, cycle_secs=7)
+        assert len(starts) == 4, starts
+        assert "MAIL-STARTED CAP, not the ceiling" in result.reason, result
+        assert "--sessions 2 plus 2 per message routed this run (1) = 4" in (
+            result.reason
+        )
+
+    def test_the_ceiling_message_is_still_the_ceilings_own(self, world):
+        """No routed work: the ceiling is reached and named as the ceiling."""
+        root = world["root"]
+        starts: list[float] = []
+
+        def starter(r, m, *, engine, resume_id, max_sessions, window_seconds, **kw):
+            starts.append(world["t"])
+            world["t"] += 5
+            return StartResult(True, "ok", session=f"s{len(starts)}", attach="a")
+
+        result = supervise(
+            root,
+            OWNER,
+            waiting=routing.Waiting(root, OWNER, OWNER),
+            engine="claude",
+            max_sessions=2,
+            window_seconds=0,
+            prompt="OPEN",
+            starter=starter,
+            verdict=lambda r: "ready",
+            resume_id_for=lambda r, m, since=0.0: "sess-1",
+            poll=0,
+            now=lambda: world["t"],
+        )
+        assert result.reason.startswith("ceiling reached: 2 session(s)"), result

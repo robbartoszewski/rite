@@ -847,11 +847,16 @@ def _supervise(
                     cycles,
                 )
             # ⚠ **THE CEILING IS SOFT WHILE ROUTES ARE OUTSTANDING (Robert,
-            # 2026-09-27), and that is said every time it bends.** It stops
-            # being a hard cap on sessions: each cycle past it is started by
-            # mail, never by the board, and waiting spends nothing — so the
-            # practical spend should fall — but it is no longer bounded by
-            # this number. The window still is.
+            # 2026-09-27), and that is said every time it bends.** Each cycle
+            # past it is started by mail, never by the board, and waiting
+            # spends nothing. ⚠ **But not without bound (W15 (a)):** observed,
+            # a secondary repeating itself drove five Owner sessions against a
+            # ceiling of two. So past the ceiling there is a second limit, the
+            # MAIL-STARTED CAP, derived from the work routed this run rather
+            # than from a second number, and reaching it is said as itself.
+            stopped = _at_the_cap(manager, waiting, max_sessions, cycles, why)
+            if stopped is not None:
+                return stopped
             stopped = _wait_for_mail(
                 root,
                 manager,
@@ -867,11 +872,15 @@ def _supervise(
             )
             if stopped is not None:
                 return stopped
+            stopped = _at_the_cap(manager, waiting, max_sessions, cycles, why)
+            if stopped is not None:
+                return stopped
             cause = "mail"
             say(
                 f"the ceiling ({max_sessions} session(s)) is reached, and it is "
                 f"SOFT while {why}: mail arrived, so this cycle starts because "
-                f"of it"
+                f"of it (session {len(cycles) + 1} of at most "
+                f"{waiting.cap(max_sessions)} under the mail-started cap)"
             )
         if deadline is not None and clock() >= deadline:
             return SuperviseResult(
@@ -1405,6 +1414,28 @@ def _supervise(
             return _torn_down(
                 root, manager, live or session_name(root, manager), cycles, say
             )
+
+
+def _at_the_cap(manager, waiting, ceiling: int, cycles, why: str):
+    """A result that stops the run at the mail-started cap, or None.
+
+    ⚠ **Said as ITSELF, never as the ceiling.** "Reached the session ceiling"
+    and "reached the mail-started cap with routed work outstanding" need
+    different responses: the first is the number the person chose, the second
+    means a Manager kept sending mail past what its routed work explains."""
+    cap = waiting.cap(ceiling)
+    if len(cycles) < cap:
+        return None
+    routed = waiting.routed_this_run()
+    return SuperviseResult(
+        True,
+        f"stopped at the MAIL-STARTED CAP, not the ceiling: {len(cycles)} "
+        f"session(s) started, and the cap is --sessions {ceiling} plus 2 per "
+        f"message routed this run ({routed}) = {cap}. It was reached while "
+        f"{why}. Anything still arriving waits in the inbox for the next "
+        f"`rite start {manager}`.",
+        cycles,
+    )
 
 
 _sleep = time.sleep

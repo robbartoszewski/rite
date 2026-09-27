@@ -364,8 +364,24 @@ def _store(path: Path, data: dict) -> None:
     write_atomic(path, json.dumps(data, indent=1, sort_keys=True) + "\n")
 
 
+ROUTED_LOG_FILE = "routed.json"
+ROUTED_LOG_KEPT = 1000
+EXTRA_SESSIONS_PER_ROUTE = 2
+"""The mail-started cap's allowance per routed message (Robert, W15 (a),
+2026-09-27): one session for the reply and one for a correction, which is the
+pattern observed (a false first reply, then a corrected second). Beyond that is
+misbehaviour, which is what the cap bounds. ⚠ Deliberately NOT configurable:
+a second tunable invites raising it until the cap means nothing, which is how
+the unbounded case arose."""
+
+
 def _record_delivered(root: Path, owner: str, to: str, name: str) -> None:
     """The Owner's supervisor delivered inbox file `name` to `to`."""
+    log = _ledger_dir(root, owner) / ROUTED_LOG_FILE
+    entries = _load(log).get("routed")
+    entries = entries if isinstance(entries, list) else []
+    entries.append({"name": name, "to": to, "at": time.time()})
+    _store(log, {"routed": entries[-ROUTED_LOG_KEPT:]})
     path = _ledger_dir(root, owner) / DELIVERED_FILE
     data = _load(path)
     names = data.get(to)
@@ -685,6 +701,35 @@ class Waiting:
             return f"routed work is outstanding: {listed}"
         self._state(self.owner)
         return f"this Manager takes work routed by the Owner {self.owner!r}"
+
+    def routed_this_run(self) -> int:
+        """Messages routed during this run: every one the Owner sent, or every
+        one this secondary was sent. From the delivery log, so a route
+        delivered and answered inside one session still counts — counting
+        only what is outstanding NOW would miss it, and would also refuse the
+        cycle carrying a route's final reply, which arrives just as the route
+        stops being outstanding."""
+        if not self.owner:
+            return 0
+        entries = _load(_ledger_dir(self.root, self.owner) / ROUTED_LOG_FILE).get(
+            "routed"
+        )
+        entries = entries if isinstance(entries, list) else []
+        return sum(
+            1
+            for e in entries
+            if isinstance(e, dict)
+            and isinstance(e.get("at"), (int, float))
+            and e["at"] >= self.began
+            and (self.is_owner or e.get("to") == self.manager)
+        )
+
+    def cap(self, ceiling: int) -> int:
+        """How many sessions this run may start in all, mail-started included:
+        the ceiling plus `EXTRA_SESSIONS_PER_ROUTE` per message routed this
+        run. ⚠ Counts THIS Manager's own sessions only; a verification rite
+        runs for itself is not one of them and is reported separately."""
+        return ceiling + EXTRA_SESSIONS_PER_ROUTE * self.routed_this_run()
 
     def reply_waiting(self) -> bool:
         """Whether the Owner's inbox holds a reply `collect_reports` brought

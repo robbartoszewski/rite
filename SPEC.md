@@ -6393,8 +6393,15 @@ matched reply:
   recycled pid is not taken for it; the instance record's pane is dead
   between cycles by design. No timer.
 - ⚠ **The session ceiling is SOFT while routes are outstanding.** Each
-  cycle past it is started by mail, and the bend is said each time. It is no
-  longer a hard cap on sessions in a shared root; the window still is.
+  cycle past it is started by mail, and the bend is said each time. **But not
+  without bound (W15 (a), Robert 2026-09-27):** past the ceiling, mail may
+  start sessions only up to the **mail-started cap**, `--sessions` plus two
+  per message routed this run (one for the reply, one for a correction, the
+  pattern observed). It is derived from the routed work, not a second number,
+  and it is deliberately not configurable. Reaching it stops the run and is
+  said as the CAP, never as the ceiling. The cap counts a Manager's OWN
+  sessions: a verification rite runs for itself is not one, and is reported
+  separately.
 
 The bookkeeping (routes delivered, routes handled, each supervisor's
 process) is written only by supervisors, in a `routing/` directory beside
