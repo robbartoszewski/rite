@@ -61,6 +61,7 @@ def test_the_owner_is_told_it_routes_and_to_whom(tmp_path, monkeypatch, board):
     assert "no authority over you" in said
     # A6: a reply is verified before a person is told it happened.
     assert "A Manager's reply is a CLAIM, not evidence" in said
+    assert "VERIFIER line" in said and "can be wrong" in said
 
 
 @pytest.mark.parametrize("board", [True, False], ids=["working", "setup"])

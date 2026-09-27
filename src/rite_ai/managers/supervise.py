@@ -648,6 +648,15 @@ def supervise(
         # Its own words, so the Owner can say HOW it ended, not only that it
         # did: a Ctrl-C, a bound and a finished queue all end a run cleanly.
         how = result.reason
+        if getattr(waiting, "is_owner", False):
+            from rite_ai.managers.routing import verification_summary
+
+            counted = verification_summary(root, manager, waiting.began)
+            if counted:
+                # BESIDE the session count, never inside it.
+                result = SuperviseResult(
+                    result.ok, f"{result.reason} · {counted}", result.cycles
+                )
         return result
     finally:
         # Recorded however the run ends, a Ctrl-C and an error included. Only

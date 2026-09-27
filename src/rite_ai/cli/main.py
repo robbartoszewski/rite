@@ -6398,6 +6398,7 @@ def _router_for(root: Path, manager: str):
     from rite_ai.config.models import ProjectConfig
     from rite_ai.config.parse import ParseError, parse_config
     from rite_ai.managers.routing import collect_reports, deliver_routes
+    from rite_ai.managers.verifier import verify
 
     parsed = parse_config(root / ".rite" / "config.yaml")
     config = parsed if not isinstance(parsed, ParseError) else ProjectConfig()
@@ -6410,7 +6411,17 @@ def _router_for(root: Path, manager: str):
     def step(say) -> None:
         deliver_routes(root, manager, owner, names, say)
         if owner and manager == owner:
-            collect_reports(root, owner, names, say)
+            # ⚠ Every reply is checked by rite before the Owner reads it, in a
+            # fresh session given only the reply and the workspace (A6
+            # hardening, Robert 2026-09-27). Fails closed: a reply that
+            # cannot be checked is delivered marked NOT VERIFIED.
+            collect_reports(
+                root,
+                owner,
+                names,
+                say,
+                verify=lambda _sender, text: verify(root, owner, text),
+            )
 
     return step
 

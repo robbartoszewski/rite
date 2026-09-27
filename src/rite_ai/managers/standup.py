@@ -150,6 +150,7 @@ def digest(
 
     notes: list[str] = []
     replies: dict[str, list[int]] = {}
+    verdicts: dict[str, int] = {}
     for e in checkins.ledger(root, manager):
         if float(e.get("at") or 0) <= start:
             continue
@@ -158,6 +159,9 @@ def digest(
             # W15 (c): counted, so a repeating secondary shows here.
             got = replies.setdefault(str(e.get("from")), [0, 0])
             got[0 if kind == "reply" else 1] += 1
+            continue
+        if kind == "verification":
+            verdicts[str(e.get("verdict"))] = verdicts.get(str(e.get("verdict")), 0) + 1
             continue
         if kind == "cycle":
             observed.append(
@@ -181,6 +185,14 @@ def digest(
         observed.append(
             f"- replies from {sender!r}: {delivered + dropped} received, "
             f"{dropped} byte-identical duplicate(s) dropped"
+        )
+    if verdicts:
+        observed.append(
+            "- rite's verifier on those replies: "
+            + ", ".join(
+                f"{n} {k.replace('_', ' ')}" for k, n in sorted(verdicts.items())
+            )
+            + " (rite's own sessions, not the Owner's)"
         )
     lines = [head, "", "Observed by rite:"]
     if observed:
