@@ -195,6 +195,23 @@ SERVICES: dict[str, Service] = {
             "installation id go in config.yaml under github_app."
         ),
     ),
+    # ⚠ No `env`, like `github_app`, and for the reason Robert gave: the key
+    # is not handed to a pane or put in the environment of anything that
+    # does not need it. A field with `env` goes to EVERY Worker through
+    # yoloAI's `--env`, which puts it on yoloAI's argv and in the pane's
+    # launch line. A Cursor Worker gets it as a read-only file (CW2) and a
+    # Cursor Manager as a per-Manager copy (CU4), each read into the agent's
+    # own environment at `exec`. Measured in `spikes/CU1b-...`.
+    "cursor": Service(
+        name="cursor",
+        label="Cursor — the API key a Cursor Manager or Worker signs in with",
+        fields=(Field("api_key", "Cursor API key", secret=True),),
+        note=(
+            "From Cursor's dashboard. A stored login does not work inside "
+            "rite's sandbox (measured), so the API key is the route. From a "
+            "file: `rite credential set cursor_api_key --stdin < <file>`."
+        ),
+    ),
     "claude": Service(
         name="claude",
         label="Claude Code — the login a sandboxed Worker uses",
