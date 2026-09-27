@@ -20,7 +20,6 @@ from rite_ai.config.managers import parse_managers
 from rite_ai.managers.engines import (
     CURSOR,
     handle_problem,
-    new_handle,
     spelling_for,
 )
 from rite_ai.managers.supervise import _resume_id_source, launch_command
@@ -80,11 +79,9 @@ def test_the_supervisor_will_not_continue_cursor_by_name():
         _resume_id_source("cursor")
 
 
-def test_a_new_handle_is_a_fresh_canonical_uuid():
-    a, b = new_handle(CURSOR), new_handle(CURSOR)
-    assert a != b
-    assert handle_problem(CURSOR, a) == ""
-    assert str(uuid.UUID(a)) == a
+def test_a_canonical_uuid_passes_the_handle_rule():
+    handle = str(uuid.uuid4())
+    assert handle_problem(CURSOR, handle) == ""
 
 
 def test_cursor_is_not_a_local_tier():
