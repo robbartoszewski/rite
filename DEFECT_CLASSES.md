@@ -3,7 +3,8 @@
 Seven rehearsal rounds against this tool, plus work on a second, unrelated codebase
 alongside it,
 produced roughly forty defects. Counting them is not useful. What is useful is
-that they fall into sixteen classes, most of which recurred — and that for each
+that they fall into seventeen classes (the seventeenth from the v0.6.0
+weekend), most of which recurred — and that for each
 class there is a question with a real answer: **what would a new instance have
 to look like to get past what now stops it?**
 
@@ -60,6 +61,30 @@ green. The checklist line is the only defence and it is advisory.
 
 > This is the class to read first and the class most likely to be on the next
 > list. Its members share no subsystem, no language and no author.
+
+**A named rule for tests, from the v0.6.0 weekend: a test that places a
+fixture through an indirection must check the fixture is really where it
+meant it to be, or it measures whatever the indirection now points at.**
+Measured: `test_a_project_under_tmp_no_longer_exposes_an_inbox` set
+`RITE_HOME_DIR` off `/tmp` so the mail would sit beyond the temp grants. When
+the mail stopped following `RITE_HOME_DIR` (DF3), the test silently measured
+the `/tmp` grant instead of the inbox fence. It went red only because Linux
+CI happened to run it; on another day it would have passed green. The same
+weekend, a sandbox read test with rite's home pointed somewhere the profile
+never named would have passed on the defect it was written for. The guard is
+one line in the test: assert the placement (`not mail_root(...).is_relative_to(
+granted)`) before measuring anything, so a moved indirection fails the test
+instead of hollowing it out. `tests/conftest.py` says this where the
+indirections are set.
+
+It held for about an hour. That same night, a harness written to catch an
+intermittent ERROR ran one worktree's tests against ANOTHER worktree's
+source, because the venv's editable install pointed there. The indirection
+was the import path. A test comparing the two checkouts' paths failed, and
+the harness's own summary grep called the run "clean". Both were found only
+by reading the per-test JUnit XML. The guard is the same one-line
+placement check: assert `rite_ai.__file__` is under the tree being tested
+before counting anything.
 
 ---
 
@@ -509,6 +534,7 @@ instances nobody has thought of yet:
 |---|---|
 | 2. A zero meaning "I could not look" | `UNREADABLE_FIELDS` vs `dataclasses.fields` |
 | 5. A writer with no project | The click-tree sweep in round 8 |
+| 17. A grant with no recorded reason | `test_every_manager_grant_has_a_reason` reads the grants from the code |
 
 Two of ten. That ratio is the honest state of this repository, and the
 difference between the two lists is not effort — it is whether the guard can
@@ -676,3 +702,41 @@ reviewer being given a different brief, not the same checklist. ⚠ **Two
 reviews finding ten defects between them, with the second finding all ten,
 is evidence about the FIRST reviewer and not evidence that the tenth was
 the last one.**
+
+## 17. A grant with no recorded reason
+
+**The shape.** A permission — a path a sandbox grants, a scope a token asks
+for, an allowlist entry — lands without a written reason. Nothing is wrong
+with it on the day it lands, so review has nothing to check it against: a
+reviewer can ask "is this justified?" only if a justification exists to be
+wrong. It then outlives whatever it was for, or was never for anything, and
+what it exposes grows as other things move under it.
+
+**The instance.** `~/.rite` was granted READABLE, as a tree, to every
+Manager on both platforms with B9 (`4ebbbd7`), one line in a batch of tool
+paths, with no reason anywhere. It turned out to be needed by nothing inside
+a boundary. Meanwhile the Manager mailboxes moved under it (`935ceef`), so for
+the rest of 0.6.0's development every Manager could read every Manager's
+inbox and outbox, for every project on the machine. Its `dispatch/projects.yaml`
+lists every registered project's path, which for a firm is its client list.
+MM-2's tests covered writes and passed throughout (DF3).
+
+**Why it is a defect and not a style point.** The grant was correct in no
+sense that anyone could state, and it hid for a release because correctness
+was never claimed. A grant with a reason can be falsified — "Goose panics
+without this" can be re-measured. A grant without one can only be noticed.
+
+**Guarded by.** `tests/test_every_manager_grant_has_a_reason.py` reads what
+`enclosure._tool_paths`, `_engine_state_paths` and `_system_paths` return —
+the grants themselves, derived from the code, not a list typed beside it —
+and fails on a path with no reason, and on a reason for a grant that is gone.
+Grants adopted wholesale from yoloAI's Worker set are recorded as exactly
+that ("inherited … not individually measured"), which is debt in plain sight.
+Mutation-checked: putting `.rite` back into `_tool_paths` turns it red.
+
+**What still gets through.** Grants built outside those three functions:
+`_manager_separation`'s own-directory rules, `github_access.profile_lines`,
+Landlock's inline system list in `compose_policy`, the permission allowlist
+(`permissions.json`), and GitHub App token scopes. Each needs the same
+enumeration; until it has one, those grants are held by someone noticing.
+

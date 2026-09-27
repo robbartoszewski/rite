@@ -193,6 +193,15 @@ def _no_real_credential_file(tmp_path_factory, monkeypatch):
         )
     # ⚠ And the Manager mailboxes, which left `~/.rite` for the operator's
     # data directory (DF3) — a directory of their own for the same reason.
+    #
+    # 🔴 **These are INDIRECTIONS, and a test that moves one must check where
+    # the thing it cares about actually landed** (DEFECT_CLASSES.md, class 1). A
+    # Landlock test set `RITE_HOME_DIR` off `/tmp` so the mail would sit
+    # beyond the temp grants; once the mail followed `RITE_MAIL_DIR` instead,
+    # the test measured the `/tmp` grant and not the fence. Assert the
+    # placement — e.g. `not mail_root(...).is_relative_to(granted)` — before
+    # measuring, so a moved indirection fails loudly instead of hollowing
+    # the test out.
     if "RITE_MAIL_DIR" not in os.environ:
         monkeypatch.setenv(
             "RITE_MAIL_DIR", str(tmp_path_factory.mktemp("ritemail") / "mail")
@@ -359,12 +368,26 @@ def _suite_leaves_this_checkout_alone():
         [f"  appeared: {line}" for line in appeared]
         + [f"  vanished: {line}" for line in vanished]
     )
+    # ⚠ **WHAT THIS MEASURES IS "THE TREE CHANGED DURING THE RUN", not "the
+    # suite wrote it"**, and it is reported as an ERROR against whichever test
+    # ran LAST (`test_workspace_prepare.py`'s final test, today), which did
+    # nothing. DF5: that pair — an innocent test ERRORing in 2 of 4 local
+    # runs, never in CI — was a person editing and committing in this checkout
+    # while the suite ran, and was nearly filed as a flaky test. Reproduced by
+    # touching one file mid-run. So the message names both causes and the
+    # misattribution, and the lines that changed tell them apart.
     raise AssertionError(
-        "the test suite changed rite's own working tree:\n"
+        "rite's own working tree changed while the suite ran:\n"
         f"{detail}\n"
-        "A test wrote into this checkout instead of a tmp_path. Find it and "
-        "isolate it — a file left here is one `git add -A` away from being "
-        "committed, which has happened four times."
+        "  ⚠ This is a SESSION check, reported against whichever test ran "
+        "last; that test is not the cause.\n"
+        "  Either a test wrote into this checkout instead of a tmp_path — find "
+        "it and isolate it, since a file left here is one `git add -A` away "
+        "from being committed, which has happened four times — or someone "
+        "edited, committed or switched branches in this checkout during the "
+        "run (another session, an editor, you). The lines above say which: "
+        "a file you were editing is the second; one you have never seen is "
+        "the first."
     )
 
 
