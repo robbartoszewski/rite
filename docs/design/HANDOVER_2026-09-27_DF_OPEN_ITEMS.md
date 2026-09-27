@@ -97,6 +97,8 @@ when the package is writable anywhere else.
 
 ## 4. The DF1 blind spot: needs a DECISION, not a fix
 
+**✅ Decided 2026-09-27 (Robert): accepted, time-limited, documented** — readiness Q7, with the reasoning.
+
 **Finding.** DF1 is fixed: a bare `rite start` refuses to continue a
 conversation that began under a different board, and names `--fresh` and
 `--keep-conversation`. One case is invisible to it. A designation written by
@@ -136,6 +138,8 @@ Managers start. A project that never starts again keeps its old mail under
 Remove it by hand if it is not wanted.
 
 ## 6. A start-time warning that became false when #15 landed
+
+**✅ Fixed on the release branch (2026-09-27, release prep):** all three messages reworded to say the mail is in its OLD location and that no Manager started by this rite can read `~/.rite` (only one still running an older development build); `tests/test_no_manager_reads_another_managers_mail.py` now asserts the false wording is gone, and fails when it is put back.
 
 **Finding.** #14 added two messages in `managers/mailbox.py`:
 

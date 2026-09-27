@@ -28,13 +28,16 @@ sessions to claim and who to ask.
   the shared one. On other platforms `rite init` leaves sandboxing off. On
   Docker, a dogfood run found file locking does not lock, so two workers can
   be granted the same path: run one worker there.
-- **61 numbered decisions** in [`SPEC.md`](SPEC.md), each with the question it
+- **101 numbered decisions** in [`SPEC.md`](SPEC.md), each with the question it
   answers and the reasoning.
 
 **If you run one session at a time you do not need this.** Several machines
-can share one project — they elect an Owner and the role moves on its own when
-a machine stops — but that has not yet been run on two physical machines over
-a real network. Treat it as implemented and unproven.
+can share one project's claims (since 0.4.0) — they elect an Owner and the
+role moves on its own when a machine stops — but that has not yet been run on
+two physical machines over a real network. Treat it as implemented and
+unproven. Several *Managers* working together (routing and replies) is one
+machine, one project root, in this release; across machines is planned for
+0.8.0.
 
 ## How work moves through rite
 
@@ -69,7 +72,7 @@ You write the design, or you already have one. `rite init` looks for
 
 On a spec too large to read whole, `rite spec index` turns it into addressable
 units and `rite spec slice 5.3` prints just that section, what it cites and the
-sections everything depends on — around 9% of rite's own 4000-line spec. It
+sections everything depends on — about 3% of rite's own 7,100-line spec. It
 refuses specs a slice cannot help: a short or densely interlinked document is
 cheaper read whole. When a slice was not enough, `rite handover write
 --spec-fallback 5.3` records it, and `rite spec status` reports how often that
@@ -218,6 +221,55 @@ check that force-push is allowed. And `rite status` takes a lock file inside
 `rite status --no-board` in a fresh project leaves `.rite/pool.json.lock`
 behind. Neither touches your code. `rite help` tours the rest.
 
+## Running a Manager
+
+A Manager is a long-running session that works your board and talks to you,
+over Slack if you set it up. `rite init` does not ask about Managers yet, and
+there is no `rite manager add`: declare them in `.rite/config.yaml`, then run
+`rite doctor`, which checks what you wrote.
+
+One Manager on Claude, the place to start:
+
+```yaml
+coordination:
+  managers: [lead]
+```
+
+```bash
+claude setup-token                 # a Claude Manager needs a token of its own
+rite credential set claude_token   # paste it
+rite start lead --sessions 3 --minutes 90
+```
+
+A Manager's git uses your global config, from inside its sandbox. If you
+sign commits, rite turns signing off for the Manager's commits and says so.
+A global `core.hooksPath` is not bypassed: the Manager's commits and pushes
+fail on its hooks until you opt in, and `rite doctor` gives the one-line fix and what it costs.
+
+A Claude Owner with a local secondary, the setup this release is for (one
+machine, one project root):
+
+```yaml
+coordination:
+  managers: [lead, helper]
+  manager_roles:
+    - {name: lead, preset: lead}          # Claude; the Owner, it holds 'route'
+    - {name: helper, engine: 'local:small', preset: executor,
+       endpoint: 'http://localhost:11434/v1', model: 'qwen3:8b', agent: goose}
+```
+
+`helper` needs Goose, Ollama with the model pulled, and
+`OLLAMA_CONTEXT_LENGTH=32768` set before Ollama starts. Run each Manager in
+its own terminal (`rite start lead …`, `rite start helper …`). The Owner hands
+work down with `rite route helper "…"`; while that work is unfinished its
+supervisor waits, spending no session, and starts the Owner's next session,
+within the same `rite start`, when the reply arrives. **A local model's report is not trusted:** in testing,
+`qwen3:8b` often did not reply at all, and more than once reported a step as done that
+had failed. rite checks every reply in a separate session before the Owner
+reads it (CONFIRMED, CONTRADICTED or COULD NOT TELL), and the Owner is told
+to check too. The checker is also a model and can be wrong. The
+[guide](docs/guide.md#declaring-a-manager) has the details.
+
 ## Install
 
 **Not on PyPI yet.** Needs `uv` or `pipx`, `git`, Python 3.11+, and a
@@ -257,6 +309,10 @@ and reported, with the difference, and replaced only if you name it
 worker receives a newer one — so notes of your own belong in
 `.rite/spec-notes.md`, which rite never generates and never rewrites.
 `rite doctor` says whether a project is behind.
+
+From 0.5.1, also run `rite credential import-keychain` once: 0.6.0 keeps
+credentials in a 0600 file and no longer reads the keychain. The
+[changelog](CHANGELOG.md) lists every step.
 
 ## Planned — not built
 
@@ -328,8 +384,9 @@ containment. See the limitations printed below.
 
 ⚠ **Read that as written.** The sandbox bounds FILES, not capability, and it
 is a set of holes that were looked for and closed rather than a proof of
-containment. Signalling processes outside the sandbox is closed on both
-platforms. Reaching the **tmux server**, which runs outside the sandbox and
+containment. Signalling processes outside the sandbox is closed on macOS,
+and on Linux only on kernel 6.12 or newer: not on a stock Ubuntu 24.04
+kernel. Reaching the **tmux server**, which runs outside the sandbox and
 would run anything sent to it unconfined, is closed on macOS and **open on
 Linux**, where the sandbox is weaker (see the release notes).
 
@@ -344,7 +401,9 @@ default.**
 
 To change the list, edit your own `.claude/settings.json` — add to
 `permissions.allow` to widen it, or `permissions.deny` to narrow it. rite
-rewrites its own file from code on every run and never touches yours. If
+rewrites its own file from code on every run and never touches yours. A
+Manager can write yours, though, so a steered one can widen its own list for
+later runs; review changes to that file as you would code. If
 that is not a trade you want on a given machine, do not run
 `rite start <manager>` there — Workers, the loop and everything else are
 unaffected.
@@ -356,8 +415,8 @@ spend your Claude Code quota in parallel, so N of them burn it at roughly N
 times one session's rate, against a quota [shared with Claude on a rolling
 window](https://support.claude.com/en/articles/14552983-models-usage-and-limits-in-claude-code).
 The plan you need scales with how many workers you run and for how long; Pro
-exhausts sooner than Max. Nor does it end gracefully: rite never reads a
-session's exit status, so a worker that runs out stops where it stands, claim
+exhausts sooner than Max. Nor does it end gracefully: rite does not read a
+worker session's exit status, so a worker that runs out stops where it stands, claim
 still held until you `rite release` it.
 
 **Nothing opens a session unless you are there.** rite sets up the workspace
@@ -376,9 +435,10 @@ at two ceilings you had to type — `--sessions` (how many) and `--minutes`
 (how long), neither of which has a default. Nothing about it is scheduled and
 nothing survives your shell.
 
-**A Manager needs a ticket backend to run more than once.** With no board
-configured, `rite start` runs one session to help you set one up and does
-not start another, whatever `--sessions` says. It says so when it starts.
+**A lone Manager needs a ticket backend to run more than once.** With no board configured, `rite start` runs one session to help you set one
+up. A lone Manager does not start another, whatever `--sessions` says. Where
+several Managers share the project, routed work can start more sessions
+within `--minutes`, and each one is said.
 
 A bare `rite start <manager>` **continues that Manager's last session** — the
 work it did yesterday is reachable today — and `--fresh` starts a new one
@@ -402,8 +462,9 @@ doctor` reports the window actually in force. See the guide.
 `CLAUDE.md` and `.claude/agents/` are first-class here rather than behind a
 provider abstraction. A local model tier for Workers (`local:<class>`) is
 designed, parsed by the config and probed by `rite doctor`; what is missing
-is the half that runs a subtask on one. No other **hosted** provider is
-planned.
+is the half that runs a subtask on one. Other tools are added one at a
+time rather than behind a general abstraction: a Cursor adapter is planned
+for 0.7.0.
 
 **Workers are interchangeable, so there is no capability routing.** Every
 worker holds the same project-scoped credentials, so assignment picks

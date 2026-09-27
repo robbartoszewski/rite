@@ -202,7 +202,9 @@ class TestABoxUnderRiteHomeIsMovedOut:
         assert [m.text for m in read(root, "lead", INBOX)] == ["waiting"]
         assert unread(root, "lead", OUTBOX, "slack") == [], "the reader lost its place"
         assert (mail_root(root, "lead") / ADOPTED_MARKER).exists()
-        assert "out of ~/.rite" in " ".join(adoption_notes(adoption, "lead"))
+        moved = " ".join(adoption_notes(adoption, "lead"))
+        assert "out of ~/.rite" in moved
+        assert "every Manager's sandbox can read" not in moved
 
     def test_a_file_that_cannot_move_is_said_to_be_still_exposed(self, old):
         from rite_ai.managers.mailbox import adopt_legacy, adoption_notes
@@ -214,7 +216,10 @@ class TestABoxUnderRiteHomeIsMovedOut:
         adoption = adopt_legacy(root, "lead")
         assert adoption.kept_in_rite_home == (box / "in" / "1_1_1.json",)
         said = " ".join(adoption_notes(adoption, "lead"))
-        assert "still READABLE by every Manager" in said
+        assert "NOT delivered" in said and "old location" in said
+        # ⚠ The false wording, gone: `~/.rite` is not granted to any Manager
+        # since DF3, so "readable by every Manager" would be a false alarm.
+        assert "READABLE by every" not in said and "every Manager" not in said
 
     def test_another_projects_box_left_there_is_said(self, old, tmp_path):
         from rite_ai.managers.mailbox import (
@@ -232,5 +237,8 @@ class TestABoxUnderRiteHomeIsMovedOut:
         (theirs.parent.parent.parent / "project").write_text(str(other))
         adopt_legacy(root, "lead")
         said = " ".join(still_under_rite_home())
-        assert "EVERY Manager" in said and str(other) in said
+        assert "old location" in said and str(other) in said
+        # ⚠ The false wording, gone (see above).
+        assert "EVERY Manager" not in said
+        assert "No Manager started by this rite can read it" in said
         assert str(root) not in said, "this project's own mail was not moved"

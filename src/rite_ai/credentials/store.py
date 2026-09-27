@@ -450,7 +450,7 @@ def warn_if_global(key: str, credentials: object | None = None) -> str | None:
         return None
     _WARNED_GLOBAL.add(key)
     message = (
-        f"warning: '{key}' is resolving to the machine-global keychain entry "
+        f"warning: '{key}' is resolving to the machine-global credential entry "
         f"'{r.global_account}', which is shared with every other project on "
         f"this machine. This project expects '{r.project_account}'. "
         f"Move it with `rite credential migrate {key}`."

@@ -85,14 +85,17 @@ both commands carry exactly what they say.
 rite credential list
 ```
 
-It prints what this project needs, the keychain account each one lives under,
+It prints what this project needs, the entry each one is stored under,
 and what is missing — with the exact command to fix each gap. That is the
 answer to *"how do I give rite a GitHub token?"*; you do not have to know the
 key's name in advance.
 
-Credentials are **per project**. The secret goes in your OS keychain; the
-project's *namespace* is recorded in `.rite/config.yaml`, which is committed.
-The keychain account is `<namespace>/<key>`, so two projects on one machine can
+Credentials are **per project**. From 0.6.0 the secret goes in one file,
+`~/.config/rite/credential-store.json`, which rite refuses to read unless its
+mode is 0600; the OS keychain is no longer read (upgrading from 0.5.1, run
+`rite credential import-keychain` once). The project's *namespace* is
+recorded in `.rite/config.yaml`, which is committed. Each entry is named
+`<namespace>/<key>`, so two projects on one machine can
 hold two different JIRA identities — which a single shared `jira_token` could
 not.
 
@@ -111,17 +114,17 @@ silent — it says so and names the account it used — and
 `rite credential migrate jira_token` copies it into this project.
 
 **What this does and does not protect.** Per-project names stop *accidental*
-cross-project use. They are **not a security boundary**: keychain access is
-per-user, not per-process, so any unsandboxed process running as you can read
+cross-project use. They are **not a security boundary**: the file is
+readable by anything running as you, so any unsandboxed process can read
 every entry rite has stored, whatever it is named. A Worker you open yourself
 is unsandboxed whatever `sandbox.enabled` says — only `rite sandbox start`
 sandboxes one — so that is the default path.
 
-The sandbox is the only enforcement, and it is blunter than you might expect: a
-seatbelt-sandboxed Worker **cannot read the keychain at all** — not another
-project's entry, and not its own. That is measured, not assumed (SPEC §10.3),
-and it is *why* a sandboxed Worker's token is handed to it through `--env`
-rather than fetched. Inside a sandbox, "not found" means "cannot check".
+The sandbox is the only enforcement, and it is blunt: a sandboxed Worker
+does not read the store at all. rite hands it every credential the project
+holds through `--env` when it starts, and a Manager's sandbox is given only
+per-Manager copies of what it needs, never the store. Inside a sandbox,
+"not found" means "cannot check".
 
 ## The schedule — when Workers may run
 
@@ -482,8 +485,8 @@ doctor` names the typo and says the window was dropped.
 
    `rite credential set claude` needs rite v0.2.0 or later (`rite --version`).
    An older rite does not know `claude` and offers `--allow-unknown`, which
-   stores a key that no worker is ever given. rite keeps the token in the
-   keychain for this project and passes it into each sandbox it
+   stores a key that no worker is ever given. rite keeps the token in its
+   credential file for this project and passes it into each sandbox it
    starts as `CLAUDE_CODE_OAUTH_TOKEN`, whichever shell you start it from;
    `rite doctor` reports it missing as a problem. Inside the sandbox, Claude
    Code's banner says "API Usage Billing" even with a subscription token:
@@ -595,6 +598,78 @@ than inside a module is not visible to the worker. If a clone fetches from a
 directory that contains the worker's own, such as the project root itself,
 start says it cannot be mounted.
 
+## Declaring a Manager
+
+`rite init` does not ask about Managers yet, and there is no `rite manager
+add`. You declare them under `coordination` in `.rite/config.yaml`, and
+`rite doctor` reports anything that parses but cannot work.
+
+**One Manager.** A lone Manager runs on Claude and holds every duty:
+
+```yaml
+coordination:
+  managers: [lead]
+```
+
+**A Claude Owner with a local secondary**, on one machine in one project
+root, the configuration 0.6.0 is built around:
+
+```yaml
+coordination:
+  managers: [lead, helper]
+  manager_roles:
+    - {name: lead, preset: lead}          # Claude; the Owner, it holds 'route'
+    - {name: helper, engine: 'local:small', preset: executor,
+       endpoint: 'http://localhost:11434/v1', model: 'qwen3:8b', agent: goose}
+```
+
+- `managers` is the list of names; `manager_roles` says what each is for.
+  Every role must name a listed Manager, and once one Manager has a role,
+  every Manager needs one.
+- **The Owner is the one Manager holding `route`.** The `lead` preset has
+  it and `executor` does not. With two Managers in one root, exactly one
+  must hold it: only that one reads Slack and routes work, and `rite doctor`
+  says so when none or several do.
+- `engine` defaults to `claude`. A `local:<class>` engine must also give
+  `endpoint`, `model` and `agent`; `goose` is the agent rite supports. Presets:
+  `lead`, `pm`, `planner`, `executor`.
+
+Before the first start:
+
+1. For `lead`: `claude setup-token`, then `rite credential set claude_token`
+   (next section).
+2. For `helper`: install Goose and Ollama, `ollama pull qwen3:8b`, and set
+   `OLLAMA_CONTEXT_LENGTH=32768` before Ollama starts (see *A local model
+   needs a context window you have to set*). Pick a model that calls tools
+   reliably: a 1.7B model did not run `rite reply` when asked.
+3. A ticket backend, if a lone Manager should run more than one session
+   per start: without one, `rite start` runs a single setup session. Where
+   several Managers share the project, routed work can start more sessions
+   within `--minutes`.
+4. `rite doctor`.
+
+Then start each in its own terminal:
+
+```bash
+rite start lead --sessions 3 --minutes 90
+rite start helper --sessions 3 --minutes 90
+```
+
+The Owner hands work down with `rite route helper "…"`, and `helper`
+answers with `rite reply`. The Owner cannot wait inside a session, so its
+supervisor waits instead, spending nothing, and starts the Owner's next
+session when the answer arrives. While routed work is unfinished,
+`--sessions` bends to let that happen, by at most two sessions per routed
+message (rite says so each time); `--minutes` does not.
+
+**A local model's report is not trusted.** In testing, `qwen3:8b` often did
+not reply at all, and more than once reported a step as done straight after it had
+failed. rite checks every reply in a separate session before the Owner reads
+it and marks it CONFIRMED, CONTRADICTED or COULD NOT TELL; the Owner is also
+told to check. The checker is a model too and can be wrong. If a secondary
+finishes or dies without replying, rite tells the Owner. A Manager that is already running keeps its opening instructions
+until `rite start <manager> --fresh`.
+
 ## A Claude Manager needs a token of its own
 
 **`rite start <manager>` runs Claude Code non-interactively, inside a
@@ -614,8 +689,9 @@ where `ps` would show it to every account on the machine. **You do not need
 `CLAUDE_CODE_OAUTH_TOKEN`; do not export it for rite.**
 
 Without a stored token, `rite start` refuses a Claude Manager before
-spending a session and prints the two commands above. A Claude Manager is
-supported on macOS in this release.
+spending a session and prints the two commands above. On Linux a Claude
+Manager starts the same way, but has had far less use than on macOS, and it
+can replace its own login file there (see the release notes).
 
 ## Naming a Manager
 
@@ -969,10 +1045,13 @@ Three things live outside the project and survive all of the above:
   project directory you have emptied.
 - **`~/.rite/`** — the cross-project dispatch hub, and a registry of which
   credentials exist and when they were last set. The registry holds names and
-  timestamps, never values. The values are in your OS keychain, under the
-  service `rite`, with item names scoped to the project that owns them —
-  `<namespace>/jira_token` (see *Credentials* below). `rite credential list`
-  shows them and `rite credential remove <name>` deletes them.
+  timestamps, never values. The values are in
+  `~/.config/rite/credential-store.json` (from 0.6.0; before that, your OS
+  keychain), with names scoped to the project that owns them —
+  `<namespace>/jira_token` (see *Credentials* above). `rite credential list`
+  shows them and `rite credential remove <name>` deletes them. Copies an older rite
+  left in the keychain stay there after an import; remove them with your
+  keychain's own tool.
 - **The tool** — `uv tool uninstall rite-ai`, or `pipx uninstall rite-ai`.
 
 ## What's built
@@ -1006,12 +1085,12 @@ counts this project's sandboxes** rather than every one on the machine.
 What this doesn't do yet — being straight about it rather than implying
 otherwise:
 
-- **Claude-native, on purpose.** `CLAUDE.md`, `.claude/agents/`, and Claude
-  Code sessions are first-class concepts here, not hidden behind a provider
-  abstraction. rite does not coordinate any other AI tool, and there's no
-  plan to add one — an abstraction layer would weaken every integration
-  point to the lowest common denominator that Claude Code's actual session
-  and config model doesn't need.
+- **Claude-first, with named exceptions.** `CLAUDE.md`, `.claude/agents/`,
+  and Claude Code sessions are first-class concepts here, not hidden behind
+  a provider abstraction. The exceptions are added one tool at a time: from
+  0.6.0 a Manager can run on a local model through Goose, and a Cursor
+  adapter is planned for 0.7.0. A general abstraction layer is not planned:
+  it would weaken every integration point to the lowest common denominator.
 - **The loop watches; it does not work the queue yet.** `rite loop` reads the
   board, your workers and the schedule every couple of minutes and tells you
   what it would do. It starts nothing. Two layers would close that, and

@@ -52,7 +52,7 @@ in this project:
     "Bash(curl:*)"
 ```
 
-The exact command in the pane is now:
+The engine command in the pane, inside the sandbox wrapper described below, is now:
 
 ```console
 claude -p --settings <rite's list> --permission-prompts none --resume <id> < <prompt file>
@@ -92,6 +92,9 @@ and the running list cannot drift apart:
 - to **narrow**, add to `permissions.deny` — deny beats allow, and it is
   the only direction a merge cannot express by adding.
 
+⚠ A Manager can write that file too, so it can widen its own list (Known
+issues).
+
 **There is no setting that restores 0.5.1's behaviour.** rite no longer
 passes `--dangerously-skip-permissions`, and it has no option to pass it
 for you. Widen the list as above instead.
@@ -102,9 +105,8 @@ Goose, the sandbox is the boundary.
 
 ### ⚠ BEHAVIOUR CHANGE ON UPGRADE — a Claude Manager signs in with its own token
 
-A Claude Manager runs inside a sandbox, and the sandbox cannot read your
-macOS keychain, which is where Claude Code keeps your login. (A Claude
-Manager is supported on macOS in this release, not yet on Linux.) So **a Claude
+A Claude Manager runs inside a sandbox and does not use your own Claude
+login: on macOS the sandbox cannot read the keychain where it lives. So **a Claude
 Manager now needs a token of its own**, once per project:
 
     claude setup-token                  # prints a one-year token
@@ -166,11 +168,10 @@ plus Metadata read. rite asks for exactly those four every time it mints a
 token, so an App granted less should have the request refused and `rite
 start` refuse with GitHub's words. Then, inside the project:
 
-    # .rite/config.yaml (neither id is a secret). This App is installed
-    # on robbartoszewski/rite-dogfood-board only, the board's repository.
+    # .rite/config.yaml (neither id is a secret)
     github_app:
-      app_id: "5084143"
-      installation_id: "165090155"
+      app_id: "<the App's id>"
+      installation_id: "<its installation id>"
       # repository: owner/name      # optional; defaults to ticket_backend.repo
 
     rite credential set github_app_key --stdin < your-app.private-key.pem
@@ -187,10 +188,13 @@ Linux it is expected to work but has not been verified against GitHub.**
 The token covers ONE repository, `repository` or else the board's. An App
 installed only on the board's repository cannot push to your code
 repository, so a Manager holding the `integrate` duty cannot push or open a
-pull request there through it. **For rite's own project that is the case:
-the App above is installed on `rite-dogfood-board` only, so `integrate` does
-not work on the `rite` repository through it.** Pushing uses the token only
-for an HTTPS remote.
+pull request there through it. Pushing uses the token only for an HTTPS
+remote.
+
+⚠ **Do not export `GH_TOKEN` or `GITHUB_TOKEN` in the shell that runs
+`rite start`.** A Manager inherits that shell's environment, and `gh` prefers
+either variable to the Manager's own configuration, so it would act with
+your token. `gh auth login` keeps your login where no Manager can read it.
 
 ⚠ **Point the board at a repository meant for tickets, never at the
 project's own code repository unless you want every ticket rite files to
@@ -224,8 +228,8 @@ the file.
   than where you stored it.
 - A multi-line secret, such as a private key, goes in with
   `rite credential set <name> --stdin < <file>`: never on the command line.
-- **No passphrase, on purpose for now.** A passphrase asked at start would
-  stop a Manager started by cron, and it protects the file only at rest.
+- **No passphrase, on purpose for now.** A passphrase would stop anything
+  rite runs unattended, and it protects the file only at rest.
 
 ### ⚠ BEHAVIOUR CHANGE ON UPGRADE — a Manager runs inside a sandbox
 
@@ -248,13 +252,23 @@ tool install, pipx, or a source checkout).
 
 **What the sandbox keeps out:** your home directory outside the paths it
 names, your SSH keys, and other projects outside `/tmp`. Signals are limited
-to the Manager's own processes. On macOS the tmux server that runs your
-Managers is out of reach too; **on Linux it is not** (Known issues).
+to the Manager's own processes, **on Linux only on kernel 6.12 or newer**
+(Known issues). On macOS the tmux server that runs your Managers is out of
+reach too; **on Linux it is not** (Known issues).
 
 **What it does NOT do, printed on every run:** it bounds files, not
 capability. The network is not confined. `/tmp` is readable and writable. A
 Manager can run `rite`, which does what you can do to this project. Treat
 a Manager as having your network access.
+
+**A Manager's commits and tags are no longer signed.** Signing needs your
+key, which the sandbox cannot read, so with `commit.gpgsign` or
+`tag.gpgsign` on, every Manager commit failed. rite turns signing off for a
+Manager's own git only, as it already did for a Worker's, and `rite start`
+and `rite doctor` both say so. Your own commits and your git config are
+unchanged. If a project requires signed commits, a Manager's commits will
+not meet it. A global `core.hooksPath` is treated differently, and is NOT
+bypassed (Known issues).
 
 **If a tool of yours that worked in 0.5.1 now fails with `Operation not
 permitted`**, it needs a path the sandbox does not grant. There is no option
@@ -283,9 +297,17 @@ It runs the model the role declares, whatever your global Goose config
 says. A dead endpoint, a missing model and a model served at 4096 tokens
 each stop `rite start` before it spends a session, and say which. A
 session Goose ended because it wanted an approval is reported as that, not
-as a clean cycle. **Pick a model that can call tools**: a small one (for
-example 1.7B parameters) may print `rite reply` as text instead of running
-it.
+as a clean cycle.
+
+⚠ **Do not take a local model's report on trust.** A small one (for example
+1.7B parameters) may print `rite reply` as text instead of running it. In
+testing, on a task with a step that fails, `qwen3:8b` ran `rite reply`
+properly when told the command, but replied unprompted in only 1 of 7 runs
+across three versions of its instructions, and more than once reported a step as done
+straight after it had failed. In every run where a reply arrived, a Claude
+Owner checked it and told the person what was true, and rite now checks
+every such reply itself before the Owner reads it (below): in testing it
+marked the false one CONTRADICTED.
 
 ⚠ **Set `OLLAMA_CONTEXT_LENGTH`** (at least 32768). At ollama's default
 of 4096, agents appear unable to call tools or remember the last turn. See
@@ -412,6 +434,10 @@ over Slack").
 - **A message sent while nothing runs is delivered at the next start.** Each
   run says in Slack that it has started and that it has stopped.
 - `rite doctor` checks both conversations and names Slack's own error.
+- ⚠ **Every Worker receives the Slack bot token** (as `SLACK_BOT_TOKEN`),
+  because every Worker receives every credential the project holds. A
+  Worker has no use for it, and with it a Worker can read your DM with the
+  app and post as the app.
 
 ⚠ **One Slack app per project.** A DM is with the app, and Slack's rate
 limits are per app. So two projects sharing one app would both act on the
@@ -426,22 +452,26 @@ it let authority point at a channel anyone can post in. Use
 
 **One machine, one project root.** "Several Managers" in this release means
 several Managers on the SAME machine, in the SAME project directory.
-Managers on different machines are not part of this release: that work is
-planned for 0.8.0.
+Routing and replies between Managers on different machines are not part of
+this release: that is planned for 0.8.0.
 
 One project root can run a Claude Manager as the **Owner** beside one or more
 secondaries, typically on a local model. **The Owner is the one Manager whose
 duties include `route`** (the `lead` preset has it; `executor` does not).
 Exactly one must hold it when several Managers share a root, and
-`rite doctor` says so when none or several do.
+`rite doctor` says so when none or several do. Managers are declared by hand
+in `.rite/config.yaml`; the guide's "Declaring a Manager" has a Claude Owner
+with a local secondary, ready to copy.
 
 - **Only the Owner reads and posts Slack.** A secondary opens no Slack
   connection at all, and says so when it starts. Before this, every Manager
   read the Owner's DM and would have acted on the same instruction.
 - **The Owner hands work down:** `rite route helper "…"`. The secondary gets
-  it at its next turn, marked as routed by the Owner.
-- **Replies come back up:** a secondary's `rite reply` reaches the Owner at
-  its next turn, marked as context from that Manager. A secondary has no
+  it in its next session, which starts within the same `rite start` (see the
+  waiting, below), marked as routed by the Owner.
+- **Replies come back up:** a secondary's `rite reply` reaches the Owner in
+  its next session, started within the same `rite start` because the reply
+  arrived, marked as context from that Manager. A secondary has no
   authority over the Owner.
 - ⚠ **No Manager can write a Manager's inbox — another's or its own.** A
   message in an inbox is an instruction, so each Manager's sandbox refuses
@@ -495,9 +525,13 @@ Exactly one must hold it when several Managers share a root, and
   does not end the Owner's wait. The wait has no timer. It ends when the work
   is done, when the Manager owing it has stopped, or at the end of the
   window, and every ten minutes it says what it is still waiting for.
-  ⚠ **In a project with several Managers, `--sessions` is no longer a hard
-  cap while routed work is unfinished.** A session started by routed mail
-  can pass it, and each time rite says so. `--minutes` is still a hard limit.
+  ⚠ **In a project with several Managers, `--sessions` bends while routed
+  work is unfinished.** Past it, routed mail may start at most two more
+  sessions per routed message, plus one for each note rite writes, and each
+  such session, and reaching that bound, is said. `--minutes` is still a
+  hard limit.
+  The Owner itself cannot wait inside a session (Claude Code blocks
+  `sleep`); the waiting is the supervisor's.
 - **A reply from another Manager is checked, not trusted.** The Owner is told
   a Manager's reply is a claim, not evidence: before telling you routed work
   was done, it checks where it can and says what it checked, or that the
@@ -519,15 +553,11 @@ Exactly one must hold it when several Managers share a root, and
   otherwise stop.
 - **A Manager repeating the same reply is not delivered twice**, and rite
   says it dropped it.
-- **`--sessions` is bounded again in a project with several Managers:**
-  past it, routed mail may start at most two sessions per routed message,
-  plus one for each note rite writes, and reaching that says so.
 - **When the Owner stops waiting, it says why:** a routed Manager was never
   started, finished its run, or died.
 
-This applies when the project has no `coordination.remote`. With one, the
-Managers may be on other machines and the election decides the Owner, and
-nothing here changes. **A Manager that is already running keeps its opening
+This applies when the project has no `coordination.remote`. With one,
+machines elect the Owner as in 0.4.0, and nothing in this section applies. **A Manager that is already running keeps its opening
 instructions** until `rite start <manager> --fresh`, so it is not told about
 the others until then.
 
@@ -560,6 +590,12 @@ See SPEC §6.6.3.
 - **A Claude Manager's `rite reply` was refused by its own allowlist.** It is
   told to run rite by full path, and the allowlist only admitted `rite`, so
   its answers never reached you. The full path is on the list now.
+
+- **A Manager name could collide with rite's own state.** A Manager named
+  `permissions` had its record written over the allowlist file. Such names
+  are now refused, and so are two names that differ only in case (macOS
+  folds case). A config that worked in 0.5.1 can stop starting: `rite
+  doctor` says which name, and you rename the Manager in `.rite/config.yaml`.
 
 - **A Manager ran whatever `rite` was first on PATH.** On a machine with an
   older rite installed, it was told to run commands that version lacks and
@@ -601,13 +637,6 @@ See SPEC §6.6.3.
   record names is now cleared and replaced. A start refused before the
   engine runs is no longer read as the conversation being gone: the run
   stops with the refusal and does not start fresh.
-- **Commit signing no longer stops a Manager's commits.** With
-  `commit.gpgsign` (or `tag.gpgsign`) on, every commit a Manager made
-  failed, because its sandbox cannot read your signing key. rite now turns
-  signing off for a Manager's commits and tags only, as it already did for a
-  Worker's. `rite start` and `rite doctor` both say so. Your own commits and
-  your git config are unchanged. If a project requires signed commits, a
-  Manager's commits will not meet that requirement.
 - **A refusal no longer repeats a credential tmux echoed back**, and only
   named variables go onto tmux's command line, which every local account
   can read with `ps`.
@@ -626,13 +655,28 @@ See SPEC §6.6.3.
     runs outside the sandbox. Closing this on Linux needs a mount namespace
     (blocked by Ubuntu's default AppArmor policy) or Docker (whose group is
     root-equivalent on the host), so it is accepted rather than closed.
+  - **On a kernel older than 6.12, a Manager can signal processes it did
+    not start**, including another Manager or the supervisor watching it.
+    Landlock only scopes signals from 6.12. A stock Ubuntu 24.04 kernel is
+    6.8, so this applies there. `rite start` prints it when it applies.
   - **A Claude Manager can replace its own login file** (see the Claude
     sign-in change above).
   - **A Manager cannot create a new top-level file or directory in its
-    project during a cycle.** Existing directories stay writable.
+    project during a cycle.** Existing directories stay writable. A fix is
+    planned for 0.7.0.
 - **Linux: Workers are not sandboxed by default.** `rite init` leaves Worker
   sandboxing off there, because `flock` does nothing inside a Docker
-  sandbox. The Manager's sandbox does not extend to Workers.
+  sandbox, so the documented route is a worker session you open yourself,
+  which is not sandboxed. `rite sandbox start`, and a Worker a Manager asks
+  for, still use yoloAI's Docker sandbox, which this release has not run on
+  Linux. The Manager's sandbox does not extend to Workers.
+- **A Manager can change the settings its own later runs start with**, on
+  both platforms. A Claude Manager can write its own Claude configuration
+  directory and the project's `.claude/settings.json`. A Manager steered
+  once, for example by ticket text, could widen its own allowlist, add a
+  hook, or send its later sessions' model requests to another address, and
+  that change persists across runs. Review changes to `.claude/settings.json`
+  as you would changes to code. A fix is planned for 0.7.0.
 - **A Manager can write its project's `.git/hooks` and `.rite/config.yaml`.**
   Hooks it writes run later OUTSIDE any sandbox, when you or a Worker run
   git, and a changed `config.yaml` changes how rite runs next. The project
@@ -659,14 +703,22 @@ See SPEC §6.6.3.
   keyed by the checkout's path, so after a move rite looks in a new, empty
   mailbox. Messages sent before the move stay in rite's data directory
   (above), in the directory whose `project` file names the old path.
-- **A Claude Owner cannot wait for a secondary's reply within one turn.**
-  If it routes work and then waits, its session ends, and the reply reaches
-  it at its next turn.
-- **A Manager needs a ticket backend to run more than one session.** With
-  none configured, `rite start` runs a single setup session and does not
-  start another, whatever `--sessions` says. So on a project with no board,
-  an Owner has stopped by the time a secondary replies, and the reply
-  waits for your next `rite start`.
+- **A lone Manager needs a ticket backend to run more than one session.**
+  With no board configured, `rite start` runs one session to help you set
+  one up. A lone Manager does not start another, whatever `--sessions`
+  says. Where several Managers share the project, routed work can start
+  more sessions within `--minutes`, and each one is said.
+- **GitHub: a `rite start` just after an issue is filed or scheduled can
+  find the board empty.** GitHub's issue lists lag new issues by about 2–3
+  seconds, so the run stops with "the board has nothing ready". Start it
+  again a few seconds later.
+- **A refusal can be blamed on the wrong thing.** When Claude Code refuses a
+  command that rite's allowlist covers, rite says "The engine did not apply
+  `permissions.json`" and asks you to check that file, which is usually
+  fine: Claude Code refuses some commands for its own reasons.
+- **Linux: `rite status` run by a Manager inside its sandbox fails** with a
+  `PermissionError` traceback instead of a sentence. Run it from your own
+  shell.
 - **A message to a Manager is not read while its board has nothing ready.**
   `rite start` then stops at once with "done: the board has nothing ready"
   and starts no session, even with a `rite message` waiting in its inbox.
@@ -693,12 +745,16 @@ See SPEC §6.6.3.
   there was the listing crash and should not recur. **Any other failure (a
   granted claim lost, or a path held twice) is this lock failing on its own.
   It is not a flake: do not rerun it until it passes.**
-- **A global `core.hooksPath` stops a Manager's `git push`.** The sandbox
-  cannot run hooks from outside the project. rite does not bypass them,
-  because a global hook may be a guard you rely on. `rite doctor` and `rite
-  start` name the directory and give the fix, which also stops your global
-  hooks running for your own pushes in that project:
+- **A global `core.hooksPath` stops a Manager's commits and pushes** when
+  it has a hook for them. The sandbox cannot run hooks from outside the
+  project. rite does not bypass them, because a global hook may be a guard
+  you rely on. `rite doctor` and `rite start` name the directory and give
+  the fix, which also stops your global hooks running for your own commits
+  and pushes in that project:
   `git config --local core.hooksPath <the project's .git/hooks>`.
+- **On macOS a Manager can reach no Unix socket except the name
+  resolver's**, so anything that goes through ssh-agent, Docker or a local
+  database socket fails inside it. Push from an HTTPS remote.
 
 ## 0.5.1 (2026-09-21)
 

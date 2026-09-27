@@ -2336,7 +2336,7 @@ def credential_list() -> None:
     question that had no discoverable answer, because the only place that
     ever asked for one was a prompt buried inside `rite add worker`.
 
-    The ACCOUNT column is the keychain entry each key lives under,
+    The ACCOUNT column is the store entry each key lives under,
     composed from the namespace recorded in `.rite/config.yaml`. That
     file is committed on purpose and holds a name, never a value: a fresh
     clone runs this command and sees exactly what to set, without a
@@ -2552,7 +2552,9 @@ def credential_migrate(name: str, yes: bool) -> None:
     # being changed.
     value = get_account(r.global_account)
     if not value:
-        click.echo(f"could not read '{r.global_account}' from the keychain", err=True)
+        click.echo(
+            f"could not read '{r.global_account}' from the credential store", err=True
+        )
         raise SystemExit(1)
 
     # ⚠ Nothing is WRITTEN before the confirm that authorises it. This
@@ -2599,11 +2601,11 @@ def credential_migrate(name: str, yes: bool) -> None:
 @click.argument("name")
 @click.option("--yes", is_flag=True, default=False, help="Skip the confirmation.")
 def credential_remove(name: str, yes: bool) -> None:
-    """Delete a stored credential from the keychain and rite's registry.
+    """Delete a stored credential from rite's credential file and registry.
 
     The counterpart to `set`. Without it, a key stored by mistake — an
     email address typed where `jira_email` belonged, say — stayed in the
-    keychain permanently, since `set` could create entries that no rite
+    store permanently, since `set` could create entries that no rite
     command could remove.
 
     Examples:

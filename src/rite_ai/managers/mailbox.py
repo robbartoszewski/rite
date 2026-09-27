@@ -741,15 +741,15 @@ def adoption_notes(adoption: Adoption, manager: str) -> list[str]:
     if adoption.from_rite_home:
         notes.append(
             f"moved {adoption.from_rite_home} file(s) of the mail of Manager "
-            f"{manager!r} out of ~/.rite, which every Manager's sandbox can read, to "
-            f"{_mail_home()}, which none can except for its own mail"
+            f"{manager!r} out of ~/.rite, its old location, to {_mail_home()}, "
+            "where each Manager's sandbox reads only its own mail"
         )
     if adoption.kept_in_rite_home:
         notes.append(
             f"⚠ {len(adoption.kept_in_rite_home)} file(s) of the mail of "
-            f"Manager {manager!r} could not be moved out of ~/.rite and are "
-            "still READABLE by every Manager on this machine. They are not "
-            "delivered. Look at them and remove them: "
+            f"Manager {manager!r} could not be moved out of ~/.rite, its old "
+            "location, and are NOT delivered. No Manager started by this rite "
+            "can read ~/.rite. Look at them and remove them: "
             f"{', '.join(str(p) for p in adoption.kept_in_rite_home[:3])}"
         )
     if adoption.moved:
@@ -778,12 +778,21 @@ def adoption_notes(adoption: Adoption, manager: str) -> list[str]:
 
 def still_under_rite_home() -> list[str]:
     """What is still under `~/.rite/managers/` after this start's move, as
-    lines to say — readable by every Manager on the machine (DF3).
+    lines to say.
 
-    ⚠ **Reported, not moved.** Each box is moved by ITS Manager's next start,
+    ⚠ **Not exposed any more, and not said to be.** Development builds of
+    0.6.0 kept mail there, where every Manager could read it (DF3). Since
+    `~/.rite` stopped being granted (`enclosure._tool_paths`, denied by name
+    on macOS; observed refused on Linux, readiness A5), no Manager started
+    by this rite can read it. This used to say "EVERY Manager's sandbox …
+    can read it", which became false then: a false warning teaches a user
+    to discount the true ones. Only a Manager still running an older
+    development build can read it.
+
+    **Reported, not moved.** Each box is moved by ITS Manager's next start,
     under that Manager's run lock; moving another project's box from here
-    would race a supervisor that may be reading it. So the exposure is said
-    at every start until it is gone, with where to look.
+    would race a supervisor that may be reading it. So it is said at every
+    start until it is gone, with where to look.
     """
     from rite_ai.credentials.store import default_rite_home
 
@@ -811,11 +820,13 @@ def still_under_rite_home() -> list[str]:
     if not exposed:
         return []
     return [
-        f"⚠ mail is still under {base}, where EVERY Manager's sandbox on this "
-        f"machine can read it: {'; '.join(exposed[:5])}"
+        f"mail of other projects is still in its old location, {base}: "
+        f"{'; '.join(exposed[:5])}"
         + (f"; and {len(exposed) - 5} more" if len(exposed) > 5 else "")
-        + ". Each project's mail moves out the next time its Managers start; "
-        "until then it is exposed. Start them, or remove what is not needed."
+        + ". Each project's mail moves the next time its Managers start. No "
+        "Manager started by this rite can read it there; one still running "
+        "an older development build of 0.6.0 can. Start them, or remove what "
+        "is not needed."
     ]
 
 
