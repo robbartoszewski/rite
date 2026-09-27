@@ -137,13 +137,12 @@ def _per_manager_user_entries(name: str) -> tuple[str, ...]:
     """The entries in `.rite/user/` a Manager called `name` gets, each
     derived from the function that builds its path, so this cannot drift
     from where rite actually writes."""
-    from rite_ai.managers.enclosure import profile_path
-
     here = Path(".")
+    # The sandbox profile is not here any more: it lives in the Manager's own
+    # credential directory, which no Manager can write (`profile_path`).
     return (
         _instance_filename(name),
         designation_path(here, name).name,
-        profile_path(here, name).name,
     )
 
 
