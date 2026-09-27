@@ -212,6 +212,7 @@ def collect_reports(root: Path, owner: str, managers: list[str], say) -> int:
     is not one. The header says so, and the Owner's text is quoted so the
     secondary cannot forge a header of its own.
     """
+    _mark_seen_running(root, owner, managers)
     brought = 0
     for sender in managers:
         if sender == owner:
@@ -420,38 +421,158 @@ def _outstanding(root: Path, owner: str) -> dict[str, list[str]]:
     return pending
 
 
+def _process_start(pid: int) -> str:
+    """When process `pid` started, as the OS reports it, or "".
+
+    Recorded with the pid so a RECYCLED pid is not read as the same process:
+    `pid_alive` answers "some process has this number", which is not "the
+    supervisor we recorded is still running". Linux: field 22 of
+    `/proc/<pid>/stat` (clock ticks since boot). Elsewhere: `ps -o lstart=`."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+        return "linux:" + stat.rsplit(")", 1)[1].split()[19]
+    except (OSError, IndexError):
+        pass
+    import subprocess
+
+    try:
+        got = subprocess.run(
+            ["ps", "-o", "lstart=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return (
+        ("ps:" + got.stdout.strip())
+        if got.returncode == 0 and got.stdout.strip()
+        else ""
+    )
+
+
 def record_supervisor(root: Path, manager: str, pid: int) -> None:
-    """This Manager's SUPERVISOR is running, as `pid`.
+    """This Manager's SUPERVISOR has started, as `pid`: the first half of its
+    recorded lifecycle (Robert, decision 4 (c), 2026-09-27).
 
     ⚠ **Not the instance record.** That one holds the tmux pane's pid, which
     is dead between cycles by design — `rite status` reports such a Manager as
     "recorded but not running" while its supervisor is alive and about to
     start the next cycle. Ending a wait on that would end it in exactly the
     momentary gap Robert ruled out. The supervisor lives from `rite start` to
-    its end, waits included, so its pid is the one that can be absent."""
+    its end, waits included, and is recorded WITH ITS START TIME, so a
+    recycled pid is not taken for it."""
     _store(
         _ledger_dir(root, manager) / SUPERVISOR_FILE,
-        {"pid": pid, "started_at": time.time()},
+        {
+            "state": RUNNING,
+            "pid": pid,
+            "process_start": _process_start(pid),
+            "started_at": time.time(),
+        },
     )
 
 
-def forget_supervisor(root: Path, manager: str, pid: int) -> None:
+def forget_supervisor(
+    root: Path, manager: str, pid: int, how: str = "finished"
+) -> None:
+    """The run recorded its own end: the second half of the lifecycle.
+
+    ⚠ **Kept, not deleted.** "A start was recorded" is what separates a
+    Manager that never ran (refused at once) from one that ran and ended; a
+    deleted record would make every ended Manager look never-started."""
     path = _ledger_dir(root, manager) / SUPERVISOR_FILE
-    if _load(path).get("pid") == pid:
-        try:
-            path.unlink()
-        except OSError:
-            pass
+    data = _load(path)
+    if data.get("pid") == pid:
+        _store(
+            path,
+            {
+                "state": ENDED,
+                "ended": how,
+                "ended_at": time.time(),
+                "started_at": data.get("started_at"),
+            },
+        )
 
 
-def _supervisor_running(root: Path, manager: str) -> bool:
-    """Whether `manager`'s supervisor is running. False is PROVABLE: no
-    record, or a record whose process no longer exists (a killed run leaves
-    one). A pid can be reused, so True is necessary rather than certain."""
+NEVER, RUNNING, ENDED, DIED = "never", "running", "ended", "died"
+
+
+def _supervisor_state(root: Path, manager: str) -> str:
+    """`manager`'s recorded lifecycle, as one of four facts:
+
+    - NEVER: no start was ever recorded here;
+    - RUNNING: the recorded process exists AND started when recorded;
+    - ENDED: its run recorded its own end;
+    - DIED: the record says running, but that process is gone or is not the
+      one recorded (killed, or crashed past its `finally`).
+
+    ⚠ **RECORDED IDENTITY, NOT A LIVENESS POLL.** "Not running right now" is
+    not an answer here: the question is whether the process rite recorded
+    still exists, and that is what is compared."""
     from rite_ai.managers import pid_alive
 
-    pid = _load(_ledger_dir(root, manager) / SUPERVISOR_FILE).get("pid")
-    return isinstance(pid, int) and pid_alive(pid)
+    data = _load(_ledger_dir(root, manager) / SUPERVISOR_FILE)
+    if not data:
+        return NEVER
+    if data.get("state") == ENDED:
+        return ENDED
+    pid = data.get("pid")
+    if not isinstance(pid, int) or not pid_alive(pid):
+        return DIED
+    recorded = data.get("process_start") or ""
+    if recorded and _process_start(pid) not in ("", recorded):
+        return DIED
+    return RUNNING
+
+
+SEEN_FILE = "seen.json"
+
+
+def _mark_seen_running(root: Path, owner: str, managers) -> None:
+    """Record, in the Owner's ledger, each routed-to Manager observed RUNNING
+    now. Called every tick of the Owner's supervisor, during its sessions and
+    its waits, so a secondary alive when it was handed work is SEEN even if it
+    dies before the Owner's next wait begins. An observation, never a timer."""
+    pending = _outstanding(root, owner)
+    if not pending:
+        return
+    path = _ledger_dir(root, owner) / SEEN_FILE
+    seen = _load(path)
+    changed = False
+    for name in managers:
+        if name in pending and _supervisor_state(root, name) == RUNNING:
+            seen[name] = time.time()
+            changed = True
+    if changed:
+        _store(path, seen)
+
+
+def _where_the_work_is(root: Path, to: str, names: list[str]) -> str:
+    """Where unhandled routed work is, stated rather than assumed.
+
+    ⚠ Found by observation: a secondary Ctrl-C'd mid-route had already TAKEN
+    the message into the session that was interrupted, and rite said it
+    "waits in its inbox". The inbox was empty. Each route's inbox filename is
+    in the ledger, so this checks which are still there."""
+    from rite_ai.managers.mailbox import mailbox_dir
+
+    box = mailbox_dir(root, to, INBOX)
+    waiting = [n for n in names if (box / n).exists()]
+    taken = len(names) - len(waiting)
+    said = []
+    if waiting:
+        said.append(
+            f"{len(waiting)} routed message(s) wait in its inbox for `rite start {to}`"
+        )
+    if taken:
+        said.append(
+            f"{taken} routed message(s) were taken into a session that did not "
+            "finish, so that work may be partly done or not done, and nothing "
+            "will deliver it again"
+        )
+    return "; ".join(said)
 
 
 class Waiting:
@@ -461,19 +582,19 @@ class Waiting:
 
     **The Owner** waits while any route it delivered is outstanding (Robert,
     2026-09-27: bounded by outstanding routes, not by a timer and not by
-    liveness). The wait is over when every route is handled, or when every
-    Manager still owing one is PROVABLY gone.
+    liveness). **A secondary** waits for routed work rather than stopping on
+    an idle board, and stops when the Owner is gone.
 
-    **A secondary** waits for routed work rather than stopping on an idle
-    board (Robert, same day), and stops when the Owner is gone.
-
-    ⚠ **"Gone" means SEEN, THEN ABSENT — and that is an interpretation of the
-    ruling, stated so it can be overruled.** Read literally, "no Owner is
-    running" is also true for the second between two `rite start`s launched
-    together: a secondary started first would stop, and the route would sit
-    until its next start. That is a start-order race, which the ruling exists
-    to remove. So a Manager that has never been seen running is not gone; the
-    wait says so LOUDLY, every `STILL_WAITING_EVERY`, instead of ending."""
+    ⚠ **"Provably gone" is Robert's decision 4, option (c), 2026-09-27: SEEN
+    RUNNING, THEN GONE — plus the recorded lifecycle.** A Manager this run saw
+    running whose recorded process is now absent has ENDED (it recorded its
+    end) or DIED (it did not). A routed secondary with NO start ever recorded
+    is a failure to launch, and is refused at once rather than waited on.
+    A Manager that has started before but not yet in this run is NOT gone:
+    ending on that would end a wait by start order, the second between two
+    `rite start`s launched together. It is waited on, and said loudly.
+    No timer anywhere. Each ending is said in its own words, because
+    "finished", "died" and "never started" need different responses."""
 
     def __init__(self, root: Path, manager: str, owner: str, clock=time.time):
         self.root = root
@@ -482,19 +603,62 @@ class Waiting:
         self.clock = clock
         self.seen: set[str] = set()
         self._said_at: float | None = None
+        # WALL time, as the lifecycle records are: see `_state`.
+        self.began = time.time()
 
     @property
     def is_owner(self) -> bool:
         return bool(self.owner) and self.manager == self.owner
 
-    def _look(self, name: str) -> bool:
-        running = _supervisor_running(self.root, name)
-        if running:
-            self.seen.add(name)
-        return running
+    def _state(self, name: str) -> str:
+        """`name`'s lifecycle, noting whether this run has SEEN it run.
 
-    def _gone(self, name: str) -> bool:
-        return not self._look(name) and name in self.seen
+        ⚠ **Seen by observation OR by its own record.** Found by observation,
+        not in review: a secondary took the route and was killed within a
+        second or two, while the Owner's own first session was still running.
+        The Owner had never looked at it while it was alive, so under a bare
+        "seen running, then gone" it was never gone, and the Owner waited out
+        the whole window for a Manager that had died. Its lifecycle record
+        says when its run started. A run that started after this one began
+        ran DURING this run, which is a fact, not a guess, so its end or death
+        is provable. A record from before this run is still not "seen":
+        that is the start-order protection."""
+        state = _supervisor_state(self.root, name)
+        started = _load(_ledger_dir(self.root, name) / SUPERVISOR_FILE).get(
+            "started_at"
+        )
+        observed = (
+            _load(_ledger_dir(self.root, self.owner) / SEEN_FILE).get(name)
+            if self.is_owner
+            else None
+        )
+        if (
+            state == RUNNING
+            or (
+                state in (ENDED, DIED)
+                and isinstance(started, (int, float))
+                and started >= self.began
+            )
+            or (isinstance(observed, (int, float)) and observed >= self.began)
+        ):
+            self.seen.add(name)
+        return state
+
+    def _ending(self, name: str) -> str:
+        """Why `name` will not handle anything this run, or "" if it may."""
+        state = self._state(name)
+        if state == NEVER:
+            return f"{name!r} has never been started here (no start is recorded)"
+        if state == RUNNING or name not in self.seen:
+            return ""
+        if state == ENDED:
+            how = _load(_ledger_dir(self.root, name) / SUPERVISOR_FILE).get("ended")
+            said = f" ({str(how)[:160]})" if how else ""
+            return f"{name!r} finished its run{said}"
+        return (
+            f"{name!r} DIED: its run ended without recording an end (killed, "
+            "or crashed), so the work may not have happened"
+        )
 
     def reason(self) -> str:
         """Why to wait, or "" for no reason (the Manager stops as before)."""
@@ -514,12 +678,12 @@ class Waiting:
                     else ""
                 )
             for to in pending:
-                self._look(to)
+                self._state(to)
             listed = ", ".join(
                 f"{to!r} ({len(n)})" for to, n in sorted(pending.items())
             )
             return f"routed work is outstanding: {listed}"
-        self._look(self.owner)
+        self._state(self.owner)
         return f"this Manager takes work routed by the Owner {self.owner!r}"
 
     def reply_waiting(self) -> bool:
@@ -538,25 +702,40 @@ class Waiting:
         _record_handled(self.root, self.manager, names)
 
     def over(self) -> str:
-        """Why the wait has ended without mail, or ""."""
+        """Why the wait has ended without mail, or "". Names WHICH ending."""
         if self.is_owner:
             pending = _outstanding(self.root, self.owner)
             if not pending:
-                return "every routed message was handled"
-            if all(self._gone(to) for to in pending):
-                left = ", ".join(
-                    f"{to!r} ({len(n)} unhandled)" for to, n in sorted(pending.items())
-                )
-                return (
-                    f"every Manager with routed work outstanding has stopped: "
-                    f"{left}. What was routed stays in its inbox for its next "
-                    f"`rite start`."
-                )
-            return ""
-        if self.owner and self._gone(self.owner):
-            return (
-                f"the Owner {self.owner!r} has stopped, so nothing will route work here"
+                return "stopped waiting: every routed message was handled"
+            endings = {to: self._ending(to) for to in pending}
+            if not all(endings.values()):
+                return ""
+            never = [to for to in pending if self._state(to) == NEVER]
+            head = (
+                "REFUSING TO WAIT — a routed Manager was never started"
+                if never
+                else "stopped waiting — no Manager owing routed work can handle it"
             )
+            parts = [
+                f"{endings[to]}; {_where_the_work_is(self.root, to, names)}"
+                for to, names in sorted(pending.items())
+            ]
+            return f"{head}: " + " · ".join(parts)
+        if self.owner and self.owner in self.seen:
+            state = self._state(self.owner)
+            if state == ENDED:
+                return (
+                    f"stopped waiting: the Owner {self.owner!r} finished its "
+                    "run, so nothing will route work here"
+                )
+            if state == DIED:
+                return (
+                    f"stopped waiting: the Owner {self.owner!r} DIED (its run "
+                    "ended without recording an end), so nothing will route "
+                    "work here"
+                )
+        else:
+            self._state(self.owner)
         return ""
 
     def begin(self) -> None:
@@ -576,16 +755,13 @@ class Waiting:
             pending = _outstanding(self.root, self.owner)
             parts = []
             for to, names in sorted(pending.items()):
-                state = (
+                state = self._state(to)
+                shown = (
                     "running"
-                    if self._look(to)
-                    else (
-                        "stopped"
-                        if to in self.seen
-                        else f"NOT RUNNING — start it with `rite start {to}`"
-                    )
+                    if state == RUNNING
+                    else f"NOT RUNNING — start it with `rite start {to}`"
                 )
-                parts.append(f"{to!r}: {len(names)} routed, {state}")
+                parts.append(f"{to!r}: {len(names)} routed, {shown}")
             return (
                 f"{mark}{self.manager!r} is waiting, spending nothing, for "
                 f"routed work to be handled — " + "; ".join(parts)
@@ -593,7 +769,7 @@ class Waiting:
                 else f"{mark}{self.manager!r} is waiting, spending nothing, to "
                 "deliver a reply"
             )
-        state = "running" if self._look(self.owner) else "NOT RUNNING"
+        state = "running" if self._state(self.owner) == RUNNING else "NOT RUNNING"
         return (
             f"{mark}{self.manager!r} is waiting, spending nothing, for work "
             f"routed by the Owner {self.owner!r} ({state})"

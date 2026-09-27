@@ -642,10 +642,18 @@ def supervise(
     from rite_ai.managers.routing import forget_supervisor, record_supervisor
 
     record_supervisor(root, manager, os.getpid())
+    how = "stopped by an error"
     try:
-        return _supervise(root, manager, waiting=waiting, **options)
+        result = _supervise(root, manager, waiting=waiting, **options)
+        # Its own words, so the Owner can say HOW it ended, not only that it
+        # did: a Ctrl-C, a bound and a finished queue all end a run cleanly.
+        how = result.reason
+        return result
     finally:
-        forget_supervisor(root, manager, os.getpid())
+        # Recorded however the run ends, a Ctrl-C and an error included. Only
+        # a KILLED run skips it, and that is exactly what `supervisor_state`
+        # reads as DIED.
+        forget_supervisor(root, manager, os.getpid(), how)
 
 
 def _supervise(

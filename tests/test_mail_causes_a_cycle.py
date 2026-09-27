@@ -234,37 +234,146 @@ class TestAProgressReplyDoesNotEndTheWait:
 
 
 class TestTheWaitEndsForAStatedReason:
-    def test_a_secondary_that_is_provably_gone_ends_the_wait(self, world):
+    """Robert's decision 4, option (c): seen running then gone, plus the
+    recorded lifecycle. Each ending is named, because "finished", "died" and
+    "never started" need different responses from a person."""
+
+    def test_a_secondary_that_finished_its_run_ends_the_wait_and_says_finished(
+        self, world
+    ):
         root = world["root"]
         routing.record_supervisor(root, SECONDARY, os.getpid())
 
-        def dies():
+        def ends():
             if world["t"] >= 30:
                 routing.forget_supervisor(root, SECONDARY, os.getpid())
 
-        world["between"].append(dies)
+        world["between"].append(ends)
         result, starts, _prompts, _said = _run_owner(world, ceiling=2, cycle_secs=7)
         assert len(starts) == 2
-        assert "has stopped" in result.reason and "small" in result.reason, result
+        assert "'small' finished its run" in result.reason, result
+        assert "DIED" not in result.reason and "never" not in result.reason
 
-    def test_a_secondary_never_seen_running_is_not_gone_and_it_is_said(
-        self, world, monkeypatch
+    def test_a_secondary_that_died_ends_the_wait_and_says_died(self, world):
+        root = world["root"]
+        routing.record_supervisor(root, SECONDARY, os.getpid())
+
+        def killed():
+            # A killed run never reaches its `finally`: the record still says
+            # running, and the recorded process is gone.
+            if world["t"] >= 30:
+                # It took the route into a session first, then was killed.
+                mailbox.take(root, SECONDARY, mailbox.INBOX)
+                path = routing._ledger_dir(root, SECONDARY) / routing.SUPERVISOR_FILE
+                data = routing._load(path)
+                if data.get("pid") == os.getpid():
+                    data["pid"] = 2**22 + 12345
+                    routing._store(path, data)
+
+        world["between"].append(killed)
+        result, _starts, _prompts, _said = _run_owner(world, ceiling=2, cycle_secs=7)
+        assert "'small' DIED" in result.reason, result
+        assert "may not have happened" in result.reason
+        # It had TAKEN the message: saying it waits in the inbox would be false.
+        assert "taken into a session that did not finish" in result.reason
+        assert "wait in its inbox" not in result.reason
+
+    def test_a_secondary_that_died_before_the_owner_ever_looked_is_still_died(
+        self, world
     ):
-        """⚠ Seen-then-absent, not merely absent: a secondary started a moment
-        after the Owner would otherwise end the Owner's wait by start order."""
-        said_lines: list[str] = []
+        """Found by observation through `rite start`: the secondary took the
+        route and was killed while the Owner's first session still ran, so the
+        Owner never saw it alive and waited out the window. Its record says
+        its run started during the Owner's run, which proves it ran."""
         root = world["root"]
 
+        def starts_then_is_killed():
+            path = routing._ledger_dir(root, SECONDARY) / routing.SUPERVISOR_FILE
+            if world["t"] >= 2 and not path.exists():
+                routing.record_supervisor(root, SECONDARY, os.getpid())
+                data = routing._load(path)
+                data["pid"] = 2**22 + 12345  # killed before the Owner looks
+                routing._store(path, data)
+
+        world["between"].append(starts_then_is_killed)
+        result, _starts, _prompts, _said = _run_owner(world, ceiling=2, cycle_secs=7)
+        assert "'small' DIED" in result.reason, result
+
+    def test_alive_when_handed_the_work_then_killed_is_died(self, world):
+        """The observed case exactly: the secondary started BEFORE the Owner
+        (so its record predates the Owner's run), was alive when the route was
+        delivered, and was killed before the Owner's first wait. The Owner's
+        supervisor saw it running at delivery, and recorded that."""
+        root = world["root"]
+        routing.record_supervisor(root, SECONDARY, os.getpid())
+        path = routing._ledger_dir(root, SECONDARY) / routing.SUPERVISOR_FILE
+        data = routing._load(path)
+        data["started_at"] = 1.0  # started before the Owner's run
+        routing._store(path, data)
+
+        def killed_after_delivery():
+            if world["t"] >= 10:
+                d = routing._load(path)
+                if d.get("pid") == os.getpid():
+                    d["pid"] = 2**22 + 12345
+                    routing._store(path, d)
+
+        world["between"].append(killed_after_delivery)
+        result, _starts, _prompts, _said = _run_owner(world, ceiling=2, cycle_secs=7)
+        assert "'small' DIED" in result.reason, result
+
+    def test_a_death_recorded_before_this_run_is_not_this_runs_death(self, world):
+        """The start-order protection holds for a stale record: killed in an
+        EARLIER run, it may be about to start now, so it is waited on."""
+        root = world["root"]
+        routing.record_supervisor(root, SECONDARY, 2**22 + 12345)
+        path = routing._ledger_dir(root, SECONDARY) / routing.SUPERVISOR_FILE
+        data = routing._load(path)
+        data["started_at"] = 1.0  # long before this run
+        routing._store(path, data)
+
         def arrives_late():
-            if world["t"] >= 700 and not routing._supervisor_running(root, SECONDARY):
+            if (
+                world["t"] >= 700
+                and routing._supervisor_state(root, SECONDARY) != routing.RUNNING
+            ):
                 _secondary_answers_at(world, 720)
 
         world["between"].append(arrives_late)
-        result, starts, prompts, said = _run_owner(world, ceiling=2, cycle_secs=7)
-        said_lines += said
+        result, _starts, prompts, _said = _run_owner(world, ceiling=2, cycle_secs=7)
         assert _carrying(prompts, REPLY), result.reason
-        assert any("NOT RUNNING" in line for line in said_lines), said_lines
-        assert any(line.startswith("⚠ still:") for line in said_lines), said_lines
+
+    def test_a_secondary_never_started_is_refused_at_once_not_waited_on(self, world):
+        """The hole in "seen running, then gone": a secondary that never ran
+        was never seen, so the Owner would have waited forever for it."""
+        result, starts, _prompts, _said = _run_owner(world, ceiling=2, cycle_secs=7)
+        assert "REFUSING TO WAIT" in result.reason, result
+        assert "never been started here" in result.reason
+        assert "rite start small" in result.reason
+        assert "wait in its inbox" in result.reason  # never taken: still there
+        assert len(starts) == 2, "refused when the wait began, not after one"
+
+    def test_a_secondary_that_ran_before_but_not_yet_now_is_waited_on_loudly(
+        self, world
+    ):
+        """⚠ Not gone: it has a recorded start, but this run has not seen it.
+        Ending here would end the wait by start order."""
+        root = world["root"]
+        routing.record_supervisor(root, SECONDARY, os.getpid())
+        routing.forget_supervisor(root, SECONDARY, os.getpid())  # an earlier run
+
+        def arrives_late():
+            if (
+                world["t"] >= 700
+                and routing._supervisor_state(root, SECONDARY) != routing.RUNNING
+            ):
+                _secondary_answers_at(world, 720)
+
+        world["between"].append(arrives_late)
+        result, _starts, prompts, said = _run_owner(world, ceiling=2, cycle_secs=7)
+        assert _carrying(prompts, REPLY), result.reason
+        assert any("NOT RUNNING" in line for line in said), said
+        assert any(line.startswith("⚠ still:") for line in said), said
 
 
 class TestTheSecondarySide:
@@ -325,7 +434,7 @@ class TestTheSecondarySide:
         )
         assert starts and starts[0] >= 40, starts
         assert TASK in prompts[0]
-        assert "Owner 'lead' has stopped" in result.reason, result
+        assert "the Owner 'lead' finished its run" in result.reason, result
 
     def test_a_route_after_the_ceiling_still_starts_a_cycle(self, world):
         root = world["root"]
@@ -450,18 +559,32 @@ class TestTheLedgerIsTheSupervisorsNotTheModels:
         assert where.parent == mail.parent and not where.is_relative_to(mail)
 
     def test_a_dead_supervisor_is_provably_gone(self, tmp_path):
-        assert not routing._supervisor_running(tmp_path, SECONDARY)  # no record
+        state = routing._supervisor_state
+        assert state(tmp_path, SECONDARY) == routing.NEVER  # no start recorded
         routing.record_supervisor(tmp_path, SECONDARY, os.getpid())
-        assert routing._supervisor_running(tmp_path, SECONDARY)
+        assert state(tmp_path, SECONDARY) == routing.RUNNING
+        routing.forget_supervisor(tmp_path, SECONDARY, os.getpid())
+        assert state(tmp_path, SECONDARY) == routing.ENDED  # kept, not deleted
         routing.record_supervisor(tmp_path, SECONDARY, 2**22 + 12345)  # no such pid
-        assert not routing._supervisor_running(tmp_path, SECONDARY)
+        assert state(tmp_path, SECONDARY) == routing.DIED
+
+    def test_a_recycled_pid_is_not_taken_for_the_recorded_process(self, tmp_path):
+        """⚠ Recorded identity, not a liveness poll: a live pid that started at
+        another time is a different process, so the recorded one DIED."""
+        routing.record_supervisor(tmp_path, SECONDARY, os.getpid())
+        path = routing._ledger_dir(tmp_path, SECONDARY) / routing.SUPERVISOR_FILE
+        data = routing._load(path)
+        assert data["process_start"], "the start time must be recorded"
+        data["process_start"] = "linux:1"
+        routing._store(path, data)
+        assert routing._supervisor_state(tmp_path, SECONDARY) == routing.DIED
 
     def test_supervise_records_itself_for_the_whole_run_and_removes_it(self, world):
         root = world["root"]
         seen: list[bool] = []
 
         def starter(r, m, *, engine, resume_id, max_sessions, window_seconds, **kw):
-            seen.append(routing._supervisor_running(root, OWNER))
+            seen.append(routing._supervisor_state(root, OWNER) == routing.RUNNING)
             return StartResult(True, "ok", session="s1", attach="a")
 
         supervise(
@@ -479,4 +602,4 @@ class TestTheLedgerIsTheSupervisorsNotTheModels:
             now=lambda: world["t"],
         )
         assert seen == [True]
-        assert not routing._supervisor_running(root, OWNER)
+        assert routing._supervisor_state(root, OWNER) == routing.ENDED

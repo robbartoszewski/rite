@@ -6379,13 +6379,19 @@ matched reply:
   board**, and a secondary's setup session starts no cycle until something is
   routed to it.
 - **The wait ends** on mail, on the window, on Ctrl-C, when every route is
-  handled, or when every Manager owing one is **provably gone**; a secondary's
-  wait ends when the Owner is. Provably gone is the **supervisor's** recorded
-  process absent, not the instance record's pane, which is dead between
-  cycles by design. ⚠ A Manager never seen running is not gone: read
-  literally, "not running" is true in the second between two `rite start`s,
-  which would end a wait by start order. The wait says so instead, and says
-  again every ten minutes while it cannot end by itself.
+  handled, or when no Manager owing a route can handle it, and **the line
+  says which** (Robert's decision 4, option (c), 2026-09-27): a secondary
+  **never started** (no start recorded) is refused at once, not waited on;
+  one this run saw running whose recorded process is now absent either
+  **finished** its run (it recorded its end, quoted) or **died** (it did not:
+  killed, or crashed). It also says where the unhandled work is: still in
+  the inbox, or taken into a session that did not finish. "Seen" is an
+  observation the Owner's supervisor records every tick, or a lifecycle
+  record showing the run started during this one; a record from before this
+  run is not "seen", so starting the two Managers in either order is safe.
+  The recorded process is the SUPERVISOR's, with its start time, so a
+  recycled pid is not taken for it; the instance record's pane is dead
+  between cycles by design. No timer.
 - ⚠ **The session ceiling is SOFT while routes are outstanding.** Each
   cycle past it is started by mail, and the bend is said each time. It is no
   longer a hard cap on sessions in a shared root; the window still is.
