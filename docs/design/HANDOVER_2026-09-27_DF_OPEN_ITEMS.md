@@ -173,6 +173,18 @@ same session that fixed the underlying exposure.
 
 ## 7. 🔴 `test_blast_radius_concurrent`: a suspected race, NOT a flake
 
+> **Update, 2026-09-27 evening.** The immediate layer below is FIXED by #27
+> (merged as `aba39ca`): `list_pending` skips a file consumed between the glob
+> and the read. It is established from the code that only consumers remove
+> those files (`flush_outbox` after delivery, `_reconcile_stall_blockers` on
+> retraction, both with `missing_ok=True`). The layer underneath, the lock, is
+> NOT fixed: it ships in 0.6.0 as a known issue (CHANGELOG), for 0.7.0. A
+> fourth occurrence came first: `d229cf5` (PR #25), run 36328876707, Python
+> 3.12. From now on, a red here that is **not** a `FileNotFoundError` is the
+> lock failing on its own. Steps 1 and 2 of "What would produce evidence"
+> below were not run; step 3 was done by #27, with one CI run per interpreter
+> since then, all green.
+
 **Finding.** `tests/test_blast_radius_concurrent.py::TestExclusionHoldsUnderSustainedConcurrency::test_no_granted_claim_is_ever_lost_and_no_path_is_held_twice`
 fails intermittently in CI:
 
@@ -189,9 +201,10 @@ fails intermittently in CI:
 Two layers, both races on the timing of independent processes, which is
 what Robert's rule forbids:
 
-- **Immediate.** `list_pending` globs the outbox and then reads each file,
-  and catches only `JSONDecodeError`/`KeyError`. A file removed between the
-  glob and the read (another tick flushing it) raises. This is a
+- **Immediate (FIXED by #27, see the update above).** `list_pending` globbed
+  the outbox and then read each file, and caught only
+  `JSONDecodeError`/`KeyError`. A file removed between the
+  glob and the read (another tick flushing it) raised. This was a
   check-then-act on the filesystem.
 - **Underneath.** Two ticks should not be reconciling at once, and
   `scheduler/lock.py` is what should stop them. It is unchanged since v0.1.0.

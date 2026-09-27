@@ -1410,6 +1410,7 @@ Each is v0.7.0 unless it lands before the tag. The detail is in its row.
 | C15's remainder: settle checks read "could not ask tmux" as "died"; two refusals relay unredacted tmux stderr | C15 |
 | An anchor is checked for presence, not support | C31 |
 | A Manager expects `rite question list` | C33 |
+| The scheduler lock admits overlapping ticks (8 processes, 20 s, Linux: 1,352–1,617 overlaps and about 500 false reclaims). The reader crash it caused is fixed (#27); the lock is a 0.6.0 known issue. Done when the handover's own bar is met: 0 overlaps and 0 false reclaims under that stress | handover 2026-09-27, item 7 |
 | `sandbox.enabled` does not decide whether Workers are sandboxed ("after the tag") | C34 |
 | A `rite reply` with backticks is refused and misdiagnosed | readiness W9 |
 | A Claude Owner cannot wait for its secondary (a named rough edge of v0.6.0) | readiness W13 |
