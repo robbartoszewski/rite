@@ -274,14 +274,42 @@ def _engine_binary_paths() -> list[Path]:
     return list(dict.fromkeys(found))
 
 
-def policy_path(root: Path, manager: str) -> Path:
+def policy_path(root: Path, manager: str, home: Path | None = None) -> Path:
     """Where this Manager's path policy is written.
 
     A JSON document, not a Landlock artefact: Landlock has no profile file:
-    the rules are syscalls. The file exists so that the policy a Manager ran
-    under is inspectable afterwards, exactly as the `.sb` profile is on
-    macOS, and so `why_it_was_refused` can point somebody at it.
+    the rules are syscalls. But the LAUNCHER reads this file and applies what
+    it says, so it is the boundary, exactly as the `.sb` profile is on macOS,
+    and it is kept where `enclosure.profile_path` keeps that one, for the
+    same reason.
+
+    ⚠ **NOT UNDER `.rite/user/`, WHICH EVERY MANAGER CAN WRITE.** A boundary
+    must not be writable by anything it bounds, or by a peer. The file used to
+    be written to `.rite/user/`, which is writable across Managers on both
+    platforms (SPEC §5.4.8), and read by the launcher a moment later. So a
+    peer could replace a Manager's boundary between the two: measured on
+    macOS, a loop inside a SECONDARY's real profile replacing the Owner's
+    `.sb` with `(allow default)` took the Owner's verifier out of its sandbox
+    in 19 of 20 runs. A Manager's own launch reads its profile the same way
+    (read from the code, not run), and Linux's launcher reads its policy the
+    same way (not measured: no Linux box was reachable).
+    It now lives in the Manager's own credential directory, under no path any
+    Manager's profile grants, beside the login rite writes there. A copy left
+    in `.rite/user/` by an older build is removed when this is written, so
+    nothing mistakes it for the one in force.
     """
+    from rite_ai.managers import github_access
+    from rite_ai.managers.enclosure import BOUNDARY_DIRNAME
+
+    return (
+        github_access._credential_dir(root, manager, home)  # noqa: PLC2701
+        / BOUNDARY_DIRNAME
+        / f"{manager}.json"
+    )
+
+
+def _legacy_policy_path(root: Path, manager: str) -> Path:
+    """Where builds before the move wrote the policy (`policy_path`)."""
     return user_dir(root) / PROFILE_DIRNAME / f"{manager}.json"
 
 
@@ -580,8 +608,9 @@ def write_profile(root: Path, manager: str, home: Path | None = None) -> Path:
     Rewritten every run, for the reason the seatbelt profile is: a write-once
     file pins a project to whatever shipped the day it was created.
     """
-    path = policy_path(root, manager)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path = policy_path(root, manager, home)
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    _legacy_policy_path(root, manager).unlink(missing_ok=True)
     engine_tmp(root, manager).mkdir(parents=True, exist_ok=True)
     # ⚠ **THE MANAGER'S OWN DIRECTORY AND MAIL BOXES ARE CREATED HERE, and
     # that is load-bearing rather than tidy.** A Landlock rule names an

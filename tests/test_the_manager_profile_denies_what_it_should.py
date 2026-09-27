@@ -159,6 +159,52 @@ class TestItActuallyDeniesWhatItShould:
         assert _under(profile, f"ls {Path.home() / '.yoloai' / 'library'}") != 0
 
 
+class TestNoManagerCanRewriteABoundary:
+    """⚠ A boundary must not be writable by anything it bounds, or by a peer.
+    The profile used to be written into `.rite/user/`, which every Manager can
+    write, and read by `sandbox-exec` a moment later: measured, a loop inside
+    a SECONDARY's profile replacing the Owner's with `(allow default)` took
+    the Owner's verifier out of its sandbox in 19 of 20 runs. It now lives in
+    the Manager's own credential directory, which no profile grants."""
+
+    def test_it_is_not_in_the_project(self, project):
+        assert not profile_path(project, "lead").is_relative_to(project)
+
+    def test_a_copy_an_older_build_left_in_the_project_is_removed(self, project):
+        from rite_ai.managers.enclosure import _legacy_profile_path
+
+        old = _legacy_profile_path(project, "lead")
+        old.parent.mkdir(parents=True, exist_ok=True)
+        old.write_text("(version 1)(allow default)\n")
+        write_profile(project, "lead")
+        assert not old.exists()
+
+    @on_macos
+    def test_a_secondary_cannot_rewrite_the_owners_profile(self, project):
+        from rite_ai.managers.enclosure import _legacy_profile_path
+
+        owner = write_profile(project, "lead")
+        secondary = write_profile(project, "small")
+        before = owner.read_text()
+        assert _under(secondary, f"printf x > '{owner}'") != 0
+        assert (
+            _under(secondary, f"printf x > '{owner}.x' && mv '{owner}.x' '{owner}'")
+            != 0
+        )
+        assert owner.read_text() == before
+        # The control: where it used to live, the secondary CAN write.
+        old = _legacy_profile_path(project, "lead")
+        assert _under(secondary, f"printf x > '{old}'") == 0, (
+            "the old location is not writable here, so this test no longer "
+            "shows why the profile moved"
+        )
+
+    @on_macos
+    def test_a_manager_cannot_rewrite_its_own_profile(self, project):
+        own = write_profile(project, "lead")
+        assert _under(own, f"printf x > '{own}'") != 0
+
+
 class TestTheLimitationsAreSaidOutLoud:
     def test_there_are_some(self):
         assert limitations()

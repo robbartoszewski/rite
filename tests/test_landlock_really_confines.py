@@ -862,6 +862,47 @@ class TestTheManagersCredentialsInsideTheBoundary:
             "next start refuses and reads as rite being broken"
         )
 
+    def test_no_manager_can_rewrite_a_policy_the_launcher_applies(self, tmp_path):
+        """⚠ The launcher reads the policy file and applies what it says, so
+        the file IS the boundary. It used to be written into `.rite/user/`,
+        which every Manager can write (measured on macOS: a secondary
+        replacing the Owner's took its verifier out of the sandbox, 19 of 20).
+        Now it is in the credential directory, which no policy grants: the
+        Owner cannot rewrite its own, and a secondary cannot rewrite the
+        Owner's. The control is the old location, which the secondary can."""
+        root, home, _cdir = self._laid_out(tmp_path)
+        own = landlock.policy_path(root, "lead", home)
+        own.parent.mkdir(parents=True, exist_ok=True)
+        own.write_text("{}")
+        old = root / ".rite" / "user" / landlock.PROFILE_DIRNAME / "lead.json"
+        old.parent.mkdir(parents=True, exist_ok=True)
+        old.write_text("{}")
+        assert not own.is_relative_to(root)
+
+        def writes(path):
+            def attempt():
+                try:
+                    Path(path).write_text("{}")
+                    return 1
+                except OSError:
+                    return 0
+
+            return attempt
+
+        owner_policy = landlock.compose_policy(root, "lead", home)
+        (root / ".rite" / "managers" / "small").mkdir(parents=True)
+        secondary_policy = landlock.compose_policy(root, "small", home)
+        assert self._inside(owner_policy, writes(own)) == 0, (
+            "a Manager can rewrite the policy its next launch applies"
+        )
+        assert self._inside(secondary_policy, writes(own)) == 0, (
+            "a secondary can rewrite the Owner's policy"
+        )
+        assert self._inside(secondary_policy, writes(old)) == 1, (
+            "the old location is not writable here, so this test no longer "
+            "shows why the policy moved"
+        )
+
 
 @NO_LANDLOCK
 def test_a_manager_cannot_read_another_managers_mail(tmp_path, monkeypatch):
