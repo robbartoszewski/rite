@@ -195,7 +195,7 @@ def _no_real_credential_file(tmp_path_factory, monkeypatch):
     # data directory (DF3) — a directory of their own for the same reason.
     #
     # 🔴 **These are INDIRECTIONS, and a test that moves one must check where
-    # the thing it cares about actually landed** (DEFECT_CLASSES §1). A
+    # the thing it cares about actually landed** (DEFECT_CLASSES.md, class 1). A
     # Landlock test set `RITE_HOME_DIR` off `/tmp` so the mail would sit
     # beyond the temp grants; once the mail followed `RITE_MAIL_DIR` instead,
     # the test measured the `/tmp` grant and not the fence. Assert the

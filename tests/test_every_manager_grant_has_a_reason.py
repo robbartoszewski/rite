@@ -1,7 +1,7 @@
 """Every path a Manager's boundary grants has a written reason, or the suite fails.
 
-🔴 **A grant with no recorded reason is a defect in itself** (DEFECT_CLASSES
-§17). `~/.rite` was granted readable to every Manager with B9, as one line in
+🔴 **A grant with no recorded reason is a defect in itself** (DEFECT_CLASSES.md,
+class 17). `~/.rite` was granted readable to every Manager with B9, as one line in
 a batch of tool paths, with no reason written anywhere. It turned out to be
 needed by nothing inside a boundary, and for a release it exposed every
 Manager's mail and every registered project's path — for a firm, its client

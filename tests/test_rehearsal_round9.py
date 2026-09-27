@@ -135,11 +135,12 @@ class TestTheDefectClassesCountIsCountable:
         # somebody reads, not a number that drifts. 10 -> 13 on 2026-09-20:
         # a guard that fails open while something else catches it; a fix that
         # corrects a defect's syntax and leaves its shape; and written,
-        # tested, called by nothing.
-        assert len(self._classes()) == 16, (
-            f"the document says sixteen classes and has {len(self._classes())}"
+        # tested, called by nothing. 16 -> 17 on 2026-09-27: a grant with no
+        # recorded reason (`~/.rite`, DF3).
+        assert len(self._classes()) == 17, (
+            f"the document says seventeen classes and has {len(self._classes())}"
         )
-        assert "sixteen classes" in self._document()
+        assert "seventeen classes" in self._document()
 
     def test_the_new_class_carries_its_own_third_column(self):
         """Every class owes the question this file exists for: what still
