@@ -305,9 +305,8 @@ testing, on a task with a step that fails, `qwen3:8b` ran `rite reply`
 properly when told the command, but replied unprompted in only 1 of 7 runs
 across three versions of its instructions, and more than once reported a step as done
 straight after it had failed. In every run where a reply arrived, a Claude
-Owner checked it and told the person what was true, and rite now checks
-every such reply itself before the Owner reads it (below): in testing it
-marked the false one CONTRADICTED.
+Owner checked it and told the person what was true. rite now also checks
+every such reply itself before the Owner reads it (below).
 
 ⚠ **Set `OLLAMA_CONTEXT_LENGTH`** (at least 32768). At ollama's default
 of 4096, agents appear unable to call tools or remember the last turn. See
