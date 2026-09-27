@@ -497,6 +497,14 @@ Exactly one must hold it when several Managers share a root, and
   ⚠ **In a project with several Managers, `--sessions` is no longer a hard
   cap while routed work is unfinished.** A session started by routed mail
   can pass it, and each time rite says so. `--minutes` is still a hard limit.
+- **A reply from another Manager is checked, not trusted.** The Owner is told
+  a Manager's reply is a claim, not evidence: before telling you routed work
+  was done, it checks where it can and says what it checked, or that the
+  report is unconfirmed. A secondary is told to check each thing it claims
+  with a tool before replying and to report a failed step as failed. ⚠
+  **Measured on a local model, the secondary's instruction did not help:**
+  `qwen3:8b` replied in 0 of 3 runs on a task with a failing step, as it
+  mostly did before. The Owner's checking is what protects you.
 
 This applies when the project has no `coordination.remote`. With one, the
 Managers may be on other machines and the election decides the Owner, and
