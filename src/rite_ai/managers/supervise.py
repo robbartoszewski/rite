@@ -846,7 +846,7 @@ def _supervise(
         # rather than bounds, and the window is what limits cost because the
         # count does not (§9.14.5).
         if len(cycles) >= max_sessions:
-            why = waiting.reason() if waiting is not None else ""
+            why = _reason_to_wait(root, manager, waiting, router, slack, say)
             if not why:
                 extra = len(cycles) - max_sessions
                 return SuperviseResult(
@@ -938,7 +938,7 @@ def _supervise(
         if callable(verdict) and not cause:
             answer = verdict(root)
             if answer in STOP_VERDICTS:
-                why = waiting.reason() if waiting is not None else ""
+                why = _reason_to_wait(root, manager, waiting, router, slack, say)
                 stopped = None
                 if why:
                     # ⚠ NOTHING ON THE BOARD IS NOT NOTHING TO DO when work is
@@ -1479,6 +1479,36 @@ def _relay_tick(root: Path, manager: str, router, slack, say) -> None:
             say(line)
         for line in getattr(slack, "news", list)():
             say(line)
+
+
+def _reason_to_wait(root: Path, manager: str, waiting, router, slack, say) -> str:
+    """Why to wait rather than stop, read so that a reply is never stranded.
+    "" means stop.
+
+    ⚠ **THE STOP DECISION COLLECTS BEFORE IT DECIDES (tag blocker 3).** The
+    ceiling check and the idle verdict read `reason()` straight after the
+    cycle, and the last collect was at the cycle's boundary. A secondary
+    that replied (or rite's silent-finish note, written on collecting) after
+    that collect and was marked handled before this read left nothing
+    outstanding and nothing in the Owner's inbox, so the Owner stopped with
+    the reply in the secondary's outbox until the next `rite start`.
+    Reproduced deterministically.
+
+    ⚠ **In the order `_wait_for_mail` documents: read, then collect, then
+    read again.** Collecting first is not enough: a reply written just after
+    an empty collect and then marked handled is still missed by a read that
+    follows. Reading first means "" can only come when every route was
+    already handled, so its reply was already in an outbox when the collect
+    below ran, and the second read sees it as a reply waiting. A reason
+    found the first time is kept, as before, and the wait collects on its
+    first tick."""
+    if waiting is None:
+        return ""
+    why = waiting.reason()
+    if why:
+        return why
+    _relay_tick(root, manager, router, slack, say)
+    return waiting.reason()
 
 
 def _wait_for_mail(
