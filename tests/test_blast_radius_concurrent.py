@@ -1,5 +1,19 @@
 """Pool A's blast-radius properties, re-proved under concurrency.
 
+⚠ **IF THIS FILE IS RED, IT IS NOT A FLAKE. Read this before rerunning it.**
+The scheduler lock (`scheduler/lock.py`) does not always keep two ticks apart,
+and that is a known 0.6.0 issue (CHANGELOG, Known issues; handover of
+2026-09-27, item 7). It went red four times in CI (`a8fd5ea`, `a0cb546`,
+`916dc44`, `d229cf5`, on Python 3.11 and 3.12), each time with a
+`FileNotFoundError` from `reporting/outbox.list_pending`. That was the reader
+crashing on a message another tick had consumed, and it is fixed (#27).
+
+- **A `FileNotFoundError` here again** means that fix has regressed.
+- **Any other failure, a granted claim lost or a path held twice, is the lock
+  failing on its own.** Record the SHA, the Python version and the traceback
+  against that known issue. Do not rerun it until it passes: a race that
+  passes on the second try is still a race.
+
 `test_blast_radius.py` certified rite safe to point at a live commercial
 repo. Every property in it was proved SINGLE-THREADED, and the pass that
 followed found three silent data-loss defects under multiple processes —
