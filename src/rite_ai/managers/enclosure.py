@@ -257,7 +257,8 @@ def _engine_state_paths(home: Path) -> tuple[Path, ...]:
 
 
 def _manager_separation(project: Path, manager: str) -> list[str]:
-    """Other Managers' state is not writable, and NO Manager's inbox is.
+    """Other Managers' state is not readable or writable, and NO Manager's
+    inbox is writable.
 
     ⚠ **An inbox write IS an instruction, so who may write one is authority,
     not tidiness.** The cycle's delivery note tells a Manager that a message
@@ -290,6 +291,19 @@ def _manager_separation(project: Path, manager: str) -> list[str]:
     The inbox is also denied by name, LAST, which costs one line and holds
     even where rite's home sits under a granted path — `/tmp`, or a project
     that is the home directory itself.
+
+    🔴 **AND OTHER MANAGERS' STATE IS NOT READABLE (DF3).** Only writes were
+    fenced, so from inside its profile a Manager could read every sibling's
+    `.rite/managers/<name>/` — its `prompt.txt` (the whole instruction, with
+    the mail delivered in it), its `routes/`, check-ins and requests. The
+    Landlock policy never granted them (`landlock._fenced_project_paths`), and
+    Owner/secondary routing ran on Linux under it, so nothing inside a
+    boundary needs them: the supervisor reads another Manager's routes from
+    outside. The same two rules for reading, the same order.
+
+    The mailbox itself is outside `~/.rite` now (`mailbox._mail_home`), because
+    `~/.rite` is granted readable to every Manager: there, every Manager could
+    read every Manager's mail, for every project on the machine.
     """
     from rite_ai.managers.mailbox import INBOX, OUTBOX, mail_root
 
@@ -302,8 +316,8 @@ def _manager_separation(project: Path, manager: str) -> list[str]:
         "; ⚠ MANAGERS ARE SEPARATED, and no Manager writes an inbox — see",
         ";   enclosure._manager_separation. Named after the project grant so",
         ";   they win.",
-        f"(deny file-write* (subpath {_quote(managers)}))",
-        f"(allow file-write* (subpath {_quote(own)}))",
+        f"(deny file-read* file-write* (subpath {_quote(managers)}))",
+        f"(allow file-read* file-write* (subpath {_quote(own)}))",
         "; This Manager's mailbox, outside the project: its outbox only.",
         f"(allow file-read* (subpath {_quote(mail)}))",
         f"(allow file-read* file-write* (subpath {_quote(mail / OUTBOX)}))",
