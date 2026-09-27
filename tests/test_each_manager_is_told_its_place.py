@@ -36,9 +36,8 @@ def _start(tmp_path, monkeypatch, config: str, manager: str, *, board: bool) -> 
     (tmp_path / ".rite" / "config.yaml").write_text(config)
     monkeypatch.chdir(tmp_path)
     if board:
-        monkeypatch.setattr(
-            main_mod, "_board_for_manager", lambda root: (object(), "present", "")
-        )
+        present = (object(), "present", "", {"type": "github", "repo": "a/b"})
+        monkeypatch.setattr(main_mod, "_board_for_manager", lambda root: present)
     seen: dict = {}
 
     def fake_supervise(root, name, **kw):

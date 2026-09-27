@@ -159,6 +159,33 @@ class TestTheSupervisorRecordsTheBoardAtLaunch:
         assert _began_under(tmp_path, "lead") == (True, {"type": "none"})
         assert "not configured" in refusal(tmp_path, "lead", sessions=1, minutes=1)
 
+    def test_the_board_recorded_is_the_one_the_prompt_was_composed_from(
+        self, tmp_path, monkeypatch
+    ):
+        """🔴 Not the one on disk at launch. The opening is composed before
+        anything is launched, and another Manager's setup session in the same
+        project can configure the board in between: recorded from a second
+        read, a setup conversation would be noted as begun under the board."""
+        import rite_ai.managers.supervise as sup
+
+        _config(tmp_path, BOARD)  # changed after the prompt was composed
+        _quiet(monkeypatch, sup)
+        supervise(
+            tmp_path,
+            "lead",
+            engine="claude",
+            max_sessions=1,
+            window_seconds=0,
+            verdict=lambda _r: "ready",
+            starter=lambda root, manager, **kw: StartResult(
+                True, "ok", session="s1", attach="a", pane="%1"
+            ),
+            fresh=True,
+            began_under={"type": "none"},
+            resume_id_for=lambda r, m, since: "sid-fresh1",
+        )
+        assert _began_under(tmp_path, "lead") == (True, {"type": "none"})
+
     def test_a_resumed_cycle_keeps_the_board_it_began_under(
         self, tmp_path, monkeypatch
     ):
@@ -221,7 +248,7 @@ def supervised(monkeypatch) -> list[dict]:
         reason = "stopped: test"
 
     monkeypatch.setattr(
-        main_mod, "_ticket_backend", lambda role="workers": (object(), None)
+        main_mod, "_ticket_backend", lambda role="workers", **kw: (object(), None)
     )
     monkeypatch.setattr(
         sup, "supervise", lambda root, manager, **kw: calls.append(kw) or Outcome()
@@ -269,6 +296,14 @@ class TestRiteStart:
         result = CliRunner().invoke(cli, [*START, "--fresh"])
         assert supervised and supervised[0]["fresh"] is True, result.output
 
+    def test_the_start_hands_on_the_board_it_composed_from(self, project, supervised):
+        result = CliRunner().invoke(cli, [*START, "--fresh"])
+        assert supervised, result.output
+        assert supervised[0]["began_under"] == {
+            "type": "github",
+            "repo": "acme/board",
+        }
+
     def test_both_flags_are_refused(self, project, supervised):
         result = CliRunner().invoke(cli, [*START, "--fresh", "--keep-conversation"])
         assert result.exit_code == 1 and supervised == []
@@ -287,7 +322,7 @@ class TestRiteStart:
             "    - name: lead\n      engine: claude\n",
         )
         monkeypatch.setattr(
-            main_mod, "_ticket_backend", lambda role="workers": (None, "none")
+            main_mod, "_ticket_backend", lambda role="workers", **kw: (None, "none")
         )
         result = CliRunner().invoke(cli, START)
         assert "`rite start lead --fresh`" in result.output, result.output

@@ -634,6 +634,7 @@ def supervise(
     window_seconds: float,
     prompt: str = "",
     fresh: bool = False,
+    began_under: dict | None = None,
     verdict: object = None,
     note: object = None,
     starter: object = None,
@@ -949,7 +950,11 @@ def supervise(
             )
             fresh_prompt = prompt + extras
             cycle_prompt = cycle_prompt + extras
-            launched_under = board_now(root)
+            # 🔴 The board `prompt` was COMPOSED from, when the caller says
+            # (`_start_a_manager` does): every fresh launch in this run is
+            # given that prompt, so that is the board its conversation began
+            # under. Read here only for a caller that does not say.
+            launched_under = began_under if began_under is not None else board_now(root)
             result: StartResult = launch(
                 root,
                 manager,
@@ -968,7 +973,12 @@ def supervise(
             # empty pane id, and the symptom surfaced three steps later.
             if result.warning:
                 say(result.warning)
-            if not result.ok and tried_designation and not cycles:
+            if (
+                not result.ok
+                and tried_designation
+                and not cycles
+                and getattr(result, "engine_died", False)
+            ):
                 # ⚠ THE EXISTENCE CHECK IS ON THE SESSION, NOT THE FILE. A
                 # designation can be present and perfectly readable while
                 # the provider has forgotten that conversation. The property
@@ -977,6 +987,15 @@ def supervise(
                 # unknown one produce DIFFERENT messages and code matching
                 # one silently misses the other. The provider validates
                 # before doing any work, so trying costs nothing.
+                #
+                # 🔴 **And only a start whose ENGINE RAN counts.** A start
+                # refused before launching — a held session, one already
+                # running, no login — never asked the provider, so it is no
+                # answer about the conversation. It was read as one: measured,
+                # a previous run's held pane refused the resume, this said
+                # "could not be continued" and started FRESH, and the
+                # conversation was intact on disk. Such a refusal now ends the
+                # run below with its own words, and the mail goes back.
                 say(_could_not_continue(manager))
                 tried_designation = False
                 continuing = False

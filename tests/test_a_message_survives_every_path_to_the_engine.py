@@ -78,7 +78,7 @@ def _run_with_dead_designation(root: Path) -> list[dict]:
     ):
         seen.append({"resume_id": resume_id, "prompt": prompt or ""})
         if resume_id:
-            return StartResult(False, "session not found")
+            return StartResult(False, "session not found", engine_died=True)
         return StartResult(False, "stop here")
 
     supervise(

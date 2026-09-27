@@ -168,7 +168,7 @@ def _starter(calls: list, fail_on_resume: bool = False):
             # never by matching its words: a bad id and a well-formed unknown
             # id produce DIFFERENT messages, and code matching one silently
             # misses the other.
-            return StartResult(False, "engine exited immediately")
+            return StartResult(False, "engine exited immediately", engine_died=True)
         return StartResult(True, "ok", session="s1", attach="a", pane="%1")
 
     return starter

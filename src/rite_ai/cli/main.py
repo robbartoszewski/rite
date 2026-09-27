@@ -3437,14 +3437,19 @@ def publish_pre_push() -> None:
 # session's memory, which had already stalled work three times.
 
 
-def _ticket_backend(board_role: str = "workers"):
-    """Build a TicketBackend from this project's config.yaml (SPEC §8.3)."""
+def _ticket_backend(board_role: str = "workers", root: Path | None = None, config=None):
+    """Build a TicketBackend from this project's config.yaml (SPEC §8.3).
+
+    `config`, when given, is a parse of `root`'s config the caller already
+    holds, so what it decides from and the board built here are ONE read.
+    """
     from rite_ai.config.parse import ParseError, parse_config
     from rite_ai.tickets import BackendError, create_backend_from_config
 
-    root = _find_project_root()
+    root = root if root is not None else _find_project_root()
     config_path = root / ".rite" / "config.yaml"
-    config = parse_config(config_path)
+    if config is None:
+        config = parse_config(config_path)
     if isinstance(config, ParseError):
         return None, f"config error: {config.message}"
 
@@ -6180,15 +6185,30 @@ def _board_for_manager(root: Path):
     have would be this codebase's signature defect wearing a friendly face,
     so the discriminator is read directly: `ticket_backend.type == "none"` is
     ABSENT, and anything else that failed to build is UNREACHABLE.
+
+    The fourth value is the board as `board_context` records it, or None when
+    the config cannot be read. 🔴 **All four come from ONE read of the
+    config.** The Manager's opening instruction is composed from this board,
+    so the board recorded as the one its conversation began under must be
+    this one: read separately, a config edited in between — by the User, or
+    by another Manager's setup session in the same project — would record a
+    board the instruction never mentioned, and the next bare start would
+    continue a setup conversation under a board (DF1, by timing). This also
+    used to read the config twice itself, once to build and once to decide
+    absent from unreachable.
     """
     from rite_ai.config.parse import ParseError, parse_config
+    from rite_ai.managers.board_context import record_of
 
-    board, problem = _ticket_backend("workers")
-    if board is not None:
-        return board, "ok", ""
     config = parse_config(root / ".rite" / "config.yaml")
+    record = (
+        None if isinstance(config, ParseError) else record_of(config.ticket_backend)
+    )
+    board, problem = _ticket_backend("workers", root=root, config=config)
+    if board is not None:
+        return board, "ok", "", record
     absent = not isinstance(config, ParseError) and config.ticket_backend.type == "none"
-    return None, ("absent" if absent else "unreachable"), problem or ""
+    return None, ("absent" if absent else "unreachable"), problem or "", record
 
 
 def _own_github_repos(root: Path) -> list[str]:
@@ -6717,7 +6737,7 @@ def _start_a_manager(
     # completion", which was neither true nor actionable for either.
     from rite_ai.managers.broker import for_project
 
-    board, board_state, board_problem = _board_for_manager(root)
+    board, board_state, board_problem, composed_under = _board_for_manager(root)
     if board_state == "unreachable":
         # ⚠ NOT the setup path. This project HAS a board; it could not be
         # reached. Sending this user to configure one would be telling them
@@ -6760,7 +6780,7 @@ def _start_a_manager(
     # began with none declined routed work as a duplicate once one existed.
     # Refused before anything is touched, with both ways forward; never
     # silently made fresh, because that discards the conversation.
-    from rite_ai.managers.board_context import board_now, record_board, refusal
+    from rite_ai.managers.board_context import record_board, refusal
 
     if fresh and keep_conversation:
         click.echo(
@@ -6770,13 +6790,14 @@ def _start_a_manager(
         )
         raise SystemExit(1)
     if not fresh:
-        refused = refusal(root, role.name, sessions=sessions, minutes=minutes)
+        refused = refusal(
+            root, role.name, sessions=sessions, minutes=minutes, now=composed_under
+        )
         if refused and not keep_conversation:
             click.echo(refused, err=True)
             raise SystemExit(1)
         if refused and keep_conversation:
-            now = board_now(root) or {"type": "none"}
-            record_board(root, role.name, now)
+            record_board(root, role.name, composed_under or {"type": "none"})
             click.echo(
                 f"continuing the conversation of Manager {role.name!r} as asked, "
                 "although it began under another board, or one rite cannot "
@@ -6850,6 +6871,9 @@ def _start_a_manager(
                 )
             ),
             fresh=fresh,
+            # The board the prompt above was composed from, recorded as the
+            # one a fresh conversation begins under (`_board_for_manager`).
+            began_under=composed_under,
             # A setup session's work is not queue work, so the queue's verdict
             # is not the question. With no board it would answer `unknown` and
             # stop before the Manager ever started — which is the defect this
