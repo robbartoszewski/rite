@@ -578,6 +578,9 @@ def test_a_project_under_tmp_no_longer_exposes_an_inbox(tmp_path, monkeypatch):
     if str(home.resolve()).startswith(("/tmp", "/var/tmp")):
         pytest.skip(f"HOME is under a temp grant ({home}), so nothing is measured")
     monkeypatch.setenv("RITE_HOME_DIR", str(home))
+    # The mail's own location since DF3, placed where the temp grants do not
+    # reach — as it is in a real install, under the data directory.
+    monkeypatch.setenv("RITE_MAIL_DIR", str(home / "mail"))
     try:
         project = tmp_path / "proj"
         (project / "src").mkdir(parents=True)
@@ -858,3 +861,64 @@ class TestTheManagersCredentialsInsideTheBoundary:
             "a confined Manager can open its own run lock; if it holds it, its "
             "next start refuses and reads as rite being broken"
         )
+
+
+@NO_LANDLOCK
+def test_a_manager_cannot_read_another_managers_mail(tmp_path, monkeypatch):
+    """DF3, the Linux half: mail left `~/.rite`, which is granted READABLE as
+    a tree, so no Manager reads another's inbox or outbox — in its project or
+    any other. Measured on the v0.6.0 acceptance run before this: listing
+    `lead`'s inbox from inside `small`'s boundary succeeded.
+
+    The HOME is laid out as a real one is, `.rite` included and granted, so
+    this would fail on the old location; the temp grants are dropped because
+    `tmp_path` is under them (`without_wholesale_temp_grants`). The control
+    reads the Manager's own mail and rite's home under the same ruleset.
+    """
+    import rite_ai.managers.github_access as ga
+    from rite_ai.managers.mailbox import INBOX, OUTBOX, mail_root, mailbox_dir, send
+
+    home = tmp_path / "home"
+    (home / ".rite").mkdir(parents=True)
+    (home / ".rite" / "probe").write_text("x")
+    monkeypatch.setenv("RITE_HOME_DIR", str(home / ".rite"))
+    monkeypatch.delenv("RITE_MAIL_DIR", raising=False)
+    isolated = ga._credential_root
+    monkeypatch.setattr(
+        ga, "_credential_root", lambda h=None: isolated(h if h is not None else home)
+    )
+    one, two = tmp_path / "one", tmp_path / "two"
+    for root, names in ((one, ("lead", "helper")), (two, ("lead",))):
+        (root / ".rite").mkdir(parents=True)
+        for name in names:
+            mailbox_dir(root, name, OUTBOX).mkdir(parents=True)
+            send(root, name, INBOX, f"secret for {name}")
+            (mailbox_dir(root, name, OUTBOX) / "1_1_1.json").write_text("{}")
+    assert not mail_root(one, "lead").is_relative_to(home / ".rite")
+    policy = without_wholesale_temp_grants(landlock.compose_policy(one, "helper", home))
+    assert str(home / ".rite") in policy["readable"], "the layout is not real"
+
+    def reads(target):
+        def child():
+            landlock.apply(policy)
+            try:
+                if Path(target).is_dir():
+                    os.listdir(target)
+                else:
+                    Path(target).read_text()
+                return 0
+            except OSError:
+                return 1
+
+        return _in_child(child) == 0
+
+    def one_message(root, name, box):
+        return next(mailbox_dir(root, name, box).glob("*.json"))
+
+    assert reads(home / ".rite" / "probe"), "control: rite's home is not granted"
+    assert reads(one_message(one, "helper", INBOX)), "control: own mail unreadable"
+    assert not reads(mailbox_dir(one, "lead", INBOX))
+    assert not reads(one_message(one, "lead", INBOX))
+    assert not reads(one_message(one, "lead", OUTBOX))
+    assert not reads(one_message(two, "lead", INBOX))
+    assert not reads(mail_root(two, "lead").parent.parent)

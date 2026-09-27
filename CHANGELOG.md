@@ -448,9 +448,18 @@ Exactly one must hold it when several Managers share a root, and
   use instead. A person's `rite message` from their own shell works as
   before.
 - ⚠ **Mailboxes moved out of the project**, from `.rite/managers/<name>/mail/`
-  to `~/.rite/managers/<checkout>/<name>/mail/`. No Manager's sandbox grants
-  that location, so the inbox is out of reach on both platforms without a
-  rule carving it out of the project. The directory is keyed by the
+  to rite's data directory: `~/Library/Application Support/rite/mail/` on
+  macOS and `~/.local/share/rite/mail/` on Linux, then
+  `<checkout>/<name>/mail/`. Each Manager's sandbox grants only its own mail:
+  readable, with its outbox writable. So no Manager can write any inbox, or
+  read another Manager's mail, in this project or any other project on the
+  machine. Development builds of 0.6.0 kept mail under `~/.rite/managers/`,
+  which every Manager's sandbox can read, so from there any Manager could
+  read every Manager's inbox and outbox. `rite start` moves it out and says
+  so, and says what it could not move. A Manager also can no longer read
+  another Manager's `.rite/managers/<name>/`, which holds its instruction
+  (`prompt.txt`) and routes. On macOS it could before; on Linux it never
+  could. The directory is keyed by the
   checkout's path, not by the credential namespace, which every checkout of a
   project shares. The file `project` beside it says which checkout it is.
   **Upgrading moves the old mailbox once.** The first `rite start` of each
@@ -604,8 +613,8 @@ See SPEC §6.6.3.
   reaches the Manager.
 - **Moving a project directory strands its Managers' mail.** The mailbox is
   keyed by the checkout's path, so after a move rite looks in a new, empty
-  mailbox. Messages sent before the move stay under `~/.rite/managers/`, in
-  the directory whose `project` file names the old path.
+  mailbox. Messages sent before the move stay in rite's data directory
+  (above), in the directory whose `project` file names the old path.
 - **A Claude Owner cannot wait for a secondary's reply within one turn.**
   If it routes work and then waits, its session ends, and the reply reaches
   it at its next turn.
