@@ -1061,10 +1061,148 @@ reviewer), at the costs above.
 
 **Status: MEASURED (CU1), and Robert has ruled.** CU1 was measured
 2026-09-27 on macOS, Cursor CLI `2026.09.26-dd393fe`, Pro tier. The spike
-note is `docs/design/spikes/CU1-cursor-cli.md` on branch
-`cu1/cursor-measurements` (commits `41a58a1`, `a05349b`). ⚠ **That branch is
-local to another session and not yet on `main`**, so the note cited here does
-not yet exist on `main`. What follows is taken from it.
+note is `docs/design/spikes/CU1-cursor-cli.md`, brought to `main` from
+branch `cu1/cursor-measurements` (commits `41a58a1`, `a05349b`) together with
+**CU1b** (`spikes/CU1b-cursor-workers-review-and-throughput.md`, measured
+2026-09-27 evening): the review convention under Cursor, Cursor inside a
+yoloAI Worker sandbox, and whether Claude's allowance is the throughput
+limit. What follows is taken from both.
+
+### The design, 2026-09-27
+
+**One engine definition, two roles.** Cursor's spelling lives once, in
+`engines.py`, and serves both Manager and Worker, as Claude's does. A Manager
+runs it in a tmux pane under rite's boundary. A Worker runs it inside a
+yoloAI sandbox. Nothing Cursor-named goes in `config.yaml`: `engine: cursor`
+on a Manager, `engine: cursor` in `worker.yml` on a Worker.
+
+**The handle: a UUID4 rite records before the first launch, and a creation
+time it checks after every continuation.** Cursor spells "start" and
+"continue" identically (`--resume <uuid>`), so the handle cannot be derived
+from the session name as Goose's is: `--fresh` would then silently continue
+the old chat. So:
+
+1. **Fresh start:** rite generates a UUID4 and records it with `designate`
+   BEFORE launching. If the record fails, nothing launches.
+2. **After a turn:** rite reads `createdAtMs` from the chat's `meta.json`
+   and records it beside the handle.
+3. **Before a continuation:** the chat directory must exist and carry the
+   recorded `createdAtMs`. Otherwise the cycle is refused, naming the path.
+4. **After a continuation:** `createdAtMs` must be unchanged.
+
+**Why step 4, under Robert's rule on races.** Cursor creates a chat for any
+UUID it has not seen and reports success (CU1 section 3). So a chat removed
+between step 3 and Cursor opening it would be recreated empty, and the turn
+would run without its history. rite cannot close that window, because the
+create-if-absent is Cursor's. Step 4 makes it fail closed and say so: a
+replaced chat has a new `createdAtMs`. The Manager's designation is then
+marked broken, and no further cycle runs until the operator passes
+`--fresh`.
+
+A handle recorded but whose first turn never produced a chat (no
+`createdAtMs` yet) is relaunched as a first turn with the SAME UUID. That is
+idempotent: nothing was promised to continue.
+
+**The key: in rite's file store, copied per role as a file, and read into the
+one process that needs it.**
+- **Store.** It is stored as `cursor_api_key`, in the file store Claude's
+  token uses. It is imported from `~/.cursor-api-key` by `rite credential`.
+- **Never in `services.py`'s automatic delivery.** A field with `env` goes to
+  every Worker by `--env`, onto yoloAI's argv and into the pane, which is
+  exactly what Robert ruled out. It is registered as `github_app` is, with
+  no `env`, and has its own route.
+- **Manager.** A per-Manager copy is written beside `claude/`, at 0600 in a
+  0700 directory, as `claude_login` does. The pane's command reads it at
+  exec: `CURSOR_API_KEY="$(cat <file>)" exec agent ...`. The command text
+  holds a path, never the key. tmux's argv, the pane's environment and every
+  other process hold neither.
+- **Worker.** A per-Worker directory holds the key, mounted read-only with
+  `-d`. CU1b measured it: the key is absent from the pane, from yoloAI's log
+  and from the sandbox directory.
+- **Exposure, stated.** The agent's own children (the shell commands it
+  runs) inherit the variable. That is the same reach a Claude Manager's
+  tools have to its token file, so it widens nothing.
+
+**Cursor's state is per role, never `~/.cursor`.**
+- **Manager.** `CURSOR_CONFIG_DIR` is per-Manager, as `CLAUDE_CONFIG_DIR`
+  is. The three grants are those in "What else the build must handle",
+  below.
+- **Worker.** `HOME` and `CURSOR_CONFIG_DIR` point into the sandbox's own
+  `rw/home`. Otherwise Cursor writes `~/.cursor/projects/`, which yoloAI's
+  profile refuses (CU1b: exit 1, loudly). `destroy` then removes the chats
+  with the sandbox.
+
+**`worker-server` is reaped by rite, because nothing else does.**
+- **Measured:** it survives `yoloai stop` and `yoloai destroy` (CU1b). It
+  also outlives a Manager's turn outside tmux (CU1).
+- **Worker:** rite finds it by working directory (the sandbox's copy, or the
+  Manager's workspace) and ends it on stop and destroy.
+- **Manager:** it is ended on `rite stop`.
+
+### Two decisions open with Robert, each with a recommendation
+
+**D-CU-1. Does the review gate hold for Cursor Workers, and if not, what
+closes it?**
+
+*Recommendation: it holds as it exists. No Cursor-specific closure; one set
+of files.*
+
+- **The gate is instruction, not enforcement.** §7.1 says rite reads none of
+  it at runtime. The Worker's `CLAUDE.md` says to run `/review`, and `/review`
+  says to spawn the `reviewer-*` agents. rite checks none of it for any
+  engine.
+- **Measured (CU1b section 1): a headless Cursor turn**
+  - applies `CLAUDE.md` and `AGENTS.md`;
+  - runs a command from `.claude/commands/`;
+  - runs sub-agents from `.claude/agents/`, each through its own `Task` call
+    and in a fresh context: neither saw the parent's secret;
+  - honoured a reviewer's `tools: Read, Grep, Glob` in behaviour.
+- **So the three files rite already generates reach Cursor unchanged.**
+  Generating `.cursor/` copies would create a second set to drift.
+- **The one difference.** Claude enforces `tools:`. For Cursor, enforcement
+  and obedience look the same (n=2).
+- **What it adds to CW6's acceptance:** the Cursor Worker's run shows at
+  least two reviewer `taskToolCall`s in its `stream-json`.
+- **The larger hole, which is not Cursor's.** The gate is unenforced for
+  Claude too. If Robert wants it closed, it should be closed for every
+  engine: rite checks a review record on the branch before publishing. That
+  is not in this track.
+
+**D-CU-2. Build Cursor Workers inside rite, or through upstream yoloAI?**
+
+*Recommendation: inside rite, on yoloAI's `idle` agent. Do not depend on
+upstream.*
+
+- **yoloAI is third-party** (`kstenerud/yoloai`), with a fixed agent list and
+  no way to define one locally. Upstream means a contribution and someone
+  else's release date on v0.7.0's critical path.
+- **Measured (CU1b section 2): rite can already do it.**
+  - An `idle` seatbelt sandbox, driven with `yoloai exec`, ran a Cursor turn
+    and resumed it on rite's UUID (`LYNX47`).
+  - The key arrived only as a file on a read-only mount.
+- **Upstream's shape would put the key where Robert ruled it must not go.**
+  yoloAI delivers an agent's key through the environment it launches with,
+  which reaches its argv and the pane's launch line.
+- **The cost of building it ourselves**, all in CW1:
+  - rite, not yoloAI, runs the turn, so rite owns its process and its end;
+  - `rite sandbox pane` shows the `idle` process, not Cursor, unless rite
+    runs the turn in the sandbox's own tmux session;
+  - the Docker backend's image has no `agent` binary, so seatbelt comes
+    first.
+- **Not excluded:** offering yoloAI a Cursor agent later, without waiting on
+  it.
+
+**CUQ5. Is Claude's allowance the throughput limit? Answered in part by
+measurement (CU1b section 3).**
+- **The weekly cap is a real, recurring stop.**
+  - Weeks of 9 and 16 September: it ran out after 3.75 and 3.96 days, and
+    work resumed at the reset minute, 50 and 64 hours later.
+  - Before September: 37 five-hour-window hits.
+- **It ran out only when rite shared the account with another project.**
+- **Otherwise the person's turnaround dominates:** 71% of rite session gaps
+  are an assistant that reported and stopped.
+- **So Cursor recovers the capped days and does not touch the larger cost.**
+  And whether Pro covers real Worker tickets is still CU6's (CUQ4).
 
 ### Robert's rulings, 2026-09-27
 
@@ -1137,7 +1275,11 @@ never passes the id through and hopes.
   closed hole: the environment, like argv, is visible in `ps`. Claude and
   GitHub reach a Manager as per-Manager files. Whether Cursor reads its key
   from a file (for example its `cli-config.json`) is **not measured**, and
-  CU4 cannot be built until it is. For a Worker, rite already delivers every
+  CU4 cannot be built until it is. **Superseded 2026-09-27 by "The design"
+  above:** the key is a per-Manager file, read into the agent's own
+  environment at `exec`, and in no other process. Whether Cursor can read it
+  from a file itself is still not measured, and no longer blocks CU4. For a
+  Worker, rite already delivers every
   credential through yoloAI's `--env` (D-31), so a key there matches today's
   Worker exposure.
 - **Never relay Cursor's keychain advice.** Given a key inside the profile,
@@ -1149,7 +1291,8 @@ never passes the id through and hopes.
   turn. Killing the tmux session ended it within 5 s. Under
   `remain-on-exit`, as rite runs panes, it is not measured. **`rite stop` must
   reap it**, and inside a Worker sandbox too, where nothing guarantees that
-  destroying the sandbox ends a process reparented to pid 1.
+  destroying the sandbox ends a process reparented to pid 1. **Measured
+  since (CU1b): it survives both `yoloai stop` and `yoloai destroy`.**
 - **Cost is not yet known for real work.** 11 tiny turns used about 1% of the
   Pro allowance (an upper bound). Whether Pro covers Workers doing real
   tickets, which is the throughput case for 5b, is exactly what CU6 must
@@ -1174,12 +1317,12 @@ building it revives the Worker tier**.
 
 | # | Worker work | size |
 |---|---|---|
-| CW1 | **Engine selection in the Worker launch path**: a Worker's engine in `worker.yml`; `sandbox.start_worker` launching Claude natively, or Cursor through `idle`/`shell` with rite driving it. Spike first: how rite drives an engine inside a running yoloAI sandbox, and what `rite sandbox pane`, `status` and the destroy guard see then | 2–3 sittings |
-| CW2 | **The key into the Worker sandbox**: `CURSOR_API_KEY` as a credential rite knows (`services.py`), delivered by `--env` as every Worker credential is. Redacted in the pane like the others | ½ sitting |
-| CW3 | **Cursor's state inside yoloAI's sandbox**: a writable `CURSOR_CONFIG_DIR` and `~/.cursor/projects/<slug>/`, and `--trust --force`, inside a profile that is yoloAI's, not rite's. Measure first, as B4d did for Goose | 1 sitting |
-| CW4 | **Chat and transcript handling in a Worker**: Workers are one-shot per ticket and not resumed today, so the chat check matters less. `rite sandbox pane` and the Worker's reporting must work for a non-Claude agent | ½ sitting |
-| CW5 | **`worker-server` reaped** when the Worker's sandbox is stopped or destroyed | ½ sitting, plus a measurement |
-| CW6 | **Observed**: a Cursor Worker, started by the broker for a Manager, takes a real ticket to its publishing end state and releases its claim | 1 sitting |
+| CW1 | **Engine selection in the Worker launch path**: `engine:` in `worker.yml` (a `WorkerManifest` field; unknown keys are refused today); `sandbox.start_worker` launching Claude as now, or Cursor in an `idle` sandbox that rite drives (D-CU-2, recommended). **Measured in CU1b:** a turn and a resume through `yoloai exec`. Still to decide in the build: rite owns the turn's process, and whether it runs in the sandbox's tmux so `rite sandbox pane` shows it | 2–3 sittings |
+| CW2 | **The key into the Worker sandbox, as a file**: a per-Worker 0700 directory holding the key at 0600, mounted read-only with `-d`, read into the agent's environment at exec. **Not `--env`**, which puts it on yoloAI's argv and in the pane. Removed after `destroy` succeeds, and kept if it fails. Measured in CU1b: absent from pane, log and sandbox directory | ½ sitting |
+| CW3 | **Cursor's state inside yoloAI's sandbox**: `HOME` and `CURSOR_CONFIG_DIR` in the sandbox's `rw/home`, `--trust --force`. **Measured in CU1b:** without the `HOME` move, exit 1 on `~/.cursor/projects`; with it, turn and resume work | ½ sitting (was 1: measured) |
+| CW4 | **Chat and transcript handling in a Worker**: the CU3 state machine, per Worker and ticket, so a restarted Worker continues its chat or refuses. `rite sandbox pane` and the Worker's reporting must work for a non-Claude agent | ½ sitting |
+| CW5 | **`worker-server` reaped** when the Worker's sandbox is stopped or destroyed. **Required, measured in CU1b:** it survives both `yoloai stop` and `yoloai destroy` | ½ sitting |
+| CW6 | **Observed**: a Cursor Worker, started by the broker for a Manager, takes a real ticket to its publishing end state and releases its claim, and its `stream-json` shows `/review`'s reviewers running as `taskToolCall`s (D-CU-1) | 1 sitting |
 
 **Linux:** Workers are unsandboxed there by default (v0.6.0), so a Cursor
 Worker on Linux runs unsandboxed, the same as a Claude one. Stated, not
@@ -1204,10 +1347,10 @@ front of Robert before CW1 starts.
 
 | # | item | done when OBSERVED | depends on | size |
 |---|---|---|---|---|
-| ~~CU1~~ | **Done, measured 2026-09-27** (spike note on `cu1/cursor-measurements`, not yet on `main`) | — | — | spent |
-| CU2 | **Cursor's spelling in `engines.py`, in Goose's handle shape**: rite generates a UUID and says it on every launch, stdin prompt, `--trust`, `--output-format json`. Then update `ENGINE_CONTRACT.md` from the code | Claude's and Goose's launch commands byte-identical across B3a's 54 argv combinations, and a Cursor turn and its continuation built by rite | — | 1 sitting |
-| CU3 | **Refuse an unknown handle**: before a continuation cycle, check the chat directory and refuse loudly, naming the path, when it is absent. *(Replaces "mint in the supervisor", which no longer arises.)* | A continuation whose chat directory was removed is REFUSED with the path named, not run as a fresh chat reported as success | CU2 | ½–1 sitting |
-| CU4 | **Profile grants and the key's route into a Manager**: the three grants; a per-Manager `CURSOR_CONFIG_DIR`; the key reaching the Manager as a file, never the environment or argv (C6) | A sandboxed Cursor Manager authenticates, and its key is absent from argv AND from the environment. **Blocked until a file route for the key is measured** | CU1 | 1 sitting + the measurement |
+| ~~CU1~~ | **Done, measured 2026-09-27** (`spikes/CU1-cursor-cli.md`, and `spikes/CU1b-cursor-workers-review-and-throughput.md`) | — | — | spent |
+| CU2 | **Cursor's spelling in `engines.py`**: `agent -p --trust --output-format json --resume <uuid> < prompt`, `engine: cursor` accepted by `config/managers.py`, the handle a UUID4. Then update `ENGINE_CONTRACT.md` from the code. ⚠ **The "54 argv combinations" test this row used to cite does not exist in the tree** (no test enumerates `launch_command`'s inputs). CU2 writes it FIRST, against today's code, so the Cursor change is checked against a pin rather than a memory | Claude's and Goose's launch commands byte-identical across every combination of `launch_command`'s inputs, pinned before the change and unchanged after; a Cursor turn and its continuation built by rite | — | 1 sitting |
+| CU3 | **The handle's state machine** (see "The design"): recorded before launch, `createdAtMs` recorded after the first turn, checked before AND after every continuation. The check after is what makes a chat replaced mid-window fail closed rather than pass | A continuation whose chat directory was removed is REFUSED with the path named. A chat replaced during a cycle (a new `createdAtMs`) marks the designation broken and says so, and no further cycle runs without `--fresh` | CU2 | 1 sitting |
+| CU4 | **Profile grants and the key's route into a Manager**: the three grants; a per-Manager `CURSOR_CONFIG_DIR`; the key a per-Manager file, read into the agent's environment by the pane's `exec` (see "The design"). ⚠ **This row used to say "absent from the environment"**. The design puts it in the agent's own environment and no other, which is Robert's wording ("not ... in the environment of anything that doesn't need it"). Same-user readers can read that environment and the 0600 file alike; other users can read neither | A sandboxed Cursor Manager authenticates. Its key is absent from tmux's argv, the pane's environment, the command text and every process that is not the agent or its descendant, checked with `ps` during a turn | CU1 | 1 sitting |
 | CU5 | **`rite doctor` for Cursor** (R6). `agent status` cannot be it | With a bad key, the probe says so in Cursor's words and exits non-zero; with a good one, it passes | CU4 | ½–1 sitting |
 | CU6 | **The both-halves observation, with cost**: two Manager cycles, the second recalling the first; a Worker through the broker; AND CU1 section 6's four cost measurements (requests per cycle, context growth, allowance per day, exhaustion) | As stated, recorded in the spike note's shape | CU3, CU4 | 1 sitting |
 | CU7 | **`rite stop` reaps `worker-server`** for a Cursor Manager, including under `remain-on-exit` | After `rite stop`, no `worker-server` for that workspace survives | CU2 | ½ sitting |
