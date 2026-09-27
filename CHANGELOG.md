@@ -456,7 +456,10 @@ Exactly one must hold it when several Managers share a root, and
   machine. Development builds of 0.6.0 kept mail under `~/.rite/managers/`,
   which every Manager's sandbox can read, so from there any Manager could
   read every Manager's inbox and outbox. `rite start` moves it out and says
-  so, and says what it could not move. A Manager also can no longer read
+  so, and says what it could not move. **Nor can a Manager read `~/.rite`
+  at all any more**: it lists every project registered with `rite projects`
+  (their paths) and the names of every stored credential, and nothing a
+  Manager runs needs it. A Manager also can no longer read
   another Manager's `.rite/managers/<name>/`, which holds its instruction
   (`prompt.txt`) and routes. On macOS it could before; on Linux it never
   could. The directory is keyed by the

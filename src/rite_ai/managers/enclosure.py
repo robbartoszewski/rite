@@ -188,7 +188,16 @@ def _tool_paths(home: Path) -> tuple[Path, ...]:
             # Claude Manager now signs in from a config directory of its own
             # (`claude_login`), measured to work with no `~/.claude` grant.
             ".config/goose",
-            ".rite",
+            # ⚠ **`~/.rite` is NOT granted any more (DF3).** It was granted
+            # readable as a tree with B9, with no reason recorded, and it
+            # holds `dispatch/projects.yaml` — every registered project's
+            # path, which for a firm is its client list — and the credential
+            # NAME registry. Until DF3 it also held every Manager's mail.
+            # Nothing a Manager runs inside its boundary reads it: the
+            # registry is read by `rite projects`, `rite start <alias>`,
+            # out-of-project `rite status` and a `rite doctor` check, and the
+            # credential registry only when a credential is stored, deleted
+            # or rotated. It is also denied by name (`_rite_home_denied`).
             ".gitconfig",
             ".config/git",
             # ⚠ **`~/.config/gh` is NOT granted any more (W8).** It holds the
@@ -301,9 +310,10 @@ def _manager_separation(project: Path, manager: str) -> list[str]:
     boundary needs them: the supervisor reads another Manager's routes from
     outside. The same two rules for reading, the same order.
 
-    The mailbox itself is outside `~/.rite` now (`mailbox._mail_home`), because
-    `~/.rite` is granted readable to every Manager: there, every Manager could
-    read every Manager's mail, for every project on the machine.
+    The mailbox itself is outside `~/.rite` now (`mailbox._mail_home`),
+    because `~/.rite` was granted readable to every Manager: there, every
+    Manager could read every Manager's mail, for every project on the
+    machine. `~/.rite` is no longer granted at all (`_tool_paths`).
     """
     from rite_ai.managers.mailbox import INBOX, OUTBOX, mail_root
 
@@ -322,6 +332,27 @@ def _manager_separation(project: Path, manager: str) -> list[str]:
         f"(allow file-read* (subpath {_quote(mail)}))",
         f"(allow file-read* file-write* (subpath {_quote(mail / OUTBOX)}))",
         f"(deny file-write* (subpath {_quote(mail / INBOX)}))",
+    ]
+
+
+def _rite_home_denied(home: Path) -> list[str]:
+    """`~/.rite`, denied by name, LAST (DF3).
+
+    Not granted anywhere, so `(deny default)` already refuses it; named as
+    well so that a later, wider grant — a project that IS the home directory,
+    or a home under `/tmp` — cannot reach it by accident. It holds every
+    registered project's path (`dispatch/projects.yaml`) and the credential
+    name registry, and it held every Manager's mail. `RITE_HOME_DIR` is
+    denied too when it points elsewhere.
+    """
+    from rite_ai.credentials.store import default_rite_home
+
+    homes = dict.fromkeys(
+        str(p) for p in (home / ".rite", default_rite_home()) for p in (p, p.resolve())
+    )
+    return [
+        "; ⚠ rite's home: every project's path and every credential's name.",
+        *(f"(deny file-read* file-write* (subpath {_quote(h)}))" for h in homes),
     ]
 
 
@@ -508,6 +539,8 @@ def compose(
         f"(deny file-write* (subpath {_quote(where / '.config/git')}))",
         "",
         *_manager_separation(project, manager),
+        "",
+        *_rite_home_denied(where),
         "",
         "; ⚠ yoloAI is unreachable ON PURPOSE. A Manager cannot create a",
         "; sandbox from inside one (B9), so it asks the supervisor instead.",

@@ -870,10 +870,11 @@ def test_a_manager_cannot_read_another_managers_mail(tmp_path, monkeypatch):
     any other. Measured on the v0.6.0 acceptance run before this: listing
     `lead`'s inbox from inside `small`'s boundary succeeded.
 
-    The HOME is laid out as a real one is, `.rite` included and granted, so
-    this would fail on the old location; the temp grants are dropped because
-    `tmp_path` is under them (`without_wholesale_temp_grants`). The control
-    reads the Manager's own mail and rite's home under the same ruleset.
+    The HOME is laid out as a real one is, `.rite` included, and `~/.rite` is
+    no longer granted at all — it lists every registered project's path. The
+    temp grants are dropped because `tmp_path` is under them
+    (`without_wholesale_temp_grants`). The control reads the Manager's own
+    mail under the same ruleset.
     """
     import rite_ai.managers.github_access as ga
     from rite_ai.managers.mailbox import INBOX, OUTBOX, mail_root, mailbox_dir, send
@@ -896,7 +897,7 @@ def test_a_manager_cannot_read_another_managers_mail(tmp_path, monkeypatch):
             (mailbox_dir(root, name, OUTBOX) / "1_1_1.json").write_text("{}")
     assert not mail_root(one, "lead").is_relative_to(home / ".rite")
     policy = without_wholesale_temp_grants(landlock.compose_policy(one, "helper", home))
-    assert str(home / ".rite") in policy["readable"], "the layout is not real"
+    assert str(home / ".rite") not in policy["readable"], "rite's home is granted"
 
     def reads(target):
         def child():
@@ -915,7 +916,7 @@ def test_a_manager_cannot_read_another_managers_mail(tmp_path, monkeypatch):
     def one_message(root, name, box):
         return next(mailbox_dir(root, name, box).glob("*.json"))
 
-    assert reads(home / ".rite" / "probe"), "control: rite's home is not granted"
+    assert not reads(home / ".rite" / "probe"), "rite's home is readable (DF3)"
     assert reads(one_message(one, "helper", INBOX)), "control: own mail unreadable"
     assert not reads(mailbox_dir(one, "lead", INBOX))
     assert not reads(one_message(one, "lead", INBOX))

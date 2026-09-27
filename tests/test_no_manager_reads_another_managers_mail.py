@@ -10,11 +10,13 @@ every Manager's inbox AND outbox, for every project on the machine — for a
 firm, one client's instructions to a Manager working for another.
 
 These RUN `sandbox-exec` against the profile rite writes, with a HOME laid
-out as a real one is: rite's home at `<home>/.rite`, which the profile grants
-readable, and the data directory where the mail now lives. Pointing rite's
-home somewhere the profile does not grant would pass on the defect — the
-test would measure an ungranted path, not the layout. Each refusal has a
-control showing the same kind of read succeeds where it should.
+out as a real one is: rite's home at `<home>/.rite`, where the profile names
+it, and the data directory where the mail now lives. Pointing rite's home
+somewhere the profile never names would pass on the defect — the test would
+measure an ungranted path, not the layout. On the pre-DF3 code, where
+`~/.rite` was granted readable and held the mail, five of these fail. Each
+refusal has a control showing the same kind of read succeeds where it
+should.
 """
 
 from __future__ import annotations
@@ -116,9 +118,29 @@ def test_the_control_a_manager_reads_its_own_mail_and_writes_its_outbox(machine)
     assert _under(lead, f"ls '{mailbox_dir(one, 'lead', OUTBOX)}'", one).returncode == 0
     out = mailbox_dir(one, "lead", OUTBOX)
     assert _under(lead, f"echo x > '{out}/2_2_2.json'", one).returncode == 0
-    # And rite's home is still readable: the layout this test depends on.
-    (machine["home"] / ".rite" / "probe").write_text("x")
-    assert _under(lead, f"cat '{machine['home']}/.rite/probe'", one).returncode == 0
+    # And a file in the project, under the same profile.
+    (one / "readme").write_text("x")
+    assert _under(lead, f"cat '{one / 'readme'}'", one).returncode == 0
+
+
+def test_rite_home_is_not_readable_at_all(machine):
+    """🔴 `dispatch/projects.yaml` lists every registered project's path —
+    for a firm, its client list — and `credentials.json` every credential's
+    name. `~/.rite` was granted readable as a tree; nothing inside a boundary
+    needs it. The mail tests above hold with or without this, because the
+    fixture asserts the mail is not under `~/.rite`; this one is about the
+    rest of it."""
+    one, lead, home = machine["one"], machine["lead"], machine["home"]
+    dispatch = home / ".rite" / "dispatch"
+    dispatch.mkdir()
+    (dispatch / "projects.yaml").write_text("projects:\n  client-a: {path: /x}\n")
+    (home / ".rite" / "credentials.json").write_text('{"client-a/jira": 1}')
+    for target in (dispatch / "projects.yaml", home / ".rite" / "credentials.json"):
+        done = _under(lead, f"cat '{target}'", one)
+        assert done.returncode and "client-a" not in done.stdout, target
+    assert _under(lead, f"ls '{home / '.rite'}'", one).returncode
+    profile = machine["lead"].read_text()
+    assert f'(deny file-read* file-write* (subpath "{home / ".rite"}"))' in profile
 
 
 def test_a_manager_cannot_read_a_siblings_in_tree_state(machine):
