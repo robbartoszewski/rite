@@ -34,6 +34,7 @@ from rite's own verify alone, and that is why.
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass
 
 
@@ -118,6 +119,23 @@ class Spelling:
     """How the instruction file is named on argv. Empty means stdin
     redirection, which is what keeps a prompt off `ps` for Claude."""
 
+    handle_is_uuid: bool = False
+    """True when a handle rite chooses must be a canonical UUID (Cursor's
+    `--resume`, measured: a non-UUID id exits 1, *"Persistent-session chat ID
+    must be a UUID"*). Refused here rather than there, so the refusal names
+    rite's caller instead of arriving as an engine error in a pane."""
+
+    permission_unexpressed: str = ""
+    """Where this engine keeps its permission mode, when rite cannot yet put
+    it there. Non-empty means a permission handed to `launch_command` is
+    REFUSED, naming this, rather than written somewhere the engine ignores or
+    dropped.
+
+    ⚠ Cursor keeps its allowlist in `cli-config.json`, a file it also
+    rewrites itself (CU8). Neither argv nor the environment is its place, so
+    `permission_env` cannot describe it, and treating it as argv would put a
+    Claude `--settings` flag on Cursor's command line."""
+
 
 CLAUDE = Spelling(
     binary="claude",
@@ -171,6 +189,39 @@ slogan: a `local:<class>` engine now gets ITS agent's vocabulary instead of
 Claude's. That was the live defect, because `local:*` is the engine that
 exists and is not Claude."""
 
+CURSOR = Spelling(
+    binary="agent",
+    turn="-p --trust --output-format json",
+    start="--resume {handle}",
+    resume="--resume {handle}",
+    handle_is_ours=True,
+    handle_is_uuid=True,
+    permission_unexpressed="Cursor's cli-config.json (CU8, not built)",
+)
+"""Measured 2026-09-27 (`spikes/CU1-cursor-cli.md`, CU1b), not read from a
+table. `agent -p` is one turn; `--trust` answers the workspace-trust prompt,
+without which it exits 1; the prompt is read from stdin.
+
+⚠ **`start` and `resume` are the SAME spelling, and that is Cursor's shape,
+not a slip.** Cursor creates a chat for a UUID it has never seen and
+continues one it has, so rite chooses the handle (Goose's direction) and says
+it on every launch. The cost is that Cursor cannot tell rite which of the two
+happened: `--resume <an unknown UUID>` exits 0, reports success, and runs an
+EMPTY chat. So whether a continuation continued is rite's to check, against
+the chat's `meta.json` (CU3), never inferred from the exit.
+
+`per_command_refusals` stays False: a command is refused per command
+(measured), but where the refusal is recorded is not (`store.db` unread).
+
+⚠ Registered so CU3 and CU4 build around a measured spelling. **Production
+cannot reach it yet**: `config/managers.py` does not accept `engine: cursor`,
+and the supervisor refuses to pick a handle for it until CU3 lands."""
+
+_BY_ENGINE: dict[str, Spelling] = {"cursor": CURSOR}
+"""Engines that name a runtime directly, as `claude` does. Kept apart from
+`_BY_AGENT`, whose keys are what a `local:<class>` tier runs: Cursor is not a
+local model, and `local:small` with `agent: cursor` stays refused."""
+
 _BY_AGENT: dict[str, Spelling] = {"goose": GOOSE}
 
 
@@ -216,4 +267,43 @@ def spelling_for(engine: str, agent: str = "") -> Spelling:
                 "flags"
             )
         return _BY_AGENT[agent]
+    if engine in _BY_ENGINE:
+        return _BY_ENGINE[engine]
     return _BY_AGENT.get(engine, SUBSTITUTED)
+
+
+def handle_problem(spelling: Spelling, handle: str) -> str:
+    """Why `handle` cannot name a conversation for this engine, or "".
+
+    Only the UUID rule lives here. The shell-safety rule is
+    `transcripts.session_id_problem`, which `launch_command` applies to every
+    handle first; a canonical UUID passes that one too.
+    """
+    if not spelling.handle_is_uuid:
+        return ""
+    try:
+        canonical = str(uuid.UUID(handle))
+    except ValueError:
+        return f"is not a UUID, and {spelling.binary} accepts only a UUID"
+    if canonical != handle:
+        return (
+            f"is not in canonical form ({canonical}), and a handle rite "
+            "records must be the exact string the engine stores"
+        )
+    return ""
+
+
+def new_handle(spelling: Spelling) -> str:
+    """A fresh handle for an engine whose handle is a UUID rite chooses.
+
+    ⚠ **Random, never derived from the session's name.** Cursor spells
+    "start" and "continue" identically, so a handle derived from the name
+    would make `--fresh` silently continue the old chat. CU3 records it
+    before the first launch.
+    """
+    if not spelling.handle_is_uuid:
+        raise ValueError(
+            f"{spelling.binary!r} does not take a UUID handle from rite; "
+            "its handle comes from somewhere else"
+        )
+    return str(uuid.uuid4())

@@ -58,7 +58,7 @@ from rite_ai.managers import (
 from rite_ai.managers.board_context import board_now
 from rite_ai.managers.boundaries import UnsupportedPlatform, boundary_for
 from rite_ai.managers.broker import take_requests
-from rite_ai.managers.engines import spelling_for
+from rite_ai.managers.engines import handle_problem, spelling_for
 from rite_ai.managers.mailbox import INBOX, delivery_note, how_to_reply, put_back, send
 from rite_ai.managers.mailbox import take as take_mail
 from rite_ai.managers.mailbox import waiting as mail_waiting
@@ -240,6 +240,17 @@ def launch_command(
     # token is never an argument. (An earlier draft passed it through
     # `$RITE_PROMPT` in the inherited environment; the file is what ships,
     # and `session.PROMPT_FILE` records why.)
+    if permission and spelling.permission_unexpressed:
+        # ⚠ REFUSED, not written and not dropped. This engine keeps its
+        # permission somewhere rite does not yet write (Cursor: a config file
+        # it also rewrites itself). Written as argv it would hand Cursor a
+        # Claude flag; dropped, the Manager would run with whatever allowlist
+        # the file happened to hold.
+        raise ValueError(
+            f"{command!r} keeps its permission mode in "
+            f"{spelling.permission_unexpressed}, which rite does not write yet; "
+            "refused rather than launched without it"
+        )
     if permission:
         # ⚠ **EVERY cycle, not just the first.** Resuming with `-p` does not
         # restore the mode a session was in — that restoration explicitly
@@ -278,6 +289,9 @@ def launch_command(
                 f"refusing to build a launch command with a resume id that "
                 f"{problem}. This string is run by a shell."
             )
+        problem = handle_problem(spelling, resume_id)
+        if problem:
+            raise ValueError(f"refusing to resume {resume_id!r}: it {problem}")
         if not spelling.resume:
             raise ValueError(
                 f"{command!r} has no resume spelling rite knows, so there is "
@@ -305,6 +319,9 @@ def launch_command(
                 f"refusing to build a launch command with a session handle "
                 f"that {problem}. This string is run by a shell."
             )
+        problem = handle_problem(spelling, start_handle)
+        if problem:
+            raise ValueError(f"refusing to start {start_handle!r}: it {problem}")
         if spelling.start:
             parts.append(spelling.start.format(handle=start_handle))
     base = " ".join(parts)
@@ -500,6 +517,16 @@ def _resume_id_source(engine: str, agent: str = ""):
     spelling = spelling_for(engine, agent)
     if not spelling.handle_is_ours:
         return _default_resume_id
+    if spelling.handle_is_uuid:
+        # ⚠ NOT `session_name`. Cursor spells start and continue alike, so a
+        # handle derived from the name would make `--fresh` continue the old
+        # chat. The handle is a UUID recorded before launch, with its chat's
+        # `createdAtMs` checked after every continuation (CU3). Until that
+        # exists, refuse here rather than hand back a name Cursor rejects.
+        raise ValueError(
+            f"{spelling.binary!r} needs a recorded UUID handle (CU3), which "
+            "is not built; refused rather than continued by name"
+        )
 
     def chosen(root: Path, manager: str, since: float = 0.0) -> str:
         # Deterministic, and the same string the tmux session carries — one
