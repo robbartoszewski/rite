@@ -37,7 +37,12 @@ def board_now(root: Path) -> dict | None:
     parsed = parse_config(root / ".rite" / "config.yaml")
     if isinstance(parsed, ParseError):
         return None
-    tb = parsed.ticket_backend
+    return record_of(parsed.ticket_backend)
+
+
+def record_of(tb) -> dict:
+    """A parsed `ticket_backend` as the comparable record kept beside a
+    conversation."""
     if tb.type == "none":
         return {"type": "none"}
     record: dict = {"type": tb.type}
@@ -78,14 +83,25 @@ def _began_under(root: Path, manager: str) -> tuple[bool, dict | None]:
     return isinstance(board, dict), board if isinstance(board, dict) else None
 
 
-def refusal(root: Path, manager: str, *, sessions: int, minutes: float) -> str:
+def refusal(
+    root: Path,
+    manager: str,
+    *,
+    sessions: int,
+    minutes: float,
+    now: dict | None = None,
+) -> str:
     """Why a bare `rite start` must not continue this Manager's conversation,
-    with the commands to choose between — or "" when it may."""
+    with the commands to choose between — or "" when it may.
+
+    `now` is the board the caller composed this start from; read here when
+    not given."""
     from rite_ai.managers import designated
 
     if not designated(root, manager):
         return ""
-    now = board_now(root)
+    if now is None:
+        now = board_now(root)
     if now is None:
         return ""
     recorded, then = _began_under(root, manager)

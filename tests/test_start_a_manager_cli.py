@@ -72,7 +72,7 @@ def supervised(monkeypatch) -> list[dict]:
     # would now route them into the no-board setup session, which is a
     # different feature with a different prompt and a ceiling of one.
     monkeypatch.setattr(
-        main_mod, "_ticket_backend", lambda role="workers": (object(), None)
+        main_mod, "_ticket_backend", lambda role="workers", **kw: (object(), None)
     )
     monkeypatch.setattr(sup, "supervise", fake)
     monkeypatch.setattr(ses, "exit_status_available", lambda: True)

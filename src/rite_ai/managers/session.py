@@ -105,6 +105,17 @@ class StartResult:
     Manager is running — but the run is degraded and the operator has to be
     told, because the symptom appears later and three steps away."""
 
+    engine_died: bool = False
+    """True only when the engine was LAUNCHED and exited at once.
+
+    ⚠ The one failure that says anything about the conversation asked for:
+    an engine given a `--resume` it does not know exits at once (measured,
+    `claude -p --resume <gone>` exits 1). Every other refusal here happens
+    BEFORE anything runs — already running, a held session, no login — and
+    says nothing about it. `supervise` read any failed resume as "the
+    conversation is gone" and started fresh, which a held session turned
+    into discarding a conversation that was intact on disk."""
+
 
 def _tmux() -> str | None:
     return shutil.which("tmux")
@@ -384,6 +395,40 @@ def start(
             f"has no record of it. Look at it (`tmux attach -t {name}`) and "
             f"either use it or remove it — rite will not adopt or kill it.",
         )
+    finished_here = read_instance(root, manager)
+    if (
+        finished_here is not None
+        and finished_here.session == name
+        and finished_here.pid > 0
+        and not pid_alive(finished_here.pid)
+        and session_exists(name)
+    ):
+        # 🔴 **THIS PROJECT'S OWN FINISHED SESSION, held by `remain-on-exit`
+        # after a run ended on a bound.** A bound leaves the pane where it is
+        # on purpose (`supervise`), so EVERY run that reaches its ceiling
+        # leaves one. `running` answers None for it — the engine has exited —
+        # and it fell to the refusal below, which said "no record" of a
+        # session this project's record names. Measured on macOS against real
+        # Claude, twice in a row: the next bare `rite start` had its resume
+        # refused here, `supervise` read that as the conversation being gone,
+        # and it started FRESH with the conversation intact on disk; and a
+        # `--fresh` after a setup session was refused outright.
+        #
+        # Cleared only when the record names THIS session and the process it
+        # recorded is gone — tmux has already said nothing runs in the pane —
+        # which together are what "finished, and ours" means. A record with no
+        # pid is not evidence either way, so it keeps the refusal below. It is
+        # about to be replaced by the session this start launches, as
+        # `supervise` already replaces its own between cycles.
+        cleared = stop(name)
+        if not cleared.ok:
+            return StartResult(
+                False,
+                f"the previous session of Manager '{manager}', {name}, has "
+                f"finished and is held open, and it could not be cleared — "
+                f"{cleared.detail}. Nothing was started. `rite manager stop "
+                f"{manager}` clears it.",
+            )
     if session_exists(name):
         # ⚠ **THE SAME SHAPE, AND IT NEEDS THE OPPOSITE ADVICE.** Not alive
         # and still there means the agent exited and `remain-on-exit` — which
@@ -548,6 +593,7 @@ def start(
         return StartResult(
             False,
             _why_the_engine_died(name, launch, manager),
+            engine_died=True,
         )
 
     pane, why_no_pane = _pane_id_or_why(name)

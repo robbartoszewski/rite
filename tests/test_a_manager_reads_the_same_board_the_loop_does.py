@@ -122,7 +122,7 @@ class TestAbsentAndUnreachableAreNotTheSame:
         monkeypatch.setattr(
             main_mod,
             "_ticket_backend",
-            lambda role="workers": (
+            lambda role="workers", **kw: (
                 None,
                 "github: could not connect to api.github.com",
             ),

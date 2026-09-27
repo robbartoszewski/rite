@@ -535,7 +535,19 @@ See SPEC §6.6.3.
   `--keep-conversation` to continue the old one anyway. A conversation
   started by an earlier build is refused the same way when a board is now
   configured, because rite cannot tell what it began under. rite never
-  starts fresh on its own.
+  starts fresh on its own. The board recorded is the one the Manager's
+  opening instruction was written from, read once, so a board configured
+  while `rite start` is starting cannot be recorded against a conversation
+  that was never told about it.
+- **A run that ended on `--sessions` is continued by the next `rite start`
+  again.** Reaching a bound keeps the Manager's finished tmux session, and
+  the next start refused it as "left over … no record of it", although this
+  project's own record named it. A bare start then reported "could not be
+  continued" and started a fresh conversation while the old one was intact,
+  and a `--fresh` start was refused. A finished session that this project's
+  record names is now cleared and replaced. A start refused before the
+  engine runs is no longer read as the conversation being gone: the run
+  stops with the refusal and does not start fresh.
 - **Commit signing no longer stops a Manager's commits.** With
   `commit.gpgsign` (or `tag.gpgsign`) on, every commit a Manager made
   failed, because its sandbox cannot read your signing key. rite now turns
