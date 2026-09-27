@@ -178,3 +178,15 @@ same session that fixed the underlying exposure.
 - Probe issues are only for `robbartoszewski/rite-dogfood-board`. Close each
   one after use.
 - Board-list reads need ~3 s after creating an issue (DF4) until DF4 lands.
+- ⚠ **Decide merge guards with `jq -e` over `gh run list --json`, not `grep`.**
+  In these sessions `grep` is a shell function, and a `grep -qv success`
+  guard failed open: #17 was merged on a red run. `main` was green after
+  the merge (`72b8673`), and #17 is one docs row, but the guard failed all
+  the same. Test a guard against a failing input before a real merge.
+
+**Evidence for the scheduler-lock defect, filed elsewhere.** That red was
+`tests/test_blast_radius_concurrent.py::TestExclusionHoldsUnderSustainedConcurrency::test_no_granted_claim_is_ever_lost_and_no_path_is_held_twice`
+on Python 3.11 only (3.12 and 3.13 green), on #17's branch at `916dc44`,
+2026-09-27 ~04:45 UTC: `FileNotFoundError` on a `.rite/outbox/…_blocker.json`
+under the test's `tmp_path`. It is the known open defect (the scheduler lock
+does not exclude), not a flake. One more occurrence, for whoever takes it.
