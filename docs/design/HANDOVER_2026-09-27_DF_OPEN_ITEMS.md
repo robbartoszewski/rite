@@ -147,11 +147,14 @@ Remove it by hand if it is not wanted.
 
 Since #15, `~/.rite` is not granted to any Manager and is denied by name on
 macOS, so those sentences are now false. **A `rite start` on a machine that
-still has other projects' mail there prints the alarming version.** On
-Robert's Mac, at the last check (2026-09-27 ~03:40), no other checkout under
-`~/.rite/managers/` held a message, so `still_under_rite_home` prints
-nothing there yet. The past-tense `adoption_notes` line prints when a project
-with mail there starts.
+still has other projects' mail there prints the alarming version.** **It
+will print on Robert's Mac.** At ~03:40 no other checkout under
+`~/.rite/managers/` held a message. By ~05:00 two did: `1a6c9cd31498880c`
+(`/private/tmp/dfcH6M2`, 1 message, 04:17) and `87e3477dab3486f6`
+(`/private/tmp/dfcjyM3`, 3 messages, 04:35). Both are scratch projects from
+the DF2 sessions, apparently run from builds older than #14. They are safe to
+remove, and removing them silences the false warning until the wording is
+fixed.
 
 **Why not fixed.** It was found while writing this note, after the session
 was asked to stop.
