@@ -138,8 +138,11 @@ working directory was the sandbox's copy.
 | `yoloai stop` + 5 s | **alive** |
 | `yoloai destroy --abandon-unapplied` + 5 s | **alive**, with its working directory deleted under it |
 
-So CW5 is required, not a precaution: **nothing in yoloAI ends it**. It was
-killed by hand. Whether it still carries the seatbelt profile is inferred,
+So **nothing in yoloAI ends it**. It was killed by hand.
+
+**It does end itself, after about five minutes idle.** Measured separately,
+outside any sandbox. One turn, then its `worker-server` was left untouched and
+polled every 10 s. It exited on its own at **300 s** (n=1). Whether it still carries the seatbelt profile is inferred,
 not measured: it descends from the sandboxed process.
 
 ### The chat record carries its creation time
