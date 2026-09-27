@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.18 · **Date:** 2026-09-26
+**Version:** 0.24.19 · **Date:** 2026-09-27
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -6324,6 +6324,43 @@ outbox with its own cursor and delivers each message into the Owner's inbox:
 (§9.16.2), and a sibling Manager is not one. Observed: the Owner's first
 cycle prompt carried a secondary's reply written before the Owner started.
 
+**Mail causes a cycle (DF2, built 2026-09-27; Robert's rulings the same
+day).** Before this, a cycle began for one reason: the last session ended
+cleanly and the board said continue. The 2-second poll ran only while a
+session was alive, so a reply reached a still-running Owner only if some
+cycle happened to start after it. Measured with a fake engine on a virtual
+clock: a ceiling of 3 with 7-second cycles never delivered it, and 10 with
+2-second cycles spent ten sessions and never delivered it. The secondary had
+the same race for a routed instruction. So in a root with an Owner, both
+sides **wait for the inbox instead of stopping**, spending no session, and a
+cycle begins **because mail is in the inbox** — anything in it, never a
+matched reply:
+
+- **The Owner waits while any route is outstanding**: delivered, and not yet
+  handled. **Handled means the secondary's cycle that carried it ENDED**,
+  written by the secondary's supervisor after the pane is gone, so a progress
+  reply mid-cycle cannot end the wait and the final reply is already in the
+  outbox when "handled" is read. A reply collected but not yet delivered is a
+  reason to wait too. There is no timer.
+- **A secondary waits for routed work rather than stopping on an idle
+  board**, and a secondary's setup session starts no cycle until something is
+  routed to it.
+- **The wait ends** on mail, on the window, on Ctrl-C, when every route is
+  handled, or when every Manager owing one is **provably gone**; a secondary's
+  wait ends when the Owner is. Provably gone is the **supervisor's** recorded
+  process absent, not the instance record's pane, which is dead between
+  cycles by design. ⚠ A Manager never seen running is not gone: read
+  literally, "not running" is true in the second between two `rite start`s,
+  which would end a wait by start order. The wait says so instead, and says
+  again every ten minutes while it cannot end by itself.
+- ⚠ **The session ceiling is SOFT while routes are outstanding.** Each
+  cycle past it is started by mail, and the bend is said each time. It is no
+  longer a hard cap on sessions in a shared root; the window still is.
+
+The bookkeeping (routes delivered, routes handled, each supervisor's
+process) is written only by supervisors, beside the mailbox under
+`~/.rite/managers/`, where no Manager's profile grants a write.
+
 ## 10. Credentials
 
 ⚠ **SUPERSEDED IN 0.6.0 for where credentials are stored:** one 0600 file
@@ -6884,6 +6921,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.19 — §9.16.7: mail causes a cycle.** A reply reached a still-running Owner only if a cycle happened to start after it, and a routed instruction reached a secondary the same way; both depended on the ceiling times the cycle length. Both sides now wait for the inbox, spending nothing, and a cycle starts because mail is there. Records Robert's three rulings: the wait is bounded by outstanding routes (no timer), an idle secondary waits, and the ceiling is soft while routes are outstanding. States the one interpretation made: a Manager never seen running is not gone.
 
 **Changes in 0.24.18 — release filing, and status lines that had fallen behind their own sections.** Robert re-scoped the next releases: v0.7.0 is "feature-complete single-machine" and v0.8.0 "feature-complete multi-machine" (`docs/design/V070_RELEASE_PLAN.md`, `docs/design/V080_RELEASE_PLAN.md`, new). So §5.5 (egress) and §6.6.3's pointer to it say 0.8.0, and so does §9.16.7's "gating Slack on the lease". §5.4.8's status line said "Not enforced" while its own table recorded P2 pinned and P1 partly held; it now says what holds. §6.6's status said "Planned for 0.6.0" and "IF it lands" after N1 and N2 were built and observed. §9.16's status said the relay and check-ins were planned; both are built. §5.4's opening still recorded `~/.claude` as readable (closed by `8a61989`) and the mailbox as in-tree. §10 described the keychain store that 0.6.0 replaced with one 0600 file; it carries a banner, and its text is not rewritten here. Each correction is marked in place, and nothing a section specifies was changed.
 

@@ -471,6 +471,20 @@ Exactly one must hold it when several Managers share a root, and
   and where setup stands. It still does not work a queue, create tickets or
   choose a backend for you. With several Managers, only the Owner does setup,
   so two Managers never edit `config.yaml` at once.
+- ⚠ **A reply now reaches an Owner that is still running, because the reply
+  arrived and not because of timing.** Before, a cycle began only when the
+  last one ended and the board said continue, so a reply landed only if some
+  later cycle happened to start after it. Now the Owner WAITS, spending no
+  session, while any work it routed is unfinished, and starts its next cycle
+  because the reply is in its inbox. A secondary likewise waits for routed
+  work instead of stopping on an empty board. A route counts as finished when
+  the secondary's session that carried it ends, so a "working on it" reply
+  does not end the Owner's wait. The wait has no timer. It ends when the work
+  is done, when the Manager owing it has stopped, or at the end of the
+  window, and every ten minutes it says what it is still waiting for.
+  ⚠ **In a project with several Managers, `--sessions` is no longer a hard
+  cap while routed work is unfinished.** A session started by routed mail
+  can pass it, and each time rite says so. `--minutes` is still a hard limit.
 
 This applies when the project has no `coordination.remote`. With one, the
 Managers may be on other machines and the election decides the Owner, and
