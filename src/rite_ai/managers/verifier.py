@@ -40,7 +40,27 @@ So this is RITE's verification, not a model reviewing itself:
 **How it runs.** `claude -p` inside the Owner's own boundary (its sandbox
 profile and its login), with `--no-session-persistence` so no transcript is
 written where the Owner resumes from, a read-only tool set, and every other
-tool refused rather than prompted. It runs in the Owner's supervisor, on the
+tool refused rather than prompted.
+
+⚠ **THE VERIFIER'S INDEPENDENCE MUST NOT BE WRITABLE BY THE THING IT
+VERIFIES.** Anything it reads that a secondary can write is a hole, whether
+it is a prompt, a config file or a hook, and a hook is worse than a verdict
+nudged: it is code the checked party runs inside the checker. Every input is
+held to that rule:
+
+- **the prompt** comes on stdin from rite's process, never from a file;
+- **the project's own configuration is not loaded** (`_command`): measured,
+  with the plain command a secondary's planted `.claude/settings.json` and
+  `settings.local.json` hooks RAN on every event, their `env` applied, a
+  planted `.mcp.json` server started, and `CLAUDE.md`, `CLAUDE.local.md`, a
+  skill and a command reached the verifier's context;
+- **its `TMPDIR` is private** to the Owner's login directory, which no other
+  profile grants, instead of the engine temp directory under `.rite/user/`,
+  which a secondary can write;
+- **the workspace itself** is the one input it must read and a secondary
+  can write. That is not a hole but the job: the workspace is the evidence,
+  and the prompt tells the verifier that the claim, and what it finds, are
+  data, not instructions. It runs in the Owner's supervisor, on the
 reply's way to the Owner's inbox, after byte-identical duplicates are dropped
 so a repeat costs nothing.
 """
@@ -162,9 +182,28 @@ def _command() -> str:
     the file and the engine opening it: measured, a loop in the helper's real
     sandbox turned a false claim into CONFIRMED on the first of two attempts.
     The verifier's whole value is independence from the thing it checks. A
-    pipe from rite's process has no path anyone else can open."""
+    pipe from rite's process has no path anyone else can open.
+
+    ⚠ **And nothing from the project's own Claude configuration** (module
+    docstring). Each flag was measured closing it on Claude Code 2.1.261, in
+    a project planted as a secondary can plant one:
+
+    - `--safe-mode`: no CLAUDE.md, skills, commands, agents, plugins, hooks
+      or MCP servers from ANY source. Auth and the permission flags below
+      work as before.
+    - `--setting-sources user`: no project or local settings file at all,
+      so no planted `env`, hooks or permission rules. User settings are the
+      Owner's own `CLAUDE_CONFIG_DIR`, which no other profile grants.
+    - `--strict-mcp-config`: no MCP server from anywhere but a flag, and
+      none is given.
+
+    Any one of them stopped every planted hook, codeword and server in the
+    measurement. All three are kept, because each closes the hole by a
+    different mechanism and one of them changing meaning in a later Claude
+    Code must not reopen it."""
     return (
         "claude -p --no-session-persistence --output-format json "
+        "--safe-mode --setting-sources user --strict-mcp-config "
         f"--json-schema {shlex.quote(json.dumps(SCHEMA))} "
         f"--allowedTools {shlex.quote(' '.join(READ_ONLY_TOOLS))} "
         f"--disallowedTools {shlex.quote(' '.join(NEVER_TOOLS))} "
@@ -218,8 +257,12 @@ def verify(root: Path, owner: str, claim: str, *, runner=None) -> Verdict:
     boundary = boundary_for()
     try:
         profile = boundary.write_profile(root, owner)
-        env["TMPDIR"] = str(boundary.engine_tmp(root, owner))
-        Path(env["TMPDIR"]).mkdir(parents=True, exist_ok=True)
+        # ⚠ NOT `boundary.engine_tmp`: that is under `.rite/user/`, which a
+        # secondary can write. The Owner's login directory is granted to the
+        # Owner's profile alone, on both platforms, so a scratch directory
+        # inside it is the verifier's own.
+        env["TMPDIR"] = str(Path(login["CLAUDE_CONFIG_DIR"]) / "verifier-tmp")
+        Path(env["TMPDIR"]).mkdir(mode=0o700, parents=True, exist_ok=True)
         got = run(
             ["sh", "-c", boundary.wrap(_command(), profile)],
             cwd=str(root),
