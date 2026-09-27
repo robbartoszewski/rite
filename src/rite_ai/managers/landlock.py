@@ -454,8 +454,8 @@ DIRS_RITE_CREATES = (
     # in plain text on a box with no keyring, and is no longer granted. gh
     # starts from the Manager's own config directory instead
     # (`github_access._own_gh_config`), which rite creates before the ruleset.
-    # rite's own state root, granted readable.
-    ".rite",
+    # ⚠ `~/.rite` is no longer here: it is no longer granted (DF3,
+    # `enclosure._tool_paths`), so there is nothing to create it for.
 )
 
 # ⚠ **DELIBERATELY NOT CREATED**, so the list above is not mistaken for

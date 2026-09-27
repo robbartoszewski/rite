@@ -2188,11 +2188,22 @@ be tested:
   (`docs/design/spikes/MM2b-moving-the-inbox-out-of-the-project.md`). Now
   measured by `test_no_manager_reads_another_managers_mail.py` (macOS) and
   `test_a_manager_cannot_read_another_managers_mail` (Landlock), each with a
-  HOME whose `.rite` is granted as in production, so both fail on the old
-  location. The same change made `.rite/managers/<other>/` unreadable on
-  macOS, as it already was on Linux: it holds the other Manager's
-  `prompt.txt`, which is its whole instruction with the mail delivered in
-  it, and its `routes/`. **Since 0.24.16
+  HOME laid out as in production, so both fail on the old location. The
+  same change made `.rite/managers/<other>/` unreadable on macOS, as it
+  already was on Linux: it holds the other Manager's `prompt.txt`, which is
+  its whole instruction with the mail delivered in it, and its `routes/`.
+
+  **`~/.rite` is no longer granted to a Manager at all**, and on macOS it is
+  also denied by name. It held more than mail: `dispatch/projects.yaml` lists
+  every registered project's path, which for a firm is its client list, and
+  `credentials.json` names every credential. It had been granted readable as
+  a tree since B9, with no reason recorded. Nothing a Manager runs inside its
+  boundary reads it (`rite projects`, `rite start <alias>`, out-of-project
+  `rite status` and one `rite doctor` check read the dispatch registry; the
+  credential registry is read only to store, delete or rotate a
+  credential). Measured by `test_rite_home_is_not_readable_at_all` (macOS,
+  fails on the code before) and the Landlock test above, and on macOS with
+  the real profile: `rite reply` still queues, and both files are refused. **Since 0.24.16
   the old in-tree `mail/` is moved once and never read again**: the first
   `rite start` moves it under the run lock, outside the boundary, and
   leaves a marker, and anything that appears there afterwards is reported
