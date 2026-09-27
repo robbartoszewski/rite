@@ -656,6 +656,21 @@ See SPEC §6.6.3.
   start another, whatever `--sessions` says. So on a project with no board,
   an Owner has stopped by the time a secondary replies, and the reply
   waits for your next `rite start`.
+- **The scheduler lock does not always keep two ticks apart.** Under a
+  stress test (8 processes contending for 20 s in a Linux container), it
+  admitted 1,352–1,617 overlapping holders per run, and made about 500
+  false "previous lock unreadable" reclaims. On macOS it admitted none, but
+  made 85 false reclaims. A false reclaim deletes a lock another tick has
+  just taken, which is how two ticks come to run at once. Read from the code,
+  not observed in use: two overlapping ticks at a window boundary could each
+  hand over the same Workers, posting the handover comment on a ticket twice.
+  It takes two ticks at the same moment, such as cron plus a manual `rite
+  scheduler-tick`. The crash this used to cause while listing the outbox is fixed. A fix
+  for the lock itself is planned for 0.7.0.
+  ⚠ **If `test_blast_radius_concurrent` goes red:** a `FileNotFoundError`
+  there was the listing crash and should not recur. **Any other failure (a
+  granted claim lost, or a path held twice) is this lock failing on its own.
+  It is not a flake: do not rerun it until it passes.**
 - **A global `core.hooksPath` stops a Manager's `git push`.** The sandbox
   cannot run hooks from outside the project. rite does not bypass them,
   because a global hook may be a guard you rely on. `rite doctor` and `rite
