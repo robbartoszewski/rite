@@ -59,6 +59,8 @@ def test_the_owner_is_told_it_routes_and_to_whom(tmp_path, monkeypatch, board):
     assert "- 'helper': engine claude; duties execute" in said
     assert ' route <manager> "' in said
     assert "no authority over you" in said
+    # A6: a reply is verified before a person is told it happened.
+    assert "A Manager's reply is a CLAIM, not evidence" in said
 
 
 @pytest.mark.parametrize("board", [True, False], ids=["working", "setup"])
@@ -70,6 +72,9 @@ def test_a_secondary_is_told_where_its_instructions_come_from(
     assert "routed by the Owner Manager 'lead'" in said
     assert "You do not read Slack" in said
     assert " reply --manager helper " in said
+    # A6: check each claim with a tool first; a failed step is reported FAILED.
+    assert "BEFORE you run it, CHECK every part you are about to claim" in said
+    assert "is reported as FAILED" in said
 
 
 def test_a_lone_managers_prompt_is_unchanged(tmp_path, monkeypatch):
