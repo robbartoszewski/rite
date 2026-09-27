@@ -250,9 +250,21 @@ def collect_reports(
         if not waiting:
             continue
         scope = _latest_route_to(root, owner, sender)
-        kept = []
+        # ⚠ **RECORDED AFTER DELIVERY, NEVER BEFORE (found by the independent
+        # verification).** The record said "delivered" at the moment of the
+        # check, before a verification that takes 10–60 s and before the
+        # send. Stopping the Owner in that window lost the reply for good:
+        # the next start said "dropped a duplicate … already delivered", which
+        # was false. A record may only assert what has happened. Repeats
+        # within this batch are caught in memory, then recorded as each
+        # delivery completes.
+        delivered_here: set[str] = set()
         for message in waiting:
-            if _already_delivered(root, owner, sender, scope, message.text):
+            digest = _digest(message.text)
+            if digest in delivered_here or digest in _delivered_digests(
+                root, owner, sender, scope
+            ):
+                _count_drop(root, owner, sender, scope)
                 say(
                     f"dropped a duplicate reply from {sender!r}: byte-identical "
                     f"to one already delivered for the same routed work "
@@ -265,8 +277,6 @@ def collect_reports(
                     {"event": "duplicate_reply", "at": time.time(), "from": sender},
                 )
                 continue
-            kept.append(message)
-        for message in kept:
             verdict = _verified(root, owner, sender, scope, message.text, verify, say)
             send(
                 root,
@@ -274,6 +284,8 @@ def collect_reports(
                 INBOX,
                 _report_message(sender, message.text, verdict.line()),
             )
+            _record_delivered_digest(root, owner, sender, scope, digest)
+            delivered_here.add(digest)
             checkins.record(
                 root, owner, {"event": "reply", "at": time.time(), "from": sender}
             )
@@ -289,9 +301,11 @@ def collect_reports(
             )
             brought += 1
         mark_read(root, sender, OUTBOX, _report_reader(owner), waiting)
-        if kept:
+        if delivered_here:
             _mark_replied(root, owner, sender)
-            say(f"brought {len(kept)} message(s) from {sender!r} to {owner!r}")
+            say(
+                f"brought {len(delivered_here)} message(s) from {sender!r} to {owner!r}"
+            )
     _notice_routed_work(root, owner, managers, say, sweep_seconds=sweep_seconds)
     return brought
 
@@ -313,9 +327,7 @@ def _verified(root: Path, owner: str, sender: str, scope: str, text: str, verify
     if not callable(verify):
         return Verdict(UNVERIFIED, "no verifier is wired for this Owner")
     path = _ledger_dir(root, owner) / REPLIES_SEEN_FILE
-    data = _load(path)
-    entry = data.get(sender) if isinstance(data.get(sender), dict) else {}
-    done = int(entry.get("verified") or 0) if entry.get("scope") == scope else 0
+    done = int(_scope_entry(root, owner, sender, scope).get("verified") or 0)
     if done >= VERIFICATIONS_PER_ROUTE:
         say(
             f"not verifying the reply from {sender!r}: {done} verification(s) "
@@ -335,10 +347,11 @@ def _verified(root: Path, owner: str, sender: str, scope: str, text: str, verify
         verdict = verify(sender, text)
     except Exception as e:  # noqa: BLE001 - fail closed, and say why
         verdict = Verdict(UNVERIFIED, f"the verifier raised: {e}")
-    if entry.get("scope") == scope:
-        entry["verified"] = done + 1
-        data[sender] = entry
-        _store(path, data)
+    data = _load(path)
+    entry = _scope_entry(root, owner, sender, scope)
+    entry["verified"] = int(entry.get("verified") or 0) + 1
+    data[sender] = entry
+    _store(path, data)
     say(f"rite's verifier on the reply from {sender!r}: {verdict.kind.upper()}")
     return verdict
 
@@ -356,29 +369,52 @@ def _latest_route_to(root: Path, owner: str, to: str) -> str:
     return str(mine[-1].get("name") or "") if mine else ""
 
 
-def _already_delivered(
-    root: Path, owner: str, sender: str, scope: str, text: str
-) -> bool:
-    """Whether these exact bytes were delivered from `sender` in this scope;
-    records them if not. Byte-identical: a digest of the UTF-8 text."""
+def _digest(text: str) -> str:
+    """Byte-identical means this: a SHA-256 of the UTF-8 text."""
     import hashlib
 
-    digest = hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()
+    return hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()
+
+
+def _scope_entry(root: Path, owner: str, sender: str, scope: str) -> dict:
+    entry = _load(_ledger_dir(root, owner) / REPLIES_SEEN_FILE).get(sender)
+    if not isinstance(entry, dict) or entry.get("scope") != scope:
+        return {"scope": scope, "digests": []}
+    return entry
+
+
+def _delivered_digests(root: Path, owner: str, sender: str, scope: str) -> set[str]:
+    """What was DELIVERED from `sender` in this scope. Read only."""
+    digests = _scope_entry(root, owner, sender, scope).get("digests")
+    return (
+        {d for d in digests if isinstance(d, str)}
+        if isinstance(digests, list)
+        else set()
+    )
+
+
+def _record_delivered_digest(
+    root: Path, owner: str, sender: str, scope: str, digest: str
+) -> None:
+    """Called AFTER a reply reached the Owner's inbox, never before."""
     path = _ledger_dir(root, owner) / REPLIES_SEEN_FILE
     data = _load(path)
-    entry = data.get(sender)
-    if not isinstance(entry, dict) or entry.get("scope") != scope:
-        entry = {"scope": scope, "digests": []}
-    digests = entry.get("digests") if isinstance(entry.get("digests"), list) else []
-    if digest in digests:
-        entry["dropped"] = int(entry.get("dropped") or 0) + 1
-        data[sender] = entry
-        _store(path, data)
-        return True
-    entry["digests"] = digests + [digest]
+    entry = _scope_entry(root, owner, sender, scope)
+    digests = [d for d in entry.get("digests") or [] if isinstance(d, str)]
+    if digest not in digests:
+        digests.append(digest)
+    entry["digests"] = digests
     data[sender] = entry
     _store(path, data)
-    return False
+
+
+def _count_drop(root: Path, owner: str, sender: str, scope: str) -> None:
+    path = _ledger_dir(root, owner) / REPLIES_SEEN_FILE
+    data = _load(path)
+    entry = _scope_entry(root, owner, sender, scope)
+    entry["dropped"] = int(entry.get("dropped") or 0) + 1
+    data[sender] = entry
+    _store(path, data)
 
 
 def briefing(manager: str, owner: str, roles) -> str:
