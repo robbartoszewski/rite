@@ -1135,9 +1135,19 @@ one process that needs it.**
 **`worker-server` is reaped by rite, because nothing else does.**
 - **Measured:** it survives `yoloai stop` and `yoloai destroy` (CU1b). It
   also outlives a Manager's turn outside tmux (CU1).
-- **Worker:** rite finds it by working directory (the sandbox's copy, or the
-  Manager's workspace) and ends it on stop and destroy.
-- **Manager:** it is ended on `rite stop`.
+- **It ends itself after about 300 s idle** (CU1b, n=1).
+- 🔴 **Not by `kill <pid>` after a lookup.** Finding it by working directory
+  and then signalling the pid has a pid-reuse race between the two, and
+  under Robert's rule that is a defect. Linux has `pidfd_open`, which closes
+  it; macOS has no equivalent.
+- **What CU7 and CW5 must choose between, then:**
+  - rely on the idle exit, and say that the daemon, holding the key in its
+    environment, outlives the Manager or the sandbox by up to five minutes;
+  - end it through something that names the process rather than a
+    reusable number: its process group or session, if the agent's launch
+    gives it one rite owns (not measured), or a pidfd on Linux.
+
+  Undecided; this is a design point for CU7, not a default.
 
 ### Two decisions open with Robert, each with a recommendation
 
