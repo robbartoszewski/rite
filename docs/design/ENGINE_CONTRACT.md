@@ -217,9 +217,13 @@ implemented twice is a guess, and B4a is the first real second
 implementation. Expect the registry to grow when it lands; the axes above are
 where to expect it.
 
-⚠ **A third handle direction is coming, and it is not built.** Cursor, as
-its documentation describes it, has the engine mint the id **before** the
-first turn, on request (`agent create-chat`). That is neither "rite
-chooses" nor "rite discovers", so `handle_is_ours` cannot carry it. Read, not
-measured. What it would cost this contract is in `V070_RELEASE_PLAN.md`,
-track CU. This document changes when the code does.
+**Cursor is NOT a third handle direction** (corrected; this said it was, from
+its documentation, before anyone measured it). Measured 2026-09-27 (CU1):
+rite generates a UUID and says it on every launch, the first included, which
+is Goose's shape (`handle_is_ours`). `agent create-chat` is not used: it never
+contacts Cursor, writes nothing, and can hang. The constraint is that the
+handle must be a UUID. ⚠ **What Cursor adds is a failure, not an axis:**
+resuming an id it has never seen exits 0, reports success and runs a fresh,
+empty chat. So the adapter checks the chat's directory before a continuation
+and refuses when it is absent. Not built; see `V070_RELEASE_PLAN.md` track CU.
+This document changes when the code does.
