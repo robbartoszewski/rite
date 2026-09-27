@@ -35,7 +35,6 @@ from __future__ import annotations
 import os
 import shlex
 import time
-import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -62,7 +61,7 @@ from rite_ai.managers import (
 from rite_ai.managers.board_context import board_now
 from rite_ai.managers.boundaries import UnsupportedPlatform, boundary_for
 from rite_ai.managers.broker import take_requests
-from rite_ai.managers.engines import handle_problem, spelling_for
+from rite_ai.managers.engines import handle_problem, new_handle, spelling_for
 from rite_ai.managers.mailbox import INBOX, delivery_note, how_to_reply, put_back, send
 from rite_ai.managers.mailbox import take as take_mail
 from rite_ai.managers.mailbox import waiting as mail_waiting
@@ -583,7 +582,7 @@ class _Chat:
     turn, else the creation time it must keep."""
 
 
-def _open_chat(root: Path, manager: str, fresh: bool, say):
+def _open_chat(root: Path, manager: str, fresh: bool, say, spelling):
     """The chat this run continues, or a refusal.
 
     ⚠ **RECORDED BEFORE ANY LAUNCH.** A fresh handle is written to the
@@ -606,7 +605,7 @@ def _open_chat(root: Path, manager: str, fresh: bool, say):
     if existing is not None and existing.handle:
         say(f"continuing Manager {manager!r}'s Cursor chat {existing.handle}")
         return _Chat(existing.handle, existing.created_ms, config)
-    handle = str(uuid.uuid4())
+    handle = new_handle(spelling)
     try:
         record_chat(root, manager, handle)
     except OSError as err:
@@ -906,7 +905,7 @@ def _supervise(
     # every Cursor designation foreign and start fresh.
     chat: _Chat | None = None
     if spelling.handle_is_uuid:
-        opened = _open_chat(root, manager, fresh, say)
+        opened = _open_chat(root, manager, fresh, say, spelling)
         if isinstance(opened, str):
             return SuperviseResult(False, opened, [])
         chat = opened

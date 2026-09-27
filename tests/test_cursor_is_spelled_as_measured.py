@@ -20,6 +20,7 @@ from rite_ai.config.managers import parse_managers
 from rite_ai.managers.engines import (
     CURSOR,
     handle_problem,
+    new_handle,
     spelling_for,
 )
 from rite_ai.managers.supervise import _resume_id_source, launch_command
@@ -72,11 +73,21 @@ def test_a_permission_is_refused_not_written_as_a_claude_flag():
         launch_command("cursor", "", "/p", "--settings /s.json", start_handle=HANDLE)
 
 
-def test_the_supervisor_will_not_continue_cursor_by_name():
+def test_the_supervisor_continues_cursor_by_its_recorded_uuid(tmp_path):
     """Goose's handle is the session's name. Cursor's cannot be, or `--fresh`
-    would continue the old chat. Refused until CU3 records a UUID."""
-    with pytest.raises(ValueError, match="CU3"):
-        _resume_id_source("cursor")
+    would continue the old chat: it is the UUID recorded before launch."""
+    from rite_ai.managers import record_chat
+
+    (tmp_path / ".rite").mkdir()
+    source = _resume_id_source("cursor")
+    assert source(tmp_path, "lead") == ""
+    record_chat(tmp_path, "lead", HANDLE)
+    assert source(tmp_path, "lead") == HANDLE
+
+
+def test_a_new_handle_is_a_fresh_canonical_uuid():
+    a, b = new_handle(CURSOR), new_handle(CURSOR)
+    assert a != b and handle_problem(CURSOR, a) == ""
 
 
 def test_a_canonical_uuid_passes_the_handle_rule():

@@ -291,3 +291,19 @@ def handle_problem(spelling: Spelling, handle: str) -> str:
             "records must be the exact string the engine stores"
         )
     return ""
+
+
+def new_handle(spelling: Spelling) -> str:
+    """A fresh handle for an engine whose handle is a UUID rite chooses.
+
+    ⚠ **Random, never derived from the session's name.** Cursor spells
+    "start" and "continue" identically, so a handle derived from the name
+    would make `--fresh` silently continue the old chat. The supervisor
+    records it before the first launch (CU3).
+    """
+    if not spelling.handle_is_uuid:
+        raise ValueError(
+            f"{spelling.binary!r} does not take a UUID handle from rite; "
+            "its handle comes from somewhere else"
+        )
+    return str(uuid.uuid4())
