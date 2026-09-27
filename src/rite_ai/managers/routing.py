@@ -251,11 +251,23 @@ def collect_reports(
             continue
         scope = _latest_route_to(root, owner, sender)
         kept = []
+        # Repeats WITHIN this batch: nothing is recorded as delivered until it
+        # is, so the ledger alone cannot see a repeat of a reply still waiting.
+        batch: set[str] = set()
         for message in waiting:
-            if _already_delivered(root, owner, sender, scope, message.text):
+            digest = _digest(message.text)
+            if digest in batch or _already_delivered(
+                root, owner, sender, scope, digest
+            ):
+                _record_dropped(root, owner, sender, scope)
+                earlier = (
+                    "an earlier message in this batch, which is delivered once"
+                    if digest in batch
+                    else "one already delivered"
+                )
                 say(
                     f"dropped a duplicate reply from {sender!r}: byte-identical "
-                    f"to one already delivered for the same routed work "
+                    f"to {earlier} for the same routed work "
                     f"({scope or 'no route recorded'}). A Manager repeating "
                     "itself is worth noticing; it was not delivered again."
                 )
@@ -265,6 +277,7 @@ def collect_reports(
                     {"event": "duplicate_reply", "at": time.time(), "from": sender},
                 )
                 continue
+            batch.add(digest)
             kept.append(message)
         for message in kept:
             verdict = _verified(root, owner, sender, scope, message.text, verify, say)
@@ -274,6 +287,17 @@ def collect_reports(
                 INBOX,
                 _report_message(sender, message.text, verdict.line()),
             )
+            # ⚠ **RECORDED AFTER DELIVERY, NEVER BEFORE.** This record says
+            # "delivered", and the next start drops a reply on its word. It was
+            # written when the reply was CHECKED, before the verifier (10–60 s)
+            # and before `send`, so stopping the Owner's `rite start` in that
+            # gap lost the reply for good, and the next start said "already
+            # delivered" about a reply nobody had read (reproduced, then fixed).
+            # Written here, a stop before `send` leaves the reply unread and it
+            # is verified and delivered at the next start; a stop after `send`
+            # but before the cursor moves finds this record and drops the
+            # repeat, which is then true.
+            _record_delivered_reply(root, owner, sender, scope, _digest(message.text))
             checkins.record(
                 root, owner, {"event": "reply", "at": time.time(), "from": sender}
             )
@@ -314,8 +338,8 @@ def _verified(root: Path, owner: str, sender: str, scope: str, text: str, verify
         return Verdict(UNVERIFIED, "no verifier is wired for this Owner")
     path = _ledger_dir(root, owner) / REPLIES_SEEN_FILE
     data = _load(path)
-    entry = data.get(sender) if isinstance(data.get(sender), dict) else {}
-    done = int(entry.get("verified") or 0) if entry.get("scope") == scope else 0
+    entry = _scoped_entry(data, sender, scope)
+    done = int(entry.get("verified") or 0)
     if done >= VERIFICATIONS_PER_ROUTE:
         say(
             f"not verifying the reply from {sender!r}: {done} verification(s) "
@@ -335,10 +359,15 @@ def _verified(root: Path, owner: str, sender: str, scope: str, text: str, verify
         verdict = verify(sender, text)
     except Exception as e:  # noqa: BLE001 - fail closed, and say why
         verdict = Verdict(UNVERIFIED, f"the verifier raised: {e}")
-    if entry.get("scope") == scope:
-        entry["verified"] = done + 1
-        data[sender] = entry
-        _store(path, data)
+    # A verification that RAN is counted, delivered or not: it spent a
+    # session, which is what the allowance bounds. So a run stopped after the
+    # verifier and before delivery verifies again at the next start, and
+    # that second run counts too.
+    data = _load(path)
+    entry = _scoped_entry(data, sender, scope)
+    entry["verified"] = int(entry.get("verified") or 0) + 1
+    data[sender] = entry
+    _store(path, data)
     say(f"rite's verifier on the reply from {sender!r}: {verdict.kind.upper()}")
     return verdict
 
@@ -356,29 +385,57 @@ def _latest_route_to(root: Path, owner: str, to: str) -> str:
     return str(mine[-1].get("name") or "") if mine else ""
 
 
-def _already_delivered(
-    root: Path, owner: str, sender: str, scope: str, text: str
-) -> bool:
-    """Whether these exact bytes were delivered from `sender` in this scope;
-    records them if not. Byte-identical: a digest of the UTF-8 text."""
+def _digest(text: str) -> str:
+    """Byte-identical means this: a digest of the UTF-8 text."""
     import hashlib
 
-    digest = hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()
-    path = _ledger_dir(root, owner) / REPLIES_SEEN_FILE
-    data = _load(path)
+    return hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()
+
+
+def _scoped_entry(data: dict, sender: str, scope: str) -> dict:
+    """`sender`'s entry in the replies ledger for `scope`. A new route opens
+    a new scope, which starts empty."""
     entry = data.get(sender)
     if not isinstance(entry, dict) or entry.get("scope") != scope:
         entry = {"scope": scope, "digests": []}
+    return entry
+
+
+def _already_delivered(
+    root: Path, owner: str, sender: str, scope: str, digest: str
+) -> bool:
+    """Whether a reply with this digest was DELIVERED from `sender` in this
+    scope. ⚠ Reads only: see `_record_delivered_reply` for why."""
+    entry = _scoped_entry(
+        _load(_ledger_dir(root, owner) / REPLIES_SEEN_FILE), sender, scope
+    )
+    digests = entry.get("digests")
+    return isinstance(digests, list) and digest in digests
+
+
+def _record_delivered_reply(
+    root: Path, owner: str, sender: str, scope: str, digest: str
+) -> None:
+    """Record that a reply with this digest is in the Owner's inbox. Called
+    only once `send` has put it there."""
+    path = _ledger_dir(root, owner) / REPLIES_SEEN_FILE
+    data = _load(path)
+    entry = _scoped_entry(data, sender, scope)
     digests = entry.get("digests") if isinstance(entry.get("digests"), list) else []
-    if digest in digests:
-        entry["dropped"] = int(entry.get("dropped") or 0) + 1
-        data[sender] = entry
-        _store(path, data)
-        return True
-    entry["digests"] = digests + [digest]
+    if digest not in digests:
+        entry["digests"] = digests + [digest]
     data[sender] = entry
     _store(path, data)
-    return False
+
+
+def _record_dropped(root: Path, owner: str, sender: str, scope: str) -> None:
+    """Count a dropped repeat in the replies ledger."""
+    path = _ledger_dir(root, owner) / REPLIES_SEEN_FILE
+    data = _load(path)
+    entry = _scoped_entry(data, sender, scope)
+    entry["dropped"] = int(entry.get("dropped") or 0) + 1
+    data[sender] = entry
+    _store(path, data)
 
 
 def briefing(manager: str, owner: str, roles) -> str:

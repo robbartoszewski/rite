@@ -102,3 +102,67 @@ def test_the_standup_counts_replies_and_drops(tmp_path):
         "replies from 'small': 3 received, 2 byte-identical duplicate(s) dropped"
         in text
     ), text
+
+
+class _Stopped(BaseException):
+    """What stopping `rite start` raises into the verifier: not an Exception,
+    so `_verified`'s fail-closed handler does not swallow it."""
+
+
+def test_a_run_stopped_while_the_verifier_runs_does_not_lose_the_reply(tmp_path):
+    """⚠ **A record must not assert what has not happened yet.** The digest
+    that marks a reply "already delivered" was written when the reply was
+    CHECKED, before the verifier (10–60 s) and before delivery. Stopping the
+    Owner's `rite start` in that gap left a record of a delivery that never
+    happened, and the next start dropped the reply for good, saying "already
+    delivered". Reproduced with a probe; this is that probe."""
+    from rite_ai.managers.verifier import CONFIRMED, Verdict
+
+    _route(tmp_path)
+    mailbox.send(tmp_path, SECONDARY, mailbox.OUTBOX, "HELLO.txt written")
+
+    def stopped_mid_verification(_sender, _text):
+        raise _Stopped
+
+    try:
+        routing.collect_reports(
+            tmp_path, OWNER, NAMES, lambda _m: None, verify=stopped_mid_verification
+        )
+    except _Stopped:
+        pass
+    assert _delivered(tmp_path) == []
+
+    said: list[str] = []
+    routing.collect_reports(
+        tmp_path,
+        OWNER,
+        NAMES,
+        said.append,
+        verify=lambda _s, _t: Verdict(CONFIRMED, "checked"),
+    )
+    assert len(_delivered(tmp_path)) == 1, said
+    assert not any(line.startswith("dropped a duplicate") for line in said), said
+
+
+def test_a_reply_delivered_before_a_stop_is_not_delivered_twice(tmp_path):
+    """The other side of the same boundary: once the reply IS in the Owner's
+    inbox, a stop before the cursor moves must not deliver it again."""
+    _route(tmp_path)
+    mailbox.send(tmp_path, SECONDARY, mailbox.OUTBOX, "HELLO.txt written")
+    real_mark_read = routing.mark_read
+
+    def stopped_before_the_cursor_moves(*_a, **_k):
+        raise _Stopped
+
+    routing.mark_read = stopped_before_the_cursor_moves
+    try:
+        try:
+            _collect(tmp_path)
+        except _Stopped:
+            pass
+    finally:
+        routing.mark_read = real_mark_read
+    assert len(_delivered(tmp_path)) == 1
+    said = _collect(tmp_path)
+    assert len(_delivered(tmp_path)) == 1
+    assert any(line.startswith("dropped a duplicate reply") for line in said), said
