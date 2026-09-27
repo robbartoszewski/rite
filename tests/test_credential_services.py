@@ -64,8 +64,12 @@ class TestEveryServiceCarriesItsOwnFields:
         must never be injected anywhere. `worker_environment` hands a Worker
         every field that has an `env`, so giving it one would put the key
         that mints tokens in every Worker's sandbox. The next
-        test pins that they are not."""
-        never_injected = {"github_app_key"}
+        test pins that they are not.
+
+        ⚠ So is the Cursor API key: `--env` would put it on yoloAI's argv and
+        in the pane, which Robert ruled out. It reaches a Worker as a
+        read-only file instead (CW2)."""
+        never_injected = {"github_app_key", "cursor_api_key"}
         for svc in SERVICES.values():
             for f in svc.secrets:
                 if service_key(svc.name, f.name) in never_injected:
@@ -85,6 +89,17 @@ class TestEveryServiceCarriesItsOwnFields:
         values = set(store.worker_environment().values())
         assert "VALUE-OF-github_app_key" not in values
         # The control: the same stub does deliver an ordinary credential.
+        assert "VALUE-OF-github_token" in values
+
+    def test_the_cursor_key_never_reaches_a_worker_by_env(self, monkeypatch):
+        """Measured the same way as the App key, with the same control."""
+        from rite_ai.credentials import store
+
+        monkeypatch.setattr(
+            store, "get_scoped", lambda key, credentials=None: f"VALUE-OF-{key}"
+        )
+        values = set(store.worker_environment().values())
+        assert "VALUE-OF-cursor_api_key" not in values
         assert "VALUE-OF-github_token" in values
 
     def test_config_fields_are_not_secrets_and_name_a_config_path(self):
