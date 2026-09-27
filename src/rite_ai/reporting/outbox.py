@@ -86,13 +86,40 @@ def enqueue(
 
 
 def list_pending(root: Path) -> list[OutboxMessage]:
+    """What is pending NOW, in enqueue order.
+
+    ⚠ **A file that vanishes between the listing and the read was CONSUMED,
+    and is skipped as no longer pending, not raised.** Established from the
+    code, not assumed: exactly two things remove a message from this
+    directory, and both are consumers. `flush_outbox` removes one it has
+    delivered, and the scheduler's `_reconcile_stall_blockers` removes a
+    blocker it has retracted. Both already remove with `missing_ok=True`,
+    treating the other's removal as expected. Names are unique per enqueue,
+    so nothing replaces a message by renaming over it, and `write_atomic`'s
+    temporary files end in `.tmp` and never match the glob. So "gone" here
+    can only mean "another tick took it", and whether that was a delivery
+    or a retraction was decided by the remover. Raising did not keep the
+    message, which was already gone; it crashed the tick that was listing,
+    and every message after it in the listing went unreported (CI: four
+    occurrences in `test_blast_radius_concurrent`, on Python 3.11 and 3.12).
+
+    ⚠ **This does not make concurrent ticks safe.** Two ticks listing at once
+    is itself the open scheduler-lock defect (`scheduler/lock.py` admits
+    overlapping holders under contention), and two concurrent flushes could
+    still deliver one message twice. This only stops a consumed message
+    from being reported as a failure of the reader.
+    """
     out_dir = _outbox_dir(root)
     if not out_dir.is_dir():
         return []
     messages: list[OutboxMessage] = []
     for path in sorted(out_dir.glob("*.json")):
         try:
-            data = json.loads(path.read_text())
+            raw = path.read_text()
+        except FileNotFoundError:
+            continue  # consumed by another tick since the listing (above)
+        try:
+            data = json.loads(raw)
             messages.append(
                 OutboxMessage(
                     kind=data.get("kind", ""),
