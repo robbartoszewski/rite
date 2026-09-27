@@ -505,6 +505,24 @@ Exactly one must hold it when several Managers share a root, and
   **Measured on a local model, the secondary's instruction did not help:**
   `qwen3:8b` replied in 0 of 3 runs on a task with a failing step, as it
   mostly did before. The Owner's checking is what protects you.
+- **Every reply from another Manager is checked by rite before the Owner
+  reads it.** A separate session, given only the reply and the project,
+  says CONFIRMED, CONTRADICTED or COULD NOT TELL, and that line arrives with
+  the reply. If the check cannot run, the reply is marked NOT VERIFIED; it
+  is never passed silently. The checker is also a model and can be wrong,
+  and every line says so. Checks are counted beside the Owner's sessions.
+- **When routed work ends in silence, you are told.** If a secondary
+  finishes without replying, or dies with the work unfinished, rite tells
+  the Owner in its own words, and the Owner tells you. A death is checked
+  every `coordination.sweep_minutes` (30), and at once when the Owner would
+  otherwise stop.
+- **A Manager repeating the same reply is not delivered twice**, and rite
+  says it dropped it.
+- **`--sessions` is bounded again in a project with several Managers:**
+  past it, routed mail may start at most two sessions per routed message,
+  plus one for each note rite writes, and reaching that says so.
+- **When the Owner stops waiting, it says why:** a routed Manager was never
+  started, finished its run, or died.
 
 This applies when the project has no `coordination.remote`. With one, the
 Managers may be on other machines and the election decides the Owner, and

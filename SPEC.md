@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.19 · **Date:** 2026-09-27
+**Version:** 0.24.20 · **Date:** 2026-09-27
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -6408,6 +6408,30 @@ matched reply:
   delivered to that secondary, so the same words for new work are a new
   reply. ⚠ It is not a fix for honesty: a false reply and its correction
   differ, and both are delivered.
+- **rite verifies every reply before the Owner reads it** (A6 hardening,
+  Robert 2026-09-27: "the cost of dealing with potentially compounding
+  issues stemming from incorrect replies is higher than the routine check on
+  every reply"). A fresh `claude -p` in the Owner's own boundary, given ONLY
+  the reply and the workspace, never the Manager's conversation; no
+  transcript (`--no-session-persistence`); a read-only tool set, anything
+  else refused; its verdict structured by the engine (`--json-schema`):
+  CONFIRMED, CONTRADICTED or COULD NOT TELL, on its own rite line between
+  the header and the quoted reply. ⚠ It fails closed: if it cannot run or
+  answers unusably, the reply is marked NOT VERIFIED with why. ⚠ The
+  verifier is also a model and can be wrong; its value is independence, and
+  every line says so. It is rite's session, not the Owner's: counted and
+  reported beside the Owner's sessions, not against the cap. At most two
+  per routed message (flagged for Robert: he ruled "every reply", and this
+  bounds a secondary sending many different replies); past that, NOT
+  VERIFIED, said.
+- **Routed work that ends in silence is said** (decision 3): FINISHED
+  WITHOUT A REPLY at the event of the session's end, and DIED (or STOPPED)
+  WITH ROUTED WORK OUTSTANDING by a sweep every `coordination.sweep_minutes`
+  (30) and at once when a wait would end on it. A note is rite's own words,
+  starts the Owner's next session like any mail, and is written once per
+  state change. The cap gives notes their own allowance (one per route at
+  most), because charged to the reply allowance a death after a reply and a
+  correction could not be told.
 
 The bookkeeping (routes delivered, routes handled, each supervisor's
 process) is written only by supervisors, in a `routing/` directory beside
@@ -6975,6 +6999,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.20 — §9.16.7: the hardening of routed work.** Robert's rulings of 2026-09-27: "provably gone" is seen running then gone plus the recorded lifecycle, and each ending is named; a mail-started cap bounds the soft ceiling; byte-identical repeats are dropped and said; rite verifies every reply in a fresh session and fails closed; silence after routed work (finished without a reply, died) is told to the Owner.
 
 **Changes in 0.24.19 — §9.16.7: mail causes a cycle.** A reply reached a still-running Owner only if a cycle happened to start after it, and a routed instruction reached a secondary the same way; both depended on the ceiling times the cycle length. Both sides now wait for the inbox, spending nothing, and a cycle starts because mail is there. Records Robert's three rulings: the wait is bounded by outstanding routes (no timer), an idle secondary waits, and the ceiling is soft while routes are outstanding. States the one interpretation made: a Manager never seen running is not gone.
 
