@@ -6415,6 +6415,27 @@ def _router_for(root: Path, manager: str):
     return step
 
 
+def _waiting_for(root: Path, manager: str):
+    """When this Manager may WAIT for its inbox instead of stopping, or None
+    (DF2). Only in a root several Managers share with an Owner: the Owner waits
+    for work it routed, a secondary for work it will be routed. A lone Manager,
+    or a root with a `remote`, runs exactly as before."""
+    from rite_ai.config.managers import routing_owner, shares_one_root
+    from rite_ai.config.models import ProjectConfig
+    from rite_ai.config.parse import ParseError, parse_config
+    from rite_ai.managers.routing import Waiting
+
+    parsed = parse_config(root / ".rite" / "config.yaml")
+    config = parsed if not isinstance(parsed, ParseError) else ProjectConfig()
+    if not shares_one_root(config.coordination.remote):
+        return None
+    roles = list(config.coordination.manager_roles)
+    owner = routing_owner(roles)
+    if len(roles) < 2 or not owner:
+        return None
+    return Waiting(root, manager, owner)
+
+
 def _claude_login(root: Path, role) -> bool:
     """Give a Claude Manager its own login, or refuse to start it.
 
@@ -6769,8 +6790,10 @@ def _start_a_manager(
         )
         click.echo(
             "  One session only: a setup session needs you at the terminal, "
-            "so it is not resumed. When the board is configured, start a new "
-            f"conversation that knows it: `rite start {role.name} --fresh`.",
+            "so it is not resumed. (With several Managers, work routed "
+            "between them can start more, and each such session is said.) "
+            "When the board is configured, start a new conversation that "
+            f"knows it: `rite start {role.name} --fresh`.",
             err=True,
         )
 
@@ -6829,6 +6852,7 @@ def _start_a_manager(
     _say_git_findings(root, role.name)
     claude_signed_in = _claude_login(root, role)
     listener = _slack_listener(root, role.name)
+    waiting = _waiting_for(root, role.name)
     try:
         outcome = supervise(
             root,
@@ -6849,6 +6873,9 @@ def _start_a_manager(
             # place; `for_project` refuses everything when there is none.
             broker=for_project(root, board),
             router=_router_for(root, role.name),
+            # ⚠ DF2: a cycle can be CAUSED by mail. None for a lone Manager,
+            # whose runs are exactly what they were.
+            waiting=waiting,
             slack=listener,
             github=github,
             max_sessions=sessions,
@@ -6878,7 +6905,16 @@ def _start_a_manager(
             # is not the question. With no board it would answer `unknown` and
             # stop before the Manager ever started — which is the defect this
             # whole change is about, one level in.
-            verdict=(lambda _r: "ready")
+            #
+            # ⚠ Except a SECONDARY's setup session, which is `idle`: setup is
+            # the Owner's job, so its only work is what is routed to it, and a
+            # first cycle before anything is routed is a session spent on
+            # nothing. `idle` with `waiting` means it waits for its inbox.
+            verdict=(
+                (lambda _r: "idle")
+                if waiting is not None and not waiting.is_owner
+                else (lambda _r: "ready")
+            )
             if setting_up
             else (lambda r: _loop_verdict(r, board)),
             note=lambda m: click.echo(m, err=True),
@@ -7661,7 +7697,9 @@ def manager_stop(name: str) -> None:
     type=int,
     default=None,
     help="Ceiling on provider sessions this run may start. Required when "
-    "starting a Manager; a COUNT, not spend (D-69).",
+    "starting a Manager; a COUNT, not spend (D-69). With several Managers in "
+    "one project it is SOFT while routed work is outstanding: a session "
+    "started by routed mail can pass it, and each one is said.",
 )
 @click.option(
     "--minutes",

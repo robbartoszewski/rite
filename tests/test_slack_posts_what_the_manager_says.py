@@ -203,7 +203,7 @@ class TestTheLastReplyOfARunIsPosted:
 
         import rite_ai.managers.supervise as sup
 
-        assert '"post_replies"' in inspect.getsource(sup.supervise)
+        assert '"post_replies"' in inspect.getsource(sup._supervise)
 
 
 class TestWhatIsPostedIsRedacted:
