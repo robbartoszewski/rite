@@ -167,6 +167,84 @@ old wording ("EVERY Manager", "still READABLE by every Manager"). This is the
 prose-drift class (DEFECT_CLASSES.md, class 6), and it was introduced by the
 same session that fixed the underlying exposure.
 
+## 7. 🔴 `test_blast_radius_concurrent`: a suspected race, NOT a flake
+
+**Finding.** `tests/test_blast_radius_concurrent.py::TestExclusionHoldsUnderSustainedConcurrency::test_no_granted_claim_is_ever_lost_and_no_path_is_held_twice`
+fails intermittently in CI:
+
+- `FileNotFoundError` on a `.rite/outbox/<…>_blocker.json` under the test's
+  `tmp_path`, raised from `reporting/outbox.list_pending`.
+- Three recorded occurrences:
+  - `a8fd5ea`, 2026-09-26 (job not recorded).
+  - `a0cb546`, 2026-09-26, run 36243078492, **Python 3.12**.
+  - `916dc44`, 2026-09-27 ~04:45 UTC, **Python 3.11** (3.12 and 3.13 green).
+- **So it is not 3.11-only.** It is intermittent across interpreter versions.
+- A rerun has passed each time, which is how it came to be carried as an
+  annoyance.
+
+Two layers, both races on the timing of independent processes, which is
+what Robert's rule forbids:
+
+- **Immediate.** `list_pending` globs the outbox and then reads each file,
+  and catches only `JSONDecodeError`/`KeyError`. A file removed between the
+  glob and the read (another tick flushing it) raises. This is a
+  check-then-act on the filesystem.
+- **Underneath.** Two ticks should not be reconciling at once, and
+  `scheduler/lock.py` is what should stop them. It is unchanged since v0.1.0.
+  It was stress-measured on 2026-09-26: 8 processes for 20 s gave
+  1352–1617 overlapping holders per run in a Linux container, and about 500
+  false "previous lock unreadable" reclaims. macOS gave 0 overlaps but 85
+  false reclaims. The likely mechanism: a lock that vanishes between
+  `exists()` and the read is judged unreadable, and `_reclaim` unlinks
+  whatever is at the path, possibly another tick's fresh lock.
+
+**Why not fixed.** Found in passing at the end of the night, and the lock is
+coordination: a wrong fix there does silent damage.
+
+**Do NOT treat a red run of this test as a flake, and do not rerun until it
+passes,** until the cause is named. A defect was already mislabelled as a
+flake once this weekend (DF5, the other way round), and the correction came
+only from counting occurrences.
+
+**What would produce evidence**, before any fix:
+
+1. **Per-test, not per-run.** Run the file in a loop with
+   `-rfE -o junit_logging=all --junitxml=<n>.xml` and keep every XML. Count
+   the failures, and keep each traceback and captured output.
+2. **Load and ordering.** Run the loop alone, then alongside a CPU-bound
+   load (e.g. two `yes > /dev/null`), then with `-p no:randomly` versus
+   shuffled ordering if a plugin is available. Does the rate change?
+   Measure on Linux (a Docker container matched to CI: a bundle clone,
+   gitleaks installed, the venv on PATH, a non-root user) as well as macOS,
+   since the lock's overlap was measured on Linux only.
+3. **Separate the layers.** In a scratch branch, make `list_pending`
+   tolerate a vanished file and rerun the loop. If the test still loses a
+   claim or holds a path twice, the lock is failing on its own. If it goes
+   quiet, only the symptom was fixed, and the lock is still unproven.
+
+**Done when** the cause is named with evidence from those runs, the lock
+excludes under the same stress that measured it failing (0 overlaps, 0
+false reclaims), and the loop runs clean at a count that would have caught
+the old rate.
+
+## For Robert, this morning
+
+- **A false warning will print** at `rite start` (item 6): "mail is still
+  under ~/.rite, where EVERY Manager's sandbox … can read it". It is not
+  true any more. Two scratch projects from the DF2 sessions left mail there.
+  To silence it until the wording is fixed:
+
+      rm -r ~/.rite/managers/1a6c9cd31498880c ~/.rite/managers/87e3477dab3486f6
+
+  (Their `project` files name `/private/tmp/dfcH6M2` and
+  `/private/tmp/dfcjyM3`. Check nothing else has appeared there first:
+  `ls ~/.rite/managers/`.)
+- **A Manager that ran without a board needs a fresh conversation once a
+  board is configured:** `rite start <name> --fresh --sessions N --minutes M`.
+  A bare `rite start` refuses and prints that exact command (DF1). Continuing
+  the old one would leave the Manager believing there is no board. Use
+  `--keep-conversation` only if the board really has not changed.
+
 ---
 
 **Rules that held all night and are worth keeping.**
@@ -189,4 +267,4 @@ same session that fixed the underlying exposure.
 on Python 3.11 only (3.12 and 3.13 green), on #17's branch at `916dc44`,
 2026-09-27 ~04:45 UTC: `FileNotFoundError` on a `.rite/outbox/…_blocker.json`
 under the test's `tmp_path`. It is the known open defect (the scheduler lock
-does not exclude), not a flake. One more occurrence, for whoever takes it.
+does not exclude), not a flake. It is written up as item 7.
