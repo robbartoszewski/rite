@@ -211,20 +211,95 @@ def collect_reports(root: Path, owner: str, managers: list[str], say) -> int:
     Owner: authority comes from the channel (§9.16.2), and a sibling Manager
     is not one. The header says so, and the Owner's text is quoted so the
     secondary cannot forge a header of its own.
+
+    ⚠ **A BYTE-IDENTICAL REPEAT for the same routed work is DROPPED, and said
+    (W15 (c), Robert 2026-09-27).** Observed: a secondary sent the same reply
+    three times, and each started an Owner session. The rules matter more than
+    the feature: never silent (said here, counted, and in the standup), scoped
+    to the most recent route delivered to that secondary (identical text for
+    later work is a legitimate reply), and byte-identical only (anything
+    cleverer is a judgement about meaning). It runs BEFORE anything else is
+    done with a reply, so a dropped duplicate costs nothing.
+
+    ⚠ **Do not credit it with honesty.** Where a false first reply was
+    followed by a correction, the two differ, so both are kept, as they must
+    be. Dedup does nothing about a false report; only verification does.
     """
+    from rite_ai.managers import checkins
+
     _mark_seen_running(root, owner, managers)
     brought = 0
     for sender in managers:
         if sender == owner:
             continue
         waiting = unread(root, sender, OUTBOX, _report_reader(owner))
+        if not waiting:
+            continue
+        scope = _latest_route_to(root, owner, sender)
+        kept = []
         for message in waiting:
+            if _already_delivered(root, owner, sender, scope, message.text):
+                say(
+                    f"dropped a duplicate reply from {sender!r}: byte-identical "
+                    f"to one already delivered for the same routed work "
+                    f"({scope or 'no route recorded'}). A Manager repeating "
+                    "itself is worth noticing; it was not delivered again."
+                )
+                checkins.record(
+                    root,
+                    owner,
+                    {"event": "duplicate_reply", "at": time.time(), "from": sender},
+                )
+                continue
+            kept.append(message)
+        for message in kept:
             send(root, owner, INBOX, _report_message(sender, message.text))
+            checkins.record(
+                root, owner, {"event": "reply", "at": time.time(), "from": sender}
+            )
             brought += 1
-        if waiting:
-            mark_read(root, sender, OUTBOX, _report_reader(owner), waiting)
-            say(f"brought {len(waiting)} message(s) from {sender!r} to {owner!r}")
+        mark_read(root, sender, OUTBOX, _report_reader(owner), waiting)
+        if kept:
+            say(f"brought {len(kept)} message(s) from {sender!r} to {owner!r}")
     return brought
+
+
+REPLIES_SEEN_FILE = "replies.json"
+
+
+def _latest_route_to(root: Path, owner: str, to: str) -> str:
+    """The most recent route delivered to `to`: the scope a repeat is judged
+    in. A new route opens a new scope, so the same words for new work are a
+    new reply."""
+    entries = _load(_ledger_dir(root, owner) / ROUTED_LOG_FILE).get("routed")
+    entries = entries if isinstance(entries, list) else []
+    mine = [e for e in entries if isinstance(e, dict) and e.get("to") == to]
+    return str(mine[-1].get("name") or "") if mine else ""
+
+
+def _already_delivered(
+    root: Path, owner: str, sender: str, scope: str, text: str
+) -> bool:
+    """Whether these exact bytes were delivered from `sender` in this scope;
+    records them if not. Byte-identical: a digest of the UTF-8 text."""
+    import hashlib
+
+    digest = hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()
+    path = _ledger_dir(root, owner) / REPLIES_SEEN_FILE
+    data = _load(path)
+    entry = data.get(sender)
+    if not isinstance(entry, dict) or entry.get("scope") != scope:
+        entry = {"scope": scope, "digests": []}
+    digests = entry.get("digests") if isinstance(entry.get("digests"), list) else []
+    if digest in digests:
+        entry["dropped"] = int(entry.get("dropped") or 0) + 1
+        data[sender] = entry
+        _store(path, data)
+        return True
+    entry["digests"] = digests + [digest]
+    data[sender] = entry
+    _store(path, data)
+    return False
 
 
 def briefing(manager: str, owner: str, roles) -> str:

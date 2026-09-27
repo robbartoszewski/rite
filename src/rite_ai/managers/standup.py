@@ -149,10 +149,16 @@ def digest(
     observed.extend(_sandbox_state(list(dict.fromkeys(started))))
 
     notes: list[str] = []
+    replies: dict[str, list[int]] = {}
     for e in checkins.ledger(root, manager):
         if float(e.get("at") or 0) <= start:
             continue
         kind = e.get("event")
+        if kind in ("reply", "duplicate_reply"):
+            # W15 (c): counted, so a repeating secondary shows here.
+            got = replies.setdefault(str(e.get("from")), [0, 0])
+            got[0 if kind == "reply" else 1] += 1
+            continue
         if kind == "cycle":
             observed.append(
                 f"- cycle {e.get('number')}, session {e.get('session')}: "
@@ -171,6 +177,11 @@ def digest(
             anchor = " ".join(str(e.get("anchor") or "").split())
             notes.append(f"- {said} [anchor: {anchor}]")
 
+    for sender, (delivered, dropped) in sorted(replies.items()):
+        observed.append(
+            f"- replies from {sender!r}: {delivered + dropped} received, "
+            f"{dropped} byte-identical duplicate(s) dropped"
+        )
     lines = [head, "", "Observed by rite:"]
     if observed:
         lines.extend(observed)

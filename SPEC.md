@@ -6402,6 +6402,12 @@ matched reply:
   said as the CAP, never as the ceiling. The cap counts a Manager's OWN
   sessions: a verification rite runs for itself is not one, and is reported
   separately.
+- **A byte-identical repeat of a reply, for the same routed work, is dropped
+  and said** (W15 (c)): counted, and in the standup ("3 received, 2
+  byte-identical duplicate(s) dropped"). The scope is the most recent route
+  delivered to that secondary, so the same words for new work are a new
+  reply. ⚠ It is not a fix for honesty: a false reply and its correction
+  differ, and both are delivered.
 
 The bookkeeping (routes delivered, routes handled, each supervisor's
 process) is written only by supervisors, in a `routing/` directory beside
