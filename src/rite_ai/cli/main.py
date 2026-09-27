@@ -6821,9 +6821,15 @@ def _start_a_manager(
         raise SystemExit(1)
     # ⚠ UNDER THE RUN LOCK, before anything reads mail: the pre-0.6.0 in-tree
     # mailbox is moved once and never read again (`mailbox.adopt_legacy`).
-    from rite_ai.managers.mailbox import adopt_legacy, adoption_notes
+    from rite_ai.managers.mailbox import (
+        adopt_legacy,
+        adoption_notes,
+        still_under_rite_home,
+    )
 
     for note in adoption_notes(adopt_legacy(root, role.name), role.name):
+        click.echo(note, err=True)
+    for note in still_under_rite_home():
         click.echo(note, err=True)
     github = _github_access(root, role.name)
     _say_git_findings(root, role.name)

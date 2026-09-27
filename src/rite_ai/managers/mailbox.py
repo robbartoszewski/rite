@@ -38,14 +38,24 @@ ties, because two writers in one millisecond otherwise produce one path
 and the second write replaces the first. That was measured on the outbox,
 not reasoned about, and this queue has the same shape.
 
-⚠ **THE MAILBOX LIVES OUTSIDE THE PROJECT TREE** (0.6.0), at
-`~/.rite/managers/<checkout>/<manager>/mail/` — see `mail_root`. An inbox
-write IS an instruction (MM-2), and inside the project every Manager's
-profile grants write, so the fence had to be carved out of that grant: by
-ordered deny rules on macOS, and on Linux, where Landlock has no deny, by
-enumerating the tree around it. Outside the tree nothing grants the inbox, so
-neither boundary has to take it away. The Manager is granted its own OUTBOX
-by exact path, because `rite reply` and `rite ask` write it from inside.
+⚠ **THE MAILBOX LIVES OUTSIDE THE PROJECT TREE AND OUTSIDE `~/.rite`**
+(0.6.0), under rite's per-user data directory beside the Managers'
+credentials — see `mail_root`. An inbox write IS an instruction (MM-2), and
+inside the project every Manager's profile grants write, so the fence had to
+be carved out of that grant: by ordered deny rules on macOS, and on Linux,
+where Landlock has no deny, by enumerating the tree around it. Outside the
+tree nothing grants the inbox, so neither boundary has to take it away. The
+Manager is granted its own mail directory READ and its own OUTBOX write, by
+exact path, because `rite reply` and `rite ask` write it from inside.
+
+🔴 **Not under `~/.rite` (DF3).** The boxes first moved to
+`~/.rite/managers/`, and `~/.rite` is granted READABLE, as a tree, to every
+Manager on both platforms. So from inside its boundary a Manager could list
+and read every Manager's inbox and outbox — for every project on the
+machine, which for a firm means other clients' instructions. MM-2 held, being
+about writes; reads were never tested. The MM-2b spike predicted this and
+recommended the credential root's location; this is that location. A box
+found under `~/.rite` is moved once, like the in-tree one (`adopt_legacy`).
 
 ⚠ **THE OLD IN-TREE BOX IS MOVED ONCE, THEN NEVER READ AGAIN.** A project
 from before 0.6.0 has messages in `.rite/managers/<manager>/mail/`. The first
@@ -89,6 +99,30 @@ class Message:
 
 
 MAILBOXES_DIRNAME = "managers"
+"""The directory under `~/.rite` where the boxes lived during 0.6.0's
+development, before DF3. Read only to move what is there (`adopt_legacy`)."""
+
+MAIL_DIR_ENV = "RITE_MAIL_DIR"
+"""Overrides `_mail_home`, as `RITE_HOME_DIR` overrides `~/.rite`: set in the
+environment, not patched, so a `rite` a test starts as a subprocess — or runs
+inside a Manager's boundary — finds the same boxes."""
+
+
+def _mail_home() -> Path:
+    """Where every project's Manager mailboxes live, under no path any
+    Manager's profile grants.
+
+    ⚠ The credential root's parent (`github_access._credential_root`):
+    `~/Library/Application Support/rite` on macOS, `~/.local/share/rite` on
+    Linux — NOT `~/.rite`, which every Manager may read (DF3). A Manager is
+    then granted its own box by exact path and reaches no other.
+    """
+    override = os.environ.get(MAIL_DIR_ENV)
+    if override:
+        return Path(override)
+    from rite_ai.managers import github_access
+
+    return github_access._credential_root().parent / "mail"  # noqa: SLF001
 
 
 def _checkout_key(root: Path) -> str:
@@ -113,15 +147,24 @@ def _checkout_key(root: Path) -> str:
 
 
 def mail_root(root: Path, manager: str) -> Path:
-    """`~/.rite/managers/<checkout>/<manager>/mail/` — where every box lives.
+    """`<_mail_home()>/<checkout>/<manager>/mail/` — where every box lives.
 
     Outside the project so that no Manager's profile, which grants the
-    project, grants an inbox (see the module docstring). `~/.rite` is
-    `RITE_HOME_DIR` when that is set, as for the credential registry.
+    project, grants an inbox; and outside `~/.rite`, which every Manager's
+    profile grants readable, so that no Manager can read another's mail
+    (see the module docstring). Each profile grants this directory to its
+    own Manager only: read, and its outbox write.
     """
+    manager_dir(root, manager)  # validates the name; the join is below
+    return _mail_home() / _checkout_key(root) / manager / "mail"
+
+
+def _rite_home_mail_root(root: Path, manager: str) -> Path:
+    """`~/.rite/managers/<checkout>/<manager>/mail/`, where the boxes lived
+    before DF3. Moved from once by `adopt_legacy`, never read for delivery."""
     from rite_ai.credentials.store import default_rite_home
 
-    manager_dir(root, manager)  # validates the name; the join is below
+    manager_dir(root, manager)
     return (
         default_rite_home() / MAILBOXES_DIRNAME / _checkout_key(root) / manager / "mail"
     )
@@ -142,7 +185,7 @@ def mailbox_dir(root: Path, manager: str, box: str) -> Path:
 
 def _mark_project(root: Path, manager: str) -> None:
     """Record which project a checkout key is, for the person reading
-    `~/.rite/managers/`. Best effort: inside the boundary it is refused, and
+    `_mail_home()`. Best effort: inside the boundary it is refused, and
     nothing reads it back."""
     try:
         where = mail_root(root, manager).parent.parent / "project"
@@ -494,6 +537,11 @@ class Adoption:
     different file, or they could not be read or written. Never deleted."""
     after_marker: tuple[Path, ...] = ()
     """Files found in the old box AFTER it had been moved: not delivered."""
+    from_rite_home: int = 0
+    """Files moved out of `~/.rite`, where every Manager could read them."""
+    kept_in_rite_home: tuple[Path, ...] = ()
+    """Files left under `~/.rite` because moving them would have replaced a
+    different file, or failed. Still readable by every Manager: SAID."""
 
 
 def _legacy_files(root: Path, manager: str) -> list[Path]:
@@ -549,8 +597,69 @@ def _move_cursor(source: Path, dest: Path) -> bool:
     return True
 
 
+def _adopt_from_rite_home(root: Path, manager: str) -> tuple[int, list[Path]]:
+    """Move this Manager's box out of `~/.rite` (DF3). Never raises.
+
+    Everything in it moves — messages, readers' cursors, and the in-tree
+    adoption marker, so a box adopted from the tree stays adopted. Messages
+    and cursors move as `adopt_legacy` moves them (written then removed; a
+    different file at the destination is never replaced; the earlier cursor
+    wins). Unlike the in-tree box there is no marker: nothing but rite
+    writes here, and anything left is still exposed, so every start moves
+    what it finds and says what it could not.
+    """
+    old = _rite_home_mail_root(root, manager)
+    if not old.is_dir():
+        return 0, []
+    new = mail_root(root, manager)
+    try:
+        files = sorted(p for p in old.rglob("*") if p.is_file() or p.is_symlink())
+    except OSError:
+        return 0, [old]
+    moved = 0
+    kept: list[Path] = []
+    for source in sorted(files, key=lambda p: (not p.parent.name.endswith(".read"), p)):
+        relative = source.relative_to(old)
+        two = len(relative.parts) == 2 and source.suffix == ".json"
+        if two and relative.parts[0].endswith(".read"):
+            ok = _move_cursor(source, new / relative)
+        elif (two and relative.parts[0] in (INBOX, OUTBOX)) or (
+            relative.parts == (ADOPTED_MARKER,)
+        ):
+            ok = _move_one(source, new / relative)
+        else:
+            ok = False
+        if ok:
+            moved += 1
+        else:
+            kept.append(source)
+    for directory in sorted(
+        (p for p in old.rglob("*") if p.is_dir()), key=lambda p: -len(p.parts)
+    ):
+        try:
+            directory.rmdir()
+        except OSError:
+            pass
+    checkout = old.parent.parent
+    for leftover in (old, old.parent):
+        try:
+            leftover.rmdir()
+        except OSError:
+            pass
+    try:
+        if [p.name for p in checkout.iterdir()] == ["project"]:
+            (checkout / "project").unlink()
+            checkout.rmdir()
+    except OSError:
+        pass
+    return moved, kept
+
+
 def adopt_legacy(root: Path, manager: str) -> Adoption:
     """Move the pre-0.6.0 in-tree box to the mailbox, ONCE. Never raises.
+
+    And, first, a box found under `~/.rite`, where 0.6.0's development builds
+    kept it and every Manager could read it (`_adopt_from_rite_home`).
 
     ⚠ **Call it under the run lock, OUTSIDE the boundary, before anything
     reads mail** — `rite start` does, straight after `hold_run`. The lock is
@@ -566,10 +675,15 @@ def adopt_legacy(root: Path, manager: str) -> Adoption:
     which. Delivering it would be delivering an instruction nobody can
     attribute. It is left in place, so a person can read it and resend it.
     """
+    from_home, kept_home = _adopt_from_rite_home(root, manager)
     marker = mail_root(root, manager) / ADOPTED_MARKER
     files = _legacy_files(root, manager)
     if marker.exists():
-        return Adoption(after_marker=tuple(files))
+        return Adoption(
+            after_marker=tuple(files),
+            from_rite_home=from_home,
+            kept_in_rite_home=tuple(kept_home),
+        )
     old = _legacy_mail_root(root, manager)
     new = mail_root(root, manager)
     moved = 0
@@ -613,17 +727,36 @@ def adopt_legacy(root: Path, manager: str) -> Adoption:
         old.rmdir()
     except OSError:
         pass
-    return Adoption(moved=moved, kept=tuple(kept))
+    return Adoption(
+        moved=moved,
+        kept=tuple(kept),
+        from_rite_home=from_home,
+        kept_in_rite_home=tuple(kept_home),
+    )
 
 
 def adoption_notes(adoption: Adoption, manager: str) -> list[str]:
     """What to say about an adoption. Nothing when there was nothing to do."""
     notes: list[str] = []
+    if adoption.from_rite_home:
+        notes.append(
+            f"moved {adoption.from_rite_home} file(s) of the mail of Manager "
+            f"{manager!r} out of ~/.rite, which every Manager's sandbox can read, to "
+            f"{_mail_home()}, which none can except for its own mail"
+        )
+    if adoption.kept_in_rite_home:
+        notes.append(
+            f"⚠ {len(adoption.kept_in_rite_home)} file(s) of the mail of "
+            f"Manager {manager!r} could not be moved out of ~/.rite and are "
+            "still READABLE by every Manager on this machine. They are not "
+            "delivered. Look at them and remove them: "
+            f"{', '.join(str(p) for p in adoption.kept_in_rite_home[:3])}"
+        )
     if adoption.moved:
         notes.append(
             f"moved {adoption.moved} file(s) from Manager {manager!r}'s "
-            "pre-0.6.0 in-tree mailbox to its mailbox under ~/.rite; the "
-            "project tree is not read for mail again"
+            f"pre-0.6.0 in-tree mailbox to its mailbox under {_mail_home()}; "
+            "the project tree is not read for mail again"
         )
     if adoption.kept:
         notes.append(
@@ -643,11 +776,56 @@ def adoption_notes(adoption: Adoption, manager: str) -> list[str]:
     return notes
 
 
+def still_under_rite_home() -> list[str]:
+    """What is still under `~/.rite/managers/` after this start's move, as
+    lines to say — readable by every Manager on the machine (DF3).
+
+    ⚠ **Reported, not moved.** Each box is moved by ITS Manager's next start,
+    under that Manager's run lock; moving another project's box from here
+    would race a supervisor that may be reading it. So the exposure is said
+    at every start until it is gone, with where to look.
+    """
+    from rite_ai.credentials.store import default_rite_home
+
+    base = default_rite_home() / MAILBOXES_DIRNAME
+    try:
+        checkouts = [p for p in base.iterdir() if p.is_dir()]
+    except OSError:
+        return []
+    exposed: list[str] = []
+    for checkout in sorted(checkouts):
+        try:
+            count = sum(
+                1
+                for p in checkout.rglob("*.json")
+                if p.is_file() and p.parent.name in (INBOX, OUTBOX)
+            )
+        except OSError:
+            continue
+        if count:
+            try:
+                which = (checkout / "project").read_text().strip()
+            except OSError:
+                which = "a project rite cannot name"
+            exposed.append(f"{count} message(s) of {which}")
+    if not exposed:
+        return []
+    return [
+        f"⚠ mail is still under {base}, where EVERY Manager's sandbox on this "
+        f"machine can read it: {'; '.join(exposed[:5])}"
+        + (f"; and {len(exposed) - 5} more" if len(exposed) > 5 else "")
+        + ". Each project's mail moves out the next time its Managers start; "
+        "until then it is exposed. Start them, or remove what is not needed."
+    ]
+
+
 def legacy_waiting(root: Path, manager: str) -> int:
     """Messages still in the pre-0.6.0 box of a Manager not yet started
     under this rite, for a reader to be told about. 0 once adopted."""
     if (mail_root(root, manager) / ADOPTED_MARKER).exists():
         return 0
+    if (_rite_home_mail_root(root, manager) / ADOPTED_MARKER).exists():
+        return 0  # adopted by a development build; moves at the next start
     return sum(
         1
         for p in _legacy_files(root, manager)

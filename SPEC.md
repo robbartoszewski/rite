@@ -1994,8 +1994,8 @@ not.** A Manager session carries `RITE_MANAGER` (`managers/__init__.py`,
 `MANAGER_ENV`), set on every session `rite start` creates. So a process can
 answer "which Manager am I". And `manager_dir()` gives each Manager
 `.rite/managers/<name>/`, where NEW state lives (the mailbox, the journal).
-*The mailbox has since left the tree, for `~/.rite/managers/<checkout>/<name>/mail/`
-(§5.4.8, 0.24.15).*
+*The mailbox has since left the tree, for `<data>/rite/mail/<checkout>/<name>/mail/`
+(§5.4.8, 0.24.15; out of `~/.rite` since DF3).*
 **Existing per-project state has not moved**, and no 0.6.0 ticket moves it.
 Step 2 is carried to 0.7.0 as MM1 in `docs/design/V070_RELEASE_PLAN.md`. The
 text below is the analysis as written before either landed.
@@ -2050,7 +2050,7 @@ The enumeration must therefore split two kinds:
   scheduler locks, the coordination cache. Each stays shared and each needs
   its reason written next to it. ⚠ *The outbox was on this list. It is no
   longer shared: each Manager has its own mailbox, since 0.6.0 outside the
-  project at `~/.rite/managers/<checkout>/<name>/mail/`
+  project at `<data>/rite/mail/<checkout>/<name>/mail/`
   (`managers/mailbox.py`, `mail_root`).*
 - **Shared by accident** — everything else in the flat `.rite/`, which is
   shared because nothing gave it an owner, and which §5.4.5's step 2 moves.
@@ -2167,10 +2167,32 @@ be tested:
   it is enforced on the writer, never on the content. Most per-project state
   is still flat and still writable by either Manager (§5.4.5).
 
-  **Since 0.24.15 the mailbox is outside the project**, at
-  `~/.rite/managers/<checkout>/<name>/mail/`. No Manager's profile grants
-  it, so neither platform has to carve the inbox out of a project grant.
-  Each Manager is granted its own outbox by exact path. **Since 0.24.16
+  **Since 0.24.15 the mailbox is outside the project**, and since DF3
+  outside `~/.rite` too, at `<data>/rite/mail/<checkout>/<name>/mail/`
+  (`<data>` is `~/Library/Application Support` on macOS and `~/.local/share`
+  on Linux, beside the Managers' credential directories). No Manager's
+  profile grants it as a tree, so neither platform has to carve the inbox
+  out of a project grant. Each Manager is granted its OWN mail directory
+  readable and its own outbox writable, by exact path, and nothing else of
+  it.
+
+  🔴 **Until DF3 this paragraph said "No Manager's profile grants it", and
+  that was true for WRITES only.** The mailbox was at
+  `~/.rite/managers/<checkout>/<name>/mail/`, and `~/.rite` is granted
+  READABLE as a tree to every Manager on both platforms
+  (`enclosure._tool_paths`, which Landlock reuses). So from inside its
+  boundary any Manager could list and read every Manager's inbox and outbox,
+  for every project on the machine. Measured on the v0.6.0 Linux acceptance
+  run, and on macOS with real `sandbox-exec`. No test covered reads, which
+  is how the claim survived. The MM-2b spike had predicted it
+  (`docs/design/spikes/MM2b-moving-the-inbox-out-of-the-project.md`). Now
+  measured by `test_no_manager_reads_another_managers_mail.py` (macOS) and
+  `test_a_manager_cannot_read_another_managers_mail` (Landlock), each with a
+  HOME whose `.rite` is granted as in production, so both fail on the old
+  location. The same change made `.rite/managers/<other>/` unreadable on
+  macOS, as it already was on Linux: it holds the other Manager's
+  `prompt.txt`, which is its whole instruction with the mail delivered in
+  it, and its `routes/`. **Since 0.24.16
   the old in-tree `mail/` is moved once and never read again**: the first
   `rite start` moves it under the run lock, outside the boundary, and
   leaves a marker, and anything that appears there afterwards is reported

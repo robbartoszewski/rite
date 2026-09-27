@@ -501,7 +501,7 @@ def _fenced_project_paths(project: Path, manager: str) -> list[Path]:
         enumerating two levels           both REFUSED, project source writable
 
     ⚠ **THE INBOXES HAVE LEFT THE TREE, AND THIS ENUMERATION HAS NOT, ON
-    PURPOSE.** Since 0.6.0 the mailbox is under rite's home, fenced by
+    PURPOSE.** Since 0.6.0 the mailbox is under rite's data directory, fenced by
     construction. But `.rite/managers/<name>/` still holds what a Manager's
     supervisor acts on with that Manager's authority — `routes/`, which the
     Owner's supervisor delivers as "routed by the Owner · INSTRUCTION", and
@@ -595,7 +595,8 @@ def write_profile(root: Path, manager: str, home: Path | None = None) -> Path:
     #
     # The outbox matters specifically: `rite reply` writes there from INSIDE
     # the boundary, and it is the one mail box a Manager must be able to write.
-    # It is under rite's home now, not the project, and granted by exact path.
+    # It is under rite's data directory now (DF3), not the project, and
+    # granted by exact path.
     manager_dir(root, manager).mkdir(parents=True, exist_ok=True)
     mailbox_dir(root, manager, OUTBOX).mkdir(parents=True, exist_ok=True)
     mailbox_dir(root, manager, INBOX).mkdir(parents=True, exist_ok=True)

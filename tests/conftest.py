@@ -185,13 +185,17 @@ def _no_real_credential_file(tmp_path_factory, monkeypatch):
     # `~/.rite/credentials.json` (7 found there on 2026-09-26), and doctor's
     # output depended on whatever that machine had stored.
     #
-    # ⚠ A directory of its OWN, not inside `d`: the Manager mailbox lives in
-    # rite's home since 0.6.0, and `github_access` denies the credential
-    # root's parent (here `d`) to every Manager, which would deny the outbox
-    # too. In production the two are `~/.rite` and Application Support.
+    # ⚠ A directory of its OWN, not inside `d`: `github_access` denies the
+    # credential store's parent (here `d`) to every Manager.
     if "RITE_HOME_DIR" not in os.environ:
         monkeypatch.setenv(
             "RITE_HOME_DIR", str(tmp_path_factory.mktemp("ritehome") / "rite-home")
+        )
+    # ⚠ And the Manager mailboxes, which left `~/.rite` for the operator's
+    # data directory (DF3) — a directory of their own for the same reason.
+    if "RITE_MAIL_DIR" not in os.environ:
+        monkeypatch.setenv(
+            "RITE_MAIL_DIR", str(tmp_path_factory.mktemp("ritemail") / "mail")
         )
     # ⚠ And the per-Manager credential directories (run lock, token, Claude
     # login), which default to the operator's real Application Support.
