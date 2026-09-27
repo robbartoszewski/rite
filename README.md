@@ -411,9 +411,10 @@ whichever is free rather than whichever *can*.
 
 **Platforms.** Built and tested on **macOS 26.2**. One step there has not
 yet run end to end: a sandboxed worker taking a ticket all the way through
-(step 4). **Linux is thinner**, tested on Ubuntu 24.04 (ARM64): a Goose
-Manager runs inside a sandbox that is weaker than macOS's, Workers are not
-sandboxed by default, and a Claude Manager is not supported yet. Several
+(step 4). **Linux is thinner**, tested on Ubuntu 24.04 (ARM64): Claude and
+Goose Managers run inside a sandbox that is weaker than macOS's, and have
+been observed working together as Owner and secondary; Workers are not
+sandboxed by default. Several
 Managers share a project on **one machine, one project root**. Windows is
 not attempted.
 

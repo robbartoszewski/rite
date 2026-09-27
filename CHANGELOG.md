@@ -12,9 +12,10 @@ one project on one machine, with a Claude Owner routing work to a
 local-model secondary.
 
 **Platforms.** Everything here runs on macOS. On Linux (tested on Ubuntu
-24.04) a Goose Manager runs inside a sandbox that is **weaker than macOS's**,
-Workers are **not sandboxed by default**, and a **Claude Manager is not
-supported yet**. See Known issues.
+24.04, ARM64) a Claude Manager and a Goose Manager both run inside a sandbox
+that is **weaker than macOS's**, and have been observed working together as
+Owner and secondary. Workers are **not sandboxed by default** there. See
+Known issues.
 
 ### Upgrading from 0.5.1: three steps, in this order
 
@@ -632,8 +633,11 @@ See SPEC §6.6.3.
 - **Linux: Workers are not sandboxed by default.** `rite init` leaves Worker
   sandboxing off there, because `flock` does nothing inside a Docker
   sandbox. The Manager's sandbox does not extend to Workers.
-- **Linux: a Claude Manager is not supported yet.** Use a Goose Manager on
-  Linux, or run Claude Managers on macOS.
+- **Linux: a Claude Manager runs, inside a weaker sandbox.** Observed on
+  Ubuntu 24.04 (ARM64) as the Owner of a Goose secondary: routing, the
+  secondary acting, and its reply reaching the running Owner. The Linux
+  sandbox's limits above apply to it, including that it can replace its own
+  login file.
 - **The network is not confined**, and `/tmp` is readable and writable by a
   Manager. Destination control is planned for 0.8.0. On Linux, no longer
   granting `/tmp` is planned for 0.7.0.

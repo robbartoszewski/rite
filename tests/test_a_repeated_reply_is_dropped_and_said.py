@@ -102,3 +102,34 @@ def test_the_standup_counts_replies_and_drops(tmp_path):
         "replies from 'small': 3 received, 2 byte-identical duplicate(s) dropped"
         in text
     ), text
+
+
+def test_a_reply_interrupted_before_delivery_is_not_called_a_duplicate(tmp_path):
+    """Found by the independent verification: the duplicate record was written
+    BEFORE a 10–60 s verification and before the send. Stopping the Owner in
+    that window lost the reply for good, and the next start said "dropped a
+    duplicate … already delivered", which was false."""
+    import pytest
+
+    _route(tmp_path)
+    mailbox.send(tmp_path, SECONDARY, mailbox.OUTBOX, "HELLO.txt written")
+
+    def stopped_mid_verification(sender, text):
+        raise KeyboardInterrupt  # the Owner's `rite start` is Ctrl-C'd here
+
+    with pytest.raises(KeyboardInterrupt):
+        routing.collect_reports(
+            tmp_path, OWNER, NAMES, lambda _m: None, verify=stopped_mid_verification
+        )
+    assert _delivered(tmp_path) == []
+    said = _collect(tmp_path)  # the next start
+    assert len(_delivered(tmp_path)) == 1, "the reply must still arrive"
+    assert not any(line.startswith("dropped a duplicate") for line in said), said
+
+
+def test_two_identical_replies_in_one_batch_still_deliver_once(tmp_path):
+    _route(tmp_path)
+    mailbox.send(tmp_path, SECONDARY, mailbox.OUTBOX, "same")
+    mailbox.send(tmp_path, SECONDARY, mailbox.OUTBOX, "same")
+    _collect(tmp_path)
+    assert len(_delivered(tmp_path)) == 1
