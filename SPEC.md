@@ -6380,8 +6380,10 @@ matched reply:
   longer a hard cap on sessions in a shared root; the window still is.
 
 The bookkeeping (routes delivered, routes handled, each supervisor's
-process) is written only by supervisors, beside the mailbox under
-`~/.rite/managers/`, where no Manager's profile grants a write.
+process) is written only by supervisors, in a `routing/` directory beside
+each Manager's `mail/` (outside `~/.rite` since DF3). A Manager's profile
+grants its own `mail/` and `mail/out` only, so no Manager can read or write
+it.
 
 ## 10. Credentials
 

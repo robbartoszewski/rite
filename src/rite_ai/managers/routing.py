@@ -301,9 +301,10 @@ def briefing(manager: str, owner: str, roles) -> str:
 # So both sides now WAIT, spending no session, and a cycle begins because mail
 # is in the inbox.
 #
-# Everything below is written by SUPERVISORS, outside every boundary, under
-# `~/.rite/managers/<checkout>/<manager>/routing/` — beside the mailbox, where
-# no Manager's profile grants a write (it is granted its own outbox only).
+# Everything below is written by SUPERVISORS, outside every boundary, in a
+# `routing/` directory beside each Manager's `mail/` (`mailbox.mail_root`,
+# outside `~/.rite` since DF3). A Manager's profile grants its own `mail/`
+# read and `mail/out` write, and nothing beside them.
 # Nothing here depends on a model remembering to run a command.
 # ---------------------------------------------------------------------------
 
