@@ -135,9 +135,16 @@ jobs:
   # ⚠ **The named files, not the whole suite, and the reason is honesty rather
   # than speed.** A hosted macOS runner has no tmux, no gitleaks and no
   # credential store, so a full run would skip the very things this job exists
-  # to check and report green. These five need none of that: they compose
+  # to check and report green. The files named need none of that: they compose
   # profiles and assert what the rules say, and `sandbox-exec` is part of
   # macOS. The Linux job above remains the full suite.
+  #
+  # ⚠ **A named list does not grow when a test is added.** Three macOS-gated
+  # files were missing from it until 2026-09-28 (DF3's mail fence, CU4's key
+  # file, CU8's allowlist), so they ran nowhere in CI while both jobs went
+  # green. `tests/test_the_macos_job_runs_every_macos_test.py`, in the Linux
+  # job, now fails when a test that names darwin or sandbox-exec is neither
+  # listed here nor excluded there with a reason.
   boundary-and-credentials-on-macos:
     runs-on: macos-latest
     steps:
@@ -181,4 +188,6 @@ jobs:
             tests/test_a_manager_gets_github_credentials_without_holding_keys.py \
             tests/test_credentials_live_in_one_0600_file.py \
             tests/test_the_sandbox_backend_is_chosen_by_platform.py \
-            tests/test_no_manager_reads_another_managers_mail.py
+            tests/test_no_manager_reads_another_managers_mail.py \
+            tests/test_a_cursor_manager_gets_its_key_as_a_file.py \
+            tests/test_cursor_allowlist_is_ritess_not_the_managers.py
