@@ -258,6 +258,12 @@ replies` and the Slack relay mark each question "needs your answer", and a
 message written without a kind (by an older rite, or by hand) is marked as
 needing you rather than passed as reading.
 
+**In Slack, your DM is the list of what needs you.** Questions are posted on
+their own, at once. What a Manager tells you for reading goes into a thread:
+under the next check-in when check-in windows are configured (so nothing for
+reading arrives between scheduled reports), otherwise under one "notes for
+today" post a day. Reading is never held more than a day.
+
 **A question stays pending until it reaches you.** Posting it to Slack does
 not count. Your reply in its Slack thread does, and so does your reaction
 when the Slack app has `reactions:read`; without Slack, `rite replies`

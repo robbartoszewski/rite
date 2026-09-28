@@ -97,6 +97,11 @@ THREAD_HOURS = 24.0
 roots a day (V060_CHECKINS), so without a horizon the set grows without
 limit."""
 
+HOLD_MAX_SECONDS = 24 * 3600.0
+"""The longest a message for READING is held for the next check-in (RP1 piece
+3). Past it, it goes under the day's notes root instead: a project whose
+Manager rarely runs in a check-in window must not hold its reading forever."""
+
 PENDING_SLOW_SECONDS = 300.0
 """How often the thread under a PENDING item (RP1 piece 2) is read once it is
 older than `THREAD_HOURS`. ⚠ **A pending item is exempt from the horizon and
@@ -510,6 +515,8 @@ class Listener:
     anything is posted — and that inference posted a month of old replies."""
     _turn: int = 0
     _unsaid: list[str] = field(default_factory=list)
+    _notes: dict = field(default_factory=dict)
+    """Today's notes root (RP1 piece 3): {"day", "channel", "ts"}."""
     _reactions: str = ""
     """"" until tried; "read" when `reactions.get` works; "missing" once Slack
     said the app lacks `reactions:read`, which is said once and then only a
@@ -925,6 +932,7 @@ class Listener:
                 "since": self.since,
                 "posted": keep,
                 "threads": threads,
+                "notes": self._notes,
             }
             write_atomic(path, json.dumps(state, indent=1) + "\n")
         except OSError as e:
@@ -935,6 +943,11 @@ class Listener:
         reading that are still inside the horizon."""
         state = self._state()
         self._started = bool(state.get("started"))
+        notes = state.get("notes")
+        if isinstance(notes, dict):
+            self._notes = {
+                k: str(v) for k, v in notes.items() if k in ("day", "channel", "ts")
+            }
         since = state.get("since")
         if isinstance(since, dict):
             self._saved_since = {str(k): str(v) for k, v in since.items() if v}
@@ -1010,9 +1023,32 @@ class Listener:
             )
         lines: list[str] = []
         from rite_ai.managers.checkins import is_checkin
-        from rite_ai.sandbox import redact_assignments
+        from rite_ai.managers.mailbox import _needs_action
 
+        # ⚠ TWO DESTINATIONS (RP1 piece 3, Robert 2026-09-28). What needs the
+        # person goes top-level into the DM and is NEVER held. What is for
+        # reading goes into a thread: under the next check-in when check-in
+        # windows are configured ("nothing between scheduled reports", for
+        # the reading pile only), else under one notes root a day. So the DM's
+        # top level is the scan list.
+        #
+        # ⚠ **So posts leave the outbox's order, and the cursor cannot say
+        # what was posted.** It advances only over the run of messages from
+        # the start that are ALL posted (below), and `posted` is what stops a
+        # message being posted twice while the cursor waits behind a held one.
+        holding = self._holds_reading()
+        held: list = []
         for message in waiting:
+            if message.path.name in posted:
+                continue
+            reading = not _needs_action(message)
+            if (
+                reading
+                and holding
+                and self.clock() - message.timestamp < HOLD_MAX_SECONDS
+            ):
+                held.append(message)
+                continue
             # ⚠ REDACTED ON THE WAY OUT. A Manager pastes command output into
             # its replies, and this posts them where people read — with no
             # Owner, into a channel the whole workspace reads. Same structural
@@ -1023,17 +1059,14 @@ class Listener:
             # the structural rule misses `oauth_token: <t>`, which is what
             # printing the Manager's gh config shows (measured).
             # The same for its Claude login and its Cursor key.
-            from rite_ai.managers import claude_login, cursor_login, github_access
-
-            text = redact_assignments(
-                message.text,
-                (
-                    self.token,
-                    *github_access.manager_secrets(self.project, self.manager),
-                    *claude_login.manager_secrets(self.project, self.manager),
-                    *cursor_login.manager_secrets(self.project, self.manager),
-                ),
-            )
+            text = self._outgoing(message.text)
+            if reading:
+                root = self._notes_root(target, call=call)
+                if root is None:
+                    break
+                if not self._post_in_thread(message, text, root, posted, lines, call):
+                    break
+                continue
             checkin = is_checkin(self.project, self.manager, message.path.name)
             if checkin and not self.dm:
                 # ⚠ No Owner, so no command channel: an answer typed in
@@ -1112,8 +1145,87 @@ class Listener:
                     # duplicate DM post.
                     self._problem(f"cannot mirror the check-in: {mirror.problem}")
             self._save(posted)
-            mark_read(self.project, self.manager, OUTBOX, READER, [message])
+            if checkin and held:
+                # The reading held since the last check-in goes in THIS one's
+                # thread, oldest first.
+                root = (sent.channel, sent.ts)
+                for h in held:
+                    if not self._post_in_thread(
+                        h, self._outgoing(h.text), root, posted, lines, call
+                    ):
+                        break
+                held = []
+        # Past every message from the start that is posted, and no further:
+        # a held one keeps its place for the check-in that carries it.
+        done = []
+        for message in waiting:
+            if message.path.name not in posted:
+                break
+            done.append(message)
+        mark_read(self.project, self.manager, OUTBOX, READER, done)
         return lines
+
+    def _outgoing(self, text: str) -> str:
+        from rite_ai.managers import claude_login, cursor_login, github_access
+        from rite_ai.sandbox import redact_assignments
+
+        return redact_assignments(
+            text,
+            (
+                self.token,
+                *github_access.manager_secrets(self.project, self.manager),
+                *claude_login.manager_secrets(self.project, self.manager),
+                *cursor_login.manager_secrets(self.project, self.manager),
+            ),
+        )
+
+    def _holds_reading(self) -> bool:
+        """Hold reading for the next check-in only when one will come."""
+        from rite_ai.managers.checkins import windows
+
+        return self.project is not None and windows(self.project).usable
+
+    def _post_in_thread(self, message, text, root, posted, lines, call) -> bool:
+        channel, ts = root
+        sent = _post(
+            channel, self.token, f"*{self.manager}*: {text}", thread=ts, call=call
+        )
+        if not sent.ok:
+            self._problem(f"cannot post a reply: {sent.problem}")
+            return False
+        posted[message.path.name] = {
+            "channel": sent.channel,
+            "ts": sent.ts,
+            "thread": ts,
+            "posted_at": self.clock(),
+        }
+        self._save(posted)
+        lines.append(
+            f"slack: posted {message.path.name} → {sent.channel} in the thread of {ts}"
+        )
+        return True
+
+    def _notes_root(self, target: str, *, call=None):
+        """Today's top-level notes post, made on first use; (channel, ts), or
+        None when it cannot be posted (said, and retried next tick)."""
+        day = time.strftime("%Y-%m-%d", time.localtime(self.clock()))
+        if self._notes.get("day") == day and self._notes.get("ts"):
+            return (self._notes["channel"], self._notes["ts"])
+        shown = time.strftime("%a %d %b", time.localtime(self.clock()))
+        sent = _post(
+            target,
+            self.token,
+            f"*{self.manager}*: notes for {shown}, for reading. Nothing in "
+            "this thread needs you; what does is posted on its own.",
+            call=call,
+        )
+        if not sent.ok:
+            self._problem(f"cannot post today's notes root: {sent.problem}")
+            return None
+        self._notes = {"day": day, "channel": sent.channel, "ts": sent.ts}
+        self.remember(sent.channel, sent.ts, self._label(f"notes for {shown}", sent))
+        self._save()
+        return (sent.channel, sent.ts)
 
     def drain(self, *, call=None) -> tuple[str, ...]:
         """One last read of every conversation and every thread, at the end

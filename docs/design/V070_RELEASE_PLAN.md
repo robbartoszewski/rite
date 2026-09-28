@@ -568,7 +568,7 @@ here, with the reasoning, so nobody relitigates them from memory.
    dogfood Worker whose question went into a file nothing reads. The
    coordinator named this the part that matters most.
 
-**RP1 status (2026-09-28): pieces 1 and 2 of 3 built.** Piece 2 (SPEC 0.24.34): what needs the Owner stays pending until his thread reply or reaction (or, without Slack, `rite replies` showing it), is listed at every check-in until then, and its thread is read past the relay's limits. Piece 1: (1) **Kinds**: every outbox
+**RP1 status (2026-09-28): all three pieces built.** Piece 3 (SPEC 0.24.35): in Slack, action top-level in the DM and never held; reading in a thread, held for the next check-in when windows are configured, else under one notes root a day, never held past 24 h. What RP1's "done when" still needs is Robert's own reading of a check-in and a day of Slack from a real run (the RC dogfood). Pieces 1 and 2: Piece 2 (SPEC 0.24.34): what needs the Owner stays pending until his thread reply or reaction (or, without Slack, `rite replies` showing it), is listed at every check-in until then, and its thread is read past the relay's limits. Piece 1: (1) **Kinds**: every outbox
 message records the command that wrote it (question, check-in, reply). A
 message with no kind needs action. `rite reply` refuses what reads as a
 question and names `rite ask`, erring toward refusing (SPEC 0.24.32). (2)
