@@ -85,6 +85,19 @@ of); don't swap in a classic token to skip it.
 
 ### `rite init` offers the repositories it finds as modules
 
+### `rite refine status` says whether a ticket has an agreed definition of done
+
+`rite refine status <ID>` reads the ticket and every comment on it once, and
+says whether it carries a definition of done that was agreed and signed by
+rite: REFINED, or NOT REFINED, STALE (the ticket changed since),
+CONFLICT (two records each claim to be current) or UNREADABLE (the board or
+a record could not be read). It exits 0 only for REFINED. Nothing else counts
+as agreement: not a label, and not an agent saying so. **In this build nothing
+writes a record yet**, so every ticket reads NOT REFINED; the refinement that
+writes them is still being built.
+
+### `rite init` in a single repository registers it
+
 `rite init` in a repository with code used to register no module, so a
 Worker's workspace held nothing to work on. It now offers the project root
 (when it is a git repository with a commit) and each repository in a
