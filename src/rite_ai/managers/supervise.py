@@ -42,6 +42,7 @@ from rite_ai.managers import (
     checkins,
     claude_login,
     cursor_chat,
+    cursor_login,
     designate,
     designated,
     designation_path,
@@ -1957,6 +1958,7 @@ def _default_starter(
     profile = confinement.write_profile(root, manager)
     github_env = github_access.pane_environment(root, manager)
     handle_spelling = spelling_for(engine, agent)
+    cursor = engine == "cursor"
     start_handle = (
         session_name(root, manager)
         if handle_spelling.handle_is_ours and not resume_id
@@ -1984,9 +1986,18 @@ def _default_starter(
             **git_settings.pane_environment(root, github_env),
             # And WHERE a Claude Manager's own login is (`claude_login`).
             **claude_login.pane_environment(root, manager),
+            # And WHERE a Cursor Manager's own state is (`cursor_login`):
+            # paths only. Its KEY is never passed with `tmux -e`.
+            **(cursor_login.pane_environment(root, manager) if cursor else {}),
         },
         engine=engine,
-        command=confinement.wrap(
+        # ⚠ CU4: a Cursor Manager's key is read by tmux's shell OUTSIDE the
+        # boundary, into the environment of the engine alone
+        # (`cursor_login.launch_prefix`). Gated on the ENGINE, not on the
+        # file: a copy a killed Cursor run left must never reach a Manager
+        # whose engine has since changed.
+        command=(cursor_login.launch_prefix(root, manager) if cursor else "")
+        + confinement.wrap(
             launch_command(
                 engine,
                 resume_id,
