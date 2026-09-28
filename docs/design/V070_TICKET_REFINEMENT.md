@@ -469,6 +469,15 @@ granted path proves nothing. **If a platform cannot deny it, then on that
 platform the record is tamper-evident against accidents and not against a
 hostile Manager, and `rite start` says so every run.**
 
+⚠ **The key never enters an argv or an environment**, not even the
+supervisor's own. CU1b section 4 (measured 2026-09-28, `9676630`) read an
+engine's environment through `sysctl(KERN_PROCARGS2)` from inside the same
+Manager, a sibling Manager and a yoloAI Worker. Anything placed there is
+readable machine-wide. So the process that computes the MAC reads the file
+itself and keeps the key in memory only. TR0 checks that with the same
+reader, from inside each boundary, against every rite process that holds
+it.
+
 ### 3.9 Local models
 
 What decides an outcome is all rite's: the lint, the quote check, the
@@ -627,7 +636,10 @@ dogfood's `KAN`.
   text node and `adf_to_text`; and whether Jira's embedded comment list
   pages.
 - **Whether the key is unreadable** from inside a Manager (seatbelt,
-  Landlock) and a Worker (yoloAI), under an ungranted root with a control.
+  Landlock) and a Worker (yoloAI), under an ungranted root with a control;
+  and whether it is absent from the argv and environment of every rite
+  process that holds it, read with CU1b section 4's `KERN_PROCARGS2`
+  reader.
 - **Whether a sandboxed Worker's handover or reply reaches the host**
   (TR4). The dogfood suggests not, because its question stayed in the
   sandbox. That is one observation, not a measurement.
