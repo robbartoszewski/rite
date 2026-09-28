@@ -288,10 +288,12 @@ def announcement(manager: str) -> str:
     where = (
         "the Manager's sandbox cannot write it"
         if sys.platform == "darwin"
-        else "⚠ on Linux the Manager CAN write it (Landlock cannot deny one "
-        "file inside a granted directory); rite checks it after every cycle "
-        "and stops on a change, which a process that restores it in time "
-        "would defeat"
+        else "⚠ the Manager CAN write it: Cursor rewrites this file itself on "
+        "every turn (a temp file created beside it and renamed over it) and "
+        "stops when it cannot, so no sandbox rule can protect it without "
+        "stopping Cursor. rite checks it after every cycle and stops on a "
+        "change; a change restored before that check is not caught. Accepted "
+        "by the operator as a limitation of Cursor"
     )
     return (
         f"permissions: Manager {manager!r} runs Cursor with rite's allowlist, "
