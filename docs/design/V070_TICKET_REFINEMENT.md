@@ -513,9 +513,46 @@ ticket, and the next record supersedes the old one.
   TRQ6: under the fail-closed default it still takes one round, "RT-10
   already has a definition of done: <quoted>. Reply ok to start it as
   written", or a person's `rite refine accept --as-written`. The
-  alternative, trusting it when the description's last editor is not an
-  identity rite gives a Manager, needs a measurement first, and on Jira
-  there is no such identity to compare.
+  alternative is to trust it when the description's last editor is the
+  person and not rite.
+
+  **Measured 2026-09-28, read-only: that alternative is not safe on GitHub
+  today, and it is not available on Jira.**
+  - **GitHub does report the editor.** GraphQL's `Issue.editor`,
+    `lastEditedAt` and `userContentEdits` exist and were read on
+    `rite-dogfood-board` (#1–#25). None of those bodies has ever been
+    edited, so every one read `null` and zero edits.
+  - **But three kinds of writer carry the person's own identity.**
+    - The person, on the web or through `gh`.
+    - rite's host-side commands, which use the person's `gh` login. Across
+      98 issues and pull requests in Robert's repositories, all 132
+      authors, editors and commenters read were `User` accounts, and none
+      was a `Bot`, rite's own handover comments included.
+    - **Workers.** They write with `github_token` or
+      `sandbox_token_<worker>` (`sandbox/__init__.py`,
+      `resolve_worker_token`), both a "GitHub personal access token"
+      (`credentials/store.py:75`), which acts as the person who made it.
+  - **Only Managers use a separate identity**: a GitHub App installation
+    token (`managers/github_access.py`), whose writes should appear as the
+    App's bot. **This is not observed.** No `Bot` actor appears anywhere
+    in his repositories, and minting an App token to edit a ticket was not
+    done: it would handle the App's private key and write to a board in
+    use.
+  - **So "last edited by Robert" cannot be told from "last edited by a
+    Worker"** on GitHub. A Worker working RT-10 could add a "definition of
+    done" to RT-11's description, and it would read as Robert's. Trusting
+    by editor identity would need Workers to write under their own
+    identity too (App tokens, or a separate machine account). That is a
+    change to Worker credentials, not a measurement, and it is not
+    proposed for v0.7.0.
+  - **Jira:** Managers hold no Jira credential (F11). Workers carry the
+    person's own Jira API token: a Worker's launch line carries "the GitHub
+    token, the JIRA token", measured on yoloAI and recorded in
+    `sandbox/__init__.py` (`redact_secrets`). So there is no identity to
+    compare either.
+
+  The one round, or a person's `--as-written` at a terminal, stays the only
+  safe skip.
 
 ### 3.7 Everything that consumes the predicate
 
@@ -899,6 +936,9 @@ it. What is actually true:
   and whether it is absent from the argv and environment of every rite
   process that holds it, read with CU1b section 4's `KERN_PROCARGS2`
   reader.
+- ~~Whether a person's edit to a ticket description can be told from
+  rite's~~: **measured 2026-09-28**: not on GitHub today, because Workers
+  write with the person's own token, and not on Jira (part 3.6).
 - ~~Whether the Jira filter for "needs refinement" works~~: **measured
   2026-09-28** on `bentora` (an exact 5 + 142 = 147 split), and the GitHub
   filter on `cli/cli`. Not yet run on `ritetest` (part 3.10).
