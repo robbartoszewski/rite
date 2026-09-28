@@ -32,6 +32,9 @@ HOME_GRANTS = {
     "measured `Abort trap: 6` with only `tools` granted",
     ".config/goose": "Goose reads its config here, and panics at start without it "
     "(measured, Linux observation pass)",
+    ".local/share/cursor-agent": "Cursor's `agent` launcher and its bundled node; "
+    "without it a Cursor launch exits 126 (measured, CU1 section 4). Read-only, "
+    "no credential in it",
     ".gitconfig": "git identity for the Manager's commits; read-only, and denied "
     "write by name so a Manager cannot change what commits claim",
     ".config/git": "git's XDG config, same reason and same write deny as `.gitconfig`",

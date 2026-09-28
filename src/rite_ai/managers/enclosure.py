@@ -211,6 +211,12 @@ def _tool_paths(home: Path) -> tuple[Path, ...]:
             # Claude Manager now signs in from a config directory of its own
             # (`claude_login`), measured to work with no `~/.claude` grant.
             ".config/goose",
+            # Cursor's `agent` launcher and the `node` it runs live here; the
+            # symlink in `~/.local/bin` points into it. Measured (CU1 section
+            # 4): without it a launch exits 126, "Operation not permitted".
+            # Read-only, and it holds no credential: Cursor's login and state
+            # are per-Manager (`cursor_login`), and `~/.cursor` is NOT granted.
+            ".local/share/cursor-agent",
             # ⚠ **`~/.rite` is NOT granted any more (DF3).** It was granted
             # readable as a tree with B9, with no reason recorded, and it
             # holds `dispatch/projects.yaml` — every registered project's

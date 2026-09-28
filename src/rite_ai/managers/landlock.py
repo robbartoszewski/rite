@@ -255,7 +255,9 @@ def _path_beneath(allowed_access: int, parent_fd: int) -> ctypes.Array:
 # here. The PARENT is granted, not the file: a binary that loads anything from
 # beside itself needs its directory, and `.local/share/uv` is granted for
 # exactly that reason already.
-ENGINE_BINARIES = ("claude", "goose", "rite", "git", "gh", "tmux")
+ENGINE_BINARIES = ("claude", "goose", "agent", "rite", "git", "gh", "tmux")
+# `agent` is Cursor's launcher, a bash script in a versioned directory that
+# runs the `node` beside it; the parent grant covers both (CU4).
 
 
 def _engine_binary_paths() -> list[Path]:
@@ -402,6 +404,7 @@ def compose_policy(root: Path, manager: str, home: Path | None = None) -> dict:
     cdir = github_access._credential_dir(root, manager, where)  # noqa: PLC2701
     gh_dir = cdir / "gh"
     claude_dir = cdir / "claude"
+    cursor_dir = cdir / "cursor"
 
     # The two GitHub files, read-only, by exact path — not the directory.
     for name in ("hosts.yml", "config.yml"):
@@ -429,6 +432,13 @@ def compose_policy(root: Path, manager: str, home: Path | None = None) -> dict:
         # can already read — and in exchange Claude works. Seatbelt keeps the
         # deny because it has one to keep.
         writable.append(claude_dir)
+
+    if cursor_dir.is_dir() and not cursor_dir.is_symlink():
+        # A Cursor Manager's config, chats and project state (CU4), for the
+        # reason seatbelt grants it (`github_access.profile_lines`). The key's
+        # copy, `cursor.key`, sits beside it and is granted nothing: tmux's
+        # shell reads it outside the boundary. Not measured on Linux.
+        writable.append(cursor_dir)
 
     return {
         "manager": manager,
