@@ -6,3 +6,7 @@
 # that CI cannot give, and what would let it run. The key is pytest's node id.
 
 [runs_nowhere]
+"tests/test_a_claude_manager_signs_in_without_the_keychain.py::test_inside_the_profile_claude_READS_its_own_file" = "needs a real `claude` binary run inside seatbelt; no CI runner installs Claude Code. The keychain-free login it confirms is covered at the file level by the rest of the file"
+"tests/test_release_checksums.py::test_the_runbook_points_at_the_tool_rather_than_a_manual_paste" = "reads docs/private/PUBLISH_RUNBOOK.md, which is private and not in the repository; a maintainer-only check"
+"tests/test_release_notes.py::test_the_runbook_creates_the_release_rather_than_leaving_it_to_a_human" = "reads the private publish runbook, which is not in the repository; a maintainer-only check"
+"tests/test_the_verify_decides_end_to_end.py::TestWhatGoosesClaimActuallyMeans::test_the_weakness_is_visible_in_the_signal_not_hidden_by_it" = "needs the `goose` binary, which no CI runner installs; installing an unpinned Goose in CI would make the result depend on its release"

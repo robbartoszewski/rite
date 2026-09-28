@@ -197,6 +197,16 @@ jobs:
           sudo mv gitleaks /usr/local/bin/gitleaks
           gitleaks version
 
+      # W8's run-it test (`test_inside_the_profile_the_operators_gh_config_is_
+      # unreadable`) skips where there is no `~/.config/gh/config.yml` to try,
+      # and a hosted runner has none, so the deny had only ever been checked
+      # as text. A harmless file here makes it run: readable outside the
+      # profile (its control), unreadable inside.
+      - name: Give the gh-config deny something to protect
+        run: |
+          mkdir -p ~/.config/gh
+          [ -e ~/.config/gh/config.yml ] || printf 'git_protocol: https\n' > ~/.config/gh/config.yml
+
       - name: Which sandbox backend does macOS pick
         run: |
           echo "arch:   $(uname -m)"
