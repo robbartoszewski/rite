@@ -34,6 +34,18 @@ refusing too much, by design. Each Manager is told which command is which.
 message written without a kind, by an older rite or by hand, is marked as
 needing you.
 
+### The Owner asks before it routes, and does not implement tickets itself
+
+The Owner used to be told to "write each instruction so it can be done
+without asking you back", which told it to settle a gap itself, on a guess.
+It is now told to ask you (`rite ask`) before it routes anything it would
+otherwise have to guess, and never to route a guess. A secondary that is
+routed something it cannot do as written replies saying so and stops,
+instead of filling the gap. The Owner, and a lone Manager, are also told not
+to change code and commit it themselves: a ticket is worked by a Worker or
+routed, so that it gets a claim, a review and a pull request. This is an
+instruction, not yet enforced.
+
 ### `rite stop --skip-handover`
 
 `rite stop` hands over by default, as before. The new `--skip-handover`

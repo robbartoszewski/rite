@@ -6479,6 +6479,21 @@ def _other_managers_briefing(root: Path, manager: str) -> str:
     return briefing(manager, routing_owner(roles), roles)
 
 
+def _ticket_work_rule(root: Path, manager: str) -> str:
+    """The start prompt's rule that a Manager does not implement tickets
+    itself (TR3), or "" for a secondary (`prompt.ticket_work`)."""
+    from rite_ai.config.managers import routing_owner, shares_one_root
+    from rite_ai.config.models import ProjectConfig
+    from rite_ai.config.parse import ParseError, parse_config
+    from rite_ai.managers.prompt import ticket_work
+
+    parsed = parse_config(root / ".rite" / "config.yaml")
+    config = parsed if not isinstance(parsed, ParseError) else ProjectConfig()
+    one_root = shares_one_root(config.coordination.remote)
+    owner = routing_owner(list(config.coordination.manager_roles))
+    return ticket_work(manager, owner, one_root=one_root)
+
+
 def _router_for(root: Path, manager: str):
     """The routing step for this Manager's supervisor, or None: route the
     Owner's requests down (MM-3), and bring the others' replies up (MM-4).
@@ -7098,7 +7113,8 @@ def _start_a_manager(
                     role.name,
                     root=root,
                     extra=instructions(root, role.name, enabled=record_issues)
-                    + _other_managers_briefing(root, role.name),
+                    + _other_managers_briefing(root, role.name)
+                    + _ticket_work_rule(root, role.name),
                 )
             ),
             fresh=fresh,

@@ -479,9 +479,18 @@ def briefing(manager: str, owner: str, roles) -> str:
             "workspace, checked it. CONFIRMED is evidence, not proof; CONTRADICTED "
             "means do not relay it as done; COULD NOT TELL and NOT VERIFIED mean "
             "unconfirmed, and you say so. The verifier is also a model and can be "
-            "wrong. Route only what a person gave "
-            "you authority for, and write each instruction so it can be done "
-            "without asking you back.\n"
+            "wrong.\n\n"
+            # ⚠ TR3 (DF8). This sentence used to end "and write each
+            # instruction so it can be done without asking you back", which
+            # told the Owner to settle a gap itself, on a guess, rather than
+            # ask the User: the opposite of refinement. Asking belongs BEFORE
+            # routing, and to the User, the only one who can settle it.
+            "Route only what a person gave you authority for. If it is missing "
+            "something you would otherwise have to guess — which file, what "
+            "counts as done, what must not change — ask the User before you "
+            f'route, with `{rite} ask "<question>"`. Never route a guess, and '
+            "never leave the other Manager to ask: it cannot reach the User. "
+            "Once routed, the other Manager should need nothing more from you.\n"
         )
     return (
         f"{head}You are NOT the Owner. The Owner is '{owner}'.\n\n"
@@ -501,6 +510,13 @@ def briefing(manager: str, owner: str, roles) -> str:
         "whose result you did not see, is reported as FAILED, with its error. "
         f"Send one reply, when you have finished and checked. '{owner}' "
         "receives it at its next turn.\n"
+        # ⚠ TR3: the gap goes back to the Owner, who can ask the User. A
+        # secondary that fills it itself does work nobody agreed to.
+        "If a routed instruction cannot be done as written — it names a file "
+        "that does not exist, two parts of it contradict, or it leaves "
+        "something you would have to guess — reply saying exactly that, and "
+        "stop. Do not fill the gap yourself: the Owner takes it back to the "
+        "User.\n"
     )
 
 
