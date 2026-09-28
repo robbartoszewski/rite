@@ -245,10 +245,16 @@ def create_asked_for(root: Path, manager: str, board, say) -> int:
                 made = BackendError(str(e))
             if isinstance(made, BackendError) or not getattr(made, "id", ""):
                 why = made.message if isinstance(made, BackendError) else "no id"
+                # ⚠ Not "not tracked": GitHub creates the issue and THEN
+                # labels it, so an error can come back for an issue that
+                # exists (`GitHubBackend.create`). The board's words are
+                # quoted, and nothing is claimed that they do not say.
                 said = (
-                    f"chore not created: the board refused it ({why}). "
-                    "The work is not tracked, so do not route it or start a "
-                    "Worker on it."
+                    f"chore not created as asked. The board said: {why}. If "
+                    "that says the ticket exists, it is there without its "
+                    "labels: tell the User rather than asking again. Do not "
+                    "route the work or start a Worker on it until it is a "
+                    "ticket."
                 )
             else:
                 created += 1
@@ -303,7 +309,7 @@ def create_for_prompt(board, worker: str, text: str) -> tuple[str, str]:
         made = BackendError(str(e))
     if isinstance(made, BackendError) or not getattr(made, "id", ""):
         why = made.message if isinstance(made, BackendError) else "no id came back"
-        return "", f"the board refused the chore ({why})"
+        return "", f"the chore could not be filed as asked; the board said: {why}"
     return str(made.id), ""
 
 

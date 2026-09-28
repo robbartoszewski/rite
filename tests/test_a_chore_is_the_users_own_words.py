@@ -136,7 +136,7 @@ class TestTheManagerChoosesMessagesAndNothingElse:
         board = Board(result=BackendError("issues are disabled"))
         assert chores.create_asked_for(tmp_path, "lead", board, lambda _m: None) == 0
         (told,) = _notes(tmp_path, "lead")
-        assert "issues are disabled" in told and "not tracked" in told
+        assert "issues are disabled" in told and "chore not created as asked" in told
 
     def test_no_board_refuses(self, tmp_path):
         ids = _deliver(tmp_path, "lead", DM)
