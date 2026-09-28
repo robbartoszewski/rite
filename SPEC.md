@@ -6351,19 +6351,23 @@ such a project behaves as before.
 
 **The Owner routes, and cannot do it by writing an inbox (built).** No
 Manager may write a Manager's inbox (§5.4.8, P1), so the Owner ASKS, as it
-does for a Worker. `rite route <manager> "…"` writes a request into the
-Owner's own directory. The Owner's supervisor, outside the boundary, delivers
+does for a Worker. `rite route --ticket <ID> <manager> "…"` writes a request
+into the Owner's own directory. **Every route names its ticket (TR9):** the
+supervisor refuses a request with none, or one whose ticket a single-issue
+read of the board does not return (a board that cannot be read refuses too),
+and the refusal reaches the Owner's next instruction. The Owner's supervisor, outside the boundary, delivers
 it: every wait-loop tick, and at the cycle boundary. **Who is asking comes
 from the supervisor, never from the request**, and delivery happens only for
 the routing Owner, so a secondary's request is discarded and said to be. The
 secondary receives it under a header rite composes, with the Owner's text
 quoted:
 
-    [routed by the Owner Manager 'lead' · sent Sat 00:14 · INSTRUCTION]
+    [routed by the Owner Manager 'lead' · ticket RT-12 · sent Sat 00:14 · INSTRUCTION]
     > run the tests on branch fix-12 and report
 
-Observed through `rite start` with stub engines inside the real profiles:
-the secondary's next cycle prompt carried that block, and its own attempt to
+Observed through `rite start` with stub engines inside the real profiles,
+before the header gained its `ticket` field (TR9, covered by unit tests, not
+re-observed): the secondary's next cycle prompt carried that block, and its own attempt to
 route to the Owner was refused and discarded.
 
 **A secondary's instructions come from two places only:** messages routed by

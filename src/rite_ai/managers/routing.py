@@ -14,7 +14,7 @@ sandbox profile refuses writes to every Manager's inbox, its own included
 (`enclosure._manager_separation`). So the Owner cannot write a secondary's
 inbox either — it ASKS, the way it asks for a Worker (`broker`):
 
-1. inside its boundary the Owner runs `rite route <manager> "<text>"`, which
+1. inside its boundary the Owner runs `rite route --ticket <ID> <manager> "<text>"`, which
    writes a request into the Owner's OWN directory;
 2. the Owner's supervisor, OUTSIDE the boundary, takes the request and
    decides. **Who is asking comes from the supervisor** — the Manager it is
