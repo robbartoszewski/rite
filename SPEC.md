@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.26 · **Date:** 2026-09-28
+**Version:** 0.24.27 · **Date:** 2026-09-28
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -7016,6 +7016,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.27 — a cut prompt is said, or rite says it cannot tell.** After each Goose Manager cycle, rite reads Ollama's log for `truncating input prompt` inside the cycle and says any cut with its numbers, recording it for the check-in. It claims a clean cycle only on positive evidence: a local endpoint, an Ollama version the line was verified on (0.34.2), a readable log covering the cycle, and a model request logged inside it. Anything short of that, or truncation wording rite does not recognise, is said as "cannot tell" with the reason, once per run. The log does not name the model, and the message says so. The multi-turn fill (the dogfood's case) is still unmeasured.
 
 **Changes in 0.24.26 — what 0.24.25 had not observed, observed.** With `qwen3:8b` pinned to 40,960 (Ollama 0.34.2, Goose 1.51.0, macOS, swap 8.35 GB of 9.2 GB), Goose sends no `num_ctx` and Ollama serves the pin, not its default. A prompt that fits is sent whole. One over the window is cut to half the window from the front with no error, `finish: stop`, and Goose exits 0 with a wrong answer. With `GOOSE_CONTEXT_LIMIT`, Goose compacts at 80%, which cannot save a single oversized message; the multi-turn case, the dogfood's, was not measured. Only Ollama's log records the cut (`truncating input prompt … prompt=79296 … new=20482`), so a full window can be said only on the machine running Ollama. Making rite say it is not built.
 

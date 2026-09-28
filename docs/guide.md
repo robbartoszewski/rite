@@ -743,11 +743,25 @@ starting on it would be a guess.
 not its own default. A prompt that fits is sent whole. A prompt over the
 window is **cut to half the window, from the front, with no error**, and the
 model answers from what is left, so a Manager can reply confidently about
-instructions it never saw. Goose's exit status and output do not show it.
-Ollama's log does: look for `truncating input prompt` in
-`~/.ollama/logs/server.log` on the machine running Ollama. If you see it, the
-window is too small for what that Manager is being asked; raise
-`context_window`, or give it less to read at once.
+instructions it never saw. Goose's exit status and output do not show it;
+only Ollama's own log does.
+
+So after each cycle of a Goose Manager, `rite start` reads that log
+(`~/.ollama/logs/server.log`, or the file `RITE_OLLAMA_LOG` names) and says
+one of three things:
+
+- **a cut**, loudly, with how many tokens were sent and how many the model got,
+  also recorded for the next check-in. Raise `context_window`, or give that
+  Manager less to read at once. (The log does not name the model, so on a
+  server other programs also use, the cut may be theirs.)
+- **nothing**, when the cycle is shown to be clean: the log is this server's,
+  covers the whole cycle, and records its requests.
+- **"cannot tell"**, and why, once per run: the endpoint is on another
+  machine, the log cannot be read or was rotated, it records none of the
+  cycle's requests (as when `ollama serve` runs in a terminal), or Ollama is a
+  version whose log wording rite has not verified. rite verified the wording on
+  Ollama 0.34.2; after an upgrade it says "cannot tell" rather than falling
+  quiet.
 
 ⚠ **A bigger window costs memory.** The window's cache grows with it, on top
 of the model's weights. On a machine with little memory to spare, a window

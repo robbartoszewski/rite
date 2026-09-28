@@ -358,6 +358,38 @@ def launch_command(
     return f"{base} < {shlex.quote(str(prompt_path))}"
 
 
+def _say_if_the_window_was_cut(
+    root: Path, manager: str, agent: str, started: float, ended: float, say, told
+) -> list:
+    """Say whether Ollama cut this local Manager's prompt during the cycle.
+
+    Observed (plan, Track MS): a prompt over the window is cut from the front
+    with no error, and the cycle then ends normally with work done on a
+    fragment. Only Ollama's log records it (`local.truncation`). Returns the
+    cuts, for the check-in record. A "cannot tell" is said once per reason per
+    run (`told`), because a line repeated every cycle is one nobody reads.
+    """
+    if agent != "goose":
+        return []
+    from rite_ai.config.parse import ParseError, parse_config
+    from rite_ai.local import truncation
+
+    parsed = parse_config(root / ".rite" / "config.yaml")
+    if isinstance(parsed, ParseError):
+        return []
+    role = next(
+        (r for r in parsed.coordination.manager_roles if r.name == manager), None
+    )
+    if role is None or not role.endpoint:
+        return []
+    verdict = truncation.check_cycle(role.endpoint, started, ended)
+    line = truncation.describe(manager, role.context_window, verdict)
+    if line and (verdict.cut or line not in told):
+        told.add(line)
+        say(line)
+    return verdict.cuts
+
+
 def _say_if_the_sandbox_refused(root: Path, manager: str, pane: str, say) -> None:
     """Point at the boundary when something in the pane hit it.
 
@@ -841,6 +873,8 @@ def _supervise(
     know a ceiling bounds anything.
     """
     clock = now if callable(now) else time.time
+    told: set[str] = set()
+    """"Cannot tell" lines about cut prompts already said in this run."""
     # Injectable so a test can read what a human would have been told,
     # and a no-op by default so nothing prints from a library call.
     say = note if callable(note) else (lambda _m: None)
@@ -1459,6 +1493,9 @@ def _supervise(
                 # cycle's last two seconds.
                 router(say)
             _say_if_the_sandbox_refused(root, manager, live_pane, say)
+            cuts = _say_if_the_window_was_cut(
+                root, manager, agent, cycle.started_at, cycle.ended_at, say, told
+            )
 
             how = ending(result.session, human_was_present=attended, pane=live_pane)
             cycle.ending = how.kind
@@ -1515,6 +1552,22 @@ def _supervise(
                     "ending": how.kind,
                 },
             )
+            for cut in cuts:
+                # For the standup: printed lines are gone by the check-in, and
+                # a Manager that acted on a fragment is exactly what the Owner
+                # has to hear about.
+                checkins.record(
+                    root,
+                    manager,
+                    {
+                        "event": "context_cut",
+                        "at": cut.at,
+                        "number": cycle.number,
+                        "session": observed or cycle.session,
+                        "sent": cut.sent,
+                        "kept": cut.kept,
+                    },
+                )
             for command in refused:
                 checkins.record(
                     root,
