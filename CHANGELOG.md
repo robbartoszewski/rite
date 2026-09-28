@@ -34,6 +34,14 @@ refusing too much, by design. Each Manager is told which command is which.
 message written without a kind, by an older rite or by hand, is marked as
 needing you.
 
+### `rite stop --skip-handover`
+
+`rite stop` hands over by default, as before. The new `--skip-handover`
+releases the claims and leaves the board alone. When `rite stop --ticket X`
+finds nothing to release (another handover already took the claims, or the
+worker held none, which rite cannot tell apart), it now posts a note saying
+exactly that and changes no label, instead of posting nothing.
+
 ## 0.6.0 (2026-09-27)
 
 **0.6.0 in one paragraph.** A Manager now runs inside a sandbox, behind a

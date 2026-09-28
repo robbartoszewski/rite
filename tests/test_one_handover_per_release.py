@@ -98,10 +98,17 @@ def _hand_over_naming_the_ticket(args) -> int:
     ).released_claims
 
 
-def test_a_named_ticket_with_nothing_released_is_not_handed_over(tmp_path):
+def _notes_and_handovers(root: Path) -> tuple[list, list]:
+    queued = _handovers_queued(root)
+    notes = [m for m in queued if m.payload.get("released_nothing")]
+    return notes, [m for m in queued if not m.payload.get("released_nothing")]
+
+
+def test_a_named_ticket_with_nothing_released_gets_a_note_not_a_handover(tmp_path):
     """`rite stop --worker alpha --ticket ABC-1` after a window boundary has
-    already handed alpha over. It used to comment again; now it posts
-    nothing, and `stop` says why rather than dropping the ticket silently."""
+    already handed alpha over. Handover is on by default (Robert, 2026-09-28),
+    so it posts; what it posts says it released nothing and names both
+    causes, because rite cannot tell them apart."""
     from rite_ai.lifecycle import stop
 
     root = _project(tmp_path)
@@ -111,9 +118,105 @@ def test_a_named_ticket_with_nothing_released_is_not_handed_over(tmp_path):
     result = stop(root, worker="alpha", reason="lunch", ticket="ABC-1")
 
     assert result.ok
-    assert len(_handovers_queued(root)) == 1
-    assert "no handover posted to ABC-1" in result.message
-    assert "released no claims" in result.message
+    notes, handovers = _notes_and_handovers(root)
+    assert len(handovers) == 1 and len(notes) == 1
+    assert notes[0].payload["ticket"] == "ABC-1"
+    assert "What waits there is a note that this stop released no claims" in (
+        result.message
+    )
+    assert "not a handover" in result.message
+
+
+def test_skip_handover_releases_the_claims_and_leaves_the_board_alone(tmp_path):
+    from rite_ai.lifecycle import stop
+
+    root = _project(tmp_path)
+    ClaimsLedger(root / ".rite" / "claims.json").claim(["src/a.py"], "alpha", "ABC-1")
+
+    result = stop(root, worker="alpha", reason="lunch", skip_handover=True)
+
+    assert result.ok and result.released_claims == 1
+    assert _handovers_queued(root) == []
+    assert "handover skipped (--skip-handover)" in result.message
+    assert ClaimsLedger(root / ".rite" / "claims.json").release_claims("alpha") == []
+
+
+def test_skip_handover_with_a_named_ticket_posts_nothing_either(tmp_path):
+    from rite_ai.lifecycle import stop
+
+    root = _project(tmp_path)
+    result = stop(root, worker="alpha", ticket="ABC-1", skip_handover=True)
+    assert result.ok and _handovers_queued(root) == []
+
+
+def test_the_cli_takes_the_flag(tmp_path, monkeypatch):
+    from click.testing import CliRunner
+
+    from rite_ai.cli.main import cli
+
+    root = _project(tmp_path)
+    ClaimsLedger(root / ".rite" / "claims.json").claim(["src/a.py"], "alpha", "ABC-1")
+    got = CliRunner().invoke(
+        cli, ["stop", str(root), "--worker", "alpha", "--skip-handover"]
+    )
+    assert got.exit_code == 0, got.output
+    assert "handover skipped" in got.output
+    assert _handovers_queued(root) == []
+
+
+class _Board:
+    def __init__(self):
+        self.comments: list[tuple[str, str]] = []
+        self.labels: list[tuple] = []
+
+    def comment(self, ticket, text):
+        self.comments.append((ticket, text))
+
+    def label(self, ticket, add, remove=()):
+        self.labels.append((ticket, add, remove))
+
+
+def _deliver(root: Path, payload: dict) -> _Board:
+    from rite_ai.lifecycle.commands import _deliver_via_backend
+    from rite_ai.reporting.outbox import OutboxMessage
+
+    board = _Board()
+    assert _deliver_via_backend(board, root, [])(
+        OutboxMessage("handover", payload, 0.0, Path(), project="acme")
+    )
+    return board
+
+
+def test_the_note_asserts_no_handover_and_changes_no_label(tmp_path):
+    root = _project(tmp_path)
+    board = _deliver(
+        root,
+        {
+            "worker": "alpha",
+            "reason": "lunch",
+            "ticket": "ABC-1",
+            "released_claims": 0,
+            "released_nothing": True,
+        },
+    )
+    [(ticket, text)] = board.comments
+    assert ticket == "ABC-1"
+    assert "released no claims, so it handed nothing over" in text
+    assert "another handover" in text and "held none" in text
+    assert "rite cannot tell which" in text
+    assert "rite handover:" not in text
+    assert board.labels == []
+
+
+def test_a_real_handover_still_says_so_and_relabels(tmp_path):
+    root = _project(tmp_path)
+    board = _deliver(
+        root,
+        {"worker": "alpha", "reason": "lunch", "ticket": "ABC-1", "released_claims": 1},
+    )
+    [(_, text)] = board.comments
+    assert "rite handover: lunch" in text
+    assert board.labels == [("ABC-1", ["scheduled"], ["alpha"])]
 
 
 def test_racing_handovers_that_name_the_ticket_hand_over_once(tmp_path):
@@ -147,3 +250,34 @@ def test_takeover_still_hands_over_though_it_releases_nothing_here(tmp_path):
     assert result.released_claims == 0
     assert result.ticket == "ABC-9"
     assert len(_handovers_queued(root)) == 1
+
+
+def _stop_naming_the_ticket(args) -> int:
+    from rite_ai.lifecycle import stop
+
+    root, barrier = Path(args[0]), args[1]
+    barrier.wait()
+    return stop(root, worker="alpha", reason="race", ticket="ABC-1").released_claims
+
+
+def test_racing_stops_that_name_the_ticket_hand_over_once_and_note_the_rest(
+    tmp_path,
+):
+    """With handover on by default, every racing `rite stop --ticket` posts.
+    Exactly one of them released the claims and hands over; each of the rest
+    posts a note that it released nothing, never a second handover."""
+    ctx = mp.get_context("spawn")
+    with ctx.Manager() as manager, ctx.Pool(RACERS) as pool:
+        for n in range(ROUNDS):
+            root = _project(tmp_path / f"r{n}")
+            ClaimsLedger(root / ".rite" / "claims.json").claim(
+                ["src/a.py"], "alpha", "ABC-1"
+            )
+            barrier = manager.Barrier(RACERS)
+            released = pool.map(
+                _stop_naming_the_ticket, [(str(root), barrier)] * RACERS
+            )
+
+            assert sorted(released) == [0] * (RACERS - 1) + [1], (n, released)
+            notes, handovers = _notes_and_handovers(root)
+            assert (len(handovers), len(notes)) == (1, RACERS - 1), n
