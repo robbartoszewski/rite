@@ -7168,7 +7168,14 @@ def replies(manager_name: str, reader: str, peek: bool) -> None:
       rite replies planner --reader slack   # as the relay
       rite replies planner --peek           # look without consuming
     """
-    from rite_ai.managers.mailbox import OUTBOX, full_warning, mark_read, prune, unread
+    from rite_ai.managers.mailbox import (
+        OUTBOX,
+        action_label,
+        full_warning,
+        mark_read,
+        prune,
+        unread,
+    )
     from rite_ai.names import UnsafeName
 
     root = _require_project_root()
@@ -7193,7 +7200,8 @@ def replies(manager_name: str, reader: str, peek: bool) -> None:
     if not waiting_for_reader:
         click.echo(f"nothing new from {manager_name!r} for reader {reader!r}.")
     for message in waiting_for_reader:
-        click.echo(message.text.strip())
+        label = action_label(message)
+        click.echo((f"[{label}]\n" if label else "") + message.text.strip())
     if waiting_for_reader and not peek:
         mark_read(root, manager_name, OUTBOX, reader, waiting_for_reader)
     # C23: retention runs on every read, and a box full of unread messages is
@@ -7259,7 +7267,8 @@ def route(manager_name: str, text: str) -> None:
         click.echo(
             f"refusing: {speaking!r} does not hold 'route'"
             + (f" — {owner!r} does" if owner else " — no Manager here does")
-            + ". Report to the Owner with `rite reply` instead.",
+            + ". Report to the Owner with `rite reply` instead, or `rite ask` "
+            "for a question.",
             err=True,
         )
         raise SystemExit(1)
@@ -7302,11 +7311,17 @@ def reply(text: str, manager: str) -> None:
     never sees is the channel failing silently. One command, the same
     validated writer, no shape to get wrong.
 
+    ⚠ **FOR READING ONLY (RP1).** What `rite reply` sends goes where the
+    person reads, not where they act: a question, a blocker or a decision
+    goes with `rite ask`. Anything that reads as one is refused here and
+    redirected, erring toward refusing too much (`reads_as_action`).
+
     Examples:
-      rite reply --manager planner "ticket 12 needs an API key — skip it?"
+      rite reply --manager planner "tickets 12 and 13 merged; CI green on a1b2c3d"
     """
     from rite_ai.managers import current_manager
-    from rite_ai.managers.mailbox import OUTBOX, full_warning, prune, send
+    from rite_ai.managers.mailbox import OUTBOX, REPLY, full_warning, prune, send
+    from rite_ai.managers.reads_as_action import sign_of_action
 
     root = _require_project_root()
     speaking = (manager or "").strip() or current_manager()
@@ -7334,8 +7349,22 @@ def reply(text: str, manager: str) -> None:
         # text, so the file would be written and never shown.
         click.echo("refusing to send an empty reply.", err=True)
         raise SystemExit(1)
+    sign = sign_of_action(text)
+    if sign:
+        # ⚠ Refused, and NOTHING is sent: a question sent as a reply lands
+        # where nobody is asked to answer it. No flag overrides this.
+        click.echo(
+            f"refusing to send this as a reply: it contains {sign}, so it may "
+            "ask the User for something, and a reply is filed for reading, "
+            "where nobody is asked to answer. Ask it instead:\n"
+            f'  rite ask --manager {speaking} "<the same text>"\n'
+            "If it asks for nothing, say it again without that. When unsure, "
+            "it is a question.",
+            err=True,
+        )
+        raise SystemExit(1)
 
-    send(root, speaking, OUTBOX, text)
+    send(root, speaking, OUTBOX, text, kind=REPLY)
     from rite_ai.config.managers import routing_owner, shares_one_root
     from rite_ai.config.parse import ParseError, parse_config
 
@@ -7396,7 +7425,7 @@ def ask(question: str, defer: bool, meanwhile: str, manager: str) -> None:
           --while "implementing tickets 14 and 15, which do not touch the CLI"
     """
     from rite_ai.managers import checkins, current_manager
-    from rite_ai.managers.mailbox import OUTBOX, full_warning, prune, send
+    from rite_ai.managers.mailbox import OUTBOX, QUESTION, full_warning, prune, send
 
     root = _require_project_root()
     asking = (manager or "").strip() or current_manager()
@@ -7430,13 +7459,13 @@ def ask(question: str, defer: bool, meanwhile: str, manager: str) -> None:
         click.echo(
             f"refusing to defer: no --while. If you cannot say what you will "
             f"do meanwhile, {checkins.REFUSED_WITHOUT_WHILE}:\n"
-            f'  rite reply --manager {asking} "<question>"',
+            f'  rite ask --manager {asking} "<question>"',
             err=True,
         )
         raise SystemExit(1)
 
     if not defer:
-        send(root, asking, OUTBOX, question)
+        send(root, asking, OUTBOX, question, kind=QUESTION)
         if meanwhile.strip():
             # A --while with no --defer is most likely a forgotten --defer.
             # Asking now is the safe reading, and it is said.
@@ -7679,7 +7708,7 @@ def message(manager_name: str, text: str) -> None:
             f"refusing: this is Manager {speaking_as!r}, and a Manager does "
             f"not write a Manager's inbox — a message there is delivered as "
             f"the Owner's instruction. To answer the person, use `rite reply "
-            f'--manager {speaking_as} "…"`.',
+            f'--manager {speaking_as} "…"`, or `rite ask` for a question.',
             err=True,
         )
         raise SystemExit(1)

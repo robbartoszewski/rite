@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.31 · **Date:** 2026-09-28
+**Version:** 0.24.32 · **Date:** 2026-09-28
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -7020,6 +7020,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.32 — every outbox message carries its kind; `rite reply` redirects a question to `rite ask` (RP1 piece 1).** RP1 (Robert, 2026-09-28) separates what needs the Owner from what is reading, classed by the command that produced a message and never by trusting the model to mark it. The outbox file now records `kind`: `question` (`rite ask`, and a deferred question rite asks, `checkins.ask_now`), `checkin` (the check-in itself) or `reply` (`rite reply`). Only `reply` is reading. **A message with no kind, or a kind this rite does not know, needs the Owner**: it was written by an older rite or by hand, and nothing says it is only reading. `send` refuses a kind outside the three rather than writing it. The cost of classing by command is a question sent with `rite reply`, which would land in the reading pile, so `rite reply` refuses text that shows any of a list of surface signs of asking, waiting or being blocked (`managers/reads_as_action.py`: any `?` outside a URL, "should I", "can you", "please", "blocked", "stuck", "your call", "whether" and others), names the `rite ask` command, and writes nothing. It **errs toward refusing too much** (the coordinator: "prefer redirecting too much to `rite ask` over letting one question through into the reading pile"). The statements it refuses on purpose are pinned in the tests, and there is no override flag, because an override is what a Manager with a mislabelled question would reach for. The Manager's instructions now name both commands: "To TELL the User something … `reply`", "To ASK them anything, or to say you are blocked or need a decision … `ask`". They used to say "to ask the User something or tell them something, run `reply`", and the check-in rule said "To ask now: `rite reply`". `rite replies` and the Slack relay mark a question "needs your answer" and an unclassed message "needs you". Delivery confirmation (piece 2) and the two destinations (piece 3) build on this.
 
 **Changes in 0.24.31 — `rite journal export` (MM8 piece 3).** The journal left the project with the rest of a Manager's state (0.24.29). Committing entries is still a person's choice, so `rite journal export <manager> --to <dir>` copies them into a directory, typically in the project. It never overwrites a different file: a conflicting name refuses the whole export, so nothing is left half-exported. Identical files are skipped, and the journal is left as it is. `rite start --record-issues` names the command. MM8 is complete.
 

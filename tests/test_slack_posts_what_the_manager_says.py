@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 
-from rite_ai.managers.mailbox import OUTBOX, send, unread
+from rite_ai.managers.mailbox import OUTBOX, QUESTION, REPLY, send, unread
 from rite_ai.managers.slack import READER, Listener
 
 OWNER = "U0WNER"
@@ -76,7 +76,7 @@ class TestAReplyIsPostedAndItsIdentityKept:
     def test_it_goes_to_the_owners_dm_and_the_ts_is_recorded(self, tmp_path):
         slack = Slack()
         listener = _started(tmp_path, slack)
-        path = send(tmp_path, "lead", OUTBOX, "RT-14 is merged")
+        path = send(tmp_path, "lead", OUTBOX, "RT-14 is merged", kind=REPLY)
         listener.post_replies(call=slack)
         # To the id the start line resolved the Owner's user id to.
         assert slack.posts[-1] == {"channel": "D1", "text": "*lead*: RT-14 is merged"}
@@ -89,7 +89,7 @@ class TestAReplyIsPostedAndItsIdentityKept:
         """Decision 1a: nothing is written into a message."""
         slack = Slack()
         listener = _started(tmp_path, slack)
-        path = send(tmp_path, "lead", OUTBOX, "done")
+        path = send(tmp_path, "lead", OUTBOX, "done", kind=REPLY)
         before = path.read_text()
         listener.post_replies(call=slack)
         assert path.read_text() == before
@@ -99,7 +99,7 @@ class TestAReplyIsPostedAndItsIdentityKept:
         message from the User at the terminal."""
         slack = Slack()
         listener = _started(tmp_path, slack)
-        send(tmp_path, "lead", OUTBOX, "done")
+        send(tmp_path, "lead", OUTBOX, "done", kind=REPLY)
         listener.post_replies(call=slack)
         assert unread(tmp_path, "lead", OUTBOX, READER) == []
         assert [m.text for m in unread(tmp_path, "lead", OUTBOX, "connect")] == ["done"]
@@ -107,7 +107,7 @@ class TestAReplyIsPostedAndItsIdentityKept:
     def test_with_no_owner_it_goes_to_the_broadcast_channel(self, tmp_path):
         slack = Slack()
         listener = _started(tmp_path, slack, owner="")
-        send(tmp_path, "lead", OUTBOX, "done")
+        send(tmp_path, "lead", OUTBOX, "done", kind=REPLY)
         listener.post_replies(call=slack)
         assert slack.posts[-1]["channel"] == "C1"
 
@@ -117,13 +117,13 @@ class TestTheFirstRunDoesNotFloodTheDM:
         slack = Slack()
         (tmp_path / ".rite").mkdir()
         for text in ("old one", "old two"):
-            send(tmp_path, "lead", OUTBOX, text)
+            send(tmp_path, "lead", OUTBOX, text, kind=REPLY)
         listener = _listener(tmp_path, slack)
         starts = len(slack.posts)
         lines = listener.post_replies(call=slack)
         assert len(slack.posts) == starts
         assert "2 earlier" in lines[0] and "rite replies" in lines[0]
-        send(tmp_path, "lead", OUTBOX, "new one")
+        send(tmp_path, "lead", OUTBOX, "new one", kind=REPLY)
         listener.post_replies(call=slack)
         assert slack.posts[-1]["text"] == "*lead*: new one"
 
@@ -132,8 +132,8 @@ class TestAFailedPostIsRetriedInOrder:
     def test_nothing_is_lost_and_nothing_overtakes(self, tmp_path):
         slack = Slack()
         listener = _started(tmp_path, slack)
-        send(tmp_path, "lead", OUTBOX, "first")
-        send(tmp_path, "lead", OUTBOX, "second")
+        send(tmp_path, "lead", OUTBOX, "first", kind=REPLY)
+        send(tmp_path, "lead", OUTBOX, "second", kind=REPLY)
         slack.fail_posts = 1
         listener.post_replies(call=slack)
         assert not any(
@@ -149,7 +149,7 @@ class TestAPostedReplyCanBeAnsweredInItsThread:
     def test_a_reply_under_it_reaches_the_manager_naming_it(self, tmp_path):
         slack = Slack()
         listener = _started(tmp_path, slack, clock=lambda: 150.0)
-        send(tmp_path, "lead", OUTBOX, "shall I merge RT-14?")
+        send(tmp_path, "lead", OUTBOX, "shall I merge RT-14?", kind=QUESTION)
         listener.post_replies(call=slack)
         root = listener.roots[-1]
         slack.replies[("D1", root.ts)] = [
@@ -167,7 +167,7 @@ class TestAPostedReplyCanBeAnsweredInItsThread:
     def test_a_restart_keeps_reading_the_thread_without_redelivering(self, tmp_path):
         slack = Slack()
         listener = _started(tmp_path, slack)
-        send(tmp_path, "lead", OUTBOX, "shall I merge?")
+        send(tmp_path, "lead", OUTBOX, "shall I merge?", kind=QUESTION)
         listener.post_replies(call=slack)
         root = listener.roots[-1]
         slack.replies[("D1", root.ts)] = [
@@ -191,7 +191,7 @@ class TestTheLastReplyOfARunIsPosted:
         is usually written just before the engine exits."""
         slack = Slack()
         listener = _started(tmp_path, slack)
-        send(tmp_path, "lead", OUTBOX, "signing off")
+        send(tmp_path, "lead", OUTBOX, "signing off", kind=REPLY)
         listener.close(call=slack)
         texts = [p["text"] for p in slack.posts]
         assert "*lead*: signing off" in texts
@@ -227,14 +227,26 @@ class TestWhatIsPostedIsRedacted:
         slack = Slack()
         listener = _started(tmp_path, slack, owner="")
         listener.token = "xoxb-not-a-real-token-0000"
-        send(tmp_path, "lead", OUTBOX, "the token is xoxb-not-a-real-token-0000")
+        send(
+            tmp_path,
+            "lead",
+            OUTBOX,
+            "the token is xoxb-not-a-real-token-0000",
+            kind=REPLY,
+        )
         listener.post_replies(call=slack)
         assert "xoxb-not-a-real-token-0000" not in slack.posts[-1]["text"]
 
     def test_an_ordinary_reply_is_untouched(self, tmp_path):
         slack = Slack()
         listener = _started(tmp_path, slack, owner="")
-        send(tmp_path, "lead", OUTBOX, "ran with --sessions=3 and PYTHONPATH=src")
+        send(
+            tmp_path,
+            "lead",
+            OUTBOX,
+            "ran with --sessions=3 and PYTHONPATH=src",
+            kind=REPLY,
+        )
         listener.post_replies(call=slack)
         assert slack.posts[-1]["text"].endswith("--sessions=3 and PYTHONPATH=src")
 
@@ -244,3 +256,31 @@ class TestWhatIsPostedIsRedacted:
         assert "xoxb-secret-value" not in repr(
             Listener(token="xoxb-secret-value", manager="m")
         )
+
+
+class TestWhatNeedsThePersonIsMarked:
+    """RP1: a message is classed by the command that wrote it. A question is
+    marked where it is posted, a reply is not, and a message nothing classed
+    is marked as needing the person rather than passed as reading."""
+
+    def test_a_question_is_marked(self, tmp_path):
+        slack = Slack()
+        listener = _started(tmp_path, slack)
+        send(tmp_path, "lead", OUTBOX, "which schema", kind=QUESTION)
+        listener.post_replies(call=slack)
+        assert slack.posts[-1]["text"] == "*lead* (needs your answer): which schema"
+
+    def test_a_reply_is_not(self, tmp_path):
+        slack = Slack()
+        listener = _started(tmp_path, slack)
+        send(tmp_path, "lead", OUTBOX, "RT-14 is merged", kind=REPLY)
+        listener.post_replies(call=slack)
+        assert slack.posts[-1]["text"] == "*lead*: RT-14 is merged"
+
+    def test_a_message_with_no_kind_is_marked_as_needing_you(self, tmp_path):
+        """Written by an older rite, or by hand: nothing says it is reading."""
+        slack = Slack()
+        listener = _started(tmp_path, slack)
+        send(tmp_path, "lead", OUTBOX, "written without a kind")
+        listener.post_replies(call=slack)
+        assert slack.posts[-1]["text"].startswith("*lead* (needs you: not filed")

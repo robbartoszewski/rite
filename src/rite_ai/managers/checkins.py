@@ -26,8 +26,9 @@ permission settings). A third kind of file there would be the same defect
 again.
 
 **Asked means sent to the outbox**, through the validated writer `rite reply`
-uses. So `rite replies`, `rite connect` and the Slack relay all carry it, and
-nothing here knows which of them exist.
+uses, filed as a question (RP1: action, not reading). So `rite replies`, `rite
+connect` and the Slack relay all carry it, and nothing here knows which of them
+exist.
 """
 
 from __future__ import annotations
@@ -197,10 +198,10 @@ def ask_now(
     """
     if not questions:
         return None
-    from rite_ai.managers.mailbox import OUTBOX, send
+    from rite_ai.managers.mailbox import OUTBOX, QUESTION, send
 
     text = "\n".join([why, "", *_question_lines(questions)])
-    path = send(root, manager, OUTBOX, text)
+    path = send(root, manager, OUTBOX, text, kind=QUESTION)
     now = time.time()
     for q in questions:
         record(root, manager, {"event": "asked", "id": q.id, "at": now, "how": how})
@@ -620,7 +621,7 @@ def _deliver_checkin(root: Path, manager: str) -> str:
     filtered.
     """
     from rite_ai.managers import standup
-    from rite_ai.managers.mailbox import OUTBOX, send
+    from rite_ai.managers.mailbox import CHECKIN, OUTBOX, send
 
     survivors = _queued(root, manager)
     since = _last_checkin(root, manager)
@@ -642,7 +643,7 @@ def _deliver_checkin(root: Path, manager: str) -> str:
         lines.append(f"- withdrawn {e.get('id')}: answered by {e.get('answered_by')}")
     if survivors:
         lines += ["", "Questions held for this check-in:", *_question_lines(survivors)]
-    path = send(root, manager, OUTBOX, "\n".join(lines))
+    path = send(root, manager, OUTBOX, "\n".join(lines), kind=CHECKIN)
     now = time.time()
     # Which outbox file IS a check-in, kept here rather than in the message
     # (which stays identity-free, Decision 1a): the Slack relay roots the
@@ -688,7 +689,7 @@ def instructions(root: Path, manager: str) -> str:
         "waited costs the User thirty seconds. So asking now is the "
         "default, and every doubt is resolved by asking now.",
         "",
-        f'To ask now: `{rite} reply --manager {manager} "<question>"`.',
+        f'To ask now: `{rite} ask --manager {manager} "<question>"`.',
         "",
         "Only when a question is CLEARLY deferrable, meaning you have real "
         "work to do meanwhile that does not depend on the answer, you may "

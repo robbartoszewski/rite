@@ -247,9 +247,19 @@ Friday stops at midnight, as a schedule window with the same keys would.
 
 ### Questions that can wait for a check-in
 
-A Manager asks you things with `rite reply`, and that stays immediate. It can
-also **defer** a question to your next check-in, but only by naming what it
-will do meanwhile:
+A Manager asks you things with `rite ask`, and that is immediate. It tells
+you things with `rite reply`, which is for reading only: since 0.7.0 `rite
+reply` refuses anything that reads like a question, a blocker or a decision
+(a question mark, "should I", "blocked", "please", "your call" and similar)
+and tells the Manager to use `rite ask`. It errs toward refusing too much, on
+purpose: a statement caught costs the Manager one more command, and a
+question let through would sit where nobody is asked to answer it. `rite
+replies` and the Slack relay mark each question "needs your answer", and a
+message written without a kind (by an older rite, or by hand) is marked as
+needing you rather than passed as reading.
+
+A Manager can also **defer** a question to your next check-in, but only by
+naming what it will do meanwhile:
 
     rite ask --defer "rename --out to --output?" --while "tickets 8 and 9, which do not touch the CLI"
 
