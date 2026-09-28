@@ -180,4 +180,5 @@ jobs:
             tests/test_a_claude_manager_signs_in_without_the_keychain.py \
             tests/test_a_manager_gets_github_credentials_without_holding_keys.py \
             tests/test_credentials_live_in_one_0600_file.py \
-            tests/test_the_sandbox_backend_is_chosen_by_platform.py
+            tests/test_the_sandbox_backend_is_chosen_by_platform.py \
+            tests/test_no_manager_reads_another_managers_mail.py
