@@ -148,6 +148,11 @@ def pytest_configure(config):
         "claude_login: run `rite start`'s real Claude sign-in step (C6/C26) "
         "instead of the suite's default of skipping it",
     )
+    config.addinivalue_line(
+        "markers",
+        "yoloai_installer: call the real `install_yoloai` (with its subprocess "
+        "mocked by the test) instead of the suite's refusal",
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -186,6 +191,35 @@ def _no_real_ollama(monkeypatch):
 
     monkeypatch.setattr(truncation, "_default_get", refuse)
     monkeypatch.setenv("RITE_OLLAMA_LOG", "/nonexistent/rite-test/ollama.log")
+
+
+@pytest.fixture(autouse=True)
+def _no_real_yoloai_install(request, monkeypatch):
+    """No test runs the real yoloAI installer.
+
+    🔴 Measured on the first whole-suite macOS CI run (PR #90): with no
+    yoloAI on the runner, `rite init`'s interactive tests reached the install
+    offer, took its default "yes", and ran `brew install --cask yoloai` for
+    real. So the suite would install software on any Mac with Homebrew and
+    without yoloAI. It never failed on a developer's Mac (yoloAI present)
+    or on Linux (no installer offered), which is why nobody saw it.
+
+    `pytest.fail`, not an exception: `Failed` is a BaseException, so no
+    `except Exception` on the way can turn this into a quiet "install
+    failed". Tests of the install path patch `install_yoloai` themselves.
+    In-process only: a `rite` started as a subprocess is not covered.
+    A test of `install_yoloai` itself mocks its subprocess and is marked
+    `yoloai_installer`."""
+    if request.node.get_closest_marker("yoloai_installer"):
+        yield
+        return
+    import rite_ai.sandbox as sandbox
+
+    def refuse(*args, **kwargs):
+        pytest.fail("a test reached the real yoloAI installer; patch it")
+
+    monkeypatch.setattr(sandbox, "install_yoloai", refuse)
+    yield
 
 
 @pytest.fixture(autouse=True)

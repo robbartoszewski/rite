@@ -10,6 +10,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 import rite_ai.sandbox as sb
 from rite_ai.cli.init import prefs
 from rite_ai.cli.init.questionnaire import _resolve_sandbox
@@ -160,6 +162,7 @@ class TestBranchTwoInstallOffer:
         assert enabled is True
         assert any("Run Workers in sandboxes?" in q for q in ui.questions)
 
+    @pytest.mark.yoloai_installer
     def test_an_installer_that_lies_is_caught(self, tmp_path, monkeypatch):
         """Exit 0 with nothing on PATH is the failure that looks like
         success — `install_yoloai` re-resolves the binary rather than
