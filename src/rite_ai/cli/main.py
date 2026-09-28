@@ -8051,19 +8051,42 @@ def _echo_phase(phase, err: bool = False) -> None:
     help="Ticket ID to comment/label on handover (default: resolved from the "
     "released claims' own ticket, per SPEC §9.10 step 1)",
 )
-def stop_cmd(directory: str, worker: str | None, reason: str, ticket: str) -> None:
+@click.option(
+    "--skip-handover",
+    is_flag=True,
+    default=False,
+    help="Release the claims and leave the board alone: no comment, no label "
+    "change. Handover is on by default.",
+)
+def stop_cmd(
+    directory: str,
+    worker: str | None,
+    reason: str,
+    ticket: str,
+    skip_handover: bool,
+) -> None:
     """Shut down with handover — release claims, update board.
+
+    Handover is ON by default (Robert, 2026-09-28); `--skip-handover` turns it
+    off. ⚠ **The flag decides whether to post, not what happened.** When a
+    named `--ticket` had nothing to release, rite cannot tell "another
+    handover already took these claims" from "the worker held none": inside
+    the ledger's lock they look the same. So the comment it posts then says
+    that, names both, and asserts no handover. It changes no label.
 
     Examples:
       rite stop
       rite stop --worker alpha --reason "lunch break"
       rite stop --worker alpha --ticket ABC-12
+      rite stop --worker alpha --ticket ABC-12 --skip-handover
       rite stop acme                # resolves a registered alias (§8.9)
     """
     from rite_ai.lifecycle import stop
 
     root = _resolve_directory_or_alias(directory)
-    result = stop(root, worker=worker, reason=reason, ticket=ticket)
+    result = stop(
+        root, worker=worker, reason=reason, ticket=ticket, skip_handover=skip_handover
+    )
     if not result.ok:
         click.echo(result.message, err=True)
         raise SystemExit(1)

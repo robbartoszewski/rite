@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.31 · **Date:** 2026-09-28
+**Version:** 0.24.33 · **Date:** 2026-09-28
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -7020,6 +7020,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.33 — `rite stop --skip-handover`; handover is on by default (Robert, 2026-09-28).** Robert's words: "rite stop --ticket X - can we just add another flag --skip-handover? (handover is on by default)". Since 0.24.23 a `rite stop --ticket X` that released no claims posted nothing. Now it posts by default, and `--skip-handover` releases the claims and leaves the board alone: no comment, no label change, nothing queued. ⚠ **The flag decides whether to post, not what happened.** Inside the ledger's lock "another handover already released these claims" and "the worker held none" are the same observation, so what a stop that released nothing posts is a NOTE, not a handover: it says this stop released no claims, names both causes, says rite cannot tell which, and changes no label (returning the ticket to the pool IS the handover, and this stop did not do one). The terminal line says the same. A stop that did release claims hands over as before. Racing stops that name the ticket, 6 processes × 20 rounds: exactly 1 handover and 5 notes each round (`test_one_handover_per_release.py`). Only `rite stop` posts a note; the scheduler's window boundary and takeover are unchanged.
 
 **Changes in 0.24.31 — `rite journal export` (MM8 piece 3).** The journal left the project with the rest of a Manager's state (0.24.29). Committing entries is still a person's choice, so `rite journal export <manager> --to <dir>` copies them into a directory, typically in the project. It never overwrites a different file: a conflicting name refuses the whole export, so nothing is left half-exported. Identical files are skipped, and the journal is left as it is. `rite start --record-issues` names the command. MM8 is complete.
 
