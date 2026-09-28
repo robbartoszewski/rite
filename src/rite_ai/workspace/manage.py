@@ -785,7 +785,9 @@ and stop rather than guessing.
    `rite claim <paths> --worker {manifest.name} --ticket <id>`. Claim files or
    directories, never a whole module. If the claim is refused, another
    worker holds an overlapping path: do not work on those paths, and do not
-   claim a narrower or wider path to get around the refusal.
+   claim a narrower or wider path to get around the refusal. If `rite claim`
+   fails any other way (an error, not a refusal), you hold nothing: say so
+   and stop rather than working unclaimed.
 3. While you hold a claim, beat every ten minutes or so:
    `rite heartbeat --worker {manifest.name} --ticket <id>`. It is the only
    liveness record `rite status` and the watchdog read — a worker that never
