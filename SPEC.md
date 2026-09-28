@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.36 · **Date:** 2026-09-28
+**Version:** 0.24.37 · **Date:** 2026-09-28
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -3744,7 +3744,10 @@ project? [y/N]"*, asked before anything else.
   will be taken from what's there."* and one open question: *"Anything stale, or
   that you'd like changed? Free text, or Enter to skip."* The brief records the
   path and that answer as `source.path` and `source.changes`, and none of the
-  sections below is asked. When the path is already a rite project, `init` says
+  sections below is asked. `source.path` is written relative to the project
+  (`.` for the default answer), as `~/…` when it is elsewhere under home, and
+  absolute only outside home: `brief.yaml` is committed, and a home path in it
+  fails the publish gate's built-in rule (§11.3) on the first push. When the path is already a rite project, `init` says
   *"This is already a rite project — I'll apply your changes rather than starting
   over."* and records the answer in that project's brief; nothing else there is
   touched, an earlier answer is kept beside the new one, and Enter changes
@@ -7020,6 +7023,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.37 — `rite init` no longer writes a home path into `brief.yaml` (dogfood F1).** Measured in the v0.6.0 dogfood: `rite init` with every default, then `git add -A; git commit; git push`, was blocked by rite's own pre-push hook on `.rite/brief.yaml:14` — the resolved absolute `source.path`, which matches the built-in `/Users/<name>/` rule. The only ways past were a suppression with a throwaway reason or `--no-verify`, so a new user learned on their first push that the gate can be waved through. §9.3: `source.path` is now written relative to the project, as `~/…` elsewhere under home, and absolute only outside home; `init` already read all three back. The same default in `_record_changes` (an existing project given changes) follows it. Re-run of the pre-registered test on macOS, under `~/AI`, with the hook installed (this Mac's global `core.hooksPath` neutralised locally, since with it init installs no hook and the push passes for the wrong reason): push exit 0, `rite publish check` clean, `.rite/gitleaksignore` untouched; before the fix the same script failed on the same rule. `test_init_output_passes_the_gate.py` builds its project in a `Users` then `alice` directory under `tmp_path`, because under pytest's `/private/var/…` the rule cannot match; reverting the fix makes it fail on `rite-hardcoded-macos-home-directory-path`.
 
 **Changes in 0.24.36 — two messages say only what rite knows.** (1) A local Manager with no `context_window` is refused with the literal line to add, `context_window: 32768`, under its `- name:` entry, rather than `context_window: <tokens>`. (2) A refused command that rite's allowlist appears to cover used to be reported as "The engine did not apply" rite's settings. SB11 (Linux, 2026-09-28) contradicted that: `printf … > notes/x.txt` was refused while `echo`, `git status` and `ls` ran under the same allowlist in the same session, so the settings were applied. It now says rite cannot tell from the transcript which cause it is, names both, and, when the command writes a file through `>` (`_writes_through_a_redirection`; `2>&1` is not one), leads with that as the observed cause. The underlying cause is NOT verified. Mutations, each red: the redirection never named, `>&` counted as a file write, the placeholder back, the flat claim back.
 
