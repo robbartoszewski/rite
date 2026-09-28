@@ -36,6 +36,11 @@ ATTESTED = "attested"
 rite cannot tell the person from a model running as them (the note, part 3.6)."""
 PROVENANCE_KINDS = (ACCEPTED, ATTESTED)
 
+ATTESTED_TOKEN = "rite-attested"
+"""A fixed word in every attested record's comment, so every one can be found
+later (TRQ10, decided): `"rite-attested" in:comments` on GitHub,
+`comment ~ "rite-attested"` in JQL. Neither search is measured yet (TR0)."""
+
 NONE_AGREED = "none agreed"
 """`verify` when no command was agreed (TRQ9, decided): explicit, never absent."""
 
@@ -78,20 +83,19 @@ def mac_of(payload: dict, key: bytes) -> str:
     ).hexdigest()
 
 
-def record_id_of(
-    ticket: str, title_sha256: str, description_sha256: str, provenance: dict
-) -> str:
-    """Deterministic, so a retried write after a lost response is the SAME
-    record rather than a second head (the note's part 4, race 10)."""
-    basis = canonical(
-        {
-            "ticket": ticket,
-            "title_sha256": title_sha256,
-            "description_sha256": description_sha256,
-            "provenance": provenance,
-        }
-    )
-    return hashlib.sha256(basis.encode("utf-8")).hexdigest()[:24]
+def record_id_of(unsigned_payload: dict) -> str:
+    """Deterministic over EVERYTHING the record says (all but its own id and
+    MAC), so a retried write of the same record after a lost response is the
+    same record rather than a second head (the note's part 4, race 10), and
+    two records that say different things never share an id.
+
+    ⚠ An earlier version hashed only the ticket, its text hashes and the
+    provenance. Two different definitions of done attested in the same second
+    from the same host then shared an id, and the ticket read as UNREADABLE.
+    A test that accepted twice found it.
+    """
+    basis = {k: v for k, v in unsigned_payload.items() if k not in ("record_id", "mac")}
+    return hashlib.sha256(canonical(basis).encode("utf-8")).hexdigest()[:24]
 
 
 @dataclass(frozen=True)
@@ -177,8 +181,8 @@ def build(
         scope_in=tuple(scope_in or ()),
         scope_out=tuple(scope_out or ()),
         exchange=tuple(exchange or ()),
-        record_id=record_id_of(ticket, title_hash, description_hash, provenance),
     )
+    unsigned = replace(unsigned, record_id=record_id_of(unsigned.payload()))
     return replace(unsigned, mac=mac_of(unsigned.payload(), key))
 
 
@@ -258,8 +262,8 @@ def render(record: Record) -> str:
     how = (
         "accepted by the User in their channel"
         if kind == ACCEPTED
-        else "attested by a session running as the person, outside any "
-        "sandbox; not confirmed to be a person"
+        else f"{ATTESTED_TOKEN}: attested by a session running as the person, "
+        "outside any sandbox; not confirmed through the User's channel"
     )
     lines += [
         "",

@@ -85,16 +85,24 @@ of); don't swap in a classic token to skip it.
 
 ### `rite init` offers the repositories it finds as modules
 
-### `rite refine status` says whether a ticket has an agreed definition of done
+### An agreed definition of done, and a command that checks for one
 
 `rite refine status <ID>` reads the ticket and every comment on it once, and
 says whether it carries a definition of done that was agreed and signed by
 rite: REFINED, or NOT REFINED, STALE (the ticket changed since),
 CONFLICT (two records each claim to be current) or UNREADABLE (the board or
 a record could not be read). It exits 0 only for REFINED. Nothing else counts
-as agreement: not a label, and not an agent saying so. **In this build nothing
-writes a record yet**, so every ticket reads NOT REFINED; the refinement that
-writes them is still being built.
+as agreement: not a label, and not an agent saying so.
+
+`rite refine accept <ID>` writes one, from your terminal or any session
+running as you: pass each item with `--item`, or `--as-written` to accept
+the items under the ticket's own "Definition of done" heading, and
+optionally `--verify` commands. The record is posted as a comment and read
+back, and it says **attested** by a session running as you, not confirmed
+through your channel, because rite cannot tell you from an agent using your
+login. Every attested record carries the word `rite-attested`, so a search
+for it finds them all. It cannot be run from inside a Manager's or Worker's
+sandbox.
 
 ### `rite init` in a single repository registers it
 

@@ -79,20 +79,10 @@ def status(board, ticket_id: str) -> Status:
     return evaluate(ticket_id, identity, thread, refinement_key.load())
 
 
-def of(root, config, ticket_id: str, *, role: str = "workers") -> Status:
-    """Is `ticket_id` refined, from a project's root and its parsed config?
-
-    **The one path from a ticket id to a status.** `rite refine status` calls
-    it, and so does anything that starts work (TR4's `sandbox start`), so the
-    composition (config, backend, one read, key, predicate) exists once and
-    cannot drift between callers. `config` is the parse the caller already
-    holds, so what it decided from and the board read here come from ONE
-    parse; None parses `root`'s own.
-
-    Every way of failing to get as far as a read is UNREADABLE, never NOT
-    REFINED: an unconfigured or unbuildable board is not a board with no
-    records on it.
-    """
+def board_for(root, config, *, role: str = "workers"):
+    """The board a project's config names, or the `Status` that says why there
+    is none. Shared by `of` (reading) and `accept` (writing), so a record is
+    written to, and checked against, a board built the same way."""
     from rite_ai.config.parse import ParseError, parse_config
     from rite_ai.tickets import BackendError, create_backend_from_config
 
@@ -113,6 +103,26 @@ def of(root, config, ticket_id: str, *, role: str = "workers") -> Status:
     )
     if isinstance(board, BackendError):
         return Status(UNREADABLE, None, board.message)
+    return board
+
+
+def of(root, config, ticket_id: str, *, role: str = "workers") -> Status:
+    """Is `ticket_id` refined, from a project's root and its parsed config?
+
+    **The one path from a ticket id to a status.** `rite refine status` calls
+    it, and so does anything that starts work (TR4's `sandbox start`), so the
+    composition (config, backend, one read, key, predicate) exists once and
+    cannot drift between callers. `config` is the parse the caller already
+    holds, so what it decided from and the board read here come from ONE
+    parse; None parses `root`'s own.
+
+    Every way of failing to get as far as a read is UNREADABLE, never NOT
+    REFINED: an unconfigured or unbuildable board is not a board with no
+    records on it.
+    """
+    board = board_for(root, config, role=role)
+    if isinstance(board, Status):
+        return board
     return status(board, ticket_id)
 
 
