@@ -147,7 +147,13 @@ jobs:
   # tmux, no gitleaks and no credential store", stopped holding. tmux and
   # gitleaks are installed here, and credentials are one file store on both
   # platforms (`credentials/file_store.py`).
-  suite-on-macos:
+  #
+  # ⚠ **THE JOB'S NAME IS A REQUIRED CHECK.** The ruleset on `main` requires
+  # `boundary-and-credentials-on-macos` by name, so the name stays although
+  # the job now runs the whole suite. A renamed job never reports under the
+  # old name, and a required check that never reports blocks every PR. A
+  # rename needs the ruleset edited at the same moment, which is Robert's.
+  boundary-and-credentials-on-macos:
     runs-on: macos-latest
     # A macOS dialog nobody answers (the keychain's SecurityAgent) is a hang,
     # not an error. Measured locally: a 440 s run took 1946 s waiting on one.
@@ -224,7 +230,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: junit-suite-on-macos
+          name: junit-boundary-and-credentials-on-macos
           path: junit.xml
 
       # ⚠ **A LABELLED BLOCK FOR READING, NOT THE COVERAGE LIST.** The boundary
@@ -254,7 +260,7 @@ jobs:
   # red without anyone having listed it. The labels below are checked against
   # the jobs and matrix by `tests/test_every_test_passes_somewhere.py`.
   every-test-passes-somewhere:
-    needs: [lint-and-test, suite-on-macos]
+    needs: [lint-and-test, boundary-and-credentials-on-macos]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -273,4 +279,4 @@ jobs:
             lint-and-test-3.11=reports/junit-lint-and-test-3.11/junit.xml \
             lint-and-test-3.12=reports/junit-lint-and-test-3.12/junit.xml \
             lint-and-test-3.13=reports/junit-lint-and-test-3.13/junit.xml \
-            suite-on-macos=reports/junit-suite-on-macos/junit.xml
+            boundary-and-credentials-on-macos=reports/junit-boundary-and-credentials-on-macos/junit.xml
