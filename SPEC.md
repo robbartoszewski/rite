@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.40 · **Date:** 2026-09-28
+**Version:** 0.24.41 · **Date:** 2026-09-28
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -1642,14 +1642,27 @@ allowlist at all.
   Prefer `rite sandbox destroy` over `rite sandbox stop` once a token is no longer
   wanted on a machine, and rotate it if a stopped sandbox has been sitting
   around** (§10 already requires rotation to be cheap for exactly this reason).
-  Note that `destroy` passes `--abandon-unapplied`, so it discards whatever is
-  in the sandbox's copy of the Worker's workspace. A Worker's work leaves by
-  pushing its branch; anything not pushed is gone. So `destroy` first reads
-  the copy with local git and refuses, without `--force`, while it holds
-  uncommitted changes or commits on no remote, naming module, branch and
-  count; `stop` reports the same and stops anyway. The copy's location is
-  yoloAI's layout as measured on 0.11.0, not an interface: a copy that
-  cannot be found is reported, not taken as safe.
+  A Worker's work leaves by pushing its branch; anything not pushed is lost
+  with the sandbox's copy. So `destroy` has two checks that fail
+  independently. rite's own reads the copy with local git and refuses,
+  without `--force`, while it holds uncommitted changes or commits on no
+  remote, naming module, branch and count (`stop` reports the same and stops
+  anyway). yoloAI's own refuses while anything is "unapplied", and rite
+  passes `--abandon-unapplied` only under `--force` — with one exception.
+  **yoloAI's "unapplied" means "not copied back with `yoloai apply`", and a
+  Worker's work never leaves that way**, so a finished Worker whose branch is
+  pushed is still "unapplied" (measured on the pingr proof, 2026-09-28: the
+  only unapplied path was the clone, its one commit already on origin). That
+  made every ordinary destroy need `--force`, which teaches that the guard is
+  skippable (dogfood F1's shape). So when yoloAI refuses for unapplied work,
+  rite stops the sandbox (its agent can no longer commit), asks yoloAI which
+  paths it means, and abandons them only if every path is one of the
+  Worker's clones in a copy rite found and each clone holds nothing
+  uncommitted and no commit on no remote. Anything else — a file outside the
+  clones, work that appeared before the stop, a diff or copy rite cannot
+  read — keeps the refusal, names what is in the way, and leaves the sandbox
+  stopped. The copy's location is yoloAI's layout as measured on 0.11.0, not
+  an interface: a copy that cannot be found is reported, not taken as safe.
 - **Checked before the sandbox starts, and refused rather than discovered.**
   `rite sandbox start` — the one path every Worker start takes, the
   supervisor's included — refuses, in one line naming the remedy, a Worker
@@ -7082,6 +7095,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.41 — `rite sandbox destroy` destroys a finished Worker without `--force` (pingr Worker proof, finding 7).** §5.3.3: yoloAI's "unapplied" means "not copied back with `yoloai apply`", and a Worker's work leaves by push, so every finished Worker was unapplied and every ordinary destroy needed `--force` — F1's shape. When yoloAI refuses for unapplied work, rite stops the sandbox, asks `yoloai diff --name-only --json` which paths it means, and passes `--abandon-unapplied` only when every path is a clone in a copy rite found and `unsaved_work` finds nothing there after the stop; otherwise the refusal stands, naming the paths, with the sandbox stopped. Measured with yoloAI 0.11.0 on macOS through the CLI: a pushed-only Worker — main refused (`1 sandbox(es) have unapplied changes`), the fix destroyed it; the same plus `NOTES.md` outside the clone — refused, `not a pushed clone: NOTES.md`, sandbox stopped, file kept. Tests replace a fake yoloAI whose `destroy` always succeeded (why the existing pushed-work test was green) with one that refuses as measured; five mutations each turn them red. SPEC's sentence that `destroy` always passes `--abandon-unapplied` was stale and is replaced.
 
 **Changes in 0.24.40 — ⚠ BEHAVIOUR CHANGE: a message a person sent is delivered, or the person is told it was not.** The coordinator's property, 2026-09-28, after the fifth instance in a day of one defect (a message sent, believed delivered, never seen). Found on Linux in SB11: `rite message lead` said "delivered at the start of its next turn", then `rite start lead` stopped on "the board has nothing ready" with the message in the inbox and nothing said. (1) **When a Manager starts changes:** an `idle` board with mail in the inbox now starts ONE session to deliver it. The inbox is read as a state at the moment of stopping, never as an event, so mail that arrived while nothing was watching is found. `closed` (the person's schedule) and the fault verdicts still start nothing, and the session ceiling still bounds. (2) **Not a loop (F22):** each delivery takes the mail, so another session needs new mail; and if the same messages are still there after a session started to deliver them, that session could not take them, which is REPORTED and not retried. (3) **Every run that ends with mail undelivered says so** (`supervise.undelivered_line`), at the terminal and in the Slack goodbye in the Owner's DM, from the `finally` at the end of `rite start`, so it holds however the run ended, an interrupted one and exits added later included. (4) **`rite message` says at send time** when the Manager is not running (`routing.supervisor_state`, recorded identity), instead of "delivered at the start of its next turn". Mutations, each red: an idle board never delivering (4), undelivered mail retried (1), `closed` overridden (1), the end of the run silent (3), the Slack goodbye omitting it (1), `rite message` claiming a next turn (1). A `last_basis` line meant to let F22 judge a delivery session was removed: an idle verdict's basis cannot equal a ready one's, so it could never change a decision.
 
