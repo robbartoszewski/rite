@@ -56,6 +56,20 @@ to change code and commit it themselves: a ticket is worked by a Worker or
 routed, so that it gets a claim, a review and a pull request. This is an
 instruction, not yet enforced.
 
+### A request in chat becomes a chore ticket, written by rite
+
+Work a Worker or another Manager does is meant to carry a ticket, including
+work you ask for in chat. A Manager now turns your message into one with
+**`rite chore <message-id>`**, naming the message by the id shown beside it.
+rite writes the ticket itself: the description is your words exactly as they
+were delivered, the title is cut from your first line, and it is labelled
+`chore` and `scheduled` (a `Task` on Jira). A Manager cannot give a chore a
+title or text of its own, and only your messages can become one: a
+message in the Owner's DM, or one sent from this machine. A message routed
+by another Manager, or said in a channel, cannot. The Manager is told
+the new ticket's id, or why the board refused it, in its next instruction.
+`rite route` does not require a ticket yet; that comes next.
+
 ### `rite stop --skip-handover`
 
 `rite stop` hands over by default, as before. The new `--skip-handover`
