@@ -7,10 +7,25 @@ interface contract the CLI entry point wires up).
 from pathlib import Path
 
 import click
+import pytest
 import yaml
 from click.testing import CliRunner
 
+import rite_ai.sandbox as sb
 from rite_ai.cli.init import run_init
+
+
+@pytest.fixture(autouse=True)
+def _sandbox_branch_one(monkeypatch):
+    """The answer sequences below are written for init's branch 1: yoloAI
+    present and verified, so the sandbox question is asked once. Pinned,
+    because the host decided it before: Linux skips the question, a Mac
+    without yoloAI adds an install offer (which ran a real `brew install`
+    on the first macOS CI run), and a Mac with yoloAI asked the real binary.
+    The branches themselves are `test_init_sandbox_branches.py`'s."""
+    monkeypatch.setattr(sb, "platform_can_sandbox", lambda: True)
+    monkeypatch.setattr(sb, "is_installed", lambda: True)
+    monkeypatch.setattr(sb, "choose_backend", lambda: sb.BackendChoice("seatbelt"))
 
 
 @click.command()

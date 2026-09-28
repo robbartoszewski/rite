@@ -51,6 +51,8 @@ Work ticket `$ARGUMENTS` end to end.
    module-wide claim blocks every other ticket touching that module even
    when the file sets don't overlap. If the claim is refused, another
    session is already on an overlapping path; do not proceed on those paths.
+   If `rite claim` fails any other way (an error, not a refusal), you hold
+   nothing: stop and report it rather than working unclaimed.
 
 4. **Do the work.** Follow this project's `CLAUDE.md` and the relevant files
    in `.rite/context/` — check `.rite/context/INDEX.md` for anything whose
