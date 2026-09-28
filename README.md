@@ -277,7 +277,8 @@ coordination:
 `helper` needs Goose, Ollama with the model pulled, and
 `OLLAMA_CONTEXT_LENGTH=32768` set before Ollama starts. Run each Manager in
 its own terminal (`rite start lead …`, `rite start helper …`). The Owner hands
-work down with `rite route helper "…"`; while that work is unfinished its
+work down with `rite route --ticket RT-12 helper "…"` (every route names its
+ticket; work you asked for in chat becomes a chore ticket first); while that work is unfinished its
 supervisor waits, spending no session, and starts the Owner's next session,
 within the same `rite start`, when the reply arrives. **A local model's report is not trusted:** in testing,
 `qwen3:8b` often did not reply at all, and more than once reported a step as done that

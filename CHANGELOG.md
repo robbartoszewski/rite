@@ -112,7 +112,12 @@ nothing starts.
 read-only: on GitHub, that issues are on, the repository is not archived,
 and your login can label them; on Jira, that it may create a `Task` in the
 project. "Could not tell" is reported as a problem, not passed.
-`rite route` does not require a ticket yet; that comes next.
+
+**`rite route` now requires `--ticket <ID>`**, and the Owner's supervisor
+refuses a route whose ticket one read of the board does not return,
+including when the board cannot be read. The refusal reaches the Owner's
+next instruction, and the Manager it was routed to sees which ticket rite
+checked.
 
 ### `rite stop --skip-handover`
 

@@ -22,9 +22,18 @@ OWNER, SECONDARY = "lead", "small"
 NAMES = [OWNER, SECONDARY]
 
 
+def _on_board(ticket_id):
+    """One single-issue read that finds the ticket (TR9: routes carry one)."""
+    from rite_ai.tickets.interface import Ticket
+
+    return Ticket(id=ticket_id, title="t")
+
+
 def _route(root, text="write HELLO.txt"):
-    routing.request(root, OWNER, SECONDARY, text)
-    routing.deliver_routes(root, OWNER, OWNER, NAMES, lambda _m: None)
+    routing.request(root, OWNER, SECONDARY, text, "RT-1")
+    routing.deliver_routes(
+        root, OWNER, OWNER, NAMES, lambda _m: None, read_ticket=_on_board
+    )
 
 
 def _collect(root):

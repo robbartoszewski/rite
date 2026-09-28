@@ -40,6 +40,13 @@ REPLY = "REPLY-FROM-SMALL"
 TASK = "write HELLO.txt"
 
 
+def _on_board(ticket_id):
+    """One single-issue read that finds the ticket (TR9: routes carry one)."""
+    from rite_ai.tickets.interface import Ticket
+
+    return Ticket(id=ticket_id, title="t")
+
+
 class _Ending:
     kind = "finished"
     resume = True
@@ -76,7 +83,7 @@ def _router(root: Path, manager: str):
     """The real routing step `rite start` builds (`main._router_for`)."""
 
     def step(say):
-        routing.deliver_routes(root, manager, OWNER, NAMES, say)
+        routing.deliver_routes(root, manager, OWNER, NAMES, say, read_ticket=_on_board)
         if manager == OWNER:
             routing.collect_reports(root, OWNER, NAMES, say)
 
@@ -123,7 +130,7 @@ def _run_owner(world, *, ceiling: int, cycle_secs: float, verdict="ready"):
         prompts.append(kw.get("prompt") or "")
         if len(starts) == 1:
             # The Owner's model routes in its first cycle, as `rite route` does.
-            routing.request(root, OWNER, SECONDARY, TASK)
+            routing.request(root, OWNER, SECONDARY, TASK, "RT-1")
         # The session runs; the secondary may act while it does.
         end = world["t"] + cycle_secs
         while world["t"] < end:
@@ -394,8 +401,12 @@ class TestTheSecondarySide:
         def owner_routes():
             while pending and world["t"] >= pending[0]:
                 pending.pop(0)
-                routing.request(root, OWNER, SECONDARY, f"{TASK} #{len(starts)}")
-                routing.deliver_routes(root, OWNER, OWNER, NAMES, lambda _m: None)
+                routing.request(
+                    root, OWNER, SECONDARY, f"{TASK} #{len(starts)}", "RT-1"
+                )
+                routing.deliver_routes(
+                    root, OWNER, OWNER, NAMES, lambda _m: None, read_ticket=_on_board
+                )
 
         world["between"].append(owner_routes)
 
@@ -597,8 +608,10 @@ class TestTheLedgerIsTheSupervisorsNotTheModels:
     def test_a_delivered_route_is_outstanding_until_its_cycle_is_handled(
         self, tmp_path
     ):
-        routing.request(tmp_path, OWNER, SECONDARY, TASK)
-        routing.deliver_routes(tmp_path, OWNER, OWNER, NAMES, lambda _m: None)
+        routing.request(tmp_path, OWNER, SECONDARY, TASK, "RT-1")
+        routing.deliver_routes(
+            tmp_path, OWNER, OWNER, NAMES, lambda _m: None, read_ticket=_on_board
+        )
         (name,) = routing._outstanding(tmp_path, OWNER)[SECONDARY]
         # A reply alone does not clear it: only the end of the cycle does.
         mailbox.send(tmp_path, SECONDARY, mailbox.OUTBOX, "PROGRESS")

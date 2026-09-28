@@ -702,8 +702,10 @@ rite start lead --sessions 3 --minutes 90
 rite start helper --sessions 3 --minutes 90
 ```
 
-The Owner hands work down with `rite route helper "…"`, and `helper`
-answers with `rite reply`. The Owner cannot wait inside a session, so its
+The Owner hands work down with `rite route --ticket RT-12 helper "…"`, and
+`helper` answers with `rite reply`. Every route names the ticket the work is
+for, and rite refuses one whose ticket it cannot read on the board; work you
+asked for in a message becomes a chore ticket first (`rite chore`). The Owner cannot wait inside a session, so its
 supervisor waits instead, spending nothing, and starts the Owner's next
 session when the answer arrives. While routed work is unfinished,
 `--sessions` bends to let that happen, by at most two sessions per routed

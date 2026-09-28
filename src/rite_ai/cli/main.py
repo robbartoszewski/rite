@@ -6746,7 +6746,7 @@ def _ticket_work_rule(root: Path, manager: str) -> str:
     return ticket_work(manager, owner, one_root=one_root)
 
 
-def _router_for(root: Path, manager: str):
+def _router_for(root: Path, manager: str, board=None):
     """The routing step for this Manager's supervisor, or None: route the
     Owner's requests down (MM-3), and bring the others' replies up (MM-4).
 
@@ -6788,8 +6788,12 @@ def _router_for(root: Path, manager: str):
         )
         sweep_minutes = 30
 
+    # ⚠ TR9: a route's ticket is checked with ONE single-issue read of the
+    # board the broker is given. None (no board) refuses every route.
+    read_ticket = getattr(board, "read", None)
+
     def step(say) -> None:
-        deliver_routes(root, manager, owner, names, say)
+        deliver_routes(root, manager, owner, names, say, read_ticket=read_ticket)
         if owner and manager == owner:
             # ⚠ Every reply is checked by rite before the Owner reads it, in a
             # fresh session given only the reply and the workspace (A6
@@ -7348,7 +7352,7 @@ def _start_a_manager(
             # TR9: a User's instruction becomes a chore, written by rite
             # outside the boundary, on the same board the broker checks.
             chores=lambda say: create_asked_for(root, role.name, board, say),
-            router=_router_for(root, role.name),
+            router=_router_for(root, role.name, board),
             # ⚠ DF2: a cycle can be CAUSED by mail. None for a lone Manager,
             # whose runs are exactly what they were.
             waiting=waiting,
@@ -7619,9 +7623,17 @@ def replies(manager_name: str, reader: str, peek: bool) -> None:
 
 
 @cli.command("route")
+@click.option(
+    "--ticket",
+    default="",
+    help="The ticket this work is for. Required: every piece of routed work "
+    "carries a ticket, and rite refuses the route if the board does not "
+    "return it. For work the User asked for in a message, make the ticket "
+    "first with `rite chore <message-id>`.",
+)
 @click.argument("manager_name")
 @click.argument("text")
-def route(manager_name: str, text: str) -> None:
+def route(manager_name: str, text: str, ticket: str) -> None:
     """Hand work to another Manager in this root — the Owner only.
 
     One project root may run several Managers; the one holding `route` is the
@@ -7635,7 +7647,7 @@ def route(manager_name: str, text: str) -> None:
     Manager holding `route`, whatever the request says.
 
     Examples:
-      rite route helper "run the test suite on branch fix-12 and report"
+      rite route --ticket RT-12 helper "run the test suite on branch fix-12 and report"
     """
     from rite_ai.config.managers import routing_owner
     from rite_ai.managers import current_manager
@@ -7679,10 +7691,23 @@ def route(manager_name: str, text: str) -> None:
     if not text.strip():
         click.echo("refusing to route an empty message.", err=True)
         raise SystemExit(1)
-    request(root, speaking, manager_name, text)
+    from rite_ai.managers.routing import ticket_problem
+
+    problem = ticket_problem(ticket)
+    if problem:
+        click.echo(
+            f"refusing: {problem}. Every route names the ticket the work is "
+            'for: `rite route --ticket <ID> <manager> "…"`. If the User asked '
+            "for it in a message, make it a ticket first with `rite chore "
+            "<message-id>`.",
+            err=True,
+        )
+        raise SystemExit(1)
+    request(root, speaking, manager_name, text, ticket.strip())
     click.echo(
-        f"route queued: {manager_name!r} receives it at its next turn, marked "
-        f"as routed by {speaking!r}."
+        f"route queued for ticket {ticket.strip()}: rite checks the ticket on "
+        f"the board, and {manager_name!r} receives it at its next turn, marked "
+        f"as routed by {speaking!r}. A refusal is in your next instruction."
     )
 
 

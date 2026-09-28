@@ -57,7 +57,8 @@ def test_the_owner_is_told_it_routes_and_to_whom(tmp_path, monkeypatch, board):
     said = _start(tmp_path, monkeypatch, TWO, "lead", board=board)
     assert "You are the OWNER" in said
     assert "- 'helper': engine claude; duties execute" in said
-    assert ' route <manager> "' in said
+    assert ' route --ticket <ID> <manager> "' in said
+    assert " chore <message-id>" in said
     assert "no authority over you" in said
     # A6: a reply is verified before a person is told it happened.
     assert "A Manager's reply is a CLAIM, not evidence" in said
