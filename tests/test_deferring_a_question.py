@@ -81,11 +81,30 @@ def _outbox(root: Path) -> list[str]:
 # --- asking now stays the default -------------------------------------------
 
 
-def test_reply_is_unchanged_and_immediate(project):
+def test_reply_is_immediate(project):
+    root = project()
+    result = CliRunner().invoke(cli, ["reply", "--manager", "lead", "schema v2 chosen"])
+    assert result.exit_code == 0, result.output
+    assert _outbox(root) == ["schema v2 chosen"]
+
+
+def test_a_question_sent_as_a_reply_is_refused_and_redirected_to_ask(project):
+    """RP1: a reply is filed for reading, so a question there is asked of
+    nobody. Before RP1 this was sent; now nothing is written."""
     root = project()
     result = CliRunner().invoke(cli, ["reply", "--manager", "lead", "which schema?"])
-    assert result.exit_code == 0, result.output
-    assert _outbox(root) == ["which schema?"]
+    assert result.exit_code == 1
+    assert 'rite ask --manager lead "<the same text>"' in result.output
+    assert _outbox(root) == []
+
+
+def test_the_refusal_to_defer_points_at_ask_not_reply(project):
+    root = project()
+    result = _ask("--defer", "which schema?")
+    assert result.exit_code == 1
+    assert "rite ask --manager lead" in result.output
+    assert "rite reply" not in result.output
+    assert _outbox(root) == []
 
 
 def test_ask_without_defer_asks_now(project):

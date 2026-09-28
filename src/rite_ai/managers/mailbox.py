@@ -95,6 +95,41 @@ class Message:
     text: str
     timestamp: float
     path: Path
+    kind: str = ""
+    """What produced it, for the outbox (RP1): one of `KINDS`, or "" when
+    nothing recorded one. Read with `_needs_action`, never compared to ""."""
+
+
+QUESTION = "question"
+"""`rite ask`, and a deferred question asked by rite (`checkins.ask_now`)."""
+CHECKIN = "checkin"
+"""The check-in message itself (`checkins._deliver_checkin`)."""
+REPLY = "reply"
+"""`rite reply`: free text for reading. The only kind that is not action."""
+KINDS = (QUESTION, CHECKIN, REPLY)
+
+
+def _needs_action(message: Message) -> bool:
+    """Does this message need the person (RP1)? Classed by the command that
+    wrote it, never by reading the text and never by the model's say-so.
+
+    ⚠ **A message with NO recorded kind, or one this rite does not know,
+    needs action.** It was written by an older rite, or by hand into the
+    outbox, and nothing says it is only for reading. Putting it in the
+    action pile costs the person a glance; putting a question in the reading
+    pile costs an answer nobody gives, which is the failure RP1 exists to
+    remove."""
+    return message.kind != REPLY
+
+
+def action_label(message: Message) -> str:
+    """How a reader marks a message that needs the person; "" for one that
+    does not, or that marks itself (a check-in opens with its own title)."""
+    if not _needs_action(message) or message.kind == CHECKIN:
+        return ""
+    if message.kind == QUESTION:
+        return "needs your answer"
+    return "needs you: not filed as reading, so shown as needing you"
 
 
 MAILBOXES_DIRNAME = "managers"
@@ -268,7 +303,13 @@ def mark_read(root: Path, manager: str, box: str, reader: str, messages) -> None
 
 
 def send(
-    root: Path, manager: str, box: str, text: str, *, sent_at: float | None = None
+    root: Path,
+    manager: str,
+    box: str,
+    text: str,
+    *,
+    sent_at: float | None = None,
+    kind: str = "",
 ) -> Path:
     """Put one message in a box. Returns the path written.
 
@@ -282,7 +323,13 @@ def send(
     cycle boundary, so a name in the past is simply sorted into place. A box
     read by CURSOR is different: a name behind a reader's cursor is never
     shown to that reader — loss, the failure the comment below records.
+
+    `kind` is what produced an outbox message (`KINDS`, RP1); one outside
+    `KINDS` is refused rather than written, so a typo cannot quietly file a
+    question as something else.
     """
+    if kind and kind not in KINDS:
+        raise ValueError(f"unknown message kind {kind!r}; one of {KINDS}")
     if sent_at is not None and box != INBOX:
         raise ValueError(
             "sent_at is for the inbox only: a box read by cursor would never "
@@ -301,8 +348,15 @@ def send(
     # a position the reader has already passed. Widths cover every pid Linux
     # and macOS issue (≤ 7 digits) and a counter no process reaches.
     path = where / f"{int(ts * 1000)}_{os.getpid():07d}_{next(_SEQUENCE):012d}.json"
-    write_atomic(path, json.dumps({"text": text, "timestamp": ts}) + "\n")
+    write_atomic(path, _encoded(text, ts, kind))
     return path
+
+
+def _encoded(text: str, timestamp: float, kind: str) -> str:
+    data: dict = {"text": text, "timestamp": timestamp}
+    if kind:
+        data["kind"] = kind
+    return json.dumps(data) + "\n"
 
 
 MAX_AGE_SECONDS = 30 * 24 * 3600
@@ -470,7 +524,15 @@ def read(root: Path, manager: str, box: str) -> list[Message]:
         text = str(data.get("text", "") or "")
         if not text.strip():
             continue
-        out.append(Message(text, _as_time(data.get("timestamp")), path))
+        kind = data.get("kind")
+        out.append(
+            Message(
+                text,
+                _as_time(data.get("timestamp")),
+                path,
+                kind if kind in KINDS else "",
+            )
+        )
     return out
 
 
@@ -510,9 +572,7 @@ def put_back(messages: list[Message]) -> int:
         try:
             message.path.parent.mkdir(parents=True, exist_ok=True)
             write_atomic(
-                message.path,
-                json.dumps({"text": message.text, "timestamp": message.timestamp})
-                + "\n",
+                message.path, _encoded(message.text, message.timestamp, message.kind)
             )
             restored += 1
         except OSError:
@@ -908,13 +968,25 @@ def how_to_reply(root: Path, manager: str) -> str:
     was 0.5.1, so `rite reply` — which 0.4.0 does not have — failed with a
     usage message naming neither the version nor the path. Naming the binary
     that composed the instruction removes that class.
+
+    ⚠ **Two commands since RP1**: `reply` is filed for reading and `ask` for
+    action, so the instruction names both and says which is which. It used to
+    say "to ask the User something … run reply", which is exactly the
+    question-in-the-reading-pile RP1 removes.
     """
     from rite_ai import own_command
 
+    rite = own_command()
     return (
         "\n\n## Talking to the User\n\n"
-        f"To ask the User something or tell them something, run:\n"
-        f'  {own_command()} reply --manager {manager} "<your message>"\n'
+        "To TELL the User something (progress, results, what you found), "
+        "run:\n"
+        f'  {rite} reply --manager {manager} "<your message>"\n'
+        "That is filed for them to read, not to act on. To ASK them anything, "
+        "or to say you are blocked or need a decision, run:\n"
+        f'  {rite} ask --manager {manager} "<your question>"\n'
+        "A reply that reads like a question is refused, and you are told to "
+        "ask it instead. When unsure, ask.\n"
         f"Do not write files into the mailbox yourself. They read your replies "
         f"with `rite connect {manager}`. Messages they send you arrive in your "
         f"instructions at the start of a turn.\n"

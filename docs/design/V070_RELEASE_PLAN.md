@@ -567,6 +567,14 @@ here, with the reasoning, so nobody relitigates them from memory.
    dogfood Worker whose question went into a file nothing reads. The
    coordinator named this the part that matters most.
 
+**RP1 status (2026-09-28): piece 1 of 3 built.** (1) **Kinds**: every outbox
+message records the command that wrote it (question, check-in, reply). A
+message with no kind needs action. `rite reply` refuses what reads as a
+question and names `rite ask`, erring toward refusing (SPEC 0.24.32). (2)
+**Delivery confirmation**, next: a question stays pending until the Owner
+answers it in Slack, and comes back at each check-in until then. (3) **The
+two destinations**, after that.
+
 **MM8, the per-Manager directory out of the project** (with MM1, as the plan
 requires):
 1. **The journal leaves the project**, with an export command for anyone who
