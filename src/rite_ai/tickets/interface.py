@@ -26,6 +26,30 @@ class Ticket:
     metadata: dict = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class Comment:
+    id: str
+    body: str
+    author: str = ""
+    created_at: datetime | None = None
+
+
+@dataclass
+class Thread:
+    """One ticket and its comments, from one read (ticket refinement, TR1).
+
+    `complete` is True only when the backend showed the comment list is the
+    whole list: a count the backend reported, matched. A thread that is not
+    complete must never be read as "no record on this ticket", because the
+    record may be among the comments not returned.
+    """
+
+    ticket: Ticket
+    comments: list[Comment]
+    complete: bool
+    note: str = ""
+
+
 @dataclass
 class TicketFilter:
     status: str | None = None
@@ -138,6 +162,17 @@ class TicketBackend(ABC):
         comment per transition. A CLI verb with no caller is surface to
         maintain and a shape for a future divergence, so it waits for
         something that needs it."""
+
+    def read_thread(self, ticket_id: str) -> Thread | BackendError:
+        """The ticket and every comment on it, with completeness shown.
+
+        Not abstract, and failing closed by default: a backend that cannot
+        read comments says so, and refinement then reports the ticket
+        UNREADABLE rather than "no agreed definition of done"."""
+        return BackendError(
+            f"{type(self).__name__} cannot read a ticket's comments, so whether "
+            f"{ticket_id} has an agreed definition of done cannot be checked"
+        )
 
     @abstractmethod
     def query(self, raw_query: str) -> list[Ticket] | BackendError:

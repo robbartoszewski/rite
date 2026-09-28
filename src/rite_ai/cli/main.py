@@ -3980,6 +3980,67 @@ def _load_config_for_write():
 
 
 @cli.group()
+def refine() -> None:
+    """Ticket refinement: whether a ticket has an agreed definition of done.
+
+    A ticket is refined only by a record rite signed on the board, which
+    matches the ticket's current title and description. Nothing else counts:
+    not a label, and not a model saying so
+    (docs/design/V070_TICKET_REFINEMENT.md).
+    """
+
+
+@refine.command("status")
+@click.argument("ticket_id")
+@click.option("--role", default="workers", help="board | workers | testing")
+def refine_status(ticket_id: str, role: str) -> None:
+    """Say whether TICKET_ID has an agreed definition of done, and why.
+
+    One read of the ticket and its comments, and no writes. Exits 0 only
+    when the ticket is REFINED, so a script can gate on it. Every other state
+    exits 1 and names itself: NOT REFINED, STALE, CONFLICT or UNREADABLE,
+    each needing something different.
+
+    Examples:
+      rite refine status KAN-7
+      rite refine status 42
+    """
+    from rite_ai.config.parse import ParseError, parse_config
+    from rite_ai.refinement import key as refinement_key
+    from rite_ai.refinement import record as refinement_record
+    from rite_ai.refinement import status as refinement_status
+
+    root = _find_project_root()
+    config = parse_config(root / ".rite" / "config.yaml")
+    if isinstance(config, ParseError):
+        click.echo(f"config error: {config.message}", err=True)
+        raise SystemExit(1)
+    backend, err = _ticket_backend(role, root=root, config=config)
+    if err:
+        click.echo(err, err=True)
+        raise SystemExit(1)
+    board = refinement_record.board_identity(config.ticket_backend)
+    result = refinement_status.evaluate(
+        ticket_id, board, backend.read_thread(ticket_id), refinement_key.load()
+    )
+    click.echo(f"{ticket_id}: {result.state} — {result.detail}")
+    if result.head is not None and result.state == refinement_status.REFINED:
+        from rite_ai.normalise import normalise
+
+        click.echo("definition of done:")
+        for item in result.head.definition_of_done:
+            click.echo(f"  - {normalise(item).text}")
+        verify = result.head.verify
+        if isinstance(verify, str):
+            click.echo(f"verify: {verify}")
+        else:
+            click.echo("verify:")
+            for command in verify:
+                click.echo(f"  {normalise(command).text}")
+    raise SystemExit(0 if result.refined else 1)
+
+
+@cli.group()
 def schedule() -> None:
     """This project's worker schedule (SPEC §2.7)."""
 
