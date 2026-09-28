@@ -78,8 +78,18 @@ class TestAReplyIsPostedAndItsIdentityKept:
         listener = _started(tmp_path, slack)
         path = send(tmp_path, "lead", OUTBOX, "RT-14 is merged", kind=REPLY)
         listener.post_replies(call=slack)
-        # To the id the start line resolved the Owner's user id to.
-        assert slack.posts[-1] == {"channel": "D1", "text": "*lead*: RT-14 is merged"}
+        # To the id the start line resolved the Owner's user id to. A reply is
+        # for reading, so since RP1 piece 3 it goes in the thread of the day's
+        # notes root, posted just before it, not on the DM's top level.
+        notes, reply = slack.posts[-2], slack.posts[-1]
+        assert notes["channel"] == "D1" and "notes for" in notes["text"]
+        assert "thread_ts" not in notes
+        notes_ts = f"{len(slack.posts) + 99}.0"
+        assert reply == {
+            "channel": "D1",
+            "text": "*lead*: RT-14 is merged",
+            "thread_ts": notes_ts,
+        }
         record = listener.posted()[path.name]
         assert (
             record["channel"] == "D1" and record["ts"] == f"{len(slack.posts) + 100}.0"

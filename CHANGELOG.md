@@ -68,6 +68,13 @@ On upgrade, messages already in the outbox are recorded as predating this,
 and rite says so once. **Answer in the question's own thread**: a message
 elsewhere cannot be matched to it.
 
+### Your Slack DM is the list of what needs you
+
+In Slack, a Manager's questions are posted on their own in your DM, at once.
+What it tells you for reading goes into a thread instead: under the next
+check-in when check-in windows are configured, otherwise under one "notes for
+today" post a day. Reading is never held more than a day.
+
 ## 0.6.0 (2026-09-27)
 
 **0.6.0 in one paragraph.** A Manager now runs inside a sandbox, behind a

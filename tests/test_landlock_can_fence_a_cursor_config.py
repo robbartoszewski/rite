@@ -1,22 +1,16 @@
-"""CU8 on Linux: can Landlock keep a Manager from rewriting Cursor's allowlist?
+"""Kernel evidence: Landlock CAN keep a file unwritable inside a directory
+whose subdirectory stays writable, and why that does not help Cursor.
 
-The claim this tests, before it goes in any public document: "Landlock cannot
-deny one file inside a directory it grants, and the directory must stay
-writable because Cursor keeps its chats there". The first half is true: a
-Landlock rule has no deny. The second half assumed the whole directory must be
-granted writable. But Landlock grants by PATH, and chats live in a
-subdirectory (`<CURSOR_CONFIG_DIR>/chats`, read from Cursor's bundle). So a
-policy can grant the config directory READ-only and `chats/` writable, and
-simply not grant the config file any write. This checks that the kernel
-enforces exactly that.
+With a Cursor config directory granted read-only and only its `chats/`
+writable, the kernel refuses overwriting, deleting, renaming over and creating
+a `.tmp` beside `cli-config.json`, while a chat can be written; the control
+(the whole directory writable) lets the file be overwritten.
 
-What it does NOT show, and what was measured since: the kernel half holds,
-but Cursor does not survive it. With a real turn, Cursor must create a temp
-file beside its config and rename it over the config on every turn, and fails
-(exit 1) when either is refused (`spikes/CU1c-cursor-authenticated-
-measurements.md`). So this fence protects the file and stops Cursor; the
-allowlist is detection-only (the CU8 row). Kept as the kernel evidence behind
-that sequence.
+Cursor does not survive that layout: it creates a temp file beside its config
+and renames it over the config on every turn, and exits 1 when it cannot
+(`spikes/CU1c-cursor-authenticated-measurements.md`). So the allowlist in that
+file is detection-only (the CU8 row). This test pins the kernel half so the
+reason is not re-derived: the limitation is Cursor's rewrite, not Landlock.
 """
 
 from __future__ import annotations
