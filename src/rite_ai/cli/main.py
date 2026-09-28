@@ -1261,10 +1261,41 @@ def _doctor_report(problems: list[str]) -> None:
             click.echo(f"checkins: {p}")
             problems.append(f"checkins: {p}")
 
+        with _doctor_check("board", problems):
+            _doctor_board_can_create(root, problems)
+
         with _doctor_check("slack", problems):
             _doctor_slack(root, problems)
 
     return
+
+
+def _doctor_board_can_create(root: Path, problems: list[str]) -> None:
+    """Can rite file a ticket on this project's board? Read-only (TR9).
+
+    Every piece of Worker work carries a ticket, so a board rite cannot
+    create on refuses every chore and every `--prompt` start. Found here
+    rather than at the first one. "Could not tell" is a problem too: it is
+    not a yes.
+    """
+    board, why = _ticket_backend("workers", root=root)
+    if board is None:
+        # No board configured is already the project's stated shape; a board
+        # that failed to build is said by the checks that read it.
+        click.echo(f"board: no ticket can be filed ({why})")
+        return
+    able, detail = board.can_create()
+    if able is True:
+        click.echo(f"board: {detail}")
+        return
+    said = (
+        f"board: {detail}. Work that is not already a ticket (a chore, or "
+        "`rite sandbox start --prompt`) will be refused"
+        if able is False
+        else f"board: could not confirm that rite can file a ticket: {detail}"
+    )
+    click.echo(said)
+    problems.append(said)
 
 
 def _warn_if_unregistered(worker: str) -> None:

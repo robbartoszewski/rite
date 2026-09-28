@@ -9,6 +9,9 @@ own note) cannot become one; and every outcome reaches the Manager.
 from __future__ import annotations
 
 import json
+from pathlib import Path
+
+import pytest
 
 from rite_ai.managers import chores, delivered
 from rite_ai.managers.mailbox import INBOX, delivery_note, read, send, take
@@ -335,3 +338,65 @@ class TestAPromptTypedAtThisMachine:
         result, seen = self._start(None)
         assert result.exit_code == 1 and "not starting 'alpha'" in result.output
         assert "prompt" not in seen
+
+
+class TestDoctorSaysWhetherAChoreCanBeFiled:
+    """Read-only, before the first chore needs it. None is not yes."""
+
+    def _gh(self, monkeypatch, out):
+        from rite_ai.tickets.github import GitHubBackend
+
+        board = GitHubBackend("a/b")
+        monkeypatch.setattr(board, "_gh", lambda args: out)
+        return board
+
+    @pytest.mark.parametrize(
+        "out, able",
+        [
+            ('{"has_issues":true,"archived":false,"triage":true}', True),
+            ('{"has_issues":false,"archived":false,"triage":true}', False),
+            ('{"has_issues":true,"archived":true,"triage":true}', False),
+            ('{"has_issues":true,"archived":false,"triage":false}', False),
+            ('{"has_issues":true,"archived":false,"triage":null}', False),
+            ("not json", None),
+        ],
+    )
+    def test_github(self, monkeypatch, out, able):
+        assert self._gh(monkeypatch, out).can_create()[0] is able
+
+    def test_github_unreadable_is_not_a_yes(self, monkeypatch):
+        board = self._gh(monkeypatch, BackendError("HTTP 404"))
+        assert board.can_create() == (None, "could not read a/b: HTTP 404")
+
+    def _jira(self, monkeypatch, answer):
+        from rite_ai.tickets.jira import JiraBackend
+
+        board = JiraBackend.__new__(JiraBackend)
+        board.config = type("C", (), {"project_key": "RT"})()
+        monkeypatch.setattr(board, "_request", lambda *a, **kw: answer)
+        return board
+
+    @pytest.mark.parametrize(
+        "answer, able",
+        [
+            ({"issueTypes": [{"name": "Bug"}, {"name": "Task"}], "total": 2}, True),
+            ({"values": [{"name": "Task"}]}, True),
+            ({"issueTypes": [{"name": "Bug"}], "total": 1}, False),
+            ({"issueTypes": [{"name": "Bug"}], "total": 60}, None),
+            ({"issueTypes": [{"name": "Bug"}]}, None),
+            ({}, None),
+            (BackendError("403"), None),
+        ],
+        ids=["task", "old key", "no task", "partial page", "no total", "empty", "err"],
+    )
+    def test_jira(self, monkeypatch, answer, able):
+        assert self._jira(monkeypatch, answer).can_create()[0] is able
+
+    def test_doctor_reports_could_not_tell_as_a_problem(self, monkeypatch):
+        import rite_ai.cli.main as main_mod
+
+        board = self._gh(monkeypatch, "not json")
+        monkeypatch.setattr(main_mod, "_ticket_backend", lambda *a, **k: (board, None))
+        problems: list[str] = []
+        main_mod._doctor_board_can_create(Path("."), problems)
+        assert problems and "could not confirm" in problems[0]
