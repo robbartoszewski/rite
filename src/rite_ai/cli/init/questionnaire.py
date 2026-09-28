@@ -33,7 +33,13 @@ from rite_ai.credentials.store import make_namespace
 
 from . import ui
 from .config_file import Preset
-from .detect import DetectedRepo, DetectionSummary, detect_repos, detect_root_branch
+from .detect import (
+    ROOT_MODULE_PATH,
+    DetectedRepo,
+    DetectionSummary,
+    detect_repos,
+    detect_root_branch,
+)
 
 _KIND_OPTIONS = [
     ("full-stack", "Full-stack"),
@@ -837,7 +843,28 @@ def source_answers(
             source_path=portable_source_path(root, source),
             source_changes=changes,
         ),
-        modules=[],
+        modules=_source_modules(root, base),
         config=config,
         kb=KbAnswers(),
     )
+
+
+def _source_modules(root: Path, base: Path) -> list[Module]:
+    """The repositories in the source, as modules, when the source is in the
+    project. A Worker clones its modules, so a source registered as nothing
+    gives every Worker an empty workspace (dogfood F2).
+
+    A source outside the project is not registered: a module's path is
+    relative to the project, and `rite add module` is how to add one from
+    elsewhere."""
+    root, base = root.resolve(), base.resolve()
+    if not base.is_relative_to(root):
+        return []
+    modules = []
+    for r in detect_repos(base):
+        rel = (base / r.path).resolve().relative_to(root).as_posix()
+        path = ROOT_MODULE_PATH if rel == "." else f"{rel}/"
+        modules.append(
+            Module(name=r.name, path=path, url=r.url, branch=r.branch, description="")
+        )
+    return modules

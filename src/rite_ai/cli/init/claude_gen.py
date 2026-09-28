@@ -16,6 +16,7 @@ import shutil
 from pathlib import Path
 
 from rite_ai.config.models import Module, ProjectBrief, ProjectConfig, SandboxConfig
+from rite_ai.config.parse import home_relative
 from rite_ai.phase import PHASE_GUIDE
 from rite_ai.project_spec import mark_spec_section
 
@@ -310,7 +311,8 @@ No modules registered yet. Register one with `rite add module <name> \
         if m.description:
             rows.append(m.description)
         rows.append(
-            f"Branch: `{m.branch}`" + (f" · {m.url}" if m.url else " · local only")
+            f"Branch: `{m.branch}`"
+            + (f" · {home_relative(m.url)}" if m.url else " · local only")
         )
         rows.append("")
         cmds = module_commands(m, project_root, sandbox)
