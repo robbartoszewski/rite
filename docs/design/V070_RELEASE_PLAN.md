@@ -1971,7 +1971,7 @@ authenticated turn, which is a separate conversation with Robert.
 
 **Found on the way, not SB11's subject**
 
-1. 🔴 **A person's message is stranded when the board is idle.**
+1. ✅ **A person's message is stranded when the board is idle.** FIXED (SPEC 0.24.40, a behaviour change, approved by the coordinator 2026-09-28 to the property "delivered, or the person is told it was not"; to be shown to Robert in the notes).
    - What happened: `rite message lead …` said "delivered at the start of its next turn". `rite start lead`, whose project had a GitHub board with nothing ready, then printed "done: the board has nothing ready (0 session(s))" and stopped. The message stayed in the inbox, and nothing said so.
    - Why: `supervise` asks the board verdict before the first cycle, and inbox mail is a cause only when routed work is outstanding (`_reason_to_wait`), which is not the case for an Owner with nothing routed, or for a solo Manager.
    - The second attempt (no board, a setup session) delivered it.

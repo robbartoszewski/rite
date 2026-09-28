@@ -1245,7 +1245,7 @@ class Listener:
             out.extend(self._read_a_thread(call=call))
         return tuple(out)
 
-    def close(self, *, call=None) -> list[str]:
+    def close(self, *, call=None, undelivered: str = "") -> list[str]:
         """The end of a run: post whatever the last cycle said, then say in
         Slack that nobody is listening.
 
@@ -1267,6 +1267,12 @@ class Listener:
             "this now. What you send here waits in Slack, and is delivered at "
             f"its first turn when `rite start {self.manager}` next runs."
         )
+        if undelivered:
+            # ⚠ WHERE THE PERSON TYPED IT. A message rite already took from
+            # Slack but the Manager never received reads, from here, exactly
+            # like one it acted on; the terminal line alone reaches nobody on
+            # a phone (coordinator, 2026-09-28).
+            stopped += f"\n⚠ {undelivered}"
         for channel in (self.dm, self.broadcast_id):
             if not channel:
                 continue

@@ -760,6 +760,12 @@ def _supervisor_state(root: Path, manager: str) -> str:
     return RUNNING
 
 
+def supervisor_state(root: Path, manager: str) -> str:
+    """`_supervisor_state`, for a reader outside routing: whether a message
+    sent now is read by a running supervisor (`rite message` says which)."""
+    return _supervisor_state(root, manager)
+
+
 SEEN_FILE = "seen.json"
 
 

@@ -7224,6 +7224,7 @@ def _start_a_manager(
     cursor_signed_in = _cursor_login(root, role)
     listener = _slack_listener(root, role.name)
     waiting = _waiting_for(root, role.name)
+    outcome = None
     try:
         outcome = supervise(
             root,
@@ -7338,7 +7339,20 @@ def _start_a_manager(
             # at the very end reaches the next start by THE ONE HOOK.
             for heard in listener.drain():
                 send(root, role.name, INBOX, heard, sent_at=heard.sent_at)
-            for line in listener.close():
+        # ⚠ A MESSAGE IS DELIVERED, OR THE PERSON IS TOLD IT WAS NOT, however
+        # the run ended, an interrupted one included. After the drain, so what
+        # Slack held at the end is counted.
+        from rite_ai.managers.supervise import undelivered_line
+
+        undelivered = undelivered_line(
+            root,
+            role.name,
+            outcome.reason if outcome is not None else "the run was interrupted",
+        )
+        if undelivered:
+            click.echo(undelivered, err=True)
+        if listener is not None:
+            for line in listener.close(undelivered=undelivered):
                 click.echo(line)
     click.echo(outcome.reason)
     if not outcome.ok:
@@ -8052,10 +8066,21 @@ def message(manager_name: str, text: str) -> None:
             err=True,
         )
         raise SystemExit(1) from None
-    click.echo(
-        f"message queued for {manager_name!r} — delivered at the start of its "
-        f"next turn. `rite connect {manager_name}` reads its replies."
-    )
+    from rite_ai.managers.routing import RUNNING, supervisor_state
+
+    if supervisor_state(root, manager_name) == RUNNING:
+        click.echo(
+            f"message queued for {manager_name!r} — delivered at the start of "
+            f"its next turn. `rite connect {manager_name}` reads its replies."
+        )
+    else:
+        # ⚠ SAID AT SEND TIME: "delivered at its next turn" read as "soon"
+        # when no run was going to take a next turn at all.
+        click.echo(
+            f"message queued for {manager_name!r}, which is NOT running, so "
+            f"nothing reads it until `rite start {manager_name}`; it is "
+            "delivered at the start of that run's first session."
+        )
 
 
 @cli.command()

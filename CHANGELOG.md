@@ -144,6 +144,22 @@ that is **weaker than macOS's**, and have been observed working together as
 Owner and secondary. Workers are **not sandboxed by default** there. See
 Known issues.
 
+### ⚠ Behaviour change: a message you send is delivered, or you are told it was not
+
+**When a Manager starts has changed.** Before, `rite start` with nothing ready
+on the board stopped at once, even with a message you had sent waiting for
+the Manager, and said nothing about it. Now, if the board has nothing ready
+and a message is waiting, it starts one session to deliver it. It does not
+override a check-in schedule that is closed, and the session ceiling still
+applies. A message that a session could not take is reported, not retried.
+
+**Whenever a run ends with a message undelivered, it says so**: how many,
+why, and that they are delivered at the next `rite start`. It says it at the
+terminal and, if you use Slack, in the goodbye it posts to your DM.
+
+**`rite message` says when the Manager is not running**, rather than
+"delivered at the start of its next turn".
+
 ### Upgrading from 0.5.1: three steps, in this order
 
 1. **Install this release, and check that it is the one that runs.**

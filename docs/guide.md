@@ -837,6 +837,15 @@ OpenAI-compatible API. rite works out why, but does not print it yet. So
 silence is not a clean bill of health: load the model (send it one request)
 and run `rite doctor` again.
 
+## A message you send is delivered, or you are told
+
+A message you send a Manager (`rite message`, or in its Slack DM) is delivered
+at the start of its next session. If the board has nothing ready, a session
+starts to deliver it; a closed check-in schedule and the session ceiling are
+still respected. If a run ends with a message undelivered, it says so, at the
+terminal and in your Slack DM, and the message waits for the next `rite
+start`. `rite message` says when the Manager is not running at all.
+
 ## Talking to a Manager over Slack
 
 `rite start <manager>` can listen to Slack and post the Manager's replies
