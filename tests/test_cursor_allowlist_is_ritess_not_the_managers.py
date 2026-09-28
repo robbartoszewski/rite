@@ -5,9 +5,10 @@ Cursor reads its allowlist from `cli-config.json` in its config directory, a
 file it rewrites itself on every run: it keeps `permissions`, `approvalMode`
 and `attribution` and drops keys it does not know (measured 2026-09-28, with
 no credential). A boundary defined by a file the bounded process controls is
-no boundary. So the supervisor writes the file before every launch, from
-outside, the Manager's profile denies writing it, and the supervisor checks
-it after every cycle.
+no boundary, and no sandbox rule can close it: Cursor renames a temp file
+over this one on every turn and exits 1 when it cannot (CU1c). So the
+supervisor writes the file before every launch, from outside, and checks it
+after every cycle; that check is the protection, on every platform.
 """
 
 from __future__ import annotations
@@ -91,42 +92,43 @@ class TestTheCheckAfterACycle:
 
 
 class TestTheBoundary:
-    def test_seatbelt_denies_writing_it_after_granting_the_directory(self, project):
+    """⚠ REVERSED 2026-09-28. These pinned a deny that kept the Manager from
+    rewriting the file. With a real turn that deny stopped Cursor (it renames a
+    temp file over this one every turn), so it is gone and these pin what
+    Cursor needs instead. The protection is the supervisor's check."""
+
+    def test_seatbelt_does_not_deny_the_config(self, project):
         cursor_login.state_dir(project, "lead").mkdir(parents=True)
         lines = "\n".join(github_access.profile_lines(project, "lead"))
         state = cursor_login.state_dir(project, "lead")
-        grant = f'(allow file-read* file-write* (subpath "{state}"))'
-        deny = f'(deny file-write* (literal "{state / "cli-config.json"}"))'
-        assert grant in lines and deny in lines
-        assert lines.index(deny) > lines.index(grant), "the deny must come last"
+        assert f'(allow file-read* file-write* (subpath "{state}"))' in lines
+        assert "cli-config.json" not in lines
 
     @pytest.mark.skipif(sys.platform != "darwin", reason="seatbelt is macOS only")
-    def test_inside_seatbelt_the_manager_cannot_change_it(self, project):
-        """Run, not read. The control is a write BESIDE it, which succeeds."""
+    def test_inside_seatbelt_cursors_own_rewrite_succeeds(self, project):
+        """Run, not read: the temp-then-rename Cursor does on every turn must
+        succeed inside the real profile, or every Cursor turn exits 1."""
         import shlex
 
         from rite_ai.managers.enclosure import write_profile
 
         path = cursor_login.write_config(project, "lead")
-        before = path.read_bytes()
         profile = write_profile(project, "lead")
         q = shlex.quote
-        state = cursor_login.state_dir(project, "lead")
-
-        def under(command: str) -> int:
-            return subprocess.run(
-                ["sandbox-exec", "-f", str(profile), "/bin/sh", "-c", command],
-                capture_output=True,
-                timeout=60,
-            ).returncode
-
-        assert under(f"echo x > {q(str(state / 'beside'))}") == 0, "control"
-        assert under(f"echo '{{}}' > {q(str(path))}") != 0, "overwrite"
-        evil = q(str(state / "evil"))
-        assert under(f"echo '{{}}' > {evil} && mv {evil} {q(str(path))}") != 0
-        assert under(f"rm -f {q(str(path))} && test ! -e {q(str(path))}") != 0
-        assert under(f"chmod 666 {q(str(path))}") != 0, "chmod"
-        assert path.read_bytes() == before
+        tmp = q(str(path) + ".123.probe.tmp")
+        done = subprocess.run(
+            [
+                "sandbox-exec",
+                "-f",
+                str(profile),
+                "/bin/sh",
+                "-c",
+                f"cat {q(str(path))} > {tmp} && mv {tmp} {q(str(path))}",
+            ],
+            capture_output=True,
+            timeout=60,
+        )
+        assert done.returncode == 0, done.stderr
 
 
 class TestTheSupervisor:
@@ -188,7 +190,8 @@ class TestTheSupervisor:
         assert not outcome.ok and "not the one rite wrote" in outcome.reason
 
 
-def test_linux_is_told_the_manager_can_write_it(monkeypatch):
-    monkeypatch.setattr(sys, "platform", "linux")
+@pytest.mark.parametrize("platform", ["linux", "darwin"])
+def test_every_platform_is_told_the_manager_can_write_it(monkeypatch, platform):
+    monkeypatch.setattr(sys, "platform", platform)
     said = cursor_login.announcement("lead")
     assert "CAN write it" in said and "renamed over it" in said

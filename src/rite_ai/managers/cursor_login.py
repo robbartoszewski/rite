@@ -243,7 +243,8 @@ def rite_config() -> dict:
 
 def write_config(root: Path, manager: str, home: Path | None = None) -> Path:
     """Write rite's config, fresh, before every launch, from OUTSIDE the
-    boundary. The Manager's profile denies writing it on macOS."""
+    boundary. The Manager can write it too (Cursor must rewrite it every
+    turn), so `config_problem` checks it after every cycle."""
     import json
 
     state = state_dir(root, manager, home)
@@ -283,17 +284,13 @@ def config_problem(root: Path, manager: str, home: Path | None = None) -> str:
 def announcement(manager: str) -> str:
     """Said every run, so the operator sees what the Manager's permission is
     and where it does not hold."""
-    import sys
-
     where = (
-        "the Manager's sandbox cannot write it"
-        if sys.platform == "darwin"
-        else "⚠ the Manager CAN write it: Cursor rewrites this file itself on "
+        "⚠ the Manager CAN write it: Cursor rewrites this file itself on "
         "every turn (a temp file created beside it and renamed over it) and "
         "stops when it cannot, so no sandbox rule can protect it without "
         "stopping Cursor. rite checks it after every cycle and stops on a "
-        "change; a change restored before that check is not caught. Accepted "
-        "by the operator as a limitation of Cursor"
+        "change; a change restored before that check is not caught. A "
+        "limitation of Cursor, on every platform"
     )
     return (
         f"permissions: Manager {manager!r} runs Cursor with rite's allowlist, "
