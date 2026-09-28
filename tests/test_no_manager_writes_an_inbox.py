@@ -80,7 +80,9 @@ def test_a_manager_cannot_write_its_own_inbox(two):
 
 def test_nor_by_renaming_or_linking_into_it(two):
     root, lead, _helper = two
-    own = root / ".rite" / "managers" / "lead"
+    from rite_ai.managers import manager_dir
+
+    own = manager_dir(root, "lead")
     inbox = mailbox_dir(root, "lead", INBOX)
     assert (
         _under(
@@ -93,7 +95,13 @@ def test_nor_by_renaming_or_linking_into_it(two):
 
 def test_a_manager_cannot_write_another_managers_directory_at_all(two):
     """§5.4.8 P1, for the state that carries authority and everything beside it."""
+    from rite_ai.managers import manager_dir
+
     root, _lead, helper = two
+    lead_state = manager_dir(root, "lead")
+    lead_state.mkdir(parents=True, exist_ok=True)
+    assert _under(helper, f"echo x > '{lead_state}/anything'", root) != 0
+    # And what an older rite left in the tree is not writable either.
     assert _under(helper, f"echo x > '{root}/.rite/managers/lead/anything'", root) != 0
 
 
@@ -105,6 +113,11 @@ def test_the_control_a_manager_still_writes_its_own_state(two):
     # seatbelt answers mkdir on an ungranted parent with EPERM, not EEXIST.
     assert _under(helper, f"echo x > '{out}/t.json'", root) == 0
     assert _under(helper, f"echo x > '{root}/file-in-the-project'", root) == 0
+    # Its own directory, outside the project since MM8 (`manager_dir`).
+    from rite_ai.managers import manager_dir
+
+    own = manager_dir(root, "helper")
+    assert _under(helper, f"echo x > '{own}/written-from-inside'", root) == 0
 
 
 def test_the_inbox_is_outside_the_project_it_would_be_granted_by(two):
@@ -114,14 +127,18 @@ def test_the_inbox_is_outside_the_project_it_would_be_granted_by(two):
 
 
 def test_writing_the_old_in_tree_box_after_the_move_delivers_nothing(two):
-    """The old box is no longer fenced, because it is no longer READ: moved
-    once at start, then only reported. So a Manager that writes it — which
-    the project grant allows — is heard by nobody."""
+    """The old box is no longer READ: moved once at start, then only
+    reported, so a write there is heard by nobody. Since MM8 it is not
+    writable from inside a profile at all: the whole in-tree
+    `.rite/managers/` is denied, the Manager's own old directory included,
+    because its own directory is outside the project now. Written here from
+    outside a profile, as an older rite would."""
     root, lead, _helper = two
     adopt_legacy(root, "lead")
     old = legacy_mail_root(root, "lead") / INBOX
     old.mkdir(parents=True, exist_ok=True)
-    assert _under(lead, _write(old, "1_0000001_000000000003.json"), root) == 0
+    assert _under(lead, _write(old, "1_0000001_000000000003.json"), root) != 0
+    (old / "1_0000001_000000000004.json").write_text('{"text": "x"}')
     assert read(root, "lead", INBOX) == []
     assert adopt_legacy(root, "lead").after_marker
 

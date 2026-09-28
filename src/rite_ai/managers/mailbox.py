@@ -79,7 +79,6 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from rite_ai.managers import manager_dir
 from rite_ai.names import UnsafeName, require_safe_name
 from rite_ai.state import write_atomic
 
@@ -155,7 +154,9 @@ def mail_root(root: Path, manager: str) -> Path:
     (see the module docstring). Each profile grants this directory to its
     own Manager only: read, and its outbox write.
     """
-    manager_dir(root, manager)  # validates the name; the join is below
+    from rite_ai.managers import _checked
+
+    _checked(manager)  # validates the name; the join is below
     return _mail_home() / _checkout_key(root) / manager / "mail"
 
 
@@ -163,8 +164,9 @@ def _rite_home_mail_root(root: Path, manager: str) -> Path:
     """`~/.rite/managers/<checkout>/<manager>/mail/`, where the boxes lived
     before DF3. Moved from once by `adopt_legacy`, never read for delivery."""
     from rite_ai.credentials.store import default_rite_home
+    from rite_ai.managers import _checked
 
-    manager_dir(root, manager)
+    _checked(manager)
     return (
         default_rite_home() / MAILBOXES_DIRNAME / _checkout_key(root) / manager / "mail"
     )
@@ -175,7 +177,9 @@ def _legacy_mail_root(root: Path, manager: str) -> Path:
 
     Moved from once by `adopt_legacy`, and never read for delivery again.
     """
-    return manager_dir(root, manager) / "mail"
+    from rite_ai.managers import legacy_manager_dir
+
+    return legacy_manager_dir(root, manager) / "mail"
 
 
 def mailbox_dir(root: Path, manager: str, box: str) -> Path:

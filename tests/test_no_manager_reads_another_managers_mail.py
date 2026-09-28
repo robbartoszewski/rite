@@ -143,24 +143,41 @@ def test_rite_home_is_not_readable_at_all(machine):
     assert f'(deny file-read* file-write* (subpath "{home / ".rite"}"))' in profile
 
 
-def test_a_manager_cannot_read_a_siblings_in_tree_state(machine):
-    """The macOS half of the same family: `.rite/managers/<other>/` holds
-    the other Manager's whole instruction (`prompt.txt`, mail included) and
-    its routes. The Landlock policy never granted it."""
+def test_a_manager_cannot_read_a_siblings_state(machine):
+    """The macOS half of the same family: a Manager's own directory holds its
+    whole instruction (`prompt.txt`, mail included) and its routes. Since MM8
+    it is outside the project (`managers.manager_dir`), granted to its own
+    Manager by path and to no other. Measured inside the real profile."""
+    from rite_ai.managers import manager_dir
+
     one, helper = machine["one"], machine["helper"]
-    theirs = one / ".rite" / "managers" / "lead"
+    theirs = manager_dir(one, "lead")
     (theirs / "routes").mkdir(parents=True, exist_ok=True)
     (theirs / "prompt.txt").write_text("the lead's instruction")
     (theirs / "routes" / "r.json").write_text("{}")
     assert _under(helper, f"cat '{theirs / 'prompt.txt'}'", one).returncode
     assert _under(helper, f"cat '{theirs / 'routes' / 'r.json'}'", one).returncode
     assert _under(helper, f"ls '{theirs}'", one).returncode
-    own = one / ".rite" / "managers" / "helper"
-    own.mkdir(parents=True, exist_ok=True)
+    assert _under(
+        helper, f"echo x > '{theirs / 'routes' / 'forged.json'}'", one
+    ).returncode
+    own = manager_dir(one, "helper")
     (own / "prompt.txt").write_text("mine")
     assert _under(helper, f"cat '{own / 'prompt.txt'}'", one).returncode == 0, (
         "control: a Manager must still read its own directory"
     )
+    assert _under(helper, f"echo x > '{own / 'written'}'", one).returncode == 0, (
+        "control: a Manager must still write its own directory"
+    )
+
+
+def test_a_siblings_legacy_in_tree_directory_stays_unreadable(machine):
+    """What an older rite left in `.rite/managers/<other>/` is still denied."""
+    one, helper = machine["one"], machine["helper"]
+    theirs = one / ".rite" / "managers" / "lead"
+    theirs.mkdir(parents=True, exist_ok=True)
+    (theirs / "prompt.txt").write_text("an old instruction")
+    assert _under(helper, f"cat '{theirs / 'prompt.txt'}'", one).returncode
 
 
 class TestABoxUnderRiteHomeIsMovedOut:

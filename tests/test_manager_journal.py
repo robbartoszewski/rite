@@ -37,6 +37,7 @@ interface. It does not exist, and trying to call it is what surfaced the
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 
 import pytest  # noqa: F401
 
@@ -49,6 +50,9 @@ import pytest  # noqa: F401
 # `rite_ai.managers.journal` exists, which is the correct signal for an
 # acceptance test: not done yet, loudly.
 from rite_ai.managers import journal  # noqa: E402
+
+PROJECT = Path("/projects/acme")  # for_manager needs the root: MM8
+
 
 # --- §9.15.3 the anchor requirement, and Q3 -----------------------------------------
 
@@ -69,7 +73,7 @@ def test_an_entry_without_an_anchor_is_refused_and_no_file_appears(tmp_path):
     )
     assert not result.ok, "an entry with no anchor was accepted"
     assert result.message, "the refusal must say why, not merely fail"
-    written = list((tmp_path / ".rite/managers/lead/journal").glob("*.md"))
+    written = list(journal.journal_dir(tmp_path, "lead").glob("*.md"))
     assert not written, (
         f"the entry was refused AND written anyway: {written}. A check that "
         "runs after the write is not a check on the writing path"
@@ -99,7 +103,7 @@ def test_a_complete_entry_is_written_where_9_14_9_says(tmp_path):
         inferred="the exit code is being read from the wrong process",
     )
     assert result.ok, f"a complete entry was refused: {result.message}"
-    entries = list((tmp_path / ".rite/managers/lead/journal").glob("*.md"))
+    entries = list(journal.journal_dir(tmp_path, "lead").glob("*.md"))
     assert len(entries) == 1, f"expected exactly one file, got {entries}"
     assert entries[0].name.endswith("-observation.md"), (
         f"§9.15.3 names the file <timestamp>-<kind>.md: {entries[0].name}"
@@ -120,7 +124,7 @@ def test_observed_and_inferred_are_separate_fields_in_the_file(tmp_path):
         expected="EXPECTED_MARKER",
         inferred="INFERRED_MARKER",
     )
-    text = next((tmp_path / ".rite/managers/lead/journal").glob("*.md")).read_text()
+    text = next(journal.journal_dir(tmp_path, "lead").glob("*.md")).read_text()
     for field in ("observed", "expected", "inferred"):
         assert field in text, f"the {field!r} field is not named in the entry"
     assert text.index("OBSERVED_MARKER") != text.index("INFERRED_MARKER")
@@ -141,7 +145,7 @@ def test_one_file_per_entry_not_a_running_log(tmp_path):
             observed=f"thing {i}",
             expected="something else",
         )
-    entries = list((tmp_path / ".rite/managers/lead/journal").glob("*.md"))
+    entries = list(journal.journal_dir(tmp_path, "lead").glob("*.md"))
     assert len(entries) == 3, f"expected three separate files, got {entries}"
 
 
@@ -275,7 +279,7 @@ def test_starting_with_the_flag_prints_where_entries_will_be_written(tmp_path):
     """
     line = journal.start_notice(tmp_path, manager="lead")
     assert line, "nothing is printed at start when the flag is on"
-    directory = str(tmp_path / ".rite/managers/lead/journal")
+    directory = str(journal.journal_dir(tmp_path, "lead").resolve())
     assert directory in line, (
         f"the start notice does not name the journal directory as an "
         f"absolute path. Got: {line!r}"
@@ -283,41 +287,23 @@ def test_starting_with_the_flag_prints_where_entries_will_be_written(tmp_path):
     assert not line.strip().startswith("."), "the path printed is not absolute"
 
 
-def test_the_start_notice_hands_over_the_command_not_just_the_path(tmp_path):
-    """§9.15.3a(1): the `git add -f` command is PRINTED, not documented.
+def test_the_start_notice_says_how_to_share_the_entries(tmp_path):
+    """§9.15.3a(1): the reader is a person the operator hands a copy to.
 
-    ⚠ The `-f` is the load-bearing character. `.rite/*` excludes
-    `.rite/managers` as a directory, and git will not descend into an
-    excluded directory, so a plain `git add` on a journal entry silently
-    refuses — measured, and it is why §9.15.3's earlier "unless somebody
-    deliberately re-includes it" was false.
-
-    Documenting the route is an instruction to a human who may never read
-    the docs, and this human is running a dogfood on another machine with
-    no reason to open them. §9.15.3's own closing argument applies: a thing
-    that hands the operator the right command beats any amount of
-    exhortation to go and find it.
+    ⚠ It USED to print `git add -f .rite/managers/<name>/journal`, because
+    `.rite/*` is ignored and a plain `git add` refused there. Since MM8
+    (Robert, 2026-09-28) the journal is OUTSIDE the project, like every
+    Manager's own state, so there is nothing to `git add`, and printing the
+    old command would hand somebody one that points at an empty path.
     """
     line = journal.start_notice(tmp_path, manager="lead")
     assert "copy" in line.lower(), (
         "the notice does not name copying the directory, which D-91 makes "
-        "the primary route: the reader is a person the operator will hand a "
-        "zip file to, and the path is the whole of the mechanism"
+        "the route: the path is the whole of the mechanism"
     )
-    assert "git add -f" in line, (
-        "the start notice does not print the `git add -f` form. Committing "
-        "entries is one way a user might take, and the `-f` is the "
-        "load-bearing character — a plain `git add` on this path refuses, "
-        "measured against this repository, so printing the bare command "
-        "would hand somebody one that does not work"
-    )
-    # ⚠ NOT asserting "REQUIRED" any more, and the reversal is the point.
-    # An earlier revision made `git add -f` THE route and said it was
-    # required; D-91 demotes it to one option, because the entries reach
-    # their reader by being copied. A test still demanding REQUIRED would
-    # now go red against a correct implementation — which is the worst kind
-    # of red, and it was caught by a peer reading the wording rather than
-    # by the test itself.
+    assert "outside the project" in line
+    assert "git add" not in line, "it still prints a command for an old layout"
+    assert not journal.journal_dir(tmp_path, "lead").is_relative_to(tmp_path)
 
 
 def test_a_manager_without_the_flag_says_nothing_about_journals(tmp_path):
@@ -351,27 +337,30 @@ def test_nothing_in_the_journal_module_transmits_anything(tmp_path):
 # --- §9.15.3 the gitignore claim ----------------------------------------------------
 
 
-def test_a_journal_entry_is_ignored_by_git(tmp_path):
-    """§9.15.3 claims the existing `.rite/*` rule already covers this.
+def test_a_journal_entry_is_never_committed_by_accident(tmp_path):
+    """§9.15.3: entries must not reach the project's history by an ordinary
+    `git add -A`.
 
-    Verified rather than assumed, because an ignored path silently
-    swallowing an intended file is a defect this project has now hit twice.
-    """
+    It used to rest on the `.rite/*` ignore rule, checked with `git
+    check-ignore`. Since MM8 the journal is OUTSIDE the project, so git cannot
+    see it at all; measured here with the add itself, not with the rule."""
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    (tmp_path / ".gitignore").write_text(".rite/*\n!.rite/config.yaml\n")
-    entry = tmp_path / ".rite/managers/lead/journal/e.md"
+    entry = journal.journal_dir(tmp_path, "lead") / "e.md"
     entry.parent.mkdir(parents=True)
     entry.write_text("x\n")
-    done = subprocess.run(
-        ["git", "check-ignore", "-v", str(entry.relative_to(tmp_path))],
+    (tmp_path / "tracked.txt").write_text("control\n")
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    staged = subprocess.run(
+        ["git", "diff", "--cached", "--name-only"],
         cwd=tmp_path,
         capture_output=True,
         text=True,
+        check=True,
+    ).stdout.split()
+    assert staged == ["tracked.txt"], (
+        f"`git add -A` staged {staged}: a journal entry would be committed"
     )
-    assert done.returncode == 0, (
-        "a journal entry is NOT ignored by the existing rule, so entries "
-        "would be committed into the project by an ordinary `git add -A`"
-    )
+    assert not entry.resolve().is_relative_to(tmp_path.resolve())
 
 
 # --- §9.15.6 / D-93: the instructions, delivered in the start prompt ----------------
@@ -395,7 +384,7 @@ def test_the_instructions_say_where_when_and_HOW(tmp_path):
     lives behind a command, naming the command is part of the instruction.
     """
     text = journal.instructions(tmp_path, "lead")
-    assert str((tmp_path / ".rite/managers/lead/journal").resolve()) in text, (
+    assert str(journal.journal_dir(tmp_path, "lead").resolve()) in text, (
         "the instructions do not say where entries go"
     )
     assert "claimed" in text, (
@@ -439,9 +428,13 @@ def test_the_prompt_carries_the_instructions_only_with_the_flag(tmp_path):
     from rite_ai.managers.prompt import for_manager
 
     off = for_manager(
-        "lead", extra=journal.instructions(tmp_path, "lead", enabled=False)
+        "lead",
+        root=PROJECT,
+        extra=journal.instructions(tmp_path, "lead", enabled=False),
     )
-    on = for_manager("lead", extra=journal.instructions(tmp_path, "lead", enabled=True))
+    on = for_manager(
+        "lead", root=PROJECT, extra=journal.instructions(tmp_path, "lead", enabled=True)
+    )
     assert "rite journal observe" not in off, (
         "a Manager started WITHOUT the flag is told about the journal in its "
         "prompt — every Manager then pays to read instructions for a "
@@ -492,7 +485,7 @@ def test_a_value_cannot_forge_a_section_heading(tmp_path):
         ),
         expected="the mutant is killed",
     )
-    text = next((tmp_path / ".rite/managers/inj/journal").glob("*.md")).read_text()
+    text = next(journal.journal_dir(tmp_path, "inj").glob("*.md")).read_text()
     assert text.count("\n## inferred\n") == 1, (
         "a value forged a second `inferred` section — observed and inferred "
         "are no longer separable by parsing, which is the one thing §9.15.3 "
@@ -535,7 +528,7 @@ def test_an_anchor_with_nothing_legible_in_it_is_refused(tmp_path, anchor, name)
         expected="a gate that cannot read a file does not report clean",
     )
     assert not result.ok, f"an anchor of only {name} was accepted"
-    assert not list((tmp_path / ".rite/managers/lead/journal").glob("*.md")), (
+    assert not list(journal.journal_dir(tmp_path, "lead").glob("*.md")), (
         f"an anchor of only {name} was refused AND written"
     )
 
@@ -597,7 +590,7 @@ def test_two_entries_stamped_in_the_same_microsecond_are_both_kept(
             expected="something else",
         )
         assert result.ok, result.message
-    entries = list((tmp_path / ".rite/managers/lead/journal").glob("*.md"))
+    entries = list(journal.journal_dir(tmp_path, "lead").glob("*.md"))
     assert len(entries) == 5, (
         f"five entries stamped identically left {len(entries)} files — the "
         "rest were overwritten, and every call reported success"
@@ -791,7 +784,7 @@ class TestAPastedTokenDoesNotReachTheFile:
             ],
         )
         assert result.exit_code == 0, result.output
-        (entry,) = (tmp_path / ".rite" / "managers" / "lead" / "journal").iterdir()
+        (entry,) = journal.journal_dir(tmp_path, "lead").iterdir()
         text = entry.read_text()
         assert "SENTINEL" not in text, text
         # The control: redaction that ruined the entry would teach a Manager

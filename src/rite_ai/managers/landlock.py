@@ -371,6 +371,11 @@ def compose_policy(root: Path, manager: str, home: Path | None = None) -> dict:
     mail = mail_root(root, manager)
     readable.append(mail)
     writable.append(mail / OUTBOX)
+    # This Manager's own directory, AS A TREE (MM8): outside the project,
+    # beside its mail, so no other Manager's is reached by any grant here.
+    from rite_ai.managers import manager_dir
+
+    writable.append(manager_dir(root, manager))
     writable.append(engine_tmp(root, manager))
     # ⚠ **`/tmp` AND `/var/tmp` ARE NOT GRANTED, WHICH DIVERGES FROM SEATBELT
     # ON PURPOSE.** The seatbelt profile grants them and then denies the inbox
@@ -609,15 +614,10 @@ def _fenced_project_paths(project: Path, manager: str) -> list[Path]:
     rite_dir = project / ".rite"
     # Every top-level entry except `.rite` — the parent must not be granted.
     granted += entries(project, {rite_dir})
-    # Everything in `.rite` except `managers`.
+    # Everything in `.rite` except `managers`. Since MM8 a Manager's own
+    # directory is outside the project (`managers.manager_dir`) and granted by
+    # `compose_policy`; `.rite/managers/` holds only what an older rite left.
     granted += entries(rite_dir, {managers})
-    # This Manager's own directory, AS A TREE. It used to be granted by its
-    # children so `mail/in` could be left out; the inbox has left the tree
-    # and the old box is never read again, so there is nothing left to carve.
-    # Not granted if it is a symlink, for the reason above.
-    own = managers / manager
-    if own.is_dir() and not own.is_symlink():
-        granted.append(own)
     return granted
 
 

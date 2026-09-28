@@ -267,7 +267,10 @@ costs you thirty seconds. So every doubt ends in asking:
   blocking after all. They are asked at once, with a line saying the deferral
   was wrong, in the message and in `rite start`'s output.
 
-A deferred question waits in `.rite/managers/<name>/checkins/queue/`.
+A deferred question waits in the Manager's own directory, outside the
+project since 0.7.0 (`<data>/rite/mail/<checkout>/<name>/state/checkins/queue/`,
+where `<data>` is `~/Library/Application Support` on macOS and
+`~/.local/share` on Linux).
 
 **At the check-in it is re-read before it is asked.** At the first cycle
 boundary inside a window, the Manager's instruction carries what it deferred,

@@ -344,18 +344,25 @@ def _manager_separation(project: Path, manager: str) -> list[str]:
     Manager could read every Manager's mail, for every project on the
     machine. `~/.rite` is no longer granted at all (`_tool_paths`).
     """
+    from rite_ai.managers import manager_dir
     from rite_ai.managers.mailbox import INBOX, OUTBOX, mail_root
 
     managers = project / ".rite" / "managers"
-    own = managers / manager
+    # ⚠ SINCE MM8 a Manager's own directory is OUTSIDE the project, beside its
+    # mail (`managers.manager_dir`), and granted by exact path: another
+    # Manager's is under no rule here, so `(deny default)` refuses it. The
+    # in-tree `.rite/managers/` is still denied, for whatever an older rite
+    # left there.
     # Resolved, because seatbelt matches the path the kernel resolved: a
     # rite home reached through a symlink would otherwise grant nothing.
+    own = manager_dir(project, manager).resolve()
     mail = mail_root(project, manager).resolve()
     return [
         "; ⚠ MANAGERS ARE SEPARATED, and no Manager writes an inbox — see",
         ";   enclosure._manager_separation. Named after the project grant so",
         ";   they win.",
         f"(deny file-read* file-write* (subpath {_quote(managers)}))",
+        "; This Manager's own directory, outside the project (MM8).",
         f"(allow file-read* file-write* (subpath {_quote(own)}))",
         "; This Manager's mailbox, outside the project: its outbox only.",
         f"(allow file-read* (subpath {_quote(mail)}))",
@@ -600,10 +607,14 @@ def write_profile(root: Path, manager: str, home: Path | None = None) -> Path:
     # ⚠ The outbox is CREATED here, outside the boundary: the Manager is
     # granted the outbox and not its parents, so from inside it could not
     # make the directory it is allowed to write.
+    from rite_ai.managers import manager_dir
     from rite_ai.managers.mailbox import INBOX, OUTBOX, mailbox_dir
 
     for box in (OUTBOX, INBOX):
         mailbox_dir(root, manager, box).mkdir(parents=True, exist_ok=True)
+    # And its own directory (MM8), for the same reason: granted, not creatable
+    # from inside, since its parent is not granted.
+    manager_dir(root, manager).mkdir(parents=True, exist_ok=True)
     path.write_text(compose(root, manager, home) + "\n")
     return path
 

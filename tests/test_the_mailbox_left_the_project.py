@@ -239,6 +239,6 @@ def test_a_start_refused_by_the_run_lock_moves_nothing(tmp_path, monkeypatch):
         )
     finally:
         os.close(running)
-    assert result.exit_code == 1 and "still running" in result.output
+    assert result.exit_code == 1 and "holds its run lock" in result.output
     assert old.exists()
     assert not (mail_root(root, "lead") / ADOPTED_MARKER).exists()

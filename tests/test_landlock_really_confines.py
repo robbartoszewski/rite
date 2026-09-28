@@ -915,3 +915,40 @@ def test_a_manager_cannot_read_another_managers_mail(tmp_path, monkeypatch):
     assert not reads(one_message(one, "lead", OUTBOX))
     assert not reads(one_message(two, "lead", INBOX))
     assert not reads(mail_root(two, "lead").parent.parent)
+
+
+@NO_LANDLOCK
+def test_a_managers_own_state_is_its_own_outside_the_project(tmp_path, monkeypatch):
+    """MM8, the Linux half, against the kernel. A Manager's own directory is
+    outside the project now (`managers.manager_dir`), granted by path: its
+    own is writable, a sibling's is neither writable nor readable. The
+    sibling's `routes/` carry the Owner's authority, which is why this is P1
+    and not tidiness."""
+    from rite_ai.managers import manager_dir
+
+    monkeypatch.setenv("RITE_MAIL_DIR", str(tmp_path / "data" / "mail"))
+    root = tmp_path / "proj"
+    (root / ".rite").mkdir(parents=True)
+    theirs = manager_dir(root, "lead")
+    (theirs / "routes").mkdir(parents=True)
+    (theirs / "routes" / "r.json").write_text("{}")
+    (theirs / "prompt.txt").write_text("the lead's instruction")
+    landlock.write_profile(root, "small", tmp_path / "home")
+    policy = landlock.compose_policy(root, "small", tmp_path / "home")
+    own = manager_dir(root, "small")
+
+    def can(action):
+        def child():
+            landlock.apply(policy)
+            try:
+                action()
+                return 0
+            except OSError:
+                return 1
+
+        return _in_child(child) == 0
+
+    assert can(lambda: (own / "written").write_text("x")), "control: own state"
+    assert not can(lambda: (theirs / "routes" / "forged.json").write_text("{}"))
+    assert not can(lambda: (theirs / "prompt.txt").read_text())
+    assert not own.is_relative_to(root)
