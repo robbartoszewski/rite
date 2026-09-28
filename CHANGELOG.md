@@ -58,7 +58,12 @@ title or text of its own, and only your messages can become one: a
 message in the Owner's DM, or one sent from this machine. A message routed
 by another Manager, or said in a channel, cannot. The Manager is told
 the new ticket's id, or why the board refused it, in its next instruction.
-`rite route` does not require a ticket yet; that comes next.
+
+**`rite route` now requires `--ticket <ID>`**, and the Owner's supervisor
+refuses a route whose ticket one read of the board does not return,
+including when the board cannot be read. The refusal reaches the Owner's
+next instruction, and the Manager it was routed to sees which ticket rite
+checked.
 
 ### `rite stop --skip-handover`
 

@@ -25,11 +25,20 @@ OWNER, SECONDARY = "lead", "small"
 NAMES = [OWNER, SECONDARY]
 
 
+def _on_board(ticket_id):
+    """One single-issue read that finds the ticket (TR9: routes carry one)."""
+    from rite_ai.tickets.interface import Ticket
+
+    return Ticket(id=ticket_id, title="t")
+
+
 def _setup(root):
     routing.record_supervisor(root, OWNER, os.getpid())
     routing.record_supervisor(root, SECONDARY, os.getpid())
-    routing.request(root, OWNER, SECONDARY, "write notes/HELLO.txt")
-    routing.deliver_routes(root, OWNER, OWNER, NAMES, lambda _m: None)
+    routing.request(root, OWNER, SECONDARY, "write notes/HELLO.txt", "RT-1")
+    routing.deliver_routes(
+        root, OWNER, OWNER, NAMES, lambda _m: None, read_ticket=_on_board
+    )
     return [m.path.name for m in mailbox.take(root, SECONDARY, mailbox.INBOX)]
 
 
@@ -112,8 +121,10 @@ def test_a_death_from_before_the_work_was_handed_out_is_not_noted(tmp_path):
     data = routing._load(path)
     data["started_at"] = 1.0
     routing._store(path, data)
-    routing.request(tmp_path, OWNER, SECONDARY, "x")
-    routing.deliver_routes(tmp_path, OWNER, OWNER, NAMES, lambda _m: None)
+    routing.request(tmp_path, OWNER, SECONDARY, "x", "RT-1")
+    routing.deliver_routes(
+        tmp_path, OWNER, OWNER, NAMES, lambda _m: None, read_ticket=_on_board
+    )
     _tick(tmp_path, sweep_seconds=0.0)
     assert _notes(tmp_path) == []
 
