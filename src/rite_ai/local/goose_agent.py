@@ -105,7 +105,8 @@ def goose_environment(
     }
     if context_limit:
         # The window the model is served with, so Goose is not left to assume
-        # one. What Goose does with it as the window fills is not yet observed.
+        # one. Observed: Goose then compacts at 80% of it, which cannot rescue
+        # a single message larger than the window (plan, Track MS).
         env["GOOSE_CONTEXT_LIMIT"] = str(context_limit)
     return env
 

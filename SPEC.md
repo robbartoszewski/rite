@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.25 · **Date:** 2026-09-28
+**Version:** 0.24.26 · **Date:** 2026-09-28
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -7016,6 +7016,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.26 — what 0.24.25 had not observed, observed.** With `qwen3:8b` pinned to 40,960 (Ollama 0.34.2, Goose 1.51.0, macOS, swap 8.35 GB of 9.2 GB), Goose sends no `num_ctx` and Ollama serves the pin, not its default. A prompt that fits is sent whole. One over the window is cut to half the window from the front with no error, `finish: stop`, and Goose exits 0 with a wrong answer. With `GOOSE_CONTEXT_LIMIT`, Goose compacts at 80%, which cannot save a single oversized message; the multi-turn case, the dogfood's, was not measured. Only Ollama's log records the cut (`truncating input prompt … prompt=79296 … new=20482`), so a full window can be said only on the machine running Ollama. Making rite say it is not built.
 
 **Changes in 0.24.25 — each Manager names its model, and a local one its window.** A Claude Manager may declare `model` (an alias or a `claude-` id, passed quoted as `--model`); a local model's name on it is refused. A Goose Manager must declare `context_window` (at least 32768), and `rite start` refuses it without one: Ollama's default window is server-wide and cannot be read before the model loads, so it was usually unknown, and unknown let a Manager start. In the v0.6.0 dogfood run a `qwen3.8` Manager filled its 32k window and ended without replying. rite now pins the window into the model it runs (a `rite-ctx<N>-` twin sharing the weights), reads the pin back rather than trusting `ollama create`, and passes it to Goose as `GOOSE_CONTEXT_LIMIT`. `rite doctor` and `rite start` print each Manager's effective model and its source (Track MS). Not yet observed with a model running: that Ollama serves the pin to Goose's requests, and what Goose does as the window fills.
 
