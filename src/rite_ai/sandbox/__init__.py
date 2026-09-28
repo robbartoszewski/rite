@@ -1609,6 +1609,104 @@ def _yoloai_sandboxes_dir() -> Path:
     return Path.home() / ".yoloai" / "library" / "sandboxes"
 
 
+def _unapplied_paths(binary: str, name: str) -> list[str] | None:
+    """What yoloAI calls unapplied in `name`, relative to the Worker's
+    copy, or None when it cannot say."""
+    try:
+        proc = subprocess.run(
+            [binary, "diff", name, "--name-only", "--json"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=60,
+        )
+        diff = json.loads(proc.stdout)["diff"]
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
+        return None
+    if proc.returncode != 0 or not isinstance(diff, str):
+        return None
+    return [line.strip() for line in diff.splitlines() if line.strip()]
+
+
+def _destroy_when_only_pushed_work_is_unapplied(
+    binary: str,
+    name: str,
+    worker: str,
+    root: str | os.PathLike[str] | None,
+    refused: subprocess.CompletedProcess,
+) -> tuple[subprocess.CompletedProcess | None, str]:
+    """Destroy a finished Worker that yoloAI refused only for pushed work.
+
+    ⚠ **yoloAI's "unapplied" measures a different property from the one
+    that matters here.** It means "not copied back to the host with `yoloai
+    apply`". A Worker's work never leaves that way: it leaves by being
+    pushed (§5.3). So every finished Worker is "unapplied" — measured on the
+    pingr proof, 2026-09-28: the only unapplied path was `pingr`, the clone
+    whose one commit was already on origin — and the ordinary path made the
+    user type `--force`, teaching that the guard is skippable (dogfood F1's
+    shape).
+
+    `--abandon-unapplied` is added here only when rite can show POSITIVELY
+    that nothing would be lost, and never on "could not check":
+
+    1. the sandbox is stopped first, so its agent cannot commit between the
+       check and the destroy;
+    2. yoloAI names what it calls unapplied, and every path is one of the
+       Worker's clones in a copy rite actually found;
+    3. each of those clones holds nothing uncommitted and no commit that is
+       on no remote (`unsaved_work`).
+
+    Otherwise yoloAI's refusal stands, with the paths named. Returns the
+    destroy's result and a note to add, or `(None, why)` when refusing."""
+    stopped = subprocess.run(
+        [binary, "stop", name],
+        capture_output=True,
+        text=True,
+        errors="replace",
+        timeout=120,
+    )
+    kept = f"refusing to destroy sandbox '{name}': " + (
+        refused.stderr.strip() or refused.stdout.strip()
+    )
+    if stopped.returncode != 0:
+        return None, f"{kept}\n  and rite could not stop it to check why"
+    kept += (
+        "\n  the sandbox is stopped, its work kept; "
+        f"`rite sandbox destroy {worker} --force` discards it"
+    )
+    if root is None:
+        return None, kept
+    copy = _sandbox_copy(name, Path(root) / "workers" / worker)
+    paths = _unapplied_paths(binary, name)
+    if copy is None or paths is None:
+        return None, f"{kept}\n  rite could not see what yoloAI calls unapplied"
+    clones = {p.name for p in copy.iterdir() if (p / ".git").exists()}
+    other = [p for p in paths if p.split("/", 1)[0] not in clones]
+    if not paths or other:
+        return None, f"{kept}\n  not a pushed clone: {', '.join(other or paths)}"
+    from rite_ai.workspace import unsaved_work
+
+    items = unsaved_work(copy)
+    if items:
+        return None, f"{kept}\n  " + "\n  ".join(i.describe() for i in items)
+    try:
+        proc = subprocess.run(
+            [binary, "destroy", name, "--abandon-unapplied"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        return None, "yoloai destroy timed out after 120s"
+    touched = sorted({p.split("/", 1)[0] for p in paths})
+    return proc, (
+        f" — yoloAI counted {', '.join(touched)} as unapplied; rite stopped "
+        "the sandbox and found every commit there on a remote and nothing "
+        "uncommitted"
+    )
+
+
 def _sandbox_copy(name: str, workdir: Path) -> Path | None:
     """yoloAI's copy of a Worker's directory, or None when it is not found.
 
@@ -1784,13 +1882,24 @@ def destroy_worker(
         )
     except subprocess.TimeoutExpired:
         return SandboxResult(False, "yoloai destroy timed out after 120s")
+    note = ""
+    if (
+        proc.returncode != 0
+        and not force
+        and "unapplied" in (proc.stderr + proc.stdout)
+    ):
+        proc, note = _destroy_when_only_pushed_work_is_unapplied(
+            binary, name, worker, root, proc
+        )
+        if proc is None:
+            return SandboxResult(False, note)
     if proc.returncode != 0:
         return SandboxResult(False, proc.stderr.strip() or proc.stdout.strip())
     from rite_ai.reporting import events
 
     if root is not None:
         events.record(Path(root), "sandbox-destroyed", worker=worker, sandbox=name)
-    return SandboxResult(True, f"sandbox '{name}' destroyed")
+    return SandboxResult(True, f"sandbox '{name}' destroyed" + note)
 
 
 @dataclass

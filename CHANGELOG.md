@@ -2,6 +2,16 @@
 
 ## Unreleased: 0.7.0 (notes in progress, completed at release)
 
+
+### `rite sandbox destroy` no longer needs `--force` for a finished Worker
+
+yoloAI refuses to destroy a sandbox with "unapplied changes", and it counts
+a Worker's pushed commits as unapplied, because work leaves a Worker by
+being pushed, never by `yoloai apply`. So every finished Worker needed
+`--force`. Now, when yoloAI refuses, rite stops the sandbox and destroys it
+only if everything yoloAI means is a clone whose work is all on a remote.
+Anything else still refuses, names what is in the way, and leaves the
+sandbox stopped with its work kept.
 ### A Worker that could not deliver is not started
 
 `rite sandbox start` (and so every Worker a Manager starts) now refuses,

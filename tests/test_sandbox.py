@@ -796,6 +796,114 @@ class TestWorkOnlyInTheSandboxCopy:
         assert result.ok, result.message
         assert any("destroy" in c for c in calls)
 
+    def _yoloai_as_measured(self, unapplied: list[str]):
+        """A fake yoloAI that behaves as 0.11.0 was measured to on the pingr
+        proof (2026-09-28): `destroy` without `--abandon-unapplied` refuses
+        while `diff` is non-empty, and a pushed clone IS in that diff. The
+        fake above, whose `destroy` always succeeds, is why the existing
+        pushed-work test passed while every real finished Worker needed
+        --force."""
+        real_run = subprocess.run
+        calls: list[list[str]] = []
+        exchange = tempfile.mkdtemp()
+
+        def run(args, *a, **kw):
+            if args and args[0] == "git":
+                return real_run(args, *a, **kw)
+            calls.append(list(args))
+            if args[1] == "destroy" and "--abandon-unapplied" not in args and unapplied:
+                return MagicMock(
+                    returncode=1,
+                    stdout="",
+                    stderr="yoloai: 1 sandbox(es) have unapplied changes; re-run "
+                    "with --abandon-unapplied or run 'yoloai apply' first",
+                )
+            if args[1] == "diff":
+                return MagicMock(
+                    returncode=0, stdout=json.dumps({"diff": "\n".join(unapplied)})
+                )
+            return _no_question(exchange)(args)
+
+        return run, calls
+
+    def _pushed(self, tmp_path, root):
+        module = self._copy(tmp_path, root)
+        remote = tmp_path / "remote.git"
+        self._git(tmp_path, "init", "-q", "--bare", str(remote))
+        self._git(module, "remote", "add", "origin", str(remote))
+        self._git(module, "push", "-q", "origin", "ABC-12")
+        return module
+
+    @patch("rite_ai.sandbox.shutil.which", return_value="/usr/local/bin/yoloai")
+    def test_a_finished_worker_is_destroyed_without_force(
+        self, _which, tmp_path, monkeypatch
+    ):
+        """Dogfood proof finding 7: the only unapplied path is the pushed
+        clone, so rite stops the sandbox, checks, and abandons it."""
+        root = self._project(tmp_path, monkeypatch)
+        self._pushed(tmp_path, root)
+        run, calls = self._yoloai_as_measured(["app"])
+        with patch("rite_ai.sandbox.subprocess.run", side_effect=run):
+            result = destroy_worker("alpha", root)
+        assert result.ok, result.message
+        assert "found every commit there on a remote" in result.message
+        verbs = [c[1] for c in calls if c[1] in ("stop", "destroy")]
+        assert verbs == ["destroy", "stop", "destroy"], "stopped before the check"
+        assert "--abandon-unapplied" in calls[-1]
+
+    @patch("rite_ai.sandbox.shutil.which", return_value="/usr/local/bin/yoloai")
+    def test_anything_but_a_pushed_clone_keeps_the_refusal(
+        self, _which, tmp_path, monkeypatch
+    ):
+        root = self._project(tmp_path, monkeypatch)
+        self._pushed(tmp_path, root)
+        run, calls = self._yoloai_as_measured(["NOTES.md", "app"])
+        with patch("rite_ai.sandbox.subprocess.run", side_effect=run):
+            result = destroy_worker("alpha", root)
+        assert not result.ok
+        assert "not a pushed clone: NOTES.md" in result.message
+        assert "the sandbox is stopped, its work kept" in result.message
+        assert not any("--abandon-unapplied" in c for c in calls)
+
+    @patch("rite_ai.sandbox.shutil.which", return_value="/usr/local/bin/yoloai")
+    def test_work_that_appeared_after_the_stop_keeps_the_refusal(
+        self, _which, tmp_path, monkeypatch
+    ):
+        """The first guard ran while the agent could still write. What
+        decides is the state after the stop."""
+        root = self._project(tmp_path, monkeypatch)
+        module = self._pushed(tmp_path, root)
+        run, calls = self._yoloai_as_measured(["app"])
+
+        def run_then_commit(args, *a, **kw):
+            result = run(args, *a, **kw)
+            if args[1] == "stop":
+                self._git(module, "commit", "-q", "--allow-empty", "-m", "late")
+            return result
+
+        with patch("rite_ai.sandbox.subprocess.run", side_effect=run_then_commit):
+            result = destroy_worker("alpha", root)
+        assert not result.ok
+        assert "1 commit(s) on no remote" in result.message
+        assert not any("--abandon-unapplied" in c for c in calls)
+
+    @patch("rite_ai.sandbox.shutil.which", return_value="/usr/local/bin/yoloai")
+    def test_an_unreadable_diff_keeps_the_refusal(self, _which, tmp_path, monkeypatch):
+        root = self._project(tmp_path, monkeypatch)
+        self._pushed(tmp_path, root)
+        run, calls = self._yoloai_as_measured(["app"])
+
+        def broken_diff(args, *a, **kw):
+            if args[1] == "diff":
+                return MagicMock(returncode=1, stdout="", stderr="boom")
+            return run(args, *a, **kw)
+
+        with patch("rite_ai.sandbox.subprocess.run", side_effect=broken_diff):
+            result = destroy_worker("alpha", root)
+        assert not result.ok
+        assert "could not see what yoloAI calls unapplied" in result.message
+        assert not any("--abandon-unapplied" in c for c in calls)
+
     @patch("rite_ai.sandbox.shutil.which", return_value="/usr/local/bin/yoloai")
     def test_a_copy_that_cannot_be_found_is_not_taken_as_safe(
         self, _which, tmp_path, monkeypatch
