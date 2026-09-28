@@ -101,8 +101,9 @@ Each property is testable. The tickets in track TR are written against them.
   *Instructed* by TR3 and *enforced* by TR5, as the standard (TRQ1,
   decided).
 - **P2: a definition of done is never invented.** Every record's definition
-  of done is either text the User accepted as proposed, or text a person
-  attested at a terminal. There is no third route. A model's statement
+  of done is either text the User accepted as proposed, or text attested by
+  a session running as the person outside every boundary (part 3.6 says
+  what that can and cannot prove). There is no third route. A model's statement
   that a ticket is refined changes nothing; rite writes the record.
 - **P3: a question reaches a person where they already look, and its answer
   is attributed to its ticket by rite, not by a model.** A question nobody
@@ -493,17 +494,39 @@ ticket, and the next record supersedes the old one.
 
 ### 3.6 The human paths
 
-- **`rite refine accept <ID> [--file <draft>] [--as-written]`**, run by a
-  person. `--as-written` accepts the ticket's own text, for a ticket a
-  human wrote properly. The command reads the ticket once and shows the
-  person the definition of done and the hash it binds to. **It then reads
-  its confirmation from `/dev/tty`** and refuses when there is none. That
-  makes the step physically the person's: a model's Bash tool is expected
-  to have no controlling terminal, and piping to stdin does not reach
-  `/dev/tty`. ⚠ **Not measured** in the Claude app's Bash tool, in Goose
-  or in Cursor (TR0). If any of them has a tty, this is a convention there
-  and not a barrier, and the note must say so. When there is no tty it
-  prints the exact command for the person to run in their own terminal.
+- **`rite refine accept <ID> [--file <draft>] [--as-written]`**, run on
+  the host. `--as-written` accepts the ticket's own text, for a ticket a
+  human wrote properly. The command reads the ticket once, shows the
+  definition of done and the hash it binds to, and signs the record.
+  **What protects it is the key, not the terminal.** A sandboxed Manager
+  or Worker cannot read the key, so it cannot sign (to be measured, TR0).
+  **Outside every boundary, rite cannot tell the person from a model
+  running as the person.**
+
+  ⚠ **Corrected 2026-09-28: a `/dev/tty` confirmation is not a barrier.**
+  This note first said `accept` would read its confirmation from
+  `/dev/tty`, and that this "makes the step physically the person's". It
+  was measured in this session's own Bash tool (Claude Code 2.1.280 in the
+  desktop app, macOS):
+  - with no terminal, `open("/dev/tty")` fails with `ENXIO`, "Device not
+    configured". That much was as expected;
+  - **but the model can make one.** `script -q /dev/null python3 probe.py`,
+    with the answer written in after a second, gave the probe a
+    controlling terminal, and it read `RT-10` from `/dev/tty`. Python's
+    `pty.fork()` did the same. Both are ordinary tools a Bash-capable model
+    has.
+
+  So the prompt is dropped. A confirmation a model can type proves
+  nothing, and presenting it as a gate would be the proxy error this note
+  exists to avoid.
+- **The Dispatch session**, and any other unsandboxed session running as
+  the person (the Claude app's Code tab, Claude Code in a terminal), **can
+  therefore run `accept` itself.** rite cannot see its conversation, so
+  the provenance says `attested`, which means "run as the person, outside
+  any boundary". It never means "confirmed by a person". `/refine` tells
+  that session to ask the person and to run `accept` only after an explicit
+  yes; that is **instructed, not enforced**. **TRQ10** (part 7) asks Robert
+  whether that is acceptable.
 - **The Dispatch session** (the person's own Claude session at the project
   root) is not a Manager and rite cannot see its conversation. So its
   `/refine` ends at `rite refine accept`, and the provenance says
@@ -919,13 +942,16 @@ it. What is actually true:
 | **TRQ7** | More than one `board` holder in a root while refinement is on | refuse at parse; allow and rely on `CONFLICT` | **Refuse at parse**, naming both |
 | **TRQ8** | Where questions and parking notices go | the Owner's DM now; RP1's action destination when it lands | Both, in that order. Named so RP1's design counts refinement as an action |
 | **TRQ9** | Must a record have Verify commands? | required; optional but explicit (`"none agreed"`) | **Optional but explicit.** A lazy User rarely names a command. Requiring one either parks most tickets or pushes the Manager to propose commands, which the User then accepts unread. The Worker is told when none was agreed |
+| **TRQ10** (new, 2026-09-28) | May an unsandboxed session running as the person, such as Dispatch or the Claude app's Code tab, attest a definition of done with `rite refine accept`? rite cannot tell such a session from the person (part 3.6) | (a) yes, instructed to ask first, with provenance `attested`; (b) no: an unsandboxed session may only *propose*, and acceptance comes only through the User's Slack DM, the one route a local model cannot author (`rite connect` is not enough, because an unsandboxed model can run it too), which leaves projects without Slack only the terminal; (c) an OS presence check (Touch ID through macOS LocalAuthentication; Linux has no common equivalent) | **(a), weakly.** That session already holds the person's credentials and could edit the ticket or push code as them, so refusing it `accept` protects little. (b) is the principled answer if Robert wants P2 absolute even against his own sessions. (c) costs a platform-specific build for one command |
 
 ## Part 8 — where I am uncertain, and what gets measured first (TR0)
 
-- **`/dev/tty` in model tool calls.** Is there no controlling terminal in
-  the Bash tool of the Claude app, Claude Code, Goose and Cursor? It is
-  load-bearing for part 3.6. If any engine has one, `accept` there is a
-  convention, and the note is corrected.
+- ~~Is there no controlling terminal in a model's Bash tool?~~ **Measured
+  2026-09-28, and the question was the wrong one.** There is none by
+  default in Claude Code, but a model can create one with `script` or
+  `pty.fork()` and answer a `/dev/tty` prompt (part 3.6). The prompt is
+  dropped. Goose and Cursor need no separate measurement: the same tools
+  are available to any engine with a shell.
 - **Whether GitHub comments are read completely**, on an issue with more
   than 100 comments, and the fallback to `totalCount`.
 - **Whether the record survives a Jira round-trip** through a single ADF
@@ -955,7 +981,7 @@ it. What is actually true:
 
 ## Part 9 — where the spec text goes once decided
 
-This note stays the design while TRQ2–TRQ9 are open (TRQ1 is decided), by the release plan's
+This note stays the design while TRQ2–TRQ10 are open (TRQ1 is decided), by the release plan's
 rule that "a spec section for an undecided feature is the defect this
 project spent two releases removing". When they are answered, TR3 writes a
 new SPEC §6.7 ("Refinement: the record, the predicate, the protocol"). It
