@@ -1,0 +1,8 @@
+# Tests that pass in NO CI job, each with the reason. Read by
+# `tools/every_test_passes_somewhere.py`, which fails CI on any test that
+# passed nowhere and is not here, and on any entry here that is stale.
+#
+# An entry is a debt in plain sight, not an exemption: say what the test needs
+# that CI cannot give, and what would let it run. The key is pytest's node id.
+
+[runs_nowhere]
