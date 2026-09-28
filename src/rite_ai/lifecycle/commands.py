@@ -67,6 +67,10 @@ class HandoverResult:
     # delivered handover, is the one failure this project keeps finding:
     # reported success, nothing happened.
     queued_reason: str = ""
+    # An explicitly named ticket that got NO handover because this call
+    # released nothing: another handover of the same claims got there first.
+    # Said by `stop`, so the ticket a person named is not silently dropped.
+    not_handed_over: str = ""
     # The ticket the handover actually landed on — resolved from the
     # released claims when the caller did not name one, so `stop` can
     # report which ticket it wrote to rather than the empty string it was
@@ -466,6 +470,8 @@ def perform_handover(
     worker: str | None = None,
     reason: str = "clean shutdown",
     ticket: str = "",
+    *,
+    comment_without_release: bool = False,
 ) -> HandoverResult:
     """Single handover function — called by `stop` (clean shutdown), by the
     Owner on a stalled Manager's behalf (heartbeat timeout), by the
@@ -498,6 +504,19 @@ def perform_handover(
         released = ledger.release_claims(worker or None, layer=layer, machine=machine)
         result.released_claims = len(released)
 
+    if ticket and not released and not comment_without_release:
+        # ONLY THE RELEASER HANDS OVER, named ticket or not. Two handovers of
+        # one Worker at once (a window boundary and `rite stop --ticket`)
+        # both used to comment. This one released nothing, so another
+        # handover already has, and a second comment would read as a second
+        # handover. Reported, not swallowed: `stop` says so.
+        #
+        # `comment_without_release` is for takeover alone, which releases
+        # nothing locally BY DESIGN: it hands over another machine's board
+        # state, and its `<machine>/<worker>` names match no local claim. Who
+        # takes over is decided by the Owner lease, not here.
+        result.not_handed_over = ticket
+        ticket = ""
     if not ticket:
         # A handover that released nothing derives no ticket, so it posts
         # nothing: whoever released the claims is the one that hands over.
@@ -592,6 +611,17 @@ def stop(
             f" — board NOT updated: {handover.queued_reason or 'backend unreachable'}"
             f"; handover queued at {handover.outbox_path}, delivered on the next "
             "`rite start`"
+        )
+    if handover.not_handed_over:
+        # Both causes named, because inside the ledger's lock they look the
+        # same: nothing to release. Guessing one would be a wrong answer half
+        # the time.
+        message += (
+            f" — no handover posted to {handover.not_handed_over}: this stop "
+            "released no claims. Either another handover (a scheduled window "
+            "boundary, or another `rite stop`) already released them and "
+            "handed over, or the worker held none. To hand the ticket back "
+            "anyway, comment on it on the board"
         )
     if handover.label_failed:
         message += " (WARNING: board label update failed — retry queued)"
