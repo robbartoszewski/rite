@@ -569,6 +569,20 @@ def is_checkin(root: Path, manager: str, outbox_name: str) -> bool:
     )
 
 
+def held_questions(root: Path, manager: str, outbox_name: str) -> int:
+    """How many questions the check-in `outbox_name` asked (RP1: a check-in
+    holding questions needs the person, one without does not). A check-in
+    recorded before the count was kept is taken to hold one: unknown is
+    treated as needing the person, as everywhere in RP1."""
+    for e in ledger(root, manager):
+        if e.get("event") == "checkin" and e.get("outbox") == outbox_name:
+            try:
+                return int(e.get("questions", 1))
+            except (TypeError, ValueError):
+                return 1
+    return 0
+
+
 @dataclass(frozen=True)
 class Counts:
     """The filter's value, counted over one check-in period."""
@@ -643,12 +657,26 @@ def _deliver_checkin(root: Path, manager: str) -> str:
         lines.append(f"- withdrawn {e.get('id')}: answered by {e.get('answered_by')}")
     if survivors:
         lines += ["", "Questions held for this check-in:", *_question_lines(survivors)]
+    # RP1 piece 2: what was asked and never confirmed to reach anyone comes
+    # back here, every check-in, until something confirms it.
+    from rite_ai.managers import pending
+
+    lines += pending.checkin_lines(root, manager, now=time.time())
     path = send(root, manager, OUTBOX, "\n".join(lines), kind=CHECKIN)
     now = time.time()
     # Which outbox file IS a check-in, kept here rather than in the message
     # (which stays identity-free, Decision 1a): the Slack relay roots the
     # answer thread on it and mirrors it to the broadcast channel (K5).
-    record(root, manager, {"event": "checkin", "at": now, "outbox": path.name})
+    record(
+        root,
+        manager,
+        {
+            "event": "checkin",
+            "at": now,
+            "outbox": path.name,
+            "questions": len(survivors),
+        },
+    )
     for q in survivors:
         record(
             root, manager, {"event": "asked", "id": q.id, "at": now, "how": "checkin"}

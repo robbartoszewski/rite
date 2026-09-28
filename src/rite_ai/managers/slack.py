@@ -97,6 +97,14 @@ THREAD_HOURS = 24.0
 roots a day (V060_CHECKINS), so without a horizon the set grows without
 limit."""
 
+PENDING_SLOW_SECONDS = 300.0
+"""How often the thread under a PENDING item (RP1 piece 2) is read once it is
+older than `THREAD_HOURS`. ⚠ **A pending item is exempt from the horizon and
+from `THREADS_MAX`**: the Owner may answer a question days later, and a
+thread nobody reads is an answer nobody sees. It is read more slowly once
+old, so a pile of them cannot starve the fresh threads of the one read a
+tick. They are bounded by what is pending, which the check-in lists."""
+
 
 @dataclass(frozen=True)
 class Heard:
@@ -390,6 +398,9 @@ class Root:
     and a Manager told only "a reply" cannot know which."""
     last: str = ""
     due: float = 0.0
+    item: str = ""
+    """The outbox name of a PENDING item this root carries (RP1 piece 2), or
+    "". A reply here from the Owner, or their reaction, confirms it."""
 
 
 class _Relayed(str):
@@ -402,6 +413,10 @@ class _Relayed(str):
     """
 
     sent_at: float | None = None
+
+
+def _pending_label(item) -> str:
+    return f'rite\'s question "{" ".join(item.first.split())[:40]}"'
 
 
 def _relayed(text: str, sent_at: float) -> _Relayed:
@@ -495,6 +510,10 @@ class Listener:
     anything is posted — and that inference posted a month of old replies."""
     _turn: int = 0
     _unsaid: list[str] = field(default_factory=list)
+    _reactions: str = ""
+    """"" until tried; "read" when `reactions.get` works; "missing" once Slack
+    said the app lacks `reactions:read`, which is said once and then only a
+    thread reply confirms."""
 
     def news(self) -> list[str]:
         """Problems not yet said, for the supervisor to print — once each.
@@ -524,7 +543,23 @@ class Listener:
         if not channel or not ts:
             return
         self.roots.append(Root(channel, ts, label, last=ts))
-        del self.roots[:-THREADS_MAX]
+        self._bound_roots()
+
+    def _bound_roots(self) -> None:
+        """`THREADS_MAX` of the ordinary roots, plus every pending one."""
+        ordinary = [r for r in self.roots if not r.item]
+        drop = {id(r) for r in ordinary[:-THREADS_MAX]}
+        self.roots = [r for r in self.roots if id(r) not in drop]
+
+    def watch(self, channel: str, ts: str, label: str, item: str) -> None:
+        """Read the thread under a PENDING item until it is confirmed."""
+        if not channel or not ts or item in {r.item for r in self.roots}:
+            return
+        for r in self.roots:
+            if (r.channel, r.ts) == (channel, ts):
+                r.item = item
+                return
+        self.roots.append(Root(channel, ts, label, last=ts, item=item))
 
     def open(self, *, call=None) -> list[str]:
         """Say this Manager is listening, and learn where. Returns lines for
@@ -658,7 +693,7 @@ class Listener:
     def _read_a_thread(self, *, call=None) -> list[str]:
         now = self.clock()
         horizon = now - THREAD_HOURS * 3600
-        self.roots = [r for r in self.roots if _as_ts(r.ts) >= horizon]
+        self.roots = [r for r in self.roots if r.item or _as_ts(r.ts) >= horizon]
         due = [r for r in self.roots if r.due <= now]
         if not due:
             return []
@@ -667,7 +702,9 @@ class Listener:
         # reached the two threads a person had just replied in — the newest
         # roots, which are the ones anyone is replying under.
         root = min(due, key=lambda r: (r.due, -_as_ts(r.ts)))
-        root.due = now + THREAD_SECONDS
+        root.due = now + (
+            PENDING_SLOW_SECONDS if _as_ts(root.ts) < horizon else THREAD_SECONDS
+        )
         heard = _read(
             "conversations.replies",
             {"channel": root.channel, "ts": root.ts, "oldest": root.last},
@@ -683,10 +720,76 @@ class Listener:
             for m in heard.messages
             if _as_ts(m.get("ts")) > _as_ts(root.last) and m.get("ts") != root.ts
         ]
+        if root.item:
+            self._confirm_if_answered(root, fresh, call=call)
         if heard.newest and _as_ts(heard.newest) > _as_ts(root.last):
             root.last = heard.newest
             self._save()
         return [self._relay(root.channel, m, under=root.label) for m in fresh]
+
+    def _counts_as_the_person(self, user: str) -> bool:
+        """The Owner, when there is one; any person, when there is not (then
+        the broadcast channel is the only place anything was asked)."""
+        return bool(user) and (user == self.owner if self.owner else True)
+
+    def _confirm_if_answered(self, root: Root, fresh, *, call=None) -> None:
+        """RP1 piece 2: a reply in the thread from the person confirms the
+        item; so does their reaction, when the app may read reactions."""
+        from rite_ai.managers import pending
+
+        if self.project is None:
+            return
+        how, at = "", 0.0
+        for m in fresh:
+            if self._counts_as_the_person(str(m.get("user") or "")):
+                how, at = pending.BY_THREAD_REPLY, _ts_of(m)
+                break
+        if not how and self._reactions != "missing":
+            how, at = self._reacted(root, call=call)
+        if not how:
+            return
+        if pending.confirm(self.project, self.manager, root.item, how, at=at):
+            self._unsaid.append(
+                f"slack: {root.label} reached the person ({how}); it is no "
+                "longer listed as waiting"
+            )
+        root.item = ""
+        self._bound_roots()
+        self._save()
+
+    def _reacted(self, root: Root, *, call=None) -> tuple[str, float]:
+        from rite_ai.managers import pending
+
+        caller = call or _call
+        try:
+            got = caller(
+                "reactions.get",
+                self.token,
+                {"channel": root.channel, "timestamp": root.ts},
+            )
+        except Exception as e:  # noqa: BLE001 - an outage is a result, not a crash
+            self._problem(f"cannot read reactions: {type(e).__name__}: {e}")
+            return "", 0.0
+        if not got.get("ok"):
+            if got.get("error") == "missing_scope":
+                self._reactions = "missing"
+                self._unsaid.append(
+                    "slack: reactions are not read — the app lacks "
+                    "reactions:read — so only a reply in a question's thread "
+                    "confirms it reached you. Add the scope under OAuth & "
+                    "Permissions for a reaction to count too"
+                )
+            else:
+                self._problem(f"cannot read reactions: {refusal(got)}")
+            return "", 0.0
+        self._reactions = "read"
+        message = got.get("message") or {}
+        for reaction in message.get("reactions") or []:
+            if any(
+                self._counts_as_the_person(str(u)) for u in reaction.get("users") or []
+            ):
+                return pending.BY_REACTION, self.clock()
+        return "", 0.0
 
     def _relay(self, channel: str, message: dict, *, under: str = "") -> _Relayed:
         """One message as the Manager will read it: rite's header, then the
@@ -812,7 +915,7 @@ class Listener:
             posted = self.posted()
         keep = dict(sorted(posted.items())[-POSTED_KEPT:])
         threads = {
-            f"{r.channel}:{r.ts}": {"last": r.last, "label": r.label}
+            f"{r.channel}:{r.ts}": {"last": r.last, "label": r.label, "item": r.item}
             for r in self.roots
         }
         try:
@@ -837,7 +940,7 @@ class Listener:
             self._saved_since = {str(k): str(v) for k, v in since.items() if v}
         threads = state.get("threads")
         if not isinstance(threads, dict):
-            return
+            threads = {}
         for key, value in threads.items():
             channel, _, ts = str(key).partition(":")
             if not (channel and ts and isinstance(value, dict)):
@@ -848,10 +951,19 @@ class Listener:
                     ts,
                     str(value.get("label") or "rite's message"),
                     last=str(value.get("last") or ts),
+                    item=str(value.get("item") or ""),
                 )
             )
+        # Every pending item that was posted is watched, whatever the saved
+        # threads say: the ledger is what must not be dropped (RP1 piece 2).
+        if self.project is not None:
+            from rite_ai.managers import pending
+
+            for i in pending.waiting(self.project, self.manager):
+                if i.ts:
+                    self.watch(i.channel, i.ts, _pending_label(i), i.name)
         self.roots.sort(key=lambda r: _as_ts(r.ts))
-        del self.roots[:-THREADS_MAX]
+        self._bound_roots()
 
     @property
     def _outward(self) -> str:
@@ -875,6 +987,12 @@ class Listener:
         target = self._outward
         if self.project is None or not target:
             return []
+        from rite_ai.managers import pending
+
+        said = pending.sync(self.project, self.manager, now=self.clock())
+        if said:
+            self._unsaid.append(said)
+        tracked = {i.name for i in pending.waiting(self.project, self.manager)}
         waiting = unread(self.project, self.manager, OUTBOX, READER)
         posted = self.posted()
         if not self._started:
@@ -950,6 +1068,13 @@ class Listener:
                 else self._label(f'reply "{" ".join(text.split())[:40]}"', sent)
             )
             self.remember(sent.channel, sent.ts, remembered)
+            if message.path.name in tracked:
+                # Posted is not answered: its thread is read until the person
+                # replies there (or reacts), however long that takes.
+                pending.posted(
+                    self.project, self.manager, message.path.name, sent.channel, sent.ts
+                )
+                self.watch(sent.channel, sent.ts, remembered, message.path.name)
             lines.append(
                 f"slack: posted {message.path.name} → {sent.channel} ts {sent.ts}"
             )
