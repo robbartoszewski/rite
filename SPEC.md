@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.42 · **Date:** 2026-09-29
+**Version:** 0.24.43 · **Date:** 2026-09-29
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -263,53 +263,64 @@ third number to keep in step. **Log a lease rejected as not-credible distinctly*
 it means somebody's clock is wrong, which is worth knowing rather than silently
 recovering from, and it is the only signal that will say so.
 
-#### 2.4.1a. ⚠ OBSERVED ONCE: two simultaneous Owners under extreme load
+#### 2.4.1a. Two simultaneous Owners reported by the graceful-handover test: a measurement fault, not the lease
 
-**The property this section exists to provide failed once, and the
-mechanism is not established.** Recorded here rather than closed, because a
-safety property that has been seen to break belongs in the spec even when
-it cannot be reproduced.
+**Status 2026-09-29: the mechanism is established, and it is in the test's
+bookkeeping, not in the lease.** This section used to record the Owner-lease
+guarantee as failing under extreme load (a "stated bound"). That reading is
+withdrawn; what follows is why, and what would still show a real failure.
 
-`tests/test_graceful_handover_across_processes.py` asserts
-`not overlapping_owners(runs)`. On 2026-09-20 it failed inside a full-suite
-run:
+`tests/test_graceful_handover_across_processes.py` asserted that no two
+ownership runs overlap. It failed twice: on 2026-09-20 in a full-suite run at
+load ~140 (overlap 103.9 simulated s), and on 2026-09-28 in CI on macOS (run
+36476910158, head `36f103d`, overlap 78.2 simulated s; the clock runs 600x,
+so 0.17 s and 0.13 s real).
 
-    beta's lease   ...0594.8 -> ...3644.8
-    alpha acquired ...3540.9
-    OVERLAP          103.9s
+**What was wrong.** The test closed the incumbent's ownership run when its
+handover TICK returned. The release lands before that: after its push the
+tick still runs the write's housekeeping and returns, and a loaded or
+descheduled process can take longer over that than the successor takes to
+read the release, wait out `skew_tolerance`, and promote. The run therefore
+ended after the successor's began, and the test reported two Owners while
+only one held the lease. The earlier reading here ("alpha acquired BEFORE
+beta's lease expired") took the late close for the lease's end.
 
-⚠ **Note the direction: alpha acquired 103.9s BEFORE beta's lease
-expired.** `stand_for_owner` cannot promote against a lease its holder
-reads as `HELD` — it returns `StillOwner`/`NotOwner` and stops. So alpha
-did not take the role because beta was slow to yield. Either alpha read a
-lease that beta had already renewed past, or the two processes' clocks
-disagreed by more than `skew_tolerance_seconds`. **Which of those it was is
-unknown**, and the difference matters: one is a defect in the state layer's
-read, one is a defect in `verdict`, and one is an environment fact.
+**What established it** (macOS, this Mac, swap 26.8-26.9 GB of 27.6 GB used,
+load 4.1-6.8, one harness for all rows):
 
-**What is established, and what is not:**
+| run | test reported two Owners | a write took a lease that still held |
+|---|---|---|
+| unmodified, 40 runs | 0 | 0 |
+| 0.4 s added after beta's pushes, main `f34c32b`, 20 runs | **20** | 0 |
+| the same, with the fix, 20 runs | 0 | 0 |
+| control: alpha misjudges beta's valid lease, 3 runs | 3 | **3** |
 
-| | |
-|---|---|
-| The failure is the PROPERTY, not a timeout | established — the assertion is `overlapping_owners` |
-| It occurred at load average ~140, 1023 processes | established |
-| Reachable at ordinary CPU contention | **NO** — 10 consecutive passes at 14 hogs on 14 cores |
-| The mechanism | **NOT established** |
+The right-hand column is **ground truth from the remote**: with its reflog
+on, every write that landed is kept in order, and a write naming a new owner
+while the previous lease (plus the skew margin) still held is a real split
+brain. It needs no process's reading of events. The control shows it catches
+one.
 
-⚠ **"It needs load 140" is not "it is not real".** A dogfood run on
-somebody else's machine is not a controlled environment, and this is the
-guarantee the whole coordination layer exists to provide. It is recorded as
-a **stated bound** — the Owner-lease guarantee has been observed to fail
-under load roughly ten times core saturation — rather than as a closed
-ticket.
+**The fix.** A release now carries the stamp it wrote (`Released`,
+`HandedOver` and `Tick` carry `released_at`), stamped before its push, and
+the test closes a handed-over run there. The test also checks the remote's
+history directly (`election_harness.lease_history`,
+`promotions_over_valid_leases`), and a variant with 1.0 s between a release
+landing and returning reproduces the old failure on demand; each of three
+mutations of the fix turns it red in 3 of 3 runs.
 
-**The next occurrence is self-diagnosing.** The harness now records, every
-tick, the lease each process actually READ beside that process's own clock,
-and the failure message splits the three causes: a promotion where
-`read_was_expired=False` means the challenger promoted against a lease it
-read as VALID (`verdict`); `True` means it acted correctly on a stale read
-(the state layer, or clock skew). Neither could be told from the timestamps
-alone, which is why this took a conversation rather than a log line.
+⚠ **The earlier "self-diagnosing" probe could not diagnose this.** It read
+the lease AFTER each tick, so at a promotion it showed the challenger's own
+new lease, and its caption ("promoted against a lease it read as VALID")
+described a read it never recorded. It is kept as a record of what each
+process held after acting, and the caption now says so.
+
+**What is NOT established.** The 2026-09-20 occurrence was before the remote
+check existed, so it cannot be shown to be the same fault; it has the same
+signature (a successor's run starting inside an incumbent's run that ends at
+a late close), which is consistent with it and no more. And a lease that
+genuinely fails would now show in the right-hand column rather than as an
+overlap alone.
 
 #### 2.4.2. Atomic promotion via git push
 
@@ -7104,6 +7115,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.43 — §2.4.1a rewritten: the two Owners the graceful-handover test reported were its own bookkeeping, not the lease.** CI run 36476910158 (macOS) reproduced the 2026-09-20 failure. The test closed a handed-over Owner's run at its tick's end, after the release had landed; the successor promoted correctly in between. Established with ground truth from the remote's reflog: under an injected slow tail after the release, main reported two Owners in 20 of 20 runs while the remote showed a correct handover in 20 of 20; with the fix, 0 of 20; a control where the successor promotes over a valid lease is caught 3 of 3. The "stated bound" on the Owner-lease guarantee is withdrawn. A release now carries its stamp (`released_at`), the test closes the run there and checks the remote's writes directly, and the probe caption that claimed a diagnosis it could not make is corrected.
 
 **Changes in 0.24.42 — `rite init` asks about each repository before registering it (Robert, 2026-09-29).** §9.3 Section 3: the project root (with a commit) and each immediate subdirectory repository are offered one at a time, root first, and registered on confirmation, on both the existing-code and from-scratch paths. Before this the existing-code path registered silently and the root was offered only when no subdirectory held a repository. `--yes` answers yes and prints a line per module added; a root with nothing committed is explained, not offered. Pre-registered dogfood tests re-run on this change under `~` with the hook installed: F1 (init with defaults → `git add -A; git commit; git push` → push exit 0, `rite publish check` clean, no `.rite/gitleaksignore` created) and F2 (`rite status` lists `app: ./`; `rite add worker alpha` → `workers/alpha/app/main.py`). Mutations each turn tests red: adding without asking, `--yes` adding nothing, `--yes` adding silently, the root dropped when subdirectories hold repositories.
 
