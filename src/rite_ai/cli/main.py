@@ -6348,6 +6348,31 @@ def _setup_prompt(root: Path, manager: str) -> str:
     )
 
 
+class LoopAnswer(str):
+    """The loop's verdict, which IS a string (every caller compares it with
+    one), carrying `basis`: what the board looked like behind it.
+
+    ⚠ **Why a basis travels with the verdict (F22).** The supervisor has to
+    tell "the board still says `ready`" from "the board says `ready` about
+    the same tickets as last time". Only the second means a session that
+    just did nothing would be repeated. The ready tickets, and those the loop
+    last saw refused, are what a session would act on; a Worker's own state
+    is not in it, because a Worker finishing moves the claims ledger, which
+    `progress.footprint` reads."""
+
+    basis: tuple = ()
+
+    @classmethod
+    def of(cls, cycle) -> "LoopAnswer":
+        answer = cls(str(getattr(cycle, "verdict", "unknown") or "unknown"))
+        answer.basis = (
+            str(answer),
+            tuple(sorted(getattr(cycle, "ready", []) or [])),
+            tuple(sorted((getattr(cycle, "blocked", {}) or {}).items())),
+        )
+        return answer
+
+
 def _loop_verdict(root: Path, board=None) -> str:
     """The loop's own answer to "should this continue" (§9.14.4).
 
@@ -6368,7 +6393,7 @@ def _loop_verdict(root: Path, board=None) -> str:
         from rite_ai.sandbox import worker_sandbox_status
 
         cycle = plan_cycle(root, board=board, sandbox_status=worker_sandbox_status)
-        return str(getattr(cycle, "verdict", "unknown") or "unknown")
+        return LoopAnswer.of(cycle)
     except Exception:  # noqa: BLE001 - an unreadable project is `unknown`
         return "unknown"
 

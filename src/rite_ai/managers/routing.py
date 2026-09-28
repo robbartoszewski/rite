@@ -570,6 +570,12 @@ a second tunable invites raising it until the cap means nothing, which is how
 the unbounded case arose."""
 
 
+def routed_log(root: Path, owner: str) -> Path:
+    """The ledger of every route `owner`'s supervisor delivered. Read by
+    `progress.footprint`, which needs a record that outlives the route file."""
+    return _ledger_dir(root, owner) / ROUTED_LOG_FILE
+
+
 def _record_delivered(root: Path, owner: str, to: str, name: str) -> None:
     """The Owner's supervisor delivered inbox file `name` to `to`."""
     log = _ledger_dir(root, owner) / ROUTED_LOG_FILE
