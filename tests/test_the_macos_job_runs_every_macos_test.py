@@ -42,12 +42,13 @@ NOT_IN_THE_MACOS_JOB: dict[str, str] = {
         "so it runs in the Linux job's full suite"
     ),
     "tests/test_sandbox.py": (
-        "asserts that `sandbox-exec` is ABSENT from a Worker's command; nothing "
-        "in it is gated on macOS, so the Linux job runs all of it"
+        "asserts rite passes yoloAI's backend name through verbatim, never the "
+        "literal `sandbox-exec`, with yoloAI mocked; nothing in it is gated on "
+        "macOS, so the Linux job runs all of it"
     ),
     "tests/test_scheduler.py": (
-        "branches on the platform to build the expected unit (launchd or "
-        "systemd) rather than skipping, so the Linux job runs every test"
+        "branches on the platform for the expected backend (launchd on macOS, "
+        "cron elsewhere) rather than skipping, so the Linux job runs every test"
     ),
     "tests/test_init_sandbox_branches.py": (
         "patches `sys.platform` to `darwin` itself, so the macOS branches run "
