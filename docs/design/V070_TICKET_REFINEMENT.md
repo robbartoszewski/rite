@@ -2,7 +2,8 @@
 
 **Status: DESIGN, 2026-09-28. Nothing in it is built.** Track TR of
 `V070_RELEASE_PLAN.md` carries the tickets. Read against `origin/main` at
-`a75469d`. Every file and line cited below was read there, and the files that
+`a75469d`; every line cited was re-checked at `9c03f3c` for the TRQ1 and
+label revision of 2026-09-28, and moved citations were updated. Every file and line cited below was read there, and the files that
 matter are unchanged from the `v0.6.0` tag (`3400dec`), which is what the
 dogfood runs. Where a sentence says what rite *does*, it names the file.
 Where it says what rite *will* do, it is this design and says "not built".
@@ -23,10 +24,21 @@ And, once the audit below showed rite does not:
 > "Yes, I expect the auto-refinement in v0.7.0. Please create a spec and
 > implementation plan in a parallel session"
 
-**Decided:** auto-refinement is v0.7.0. **Not decided:** everything this
-note proposes about *how*. The questions that are Robert's are collected in
-part 7, each with a recommendation. The one with the largest cost is TRQ1,
-whether rite *enforces* refinement or only *instructs* it (part 5).
+**Decided:** auto-refinement is v0.7.0. **Also decided, 2026-09-28 (TRQ1):
+refinement is enforced, as the standard, everywhere.** Robert, verbatim:
+
+> "5. There aren't really any 'existing projects' so let's just implement it
+> as a standard. Also, I think adding a label to tickets that are ready to
+> work on (you can come up with a name for it) could be useful. For example,
+> it makes it easy for the owner to filter tickets that are ready to be
+> assigned vs. the tickets that need refinement"
+
+**The second half of that ruling is a new requirement: the `ready-to-work`
+label, part 3.10.** It is a view derived from the signed record, never the
+authority.
+
+**Not decided:** the rest of what this note proposes about *how*, in
+TRQ2–TRQ9 (part 7), each with a recommendation.
 
 **The test, in his words, is the one this design is held to:** a lazy
 ticket, and a User who answers lazily, end in either a definition of done
@@ -42,7 +54,7 @@ There are three categories, kept separate.
 |---|---|---|
 | A Manager asks the User clarifying questions about a ticket | **Absent.** The channel exists (`rite reply`, `mailbox.how_to_reply`). The rule about *when* to ask a question the Manager already has exists (`checkins.RULE`, `checkins.py:49`: "ask now unless the question is clearly deferrable"). Nothing tells a Manager to form questions about a thin ticket | `managers/prompt.py:65`, `managers/checkins.py:49`, `managers/mailbox.py` |
 | A definition of done is established | **Instructed, in the wrong places.** `/refine` asks for one, and nothing tells a Manager to run `/refine`. The README frames it as the human's step "in your Dispatch session". `/ticket` step 1 and the Worker's `CLAUDE.md` name it only as a reason to *stop*: "say so and stop rather than guessing" | `templates/commands/refine.md`, `templates/commands/ticket.md:8`, `workspace/manage.py:773`, README "3. Tickets" |
-| Anything refuses a ticket without one | **Not enforced, not even as an advisory check.** `rite board create --description` defaults to `""` (`cli/main.py:3517`). The loop's ready set is "labelled `scheduled`" (`loop/__init__.py:428`). The broker checks only that the ticket exists on the board (`managers/broker.py:168`). Nothing in `src/` reads a ticket's content to decide anything | as named |
+| Anything refuses a ticket without one | **Not enforced, not even as an advisory check.** `rite board create --description` defaults to `""` (`cli/main.py:3523`). The loop's ready set is "labelled `scheduled`" (`loop/__init__.py:428`). The broker checks only that the ticket exists on the board (`managers/broker.py:168`). Nothing in `src/` reads a ticket's content to decide anything | as named |
 
 **What the dogfood run observed** (the run's own findings file, outside
 this repository, section R, 2026-09-28):
@@ -70,7 +82,8 @@ Each property is testable. The tickets in track TR are written against them.
 
 - **P1: no work starts on an unrefined ticket.** "Work" means a Worker
   started on it, a route naming it, or a Manager working it itself.
-  *Instructed* by TR3. *Enforced* only if Robert decides TRQ1 that way.
+  *Instructed* by TR3 and *enforced* by TR5, as the standard (TRQ1,
+  decided).
 - **P2: a definition of done is never invented.** Every record's definition
   of done is either text the User accepted as proposed, or text a person
   attested at a terminal. There is no third route. A model's statement
@@ -170,11 +183,13 @@ only if all of these hold:
 
 Anything else maps to the specific non-ready state in part 3.1.
 
-**No label is a source of truth.** A `refined` label would be a second
-write beside the comment. The two cannot be made atomic, and a label is
-writable by anything holding a token. The status is computed. It is printed
-by `rite board show` and in every instruction and start line that names the
-ticket. *Not built.*
+**No label is a source of truth.** Any label would be a second write beside
+the comment, and the two cannot be made atomic. A label is also writable by
+any person or token with access to the board. The status is computed. It is
+printed by `rite board show` and in every instruction and start line that
+names the ticket. The `ready-to-work` label Robert asked for (part 3.10) is
+a *view* of that computed status, which rite keeps in step with it. **No
+code path reads the label to decide anything.** *Not built.*
 
 ### 3.3 Who refines
 
@@ -430,22 +445,28 @@ ticket, and the next record supersedes the old one.
 
 ### 3.7 Everything that consumes the predicate
 
-*Not built.* Each consumer is marked "instructed" or "enforced".
+*Not built.* Each consumer is marked "instructed" or "enforced". Both
+halves are standard (TRQ1, decided); the column says which mechanism does
+the work.
 
 | consumer | change | half |
 |---|---|---|
-| **Worker launch** (`cli/main.py:5754`, `prompt = f"Work ticket {ticket}."`) | The supervisor reads the ticket once, checks it, and puts **the record itself** in the start prompt: id, checklist, scope, Verify. What was checked is what was delivered, so there is no window between the check and the Worker's read (part 4, race 4) | delivery: both halves. A refusal on a missing record is enforced |
+| **Worker launch** (`cli/main.py:5760`, `prompt = f"Work ticket {ticket}."`) | The supervisor reads the ticket once, checks it, and puts **the record itself** in the start prompt: id, checklist, scope, Verify. What was checked is what was delivered, so there is no window between the check and the Worker's read (part 4, race 4) | delivery: both halves. A refusal on a missing record is enforced |
 | **`rite route --ticket`** (new flag) | attaches the record snapshot to the routed text the same way | delivery: both; refusal: enforced |
 | **broker** (`managers/broker.py:168`) | refuses a Worker request for a ticket that is not REFINED, and says which state it is in | enforced |
-| **loop** (`loop/__init__.py:424`, `_ready`) | only REFINED counts as ready. The others are listed with their state, and the new `waiting-on-user` verdict applies | enforced. Instructed half: listed, not excluded |
+| **loop** (`loop/__init__.py:424`, `_ready`) | only REFINED counts as ready. The others are listed with their state, and the new `waiting-on-user` verdict applies | enforced |
+| **the Owner's assignment to Managers** (`scheduler/__init__.py:617`, which also lists `scheduled`) | assigns only tickets that are REFINED. It is a third reader of the ready signal, beside the loop and the broker, and it must not have its own | enforced |
+| **assignment to a Worker** (`coordination/distribution.py:164`, which removes `scheduled` when it adds the Worker's label) | removes `ready-to-work` in the same `label()` call (part 3.10) | view |
 | **`rite board show`** | a status line and the record | both |
 | **`/ticket`, the Worker's `CLAUDE.md`, `/refine`, the prompts** | part 3.5 | instructed |
 | **the review checklist** (`templates/review-checklist.md:202`) | its "would this ticket's definition of done still be met" test now has a definition of done to read: the record | both |
 | **the Worker's stop** | today it lands nowhere (`question.json`, part 1). It must reach the Manager, and through the Manager `rite status`. **Whether a sandboxed Worker's handover or reply reaches the host today is not established here.** TR4 establishes it before anything relies on it | both |
 
 **Every path that starts a Worker on a ticket must go through the broker's
-check.** TR5 enumerates those paths first, with a test that fails when a new
-launch path appears. That is MM1's enumerate-first practice, because
+check, and every reader of readiness must use the predicate.** TR5
+enumerates both first (the loop, the broker and the scheduler's assignment
+are the three readers known today), with a test that fails when a new one
+appears. That is MM1's enumerate-first practice, because
 `state.py` once claimed "every state file" and missed four writers.
 
 ### 3.8 Board by board
@@ -458,7 +479,8 @@ launch path appears. That is MM1's enumerate-first practice, because
 | Reading comments | ⚠ `_ISSUE_FIELDS` (`tickets/github.py:27`) does not fetch comments today. Add them to the single read. **Completeness must be shown**, for example with a GraphQL `comments.totalCount` compared against the rows returned. Whether `gh issue view --json comments` pages through every comment is **not measured**. If completeness cannot be shown: `UNREADABLE` | the issue GET with `fields=comment` returns `total` and `maxResults` (to be confirmed, TR0). Page when short, or `UNREADABLE` |
 | Questions posted on the ticket | a comment | a comment |
 | A Manager forging a record | a Manager holds a GitHub token and could post a record-shaped comment. **The MAC is what defeats this**, and it holds only while the key is unreadable from inside every boundary (TR0) | a Manager has no Jira credential today (F11) |
-| `ticket_backend: none` | no board, so nothing can be recorded. Under TRQ1 enforcement nothing is ready, which is already true without a board | — |
+| `ready-to-work` label (part 3.10) | added through `POST …/issues/{n}/labels` (`tickets/github.py`, `label()`), which creates a missing label; rite creates it once, beforehand, with a description (part 3.10). Removal is a separate `gh issue edit` call | added and removed in one `PUT … {"update": {"labels": […]}}` (`tickets/jira.py:456`), verified in that code's comment as accepting both at once. Jira labels are free-form and carry no description |
+| `ticket_backend: none` | no board, so nothing can be recorded. With enforcement standard, nothing is ready, which is already true without a board | — |
 
 **The key.** A random key at a path under rite's data directory, beside the
 credential root (`mailbox.mail_root` shows the pattern), **granted to no
@@ -505,6 +527,113 @@ is not a gate.
 ⚠ **An honest limit.** A lazy User will accept a mediocre proposal. rite
 records that as *accepted by the User*, never as *verified*. P2 is "never
 invented", not "always good".
+
+### 3.10 The `ready-to-work` label: a view of the record, never the authority
+
+*Not built.* Robert asked for it (part 0) so that the Owner can filter
+"ready to be assigned" from "needs refinement". The dogfood showed the need:
+the Owner had no way to tell a ticket it could start from one that needed
+the User.
+
+**The one thing that must not go wrong.** A label is board state that any
+person, and any Manager holding a token, can add or remove. If rite read
+the label as proof of refinement, adding it by hand would bypass
+enforcement completely. That is the proxy-for-the-property failure this
+project has catalogued all release. So:
+
+- **The gate never reads the label.** Every consumer in part 3.7 decides
+  from `scheduled` (the list) and the predicate (the signed record, part
+  3.2).
+- **rite is the only intended writer, and it writes what the record says.**
+  The label is output, not input.
+
+**The name: `ready-to-work`.** It is Robert's own phrase ("tickets that are
+ready to work on"), it reads correctly to someone who has never seen rite's
+docs, and it is one token, which Jira needs (its labels cannot contain
+spaces). It is also plainly different from `scheduled`, which is the point
+of the next paragraph.
+
+**Its relationship to `scheduled`: three roles, one authority each.**
+
+| | who sets it | means | read by the gate? |
+|---|---|---|---|
+| `scheduled` | a person, or rite's handover returning a ticket (`lifecycle/commands.py:164`, `coordination/refusal.py:103`) | "this should be worked": the queue, as today | **yes**, as membership of the queue |
+| the signed record | rite, from the User's accept or a person's attestation | "this has an agreed definition of done" | **yes**, as the predicate |
+| `ready-to-work` | **rite only** | `scheduled` **and** REFINED **and** not yet assigned | **never** |
+
+The alternative, making `ready-to-work` *replace* `scheduled` as the queue
+signal, was rejected on two counts. The gate would then read a label that
+anyone can set, which is the proxy again. And a person would lose the
+plain "please work this" input that `scheduled` is today. With the roles
+above, **the two labels cannot disagree as decisions**, because only one
+of them is ever an input. They can disagree as a *view*: the view is
+stale, and the next reconciling read corrects it.
+
+**The Owner's two filters**, on either board:
+
+| | GitHub | Jira (JQL) |
+|---|---|---|
+| ready to be assigned | `label:ready-to-work` | `labels = ready-to-work` |
+| needs refinement | `label:scheduled -label:ready-to-work` | `labels = scheduled AND labels not in (ready-to-work)` |
+
+⚠ The JQL for "needs refinement" is written from the documented semantics
+of `not in` on a multi-valued field, not measured. TR0 checks it. When the
+board view may be stale (no rite process has run lately),
+`rite board list --ready` and `rite board list --needs-refinement` compute
+the truth from a fresh read, with each ticket's state.
+
+**Both cases someone will produce, by hand or with a Manager's token:**
+
+- **The label added to a ticket that is not REFINED.** Nothing starts:
+  every gate reads the record and refuses with the ticket's actual state
+  (NOT REFINED, STALE, …). At its next reconciling read, rite **removes the
+  label** and says so twice: a line in the board holder's instruction, and
+  once on the ticket as a comment ("rite removed `ready-to-work`: this
+  ticket has no valid refinement record (state: NOT REFINED)"). If the same
+  label keeps being re-added, rite keeps removing it. The ticket comment is
+  posted **once per record state**, so a person re-adding it cannot start a
+  comment war. The instruction line repeats every time, because a Manager
+  adding it is worth knowing about.
+- **The label removed from a ticket that is REFINED.** Nothing is blocked:
+  the gate reads the record, and the ticket stays ready. At its next
+  reconciling read, rite **re-adds the label** and reports it in the cycle
+  line. It posts no ticket comment, because nothing is wrong with the
+  ticket.
+
+**Reconciliation: fixed at the next read, never assumed correct.**
+
+- **Who writes.** The supervisor of the `board` holder, and only that one
+  among Managers (TRQ7 makes it one). Also a person's `rite refine accept`
+  or `reopen`, for the ticket it touches. Also assignment, which removes the
+  label in the same `label()` call that removes `scheduled`
+  (`coordination/distribution.py:164`).
+- **When.** At the start of every cycle; right after every record write
+  (after its read-back); and on demand with `rite refine sync`, which a
+  person can run on the host with no Manager running.
+- **What is looked at.** The union of `list(scheduled)`,
+  `list(ready-to-work)` and DF4's ledger of ids rite recently created or
+  labelled. Each member is read with one single-issue GET, the desired
+  label is computed from that read, and rite writes only where the label
+  differs. The second list matters: it finds a label left on a ticket that
+  lost `scheduled` or was assigned while rite was not running.
+- **While no rite process runs, the label drifts.** It is exactly as fresh
+  as the last reconcile, and each start line says how many labels it
+  corrected. A board view is never the truth; `rite board list --ready` is.
+- **Incomplete lists are said.** A list that returns a truncated page
+  (`TicketPage.truncated`, `tickets/interface.py`) makes that cycle's
+  reconciliation incomplete, and the start line says so. It never claims
+  the board is reconciled.
+- **A list's lag (DF4) delays the view, never a decision.** A label added in
+  the last seconds may be missed by one read, and is fixed at the next.
+
+**On GitHub the label is created once, with a description**, the first time
+rite needs it: "Set and removed by rite: this ticket is scheduled and its
+definition of done is agreed. Adding it by hand does nothing." A person
+browsing the repository's labels then learns what it is without reading any
+docs. An existing label of that name keeps its colour; rite does not
+overwrite a person's customisation. `label()` would otherwise create it
+grey with no description. Jira has no label descriptions, so there it is
+the name alone.
 
 ## Part 4 — races, one by one
 
@@ -561,14 +690,29 @@ available, the result fails closed and says why.
 11. **Ledger writes** (the supervisor, a person's `reopen` or `accept`) take
     a kernel `flock` on the ticket's ledger file, the scheduler lock's fix
     (#37). The ledger holds rounds only. It never decides `REFINED`.
+12. **The `ready-to-work` label against anything else writing labels.** A
+    person's edit, rite's reconcile and an assignment can interleave in any
+    order, and the last write wins. **No outcome depends on the result**,
+    because no gate reads the label, and the next reconciling read puts it
+    back in step with the record. On GitHub an assignment's add and remove
+    are two calls (`github.py`, `label()`), so a crash between them can
+    leave `ready-to-work` on an assigned ticket. The next reconcile removes
+    it, because "not yet assigned" is part of the label's definition.
 
 **Out of scope, and said:** several machines. The ledger is machine-local.
 Two machines refining the same ticket is race 3, which holds, but the
 rounds and deadlines do not travel. That is v0.8.0's shape.
 
-## Part 5 — instructed and enforced: the two halves
+## Part 5 — instructed and enforced: both are standard
 
-| | instructed half (TR1–TR4) | enforced half (TR5), **Robert's decision, TRQ1** |
+**Decided by Robert, 2026-09-28 (TRQ1): enforcement is the standard, with
+no opt-in, no configuration key and no exemption for existing projects.**
+His reason: "There aren't really any 'existing projects' so let's just
+implement it as a standard." So the `refinement.enforce` key this note
+first proposed is dropped, along with the start line that would have said
+enforcement was off.
+
+| | instructed (TR1–TR4) | enforced (TR5) |
 |---|---|---|
 | The Owner refines before routing | the prompt says so | `route --ticket` refuses an unrefined ticket |
 | A Worker starts only on a refined ticket | its start prompt carries the record, and `/ticket` checks | the broker refuses. The loop does not count it as ready |
@@ -576,10 +720,11 @@ rounds and deadlines do not travel. That is v0.8.0's shape.
 | Routed free text that is really ticket work | instructed: ticket work goes with `--ticket` | ⚠ **not enforceable**: rite cannot tell free text naming a ticket from any other text (TRQ5) |
 | A human `rite loop` with no Manager | reports NOT REFINED tickets | dispatches none of them until a person refines or attests them |
 
-**What enforcement costs, concretely.** It changes behaviour for anyone who
-puts a bare ticket on a board and expects work to start, and that includes
-Robert's own boards: `RT` on Jira, `rite-dogfood-board` on GitHub, and the
-dogfood's `KAN`.
+**What enforcement changes, accepted with the ruling.** It changes
+behaviour for anyone who puts a bare ticket on a board and expects work to
+start, and that includes Robert's own boards: `RT` on Jira,
+`rite-dogfood-board` on GitHub, and the dogfood's `KAN`. Listed so that the
+first run after the upgrade surprises no one.
 
 - On the first run after upgrading, **every** `scheduled` ticket is NOT
   REFINED. Nothing starts until each one is refined. With N = 3, that is up
@@ -587,8 +732,8 @@ dogfood's `KAN`.
   once.
 - **A well-written ticket still needs a person's word**: one `ok`, or a
   `rite refine accept --as-written` at a terminal, under the fail-closed
-  default of TRQ6. There is no blanket accept, deliberately (TRQ1 option
-  d).
+  default of TRQ6. There is no blanket accept, deliberately: it would be
+  an invented definition of done by another name.
 - Throughput on a board of properly written tickets drops by one
   round-trip to the User per ticket.
 - A project with no one reachable (no Slack, nobody at `rite connect`)
@@ -614,7 +759,7 @@ dogfood's `KAN`.
 
 | id | question | options | recommendation, and why |
 |---|---|---|---|
-| **TRQ1** | **Enforce refinement in code, or instruct only?** | (a) enforced everywhere, from the upgrade; (b) enforced for projects `rite init` creates under 0.7.0, and opt-in (`refinement.enforce: true`) for existing ones, which are told at every start that it is off; (c) opt-in everywhere; (d) any of these plus a blanket `accept --all` for migration | **(b).** It gives new projects the guarantee, and it does not silently stop existing boards, his own included, on upgrade. Its cost is a start line that says the guarantee is off where it is. **Against (d):** a blanket accept is the invented definition of done by another name. The recommendation to enforce at all came from the session coordinating this work; (a) against (b) is the cost question, and it is his |
+| ✅ **TRQ1**: **DECIDED 2026-09-28, enforced as the standard** | Enforce refinement in code, or instruct only? | (a) enforced everywhere; (b) enforced for new projects, opt-in for existing ones; (c) opt-in everywhere; (d) any of these plus a blanket accept | **Robert chose (a):** "There aren't really any 'existing projects' so let's just implement it as a standard." No configuration key. This note had recommended (b); the ruling replaces it. (d) stays rejected. The same ruling added the `ready-to-work` label (part 3.10) |
 | **TRQ2** | N rounds per attempt; the round deadline; K open rounds per Manager | N 2–4; deadline 12 h, 24 h, or the next check-in; K 3–8 | **N = 3, 24 h or the next check-in close if sooner, K = 5.** 24 h is Slack's thread horizon today, so a longer deadline needs the pinning in race 7 anyway. K = 5 stays inside Tier 3 with the relay's other reads |
 | **TRQ3** | The accept set | a word list; also `<ID> ok` in the DM; also a batch `ok <ID> <ID>` for as-written proposals | **`ok`, `yes`, `accept`, `lgtm`, in-thread or as `<ID> ok`, with the batch form only for as-written proposals.** Deliberately small: every word added is one a model or a person could type by accident |
 | **TRQ4** | Does "you decide" (delegation) count as acceptance? | yes, for the Manager's next proposal; no | **No.** The Manager answers it with a proposal that one word accepts. P2 stays absolute, and the lazy User pays one more word |
@@ -640,6 +785,9 @@ dogfood's `KAN`.
   and whether it is absent from the argv and environment of every rite
   process that holds it, read with CU1b section 4's `KERN_PROCARGS2`
   reader.
+- **Whether the Jira filter for "needs refinement"** (`labels = scheduled
+  AND labels not in (ready-to-work)`) returns exactly the scheduled tickets
+  without the label, on a real site.
 - **Whether a sandboxed Worker's handover or reply reaches the host**
   (TR4). The dogfood suggests not, because its question stayed in the
   sandbox. That is one observation, not a measurement.
@@ -652,7 +800,7 @@ dogfood's `KAN`.
 
 ## Part 9 — where the spec text goes once decided
 
-This note stays the design while TRQ1–TRQ9 are open, by the release plan's
+This note stays the design while TRQ2–TRQ9 are open (TRQ1 is decided), by the release plan's
 rule that "a spec section for an undecided feature is the defect this
 project spent two releases removing". When they are answered, TR3 writes a
 new SPEC §6.7 ("Refinement: the record, the predicate, the protocol"). It
