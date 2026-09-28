@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.27 · **Date:** 2026-09-28
+**Version:** 0.24.28 · **Date:** 2026-09-28
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -7016,6 +7016,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.28 — a cut is the server's, and the clock is checked.** Ollama's log does not say whose prompt it cut, and several local Managers sharing one server is the ordinary case, so 0.24.27's report is scoped: a cut "on this server during this Manager's cycle", with the other Managers on the endpoint named, never "your prompt". The log's stamps are wall-clock only, so the cycle's wall-clock window is checked against a monotonic measurement, and a clock step or a daylight-saving change answers "cannot tell". The window opens before the launch; it had opened after it. 0.24.27 said a cut was recorded for the check-in; it was recorded under a name the standup did not read, and now it is read, scoped the same way.
 
 **Changes in 0.24.27 — a cut prompt is said, or rite says it cannot tell.** After each Goose Manager cycle, rite reads Ollama's log for `truncating input prompt` inside the cycle and says any cut with its numbers, recording it for the check-in. It claims a clean cycle only on positive evidence: a local endpoint, an Ollama version the line was verified on (0.34.2), a readable log covering the cycle, and a model request logged inside it. Anything short of that, or truncation wording rite does not recognise, is said as "cannot tell" with the reason, once per run. The log does not name the model, and the message says so. The multi-turn fill (the dogfood's case) is still unmeasured.
 

@@ -750,18 +750,22 @@ So after each cycle of a Goose Manager, `rite start` reads that log
 (`~/.ollama/logs/server.log`, or the file `RITE_OLLAMA_LOG` names) and says
 one of three things:
 
-- **a cut**, loudly, with how many tokens were sent and how many the model got,
-  also recorded for the next check-in. Raise `context_window`, or give that
-  Manager less to read at once. (The log does not name the model, so on a
-  server other programs also use, the cut may be theirs.)
+- **a cut**, loudly, with how many tokens were sent and how many were kept,
+  and it appears in the next check-in's standup. **It is the server's cut,
+  not necessarily this Manager's:** Ollama's log does not say whose prompt it
+  was, so rite names the project's other Managers on the same endpoint, and
+  anything else using that Ollama server is invisible to it. If the cut was
+  this Manager's, raise its `context_window` or give it less to read at once.
 - **nothing**, when the cycle is shown to be clean: the log is this server's,
   covers the whole cycle, and records its requests.
 - **"cannot tell"**, and why, once per run: the endpoint is on another
   machine, the log cannot be read or was rotated, it records none of the
   cycle's requests (as when `ollama serve` runs in a terminal), or Ollama is a
-  version whose log wording rite has not verified. rite verified the wording on
-  Ollama 0.34.2; after an upgrade it says "cannot tell" rather than falling
-  quiet.
+  version whose log wording rite has not verified, or the clock moved during
+  the cycle (a clock step, or a daylight-saving change: the log is stamped in
+  wall-clock time, and its request lines carry no zone). rite verified the
+  wording on Ollama 0.34.2; after an upgrade it says "cannot tell" rather than
+  falling quiet.
 
 ⚠ **A bigger window costs memory.** The window's cache grows with it, on top
 of the model's weights. On a machine with little memory to spare, a window

@@ -1003,6 +1003,17 @@ server's own accounting.
    log: run A's three cuts found (79,535 / 79,296 / 79,262 → 20,482), the
    control clean, an idle window "cannot tell". Mutation-checked, each
    safeguard red when removed.
+   **Scoped the same day** (review): nothing in the log identifies the caller
+   (checked: no model, request id or port on the truncation line; only
+   `127.0.0.1` and the path on the request line), and several local Managers
+   sharing one server is the ordinary case. So a cut is reported as the
+   SERVER'S, with the project's other Managers on that endpoint named, never as
+   "your prompt was cut". The cycle is bounded in wall-clock time, because the
+   log's stamps are wall-clock; it is checked against a monotonic measurement,
+   and a clock step or a DST change answers "cannot tell". The window now
+   opens BEFORE the launch; it opened after it, which could miss a cut in the
+   first request. And the standup renders the cut: #54 recorded it as
+   `context_cut`, which nothing read (DEFECT_CLASSES 13).
 
 Cleaned up: the model was unloaded and `rite-ctx40960-qwen3-8b` removed
 (`ollama list` shows none). ⚠ Goose wrote these runs to the operator's

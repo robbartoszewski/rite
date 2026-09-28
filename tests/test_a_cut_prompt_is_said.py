@@ -88,9 +88,21 @@ class TestWhatItSays:
         assert got.known and got.cut
         assert [(c.sent, c.kept) for c in got.cuts] == [(79296, 20482)]
         line = T.describe("helper", 40960, got)
-        assert "CUT a prompt 1 time(s)" in line
+        assert "1 prompt(s) CUT on this server during 'helper''s cycle" in line
         assert "79,296 tokens" in line and "20,482" in line
-        assert "does not name the model" in line
+        assert "does not say which caller" in line
+        assert "no other Manager in this project uses this endpoint" in line
+
+    def test_a_cut_is_never_claimed_as_the_managers_own(self, tmp_path):
+        """Two Managers sharing one Ollama is the ordinary case since 0.6.0,
+        and the log does not say whose prompt was cut. The line names the
+        others on the endpoint rather than blaming this one."""
+        got = _check(tmp_path, [START, _gin(39), _cut(39)])
+        line = T.describe("helper", 40960, got, sharing=("scout", "lead"))
+        assert "'scout', 'lead' in this project also use this endpoint" in line
+        assert "may be theirs" in line
+        assert "If it was 'helper''s" in line
+        assert "helper's prompt was cut" not in line
 
     def test_a_cycle_with_requests_and_no_cut_is_clean_and_says_nothing(self, tmp_path):
         """llama.cpp's own `truncated = 0` slot line is not a truncation."""
@@ -151,6 +163,31 @@ class TestWhereItCannotTellItSaysSo:
         )
         assert not got.known and "does not recognise" in got.why
 
+    def test_a_wall_clock_that_moved_during_the_cycle(self, tmp_path):
+        """The log is wall-clock stamped; a step (NTP, sleep, a manual change)
+        moves the window onto a neighbour's lines or off this cycle's."""
+        a, b = _window(38, 43)
+        log = tmp_path / "server.log"
+        log.write_text("\n".join([START, _gin(39), _cut(39)]) + "\n")
+        stepped = T.check_cycle(
+            LOCAL, a, b, get=Version(), log=log, monotonic_elapsed=(b - a) - 3600
+        )
+        steady = T.check_cycle(
+            LOCAL, a, b, get=Version(), log=log, monotonic_elapsed=(b - a) - 0.5
+        )
+        assert not stepped.known and "wall clock moved" in stepped.why
+        assert steady.known and steady.cut
+
+    def test_a_daylight_saving_change_during_the_cycle(self, tmp_path, monkeypatch):
+        """The request lines carry no zone, so across a DST change they are
+        ambiguous; the answer is "cannot tell", not a guess."""
+        from datetime import timedelta
+
+        offsets = iter([timedelta(hours=2), timedelta(hours=1)])
+        monkeypatch.setattr(T, "_offset", lambda at: next(offsets))
+        got = _check(tmp_path, [START, _gin(39), _cut(39)])
+        assert not got.known and "daylight saving" in got.why
+
     def test_the_can_not_tell_line_names_the_reason(self, tmp_path):
         got = _check(tmp_path, [START, _gin(39)], version="9.9.9")
         line = T.describe("helper", 40960, got)
@@ -172,7 +209,7 @@ class TestTheSupervisorSaysIt:
     def _run(self, root, verdict, monkeypatch, agent="goose", told=None):
         from rite_ai.managers import supervise as sup
 
-        monkeypatch.setattr(T, "check_cycle", lambda endpoint, a, b: verdict)
+        monkeypatch.setattr(T, "check_cycle", lambda endpoint, a, b, **kw: verdict)
         said: list[str] = []
         cuts = sup._say_if_the_window_was_cut(
             root,
@@ -188,8 +225,27 @@ class TestTheSupervisorSaysIt:
     def test_a_cut_is_said_and_returned_for_the_check_in(self, tmp_path, monkeypatch):
         verdict = T.Verdict(True, cuts=[T.Cut(at=0.5, sent=79296, kept=20482)])
         said, cuts = self._run(self._project(tmp_path), verdict, monkeypatch)
-        assert len(said) == 1 and "CUT a prompt" in said[0]
+        assert len(said) == 1 and "CUT on this server" in said[0]
         assert cuts == verdict.cuts
+
+    def test_the_other_managers_on_the_endpoint_are_named(self, tmp_path, monkeypatch):
+        root = self._project(tmp_path)
+        (root / ".rite" / "config.yaml").write_text(
+            "coordination:\n  managers: [helper, scout, far]\n  manager_roles:\n"
+            "  - {name: helper, engine: 'local:small', preset: lead, "
+            f"endpoint: '{LOCAL}', model: 'qwen3:8b', agent: goose, "
+            "context_window: 40960}\n"
+            "  - {name: scout, engine: 'local:small', preset: executor, "
+            "endpoint: 'http://localhost:11434', model: 'qwen3:8b', agent: goose, "
+            "context_window: 40960}\n"
+            "  - {name: far, engine: 'local:big', preset: executor, "
+            "endpoint: 'http://gpu.lan:11434/v1', model: 'qwen3:32b', agent: goose, "
+            "context_window: 40960}\n"
+        )
+        verdict = T.Verdict(True, cuts=[T.Cut(at=0.5, sent=79296, kept=20482)])
+        said, _ = self._run(root, verdict, monkeypatch)
+        assert "'scout' in this project also use this endpoint" in said[0]
+        assert "'far'" not in said[0]
 
     def test_cannot_tell_is_said_once_per_reason_per_run(self, tmp_path, monkeypatch):
         root = self._project(tmp_path)
@@ -218,3 +274,77 @@ class TestTheSupervisorSaysIt:
             self._project(tmp_path), verdict, monkeypatch, agent="claude"
         )
         assert said == []
+
+
+def test_the_standup_shows_a_cut_as_the_servers(tmp_path):
+    """Recorded for the check-in AND rendered by it. The first version recorded
+    an event the standup did not read (DEFECT_CLASSES 13)."""
+    import time
+
+    from rite_ai.managers import checkins, standup
+
+    root = tmp_path
+    (root / ".rite").mkdir()
+    checkins.record(
+        root,
+        "helper",
+        {
+            "event": "ollama_cut",
+            "scope": "server",
+            "at": time.time(),
+            "number": 3,
+            "sent": 79296,
+            "kept": 20482,
+        },
+    )
+    text = "\n".join(standup.digest(root, "helper", since=0.0))
+    assert "prompt CUT on this Manager's model server during cycle 3" in text
+    assert "79,296 tokens sent, 20,482 kept" in text
+    assert "does not say whose prompt it was" in text
+
+
+def test_the_window_opens_before_the_launch(tmp_path, monkeypatch):
+    """The engine talks to its model the moment tmux starts it, so a window
+    opened when `launch` RETURNS misses a cut in the first request. Driven
+    through the supervisor with a clock the fake session advances."""
+    from rite_ai.managers import supervise as sup
+    from rite_ai.managers.session import StartResult
+
+    (tmp_path / ".rite").mkdir()
+    (tmp_path / ".rite" / "config.yaml").write_text(
+        "coordination:\n  managers: [helper]\n  manager_roles:\n"
+        "  - {name: helper, engine: 'local:small', preset: lead, "
+        f"endpoint: '{LOCAL}', model: 'qwen3:8b', agent: goose, "
+        "context_window: 40960}\n"
+    )
+    world = {"t": 1000.0}
+    seen: dict = {}
+
+    def starter(root, manager, **kw):
+        seen["launched_at"] = world["t"]
+        world["t"] += 30.0  # the session runs, and talks to its model
+        return StartResult(True, "ok", session="s1", attach="a")
+
+    def check(endpoint, started, ended, **kw):
+        seen["window"] = (started, ended)
+        return T.Verdict(True)
+
+    monkeypatch.setattr(T, "check_cycle", check)
+    sup.supervise(
+        tmp_path,
+        "helper",
+        engine="local:small",
+        agent="goose",
+        max_sessions=1,
+        window_seconds=0,
+        prompt="go",
+        starter=starter,
+        engine_ready=lambda: [],
+        verdict=lambda r: "ready",
+        resume_id_for=lambda *a, **k: "",
+        note=lambda line: None,
+        poll=0,
+        now=lambda: world["t"],
+    )
+    assert "window" in seen, "the supervisor never checked the cycle"
+    assert seen["window"][0] <= seen["launched_at"]
