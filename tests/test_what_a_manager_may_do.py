@@ -385,8 +385,41 @@ class TestTheUserIsToldAboutARefusal:
         said: list[str] = []
         sup._say_refusals(tmp_path, 0.0, said.append)
         assert len(said) == 1
-        assert "DOES cover" in said[0]
+        assert "appears to cover" in said[0]
+        assert "cannot tell" in said[0]
         assert str(settings_path(tmp_path)) in said[0]
+        assert "through `>`" not in said[0], "no redirection in `rite status`"
+
+    def test_a_refused_redirection_names_the_file_write_first(
+        self, tmp_path, monkeypatch
+    ):
+        """SB11, Linux 2026-09-28: `printf … > notes/x.txt` was refused while
+        other allowlisted commands ran, so the settings were applied. The old
+        line said they were not."""
+        import rite_ai.managers.supervise as sup
+
+        command = "printf 'sb11\\n' > notes/SB11.txt && cat notes/SB11.txt"
+        monkeypatch.setattr(sup, "refused_commands", lambda *a, **k: [command])
+        monkeypatch.setattr(sup, "allowed", lambda c: True)
+        said: list[str] = []
+        sup._say_refusals(tmp_path, 0.0, said.append)
+        assert "through `>`" in said[0]
+        assert "did not apply" in said[0] and "cannot tell" in said[0]
+
+    @pytest.mark.parametrize(
+        "command, writes",
+        [
+            ("printf x > notes/a.txt", True),
+            ("echo x >> log.txt", True),
+            ("make 2>&1", False),
+            ("echo 'a > b'", False),
+            ("git status", False),
+        ],
+    )
+    def test_what_counts_as_writing_through_a_redirection(self, command, writes):
+        from rite_ai.managers.supervise import _writes_through_a_redirection
+
+        assert _writes_through_a_redirection(command) is writes
 
     def test_an_unlisted_refusal_names_the_line_that_would_permit_it(
         self, tmp_path, monkeypatch
