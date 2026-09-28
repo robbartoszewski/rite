@@ -85,9 +85,38 @@ Where each landed:
 | TRQ5 | **every piece of Worker work carries a ticket**; `--no-ticket` is withdrawn | part 3.14, and TRQ11 |
 | TRQ7 | **dissolved**: the Owner owns the board. Refinement is the Owner's, which rite already makes singular | part 3.3 |
 
-**Still open:** TRQ10 (who may run `rite refine accept`), TRQ11 (whether a
-chore needs refinement) and TRQ12 (a separate board identity for agents).
-Each is in part 7 with a recommendation.
+**Robert's answers to TRQ10–TRQ12, Q4, and commit authorship, 2026-09-29,
+verbatim where given:**
+
+- **TRQ10: "Allow it."** A session running as him may approve, and the
+  record says `attested`, not "confirmed by you". The Slack DM stays the
+  strong path, because a local model cannot write to it. The label must be
+  findable later.
+- **TRQ11:** "In most cases, I think the Owner should ask follow up
+  questions (if it has any doubts) and refine straight away. If the User
+  doesn't reply within some timeout, create a chore with what it's got and
+  then refine later".
+- **TRQ12:** "Can't the User control it by choosing if they give rite their
+  token or create a separate account for them?"
+- **Q4** (whether "don't implement tickets yourself" binds executor
+  secondaries): "Yes, close the bypass. However, instruct that it's meant
+  for chores and trivial tickets. Any serious work should be passed to
+  workers."
+- **Commit authorship:** leave it, on the same principle as TRQ12.
+
+| ruling | what changes | where |
+|---|---|---|
+| TRQ10, (a) | an unsandboxed session may attest; the label is findable on the board and in `rite refine status` | part 3.6 |
+| TRQ11, reshaped | ask at once when in doubt, refine in place; **silence makes an unrefined chore holding exactly his words**, never a parked ticket and never an invented definition of done | parts 3.4 step 7 and 3.14 |
+| TRQ12, premise rejected | **rite builds no identity management**: it works under either credential choice, says which one is in use, and enforces the guardrail when the choice makes it possible | part 3.13 |
+| Q4, (c) plus scope | an executor may commit, but only on a ticket-named branch through a PR, and its instructions say that path is for chores and trivial tickets | part 3.5, and TR3 and TR10 in the plan |
+| authorship | documented, not built | part 3.13 |
+
+**The principle behind TRQ12 and authorship, written once:** rite does not
+invent identity. It reports which identity is in use and what follows
+from it (part 3.13).
+
+**Nothing is open with Robert on this track.**
 
 **The test, in his words, is the one this design is held to:** a lazy
 ticket, and a User who answers lazily, end in either a definition of done
@@ -142,9 +171,10 @@ Each property is testable. The tickets in track TR are written against them.
   is attributed to its ticket by rite, not by a model.** A question nobody
   can see is not asked.
 - **P4: refinement is bounded and fails closed.** A bounded number of
-  rounds and a bounded time, ending in REFINED or PARKED. Each end is said
-  to the User and on the ticket. Refinement never makes a Manager wait: the
-  ticket waits, and the Manager takes other work.
+  rounds and a bounded time. When the User is silent the work is neither
+  lost, nor blocked, nor guessed at: it waits, visibly unrefined, and is
+  refined when the User is back (TRQ11, decided). Refinement never makes a
+  Manager wait: the ticket waits, and the Manager takes other work.
 - **P5: the record lives on the board.** It survives every session, it is
   readable by a cold session on any engine, and a change to the ticket's
   text invalidates it.
@@ -178,7 +208,8 @@ what the Owner does with it:
 | `PROPOSED` | the latest round carries a proposal the User can accept | no | in refinement; waits for the User's word |
 | `REFINED` | exactly one valid record heads the chain, and it matches the ticket's current title and description | **yes** | **the Owner assigns it** to a Manager; `ready-to-work` is on it until then |
 | `STALE` | a record exists, and the title or description changed after it was written | no | **the Owner starts refinement again**, like `NOT REFINED`; the round quotes the old record so the User sees what changed |
-| `PARKED` | refinement ended without agreement. The reason is one of: `no answer`, `not agreed after N rounds`, `thread unreadable`, `not started by the Manager` | no | waits for a person (part 3.4 step 7); **uses no sessions** |
+| `WAITING FOR YOU` | the User did not answer before the round's deadline (TRQ11, decided). The open question stands and is not asked again | no | **re-presented when the User is next active** (part 3.4 step 7), without spending a round; **uses no sessions** while he is away. Does not count against K |
+| `PARKED` | refinement ended without agreement, and only a person can restart it. The reason is one of: `not agreed after N rounds`, `thread unreadable`, `not started by the Manager` | no | waits for a person (part 3.4 step 7); **uses no sessions** |
 | `CONFLICT` | two records claim to be the head (part 4, race 3) | no | waits for a person; reported; **uses no sessions** |
 | `UNREADABLE` | the board could not be read, the comment list could not be shown complete, or the record's signature cannot be checked | no | reported; **uses no sessions**, because a session cannot read what rite could not |
 
@@ -319,7 +350,8 @@ supervisor rather than asked of the model:
   (`rite refine reopen <ID>` retries it). A Manager that cannot or will not
   start a ticket's refinement costs two sessions, not a session a minute.
 
-`PARKED`, `CONFLICT` and `UNREADABLE` never cause a session. Every
+`WAITING FOR YOU`, `PARKED`, `CONFLICT` and `UNREADABLE` never cause a
+session. Every
 refinement session also counts against the run's mandatory budget ceiling
 (§9.14.5), which stays the outer bound.
 
@@ -438,36 +470,74 @@ still open, and it proposes. Worked example with the dogfood's KAN-7
 - `ok` → the record is written. Silence → part 3.4 step 7. "make it 10s"
   → round 3 proposes again, with item 3 now quoting the answer.
 
-**7. No answer, and the bound.** A round is open until the earlier of an
-attributed reply and its **deadline**. TRQ2 decided 24 h by default, or the close of
-the next check-in window if that is sooner, and never later than Slack's
-thread horizon (`THREAD_HOURS`, `slack.py:95`). At the deadline:
+**7. No answer: the work waits, visibly unrefined, and nothing is invented.**
 
-- **PARKED (no answer) is declared only once rite has read that thread
-  past the deadline** and found nothing sent before it. Send time comes
-  from Slack (`_Relayed.sent_at`), not from when rite polled. A reply sent
-  at 23:59 and read at 00:10 counts. While the thread has not yet been read
-  past the deadline, the state stays `ASKING (deadline passed, thread not
-  yet read)` (part 4, race 6).
-- If the thread *cannot* be read (the relay was down past the horizon, or
-  the root was dropped), the result is **PARKED (thread unreadable)**, said
-  as that and never as "no answer".
-- After round N with no accept: **PARKED (not agreed after N rounds)**.
+Robert, TRQ11 (decided 2026-09-29): "In most cases, I think the Owner
+should ask follow up questions (if it has any doubts) and refine straight
+away. If the User doesn't reply within some timeout, create a chore with
+what it's got and then refine later".
 
-**Parking** posts once, to the User's action destination (RP1; the Owner's
-DM until RP1 lands) and on the ticket as a comment. The notice says what is
-still missing and the one thing that resumes it. The ticket is then off the
-Manager's list until a person acts. **There is no automatic re-ask**: a
-reminder is a round, and rounds are bounded.
+- **Refine straight away.** When an instruction or a ticket reaches the
+  Owner, its first round goes out in that same session. It asks questions
+  if the Owner has doubts, and it is a proposal to accept if not. A round
+  is open until the earlier of an attributed reply and its **deadline**:
+  24 h by default, or the close of the next check-in window if that is
+  sooner (TRQ2, configurable).
+- **Silence is WAITING FOR YOU, not PARKED.** At the deadline the ticket
+  becomes `WAITING FOR YOU`. That is declared only once rite has read the
+  thread past the deadline and found nothing sent before it, judged by
+  Slack's send time (`_Relayed.sent_at`), not by when rite polled (part 4,
+  race 6). Until then it stays `ASKING (deadline passed, thread not yet
+  read)`. A ticket waiting for the User:
+  - stays unrefined and visible: never `ready-to-work`, never assigned,
+    never given a Worker;
+  - is **not asked again** while he is away. There are no reminders, and it
+    starts no sessions;
+  - **does not count against K**, the cap on open refinements, so silence
+    on one ticket never blocks refinement of the others.
+- **When he is back, the question comes back, and it is not a new round.**
+  "Back" is an observable event, never a model's guess: the next message
+  rite delivers from him (`INSTRUCTION` or header-less), or his reply to a
+  check-in. At that point every ticket waiting for him has its open
+  question re-presented, once, in the same thread with the same round
+  number. RP1's delivery confirmation already brings unconfirmed action
+  items back at each check-in, so this is that mechanism, not a second
+  one.
+- **A chat instruction becomes a chore, and silence does not lose it**
+  (part 3.14). If he has not replied by `chore_after_minutes` (default 60,
+  configurable), rite creates the chore **with exactly his words**, marked
+  unrefined, and refinement continues on it.
+- **What still parks, meaning only a person can restart it:**
+  - **PARKED (not agreed after N rounds):** he was there, answered, and N
+    rounds did not reach an accepted definition of done;
+  - **PARKED (thread unreadable):** the relay was down past the horizon, or
+    the root was dropped. This is said as that, and never as "no answer";
+  - **PARKED (not started by the Manager):** part 3.4 step 0's no-progress
+    guard.
 
-**Resuming** needs a person's action, so it cannot loop:
+**What TRQ11 changes in the round limits:**
+- **N = 3 stays the cap on rounds with a User who is answering.** Being
+  re-presented after an absence does not consume a round, so a User who is
+  away for a week comes back to the question he left, not to a fourth
+  message about it.
+- **The deadline no longer ends refinement.** It only moves the ticket from
+  asking to waiting.
+- **K counts only rounds still inside their deadline,** so tickets waiting
+  for the User never crowd out new ones.
+- **S, the per-session start cap, is unchanged.**
+- **One new setting:** `chore_after_minutes` (part 3.11).
 
-- a reply attributed to the ticket. The parking notice says to reply in the
-  DM starting with the id, because an old thread may be past the horizon;
+**Parking** posts once, to the User's action destination (RP1; the
+Owner's DM until RP1 lands) and on the ticket as a comment. The notice says
+what is still missing and the one thing that resumes it.
+
+**Resuming a PARKED ticket** needs a person's action, so it cannot loop:
+- a reply attributed to the ticket. The notice says to reply in the DM
+  starting with the id, because an old thread may be past the horizon;
 - `rite refine reopen <ID>`;
 - or an edit to the ticket's title or description, which changes the hash
-  and starts a new attempt from `NOT REFINED`. **A User who fixes the ticket
-  themselves has resumed it.**
+  and starts a new attempt from `NOT REFINED`. **A User who fixes the
+  ticket themselves has resumed it.**
 
 **8. It never blocks the Manager, and it never reads as an empty board.**
 Refinement is per-ticket state. While a ticket is `ASKING`, the Manager
@@ -477,7 +547,8 @@ works anything that is `REFINED`. The loop gains two verdicts, and
 - **`refining`**: step 0 admits refinement work this cycle. A session
   starts, as for `ready`.
 - **`waiting-on-user`**: every `scheduled` ticket is `ASKING`, `PROPOSED`,
-  `PARKED`, `CONFLICT` or `UNREADABLE`, or is queued behind K. Nothing is in
+  `WAITING FOR YOU`, `PARKED`, `CONFLICT` or `UNREADABLE`, or is queued
+  behind K. Nothing is in
   flight either. Its line names each ticket and what it waits for.
 
 ⚠ **This corrects a defect in this note's first version.** There, the loop
@@ -523,6 +594,20 @@ The secondary's half gains (*not built*):
 > that does not exist, or two items contradict — reply saying exactly
 > that, and stop. Do not fill the gap yourself: the Owner takes it back to
 > the User."
+
+**Q4, decided 2026-09-29: an executor Manager may do the work itself, and
+only through the ticket.** Robert: "Yes, close the bypass. However,
+instruct that it's meant for chores and trivial tickets. Any serious work
+should be passed to workers." The rule and its enforcement:
+
+- An executor Manager may commit a ticket's work itself only when the ticket
+  is REFINED. It works on a branch named for the ticket, and the work goes
+  out through a pull request. Enforced at PB1's publish step (TR10): rite
+  publishes nothing whose ticket is not REFINED.
+- Its instructions add the scope (*not built*): "Doing a ticket yourself is
+  for chores and trivial tickets. Anything more is passed to a Worker: ask
+  for one through the broker". This scope is **instructed**. rite has no
+  measure of "trivial", and pretending otherwise would be a proxy.
 
 **(2) `/refine` against `/ticket` step 1 (and the Worker's `CLAUDE.md`).**
 The two disagree today because each makes its own judgement of "complete
@@ -594,8 +679,23 @@ ticket, and the next record supersedes the old one.
   the provenance says `attested`, which means "run as the person, outside
   any boundary". It never means "confirmed by a person". `/refine` tells
   that session to ask the person and to run `accept` only after an explicit
-  yes; that is **instructed, not enforced**. **TRQ10** (part 7) asks Robert
-  whether that is acceptable.
+  yes; that is **instructed, not enforced**.
+
+  **Decided 2026-09-29 (TRQ10): "Allow it."** Two consequences follow:
+  - **The Slack DM stays the strong path.** An `accepted` record is one the
+    User accepted in the channel a local model cannot write to. An
+    `attested` record is one a session running as the person signed. Both
+    make the ticket REFINED; only the first says a person was there.
+  - **The attested label is findable later.** It is recorded three ways:
+    - the record's provenance: `kind: attested`, when, and the host;
+    - the comment's text, which says in words that the approval was
+      attested, not confirmed by the User, and carries the fixed token
+      `rite-attested`. So a search finds every one: `"rite-attested"
+      in:comments` on GitHub, `comment ~ "rite-attested"` in JQL. Neither
+      query is measured yet (TR0);
+    - `rite refine status`, which prints the provenance with every REFINED
+      result, so an attested approval is never shown looking like a
+      confirmed one.
 - **The Dispatch session** (the person's own Claude session at the project
   root) is not a Manager and rite cannot see its conversation. So its
   `/refine` ends at `rite refine accept`, and the provenance says
@@ -655,7 +755,7 @@ refuses it.** The "unrefined" column says which, and what it prints.
 
 | consumer | change | unrefined `scheduled` ticket |
 |---|---|---|
-| **the Owner's assignment to Managers** (`scheduler/__init__.py:617`, which also lists `scheduled`) | assigns only REFINED tickets. It is a third reader of readiness, beside the loop and the broker, and it must not have its own rule | **routes to refinement.** `NOT REFINED`/`STALE`: "RT-10: starting refinement" (or "queued for refinement, position n", behind K). `ASKING`/`PROPOSED`: "RT-10: in refinement, round k of N, waiting for you". `PARKED`: "RT-10: parked (<reason>); reply `RT-10 …` to resume". `CONFLICT`/`UNREADABLE`: "RT-10: needs a person: <why>". Never assigned, never refused |
+| **the Owner's assignment to Managers** (`scheduler/__init__.py:617`, which also lists `scheduled`) | assigns only REFINED tickets. It is a third reader of readiness, beside the loop and the broker, and it must not have its own rule | **routes to refinement.** `NOT REFINED`/`STALE`: "RT-10: starting refinement" (or "queued for refinement, position n", behind K). `ASKING`/`PROPOSED`: "RT-10: in refinement, round k of N, waiting for you". `WAITING FOR YOU`: "RT-10: waiting for you (asked <when>)". `PARKED`: "RT-10: parked (<reason>); reply `RT-10 …` to resume". `CONFLICT`/`UNREADABLE`: "RT-10: needs a person: <why>". Never assigned, never refused |
 | **loop** (`loop/__init__.py:424`, `_ready`) | REFINED counts as ready for Workers. Unrefined `scheduled` tickets are refinement work: the `refining` verdict, bounded by part 3.4 step 0 | **routes to refinement**, with the same lines. Never `idle` while anything is `scheduled` |
 | **broker** (`managers/broker.py:168`) | a Worker request is an attempt to *work* the ticket | **refuses**: "refused: RT-10 has no agreed definition of done yet (NOT REFINED). It is in the queue for refinement; ask for a Worker once rite reports it REFINED." The state and its round are named |
 | **`rite route --ticket`** (new flag) | a route is an attempt to have another Manager work it. On REFINED it attaches the record snapshot, as the Worker launch does | **refuses**, in the broker's words |
@@ -875,11 +975,12 @@ good. I think I will add "proceed"". *Not built.*
 ```yaml
 # .rite/config.yaml
 refinement:
-  rounds: 3              # N: messages per ticket before PARKED
+  rounds: 3              # N: rounds with an answering User before PARKED
   deadline_hours: 24     # how long one round waits
   open_max: 5            # K: refinements open at once per Manager
   start_per_session: 3   # S: new refinements started per Owner session
   accept_words: [ok, yes, accept, lgtm, proceed]
+  chore_after_minutes: 60  # a silent chat instruction becomes an unrefined chore (TRQ11)
   questions_to: dm       # or: channel (part 3.12)
   channel: ""            # the private channel's id, when questions_to is channel
 ```
@@ -899,6 +1000,9 @@ refuses, rather than clamps:
   likely to be typed as the opposite of yes. Matching is case-insensitive
   and exact after rite strips the ticket id;
 - `questions_to: channel` with no `channel`.
+- `chore_after_minutes` below 1. It has no upper bound: a longer wait only
+  delays when the words appear on the board. They are safe in
+  `delivered.py` meanwhile.
 
 Unknown keys are refused, as everywhere in `config.yaml`.
 
@@ -985,72 +1089,81 @@ under an identity of their own. Where they stand today:
 problem on GitHub is Workers, and rite's own host-side writes. On Jira it
 is everyone, because every agent that can write there does so as him.
 
-**The proposal: agents never hold the person's board credential** (TRQ12,
-a decision for Robert):
+**Decided 2026-09-29 (TRQ12): rite builds no identity management.**
+Robert: "Can't the User control it by choosing if they give rite their
+token or create a separate account for them?" He is right, and it replaces
+this note's earlier proposal (separate agent identities built by rite)
+entirely. **The User decides, by which credential they configure:**
 
-- **Jira: a separate Atlassian account for rite.** Robert has already made
-  one for the dogfood project. The supervisor and Managers use it, and
-  Workers get no Jira credential, because they receive their ticket's
-  record in the prompt (TR4). **This also answers readiness Q3** ("Jira for
-  a sandboxed Manager: … a service account by the file route") **and F11**
-  (a Manager cannot read Jira at all).
-- **GitHub, host side:** the supervisor writes records, labels and
-  question comments under an App installation token it mints for itself,
-  with the `github_access.py` machinery that Managers already use.
-- **GitHub, Workers:** three routes, with their costs:
-  - (a) a fine-grained personal access token without the Issues
-    permission. Cheap, but rite cannot verify what a token may do without
-    attempting a write, and that is unmeasured;
-  - (b) an App token minted with `contents: write` and no `issues`
-    permission. Verifiable, because rite chooses the permissions (as
-    `TOKEN_PERMISSIONS` does for Managers). But it lasts one hour, and on
-    seatbelt a yoloAI Worker receives credentials only at launch
-    (`redact_secrets`), so a Worker running past an hour loses `git push`;
-  - (c) **no GitHub credential at all.** Under PB1 (v0.7.0, decided)
-    Workers never push; the Manager publishes. This is the end state, and
-    it also removes a credential from every sandbox. **What Workers use
-    `gh` for today, beyond pushing, is unmeasured**, and it has to be
-    measured before (c) is built.
+- **Their own account.** rite's agents write as them, and rite cannot tell
+  their edits from an agent's. The guardrail is **advisory**: rite still
+  never edits a description itself (G2), and it instructs agents not to,
+  but it cannot detect one that does.
+- **A separate account for rite**, as Robert made for the dogfood. rite's
+  writes carry that account, anything else is the person's, and the
+  guardrail is **enforced** (below).
 
-  Recommendation: **(c), landing with PB1.** Until then GitHub keeps the
-  one "ok" (below).
+#### 3.13.1 The principle, written once: rite does not invent identity
 
-**What it costs:**
+**rite reports which identity is in use, and what follows from it.** This
+covers the board (TRQ12) and commits alike, and it is the one rule for
+every question of "who did this":
+- rite never builds, mints or impersonates an identity to make one
+  distinguishable;
+- it works correctly whichever identity the User chose;
+- it says plainly, at setup and in `rite doctor`, which one that is and
+  what it means.
 
-- **Jira:** one more user on the site. As I understand Atlassian's
-  pricing, which I did not check today, paid Jira Cloud plans bill per
-  user and the free plan is capped at a small number of users; this needs
-  verifying. Setup is creating the account, adding it to the project with
-  browse, create, edit and comment permissions, making an API token, and
-  `rite credential set`. That is one more guided step in `rite init` and
-  one more check in `rite doctor`.
-- **GitHub:** nothing new for Managers. For Workers, (c) depends on PB1 and
-  on the measurement above.
-- **What it cannot see:** the person's own unsandboxed sessions (Dispatch,
-  the Code tab) act as the person, so the guardrail cannot tell them from
-  him (TRQ10).
+**What rite owes the User under it** (*not built*; TR8, reshaped):
 
-**What it buys, once agents write under their own identity on a board:**
-
-- **G1 is enforced, not advised.** When a title's or description's latest
-  revision was made by an agent identity, the ticket is `EDITED BY AGENT`.
-  It is not refinable from its own text, and any record it had is `STALE`
-  by hash anyway. The User is asked, as an action item: "RT-10's
-  description was changed by <identity> at <time>: <diff>. Keep it, or
-  restore your text?" Jira's changelog carries the before and after text,
-  and GitHub's `userContentEdits` carries the diff, so rite can show
-  exactly what changed.
-  - **Keep** is an accept word in that thread: explicit permission,
-    recorded.
-  - **Restore** makes rite write back the person's last revision: the only
+- **It names the identity each writer uses, and says what follows.**
+  - GitHub: each token rite hands an agent is looked up with `GET /user`
+    (the Worker's `github_token` or `sandbox_token_<worker>`). The Managers'
+    App reports its bot name. Each is compared with the `gh` login rite uses
+    on the host, which is normally the person's own:
+    - the same login: "Workers write to GitHub as `robbartoszewski`, which
+      is also you. rite cannot tell your edits from theirs, so the guard
+      against an agent overwriting your ticket text is advisory. A
+      separate account for rite makes it enforced";
+    - a different login: "Workers write as `rite-bot`. Your edits are
+      told apart from theirs, and the guard is enforced".
+  - Jira: rite cannot see which account the person edits with, so it says
+    which account rite writes as (`/myself` for the configured token),
+    and states both consequences conditionally: "if that is your own
+    account…, if it is a separate one…".
+- **It enforces the guardrail when the choice allows it, from the same one
+  read** (part 3.2: `read_thread` also returns the description's edit
+  history: GitHub's `userContentEdits`, Jira's changelog).
+  - **G1, enforced:** a description whose latest revision was made by an
+    identity rite hands to agents is `EDITED BY AGENT`. It is not refinable
+    from its own text, and the User is asked, with the diff, to keep it or
+    restore their own version. **Keep** is an accept word in that thread.
+    **Restore** makes rite write back the person's last revision: the one
     time rite writes a description, and only on the person's word.
-- **Robert's "ok" friction goes away for well-written tickets.** A ticket
-  whose definition of done is in text that **every revision of which was
-  made by the person** is REFINED with no round. Its provenance is
-  `ticket-text`, citing that revision (the GitHub edit, or the Jira
-  changelog id), under the MAC. That is the outcome he was reaching for.
-- **Until a board's agents have an identity of their own, the one "ok"
-  stays on that board.** It fails closed.
+  - **The "ok" goes away for tickets he wrote himself** (TRQ6's friction).
+    A definition of done in text that no agent identity has ever edited is
+    REFINED with provenance `ticket-text`, citing that revision, under the
+    MAC. Where the identities are shared, that cannot be established, so the
+    one "ok" stays: rite fails closed and says why.
+- **G2 in every case:** rite itself never edits a title or description,
+  except the restore above. Nothing in `src/` calls the backends'
+  `update()` today, and a test pins that.
+
+**Commit authorship: documented, not built** (decided 2026-09-29, same
+principle). A Worker's commits carry whatever git identity its sandbox is
+given, and its pushes and pull requests carry the account of the token it
+holds. If that is the User's own, agent work appears under their name,
+which matches PB1's "rite's involvement being discoverable is fine" but
+cannot be told apart by author. If they want it told apart, a separate
+account does that. `rite doctor` states which identity commits and pull
+requests go out as, and rite adds nothing to the history to make up the
+difference.
+
+**What was withdrawn:** this note's proposal that rite create a Jira
+service account, mint App tokens for its own host-side writes, and strip
+Workers of GitHub credentials in order to make identities distinct. PB1
+still takes pushing away from Workers for its own reasons; that is no
+longer part of this guardrail.
 
 ### 3.14 Every piece of Worker work carries a ticket (TRQ5, decided)
 
@@ -1074,7 +1187,9 @@ outright.** *Not built.*
   everything.** A route to another Manager is work. There is no route that
   needs no ticket; a status question has `rite status`.
 - **A User instruction that is not already a ticket becomes a chore.** The
-  Owner asks, and the supervisor creates the ticket outside the boundary.
+  supervisor creates the ticket outside the boundary, at the first of two
+  moments (TRQ11, decided, below): **when the User accepts** a definition
+  of done for it, or **when `chore_after_minutes` passes with no reply**.
   **Its description is the User's instruction, quoted verbatim from the
   message rite delivered and marked `INSTRUCTION`**, with those message ids
   recorded. **The Owner cannot write a chore's text**, so it cannot pass off
@@ -1094,23 +1209,52 @@ outright.** *Not built.*
 - **Noise.** A chore closes when its work is reported done, and
   `-label:chore` hides chores in a board filter.
 
-**Does a chore need refinement? TRQ11, for Robert, and my recommendation
-differs from the lean I was given.** The coordinating session's view: no,
-because a chore is not user-authored intent. My view: **a chore *is*
-user-authored**, since it is the User's own words from chat, and chat is
-where the laziest instructions arrive ("fix the timeout thing"). Exempting
-chores would let any vague request skip refinement just by arriving in
-Slack instead of on the board. The dogfood's KAN-7 would become an
-unrefined chore. **Recommendation: a chore goes through the same predicate.**
-The Owner's first round for a mechanical chore is already a proposal ("I'll
-run the suite on branch X and report the result. ok?"), so it costs one
-word, and a vague one gets refined properly.
+**Does a chore need refinement? Decided 2026-09-29 (TRQ11): yes, straight
+away, and silence never loses it.** Robert: "In most cases, I think the
+Owner should ask follow up questions (if it has any doubts) and refine
+straight away. If the User doesn't reply within some timeout, create a
+chore with what it's got and then refine later". That settles the question
+between the two readings I put to him (a chore as the User's intent, or
+not), in the direction of refining it, and adds what to do when he is
+silent:
 
+- **Refine straight away.** The chat instruction's first round goes out in
+  the Owner's same session: questions if it has doubts, a one-word proposal
+  if not ("I'll run the suite on branch X and report the result. ok?").
+- **He answers:** the rounds run as for any ticket. On his accept, rite
+  creates the chore with his words and posts the signed record on it, and
+  it is REFINED.
+- **He is silent for `chore_after_minutes`:** rite creates the chore **with
+  exactly his words**, quoted from `delivered.py` with their message ids,
+  and no definition of done. It is visibly unrefined:
+  - its body opens with a line rite writes: "Unrefined: rite created this
+    from your message at <time>. No definition of done is agreed yet; no
+    work starts until one is";
+  - its state is `NOT REFINED`, and then `WAITING FOR YOU` at the round's
+    deadline;
+  - so it is never `ready-to-work`, never assigned, and never given a
+    Worker. The broker and `route --ticket` refuse it, like any unrefined
+    ticket (part 3.7).
+  Refinement continues on it, and its open question is re-presented when he
+  is back (part 3.4 step 7). **Nothing is lost** (the words are on the
+  board), **nothing is blocked** (other work goes on), and **nothing is
+  invented** (no definition of done exists until he accepts one).
+- **Exactly one chore per instruction, including across crashes.** The
+  chore's creation is keyed by the instruction's message ids, under the
+  ledger's `flock` (part 4, race 11). Accepting and timing out can land in
+  the same cycle, and whichever takes the lock first creates the chore; the
+  other finds it. The id is written to the ledger only after the board
+  create returns. So there is a window in which a crash leaves an intent
+  recorded with no id: the chore may or may not exist.
+  - Finding out would need a list, which lags (DF4).
+  - So rite **does not create again**. It reports "a chore for your message
+    of <time> may already exist; check the board, then `rite refine reopen`"
+    and waits for a person. A silent duplicate is worse than a question.
 **What it costs:**
 
 - a ticket per instruction: one to three extra board writes per route, and
   board clutter that the `chore` label and closing on completion contain;
-- under TRQ11's recommendation, one word per chore;
+- one word per mechanical chore (TRQ11, decided);
 - on a board where rite's identity cannot create issues, every chat
   instruction is refused until that is fixed. `rite doctor` finds it first.
 
@@ -1141,7 +1285,8 @@ available, the result fails closed and says why.
 5. **List lag (DF4).** The status comes from a single-issue GET. DF4's
    ledger governs which tickets are looked at.
 6. **A reply sent just before the deadline.** Decided by Slack's send
-   time, and PARKED only after the thread has been read past the deadline.
+   time, and WAITING FOR YOU only after the thread has been read past the
+   deadline.
    Not by which of the reply and the deadline rite happens to see first.
 7. **Thread eviction.** Today the relay reads at most `THREADS_MAX = 10`
    roots (`slack.py:83`), newest first, and drops roots older than 24 h. A
@@ -1260,9 +1405,10 @@ it. What is actually true:
 | ✅ **TRQ7**: **DISSOLVED 2026-09-28** | Two board-managing Managers | refuse at parse; allow | **Robert: "Doesn't "Owner owns the board and assigns tickets. Managers manage only the tickets assigned to them" solve this?"** It does. Refinement belongs to the Owner, which rite already makes singular (`routing_owner`). The question existed only because this note first keyed refinement to the `board` duty, which has no uniqueness rule and no consumer (part 3.3) |
 | ✅ **TRQ8**: **DECIDED 2026-09-28** | Where questions go | the DM; a private channel | **Robert: "DMs or a dedicated private channel with @rite invited. Let's make it configurable."** The channel is a second destination; answers there count only from `owner_user`; RP1's delivery confirmation governs both destinations, and unconfirmed questions come back in the DM (part 3.12) |
 | ✅ **TRQ9**: **DECIDED 2026-09-28** | Must a record have Verify commands? | required; optional but explicit | **Robert: "makes sense."** Optional but explicit (`"none agreed"`), as recommended |
-| **TRQ10** (new, 2026-09-28) | May an unsandboxed session running as the person, such as Dispatch or the Claude app's Code tab, attest a definition of done with `rite refine accept`? rite cannot tell such a session from the person (part 3.6) | (a) yes, instructed to ask first, with provenance `attested`; (b) no: an unsandboxed session may only *propose*, and acceptance comes only through the User's Slack DM, the one route a local model cannot author (`rite connect` is not enough, because an unsandboxed model can run it too), which leaves projects without Slack only the terminal; (c) an OS presence check (Touch ID through macOS LocalAuthentication; Linux has no common equivalent) | **(a), weakly.** That session already holds the person's credentials and could edit the ticket or push code as them, so refusing it `accept` protects little. (b) is the principled answer if Robert wants P2 absolute even against his own sessions. (c) costs a platform-specific build for one command |
-| **TRQ11** (new, 2026-09-28) | Does a chore ticket need refinement? | (a) no: a chore is exempt; (b) yes: the same predicate, where a mechanical chore's first round is already a one-word proposal | **(b).** The coordinating session leaned towards (a), on the grounds that a chore is not user-authored intent. But a chore is the User's own words from chat, where the vaguest instructions arrive, so (a) would let "fix the timeout thing" skip refinement just by arriving in Slack. **If wrong:** (a) reopens the lazy-ticket hole through chat; (b) costs one word per mechanical chore |
-| **TRQ12** (new, 2026-09-28) | Should agents write to the board under an identity of their own, so that "who wrote this text" is answerable? | (a) no: keep the one "ok" per well-written ticket; (b) yes: a separate Atlassian account for rite on Jira, App tokens for rite's host-side GitHub writes, and no GitHub credential for Workers once PB1 lands | **(b).** It turns G1 from advice into enforcement, removes the "ok" for tickets the person wrote, and answers readiness Q3 and F11 on the way. **Cost:** one Jira user seat per site (pricing not checked today), a guided setup step, and a dependency on PB1 plus an unmeasured question: what Workers use `gh` for today. **If wrong:** (a) keeps the friction he disliked; (b) done badly means an agent identity with more rights than it needs |
+| ✅ **TRQ10**: **DECIDED 2026-09-29, (a)** | May an unsandboxed session running as the person attest a definition of done? | (a) yes, labelled `attested`; (b) Slack DM only; (c) an OS presence check | **Robert: "Allow it."** The Slack DM stays the strong path (`accepted`); an attested approval is findable by its provenance, by the `rite-attested` token on the board, and in `rite refine status` (part 3.6) |
+| ✅ **TRQ11**: **DECIDED 2026-09-29, reshaped** | Does a chore ticket need refinement? | (a) exempt; (b) the same predicate | **Robert: "In most cases, I think the Owner should ask follow up questions (if it has any doubts) and refine straight away. If the User doesn't reply within some timeout, create a chore with what it's got and then refine later".** So (b), plus: silence makes an unrefined chore with exactly his words after `chore_after_minutes`, and a silent ticket is `WAITING FOR YOU`, re-presented when he is back, never PARKED (parts 3.4 step 7 and 3.14) |
+| ✅ **TRQ12**: **DECIDED 2026-09-29, premise rejected** | Should agents write to the board under an identity of their own? | (a) no; (b) rite builds agent identities | **Robert: "Can't the User control it by choosing if they give rite their token or create a separate account for them?"** rite builds no identity management. It works under either choice, says in setup and `rite doctor` which one is in use, and enforces the guardrail where the choice allows it. The same principle covers commit authorship: documented, not built (part 3.13) |
+| ✅ **Q4**: **DECIDED 2026-09-29, (c) plus scope** | Does "don't implement tickets yourself" bind executor secondaries? | — | **Robert: "Yes, close the bypass. However, instruct that it's meant for chores and trivial tickets. Any serious work should be passed to workers."** An executor Manager may commit only on a ticket-named branch through a PR, on a REFINED ticket, and its instructions say that path is for chores and trivial tickets (part 3.5; TR3, TR10) |
 
 ## Part 8 — where I am uncertain, and what gets measured first (TR0)
 
@@ -1301,7 +1447,7 @@ it. What is actually true:
 
 ## Part 9 — where the spec text goes once decided
 
-This note stays the design while TRQ10–TRQ12 are open (TRQ1–TRQ9 are decided), by the release plan's
+Every TRQ is now decided (TRQ1–TRQ12, and Q4). This note stays the design until TR3 writes the SPEC text, by the release plan's
 rule that "a spec section for an undecided feature is the defect this
 project spent two releases removing". When they are answered, TR3 writes a
 new SPEC §6.7 ("Refinement: the record, the predicate, the protocol"). It
