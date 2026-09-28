@@ -141,7 +141,17 @@ authenticate through, using that token; `gh` needs no login of its own. A commit
 measured reaching GitHub. Sandboxed pushes run the repository's own hooks,
 never your global ones, so a global pre-push hook such as a secret scan does
 not run there. `rite doctor`
-reports a missing Claude login as a problem. Then, per ticket:
+reports a missing Claude login, or a missing GitHub token, as a problem, and
+`rite sandbox start` refuses to start a worker that could not push its work:
+no GitHub token, no `gh`, or a token GitHub says cannot push to the
+repository (checked with a dry-run push that creates nothing). An `ssh`
+remote works too; inside the sandbox it is used over HTTPS.
+
+**Contributing through a fork?** Register your fork as the module and give
+the token Contents and Pull requests read/write on the fork. A fine-grained
+token cannot open a pull request on a repository you are not a member of, so
+the worker pushes its branch to your fork and you open the pull request to
+the upstream yourself. Then, per ticket:
 
 ```bash
 rite sandbox start alpha --ticket ABC-12     # GitHub Issues: --ticket 42
