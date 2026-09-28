@@ -1677,12 +1677,16 @@ allowlist at all.
   `known_hosts: Operation not permitted` before trying a key — so the
   sandbox's git environment rewrites `git@github.com:` and
   `ssh://git@github.com/` to `https://github.com/`, which reaches the token.
-- **A fine-grained PAT cannot open a pull request on a repository its owner is
-  not a member of** (GitHub lists "contribute to public repos where the user
-  is not a member" among fine-grained tokens' gaps). A Worker contributing
-  through a fork can push to the fork; the pull request to the upstream is
-  opened by a person, or needs a classic token, whose scope §5.3.2 argues
-  against handing to a sandbox.
+- **Through a fork, the pull request to the upstream is opened by a person,
+  and that is the design.** A fine-grained PAT cannot open a pull request on a
+  repository its owner is not a member of (GitHub lists "contribute to public
+  repos where the user is not a member" among fine-grained tokens' gaps). So
+  a Worker contributing through a fork pushes to the fork, and the person
+  whose name the pull request carries reads the diff before another
+  project's maintainer does. That review would otherwise be a promise; the
+  token makes it structural. The alternative, a classic token, removes the
+  step and hands the sandbox write access to every repository its owner can
+  write (§5.3.2). Decided for the yoloAI contribution run, 2026-09-28.
 - **Short expiry, easy rotation** — the same principle §10 already states for every
   credential rite manages: a credential that's painful to rotate never gets rotated.
 - **GitHub App installation tokens** (short-lived, scoped to the app's installation)

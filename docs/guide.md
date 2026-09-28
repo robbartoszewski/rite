@@ -544,9 +544,12 @@ doctor` names the typo and says the window was dropped.
    before creating the sandbox, a worker with no module, no GitHub token, no
    `gh`, or a token that cannot push: it asks GitHub the permission question
    a push asks first, and sends nothing. An `ssh` remote is used over HTTPS
-   inside. Through a fork, the worker can push to your fork but a
-   fine-grained token cannot open a pull request on a repository you are not
-   a member of: open that one yourself. A commit pushed from inside a sandbox this
+   inside. Through a fork, the worker pushes to your fork and you open the
+   pull request to the upstream yourself. That is deliberate: you read the
+   diff before the other project's maintainer does, and a fine-grained token
+   makes it structural, since GitHub will not let one open a pull request on
+   a repository you are not a member of. A classic token would remove the
+   step and widen what the sandbox holds to every repository you can write. A commit pushed from inside a sandbox this
    way has been measured reaching GitHub. Sandboxed pushes run the repository's own hooks, never your
    global ones: rite sets `core.hooksPath` to `.git/hooks` inside the sandbox,
    because a global hooks directory under your home directory cannot be read

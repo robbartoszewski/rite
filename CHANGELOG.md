@@ -13,9 +13,11 @@ asks first; it sends nothing. `rite doctor` reports a missing Worker token as a 
 An `ssh` remote (`git@github.com:…`) now works from a sandbox: it is fetched
 and pushed over HTTPS with the token.
 
-If you contribute through a fork: a fine-grained token cannot open a pull
-request on a repository you are not a member of. The Worker pushes its branch
-to your fork; open the pull request to the upstream yourself.
+If you contribute through a fork: the Worker pushes its branch to your fork,
+and you open the pull request to the upstream yourself, so you read the diff
+before the other project's maintainer does. A fine-grained token enforces
+that (it cannot open a pull request on a repository you are not a member
+of); don't swap in a classic token to skip it.
 
 ### `rite init` in a single repository registers it
 

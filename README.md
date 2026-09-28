@@ -148,10 +148,15 @@ repository (asked of GitHub without pushing anything). An `ssh`
 remote works too; inside the sandbox it is used over HTTPS.
 
 **Contributing through a fork?** Register your fork as the module and give
-the token Contents and Pull requests read/write on the fork. A fine-grained
-token cannot open a pull request on a repository you are not a member of, so
-the worker pushes its branch to your fork and you open the pull request to
-the upstream yourself. Then, per ticket:
+the token Contents and Pull requests read/write on the fork, and nothing
+else. The worker pushes its branch to your fork, and **you** open the pull
+request to the upstream. That is the point, not a gap: a diff going to
+someone else's project should be read by you before its maintainer sees it,
+and with a fine-grained token that is enforced rather than promised —
+GitHub does not let one open a pull request on a repository you are not a
+member of. Don't hand the worker a classic token to get round it: one that
+can open that pull request can also write to every repository you can.
+Then, per ticket:
 
 ```bash
 rite sandbox start alpha --ticket ABC-12     # GitHub Issues: --ticket 42
