@@ -899,6 +899,7 @@ def _supervise(
     chores: object = None,
     poll: float = POLL_SECONDS,
     now: object = None,
+    watch: object = None,
 ) -> SuperviseResult:
     """Run the Manager until a bound or a stop verdict ends it.
 
@@ -932,6 +933,21 @@ def _supervise(
     # Injectable so a test can read what a human would have been told,
     # and a no-op by default so nothing prints from a library call.
     say = note if callable(note) else (lambda _m: None)
+    if callable(watch):
+        # ⚠ `watch(say)` rides on the router, deliberately (dogfood Q1–Q4,
+        # part B): every place this supervisor does its file work with no
+        # engine to watch — each poll while a session runs, each cycle
+        # boundary, each tick of a wait — already calls `router(say)`. Joined
+        # here once, it runs at all of them, and a Worker's question is seen
+        # whether or not the Owner has a session. The watcher throttles
+        # itself; it is called at the poll rate.
+        routing_step = router
+
+        def router(say_):
+            if callable(routing_step):
+                routing_step(say_)
+            watch(say_)
+
     begin = clock()
     deadline = begin + window_seconds if window_seconds > 0 else None
     launch = starter if callable(starter) else _default_starter

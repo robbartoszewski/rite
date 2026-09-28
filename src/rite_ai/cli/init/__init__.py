@@ -39,7 +39,7 @@ from rite_ai.state import write_atomic
 from . import claude_gen, scaffold, ui
 from .config_file import ConfigFileError, load_preset
 from .detect import run_detection
-from .questionnaire import run_questionnaire, source_answers
+from .questionnaire import portable_source_path, run_questionnaire, source_answers
 
 
 @dataclass
@@ -445,7 +445,7 @@ def _record_changes(project: Path, changes: str) -> InitResult:
         source = {}
     earlier = str(source.get("changes") or "").strip()
     source["changes"] = f"{earlier}\n\n{changes}" if earlier else changes
-    source.setdefault("path", str(project))
+    source.setdefault("path", portable_source_path(project, project))
     raw["source"] = source
     write_atomic(brief_path, yaml.safe_dump(raw, sort_keys=False, allow_unicode=True))
     return InitResult(

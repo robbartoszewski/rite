@@ -2,6 +2,16 @@
 
 ## Unreleased: 0.7.0 (notes in progress, completed at release)
 
+### `rite init`'s output passes rite's own gate on the first push
+
+`rite init` wrote the absolute path of your project into `.rite/brief.yaml`
+(`source.path`), and rite's own publish gate refuses a home path in a pushed
+file, so the first `git push` after init was blocked. It now writes `.` for
+the project itself, `~/…` for a path elsewhere under your home, and an
+absolute path only outside it. A project initialised by 0.6.0 still has the
+old line: change `source.path` to `.` by hand, and drop any
+`.rite/gitleaksignore` entry you added for it.
+
 ### Each Manager's own state has left the project
 
 A Manager's prompt, routes, Worker requests, check-ins, Slack relay state and
