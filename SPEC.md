@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.23 · **Date:** 2026-09-28
+**Version:** 0.24.24 · **Date:** 2026-09-28
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -6273,10 +6273,21 @@ is no burden, and anyone with ten or more needs a way to manage that anyway.
 credential store is already per project (§10), so each project's
 `slack_bot_token` lives under its own namespace with no new mechanism.
 
-⚠ **Not enforced.** Nothing in rite detects two projects configured with
-the same app token. Another machine's configuration is invisible to it, and
-a token's identity (`auth.test`) is only comparable on one machine. The
-guide says it; nothing checks it.
+**Enforced on one machine since 0.24.24: an app is bound to one project.**
+The app's identity is the workspace and bot user `auth.test` reports, so it
+does not matter which credential supplied the token. The first project to
+open a relay on an app binds it, with a record published by `os.link` in
+rite's data directory, where no Manager's profile reaches. Any other project
+on that app is refused before its listener exists, so nothing is read,
+delivered or posted, and it names the project holding the app. The binding
+is persistent rather than held only while a relay runs, because a DM sent
+while one project is stopped waits in Slack (A5) and would otherwise reach the
+other project at its next start. A relay whose app cannot be identified does
+not open. Measured on main `f9c98a8` through the production path: both
+projects took 10 of 10 of the Owner's DMs as INSTRUCTION, and a project
+started while the other was stopped took all 10 of the other's. Refused
+since. ⚠ **Another machine is still invisible**: two machines running projects
+on one app are not detected (v0.8.0, multi-machine).
 
 **Deferred to v0.7.0 as a CONVENIENCE: private channels bound to a project.**
 Robert's design: a user creates a private channel, invites the app, and tells
@@ -7005,6 +7016,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.24 — §9.16.6: a second project on one Slack app is refused.** D-101 ("one app per project") was advice, and §9.16.6 said nothing checked it. A v0.6.0 dogfood project reused another project's bot token. Two projects on one app share the Owner's DM, so both took every DM as an INSTRUCTION and each read the other's conversation, and a stopped project's DMs went to the other at its next start (A5). An app, identified by workspace and bot user, is now bound to the first project that opens a relay on it, and any other is refused before its listener exists. Race: 6 projects binding one app at once, 200 rounds: `os.link` gave 1 winner every round; a check-then-write control bound 5 or 6 every round.
 
 **Changes in 0.24.23 — the loop lock is an `flock`, and only the releaser hands over.** The loop's one-per-project lock was a pid file, read and then overwritten. Measured on macOS against `4f7e1d2` (8 processes, 20 s): 51,120–52,154 overlapping holders per run, and a zombie or an unrelated live pid recorded in it refused every start. It is now a kernel `flock` the loop process holds for its life, behind a gate lock that every take, release and "is it running" goes through, so a reader's look can never make a starting loop fail. It answers running, not running, or cannot tell. Same harness: 0 overlaps; with the gate, 0 false refusals where removing it gave about 221,000 per run. `.rite/loop-run.lock` and `.rite/loop-run.gate` replace `.rite/loop.lock`. Separately, `perform_handover` read a Worker's claims and released them in two locked steps, so every caller racing for one Worker posted a handover. Now only the process that released the claims posts one, named ticket or not: 6 racers went from 6 handovers a round to 1. `rite stop --ticket` for a Worker holding no claims no longer posts one, and says why. Takeover opts out by design, because it releases nothing locally; its exclusivity is the Owner lease's (v0.8.0, LS2).
 

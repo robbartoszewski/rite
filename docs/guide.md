@@ -794,8 +794,16 @@ with its own channels. They must not share an app, for two reasons:
 So create an app per project. The manifest makes that a few clicks, and each
 project stores its own token (`rite credential set slack` in that project).
 ⚠ **A free workspace allows 10 custom apps**, so it holds about ten rite
-projects. rite cannot tell whether two projects share a token, so this is
-on you.
+projects.
+
+rite enforces this on one machine. The first project to start a Manager with
+Slack on an app owns that app, whichever token setting reached it. Any other
+project that starts with the same bot is refused before it reads or posts
+anything, and the message names the project that owns the app. It stays
+refused while the first project is stopped too, because a DM you send while
+one is stopped would otherwise reach the other. If the first project no longer
+uses the app, the message names the file to remove. Two machines sharing one
+app are not detected.
 
 **When no Manager is running**, a message you send waits in Slack. At the
 next `rite start` it is delivered at the Manager's first turn, with a line

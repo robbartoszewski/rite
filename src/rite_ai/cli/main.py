@@ -6667,6 +6667,21 @@ def _slack_listener(root: Path, manager: str):
             err=True,
         )
         return None
+    # ⚠ **ONE APP, ONE PROJECT, REFUSED BEFORE A LISTENER EXISTS.** Two
+    # projects on one app share the Owner's DM: each takes the other's
+    # instructions and reads the other's messages (`slack_app`). No listener
+    # means nothing is read, delivered or posted, with no per-call guard to
+    # forget.
+    from rite_ai.managers.slack_app import Refused, bind, identity_of
+
+    who = identity_of(token)
+    bound = who if isinstance(who, Refused) else bind(who, root)
+    if isinstance(bound, Refused):
+        click.echo(
+            f"slack: NOT reading or posting for this run — {bound.reason}.",
+            err=True,
+        )
+        return None
     listener = Listener(
         token=token,
         manager=manager,
