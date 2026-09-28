@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.35 · **Date:** 2026-09-28
+**Version:** 0.24.36 · **Date:** 2026-09-28
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -7020,6 +7020,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.36 — two messages say only what rite knows.** (1) A local Manager with no `context_window` is refused with the literal line to add, `context_window: 32768`, under its `- name:` entry, rather than `context_window: <tokens>`. (2) A refused command that rite's allowlist appears to cover used to be reported as "The engine did not apply" rite's settings. SB11 (Linux, 2026-09-28) contradicted that: `printf … > notes/x.txt` was refused while `echo`, `git status` and `ls` ran under the same allowlist in the same session, so the settings were applied. It now says rite cannot tell from the transcript which cause it is, names both, and, when the command writes a file through `>` (`_writes_through_a_redirection`; `2>&1` is not one), leads with that as the observed cause. The underlying cause is NOT verified. Mutations, each red: the redirection never named, `>&` counted as a file write, the placeholder back, the flat claim back.
 
 **Changes in 0.24.35 — two destinations in Slack: what needs the Owner top-level, what is for reading in a thread (RP1 piece 3).** Robert, 2026-09-28: the Owner's DM carries only what needs him, so it is the scan list; everything else goes in a thread under the check-in; "nothing between scheduled reports" is enforced for the reading pile only, and anything needing action is never held. The relay (`slack.Listener.post_replies`) now posts a message that needs the person (piece 1's kinds) top-level, at once, as before. A reply goes into a thread. **With check-in windows** it is held and posted in the thread of the next check-in, oldest first. **With none**, it goes at once under one top-level "notes for <day>, for reading" post a day (the notes root, remembered across restarts, its thread read like any other). **A reply held longer than 24 hours** goes under the notes root, so a Manager that rarely runs in a window does not hold its reading forever. ⚠ Posts now leave the outbox's order, and a reader's cursor is one position: it advances only over the run of messages from the start that are all posted, and the relay's `posted` record is what stops a message being posted twice while the cursor waits behind a held one. Only the Slack relay changes; `rite replies` and the Owner's collection of a secondary's replies are as before. Measured on macOS against a fake Slack: 5 tests; 8 mutations each red. One of them (the `posted` record not consulted) first survived, which exposed a missing assertion, now added: a question posted while the cursor waits is posted once.
 
