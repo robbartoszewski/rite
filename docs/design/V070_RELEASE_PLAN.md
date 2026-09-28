@@ -1149,10 +1149,20 @@ one process that needs it.**
 
   Undecided; this is a design point for CU7, not a default.
 
-### Two decisions open with Robert, each with a recommendation
+### Two decisions, RULED by Robert on 2026-09-28
 
-**D-CU-1. Does the review gate hold for Cursor Workers, and if not, what
-closes it?**
+Both were put to him with the recommendation and reasoning below, and he
+accepted both, verbatim:
+
+> "D-CU-1, review gate - I agree with your recommendation"
+> "D-CU-2, build in rite vs upstream yoloAI - I agree with your recommendation"
+
+**These are settled.** The reasoning is kept so that a later reader argues
+with the evidence rather than reopening them from memory.
+
+
+**D-CU-1 (RULED: no Cursor-specific closure). Does the review gate hold for
+Cursor Workers, and if not, what closes it?**
 
 *Recommendation: it holds as it exists. No Cursor-specific closure; one set
 of files.*
@@ -1178,7 +1188,8 @@ of files.*
   engine: rite checks a review record on the branch before publishing. That
   is not in this track.
 
-**D-CU-2. Build Cursor Workers inside rite, or through upstream yoloAI?**
+**D-CU-2 (RULED: inside rite, on yoloAI's `idle` agent). Build Cursor Workers
+inside rite, or through upstream yoloAI?**
 
 *Recommendation: inside rite, on yoloAI's `idle` agent. Do not depend on
 upstream.*
@@ -1237,7 +1248,26 @@ measurement (CU1b section 3).**
   secondary, not to this track. It is not listed here, and it is moot
   anyway: Robert chose the Owner-verifies bar.)*
 
-### The documented surface, against R1–R7, as measured
+### ⚠ The Cursor API key was exposed on argv, and is deliberately NOT rotated
+
+Recorded so that anyone investigating odd Cursor account activity finds it
+written down rather than having to reconstruct it.
+
+- **What happened.** On **2026-09-27**, during the CU1b measurements on
+  Robert's Mac, a check for the key in a sandbox directory ran
+  `grep -rlF -- "<the whole key>"`. That put the key's full value on grep's
+  argv, which every local account can read with `ps`, for as long as the grep
+  ran.
+- **The key file.** `~/.cursor-api-key` was also mode 0644. Robert has since
+  changed it to 0600.
+- **Robert's decision, 2026-09-28, verbatim:** *"I don't want to rotate the
+  API key right now."* So the exposure stands rather than being retired.
+- **The bar that follows for this work:** no new path to the key, at all, and
+  no "briefly". Its value never goes on a command line. Any check of its
+  contents reads it inside a program and reports only its length and a hash.
+  Authenticated measurements with this key are held.
+
+
 
 | R | Cursor, measured (CU1) | still open |
 |---|---|---|
