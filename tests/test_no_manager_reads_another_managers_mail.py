@@ -30,9 +30,11 @@ import pytest
 from rite_ai.managers.enclosure import write_profile
 from rite_ai.managers.mailbox import INBOX, OUTBOX, mail_root, mailbox_dir, send
 
-pytestmark = pytest.mark.skipif(
-    sys.platform != "darwin", reason="seatbelt is macOS only"
-)
+# ⚠ The macOS gate is on the `machine` fixture, not the module. It was a
+# module-wide `pytestmark`, which also skipped `TestABoxUnderRiteHomeIsMovedOut`
+# on Linux: three tests of `adopt_legacy` that run no `sandbox-exec` and so ran
+# nowhere in CI. Every test that needs seatbelt takes `machine`; one that
+# forgets it fails on Linux, loudly, rather than skipping.
 
 
 def _under(profile: Path, command: str, cwd: Path) -> subprocess.CompletedProcess:
@@ -49,6 +51,8 @@ def _under(profile: Path, command: str, cwd: Path) -> subprocess.CompletedProces
 def machine(tmp_path, monkeypatch):
     """Two projects on one machine, each with a `lead`; project one also has
     a `helper`. Mail is where production puts it, not an override."""
+    if sys.platform != "darwin":
+        pytest.skip("seatbelt is macOS only")
     import rite_ai.managers.github_access as ga
 
     home = (tmp_path / "home").resolve()
