@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.21 · **Date:** 2026-09-27
+**Version:** 0.24.22 · **Date:** 2026-09-28
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -2214,7 +2214,8 @@ be tested:
   leaves a marker, and anything that appears there afterwards is reported
   at each start and not delivered. So the old box needs no fence, and the
   inbox fence rests on no deny rule and no enumeration on either platform,
-  including for a project under the granted `/tmp` on Linux. **This did
+  including for a project under `/tmp` on Linux, which since 0.24.22 is not
+  granted at all (SB11). **This did
   not let Linux grant the project as a tree.**
   `.rite/managers/<name>/` also holds `routes/`, whose requests the Owner's
   supervisor delivers as "routed by the Owner · INSTRUCTION", and
@@ -7004,6 +7005,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.22 — §5.4.8: Linux no longer grants `/tmp` (SB11).** The Linux Manager policy granted `/tmp` and `/var/tmp` read and write to mirror seatbelt. Landlock unions its grants and has no deny rule, so for anything under them the grant overrode every narrower rule. Measured 2026-09-26: the in-tree inbox was writable, a third file in the credential directory was readable, and the Claude login was overwritable. Seatbelt is unaffected because its denies come after the grant and the last match wins. Both grants are gone. The engine keeps its own temp directory, which `TMPDIR` names. Linux is now narrower than macOS here, and a tool that hardcodes `/tmp` fails on Linux where it works on macOS. The tests no longer strip the grants to measure a narrow property; they run the real policy.
 
 **Changes in 0.24.21 — §5.1.2: the tick lock is an `flock`.** The pid lockfile did not exclude: it decided from outside whether a holder was gone (a file missing between two looks, a file that read as unusable, `kill(pid, 0)`), then deleted whatever was at the path. Measured with 8 processes for 20 s: 1,352–1,617 overlapping holders in a Linux container on 2026-09-26, and 618–665 overlaps with 612–692 false reclaims in an Ubuntu VM on 2026-09-27. The section had called that design one where the OS "answers exactly". It now describes a kernel-held `flock` on a file that is never deleted, and a self-test that refuses to run where `flock` does not exclude. Same harness, same VM: 0 overlaps and 0 reclaims, and 0 on macOS against 0–1 overlaps and 85–95 false reclaims before. The file is renamed to `scheduler-tick.lock` so a 0.6.0 tick can never delete it.
 

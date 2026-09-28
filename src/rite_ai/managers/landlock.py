@@ -372,9 +372,18 @@ def compose_policy(root: Path, manager: str, home: Path | None = None) -> dict:
     readable.append(mail)
     writable.append(mail / OUTBOX)
     writable.append(engine_tmp(root, manager))
-    # Shared temporary space, mirroring seatbelt. ⚠ This is also where the
-    # socket hole lives: see the module docstring and `limitations`.
-    writable += [Path("/tmp"), Path("/var/tmp")]
+    # ⚠ **`/tmp` AND `/var/tmp` ARE NOT GRANTED, WHICH DIVERGES FROM SEATBELT
+    # ON PURPOSE.** The seatbelt profile grants them and then denies the inbox
+    # AFTER, which wins because seatbelt takes the last match — measured: a
+    # project under `/tmp` on macOS still refuses another Manager's inbox.
+    # Landlock has no deny rule and unions its grants, so a wholesale `/tmp`
+    # grant cannot be carved and it OVERRODE the MM-2 enumeration entirely:
+    # measured, every inbox was writable for a project under `/tmp`.
+    #
+    # So Linux is narrower than macOS here. The engine keeps its own writable
+    # temp space — `engine_tmp` above, which `TMPDIR` points at — so a tool
+    # that honours `TMPDIR` is unaffected. What breaks is anything that
+    # hardcodes `/tmp`, and that is the risk this change carries.
     writable += [p for p in _engine_state_paths(where) if p.exists()]
 
     # ⚠ **THIS MANAGER'S OWN CREDENTIALS (C6/C26), MATCHED TO SEATBELT FILE
@@ -682,8 +691,11 @@ def limitations() -> tuple[str, ...]:
         "tmux control socket is that shape, so the escape macOS closed by "
         "denying the socket's path is OPEN here. This is a known hole, not an "
         "unexamined one",
-        "/tmp and /var/tmp are readable and writable, so anything kept there "
-        "— including other rite worktrees — is reachable",
+        "/tmp and /var/tmp are NOT granted, unlike the macOS profile: "
+        "Landlock cannot carve a hole in a wholesale grant, and granting them "
+        "made every Manager's inbox writable for a project living under them. "
+        "A tool that hardcodes /tmp rather than honouring TMPDIR will fail "
+        "here where it works on macOS",
         "the network is NOT confined: a Manager can reach anything this machine can",
         "a Manager can run `rite`, which does whatever you can do to this "
         "project — the boundary bounds the filesystem, not that",
@@ -705,7 +717,7 @@ def limitations() -> tuple[str, ...]:
     else:
         holes.append(
             "what it DOES buy: your home outside the policy's paths, your SSH "
-            "keys, and other projects outside /tmp are not reachable, and "
+            "keys, and other projects, under /tmp included, are not reachable, and "
             "signals do not cross the boundary — measured before and after"
         )
     return tuple(holes)
