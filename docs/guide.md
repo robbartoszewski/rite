@@ -542,8 +542,8 @@ doctor` names the typo and says the window was dropped.
    commits, not yours. A module whose origin is a local directory cannot be
    pushed from a sandbox; start names each one. `rite sandbox start` refuses,
    before creating the sandbox, a worker with no module, no GitHub token, no
-   `gh`, or a token that cannot push: it asks GitHub with a dry-run push of a
-   new branch name, which creates nothing. An `ssh` remote is used over HTTPS
+   `gh`, or a token that cannot push: it asks GitHub the permission question
+   a push asks first, and sends nothing. An `ssh` remote is used over HTTPS
    inside. Through a fork, the worker can push to your fork but a
    fine-grained token cannot open a pull request on a repository you are not
    a member of: open that one yourself. A commit pushed from inside a sandbox this

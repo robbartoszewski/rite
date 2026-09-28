@@ -1656,13 +1656,16 @@ allowlist at all.
   with no module (nothing to work on); one whose clone pushes to a host other
   than github.com (rite delivers no credential for it); one with a GitHub
   remote and no token, or no `gh`; and one whose token GitHub says cannot
-  push. The last is asked of GitHub with `git push --dry-run` to a new ref,
-  from the host, with only the Worker's token (`GITHUB_TOKEN`; the host's
-  `GH_TOKEN`, keychain helper and global git config removed): GitHub
-  authorises receive-pack before a ref is sent, and a dry run sends none.
-  Measured 2026-09-28: exit 0 for a repository the token can write, 403 for
-  one it can only read, a bogus token refused on a host whose own login could
-  push, and no branch created. A check that cannot finish refuses. Reading
+  push. The last is asked of GitHub the way a push asks first, and no
+  further: `GET <repo>.git/info/refs?service=git-receive-pack` with only the
+  Worker's token, from the host. A GET cannot send a ref, so rite still has
+  no path that writes to a remote (a first cut used `git push --dry-run`,
+  which also wrote nothing but put the push verb in rite, which
+  `test_blast_radius` forbids). Measured 2026-09-28: a repository the token
+  can write → 200 with the receive-pack advertisement, the only answer
+  allowed; one it can only read → 403; a bogus token, on a host whose own
+  login could push → 401; no token → 401; no such repository → 404. A check
+  that cannot finish refuses. Reading
   (`GET repos/o/r`) is not the property: any token, or none, passes it for a
   public repository such as a fork. Dogfood KAN-7 is the case this closes: a
   Worker started with no clone, then no token, stopped at `could not read
@@ -7051,7 +7054,7 @@ Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
 
-**Changes in 0.24.38 — a Worker is started only when its work could leave the sandbox (dogfood KAN-7, #28).** In the v0.6.0 dogfood no Worker did code work end to end: KAN-7's Worker had no module, then no GitHub token, and stopped at `could not read Username for 'https://github.com'`; `rite doctor` printed `github_token: not set` and counted nothing. §5.3.3: `rite sandbox start` now refuses, before a sandbox is spent and in one line the supervisor relays, a Worker with no module, a non-GitHub remote, a GitHub remote with no token or no `gh`, or a token GitHub says cannot push (`git push --dry-run` to a new ref, host-side, with only the Worker's token). An SSH origin is rewritten to HTTPS inside the sandbox. `rite doctor` counts a missing Worker token as a problem. What a Worker RECEIVES is unchanged (§5.3.4). Measured on macOS: the dry-run check against GitHub (write → allowed, read-only → 403, bogus token with a host login that could push → refused, no branch created); ssh inside a seatbelt sandbox failing on `known_hosts` and the rewrite reaching the credential helper; the KAN-7 state through the real CLI refused with no sandbox created (11 before, 11 after). `test_worker_can_deliver.py`, 17 tests; five mutations (rewrite removed, start check removed, doctor check removed, host `GH_TOKEN` kept, an unfinished check allowed) each turn tests red. Not yet measured: a sandboxed Worker pushing a branch and opening a PR with a real token.
+**Changes in 0.24.38 — a Worker is started only when its work could leave the sandbox (dogfood KAN-7, #28).** In the v0.6.0 dogfood no Worker did code work end to end: KAN-7's Worker had no module, then no GitHub token, and stopped at `could not read Username for 'https://github.com'`; `rite doctor` printed `github_token: not set` and counted nothing. §5.3.3: `rite sandbox start` now refuses, before a sandbox is spent and in one line the supervisor relays, a Worker with no module, a non-GitHub remote, a GitHub remote with no token or no `gh`, or a token GitHub says cannot push (the receive-pack permission GET a push starts with, host-side, with only the Worker's token; it sends nothing). An SSH origin is rewritten to HTTPS inside the sandbox. `rite doctor` counts a missing Worker token as a problem. What a Worker RECEIVES is unchanged (§5.3.4). Measured on macOS: the check against GitHub (write → 200 receive-pack, allowed; read-only → 403; bogus token with a host login that could push → 401; no token → 401; no such repo → 404); ssh inside a seatbelt sandbox failing on `known_hosts` and the rewrite reaching the credential helper; the KAN-7 state through the real CLI refused with no sandbox created (11 before, 11 after). `test_worker_can_deliver.py`, 17 tests; mutations each turn tests red: rewrite removed, start check removed, doctor check removed, any 200 taken as yes, an unfinished check allowed. Not yet measured: a sandboxed Worker pushing a branch and opening a PR with a real token.
 
 **Changes in 0.24.35 — two destinations in Slack: what needs the Owner top-level, what is for reading in a thread (RP1 piece 3).** Robert, 2026-09-28: the Owner's DM carries only what needs him, so it is the scan list; everything else goes in a thread under the check-in; "nothing between scheduled reports" is enforced for the reading pile only, and anything needing action is never held. The relay (`slack.Listener.post_replies`) now posts a message that needs the person (piece 1's kinds) top-level, at once, as before. A reply goes into a thread. **With check-in windows** it is held and posted in the thread of the next check-in, oldest first. **With none**, it goes at once under one top-level "notes for <day>, for reading" post a day (the notes root, remembered across restarts, its thread read like any other). **A reply held longer than 24 hours** goes under the notes root, so a Manager that rarely runs in a window does not hold its reading forever. ⚠ Posts now leave the outbox's order, and a reader's cursor is one position: it advances only over the run of messages from the start that are all posted, and the relay's `posted` record is what stops a message being posted twice while the cursor waits behind a held one. Only the Slack relay changes; `rite replies` and the Owner's collection of a secondary's replies are as before. Measured on macOS against a fake Slack: 5 tests; 8 mutations each red. One of them (the `posted` record not consulted) first survived, which exposed a missing assertion, now added: a question posted while the cursor waits is posted once.
 

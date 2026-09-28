@@ -5943,8 +5943,8 @@ def _worker_cannot_deliver(
     refusal = remote_access_refusal(worker, remotes, token, gh)
     if refusal or not remotes:
         return refusal
-    assert token and gh  # remote_access_refusal refuses without either
-    return push_access_refusal(worker, remotes, token, gh)
+    assert token  # remote_access_refusal refuses without one
+    return push_access_refusal(worker, remotes, token)
 
 
 @sandbox.command("stop")

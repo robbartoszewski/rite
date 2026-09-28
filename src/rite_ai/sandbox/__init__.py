@@ -1482,107 +1482,70 @@ def remote_access_refusal(
     return None
 
 
+RECEIVE_PACK = "application/x-git-receive-pack-advertisement"
+
+
 def push_access_refusal(
-    worker: str,
-    remotes: list[CloneRemote],
-    token: str,
-    gh: str,
-    timeout: int = 60,
+    worker: str, remotes: list[CloneRemote], token: str, timeout: int = 30
 ) -> str | None:
     """Whether `token` can PUSH to each GitHub remote, asked of GitHub.
 
     ⚠ **Push, not read.** `check_token_access` asks `GET repos/o/r`, which
     any token — or none — passes for a public repository, such as a fork
-    being contributed from. Measured 2026-09-28 with a token that can write
-    one repository and not another: `git push --dry-run` to a new ref name
-    exited 0 for the first and 403 for `github.com/git/git`, which that
-    token can read. GitHub authorises receive-pack before a ref is sent, and
-    a dry run sends none: no branch appeared.
+    being contributed from.
 
-    Run on the host, over HTTPS whatever the origin says (inside, an SSH
-    origin is rewritten to HTTPS too), with only the token this Worker gets:
-    no credential helper but `gh`, and a `gh` config directory holding
-    nothing, so the host's own login cannot answer for it.
+    Asked the way a push asks first, and nothing more: `GET
+    <repo>.git/info/refs?service=git-receive-pack` with the token. GitHub
+    authorises receive-pack there, before any ref could be sent, and a GET
+    cannot send one — so rite still has no path that writes to a remote
+    (`test_blast_radius`). Measured 2026-09-28: a token that can write the
+    repository → 200 with the receive-pack advertisement; the same token on
+    a public repository it can only read → 403; a bogus token → 401; no
+    token → 401; a repository that does not exist → 404. Only the first is
+    allowed.
+
+    The token is sent as the password, as `gh auth git-credential` gives it
+    to git inside the sandbox, and nothing of the host's is consulted.
 
     A check that cannot finish refuses: "could not ask" is not "allowed"."""
-    import uuid
+    import base64
+    import urllib.error
+    import urllib.request
 
+    basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
     for remote in remotes:
         if remote.github is None:
             continue
         owner, repo = remote.github
-        probe = f"refs/heads/rite-push-check-{uuid.uuid4().hex[:12]}"
-        with tempfile.TemporaryDirectory(prefix="rite-gh-") as empty:
-            env = _push_check_environment(token, empty)
-            args = [
-                "git",
-                "-C",
-                str(remote.clone),
-                "-c",
-                "credential.helper=",
-                "-c",
-                f"credential.https://github.com.helper=!{shlex.quote(gh)} "
-                "auth git-credential",
-                "push",
-                "--dry-run",
-                "--no-verify",
-                f"https://github.com/{owner}/{repo}.git",
-                f"HEAD:{probe}",
-            ]
-            try:
-                proc = subprocess.run(
-                    args,
-                    capture_output=True,
-                    text=True,
-                    errors="replace",
-                    timeout=timeout,
-                    env=env,
-                )
-            except (OSError, subprocess.SubprocessError) as e:
-                return (
-                    f"not starting '{worker}': could not check that its GitHub "
-                    f"token can push to {owner}/{repo} ({e.__class__.__name__}), "
-                    "and an unchecked token is refused rather than trusted"
-                )
-        if proc.returncode != 0:
-            detail = (proc.stderr.strip().splitlines() or [f"exit {proc.returncode}"])[
-                -1
-            ]
+        request = urllib.request.Request(
+            f"https://github.com/{owner}/{repo}.git/info/refs?service=git-receive-pack",
+            headers={"Authorization": f"Basic {basic}"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                status = response.status
+                kind = response.headers.get("Content-Type", "")
+        except urllib.error.HTTPError as e:
+            status, kind = e.code, ""
+        except (OSError, ValueError) as e:
+            return (
+                f"not starting '{worker}': could not check that its GitHub "
+                f"token can push to {owner}/{repo} ({e.__class__.__name__}), "
+                "and an unchecked token is refused rather than trusted"
+            )
+        if status != 200 or not kind.startswith(RECEIVE_PACK):
+            why = {
+                401: "GitHub does not accept the token",
+                403: "the token can read it but not write it",
+                404: "the repository does not exist, or the token cannot see it",
+            }.get(status, f"HTTP {status}")
             return (
                 f"not starting '{worker}': its GitHub token cannot push to "
-                f"{owner}/{repo} ({detail[:120]}). Give the token Contents: "
-                "read and write on that repository, or set another with `rite "
+                f"{owner}/{repo} ({why}). Give the token Contents: read and "
+                "write on that repository, or set another with `rite "
                 "credential set github_token`"
             )
     return None
-
-
-def _push_check_environment(token: str, gh_config_dir: str) -> dict[str, str]:
-    """The environment a push check runs in: the Worker's token under the
-    name the Worker gets it (`GITHUB_TOKEN`), and nothing of the host's that
-    could answer instead.
-
-    `GH_TOKEN` is removed because `gh` prefers it to `GITHUB_TOKEN`: a host
-    shell exporting one would make the check pass on the host's token.
-    Every git config the host sets through the environment is removed, and
-    the global and system files are not read, so neither a keychain helper
-    nor a global `insteadOf` can supply a credential the sandbox lacks."""
-    env = {
-        k: v
-        for k, v in sandbox_environment().items()
-        if not k.startswith("GIT_CONFIG_")
-        and k not in ("GH_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN")
-    }
-    env.update(
-        {
-            TOKEN_ENV_VAR: token,
-            "GH_CONFIG_DIR": gh_config_dir,
-            "GIT_TERMINAL_PROMPT": "0",
-            "GIT_CONFIG_NOSYSTEM": "1",
-            "GIT_CONFIG_GLOBAL": os.devnull,
-        }
-    )
-    return env
 
 
 def _local_origins(

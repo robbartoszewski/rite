@@ -7,9 +7,9 @@
 `rite sandbox start` (and so every Worker a Manager starts) now refuses,
 before creating a sandbox, a Worker with no module, one whose repository is
 on a host other than github.com, one with no GitHub token or no `gh`, and one
-whose token GitHub says cannot push. The push check is a `git push --dry-run`
-to a new branch name, run on your machine with only the Worker's token; it
-creates nothing. `rite doctor` reports a missing Worker token as a problem.
+whose token GitHub says cannot push. The push check asks GitHub, from your
+machine and with only the Worker's token, the permission question a push
+asks first; it sends nothing. `rite doctor` reports a missing Worker token as a problem.
 An `ssh` remote (`git@github.com:…`) now works from a sandbox: it is fetched
 and pushed over HTTPS with the token.
 

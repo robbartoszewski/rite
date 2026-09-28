@@ -144,7 +144,7 @@ not run there. `rite doctor`
 reports a missing Claude login, or a missing GitHub token, as a problem, and
 `rite sandbox start` refuses to start a worker that could not push its work:
 no GitHub token, no `gh`, or a token GitHub says cannot push to the
-repository (checked with a dry-run push that creates nothing). An `ssh`
+repository (asked of GitHub without pushing anything). An `ssh`
 remote works too; inside the sandbox it is used over HTTPS.
 
 **Contributing through a fork?** Register your fork as the module and give

@@ -9,15 +9,16 @@ start` before a sandbox is spent, and the token state is a doctor problem.
 
 What is real here: git, the clones, their origins, and `git ls-remote
 --get-url` applying the sandbox's rewrite. What is not: yoloAI, and GitHub
-itself — `push_access_refusal` is exercised with its subprocess replaced,
-and was measured against GitHub separately (see its docstring).
+itself — `push_access_refusal` is exercised with `urlopen` replaced, and was
+measured against GitHub separately (see its docstring).
 """
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from click.testing import CliRunner
@@ -111,48 +112,76 @@ def _remotes() -> list[CloneRemote]:
     return [_remote("app", "git@github.com:acme/app.git", ("acme", "app"))]
 
 
-def test_the_push_check_asks_with_the_workers_token_only(monkeypatch):
-    """`gh` prefers GH_TOKEN to GITHUB_TOKEN: a host shell exporting one would
-    answer for the Worker. And the check pushes to HTTPS whatever the origin
-    says, because that is what the sandbox's rewrite makes it."""
-    monkeypatch.setenv("GH_TOKEN", "the-hosts-token")
+class _Answer:
+    """What `urlopen` returns, as a context manager."""
+
+    def __init__(self, status: int, content_type: str) -> None:
+        self.status = status
+        self.headers = {"Content-Type": content_type}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _http_error(code: int):
+    import urllib.error
+
+    return urllib.error.HTTPError("u", code, "no", {}, None)
+
+
+def test_the_push_check_asks_what_a_push_asks_with_the_workers_token():
+    """The question is receive-pack's, asked with a GET, so nothing can be
+    written; and it goes to HTTPS whatever the origin says, because that is
+    what the sandbox's rewrite makes it."""
+    import base64
+
     seen = {}
 
-    def run(args, **kw):
-        seen["args"], seen["env"] = args, kw["env"]
-        return MagicMock(returncode=0, stdout="", stderr="")
+    def urlopen(request, timeout):
+        seen["request"] = request
+        return _Answer(200, "application/x-git-receive-pack-advertisement")
 
-    with patch("rite_ai.sandbox.subprocess.run", side_effect=run):
-        assert push_access_refusal("alpha", _remotes(), "workers-token", GH) is None
+    with patch("urllib.request.urlopen", side_effect=urlopen):
+        assert push_access_refusal("alpha", _remotes(), "workers-token") is None
 
-    assert "GH_TOKEN" not in seen["env"]
-    assert seen["env"]["GITHUB_TOKEN"] == "workers-token"
-    assert seen["env"]["GIT_CONFIG_GLOBAL"] != ""
-    assert not any(k.startswith("GIT_CONFIG_KEY_") for k in seen["env"])
-    assert "--dry-run" in seen["args"]
-    assert "https://github.com/acme/app.git" in seen["args"]
-    assert seen["args"][-1].startswith("HEAD:refs/heads/rite-push-check-")
-
-
-def test_a_token_that_cannot_push_is_refused():
-    denied = MagicMock(
-        returncode=128,
-        stdout="",
-        stderr="fatal: unable to access '...': The requested URL returned error: 403",
+    request = seen["request"]
+    assert request.get_method() == "GET"
+    assert request.full_url == (
+        "https://github.com/acme/app.git/info/refs?service=git-receive-pack"
     )
-    with patch("rite_ai.sandbox.subprocess.run", return_value=denied):
-        refusal = push_access_refusal("alpha", _remotes(), "tok", GH)
+    sent = request.get_header("Authorization").removeprefix("Basic ")
+    assert base64.b64decode(sent).decode().endswith(":workers-token")
+
+
+@pytest.mark.parametrize(
+    "code, why",
+    [
+        (401, "does not accept the token"),
+        (403, "can read it but not write it"),
+        (404, "does not exist"),
+    ],
+)
+def test_a_token_that_cannot_push_is_refused(code: int, why: str):
+    with patch("urllib.request.urlopen", side_effect=_http_error(code)):
+        refusal = push_access_refusal("alpha", _remotes(), "tok")
     assert refusal is not None
-    assert "cannot push to acme/app" in refusal and "403" in refusal
+    assert "cannot push to acme/app" in refusal and why in refusal
+
+
+def test_a_200_that_is_not_receive_pack_is_not_permission():
+    """A proxy or captive portal answering 200 with a page is not GitHub
+    saying yes."""
+    with patch("urllib.request.urlopen", return_value=_Answer(200, "text/html")):
+        assert push_access_refusal("alpha", _remotes(), "tok") is not None
 
 
 def test_a_check_that_cannot_finish_refuses():
-    """"Could not ask" is not "allowed"."""
-    with patch(
-        "rite_ai.sandbox.subprocess.run",
-        side_effect=subprocess.TimeoutExpired("git", 60),
-    ):
-        refusal = push_access_refusal("alpha", _remotes(), "tok", GH)
+    """ "Could not ask" is not "allowed"."""
+    with patch("urllib.request.urlopen", side_effect=TimeoutError("timed out")):
+        refusal = push_access_refusal("alpha", _remotes(), "tok")
     assert refusal is not None and "refused rather than trusted" in refusal
 
 
@@ -166,7 +195,7 @@ def test_an_ssh_origin_is_fetched_over_https_inside(tmp_path: Path, origin: str)
     """Measured: inside the sandbox ssh cannot read ~/.ssh/known_hosts, so an
     SSH origin fails before any key is tried. Real git resolves the URL."""
     clone = _clone_with_origin(tmp_path, "app", origin)
-    env = {**__import__("os").environ, **sandbox_git_environment(GH)}
+    env = {**os.environ, **sandbox_git_environment(GH)}
 
     url = _git(clone, "ls-remote", "--get-url", "origin", env=env)
 
@@ -237,9 +266,7 @@ def test_start_refuses_a_github_worker_with_no_token(tmp_path, monkeypatch):
 
 
 def test_start_asks_github_before_starting(tmp_path, monkeypatch):
-    _project(
-        tmp_path, monkeypatch, modules=True, origin="git@github.com:acme/app.git"
-    )
+    _project(tmp_path, monkeypatch, modules=True, origin="git@github.com:acme/app.git")
     monkeypatch.setenv("RITE_GITHUB_TOKEN", "tok")
     with patch(
         "rite_ai.sandbox.push_access_refusal",
@@ -254,9 +281,7 @@ def test_start_asks_github_before_starting(tmp_path, monkeypatch):
 def test_start_proceeds_when_the_token_can_push(tmp_path, monkeypatch):
     from rite_ai.sandbox import SandboxResult
 
-    _project(
-        tmp_path, monkeypatch, modules=True, origin="git@github.com:acme/app.git"
-    )
+    _project(tmp_path, monkeypatch, modules=True, origin="git@github.com:acme/app.git")
     monkeypatch.setenv("RITE_GITHUB_TOKEN", "tok")
     with (
         patch("rite_ai.sandbox.push_access_refusal", return_value=None),
