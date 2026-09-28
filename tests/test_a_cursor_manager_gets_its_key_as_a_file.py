@@ -176,7 +176,17 @@ class TestTheBoundary:
         state = cursor_login.state_dir(project, "lead", home)
         assert str(state) in policy["writable"]
         key = str(cursor_login._key_path(project, "lead", home))
-        assert not any(key == g or key.startswith(g.rstrip("/") + "/") for g in granted)
+        covering = {
+            g for g in granted if key == g or key.startswith(g.rstrip("/") + "/")
+        }
+        # ⚠ Landlock has no deny: the copy is safe only because no grant
+        # covers its directory. The ONE exception tolerated here is SB11's
+        # wholesale temp grant, which covers this fixture on a Linux runner
+        # (pytest's temp is under /tmp) and never covers the real credential
+        # root (`~/.local/share/rite/managers`). Anything else covering the
+        # key fails. When SB11's fix lands, this set should be empty.
+        sb11 = {"/tmp", "/var/tmp", "/private/tmp", "/private/var/tmp"}
+        assert covering <= sb11, sorted(covering)
 
     @pytest.mark.skipif(sys.platform != "darwin", reason="seatbelt is macOS only")
     def test_inside_seatbelt_key_unreadable_state_writable_prefix_crosses(
