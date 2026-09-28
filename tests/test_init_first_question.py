@@ -89,8 +89,11 @@ def test_the_brief_holds_the_path_and_the_answer(tmp_path: Path):
     )
     assert result.exit_code == 0, result.output
     brief = _brief(tmp_path)
+    # Relative to the project root, not absolute: an absolute home path in
+    # this committed file failed rite's own publish gate on the first push
+    # (v0.6.0 dogfood F1; `test_init_leaves_no_home_path.py`).
     assert brief["source"] == {
-        "path": str(tmp_path.resolve()),
+        "path": ".",
         "changes": "The feed poller is stale",
     }
     assert brief["what"] == {"kind": "", "features": ""}
@@ -102,7 +105,7 @@ def test_the_path_can_point_elsewhere(tmp_path: Path):
     (tmp_path / "code").mkdir()
     result = CliRunner().invoke(_init_cmd, [str(tmp_path)], input="y\ncode\n\n\n")
     assert result.exit_code == 0, result.output
-    assert _brief(tmp_path)["source"]["path"] == str((tmp_path / "code").resolve())
+    assert _brief(tmp_path)["source"]["path"] == "code"
 
 
 def test_a_mistyped_path_is_asked_again_and_never_falls_through(tmp_path: Path):
@@ -113,7 +116,7 @@ def test_a_mistyped_path_is_asked_again_and_never_falls_through(tmp_path: Path):
     assert "Nothing at" in result.output
     assert result.output.count(PATH) == 2
     assert FROM_SCRATCH not in result.output, "fell through to the from-scratch flow"
-    assert _brief(tmp_path)["source"]["path"] == str(tmp_path.resolve())
+    assert _brief(tmp_path)["source"]["path"] == "."
 
 
 def test_the_root_branch_is_the_one_the_source_is_on(tmp_path: Path):
@@ -184,7 +187,7 @@ def test_a_preset_can_answer_the_first_question(tmp_path: Path):
     )
     assert result.exit_code == 0, result.output
     assert _brief(tmp_path)["source"] == {
-        "path": str(tmp_path.resolve()),
+        "path": ".",
         "changes": "Split the API",
     }
 

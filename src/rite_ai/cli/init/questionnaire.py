@@ -14,6 +14,7 @@ deterministic and what makes the interactive path testable through
 
 from __future__ import annotations
 
+import os
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -766,6 +767,29 @@ def _ask_role(preset: Preset, interactive: bool) -> str:
 __all__ = ["InitAnswers", "KbAnswers", "run_questionnaire", "source_answers"]
 
 
+def _as_committed(source: Path, root: Path) -> str:
+    """`source` as it is written into `.rite/brief.yaml`, which is committed.
+
+    ⚠ **Relative to the project root, never absolute** (dogfood F1). `rite
+    init` in `~/AI/dogfood-v060/pingr` answered "." and wrote
+    `/Users/<name>/AI/dogfood-v060/pingr` here, and rite's own publish gate
+    then blocked the project's first push on
+    `rite-hardcoded-macos-home-directory-path`. The only ways past it were a
+    suppression with a throwaway reason or `--no-verify`, which teaches a
+    new user on push one that the gate can be waved through. A home path in
+    a committed file is also a username published with the repository. A
+    source outside the project is written as a relative path too
+    (`../specs/x.md`): true on every clone laid out the same way, and no
+    less true than an absolute path, which holds on one machine only.
+    """
+    try:
+        return os.path.relpath(Path(source).resolve(), Path(root).resolve())
+    except ValueError:
+        # Different drives (Windows only, which rite does not attempt): no
+        # relative path exists. Absolute, and the gate will say so.
+        return str(source)
+
+
 def source_answers(
     root: Path, preset: Preset, source: Path, changes: str, interactive: bool = True
 ) -> InitAnswers:
@@ -806,7 +830,7 @@ def source_answers(
             name=name,
             role=role,
             root_branch=detect_root_branch(base, detect_repos(base)) or "main",
-            source_path=str(source),
+            source_path=_as_committed(source, root),
             source_changes=changes,
         ),
         modules=[],
