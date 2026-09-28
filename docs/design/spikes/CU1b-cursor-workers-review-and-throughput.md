@@ -225,3 +225,58 @@ its tools account for about 17%.
 - how work resumed after the short stops;
 - anything about rite's own Workers or scheduler: `.rite/scheduler-last-tick` in the main checkout reads 12 September, and the work in these transcripts was interactive sessions, not rite-orchestrated;
 - CI latency and merge contention, which the transcripts do not record.
+
+---
+
+## 4. Who can read a key in the engine's environment: everyone on the machine
+
+**Measured 2026-09-28**, macOS 26 (Darwin 25.2). The key was a **fake**,
+`FAKEKEY-CU4-PROBE-7f3a`; the real key was not used or read. The project
+fixture was under `$HOME`, not a granted temporary directory. The profiles
+were rite's real Manager profiles, from this tree at `a75469d`.
+
+**The target** was launched exactly as CU4's merged route launches the engine:
+`CURSOR_API_KEY="$(cat <copy>)" exec sandbox-exec -f <lead's profile> <engine>`.
+It is read with `sysctl(KERN_PROCARGS2)`, which returns a process's argv and
+environment, from a small Python reader.
+
+⚠ **The engine binary matters, and the first stand-in was wrong.** macOS
+hides the environment of Apple platform binaries: `/bin/sleep` as the target
+read `False` from everywhere, and so did the control. With **Cursor's own
+bundled `node`** (the process `agent` actually runs), the controls pass and
+the key is visible:
+
+| reader | result |
+|---|---|
+| control: a child with a known variable, read from outside | visible |
+| control: a process reading its parent's variable | visible |
+| from outside any sandbox | **visible** |
+| from inside the **same** Manager's sandbox | **visible** |
+| from inside a **sibling** Manager's sandbox (`helper`) | **visible** |
+| from inside a **yoloAI Worker** sandbox (seatbelt, `idle`, boundary confirmed by a refused write outside) | **visible** |
+| a child of the engine (what every command a Manager runs is) | **inherits it** |
+| `ps eww` | shows nothing, even for the unsandboxed control: not a route on this macOS, and so not evidence either way |
+| `/bin/ps` inside a Manager's profile | refused at exec; irrelevant, since the sysctl works from Python |
+| tmux's session and global environment | absent |
+| any process's argv, sampled every 50 ms through the launch | absent (0 hits) |
+
+⚠ **One unexplained observation.** The first probe's argv check reported the
+fake key present on some process's argv once. It did not reproduce: sampling
+every 50 ms under the same launch found nothing. It is recorded as
+unexplained, not as refuted.
+
+**What this means for CU4 as merged (#41).** The key is kept off argv, out of
+the pane's environment and out of logs, and the copy is unreadable from
+inside any profile. **But once it is in the engine's environment, the
+Manager, every sibling Manager and every Worker on the machine can read it.**
+That fails the property the work is held to. It is not a window to narrow;
+it goes to Robert.
+
+**Wider than Cursor, inferred and not measured:** every credential a Worker
+receives by `--env` today sits in a process environment, so the same call
+should reach it from any sandbox.
+
+Not measured: Linux (`/proc/<pid>/environ`; the VMs were suspended), and
+whether Cursor strips the key from the commands it runs (that needs a working
+key).
+

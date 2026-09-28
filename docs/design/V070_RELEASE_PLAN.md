@@ -1149,10 +1149,20 @@ one process that needs it.**
 
   Undecided; this is a design point for CU7, not a default.
 
-### Two decisions open with Robert, each with a recommendation
+### Two decisions, RULED by Robert on 2026-09-28
 
-**D-CU-1. Does the review gate hold for Cursor Workers, and if not, what
-closes it?**
+Both were put to him with the recommendation and reasoning below, and he
+accepted both, verbatim:
+
+> "D-CU-1, review gate - I agree with your recommendation"
+> "D-CU-2, build in rite vs upstream yoloAI - I agree with your recommendation"
+
+**These are settled.** The reasoning is kept so that a later reader argues
+with the evidence rather than reopening them from memory.
+
+
+**D-CU-1 (RULED: no Cursor-specific closure). Does the review gate hold for
+Cursor Workers, and if not, what closes it?**
 
 *Recommendation: it holds as it exists. No Cursor-specific closure; one set
 of files.*
@@ -1178,7 +1188,8 @@ of files.*
   engine: rite checks a review record on the branch before publishing. That
   is not in this track.
 
-**D-CU-2. Build Cursor Workers inside rite, or through upstream yoloAI?**
+**D-CU-2 (RULED: inside rite, on yoloAI's `idle` agent). Build Cursor Workers
+inside rite, or through upstream yoloAI?**
 
 *Recommendation: inside rite, on yoloAI's `idle` agent. Do not depend on
 upstream.*
@@ -1237,7 +1248,26 @@ measurement (CU1b section 3).**
   secondary, not to this track. It is not listed here, and it is moot
   anyway: Robert chose the Owner-verifies bar.)*
 
-### The documented surface, against R1–R7, as measured
+### ⚠ The Cursor API key was exposed on argv, and is deliberately NOT rotated
+
+Recorded so that anyone investigating odd Cursor account activity finds it
+written down rather than having to reconstruct it.
+
+- **What happened.** On **2026-09-27**, during the CU1b measurements on
+  Robert's Mac, a check for the key in a sandbox directory ran
+  `grep -rlF -- "<the whole key>"`. That put the key's full value on grep's
+  argv, which every local account can read with `ps`, for as long as the grep
+  ran.
+- **The key file.** `~/.cursor-api-key` was also mode 0644. Robert has since
+  changed it to 0600.
+- **Robert's decision, 2026-09-28, verbatim:** *"I don't want to rotate the
+  API key right now."* So the exposure stands rather than being retired.
+- **The bar that follows for this work:** no new path to the key, at all, and
+  no "briefly". Its value never goes on a command line. Any check of its
+  contents reads it inside a program and reports only its length and a hash.
+  Authenticated measurements with this key are held.
+
+
 
 | R | Cursor, measured (CU1) | still open |
 |---|---|---|
@@ -1360,7 +1390,7 @@ front of Robert before CW1 starts.
 | ~~CU1~~ | **Done, measured 2026-09-27** (`spikes/CU1-cursor-cli.md`, and `spikes/CU1b-cursor-workers-review-and-throughput.md`) | — | — | spent |
 | CU2 | ✅ **BUILT, 2026-09-27** (#31 the pin, #33 the spelling). `engines.CURSOR`; `Spelling.handle_is_uuid` and `permission_unexpressed`; Claude and Goose unchanged across all 96 combinations of `launch_command`, pinned in `test_launch_command_is_pinned.py` before the change. Not reachable in production: config rejects `engine: cursor` until CU4 | Claude's and Goose's command lines unchanged (pinned, 96 of 96), and a Cursor turn and its continuation built by rite (`test_cursor_is_spelled_as_measured.py`) | — | spent |
 | CU3 | ✅ **BUILT, 2026-09-27** (#34): `managers/cursor_chat.py` and its wiring in `supervise`. The UUID is recorded before launch, and `createdAtMs` is checked before and after every turn. A replaced chat marks the designation broken, and nothing runs again until `--fresh`. ⚠ **Observed through the real supervisor loop with a starter that does to the chat store what Cursor was measured to do, not yet with Cursor itself**, which needs CU4. Three mutations each turn their test red | A continuation whose chat directory was removed is REFUSED with the path named (observed, stub Cursor); a chat replaced mid-cycle stops the run and every later bare start (observed, stub Cursor); **with real Cursor: CU6** | CU2 | spent |
-| CU4 | 🟡 **BUILT, 2026-09-28; the authenticated observation is HELD until Robert rotates the key** (it sat on argv during CU1b, so it is treated as compromised and put nowhere new). `managers/cursor_login.py`, and the following. **The key file:** a 0600 copy at `<credential dir>/cursor.key`, granted to NO profile and denied by name on seatbelt. **The route:** tmux's shell reads it OUTSIDE the boundary, into the engine's own environment (`CURSOR_API_KEY="$(cat <path>)" <boundary> agent ...`). That is the narrowest place there is: read from the CLI bundle, the main `agent` takes a credential only on argv or in the environment, `--auth-token-file` is `agent worker` only, and the stored login is the keychain. **The state:** a per-Manager `cursor/` directory as both `CURSOR_CONFIG_DIR` and `CURSOR_DATA_DIR`. `CURSOR_DATA_DIR` relocates `projects/`, read from the bundle, so `~/.cursor` is granted to nobody. **Grants:** `~/.local/share/cursor-agent` read-only, with its reason in `test_every_manager_grant_has_a_reason`; `agent` added to Landlock's engine binaries. ⚠ **Found:** with a long `CURSOR_DATA_DIR` Cursor puts its socket directory in `/tmp/.cursor/` (bundle, and measured), so Cursor depends on `/tmp` staying writable (SB8, SB11) | A sandboxed Cursor Manager authenticates (**held**). Observed with a fake key inside a real seatbelt profile: the copy can be neither read nor written, the state directory beside it is writable, and the prefix delivers the variable across the boundary, while without it nothing arrives. The key is absent from the command text, the pane's environment and `ALLOWED_ON_TMUX_ARGV`; a copy left by a killed Cursor run never reaches a Manager of another engine. **Held for the rotated key:** where the trust marker lands under `CURSOR_DATA_DIR`, a sandboxed turn and resume, and `ps` during a turn. Not measured on Linux | CU1 | 1 sitting, plus the held observation |
+| CU4 | 🔴 **BUILT, AND ITS KEY ROUTE FAILS THE PROPERTY: WITH ROBERT.** Measured 2026-09-28 with a fake key (CU1b section 4): once in the engine's environment, the key is readable from the same Manager, a sibling Manager and a yoloAI Worker, via `sysctl(KERN_PROCARGS2)`. The route was built on a question that was skipped, not answered. The key is not being rotated (see above), so no authenticated measurement will use it. Built so far (it sat on argv during CU1b, so it is treated as compromised and put nowhere new). `managers/cursor_login.py`, and the following. **The key file:** a 0600 copy at `<credential dir>/cursor.key`, granted to NO profile and denied by name on seatbelt. **The route:** tmux's shell reads it OUTSIDE the boundary, into the engine's own environment (`CURSOR_API_KEY="$(cat <path>)" <boundary> agent ...`). That is the narrowest place there is: read from the CLI bundle, the main `agent` takes a credential only on argv or in the environment, `--auth-token-file` is `agent worker` only, and the stored login is the keychain. **The state:** a per-Manager `cursor/` directory as both `CURSOR_CONFIG_DIR` and `CURSOR_DATA_DIR`. `CURSOR_DATA_DIR` relocates `projects/`, read from the bundle, so `~/.cursor` is granted to nobody. **Grants:** `~/.local/share/cursor-agent` read-only, with its reason in `test_every_manager_grant_has_a_reason`; `agent` added to Landlock's engine binaries. ⚠ **Found:** with a long `CURSOR_DATA_DIR` Cursor puts its socket directory in `/tmp/.cursor/` (bundle, and measured), so Cursor depends on `/tmp` staying writable (SB8, SB11) | A sandboxed Cursor Manager authenticates (**held**). Observed with a fake key inside a real seatbelt profile: the copy can be neither read nor written, the state directory beside it is writable, and the prefix delivers the variable across the boundary, while without it nothing arrives. The key is absent from the command text, the pane's environment and `ALLOWED_ON_TMUX_ARGV`; a copy left by a killed Cursor run never reaches a Manager of another engine. **Held for the rotated key:** where the trust marker lands under `CURSOR_DATA_DIR`, a sandboxed turn and resume, and `ps` during a turn. Not measured on Linux | CU1 | 1 sitting, plus the held observation |
 | CU5 | **`rite doctor` for Cursor** (R6). `agent status` cannot be it | With a bad key, the probe says so in Cursor's words and exits non-zero; with a good one, it passes | CU4 | ½–1 sitting |
 | CU6 | **The both-halves observation, with cost**: two Manager cycles, the second recalling the first; a Worker through the broker; AND CU1 section 6's four cost measurements (requests per cycle, context growth, allowance per day, exhaustion) | As stated, recorded in the spike note's shape | CU3, CU4 | 1 sitting |
 | CU7 | **`rite stop` reaps `worker-server`** for a Cursor Manager, including under `remain-on-exit` | After `rite stop`, no `worker-server` for that workspace survives | CU2 | ½ sitting |
