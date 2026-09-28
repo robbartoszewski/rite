@@ -180,6 +180,9 @@ def config_dir(root: Path, manager: str, home: Path | None = None) -> Path:
     here (`chats/`), so this is where `observe` looks. Granting it to the
     Manager's boundary, and putting it in the pane's environment, is CU4.
     """
-    from rite_ai.managers.github_access import _credential_dir
+    from rite_ai.managers.cursor_login import state_dir
 
-    return _credential_dir(root, manager, home) / "cursor"
+    # One definition of where a Cursor Manager's state lives, shared with
+    # the grant and the pane's environment, so the check cannot look in a
+    # different place from the one Cursor was told to write.
+    return state_dir(root, manager, home)

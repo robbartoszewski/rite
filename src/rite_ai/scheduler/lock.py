@@ -34,9 +34,17 @@ the same one).
 Measured with the harness that produced the numbers above (8 processes,
 20 s, each recording the interval it held the lock; three runs each):
 
-- Ubuntu 24.04 VM, kernel 7.0, 4 cores: the old lock 618–665 overlapping
-  holders and 612–692 false reclaims per run. This one 0 and 0.
-- macOS: the old lock 0–1 overlaps and 85–95 false reclaims. This one 0 and 0.
+- Ubuntu 24.04 VM (Parallels, aarch64, kernel 7.0, 4 vCPU, Python 3.12.3),
+  guest idle when the runs started (load 0.00), on a Mac host that was not
+  quiet: the old lock 618–665 overlapping holders and 612–692 false
+  reclaims per run. This one 0 and 0. The old code was re-measured here so
+  this pair is comparable. It is NOT like-for-like with the 1,352–1,617
+  above: that came from a Docker container, a different machine and core
+  count, and its load was not recorded.
+- macOS (M-series, 14 cores, Python 3.14), on a LOADED machine: load 3.7
+  before the runs and 8.5 during them, with three other working sessions
+  running. The old lock 0–1 overlaps and 85–95 false reclaims; this one 0
+  and 0. Taken under that load, so not comparable to a quiet-machine figure.
 - Controls, on both: with `flock` made a no-op and the self-test below
   removed, the harness counted 56,275 (Linux) and 57,473 (macOS)
   overlaps, so its zero is not blindness. With the self-test kept, every

@@ -1134,6 +1134,12 @@ ALLOWED_ON_TMUX_ARGV = frozenset(
         # A PATH: where a Claude Manager's own login and transcripts are
         # (`claude_login`). The token is in a 0600 file there, never here.
         "CLAUDE_CONFIG_DIR",
+        # PATHS: a Cursor Manager's own config, chats and project state
+        # (`cursor_login`). ⚠ `CURSOR_API_KEY` is deliberately NOT here: the
+        # key reaches the engine through a prefix tmux's shell expands, and
+        # this list is what keeps it off tmux's argv.
+        "CURSOR_CONFIG_DIR",
+        "CURSOR_DATA_DIR",
     }
 )
 """The ONLY variables that may be passed to a pane with `tmux -e` (C6).
