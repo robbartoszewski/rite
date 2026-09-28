@@ -17,6 +17,31 @@ If you contribute through a fork: a fine-grained token cannot open a pull
 request on a repository you are not a member of. The Worker pushes its branch
 to your fork; open the pull request to the upstream yourself.
 
+### `rite init` in a single repository registers it
+
+`rite init` in a repository with code used to register no module, so a
+Worker's workspace held nothing to work on. When the project root holds no
+repositories but is one (with at least one commit), it is now the module, at
+path `./`, with its origin URL and branch. An origin that is a directory
+under your home is written `~/…`, so it does not trip the publish gate. A project initialised by 0.6.0 can
+add it to `.rite/modules.yaml` by hand:
+
+    modules:
+      myapp:
+        path: ./
+        url: <the repo's origin URL>
+        branch: main
+
+### `rite init`'s output passes rite's own gate on the first push
+
+`rite init` wrote the absolute path of your project into `.rite/brief.yaml`
+(`source.path`), and rite's own publish gate refuses a home path in a pushed
+file, so the first `git push` after init was blocked. It now writes `.` for
+the project itself, `~/…` for a path elsewhere under your home, and an
+absolute path only outside it. A project initialised by 0.6.0 still has the
+old line: change `source.path` to `.` by hand, and drop any
+`.rite/gitleaksignore` entry you added for it.
+
 ### Each Manager's own state has left the project
 
 A Manager's prompt, routes, Worker requests, check-ins, Slack relay state and
@@ -48,6 +73,32 @@ refusing too much, by design. Each Manager is told which command is which.
 `rite replies` and the Slack relay mark a question "needs your answer". A
 message written without a kind, by an older rite or by hand, is marked as
 needing you.
+
+### The Owner asks before it routes, and does not implement tickets itself
+
+The Owner used to be told to "write each instruction so it can be done
+without asking you back", which told it to settle a gap itself, on a guess.
+It is now told to ask you (`rite ask`) before it routes anything it would
+otherwise have to guess, and never to route a guess. A secondary that is
+routed something it cannot do as written replies saying so and stops,
+instead of filling the gap. The Owner, and a lone Manager, are also told not
+to change code and commit it themselves: a ticket is worked by a Worker or
+routed, so that it gets a claim, a review and a pull request. This is an
+instruction, not yet enforced.
+
+### A request in chat becomes a chore ticket, written by rite
+
+Work a Worker or another Manager does is meant to carry a ticket, including
+work you ask for in chat. A Manager now turns your message into one with
+**`rite chore <message-id>`**, naming the message by the id shown beside it.
+rite writes the ticket itself: the description is your words exactly as they
+were delivered, the title is cut from your first line, and it is labelled
+`chore` and `scheduled` (a `Task` on Jira). A Manager cannot give a chore a
+title or text of its own, and only your messages can become one: a
+message in the Owner's DM, or one sent from this machine. A message routed
+by another Manager, or said in a channel, cannot. The Manager is told
+the new ticket's id, or why the board refused it, in its next instruction.
+`rite route` does not require a ticket yet; that comes next.
 
 ### `rite stop --skip-handover`
 

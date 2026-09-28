@@ -81,7 +81,8 @@ class TestTheDeclaredModelReachesTheEngine:
         result, seen = _launch(_project(tmp_path, window=0), monkeypatch)
         assert not result.ok
         assert "declares no context_window" in result.message
-        assert "context_window: <tokens>" in result.message
+        assert "- name: " in result.message
+        assert "\n      context_window: 32768\n" in result.message
         assert seen == {}, "a session was started without a known window"
 
     def test_the_worker_and_the_manager_use_one_definition(self):

@@ -33,7 +33,13 @@ from rite_ai.credentials.store import make_namespace
 
 from . import ui
 from .config_file import Preset
-from .detect import DetectedRepo, DetectionSummary, detect_repos, detect_root_branch
+from .detect import (
+    ROOT_MODULE_PATH,
+    DetectedRepo,
+    DetectionSummary,
+    detect_repos,
+    detect_root_branch,
+)
 
 _KIND_OPTIONS = [
     ("full-stack", "Full-stack"),
@@ -763,7 +769,35 @@ def _ask_role(preset: Preset, interactive: bool) -> str:
     return ui.select("Is this the Owner machine or a Manager machine?", ROLE_OPTIONS)
 
 
-__all__ = ["InitAnswers", "KbAnswers", "run_questionnaire", "source_answers"]
+__all__ = [
+    "InitAnswers",
+    "KbAnswers",
+    "portable_source_path",
+    "run_questionnaire",
+    "source_answers",
+]
+
+
+def portable_source_path(root: Path, source: Path) -> str:
+    """How `source.path` is written into the brief: never with a home path in it.
+
+    `brief.yaml` is committed, and rite's own publish gate refuses a
+    `/Users/<name>/` or `/home/<name>/` path in any pushed file. Measured in
+    the v0.6.0 dogfood (F1): init wrote the resolved absolute path, so the
+    first `git push` after `rite init` was blocked by rite, and the only ways
+    past were a throwaway suppression or `--no-verify`.
+
+    Inside the project it is relative to the root (`.` for the default
+    answer), elsewhere under home it is `~/…`, and only outside home is it
+    absolute. `_resolve_source` reads all three forms back.
+    """
+    root = root.resolve()
+    if source.is_relative_to(root):
+        return source.relative_to(root).as_posix() or "."
+    home = Path.home().resolve()
+    if source.is_relative_to(home):
+        return f"~/{source.relative_to(home).as_posix()}"
+    return str(source)
 
 
 def source_answers(
@@ -806,10 +840,31 @@ def source_answers(
             name=name,
             role=role,
             root_branch=detect_root_branch(base, detect_repos(base)) or "main",
-            source_path=str(source),
+            source_path=portable_source_path(root, source),
             source_changes=changes,
         ),
-        modules=[],
+        modules=_source_modules(root, base),
         config=config,
         kb=KbAnswers(),
     )
+
+
+def _source_modules(root: Path, base: Path) -> list[Module]:
+    """The repositories in the source, as modules, when the source is in the
+    project. A Worker clones its modules, so a source registered as nothing
+    gives every Worker an empty workspace (dogfood F2).
+
+    A source outside the project is not registered: a module's path is
+    relative to the project, and `rite add module` is how to add one from
+    elsewhere."""
+    root, base = root.resolve(), base.resolve()
+    if not base.is_relative_to(root):
+        return []
+    modules = []
+    for r in detect_repos(base):
+        rel = (base / r.path).resolve().relative_to(root).as_posix()
+        path = ROOT_MODULE_PATH if rel == "." else f"{rel}/"
+        modules.append(
+            Module(name=r.name, path=path, url=r.url, branch=r.branch, description="")
+        )
+    return modules

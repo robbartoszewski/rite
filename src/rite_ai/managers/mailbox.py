@@ -950,6 +950,15 @@ def delivery_note(messages: list[Message]) -> str:
         first, *rest = m.text.strip().splitlines() or [""]
         lines.append(f"- {first}")
         lines.extend(f"  {line}" for line in rest)
+        # TR9: the id a chore is asked for by. Only on the User's own
+        # instructions, since only those can become one (`delivered`). Last,
+        # and outside the `> ` quote, so typed text cannot forge it.
+        path = getattr(m, "path", None)
+        if path is not None:
+            from rite_ai.managers.delivered import classify, message_id
+
+            if classify(m.text).users:
+                lines.append(f"  ↳ message id `{message_id(path)}`")
     return "\n".join(lines)
 
 

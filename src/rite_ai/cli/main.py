@@ -691,10 +691,23 @@ def _doctor_report(problems: list[str]) -> None:
         # modules.yaml by design, because `scaffold.AUTHORED_CONFIG`
         # re-includes them. Only the explicit override answers it, and
         # nothing else tells anyone — which is what this row is for.
-        if _is_project(module_dir):
+        is_the_root = module_dir.resolve() == root.resolve()
+        if is_the_root and module_sandbox.enabled:
+            # A single-repository project (dogfood F2): the module IS the
+            # project, so every clone of it carries the project's own
+            # `.rite/`. A sandboxed Worker is given RITE_PROJECT_ROOT by
+            # `rite sandbox start`, which wins over that marker, so its claims
+            # reach this project's ledger. Only an unsandboxed session started
+            # in the clone would miss it, which is the branch below.
+            click.echo(
+                f"module {m.name}: is the project itself; sandboxed Workers "
+                "are pointed at this project, so their claims are shared"
+            )
+        elif _is_project(module_dir):
             click.echo(
                 f"module {m.name}: is itself a rite project "
-                f"({m.path}/.rite/). A session started inside it resolves to "
+                f"({m.path.rstrip('/')}/.rite/). A session started inside it "
+                f"resolves to "
                 f"IT, not to this project, so its claims go to a private "
                 f"ledger and never collide with anyone else's. Set "
                 f"{PROJECT_ROOT_ENV}={root} in that session's environment."
@@ -6514,6 +6527,43 @@ def _other_sandbox_note(entry, asked) -> str:
     return f"no changes; `yoloai destroy {entry.name}` frees it"
 
 
+WORKER_QUESTION_EVERY = 30.0
+"""How often the Owner's supervisor looks at its Workers for a question: a
+`yoloai` call per Worker, so not at the poll rate."""
+
+
+def _worker_question_watch(root: Path, manager: str):
+    """The Owner's watcher for Workers waiting on a question (dogfood Q1–Q4,
+    part B), or None for a Manager that should not tell the person.
+
+    The Manager that tells is the one holding 'route', which is the one that
+    reads and posts Slack; with no roles declared, the lone Manager. A
+    secondary does not: two Managers telling the person the same question is
+    the noise that trains people to ignore both."""
+    from rite_ai.config.managers import routing_owner
+    from rite_ai.config.models import ProjectConfig
+    from rite_ai.config.parse import ParseError, parse_config
+    from rite_ai.managers.worker_questions import surface
+
+    parsed = parse_config(root / ".rite" / "config.yaml")
+    config = parsed if not isinstance(parsed, ParseError) else ProjectConfig()
+    if not config.sandbox.enabled:
+        return None
+    roles = list(config.coordination.manager_roles)
+    if roles and routing_owner(roles) != manager:
+        return None
+    last = {"at": None}
+
+    def watch(say) -> None:
+        now = time.monotonic()
+        if last["at"] is not None and now - last["at"] < WORKER_QUESTION_EVERY:
+            return
+        last["at"] = now
+        surface(root, manager, say)
+
+    return watch
+
+
 def _loop_verdict(root: Path, board=None) -> str:
     """The loop's own answer to "should this continue" (§9.14.4).
 
@@ -6556,6 +6606,21 @@ def _other_managers_briefing(root: Path, manager: str) -> str:
         return ""
     roles = list(config.coordination.manager_roles)
     return briefing(manager, routing_owner(roles), roles)
+
+
+def _ticket_work_rule(root: Path, manager: str) -> str:
+    """The start prompt's rule that a Manager does not implement tickets
+    itself (TR3), or "" for a secondary (`prompt.ticket_work`)."""
+    from rite_ai.config.managers import routing_owner, shares_one_root
+    from rite_ai.config.models import ProjectConfig
+    from rite_ai.config.parse import ParseError, parse_config
+    from rite_ai.managers.prompt import ticket_work
+
+    parsed = parse_config(root / ".rite" / "config.yaml")
+    config = parsed if not isinstance(parsed, ParseError) else ProjectConfig()
+    one_root = shares_one_root(config.coordination.remote)
+    owner = routing_owner(list(config.coordination.manager_roles))
+    return ticket_work(manager, owner, one_root=one_root)
 
 
 def _router_for(root: Path, manager: str):
@@ -7016,6 +7081,8 @@ def _start_a_manager(
     # "stopped on 'unknown' after 0 session(s) — this is a fault, not a
     # completion", which was neither true nor actionable for either.
     from rite_ai.managers.broker import for_project
+    from rite_ai.managers.chores import create_asked_for
+    from rite_ai.managers.chores import instructions as chore_instructions
 
     board, board_state, board_problem, composed_under = _board_for_manager(root)
     if board_state == "unreachable":
@@ -7154,6 +7221,9 @@ def _start_a_manager(
             # itself reads, so "is this a real ticket" has one answer in one
             # place; `for_project` refuses everything when there is none.
             broker=for_project(root, board),
+            # TR9: a User's instruction becomes a chore, written by rite
+            # outside the boundary, on the same board the broker checks.
+            chores=lambda say: create_asked_for(root, role.name, board, say),
             router=_router_for(root, role.name),
             # ⚠ DF2: a cycle can be CAUSED by mail. None for a lone Manager,
             # whose runs are exactly what they were.
@@ -7177,7 +7247,9 @@ def _start_a_manager(
                     role.name,
                     root=root,
                     extra=instructions(root, role.name, enabled=record_issues)
-                    + _other_managers_briefing(root, role.name),
+                    + chore_instructions(root, role.name)
+                    + _other_managers_briefing(root, role.name)
+                    + _ticket_work_rule(root, role.name),
                 )
             ),
             fresh=fresh,
@@ -7201,6 +7273,7 @@ def _start_a_manager(
             if setting_up
             else (lambda r: _loop_verdict(r, board)),
             note=lambda m: click.echo(m, err=True),
+            watch=_worker_question_watch(root, role.name),
         )
     finally:
         # Both credential copies go however the run ENDS. A KILLED run skips
@@ -7473,6 +7546,51 @@ def route(manager_name: str, text: str) -> None:
     click.echo(
         f"route queued: {manager_name!r} receives it at its next turn, marked "
         f"as routed by {speaking!r}."
+    )
+
+
+@cli.command("chore")
+@click.argument("message_ids", nargs=-1, required=True)
+def chore(message_ids: tuple[str, ...]) -> None:
+    """Have rite make a chore ticket from the User's own message(s) — a Manager only.
+
+    Every piece of work a Worker or another Manager does carries a ticket.
+    When the User asks for work in a message and it is not a ticket
+    yet, the Manager names the message by the id shown beside it in its
+    instruction, and rite writes the ticket: the User's words as they were
+    delivered, labelled `chore` and `scheduled`. The Manager cannot give it a
+    title or text.
+
+    ⚠ This only ASKS. The ticket is created by the Manager's supervisor,
+    outside its sandbox, when the Manager's current turn ends, and its next
+    instruction says the ticket's id or why it was refused.
+
+    Examples:
+      rite chore 1759068000123-4521-0
+    """
+    from rite_ai.managers import current_manager
+    from rite_ai.managers.chores import MAX_MESSAGES, request
+
+    root = _require_project_root()
+    speaking = current_manager()
+    if not speaking:
+        click.echo(
+            "refusing: `rite chore` is how a Manager asks rite to ticket a "
+            "User's instruction. From your own shell, file the ticket "
+            "directly with `rite board create`.",
+            err=True,
+        )
+        raise SystemExit(1)
+    ids = [i.strip() for i in message_ids if i.strip()]
+    if not ids or len(set(ids)) != len(ids) or len(ids) > MAX_MESSAGES:
+        click.echo(
+            f"refusing: name 1 to {MAX_MESSAGES} different message ids.", err=True
+        )
+        raise SystemExit(1)
+    request(root, speaking, ids)
+    click.echo(
+        f"chore requested from message(s) {', '.join(ids)}: rite creates it "
+        "when this turn ends, and your next instruction says its id."
     )
 
 
