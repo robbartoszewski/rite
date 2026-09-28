@@ -145,7 +145,7 @@ started with `spawn(execPath, ["worker-server"], {detached: false, env:
 `CURSOR_API_KEY` included, and it outlives the turn by about five minutes
 (CU1b), after `yoloai destroy` too. Under this note's finding, the key stays
 readable from every sandbox for that long after the run that needed it has
-ended. CU7's reaping ends it with the turn in a Manager's pane.
+ended. CU7's reaping ends it with the turn in a Manager's pane: **observed since** with the real `worker-server` in 8 authenticated turns (`spikes/CU1c-cursor-authenticated-measurements.md`), none left running after the group signal.
 
 ## Not measured
 

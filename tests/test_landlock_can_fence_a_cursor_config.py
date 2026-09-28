@@ -10,11 +10,13 @@ policy can grant the config directory READ-only and `chats/` writable, and
 simply not grant the config file any write. This checks that the kernel
 enforces exactly that.
 
-What it does NOT show: whether Cursor still works when it cannot rewrite its
-own config or `statsig-cache.json` at the directory's root during a real turn.
-Its config write is a `.tmp` file renamed over the original (bundle); some of
-its write paths swallow a failure and one re-throws. That needs an
-authenticated turn on Linux, and is held.
+What it does NOT show, and what was measured since: the kernel half holds,
+but Cursor does not survive it. With a real turn, Cursor must create a temp
+file beside its config and rename it over the config on every turn, and fails
+(exit 1) when either is refused (`spikes/CU1c-cursor-authenticated-
+measurements.md`). So this fence protects the file and stops Cursor; the
+allowlist is detection-only (the CU8 row). Kept as the kernel evidence behind
+that sequence.
 """
 
 from __future__ import annotations
