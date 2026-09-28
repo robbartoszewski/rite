@@ -5739,8 +5739,9 @@ def sandbox() -> None:
     "--prompt",
     "prompt_text",
     default=None,
-    help="Opening prompt for the Worker, sent verbatim. For work that is not "
-    "a ticket on your board; use instead of --ticket.",
+    help="Work that is not a ticket on your board yet: rite files it as a "
+    "chore ticket first, from exactly this text, and starts the Worker on "
+    "that ticket. Use instead of --ticket.",
 )
 def sandbox_start(
     worker: str,
@@ -5770,7 +5771,8 @@ def sandbox_start(
         raise click.UsageError("give --ticket or --prompt, not both")
     if ticket is not None and not ticket.strip():
         raise click.UsageError("--ticket needs a ticket ID")
-    prompt = f"Work ticket {ticket}." if ticket is not None else prompt_text
+    if prompt_text is not None and not prompt_text.strip():
+        raise click.UsageError("--prompt needs the work to do")
     from rite_ai.credentials.store import worker_environment
     from rite_ai.sandbox import (
         GLOBAL_TOKEN_CREDENTIAL,
@@ -5821,6 +5823,28 @@ def sandbox_start(
             )
             raise SystemExit(1)
 
+    # ⚠ TR9: every piece of Worker work carries a ticket. `--prompt` files
+    # the chore here, AFTER the workspace is ready, so a refused prepare
+    # leaves nothing on the board, and before anything starts.
+    if prompt_text is not None:
+        from rite_ai.managers.chores import create_for_prompt
+
+        chore_board, board_problem = _ticket_backend(
+            "workers", root=root, config=config
+        )
+        made, refusal = create_for_prompt(chore_board, worker, prompt_text)
+        if refusal:
+            click.echo(
+                f"not starting '{worker}': {refusal}."
+                + (f" ({board_problem})" if board_problem else "")
+                + " Give it a ticket that is on the board with --ticket instead.",
+                err=True,
+            )
+            raise SystemExit(1)
+        click.echo(f"filed chore {made} from the prompt, labelled chore and {worker}")
+        ticket = made
+    prompt = f"Work ticket {ticket}." if ticket is not None else None
+
     token, tier = resolve_worker_token(worker, config.credentials)
     # Every credential this project holds, not just the git token (§5.3.4).
     env = worker_environment(config.credentials, worker_token=token)
@@ -5865,6 +5889,15 @@ def sandbox_start(
     )
     click.echo(result.message)
     if not result.ok:
+        if prompt_text is not None:
+            # Said, not undone: deleting a ticket is not something rite does,
+            # and a chore nobody knows about is the untracked work TR9 closes.
+            click.echo(
+                f"the chore {ticket} filed for this stays on the board, labelled "
+                f"chore and {worker}. Start it again with `rite sandbox start "
+                f"{worker} --ticket {ticket}`, or close it.",
+                err=True,
+            )
         raise SystemExit(1)
 
 

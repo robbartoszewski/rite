@@ -145,7 +145,8 @@ reports a missing Claude login as a problem. Then, per ticket:
 
 ```bash
 rite sandbox start alpha --ticket ABC-12     # GitHub Issues: --ticket 42
-                                            # no board: --prompt "<what to do>"
+                                            # not a ticket yet: --prompt "<what to do>"
+                                            #   files it as a chore ticket first
 ```
 
 Start prepares the worker's workspace first and refuses one it cannot prepare,

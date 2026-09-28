@@ -256,3 +256,82 @@ class TestTheCommand:
 def test_every_manager_is_told_how_to_make_a_chore(tmp_path):
     text = chores.instructions(tmp_path, "lead")
     assert " chore <message-id>" in text and "you cannot give it a title" in text
+
+
+class TestAPromptTypedAtThisMachine:
+    """`rite sandbox start <worker> --prompt "…"`: the person's words, filed as
+    a chore before the Worker starts, and the Worker started on that ticket."""
+
+    def test_the_chore_is_the_prompt_labelled_for_that_worker_not_scheduled(self):
+        board = Board()
+        made, refusal = chores.create_for_prompt(board, "alpha", "add a CSV export\n")
+        assert (made, refusal) == ("RT-99", "")
+        ((title, description, labels),) = board.created
+        assert title == "chore: add a CSV export"
+        assert description.startswith("add a CSV export\n\n---")
+        assert labels == ["chore", "alpha"]
+
+    def test_no_board_or_a_refused_create_is_a_refusal(self):
+        assert chores.create_for_prompt(None, "alpha", "x")[1]
+        refused = Board(result=BackendError("no Task type"))
+        assert "no Task type" in chores.create_for_prompt(refused, "alpha", "x")[1]
+
+    def _project(self, tmp_path, monkeypatch, backend: str):
+        rite = tmp_path / ".rite"
+        rite.mkdir()
+        (rite / "brief.yaml").write_text("project:\n  name: acme\n  role: owner\n")
+        (rite / "modules.yaml").write_text("modules: {}\n")
+        (rite / "config.yaml").write_text(
+            f"ticket_backend:\n  type: {backend}\n"
+            + ("  repo: a/b\n" if backend == "github" else "")
+            + "sandbox:\n  enabled: true\n  backend: seatbelt\n"
+        )
+        (tmp_path / "workers" / "alpha").mkdir(parents=True)
+        (tmp_path / "workers" / "alpha" / "worker.yml").write_text(
+            "worker:\n  name: alpha\n  manager: ''\n  modules: []\n"
+        )
+        monkeypatch.chdir(tmp_path)
+
+    def _start(self, board):
+        from pathlib import Path
+        from unittest.mock import MagicMock, patch
+
+        from click.testing import CliRunner
+
+        from rite_ai.cli.main import cli
+
+        seen: dict = {}
+
+        def _run(args, *a, **kw):
+            if "new" in args:
+                seen["prompt"] = Path(args[args.index("--prompt-file") + 1]).read_text()
+            stdout = '{"sandboxes": []}' if "ls" in args else ""
+            return MagicMock(returncode=0, stdout=stdout, stderr="")
+
+        with (
+            patch("keyring.get_password", return_value=None),
+            patch("rite_ai.sandbox.shutil.which", return_value="/usr/bin/yoloai"),
+            patch("rite_ai.sandbox.subprocess.run", side_effect=_run),
+            patch(
+                "rite_ai.cli.main._ticket_backend",
+                return_value=(board, None if board else "no ticket backend"),
+            ),
+        ):
+            result = CliRunner().invoke(
+                cli, ["sandbox", "start", "alpha", "--prompt", "add a CSV export"]
+            )
+        return result, seen
+
+    def test_the_worker_is_started_on_the_chore(self, tmp_path, monkeypatch):
+        self._project(tmp_path, monkeypatch, "github")
+        board = Board()
+        result, seen = self._start(board)
+        assert result.exit_code == 0, result.output
+        assert seen["prompt"] == "Work ticket RT-99.\n"
+        assert board.created[0][0] == "chore: add a CSV export"
+
+    def test_with_no_board_nothing_starts(self, tmp_path, monkeypatch):
+        self._project(tmp_path, monkeypatch, "none")
+        result, seen = self._start(None)
+        assert result.exit_code == 1 and "not starting 'alpha'" in result.output
+        assert "prompt" not in seen

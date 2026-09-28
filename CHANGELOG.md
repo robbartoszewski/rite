@@ -68,6 +68,11 @@ title or text of its own, and only your messages can become one: a
 message in the Owner's DM, or one sent from this machine. A message routed
 by another Manager, or said in a channel, cannot. The Manager is told
 the new ticket's id, or why the board refused it, in its next instruction.
+
+**`rite sandbox start <worker> --prompt "…"`** now files your text, exactly as
+typed, as a chore ticket labelled `chore` and the Worker's name, then starts
+the Worker on that ticket. With no board, or a board that refuses the ticket,
+nothing starts.
 `rite route` does not require a ticket yet; that comes next.
 
 ### `rite stop --skip-handover`

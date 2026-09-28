@@ -269,6 +269,44 @@ def create_asked_for(root: Path, manager: str, board, say) -> int:
     return created
 
 
+def create_for_prompt(board, worker: str, text: str) -> tuple[str, str]:
+    """A person's `rite sandbox start <worker> --prompt "…"`, as a chore.
+
+    Returns `(ticket id, "")`, or `("", why not)`. Typed at this machine by
+    the person, so the text is theirs, as a header-less message is
+    (`delivered.classify`). Labelled `chore` and the Worker's own label, the
+    way assignment labels a ticket (`coordination.distribution`), and NOT
+    `scheduled`: the person has already given it to this Worker, and
+    `scheduled` would put it in the queue for another one too.
+
+    ⚠ **No board, or a refused create, refuses the start.** Nothing runs
+    untracked (TRQ5); a Worker started on work with no ticket is the hole
+    this closes.
+    """
+    from rite_ai.tickets.interface import BackendError
+
+    if board is None:
+        return "", (
+            "this project has no board rite can reach, so the work cannot be "
+            "tracked. Every piece of Worker work carries a ticket"
+        )
+    description = (
+        text.strip()
+        + "\n\n---\n\n"
+        + "Chore created by rite from the prompt a person typed at this "
+        f"machine: `rite sandbox start {worker} --prompt`. The text above is "
+        "theirs, as typed.\n"
+    )
+    try:
+        made = board.create(_title_of(text), description, labels=[CHORE_LABEL, worker])
+    except Exception as e:  # noqa: BLE001 - said, never raised
+        made = BackendError(str(e))
+    if isinstance(made, BackendError) or not getattr(made, "id", ""):
+        why = made.message if isinstance(made, BackendError) else "no id came back"
+        return "", f"the board refused the chore ({why})"
+    return str(made.id), ""
+
+
 def instructions(root: Path, manager: str) -> str:
     """What a Manager is told about chores."""
     from rite_ai import own_command
