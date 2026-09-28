@@ -4007,16 +4007,10 @@ def refine_status(ticket_id: str, role: str) -> None:
     """
     from rite_ai.refinement import status as refinement_status
 
-    backend, err = _ticket_backend(role)
-    if err:
-        click.echo(err, err=True)
-        raise SystemExit(1)
-    result = refinement_status.status(backend, ticket_id)
+    result = refinement_status.of(_find_project_root(), None, ticket_id, role=role)
     click.echo(f"{ticket_id}: {result.state} — {result.detail}")
     if result.record is not None and result.state == refinement_status.REFINED:
-        from rite_ai.refinement.record import render_for_worker
-
-        click.echo(render_for_worker(result.record))
+        click.echo(refinement_status.render_for_worker(result.record))
     raise SystemExit(0 if result.refined else 1)
 
 

@@ -484,3 +484,87 @@ def test_the_worker_text_is_deterministic_and_carries_the_record():
     assert r.record_id in text
     assert "- [ ] the timeout is a flag" in text
     assert "none agreed" in text and "how you checked each item" in text
+
+
+# --- of(): the one path from a ticket id to a status ---------------------
+
+
+def _config(tmp_path, text):
+    from rite_ai.config.parse import parse_config
+
+    (tmp_path / ".rite").mkdir(exist_ok=True)
+    (tmp_path / ".rite" / "config.yaml").write_text(text)
+    return parse_config(tmp_path / ".rite" / "config.yaml")
+
+
+def test_of_with_no_board_is_unreadable_not_unrefined(tmp_path):
+    result = status.of(tmp_path, _config(tmp_path, "{}\n"), "7")
+    assert result.state == status.UNREADABLE
+    assert "no ticket backend" in result.detail
+
+
+def test_of_parses_the_roots_config_when_given_none(tmp_path):
+    (tmp_path / ".rite").mkdir()
+    (tmp_path / ".rite" / "config.yaml").write_text("ticket_backend: [\n")
+    assert status.of(tmp_path, None, "7").state == status.UNREADABLE
+
+
+def test_of_builds_the_board_and_reads_it_once(tmp_path, monkeypatch):
+    monkeypatch.setattr(refinement_key, "load", lambda: refinement_key.Loaded(KEY))
+    r = _record()
+    board, counted = _github(_thread(rec.render(r)))
+    built = []
+
+    def fake_build(tb, board_role="workers", credentials=None):
+        built.append((tb.type, tb.repo, board_role))
+        return board
+
+    monkeypatch.setattr(
+        "rite_ai.tickets.create_backend_from_config", fake_build, raising=True
+    )
+    config = _config(tmp_path, "ticket_backend:\n  type: github\n  repo: org/repo\n")
+    result = status.of(tmp_path, config, "7")
+    assert built == [("github", "org/repo", "workers")]
+    assert counted.reads == 1
+    assert result.state == status.REFINED and result.record.record_id == r.record_id
+
+
+def test_the_cli_goes_through_of(tmp_path, monkeypatch):
+    from click.testing import CliRunner
+
+    from rite_ai.cli.main import cli
+
+    calls = []
+
+    def fake_of(root, config, ticket_id, *, role="workers"):
+        calls.append((ticket_id, role))
+        return status.Status(status.NOT_REFINED, None, "stub", None)
+
+    monkeypatch.setattr(status, "of", fake_of)
+    monkeypatch.setattr("rite_ai.cli.main._find_project_root", lambda: tmp_path)
+    result = CliRunner().invoke(cli, ["refine", "status", "KAN-7"])
+    assert calls == [("KAN-7", "workers")]
+    assert result.exit_code == 1 and "NOT REFINED" in result.output
+
+
+def test_nothing_else_composes_the_predicate():
+    """The drift this path exists to prevent: a second caller that reads the
+    thread and evaluates it itself, which then has to stay identical to this
+    one for ever. Anything that needs a status calls `status.of` or
+    `status.status`."""
+    from pathlib import Path
+
+    src = Path(status.__file__).resolve().parents[1]
+    offenders = []
+    for path in src.rglob("*.py"):
+        rel = path.relative_to(src).as_posix()
+        if rel in ("refinement/status.py",) or rel.startswith("tickets/"):
+            continue
+        text = path.read_text()
+        if (
+            ".read_thread(" in text
+            or "evaluate(ticket" in text
+            or ("status.evaluate(" in text)
+        ):
+            offenders.append(rel)
+    assert not offenders, offenders

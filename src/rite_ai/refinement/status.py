@@ -79,6 +79,50 @@ def status(board, ticket_id: str) -> Status:
     return evaluate(ticket_id, identity, thread, refinement_key.load())
 
 
+def of(root, config, ticket_id: str, *, role: str = "workers") -> Status:
+    """Is `ticket_id` refined, from a project's root and its parsed config?
+
+    **The one path from a ticket id to a status.** `rite refine status` calls
+    it, and so does anything that starts work (TR4's `sandbox start`), so the
+    composition (config, backend, one read, key, predicate) exists once and
+    cannot drift between callers. `config` is the parse the caller already
+    holds, so what it decided from and the board read here come from ONE
+    parse; None parses `root`'s own.
+
+    Every way of failing to get as far as a read is UNREADABLE, never NOT
+    REFINED: an unconfigured or unbuildable board is not a board with no
+    records on it.
+    """
+    from rite_ai.config.parse import ParseError, parse_config
+    from rite_ai.tickets import BackendError, create_backend_from_config
+
+    if config is None:
+        config = parse_config(root / ".rite" / "config.yaml")
+    if isinstance(config, ParseError):
+        return Status(UNREADABLE, None, f"config error: {config.message}")
+    tb = config.ticket_backend
+    if tb.type == "none":
+        return Status(
+            UNREADABLE,
+            None,
+            "no ticket backend is configured, so no ticket can be checked "
+            "(ticket_backend.type in .rite/config.yaml)",
+        )
+    board = create_backend_from_config(
+        tb, board_role=role, credentials=config.credentials
+    )
+    if isinstance(board, BackendError):
+        return Status(UNREADABLE, None, board.message)
+    return status(board, ticket_id)
+
+
+def render_for_worker(record: rec.Record) -> str:
+    """The agreed definition of done as a Worker's start prompt carries it.
+    One implementation, in `record`; re-exported here so a caller of `of`
+    needs this module only."""
+    return rec.render_for_worker(record)
+
+
 def evaluate(ticket_id: str, board: dict, thread, loaded) -> Status:
     """The predicate itself, pure. `thread` is a `tickets.Thread` or a
     `tickets.BackendError`; `board` is `record.board_identity` of the board
