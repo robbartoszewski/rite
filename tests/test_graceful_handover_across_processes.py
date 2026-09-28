@@ -22,7 +22,15 @@ import subprocess
 import time
 from pathlib import Path
 
-from election_harness import clock_for, describe, overlapping_owners, ownership_runs
+from election_harness import (
+    clock_for,
+    describe,
+    lease_history,
+    overlapping_owners,
+    ownership_runs,
+    promotions_over_valid_leases,
+    record_every_write,
+)
 
 CAP_SECONDS = 90.0
 """A cap, not a duration. The run ends when the handover has happened, and
@@ -90,8 +98,15 @@ def _manager(args):
         if yields_role is False and tick.action == "promoted" and events.count("asked"):
             done = True  # the returning Manager has the role back
         if tick.action == "handed over" and held:
-            # Belief ends HERE, not at the expiry we last renewed to.
-            moment = clock().timestamp()
+            # Belief ends when the RELEASE was stamped, not at the expiry we
+            # last renewed to, and not when this tick returned. ⚠ The tick's
+            # end is later by whatever the tick did after its release landed
+            # (the write's housekeeping, returning, being descheduled), and in
+            # that time the successor may already have read the release and
+            # promoted. Closing there reported two Owners where the remote
+            # held one (§2.4.1a; CI run 36476910158, macOS).
+            released = parse_timestamp(tick.released_at) if tick.released_at else None
+            moment = released.timestamp() if released else clock().timestamp()
             rows.append(
                 {
                     "manager": name,
@@ -144,9 +159,61 @@ def _manager(args):
     return name
 
 
+def _slow_tail_after_release():
+    """A Pool initializer: 1.0 s real between a release LANDING and the call
+    returning. That is the gap the CI failure lived in (run 36476910158,
+    macOS): beta's release had landed, alpha read it and promoted, and beta's
+    tick had not yet returned. On a loaded runner a descheduled process makes
+    the same gap with no sleep at all. Only the incumbent releases, so only
+    beta is slowed, and only once."""
+    from rite_ai.coordination.lease import OwnerLeaseHolder
+
+    real = OwnerLeaseHolder.release
+
+    def slow(self):
+        released = real(self)
+        time.sleep(1.0)
+        return released
+
+    OwnerLeaseHolder.release = slow
+
+
 def test_a_returning_manager_is_handed_the_role_without_a_lapse(tmp_path):
+    _hand_over(tmp_path)
+
+
+def test_a_slow_tail_after_the_release_is_not_read_as_two_owners(tmp_path):
+    """⚠ The reproduction, on demand. Before the role's end was taken from the
+    release stamp, this reported TWO OWNERS in 20 of 20 runs while the
+    remote's own history showed a clean handover in 20 of 20 (§2.4.1a)."""
+    _hand_over(tmp_path, initializer=_slow_tail_after_release)
+
+
+def test_the_truth_check_sees_a_promotion_over_a_valid_lease():
+    """The control for the check above: it is not a check that passes by
+    seeing nothing."""
+    held = {
+        "owner": "beta",
+        "acquired": "2026-09-10T00:40:00Z",
+        "expires": "2026-09-10T01:04:33Z",
+    }
+    taken = {
+        "owner": "alpha",
+        "acquired": "2026-09-10T00:52:38Z",
+        "expires": "2026-09-10T01:07:38Z",
+    }
+    released = {**held, "expires": "2026-09-10T00:51:00Z"}
+    assert promotions_over_valid_leases([held, taken], 60.0)
+    assert promotions_over_valid_leases([released, taken], 60.0) == []
+    # Inside the skew margin is still too early.
+    early = {**held, "expires": "2026-09-10T00:52:00Z"}
+    assert promotions_over_valid_leases([early, taken], 60.0)
+
+
+def _hand_over(tmp_path, initializer=None):
     remote = tmp_path / "remote.git"
     subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
+    record_every_write(remote)
     logs = tmp_path / "logs"
     logs.mkdir()
 
@@ -177,7 +244,7 @@ def test_a_returning_manager_is_handed_the_role_without_a_lapse(tmp_path):
             False,
         ),
     ]
-    with mp.get_context("spawn").Pool(2) as pool:
+    with mp.get_context("spawn").Pool(2, initializer=initializer) as pool:
         pool.map(_manager, args)
 
     loaded = {p.stem: json.loads(p.read_text()) for p in logs.glob("*.json")}
@@ -189,28 +256,32 @@ def test_a_returning_manager_is_handed_the_role_without_a_lapse(tmp_path):
         for name, v in loaded.items():
             print(f"  {name}: {v['events']}")
 
-    if overlapping_owners(runs):
-        # The three-way split, printed with the failure so the next person
-        # does not have to reconstruct it from timestamps.
+    # ⚠ TWO CHECKS, and they answer different questions. The REMOTE's own
+    # history says whether any write took the role from a lease that still
+    # held it: the property itself, in the order the writes landed. The
+    # ownership runs say whether two processes BELIEVED they were Owner at
+    # once, each closed at the moment its role ended. Before the handover's
+    # end was taken from the release stamp, the runs reported two Owners
+    # while the remote showed a clean handover (§2.4.1a).
+    over_valid = promotions_over_valid_leases(lease_history(remote), 60.0)
+    if over_valid or overlapping_owners(runs):
         lines = ["TWO OWNERS DURING A GRACEFUL HANDOVER — " + describe(runs), ""]
+        lines.append(
+            "  in the remote's writes: "
+            + ("; ".join(over_valid) if over_valid else "none took a valid lease")
+        )
+        # ⚠ The probes read the lease AFTER the tick, so at a promotion they
+        # show the challenger's OWN new lease. They say what each process
+        # held after acting, not what it read before deciding; the remote's
+        # history above is what says whether the decision was wrong.
         for name, v in sorted(loaded.items()):
             for pr in v.get("probes", []):
                 if pr["action"] in ("promoted", "handed over", "took over"):
                     lines.append(
                         f"  {pr['by']} {pr['action']}: now={pr['now']:.1f} "
-                        f"saw owner={pr['saw_owner']!r} "
-                        f"expires={pr['saw_expires']:.1f} "
-                        f"read_was_expired={pr['read_was_expired']}"
+                        f"then held by {pr['saw_owner']!r} "
+                        f"to {pr['saw_expires']:.1f}"
                     )
-        lines.append("")
-        lines.append(
-            "  read_was_expired=False at a promotion means the challenger "
-            "promoted against a lease it read as VALID -> `verdict`."
-        )
-        lines.append(
-            "  read_was_expired=True means it acted correctly on a STALE "
-            "read -> the state layer read, or clock skew between processes."
-        )
         raise AssertionError("\n".join(lines))
 
     # The protocol actually ran: beta held it, was asked, and gave it up;
