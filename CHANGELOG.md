@@ -9,7 +9,9 @@ before creating a sandbox, a Worker with no module, one whose repository is
 on a host other than github.com, one with no GitHub token or no `gh`, and one
 whose token GitHub says cannot push. The push check asks GitHub, from your
 machine and with only the Worker's token, the permission question a push
-asks first; it sends nothing. `rite doctor` reports a missing Worker token as a problem.
+asks first; it sends nothing. `rite doctor` reports a missing Worker token as a problem, and `rite
+credential list` now lists `github_token` as missing in exactly the same
+cases (it used to say "nothing missing" while a Worker would be refused).
 An `ssh` remote (`git@github.com:…`) now works from a sandbox: it is fetched
 and pushed over HTTPS with the token.
 

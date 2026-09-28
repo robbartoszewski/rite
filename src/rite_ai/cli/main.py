@@ -465,8 +465,22 @@ def doctor() -> None:
     click.echo("\nok")
 
 
-def _doctor_worker_github_token(root: Path, modules: list, problems: list) -> None:
-    from rite_ai.credentials.store import get_scoped, store_is_readable
+def _workers_without_github_token(
+    root: Path, modules: list, creds
+) -> tuple[list[str], list[str]]:
+    """`(modules on GitHub, Workers that would have no token for them)`.
+
+    ⚠ **The one answer to "is a GitHub token missing for Workers?"**, read
+    by both `rite doctor` and `rite credential list`. They used to answer it
+    separately and disagreed: on a sandboxed project with a GitHub module
+    and no token, doctor reported a problem while `credential list` said
+    "nothing missing" — so a user who checked the list was told they were
+    ready, then watched `rite sandbox start` refuse the Worker.
+
+    With no Worker yet, the one every future Worker would fall back to
+    (`github_token`) is what counts. Callers check `store_is_readable()`
+    first: an unreadable store is "cannot check", not "missing"."""
+    from rite_ai.credentials.store import get_scoped
     from rite_ai.sandbox import (
         GLOBAL_TOKEN_CREDENTIAL,
         owner_repo_from_url,
@@ -475,20 +489,27 @@ def _doctor_worker_github_token(root: Path, modules: list, problems: list) -> No
 
     on_github = [m.name for m in modules if m.url and owner_repo_from_url(m.url)]
     if not on_github:
-        return
-    if not store_is_readable():
-        return  # reported above as the store being unreadable, not as missing
-    creds = _project_credentials()
+        return on_github, []
     workers_dir = root / "workers"
     workers = (
         sorted(p.name for p in workers_dir.iterdir() if (p / "worker.yml").is_file())
         if workers_dir.is_dir()
         else []
     )
-    # With no Worker yet, the one every future Worker would fall back to.
     lacking = [w for w in workers if resolve_worker_token(w, creds)[0] is None]
     if not workers and not get_scoped(GLOBAL_TOKEN_CREDENTIAL, creds):
         lacking = ["(any new Worker)"]
+    return on_github, lacking
+
+
+def _doctor_worker_github_token(root: Path, modules: list, problems: list) -> None:
+    from rite_ai.credentials.store import store_is_readable
+
+    if not store_is_readable():
+        return  # reported above as the store being unreadable, not as missing
+    on_github, lacking = _workers_without_github_token(
+        root, modules, _project_credentials()
+    )
     if lacking:
         click.echo(
             f"workers: no GitHub token for {_first_few(lacking)}, so sandboxed "
@@ -1818,6 +1839,21 @@ def _keys_this_project_needs(config=None) -> list[str]:
         # The login a sandboxed session needs: it cannot read the keychain.
         keys.append("claude_token")
         root = _find_project_root()
+        # The push credential, by the SAME rule `rite doctor` and `rite
+        # sandbox start` apply (`_workers_without_github_token`): listed as
+        # missing exactly when doctor calls it a problem. Listed when set,
+        # too, so its status and rotation are shown.
+        if "github_token" not in keys:
+            from rite_ai.config.parse import ParseError, parse_modules
+            from rite_ai.credentials.store import resolve as _resolve
+            from rite_ai.credentials.store import store_is_readable as _readable
+
+            modules = parse_modules(root / ".rite" / "modules.yaml")
+            creds = getattr(config, "credentials", None)
+            if not isinstance(modules, ParseError) and _readable():
+                on_github, lacking = _workers_without_github_token(root, modules, creds)
+                if lacking or (on_github and _resolve("github_token", creds).found):
+                    keys.append("github_token")
         workers_dir = root / "workers"
         if workers_dir.is_dir():
             from rite_ai.credentials.store import resolve, store_is_readable
