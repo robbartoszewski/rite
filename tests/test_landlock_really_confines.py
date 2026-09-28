@@ -952,3 +952,42 @@ def test_a_managers_own_state_is_its_own_outside_the_project(tmp_path, monkeypat
     assert not can(lambda: (theirs / "routes" / "forged.json").write_text("{}"))
     assert not can(lambda: (theirs / "prompt.txt").read_text())
     assert not own.is_relative_to(root)
+
+
+@NO_LANDLOCK
+def test_a_linux_manager_creates_a_new_top_level_file_in_its_project(
+    tmp_path, monkeypatch
+):
+    """D17's done-when, against the kernel (MM8 piece 2). Landlock has no deny
+    rule, so keeping one Manager out of another's in-tree directory meant
+    enumerating the project root, and a new top-level entry was refused
+    (measured 2026-09-26: `mkdir /proj/newtopdir` raised PermissionError).
+    Since piece 1 no Manager's state is in the tree, so the project is
+    granted as one tree, and one Manager still cannot write another's routes,
+    which are outside it now."""
+    from rite_ai.managers import manager_dir
+
+    monkeypatch.setenv("RITE_MAIL_DIR", str(tmp_path / "data" / "mail"))
+    root = tmp_path / "proj"
+    (root / "src").mkdir(parents=True)
+    (root / ".rite" / "managers" / "lead").mkdir(parents=True)  # an old layout
+    theirs = manager_dir(root, "lead")
+    (theirs / "routes").mkdir(parents=True)
+    landlock.write_profile(root, "small", tmp_path / "home")
+    policy = landlock.compose_policy(root, "small", tmp_path / "home")
+
+    def can(action):
+        def child():
+            landlock.apply(policy)
+            try:
+                action()
+                return 0
+            except OSError:
+                return 1
+
+        return _in_child(child) == 0
+
+    assert can(lambda: (root / "NEW_TOP_LEVEL.md").write_text("x"))
+    assert can(lambda: (root / "newtopdir").mkdir())
+    assert can(lambda: (root / "src" / "a.py").write_text("x")), "control"
+    assert not can(lambda: (theirs / "routes" / "forged.json").write_text("{}"))
