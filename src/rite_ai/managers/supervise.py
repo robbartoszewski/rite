@@ -1102,6 +1102,12 @@ def _supervise(
     # changes. While set, a board that still reads the same starts no
     # session. See `progress` for what counts and why.
     stalled: _Stalled | None = None
+    # ⚠ A PERSON'S MESSAGE IS DELIVERED, OR THE PERSON IS TOLD IT WAS NOT
+    # (coordinator, 2026-09-28). The inbox names a session was started to
+    # deliver: if the same ones are still there afterwards, that session
+    # could not take them, and they are reported rather than retried (F22's
+    # lesson: repeating a session with the same inputs is the loop).
+    delivering: set[str] = set()
     # The board as the verdict last read it. A cycle mail started is judged
     # against it too: mail is new INPUT, not progress, and a session handed a
     # message that then changes nothing is as idle as one handed none.
@@ -1231,6 +1237,35 @@ def _supervise(
                     )
                     if stopped is None:
                         cause = "mail"
+                if not cause and answer == "idle" and stopped is None:
+                    # ⚠ AN IDLE BOARD IS NOT NOTHING TO DO WHILE A MESSAGE
+                    # WAITS. Found on Linux (SB11, 2026-09-28): `rite message`
+                    # said "delivered at the start of its next turn", and
+                    # `rite start` stopped on "the board has nothing ready"
+                    # with it undelivered and unsaid. Read as a STATE, now,
+                    # never as an event: whatever arrived while nothing was
+                    # watching is in the inbox, and that is what is asked.
+                    # Only `idle`: `closed` is the person's schedule, and the
+                    # other stop verdicts are faults; those runs end, and the
+                    # undelivered mail is SAID at the end of the run
+                    # (`undelivered_line`), as it is for every other exit.
+                    names = _inbox_names(root, manager)
+                    if names - delivering:
+                        delivering |= names
+                        cause = "mail"
+                        say(
+                            f"the board has nothing ready, and {len(names)} "
+                            f"message(s) are waiting for {manager!r}: a session "
+                            "starts to deliver them"
+                        )
+                    elif names:
+                        say(
+                            f"{len(names)} message(s) are still waiting for "
+                            f"{manager!r} after a session was started to "
+                            "deliver them, so that session could not take them. "
+                            "Not retried: a session started again on the same "
+                            "mail would repeat the one that just could not."
+                        )
                 if not cause:
                     # ⚠ Before stopping: a check-in due in this window goes out
                     # rather than being skipped, and idle with questions queued
@@ -2145,6 +2180,29 @@ def _torn_down(root, manager: str, session: str, cycles, say) -> SuperviseResult
         True,
         f"stopped Manager {manager!r} — its session had already ended",
         cycles,
+    )
+
+
+def _inbox_names(root: Path, manager: str) -> set[str]:
+    from rite_ai.managers.mailbox import read
+
+    return {m.path.name for m in read(root, manager, INBOX)}
+
+
+def undelivered_line(root: Path, manager: str, why: str) -> str:
+    """What a run that ends with mail still in the inbox says, or "".
+
+    ⚠ **THE PROPERTY, CHECKED AT THE ONE PLACE EVERY RUN PASSES** (the end of
+    `rite start`), rather than at each way a run can stop: a message a person
+    sent is delivered, or the person is told it was not. Asked of the inbox as
+    it stands, so it covers exits added later too."""
+    names = _inbox_names(root, manager)
+    if not names:
+        return ""
+    return (
+        f"{len(names)} message(s) sent to {manager!r} were NOT delivered in "
+        f"this run ({why}). They stay in its inbox and are delivered at the "
+        f"start of its next session: `rite start {manager}`."
     )
 
 
