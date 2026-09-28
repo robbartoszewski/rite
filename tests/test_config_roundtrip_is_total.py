@@ -62,6 +62,8 @@ _VALID_ALTERNATES = {
     "coordination.manager_roles[].preset": "planner",
     "coordination.manager_roles[].duties": ("decompose",),
     "coordination.manager_roles[].agent": "aider",
+    # At least the smallest window measured to work (engine_probe).
+    "coordination.manager_roles[].context_window": 65536,
     # Schema-validated (A6): a user id and a channel name or id, because each
     # mistake is otherwise a bare `channel_not_found` at a run's first poll.
     "slack.owner_user": "U0C4HK552HF",

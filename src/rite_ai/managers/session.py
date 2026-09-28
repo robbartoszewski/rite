@@ -1114,6 +1114,7 @@ ALLOWED_ON_TMUX_ARGV = frozenset(
         "TMPDIR",
         "GOOSE_PROVIDER",
         "GOOSE_MODEL",
+        "GOOSE_CONTEXT_LIMIT",
         "OLLAMA_HOST",
         # C6/C26 (`github_access`): a PATH, or a helper's NAME. None is a
         # secret. The token itself is in a 0600 file.

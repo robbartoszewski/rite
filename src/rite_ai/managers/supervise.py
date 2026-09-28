@@ -171,6 +171,7 @@ def launch_command(
     permission: str = "",
     agent: str = "",
     start_handle: str = "",
+    model: str = "",
 ) -> str:
     """What to run in the pane, in the engine's OWN vocabulary (B3a).
 
@@ -270,6 +271,26 @@ def launch_command(
             pass
         else:
             parts.append(permission)
+    if model:
+        # A Claude Manager's declared model (`coordination.manager_roles`).
+        # Checked again HERE, at the boundary that reaches the shell, as the
+        # resume id is below: the parser's check is one caller's.
+        from rite_ai.config.managers import claude_model_problem
+        from rite_ai.managers.engines import CLAUDE as CLAUDE_SPELLING
+        from rite_ai.managers.engines import SUBSTITUTED
+
+        if spelling not in (CLAUDE_SPELLING, SUBSTITUTED):
+            raise ValueError(
+                f"{command!r} takes its model from its role's endpoint, not a "
+                "--model flag; refused rather than written where it is ignored"
+            )
+        problem = claude_model_problem(model)
+        if problem:
+            raise ValueError(f"refusing to launch with model {model!r}: {problem}")
+        # QUOTED: `claude-opus-5-5[1m]` is a valid id and `[1m]` is a shell
+        # glob, so unquoted, a file in the pane's directory named
+        # `claude-opus-5-51` would become the model.
+        parts.append(f"--model {shlex.quote(model)}")
     if resume_id:
         # ⚠ **REFUSES rather than escapes, and raises rather than drops the
         # flag.** This string is handed to `tmux new-session`, which runs it
@@ -1852,6 +1873,24 @@ def _why(answer: str, started: int) -> str:
     )
 
 
+def _declared_claude_model(root: Path, manager: str, engine: str) -> str:
+    """The model a Claude Manager's role names, or "" for Claude's default.
+
+    Derived from the config at the launch, as `_engine_model_env` is, so
+    there is no argument for a caller to drop."""
+    if engine != "claude":
+        return ""
+    from rite_ai.config.parse import ParseError, parse_config
+
+    parsed = parse_config(root / ".rite" / "config.yaml")
+    if isinstance(parsed, ParseError):
+        return ""
+    role = next(
+        (r for r in parsed.coordination.manager_roles if r.name == manager), None
+    )
+    return role.model if role else ""
+
+
 def _engine_model_env(root: Path, manager: str, agent: str):
     """WHICH model a local Manager's engine runs, from its declared role.
 
@@ -1865,7 +1904,7 @@ def _engine_model_env(root: Path, manager: str, agent: str):
     declared `qwen3:8b`, ran `qwen3-vl:8b-instruct`.
     """
     if agent != "goose":
-        return {}, ""
+        return {}, "", ""
     from urllib.parse import urlsplit
 
     from rite_ai.config.parse import ParseError, parse_config
@@ -1873,26 +1912,74 @@ def _engine_model_env(root: Path, manager: str, agent: str):
 
     parsed = parse_config(root / ".rite" / "config.yaml")
     if isinstance(parsed, ParseError):
-        return {}, f"config.yaml does not parse: {parsed.message}"
+        return {}, f"config.yaml does not parse: {parsed.message}", ""
     role = next(
         (r for r in parsed.coordination.manager_roles if r.name == manager), None
     )
     if role is None or not (role.model and role.endpoint):
-        return {}, (
-            "a goose Manager must declare its model and endpoint in "
-            "coordination.manager_roles, or Goose silently runs whatever the "
-            "operator's global goose config names"
+        return (
+            {},
+            (
+                "a goose Manager must declare its model and endpoint in "
+                "coordination.manager_roles, or Goose silently runs whatever the "
+                "operator's global goose config names"
+            ),
+            "",
         )
     parts = urlsplit(role.endpoint)
     if parts.username or parts.password:
         # These values travel on tmux's argv (ALLOWED_ON_TMUX_ARGV), where
         # `ps` shows them to every local account.
-        return {}, (
-            f"the endpoint for {manager!r} carries credentials in its URL, "
-            "which would appear on a process list. Put the secret in the "
-            "role's `credential` and the bare URL in `endpoint`"
+        return (
+            {},
+            (
+                f"the endpoint for {manager!r} carries credentials in its URL, "
+                "which would appear on a process list. Put the secret in the "
+                "role's `credential` and the bare URL in `endpoint`"
+            ),
+            "",
         )
-    return goose_environment(role.endpoint, role.model), ""
+    # ⚠ **THE WINDOW IS PINNED INTO THE MODEL, AND AN UNDECLARED ONE REFUSES.**
+    # Ollama serves every model at one server-wide default unless the model
+    # itself sets `num_ctx`, and that default cannot be read until a model is
+    # loaded. So "unknown" was the common case, and it let a Manager start.
+    # Goose was not told the window either (`GOOSE_CONTEXT_LIMIT`, which Goose
+    # 1.51 reads). ⚠ NOT YET OBSERVED with a model running: that Ollama serves
+    # the pin to Goose's requests, and what Goose does as the window fills.
+    if not role.context_window:
+        return (
+            {},
+            (
+                f"{manager!r} declares no context_window, so the window its model "
+                "is served with would be whatever this Ollama server defaults to, "
+                "which rite cannot read before the model loads, and Goose would "
+                "not know it. Add `context_window: <tokens>` to its entry in "
+                "coordination.manager_roles (at least 32768)"
+            ),
+            "",
+        )
+    from rite_ai.local.context_window import pin_window
+
+    pinned = pin_window(role.endpoint, role.model, role.context_window)
+    if pinned.problem:
+        return (
+            {},
+            (
+                f"the {role.context_window}-token window for {manager!r} could not "
+                f"be pinned: {pinned.problem}"
+            ),
+            "",
+        )
+    # What pinning wrote to the operator's model library, said at the start:
+    # `context_window.py`'s rule is that rite names anything it puts there
+    # and says how to remove it.
+    return (
+        goose_environment(
+            role.endpoint, pinned.model, context_limit=role.context_window
+        ),
+        "",
+        pinned.detail if pinned.created else "",
+    )
 
 
 def _default_starter(
@@ -1952,7 +2039,7 @@ def _default_starter(
     from rite_ai.managers.engines import permission_placement
 
     placement = permission_placement(engine, agent, permission)
-    model_env, refused = _engine_model_env(root, manager, agent)
+    model_env, refused, created_note = _engine_model_env(root, manager, agent)
     if refused:
         return StartResult(False, f"refusing to start Manager {manager!r}: {refused}")
     # ⚠ **DERIVED HERE rather than passed in, and that is the point.** This
@@ -2031,6 +2118,7 @@ def _default_starter(
                 permission,
                 agent,
                 start_handle,
+                model=_declared_claude_model(root, manager, engine),
             ),
             profile,
         )
@@ -2044,6 +2132,8 @@ def _default_starter(
         max_sessions=max_sessions,
         window_seconds=window_seconds,
     )
+    if created_note and result.ok:
+        result.warning = "; ".join(w for w in (result.warning, created_note) if w)
     # ⚠ NO SECOND `record_instance` HERE. `start_session` has already
     # written the record, with tmux's pane pid and the command that
     # actually ran. This function used to re-record the same instance

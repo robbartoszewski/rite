@@ -95,6 +95,10 @@ class EngineProbe:
     rule this module already applies to the model list."""
     context_detail: str = ""
     """Why `context_window` is None, when it is."""
+    window_undeclared: bool = False
+    """A Goose Manager whose role declares no `context_window`, which `rite
+    start` refuses: the served window would be the server's default, which
+    cannot be read before the model loads."""
 
     @property
     def problems(self) -> list[str]:
@@ -112,6 +116,14 @@ class EngineProbe:
             found.append(
                 f"manager {self.manager}: the endpoint is up but does not "
                 f"serve its declared model (it serves: {served})"
+            )
+        if self.window_undeclared:
+            found.append(
+                f"manager {self.manager}: declares no context_window, so "
+                "`rite start` refuses it — the window would be this server's "
+                "default, which cannot be read before the model loads, and "
+                "Goose would not know it. Add `context_window: <tokens>` (at "
+                f"least {MINIMUM_CONTEXT_WINDOW}) to its role"
             )
         if self.agent_installed is False:
             found.append(
@@ -186,6 +198,17 @@ def _served_window(endpoint: str, model: str, get) -> tuple[int | None, str]:
 
 
 def probe_engine(role, *, get=None, which=None) -> EngineProbe:
+    """Probe one role's engine. Returns, never raises. See `_probe`."""
+    from dataclasses import replace
+
+    probed = _probe(role, get=get, which=which)
+    undeclared = getattr(role, "agent", "") == "goose" and not getattr(
+        role, "context_window", 0
+    )
+    return replace(probed, window_undeclared=undeclared) if undeclared else probed
+
+
+def _probe(role, *, get=None, which=None) -> EngineProbe:
     """Probe one role's engine. Returns, never raises.
 
     `get` and `which` are injected so this is testable without a model on the
