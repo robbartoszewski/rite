@@ -17,6 +17,7 @@ import yaml
 
 from rite_ai.config.managers import to_yaml_entry
 from rite_ai.config.models import Module, ProjectBrief, ProjectConfig
+from rite_ai.config.parse import home_relative
 from rite_ai.context.manage import CONTEXT_INDEX_TEMPLATE as CONTEXT_INDEX
 from rite_ai.gate.ci import (
     CI_WORKFLOW_MARKER,
@@ -78,7 +79,7 @@ def modules_to_yaml(modules: list[Module]) -> str:
     for m in modules:
         entry = {"path": m.path}
         if m.url:
-            entry["url"] = m.url
+            entry["url"] = home_relative(m.url)
         entry["branch"] = m.branch
         entry["description"] = m.description
         recorded = {key: value for key, value in asdict(m.commands).items() if value}

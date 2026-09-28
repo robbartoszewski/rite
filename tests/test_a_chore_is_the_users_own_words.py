@@ -9,6 +9,9 @@ own note) cannot become one; and every outcome reaches the Manager.
 from __future__ import annotations
 
 import json
+from pathlib import Path
+
+import pytest
 
 from rite_ai.managers import chores, delivered
 from rite_ai.managers.mailbox import INBOX, delivery_note, read, send, take
@@ -136,7 +139,7 @@ class TestTheManagerChoosesMessagesAndNothingElse:
         board = Board(result=BackendError("issues are disabled"))
         assert chores.create_asked_for(tmp_path, "lead", board, lambda _m: None) == 0
         (told,) = _notes(tmp_path, "lead")
-        assert "issues are disabled" in told and "not tracked" in told
+        assert "issues are disabled" in told and "chore not created as asked" in told
 
     def test_no_board_refuses(self, tmp_path):
         ids = _deliver(tmp_path, "lead", DM)
@@ -256,3 +259,165 @@ class TestTheCommand:
 def test_every_manager_is_told_how_to_make_a_chore(tmp_path):
     text = chores.instructions(tmp_path, "lead")
     assert " chore <message-id>" in text and "you cannot give it a title" in text
+
+
+class TestAPromptTypedAtThisMachine:
+    """`rite sandbox start <worker> --prompt "…"`: the person's words, filed as
+    a chore before the Worker starts, and the Worker started on that ticket."""
+
+    def test_the_chore_is_the_prompt_labelled_for_that_worker_not_scheduled(self):
+        board = Board()
+        made, refusal = chores.create_for_prompt(board, "alpha", "add a CSV export\n")
+        assert (made, refusal) == ("RT-99", "")
+        ((title, description, labels),) = board.created
+        assert title == "chore: add a CSV export"
+        assert description.startswith("add a CSV export\n\n---")
+        assert labels == ["chore", "alpha"]
+
+    def test_no_board_or_a_refused_create_is_a_refusal(self):
+        assert chores.create_for_prompt(None, "alpha", "x")[1]
+        refused = Board(result=BackendError("no Task type"))
+        assert "no Task type" in chores.create_for_prompt(refused, "alpha", "x")[1]
+
+    def _project(self, tmp_path, monkeypatch, backend: str):
+        rite = tmp_path / ".rite"
+        rite.mkdir()
+        (rite / "brief.yaml").write_text("project:\n  name: acme\n  role: owner\n")
+        (rite / "modules.yaml").write_text("modules: {}\n")
+        (rite / "config.yaml").write_text(
+            f"ticket_backend:\n  type: {backend}\n"
+            + ("  repo: a/b\n" if backend == "github" else "")
+            + "sandbox:\n  enabled: true\n  backend: seatbelt\n"
+        )
+        (tmp_path / "workers" / "alpha").mkdir(parents=True)
+        (tmp_path / "workers" / "alpha" / "worker.yml").write_text(
+            "worker:\n  name: alpha\n  manager: ''\n  modules: []\n"
+        )
+        monkeypatch.chdir(tmp_path)
+
+    def _start(self, board):
+        from pathlib import Path
+        from unittest.mock import MagicMock, patch
+
+        from click.testing import CliRunner
+
+        from rite_ai.cli.main import cli
+
+        seen: dict = {}
+
+        def _run(args, *a, **kw):
+            if "new" in args:
+                seen["prompt"] = Path(args[args.index("--prompt-file") + 1]).read_text()
+            stdout = '{"sandboxes": []}' if "ls" in args else ""
+            return MagicMock(returncode=0, stdout=stdout, stderr="")
+
+        with (
+            patch("keyring.get_password", return_value=None),
+            patch("rite_ai.sandbox.shutil.which", return_value="/usr/bin/yoloai"),
+            patch("rite_ai.sandbox.subprocess.run", side_effect=_run),
+            patch(
+                "rite_ai.cli.main._ticket_backend",
+                return_value=(board, None if board else "no ticket backend"),
+            ),
+        ):
+            result = CliRunner().invoke(
+                cli, ["sandbox", "start", "alpha", "--prompt", "add a CSV export"]
+            )
+        return result, seen
+
+    def test_the_worker_is_started_on_the_chore(self, tmp_path, monkeypatch):
+        import rite_ai.cli.main as main_mod
+
+        self._project(tmp_path, monkeypatch, "github")
+        # This Worker has no module; whether its work can leave the sandbox
+        # is `test_worker_can_deliver`'s question, not this one's.
+        monkeypatch.setattr(main_mod, "_worker_cannot_deliver", lambda *a, **k: "")
+        board = Board()
+        result, seen = self._start(board)
+        assert result.exit_code == 0, result.output
+        assert seen["prompt"] == "Work ticket RT-99.\n"
+        assert board.created[0][0] == "chore: add a CSV export"
+
+    def test_a_start_refused_for_another_reason_files_no_chore(
+        self, tmp_path, monkeypatch
+    ):
+        """Filed after every other refusal, so a refused start leaves nothing
+        on the board (found when `_worker_cannot_deliver` landed above it)."""
+        import rite_ai.cli.main as main_mod
+
+        self._project(tmp_path, monkeypatch, "github")
+        monkeypatch.setattr(
+            main_mod, "_worker_cannot_deliver", lambda *a, **k: "cannot deliver"
+        )
+        board = Board()
+        result, seen = self._start(board)
+        assert result.exit_code == 1 and "cannot deliver" in result.output
+        assert board.created == [] and "prompt" not in seen
+
+    def test_with_no_board_nothing_starts(self, tmp_path, monkeypatch):
+        self._project(tmp_path, monkeypatch, "none")
+        result, seen = self._start(None)
+        assert result.exit_code == 1 and "not starting 'alpha'" in result.output
+        assert "prompt" not in seen
+
+
+class TestDoctorSaysWhetherAChoreCanBeFiled:
+    """Read-only, before the first chore needs it. None is not yes."""
+
+    def _gh(self, monkeypatch, out):
+        from rite_ai.tickets.github import GitHubBackend
+
+        board = GitHubBackend("a/b")
+        monkeypatch.setattr(board, "_gh", lambda args: out)
+        return board
+
+    @pytest.mark.parametrize(
+        "out, able",
+        [
+            ('{"has_issues":true,"archived":false,"triage":true}', True),
+            ('{"has_issues":false,"archived":false,"triage":true}', False),
+            ('{"has_issues":true,"archived":true,"triage":true}', False),
+            ('{"has_issues":true,"archived":false,"triage":false}', False),
+            ('{"has_issues":true,"archived":false,"triage":null}', False),
+            ("not json", None),
+        ],
+    )
+    def test_github(self, monkeypatch, out, able):
+        assert self._gh(monkeypatch, out).can_create()[0] is able
+
+    def test_github_unreadable_is_not_a_yes(self, monkeypatch):
+        board = self._gh(monkeypatch, BackendError("HTTP 404"))
+        assert board.can_create() == (None, "could not read a/b: HTTP 404")
+
+    def _jira(self, monkeypatch, answer):
+        from rite_ai.tickets.jira import JiraBackend
+
+        board = JiraBackend.__new__(JiraBackend)
+        board.config = type("C", (), {"project_key": "RT"})()
+        monkeypatch.setattr(board, "_request", lambda *a, **kw: answer)
+        return board
+
+    @pytest.mark.parametrize(
+        "answer, able",
+        [
+            ({"issueTypes": [{"name": "Bug"}, {"name": "Task"}], "total": 2}, True),
+            ({"values": [{"name": "Task"}]}, True),
+            ({"issueTypes": [{"name": "Bug"}], "total": 1}, False),
+            ({"issueTypes": [{"name": "Bug"}], "total": 60}, None),
+            ({"issueTypes": [{"name": "Bug"}]}, None),
+            ({}, None),
+            (BackendError("403"), None),
+        ],
+        ids=["task", "old key", "no task", "partial page", "no total", "empty", "err"],
+    )
+    def test_jira(self, monkeypatch, answer, able):
+        assert self._jira(monkeypatch, answer).can_create()[0] is able
+
+    def test_doctor_reports_could_not_tell_as_a_problem(self, monkeypatch):
+        import rite_ai.cli.main as main_mod
+
+        board = self._gh(monkeypatch, "not json")
+        monkeypatch.setattr(main_mod, "_ticket_backend", lambda *a, **k: (board, None))
+        problems: list[str] = []
+        main_mod._doctor_board_can_create(Path("."), problems)
+        assert problems and "could not confirm" in problems[0]

@@ -465,6 +465,41 @@ def doctor() -> None:
     click.echo("\nok")
 
 
+def _doctor_worker_github_token(root: Path, modules: list, problems: list) -> None:
+    from rite_ai.credentials.store import get_scoped, store_is_readable
+    from rite_ai.sandbox import (
+        GLOBAL_TOKEN_CREDENTIAL,
+        owner_repo_from_url,
+        resolve_worker_token,
+    )
+
+    on_github = [m.name for m in modules if m.url and owner_repo_from_url(m.url)]
+    if not on_github:
+        return
+    if not store_is_readable():
+        return  # reported above as the store being unreadable, not as missing
+    creds = _project_credentials()
+    workers_dir = root / "workers"
+    workers = (
+        sorted(p.name for p in workers_dir.iterdir() if (p / "worker.yml").is_file())
+        if workers_dir.is_dir()
+        else []
+    )
+    # With no Worker yet, the one every future Worker would fall back to.
+    lacking = [w for w in workers if resolve_worker_token(w, creds)[0] is None]
+    if not workers and not get_scoped(GLOBAL_TOKEN_CREDENTIAL, creds):
+        lacking = ["(any new Worker)"]
+    if lacking:
+        click.echo(
+            f"workers: no GitHub token for {_first_few(lacking)}, so sandboxed "
+            f"work on {_first_few(on_github)} could never be pushed — `rite "
+            "credential set github_token`"
+        )
+        problems.append(
+            f"no GitHub token for sandboxed Worker(s) {_first_few(lacking)}"
+        )
+
+
 def _first_few(names: list[str], limit: int = 5) -> str:
     """A list a person can read in one line: the first few, then a count."""
     if len(names) <= limit:
@@ -656,10 +691,23 @@ def _doctor_report(problems: list[str]) -> None:
         # modules.yaml by design, because `scaffold.AUTHORED_CONFIG`
         # re-includes them. Only the explicit override answers it, and
         # nothing else tells anyone — which is what this row is for.
-        if _is_project(module_dir):
+        is_the_root = module_dir.resolve() == root.resolve()
+        if is_the_root and module_sandbox.enabled:
+            # A single-repository project (dogfood F2): the module IS the
+            # project, so every clone of it carries the project's own
+            # `.rite/`. A sandboxed Worker is given RITE_PROJECT_ROOT by
+            # `rite sandbox start`, which wins over that marker, so its claims
+            # reach this project's ledger. Only an unsandboxed session started
+            # in the clone would miss it, which is the branch below.
+            click.echo(
+                f"module {m.name}: is the project itself; sandboxed Workers "
+                "are pointed at this project, so their claims are shared"
+            )
+        elif _is_project(module_dir):
             click.echo(
                 f"module {m.name}: is itself a rite project "
-                f"({m.path}/.rite/). A session started inside it resolves to "
+                f"({m.path.rstrip('/')}/.rite/). A session started inside it "
+                f"resolves to "
                 f"IT, not to this project, so its claims go to a private "
                 f"ledger and never collide with anyone else's. Set "
                 f"{PROJECT_ROOT_ENV}={root} in that session's environment."
@@ -704,6 +752,14 @@ def _doctor_report(problems: list[str]) -> None:
                 "        test: <the command that runs this module's tests>"
             )
             problems.append(f"module {m.name} has no test command")
+
+    # A sandboxed Worker pushes to GitHub with the token rite gives it and
+    # nothing else (§5.3.3), so a GitHub module with no token for Workers is
+    # a Worker that works and cannot deliver. Dogfood #28: doctor printed
+    # `github_token: not set` and counted nothing, and KAN-7's Worker hit
+    # `could not read Username`. `rite sandbox start` refuses the same state.
+    if module_sandbox.enabled:
+        _doctor_worker_github_token(root, modules, problems)
 
     # The WORKERS' checkouts, which the loop above never looked at. Every
     # module line it prints is about `<root>/<module>` — the project's own
@@ -1261,10 +1317,41 @@ def _doctor_report(problems: list[str]) -> None:
             click.echo(f"checkins: {p}")
             problems.append(f"checkins: {p}")
 
+        with _doctor_check("board", problems):
+            _doctor_board_can_create(root, problems)
+
         with _doctor_check("slack", problems):
             _doctor_slack(root, problems)
 
     return
+
+
+def _doctor_board_can_create(root: Path, problems: list[str]) -> None:
+    """Can rite file a ticket on this project's board? Read-only (TR9).
+
+    Every piece of Worker work carries a ticket, so a board rite cannot
+    create on refuses every chore and every `--prompt` start. Found here
+    rather than at the first one. "Could not tell" is a problem too: it is
+    not a yes.
+    """
+    board, why = _ticket_backend("workers", root=root)
+    if board is None:
+        # No board configured is already the project's stated shape; a board
+        # that failed to build is said by the checks that read it.
+        click.echo(f"board: no ticket can be filed ({why})")
+        return
+    able, detail = board.can_create()
+    if able is True:
+        click.echo(f"board: {detail}")
+        return
+    said = (
+        f"board: {detail}. Work that is not already a ticket (a chore, or "
+        "`rite sandbox start --prompt`) will be refused"
+        if able is False
+        else f"board: could not confirm that rite can file a ticket: {detail}"
+    )
+    click.echo(said)
+    problems.append(said)
 
 
 def _warn_if_unregistered(worker: str) -> None:
@@ -5739,8 +5826,9 @@ def sandbox() -> None:
     "--prompt",
     "prompt_text",
     default=None,
-    help="Opening prompt for the Worker, sent verbatim. For work that is not "
-    "a ticket on your board; use instead of --ticket.",
+    help="Work that is not a ticket on your board yet: rite files it as a "
+    "chore ticket first, from exactly this text, and starts the Worker on "
+    "that ticket. Use instead of --ticket.",
 )
 def sandbox_start(
     worker: str,
@@ -5770,7 +5858,8 @@ def sandbox_start(
         raise click.UsageError("give --ticket or --prompt, not both")
     if ticket is not None and not ticket.strip():
         raise click.UsageError("--ticket needs a ticket ID")
-    prompt = f"Work ticket {ticket}." if ticket is not None else prompt_text
+    if prompt_text is not None and not prompt_text.strip():
+        raise click.UsageError("--prompt needs the work to do")
     from rite_ai.credentials.store import worker_environment
     from rite_ai.sandbox import (
         GLOBAL_TOKEN_CREDENTIAL,
@@ -5852,6 +5941,37 @@ def sandbox_start(
             f"project sets a new one.",
             err=True,
         )
+    # Refused BEFORE a sandbox is spent (dogfood KAN-7): a Worker with nothing
+    # cloned, or whose work cannot leave the sandbox, otherwise starts,
+    # works, and fails only at the push — and the one thing it can then do
+    # is ask for a credential through a side channel.
+    refusal = _worker_cannot_deliver(worker, worker_dir, modules, token)
+    if refusal:
+        click.echo(refusal, err=True)
+        raise SystemExit(1)
+    # ⚠ TR9: every piece of Worker work carries a ticket. `--prompt` files
+    # the chore HERE, after every refusal above (an unprepared workspace,
+    # work that could not leave the sandbox), so a start refused for any of
+    # them leaves nothing on the board. Only `start_worker` itself can fail
+    # after it, and that is said below.
+    if prompt_text is not None:
+        from rite_ai.managers.chores import create_for_prompt
+
+        chore_board, board_problem = _ticket_backend(
+            "workers", root=root, config=config
+        )
+        made, refusal = create_for_prompt(chore_board, worker, prompt_text)
+        if refusal:
+            click.echo(
+                f"not starting '{worker}': {refusal}."
+                + (f" ({board_problem})" if board_problem else "")
+                + " Give it a ticket that is on the board with --ticket instead.",
+                err=True,
+            )
+            raise SystemExit(1)
+        click.echo(f"filed chore {made} from the prompt, labelled chore and {worker}")
+        ticket = made
+    prompt = f"Work ticket {ticket}." if ticket is not None else None
     result = start_worker(
         root,
         worker,
@@ -5865,7 +5985,66 @@ def sandbox_start(
     )
     click.echo(result.message)
     if not result.ok:
+        if prompt_text is not None:
+            # Said, not undone: deleting a ticket is not something rite does,
+            # and a chore nobody knows about is the untracked work TR9 closes.
+            click.echo(
+                f"the chore {ticket} filed for this stays on the board, labelled "
+                f"chore and {worker}. Start it again with `rite sandbox start "
+                f"{worker} --ticket {ticket}`, or close it.",
+                err=True,
+            )
         raise SystemExit(1)
+
+
+def _how_to_register(root: Path) -> str:
+    """The step that gives this project a module, for the one-line refusal.
+
+    `rite add module <name> <url>` clones into `<root>/<name>/`. For a
+    project that IS one repository (dogfood F2's pingr, created by a rite
+    older than the fix, so its committed `modules.yaml` is empty) that is a
+    second copy nested inside the first, one `git add -A` from being
+    committed. There the module is the root itself, so name the entry."""
+    from rite_ai.cli.init.detect import ROOT_MODULE_PATH, detect_repos
+    from rite_ai.config.parse import home_relative
+
+    repos = detect_repos(root)
+    if len(repos) == 1 and repos[0].path == ROOT_MODULE_PATH:
+        r = repos[0]
+        url = f", url: {home_relative(r.url)}" if r.url else ""
+        return (
+            "This project is itself the repository: add it to "
+            f".rite/modules.yaml as `{r.name}: {{path: ./{url}, branch: "
+            f"{r.branch}}}`"
+        )
+    return "Register the repository with `rite add module <name> <url>`"
+
+
+def _worker_cannot_deliver(
+    worker: str, worker_dir: Path, modules: list, token: str | None
+) -> str | None:
+    """Why this Worker could do no work that reaches anyone, or None."""
+    import shutil
+
+    from rite_ai.sandbox import (
+        clone_remotes,
+        push_access_refusal,
+        remote_access_refusal,
+    )
+
+    if not modules:
+        return (
+            f"not starting '{worker}': it has no module, so its workspace holds "
+            f"no code to work on. {_how_to_register(worker_dir.parent.parent)}, "
+            f"then `rite remove worker {worker}` and `rite add worker {worker}`"
+        )
+    gh = shutil.which("gh")
+    remotes = clone_remotes(worker_dir)
+    refusal = remote_access_refusal(worker, remotes, token, gh)
+    if refusal or not remotes:
+        return refusal
+    assert token  # remote_access_refusal refuses without one
+    return push_access_refusal(worker, remotes, token)
 
 
 @sandbox.command("stop")
@@ -7114,6 +7293,7 @@ def _start_a_manager(
     cursor_signed_in = _cursor_login(root, role)
     listener = _slack_listener(root, role.name)
     waiting = _waiting_for(root, role.name)
+    outcome = None
     try:
         outcome = supervise(
             root,
@@ -7228,7 +7408,20 @@ def _start_a_manager(
             # at the very end reaches the next start by THE ONE HOOK.
             for heard in listener.drain():
                 send(root, role.name, INBOX, heard, sent_at=heard.sent_at)
-            for line in listener.close():
+        # ⚠ A MESSAGE IS DELIVERED, OR THE PERSON IS TOLD IT WAS NOT, however
+        # the run ended, an interrupted one included. After the drain, so what
+        # Slack held at the end is counted.
+        from rite_ai.managers.supervise import undelivered_line
+
+        undelivered = undelivered_line(
+            root,
+            role.name,
+            outcome.reason if outcome is not None else "the run was interrupted",
+        )
+        if undelivered:
+            click.echo(undelivered, err=True)
+        if listener is not None:
+            for line in listener.close(undelivered=undelivered):
                 click.echo(line)
     click.echo(outcome.reason)
     if not outcome.ok:
@@ -7963,10 +8156,21 @@ def message(manager_name: str, text: str) -> None:
             err=True,
         )
         raise SystemExit(1) from None
-    click.echo(
-        f"message queued for {manager_name!r} — delivered at the start of its "
-        f"next turn. `rite connect {manager_name}` reads its replies."
-    )
+    from rite_ai.managers.routing import RUNNING, supervisor_state
+
+    if supervisor_state(root, manager_name) == RUNNING:
+        click.echo(
+            f"message queued for {manager_name!r} — delivered at the start of "
+            f"its next turn. `rite connect {manager_name}` reads its replies."
+        )
+    else:
+        # ⚠ SAID AT SEND TIME: "delivered at its next turn" read as "soon"
+        # when no run was going to take a next turn at all.
+        click.echo(
+            f"message queued for {manager_name!r}, which is NOT running, so "
+            f"nothing reads it until `rite start {manager_name}`; it is "
+            "delivered at the start of that run's first session."
+        )
 
 
 @cli.command()

@@ -1358,6 +1358,8 @@ def sandbox_git_environment(gh: str | None) -> dict[str, str]:
       environment`), which rite injects. The path is shell-quoted because
       git runs a `!` helper through the shell. Without `gh` only the reset
       is set, and the caller says so.
+    - **SSH origins.** Rewritten to HTTPS for github.com, because nothing
+      under `~/.ssh` is readable inside.
     - **Signing off.** A Worker's commits are the agent's. Signing them with
       the host user's key would assert that person wrote them, and a
       signing key under `~/.ssh` is unreadable inside anyway, which made
@@ -1377,6 +1379,13 @@ def sandbox_git_environment(gh: str | None) -> dict[str, str]:
             )
         )
     settings += [
+        # An SSH origin can never authenticate inside: measured, git over ssh
+        # in a Worker's sandbox stops at `hostkeys_foreach failed for
+        # ~/.ssh/known_hosts: Operation not permitted`, before any key is
+        # tried. Rewritten, the same origin reaches the HTTPS helper above
+        # and the token rite injects. Both spellings git accepts for GitHub.
+        (GITHUB_REWRITE_KEY, "git@github.com:"),
+        (GITHUB_REWRITE_KEY, "ssh://git@github.com/"),
         ("commit.gpgsign", "false"),
         ("tag.gpgsign", "false"),
         ("core.hooksPath", ".git/hooks"),
@@ -1393,6 +1402,150 @@ def sandbox_git_environment(gh: str | None) -> dict[str, str]:
         # GITHUB_TOKEN.
         env["GH_CONFIG_DIR"] = str(Path(tempfile.gettempdir()) / "rite-sandbox-gh")
     return env
+
+
+GITHUB_REWRITE_KEY = "url.https://github.com/.insteadOf"
+
+
+@dataclass
+class CloneRemote:
+    """Where one of a Worker's clones pushes to, read from the clone."""
+
+    clone: Path
+    url: str
+    # `(owner, repo)` when the origin is on github.com, else None.
+    github: tuple[str, str] | None
+
+
+def clone_remotes(workdir: Path) -> list[CloneRemote]:
+    """Every clone in `workdir` whose origin is a network URL.
+
+    Read from each clone's own `origin`, not from `modules.yaml`: the clone
+    is what the Worker pushes from, and a module cloned from the project's
+    local checkout (no `url` recorded) has a local origin, not the URL."""
+    found: list[CloneRemote] = []
+    if not workdir.is_dir():
+        return found
+    for clone in sorted(p for p in workdir.iterdir() if (p / ".git").exists()):
+        try:
+            proc = subprocess.run(
+                ["git", "-C", str(clone), "remote", "get-url", "origin"],
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        url = proc.stdout.strip()
+        if proc.returncode != 0 or not url or url.startswith("file://"):
+            continue
+        if "://" in url or re.match(r"^[^/]+:", url):
+            found.append(CloneRemote(clone, url, owner_repo_from_url(url)))
+    return found
+
+
+def remote_access_refusal(
+    worker: str, remotes: list[CloneRemote], token: str | None, gh: str | None
+) -> str | None:
+    """Why a Worker with these remotes could not push from its sandbox, or
+    None. Decided before the sandbox starts, because afterwards the only
+    symptom is a session that works and then cannot deliver (dogfood KAN-7:
+    `could not read Username for 'https://github.com'`, and the Worker asked
+    for a token through a side channel).
+
+    One line, remedy included: `rite sandbox start` prints it last, and the
+    supervisor relays only the last line of a failed start."""
+    if not remotes:
+        return None
+    elsewhere = [r for r in remotes if r.github is None]
+    if elsewhere:
+        r = elsewhere[0]
+        return (
+            f"not starting '{worker}': {r.clone.name}/ pushes to {r.url}, and "
+            "rite gives a sandboxed Worker a credential for github.com only, "
+            "so its work could never leave the sandbox"
+        )
+    first = "/".join(remotes[0].github or ())
+    if not token:
+        return (
+            f"not starting '{worker}': no GitHub token for Workers, so its work "
+            f"on {first} could never be pushed. Run `rite credential set "
+            "github_token` in this project, then start it again"
+        )
+    if not gh:
+        return (
+            f"not starting '{worker}': GitHub's `gh` CLI is not installed, and "
+            "git inside the sandbox authenticates to github.com through it. "
+            "Install gh, then start it again"
+        )
+    return None
+
+
+RECEIVE_PACK = "application/x-git-receive-pack-advertisement"
+
+
+def push_access_refusal(
+    worker: str, remotes: list[CloneRemote], token: str, timeout: int = 30
+) -> str | None:
+    """Whether `token` can PUSH to each GitHub remote, asked of GitHub.
+
+    ⚠ **Push, not read.** `check_token_access` asks `GET repos/o/r`, which
+    any token — or none — passes for a public repository, such as a fork
+    being contributed from.
+
+    Asked the way a push asks first, and nothing more: `GET
+    <repo>.git/info/refs?service=git-receive-pack` with the token. GitHub
+    authorises receive-pack there, before any ref could be sent, and a GET
+    cannot send one — so rite still has no path that writes to a remote
+    (`test_blast_radius`). Measured 2026-09-28: a token that can write the
+    repository → 200 with the receive-pack advertisement; the same token on
+    a public repository it can only read → 403; a bogus token → 401; no
+    token → 401; a repository that does not exist → 404. Only the first is
+    allowed.
+
+    The token is sent as the password, as `gh auth git-credential` gives it
+    to git inside the sandbox, and nothing of the host's is consulted.
+
+    A check that cannot finish refuses: "could not ask" is not "allowed"."""
+    import base64
+    import urllib.error
+    import urllib.request
+
+    basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+    for remote in remotes:
+        if remote.github is None:
+            continue
+        owner, repo = remote.github
+        request = urllib.request.Request(
+            f"https://github.com/{owner}/{repo}.git/info/refs?service=git-receive-pack",
+            headers={"Authorization": f"Basic {basic}"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                status = response.status
+                kind = response.headers.get("Content-Type", "")
+        except urllib.error.HTTPError as e:
+            status, kind = e.code, ""
+        except (OSError, ValueError) as e:
+            return (
+                f"not starting '{worker}': could not check that its GitHub "
+                f"token can push to {owner}/{repo} ({e.__class__.__name__}), "
+                "and an unchecked token is refused rather than trusted"
+            )
+        if status != 200 or not kind.startswith(RECEIVE_PACK):
+            why = {
+                401: "GitHub does not accept the token",
+                403: "the token can read it but not write it",
+                404: "the repository does not exist, or the token cannot see it",
+            }.get(status, f"HTTP {status}")
+            return (
+                f"not starting '{worker}': its GitHub token cannot push to "
+                f"{owner}/{repo} ({why}). Give the token Contents: read and "
+                "write on that repository, or set another with `rite "
+                "credential set github_token`"
+            )
+    return None
 
 
 def _local_origins(

@@ -118,6 +118,17 @@ class TicketBackend(ABC):
         self, filters: TicketFilter | None = None
     ) -> list[Ticket] | BackendError: ...
 
+    def can_create(self) -> tuple[bool | None, str]:
+        """Whether rite could file a ticket here, read-only (TR9).
+
+        `(True, detail)`, `(False, why not)`, or `(None, why it could not
+        tell)`. **None is not True**: every caller reports it as a problem,
+        because work that cannot be ticketed is refused, and finding that out
+        at the first chore is later than `rite doctor`. A backend that has no
+        way to check answers None and says so.
+        """
+        return None, "this board type offers no read-only check"
+
     @abstractmethod
     def comment(self, ticket_id: str, text: str) -> None | BackendError:
         """Post a comment on the ticket.

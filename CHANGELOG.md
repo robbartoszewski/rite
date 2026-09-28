@@ -2,6 +2,36 @@
 
 ## Unreleased: 0.7.0 (notes in progress, completed at release)
 
+### A Worker that could not deliver is not started
+
+`rite sandbox start` (and so every Worker a Manager starts) now refuses,
+before creating a sandbox, a Worker with no module, one whose repository is
+on a host other than github.com, one with no GitHub token or no `gh`, and one
+whose token GitHub says cannot push. The push check asks GitHub, from your
+machine and with only the Worker's token, the permission question a push
+asks first; it sends nothing. `rite doctor` reports a missing Worker token as a problem.
+An `ssh` remote (`git@github.com:…`) now works from a sandbox: it is fetched
+and pushed over HTTPS with the token.
+
+If you contribute through a fork: a fine-grained token cannot open a pull
+request on a repository you are not a member of. The Worker pushes its branch
+to your fork; open the pull request to the upstream yourself.
+
+### `rite init` in a single repository registers it
+
+`rite init` in a repository with code used to register no module, so a
+Worker's workspace held nothing to work on. When the project root holds no
+repositories but is one (with at least one commit), it is now the module, at
+path `./`, with its origin URL and branch. An origin that is a directory
+under your home is written `~/…`, so it does not trip the publish gate. A project initialised by 0.6.0 can
+add it to `.rite/modules.yaml` by hand:
+
+    modules:
+      myapp:
+        path: ./
+        url: <the repo's origin URL>
+        branch: main
+
 ### `rite init`'s output passes rite's own gate on the first push
 
 `rite init` wrote the absolute path of your project into `.rite/brief.yaml`
@@ -69,6 +99,16 @@ message in the Owner's DM, or one sent from this machine. A message routed
 by another Manager, or said in a channel, cannot. The Manager is told
 the new ticket's id, or why the board refused it, in its next instruction.
 
+**`rite sandbox start <worker> --prompt "…"`** now files your text, exactly as
+typed, as a chore ticket labelled `chore` and the Worker's name, then starts
+the Worker on that ticket. With no board, or a board that refuses the ticket,
+nothing starts.
+
+**`rite doctor` says whether rite can file a ticket on your board**,
+read-only: on GitHub, that issues are on, the repository is not archived,
+and your login can label them; on Jira, that it may create a `Task` in the
+project. "Could not tell" is reported as a problem, not passed.
+
 **`rite route` now requires `--ticket <ID>`**, and the Owner's supervisor
 refuses a route whose ticket one read of the board does not return,
 including when the board cannot be read. The refusal reaches the Owner's
@@ -118,6 +158,22 @@ local-model secondary.
 that is **weaker than macOS's**, and have been observed working together as
 Owner and secondary. Workers are **not sandboxed by default** there. See
 Known issues.
+
+### ⚠ Behaviour change: a message you send is delivered, or you are told it was not
+
+**When a Manager starts has changed.** Before, `rite start` with nothing ready
+on the board stopped at once, even with a message you had sent waiting for
+the Manager, and said nothing about it. Now, if the board has nothing ready
+and a message is waiting, it starts one session to deliver it. It does not
+override a check-in schedule that is closed, and the session ceiling still
+applies. A message that a session could not take is reported, not retried.
+
+**Whenever a run ends with a message undelivered, it says so**: how many,
+why, and that they are delivered at the next `rite start`. It says it at the
+terminal and, if you use Slack, in the goodbye it posts to your DM.
+
+**`rite message` says when the Manager is not running**, rather than
+"delivered at the start of its next turn".
 
 ### Upgrading from 0.5.1: three steps, in this order
 

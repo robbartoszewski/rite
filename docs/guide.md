@@ -540,7 +540,13 @@ doctor` names the typo and says the window was dropped.
    would otherwise use is unreadable there. Commits made in a sandbox are not
    signed: rite turns signing off inside it, because they are the agent's
    commits, not yours. A module whose origin is a local directory cannot be
-   pushed from a sandbox; start names each one. A commit pushed from inside a sandbox this
+   pushed from a sandbox; start names each one. `rite sandbox start` refuses,
+   before creating the sandbox, a worker with no module, no GitHub token, no
+   `gh`, or a token that cannot push: it asks GitHub the permission question
+   a push asks first, and sends nothing. An `ssh` remote is used over HTTPS
+   inside. Through a fork, the worker can push to your fork but a
+   fine-grained token cannot open a pull request on a repository you are not
+   a member of: open that one yourself. A commit pushed from inside a sandbox this
    way has been measured reaching GitHub. Sandboxed pushes run the repository's own hooks, never your
    global ones: rite sets `core.hooksPath` to `.git/hooks` inside the sandbox,
    because a global hooks directory under your home directory cannot be read
@@ -562,8 +568,12 @@ rite sandbox start alpha --ticket 42        # a GitHub issue, by its number
 rite sandbox start alpha --prompt "Add a CSV export to the invoices page."
 ```
 
-`--ticket` is for work on your board, by its key there; `--prompt` sends its
-text as written. With neither, the session starts idle until someone attaches.
+`--ticket` is for work on your board, by its key there. `--prompt` is for work
+that is not a ticket yet: every piece of Worker work carries one, so rite first
+files your text, exactly as typed, as a chore ticket labelled `chore` and the
+Worker's name, and starts the Worker on that ticket. With no board, or a board
+that refuses the ticket, nothing starts. With neither flag, the session starts
+idle until someone attaches.
 After the prepare summary, start prints:
 
 ```text
@@ -832,6 +842,15 @@ llama.cpp or vLLM rather than Ollama, none of which expose this through the
 OpenAI-compatible API. rite works out why, but does not print it yet. So
 silence is not a clean bill of health: load the model (send it one request)
 and run `rite doctor` again.
+
+## A message you send is delivered, or you are told
+
+A message you send a Manager (`rite message`, or in its Slack DM) is delivered
+at the start of its next session. If the board has nothing ready, a session
+starts to deliver it; a closed check-in schedule and the session ceiling are
+still respected. If a run ends with a message undelivered, it says so, at the
+terminal and in your Slack DM, and the message waits for the next `rite
+start`. `rite message` says when the Manager is not running at all.
 
 ## Talking to a Manager over Slack
 
