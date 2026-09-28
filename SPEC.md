@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.34 · **Date:** 2026-09-28
+**Version:** 0.24.35 · **Date:** 2026-09-28
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -3744,7 +3744,10 @@ project? [y/N]"*, asked before anything else.
   will be taken from what's there."* and one open question: *"Anything stale, or
   that you'd like changed? Free text, or Enter to skip."* The brief records the
   path and that answer as `source.path` and `source.changes`, and none of the
-  sections below is asked. When the path is already a rite project, `init` says
+  sections below is asked. `source.path` is written relative to the project
+  (`.` for the default answer), as `~/…` when it is elsewhere under home, and
+  absolute only outside home: `brief.yaml` is committed, and a home path in it
+  fails the publish gate's built-in rule (§11.3) on the first push. When the path is already a rite project, `init` says
   *"This is already a rite project — I'll apply your changes rather than starting
   over."* and records the answer in that project's brief; nothing else there is
   touched, an earlier answer is kept beside the new one, and Enter changes
@@ -7020,6 +7023,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.35 — `rite init` no longer writes a home path into `brief.yaml` (dogfood F1).** Measured in the v0.6.0 dogfood: `rite init` with every default, then `git add -A; git commit; git push`, was blocked by rite's own pre-push hook on `.rite/brief.yaml:14` — the resolved absolute `source.path`, which matches the built-in `/Users/<name>/` rule. The only ways past were a suppression with a throwaway reason or `--no-verify`, so a new user learned on their first push that the gate can be waved through. §9.3: `source.path` is now written relative to the project, as `~/…` elsewhere under home, and absolute only outside home; `init` already read all three back. The same default in `_record_changes` (an existing project given changes) follows it. Re-run of the pre-registered test on macOS, under `~/AI`, with the hook installed (this Mac's global `core.hooksPath` neutralised locally, since with it init installs no hook and the push passes for the wrong reason): push exit 0, `rite publish check` clean, `.rite/gitleaksignore` untouched; before the fix the same script failed on the same rule. `test_init_output_passes_the_gate.py` builds its project in a `Users` then `alice` directory under `tmp_path`, because under pytest's `/private/var/…` the rule cannot match; reverting the fix makes it fail on `rite-hardcoded-macos-home-directory-path`.
 
 **Changes in 0.24.34 — what needs the Owner stays pending until it reaches a person (RP1 piece 2, delivery confirmation).** Robert: "did this actually reach a human" must be an observable property, not an assumption; the coordinator named it the part of RP1 that matters most. `managers/pending.py` keeps a ledger, in the Manager's own directory, of every outbox message that needs the person (a question, a message with no kind, a check-in that holds questions). **Posting is not reaching**: a Slack post reaches a channel. An item is confirmed only by the Owner's reply in its Slack thread (any person's when there is no Owner), by their reaction when the app has `reactions:read` (said once when it lacks it; then only a reply counts), or, at the terminal, by `rite replies` showing it to a person (recorded as SEEN, never as answered; `--peek` and machine readers confirm nothing). **An unconfirmed item comes back at every check-in**, with how long it has waited and whether it was posted. **Its Slack thread outlives the relay's limits**: a pending root is exempt from `THREADS_MAX` and the 24-hour horizon, read every 30 s while fresh and every 5 min once old, and restored from the ledger on restart; the Owner's late answer is both confirmed and delivered to the Manager. **On upgrade**, what is already in the outbox is recorded as predating the tracking and said once, and `rite start` starts the tracking before the first session, so a new project's first question is tracked. Stated limit: the ledger is in a directory the Manager can write, so a Manager can remove its own questions from its own reminder list. Measured on macOS against a fake Slack: 16 tests; 11 mutations each red, among them the ledger lock removed (six concurrent confirmations lost four in round 0), posting treated as confirmation (8 red), and the horizon applied to pending threads.
 
