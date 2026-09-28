@@ -337,3 +337,95 @@ def test_github_error_propagates(mock_gh):
 
 def test_github_refuses_a_ticket_that_is_not_an_issue_number():
     assert isinstance(GitHubBackend("org/repo").read_thread("KAN-7"), BackendError)
+
+
+# --- reading a Jira issue's whole thread (NOT observed against a real site) --
+
+
+def _jira():
+    from rite_ai.tickets.jira import JiraBackend, JiraConfig
+
+    return JiraBackend(JiraConfig(site="x.atlassian.net", email="e", token="t"))
+
+
+def _adf(text):
+    return {
+        "type": "doc",
+        "content": [{"type": "paragraph", "content": [{"type": "text", "text": text}]}],
+    }
+
+
+def _jira_comments(start, n):
+    return [
+        {"id": str(i), "body": _adf(f"c{i}"), "author": {"displayName": "P"}}
+        for i in range(start, start + n)
+    ]
+
+
+def _jira_issue(comments, total):
+    return {
+        "key": "KAN-7",
+        "fields": {
+            "summary": "timout is way too long",
+            "description": None,
+            "labels": ["scheduled"],
+            "comment": {"comments": comments, "total": total, "maxResults": 5000},
+        },
+    }
+
+
+def test_jira_reads_embedded_comments_and_checks_the_count():
+    backend = _jira()
+    with patch.object(
+        type(backend), "_request", return_value=_jira_issue(_jira_comments(0, 3), 3)
+    ):
+        thread = backend.read_thread("KAN-7")
+    assert thread.complete and [c.body for c in thread.comments] == [
+        "c0\n",
+        "c1\n",
+        "c2\n",
+    ]
+    assert thread.ticket.title == "timout is way too long"
+
+
+def test_jira_pages_past_the_embedded_comments():
+    backend = _jira()
+    responses = [
+        _jira_issue(_jira_comments(0, 2), 5),
+        {"comments": _jira_comments(2, 3), "total": 5, "startAt": 2},
+    ]
+    with patch.object(type(backend), "_request", side_effect=responses) as req:
+        thread = backend.read_thread("KAN-7")
+    assert thread.complete and len(thread.comments) == 5
+    assert req.call_args_list[1].kwargs["params"]["startAt"] == 2
+
+
+def test_jira_counts_that_disagree_are_not_complete():
+    backend = _jira()
+    responses = [_jira_issue(_jira_comments(0, 2), 5), {"comments": [], "total": 5}]
+    with patch.object(type(backend), "_request", side_effect=responses):
+        thread = backend.read_thread("KAN-7")
+    assert not thread.complete
+
+
+def test_jira_without_a_count_is_not_complete():
+    """A response shaped differently from the documented one fails closed."""
+    backend = _jira()
+    issue = _jira_issue(_jira_comments(0, 1), None)
+    with patch.object(type(backend), "_request", return_value=issue):
+        assert not backend.read_thread("KAN-7").complete
+
+
+def test_a_backend_without_read_thread_fails_closed():
+    from rite_ai.tickets import TicketBackend
+
+    class Minimal(TicketBackend):
+        create = read = update = move = assign = label = None
+        list_tickets = comment = query = link = None
+
+    Minimal.__abstractmethods__ = frozenset()
+    result = Minimal().read_thread("1")
+    assert isinstance(result, BackendError)
+    assert status.evaluate("1", BOARD, result, refinement_key.Loaded(KEY)).state == (
+        status.UNREADABLE
+    )
