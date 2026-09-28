@@ -118,3 +118,27 @@ cloud target is one argument away.
   hooks-disabled git runner.
 
 Both would send the fixture to Cursor's cloud. **They wait on Robert.**
+
+---
+
+## How CU8's position was reached (history; the current position is the CU8 row)
+
+Kept once, here, so it can be reconstructed. Nothing else repeats it.
+
+1. **First claim, inferred:** "Landlock cannot deny one file inside a granted
+   directory, and the directory must stay writable because Cursor keeps its
+   chats there". It was inferred from where Cursor's files sat. Robert nearly
+   published it as a Linux limitation.
+2. **Refuted, for the kernel:** a CI probe
+   (`tests/test_landlock_can_fence_a_cursor_config.py`) showed Landlock
+   protects the file with the directory read-only and `chats/` writable. The
+   record was corrected before publication.
+3. **Re-established, by a mechanism neither earlier version had (this
+   note):** Cursor itself creates a temp file at the directory's root and
+   renames it over the config on every turn, and fails when it cannot. That
+   defeats the read-only layout on Linux and the file-only deny on macOS
+   alike.
+
+Only the third is a measurement of Cursor. It is what the runtime message,
+the plan and any user-facing text state.
+

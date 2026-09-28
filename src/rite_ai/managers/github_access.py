@@ -229,16 +229,22 @@ def profile_lines(root: Path, manager: str, home: Path | None = None) -> list[st
         # (measured, CU1 section 7). Without it a turn exits 1, "Failed to
         # trust workspace". It replaces a grant of `~/.cursor`, which holds
         # every project's Cursor transcripts and is granted to nobody.
-        # ⚠ Known and open (CU8): the allowlist Cursor reads is in this
-        # directory, so a Manager can widen its own next cycle's.
+        # ⚠ CU8, accepted as a limitation of Cursor: the allowlist Cursor
+        # reads is in this directory and Cursor must rewrite it every turn,
+        # so the Manager can write it. The supervisor rewrites it before
+        # every launch and stops the run if it changed during a cycle.
         lines.append(f'(allow file-read* file-write* (subpath "{cursor}"))')
         # ⚠ CU8: EXCEPT the allowlist Cursor reads, which the supervisor
         # writes before every launch. Denied write by name, after the grant,
         # so the Manager cannot widen its own next cycle. Measured 2026-09-28
         # in the real profile: overwrite, rename-over, delete and chmod of it
-        # are all refused, a write beside it succeeds, and Cursor still
-        # reaches authentication with it unwritable. Landlock cannot deny one
-        # file in a granted tree, so this holds on macOS only.
+        # are all refused and a write beside it succeeds.
+        # 🔴 **AND IT STOPS CURSOR.** Measured since with a real turn
+        # (`spikes/CU1c-cursor-authenticated-measurements.md`): Cursor
+        # renames a temp file over this one on every turn and exits 1 when it
+        # cannot. So this deny ends every Cursor Manager turn. It is
+        # unreachable while config refuses `engine: cursor`; removing it
+        # awaits a decision (the CU8 row).
         lines.append(f'(deny file-write* (literal "{cursor / "cli-config.json"}"))')
     # ⚠ The Cursor key's copy is granted to NO profile: tmux's shell reads it
     # outside the boundary (`cursor_login.launch_prefix`). Denied by name as

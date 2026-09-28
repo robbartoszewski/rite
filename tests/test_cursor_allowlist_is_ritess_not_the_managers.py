@@ -190,4 +190,5 @@ class TestTheSupervisor:
 
 def test_linux_is_told_the_manager_can_write_it(monkeypatch):
     monkeypatch.setattr(sys, "platform", "linux")
-    assert "CAN write it" in cursor_login.announcement("lead")
+    said = cursor_login.announcement("lead")
+    assert "CAN write it" in said and "renamed over it" in said
