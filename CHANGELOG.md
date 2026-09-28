@@ -2,6 +2,21 @@
 
 ## Unreleased: 0.7.0 (notes in progress, completed at release)
 
+### A Worker that could not deliver is not started
+
+`rite sandbox start` (and so every Worker a Manager starts) now refuses,
+before creating a sandbox, a Worker with no module, one whose repository is
+on a host other than github.com, one with no GitHub token or no `gh`, and one
+whose token GitHub says cannot push. The push check is a `git push --dry-run`
+to a new branch name, run on your machine with only the Worker's token; it
+creates nothing. `rite doctor` reports a missing Worker token as a problem.
+An `ssh` remote (`git@github.com:…`) now works from a sandbox: it is fetched
+and pushed over HTTPS with the token.
+
+If you contribute through a fork: a fine-grained token cannot open a pull
+request on a repository you are not a member of. The Worker pushes its branch
+to your fork; open the pull request to the upstream yourself.
+
 ### Each Manager's own state has left the project
 
 A Manager's prompt, routes, Worker requests, check-ins, Slack relay state and

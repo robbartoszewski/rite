@@ -465,6 +465,41 @@ def doctor() -> None:
     click.echo("\nok")
 
 
+def _doctor_worker_github_token(root: Path, modules: list, problems: list) -> None:
+    from rite_ai.credentials.store import get_scoped, store_is_readable
+    from rite_ai.sandbox import (
+        GLOBAL_TOKEN_CREDENTIAL,
+        owner_repo_from_url,
+        resolve_worker_token,
+    )
+
+    on_github = [m.name for m in modules if m.url and owner_repo_from_url(m.url)]
+    if not on_github:
+        return
+    if not store_is_readable():
+        return  # reported above as the store being unreadable, not as missing
+    creds = _project_credentials()
+    workers_dir = root / "workers"
+    workers = (
+        sorted(p.name for p in workers_dir.iterdir() if (p / "worker.yml").is_file())
+        if workers_dir.is_dir()
+        else []
+    )
+    # With no Worker yet, the one every future Worker would fall back to.
+    lacking = [w for w in workers if resolve_worker_token(w, creds)[0] is None]
+    if not workers and not get_scoped(GLOBAL_TOKEN_CREDENTIAL, creds):
+        lacking = ["(any new Worker)"]
+    if lacking:
+        click.echo(
+            f"workers: no GitHub token for {_first_few(lacking)}, so sandboxed "
+            f"work on {_first_few(on_github)} could never be pushed — `rite "
+            "credential set github_token`"
+        )
+        problems.append(
+            f"no GitHub token for sandboxed Worker(s) {_first_few(lacking)}"
+        )
+
+
 def _first_few(names: list[str], limit: int = 5) -> str:
     """A list a person can read in one line: the first few, then a count."""
     if len(names) <= limit:
@@ -704,6 +739,14 @@ def _doctor_report(problems: list[str]) -> None:
                 "        test: <the command that runs this module's tests>"
             )
             problems.append(f"module {m.name} has no test command")
+
+    # A sandboxed Worker pushes to GitHub with the token rite gives it and
+    # nothing else (§5.3.3), so a GitHub module with no token for Workers is
+    # a Worker that works and cannot deliver. Dogfood #28: doctor printed
+    # `github_token: not set` and counted nothing, and KAN-7's Worker hit
+    # `could not read Username`. `rite sandbox start` refuses the same state.
+    if module_sandbox.enabled:
+        _doctor_worker_github_token(root, modules, problems)
 
     # The WORKERS' checkouts, which the loop above never looked at. Every
     # module line it prints is about `<root>/<module>` — the project's own
@@ -5852,6 +5895,14 @@ def sandbox_start(
             f"project sets a new one.",
             err=True,
         )
+    # Refused BEFORE a sandbox is spent (dogfood KAN-7): a Worker with nothing
+    # cloned, or whose work cannot leave the sandbox, otherwise starts,
+    # works, and fails only at the push — and the one thing it can then do
+    # is ask for a credential through a side channel.
+    refusal = _worker_cannot_deliver(worker, worker_dir, modules, token)
+    if refusal:
+        click.echo(refusal, err=True)
+        raise SystemExit(1)
     result = start_worker(
         root,
         worker,
@@ -5866,6 +5917,34 @@ def sandbox_start(
     click.echo(result.message)
     if not result.ok:
         raise SystemExit(1)
+
+
+def _worker_cannot_deliver(
+    worker: str, worker_dir: Path, modules: list, token: str | None
+) -> str | None:
+    """Why this Worker could do no work that reaches anyone, or None."""
+    import shutil
+
+    from rite_ai.sandbox import (
+        clone_remotes,
+        push_access_refusal,
+        remote_access_refusal,
+    )
+
+    if not modules:
+        return (
+            f"not starting '{worker}': it has no module, so its workspace holds "
+            "no code to work on. Register the repository (`rite add module "
+            f"<name> <url>`), then `rite remove worker {worker}` and `rite add "
+            f"worker {worker}`"
+        )
+    gh = shutil.which("gh")
+    remotes = clone_remotes(worker_dir)
+    refusal = remote_access_refusal(worker, remotes, token, gh)
+    if refusal or not remotes:
+        return refusal
+    assert token and gh  # remote_access_refusal refuses without either
+    return push_access_refusal(worker, remotes, token, gh)
 
 
 @sandbox.command("stop")

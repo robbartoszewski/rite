@@ -665,14 +665,19 @@ def test_sandbox_start_passes_provisioned_token_through(tmp_path, monkeypatch):
         "project:\n  name: acme\n  role: owner\n"
         "what:\n  kind: app\ntechnology:\n  languages:\n    - python\n"
     )
-    (rite_dir / "modules.yaml").write_text("modules: {}\n")
+    # One module: `rite sandbox start` refuses a Worker with none, since it
+    # would have no code to work on (dogfood KAN-7). Its origin is local, so
+    # no GitHub token is needed to push.
+    (rite_dir / "modules.yaml").write_text(
+        "modules:\n  app:\n    path: app/\n    branch: main\n"
+    )
     (rite_dir / "config.yaml").write_text(
         "ticket_backend:\n  type: none\nsandbox:\n  enabled: true\n"
         "  backend: seatbelt\n"
     )
     (tmp_path / "workers" / "alpha").mkdir(parents=True)
     (tmp_path / "workers" / "alpha" / "worker.yml").write_text(
-        "worker:\n  name: alpha\n  manager: ''\n  modules: []\n"
+        "worker:\n  name: alpha\n  manager: ''\n  modules: [app]\n"
     )
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("RITE_SANDBOX_TOKEN_ALPHA", raising=False)
@@ -704,14 +709,19 @@ def _sandbox_project(tmp_path, monkeypatch):
     rite_dir = tmp_path / ".rite"
     rite_dir.mkdir()
     (rite_dir / "brief.yaml").write_text("project:\n  name: acme\n  role: owner\n")
-    (rite_dir / "modules.yaml").write_text("modules: {}\n")
+    # One module: `rite sandbox start` refuses a Worker with none, since it
+    # would have no code to work on (dogfood KAN-7). Its origin is local, so
+    # no GitHub token is needed to push.
+    (rite_dir / "modules.yaml").write_text(
+        "modules:\n  app:\n    path: app/\n    branch: main\n"
+    )
     (rite_dir / "config.yaml").write_text(
         "ticket_backend:\n  type: none\nsandbox:\n  enabled: true\n"
         "  backend: seatbelt\n"
     )
     (tmp_path / "workers" / "alpha").mkdir(parents=True)
     (tmp_path / "workers" / "alpha" / "worker.yml").write_text(
-        "worker:\n  name: alpha\n  manager: ''\n  modules: []\n"
+        "worker:\n  name: alpha\n  manager: ''\n  modules: [app]\n"
     )
     monkeypatch.chdir(tmp_path)
 
