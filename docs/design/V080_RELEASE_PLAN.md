@@ -369,6 +369,7 @@ behaves as before §9.16.7, so every Manager opens a relay.
 | # | item | done when OBSERVED | depends on | size |
 |---|---|---|---|---|
 | LS1 | **Gate the Slack relay on the Owner lease** when `coordination.remote` is set (SPEC §9.16.7; `cli/main.py`, `_slack_listener`) | not yet written | MX2 (the lease has never run on two physical machines, MX-P4) | unsized |
+| LS2 | **A takeover's handover comment is exclusive only if the Owner lease is.** Filed 2026-09-28 from v0.7.0's handover work. On one machine, "only the process that released a Worker's claims posts its handover" now holds for every caller (the tick, `rite stop`, `rite stop --ticket`): measured, 6 racers on one Worker queued 6 handovers a round before and 1 after. Takeover cannot use that rule, because it releases nothing locally by design: it hands over ANOTHER machine's board state, and its `<machine>/<worker>` names match no local claim (`coordination/takeover.py`). So two processes taking over one stalled machine at once would each post a comment, and the only thing stopping that is that one Owner holds the lease at a time. | Two Owners contending for one stalled machine's takeover, on two physical machines, post one handover per ticket. Or, if the lease can be held twice, the takeover decides by a compare-and-set on the state layer instead | MX2, MX-P4 | unsized |
 
 ---
 

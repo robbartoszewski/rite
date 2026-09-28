@@ -192,6 +192,10 @@ def hand_over_machines_work(
             worker=f"{machine}/{worker}" if worker else machine,
             reason=reason,
             ticket=ticket,
+            # Releases nothing locally by design (module docstring), so the
+            # "only the releaser hands over" rule would silence every
+            # takeover. Who takes over is the Owner lease's decision.
+            comment_without_release=True,
         )
         told.tickets.append(ticket)
         if result.ticket_commented:

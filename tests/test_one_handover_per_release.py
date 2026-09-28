@@ -85,3 +85,65 @@ def test_racing_handovers_of_one_worker_hand_over_once(tmp_path):
             queued = _handovers_queued(root)
             assert len(queued) == 1, (n, [m.payload for m in queued])
             assert queued[0].payload["ticket"] == "ABC-1"
+
+
+# --- a ticket named explicitly follows the same rule --------------------------------
+
+
+def _hand_over_naming_the_ticket(args) -> int:
+    root, barrier = Path(args[0]), args[1]
+    barrier.wait()
+    return perform_handover(
+        root, worker="alpha", reason="race", ticket="ABC-1"
+    ).released_claims
+
+
+def test_a_named_ticket_with_nothing_released_is_not_handed_over(tmp_path):
+    """`rite stop --worker alpha --ticket ABC-1` after a window boundary has
+    already handed alpha over. It used to comment again; now it posts
+    nothing, and `stop` says why rather than dropping the ticket silently."""
+    from rite_ai.lifecycle import stop
+
+    root = _project(tmp_path)
+    ClaimsLedger(root / ".rite" / "claims.json").claim(["src/a.py"], "alpha", "ABC-1")
+    perform_handover(root, worker="alpha", reason="scheduled window boundary")
+
+    result = stop(root, worker="alpha", reason="lunch", ticket="ABC-1")
+
+    assert result.ok
+    assert len(_handovers_queued(root)) == 1
+    assert "no handover posted to ABC-1" in result.message
+    assert "released no claims" in result.message
+
+
+def test_racing_handovers_that_name_the_ticket_hand_over_once(tmp_path):
+    ctx = mp.get_context("spawn")
+    with ctx.Manager() as manager, ctx.Pool(RACERS) as pool:
+        for n in range(ROUNDS):
+            root = _project(tmp_path / f"r{n}")
+            ClaimsLedger(root / ".rite" / "claims.json").claim(
+                ["src/a.py"], "alpha", "ABC-1"
+            )
+            barrier = manager.Barrier(RACERS)
+            pool.map(_hand_over_naming_the_ticket, [(str(root), barrier)] * RACERS)
+
+            assert len(_handovers_queued(root)) == 1, n
+
+
+def test_takeover_still_hands_over_though_it_releases_nothing_here(tmp_path):
+    """Takeover hands over ANOTHER machine's board state; its
+    `<machine>/<worker>` names match no local claim, by design. It opts out
+    of the releaser rule by name, or every takeover would be silent."""
+    root = _project(tmp_path)
+
+    result = perform_handover(
+        root,
+        worker="other-machine/w1",
+        reason="manager stalled",
+        ticket="ABC-9",
+        comment_without_release=True,
+    )
+
+    assert result.released_claims == 0
+    assert result.ticket == "ABC-9"
+    assert len(_handovers_queued(root)) == 1
