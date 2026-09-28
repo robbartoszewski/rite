@@ -6952,6 +6952,8 @@ def _start_a_manager(
     # "stopped on 'unknown' after 0 session(s) — this is a fault, not a
     # completion", which was neither true nor actionable for either.
     from rite_ai.managers.broker import for_project
+    from rite_ai.managers.chores import create_asked_for
+    from rite_ai.managers.chores import instructions as chore_instructions
 
     board, board_state, board_problem, composed_under = _board_for_manager(root)
     if board_state == "unreachable":
@@ -7090,6 +7092,9 @@ def _start_a_manager(
             # itself reads, so "is this a real ticket" has one answer in one
             # place; `for_project` refuses everything when there is none.
             broker=for_project(root, board),
+            # TR9: a User's instruction becomes a chore, written by rite
+            # outside the boundary, on the same board the broker checks.
+            chores=lambda say: create_asked_for(root, role.name, board, say),
             router=_router_for(root, role.name),
             # ⚠ DF2: a cycle can be CAUSED by mail. None for a lone Manager,
             # whose runs are exactly what they were.
@@ -7113,6 +7118,7 @@ def _start_a_manager(
                     role.name,
                     root=root,
                     extra=instructions(root, role.name, enabled=record_issues)
+                    + chore_instructions(root, role.name)
                     + _other_managers_briefing(root, role.name)
                     + _ticket_work_rule(root, role.name),
                 )
@@ -7410,6 +7416,51 @@ def route(manager_name: str, text: str) -> None:
     click.echo(
         f"route queued: {manager_name!r} receives it at its next turn, marked "
         f"as routed by {speaking!r}."
+    )
+
+
+@cli.command("chore")
+@click.argument("message_ids", nargs=-1, required=True)
+def chore(message_ids: tuple[str, ...]) -> None:
+    """Have rite make a chore ticket from the User's own message(s) — a Manager only.
+
+    Every piece of work a Worker or another Manager does carries a ticket.
+    When the User asks for work in a message and it is not a ticket
+    yet, the Manager names the message by the id shown beside it in its
+    instruction, and rite writes the ticket: the User's words as they were
+    delivered, labelled `chore` and `scheduled`. The Manager cannot give it a
+    title or text.
+
+    ⚠ This only ASKS. The ticket is created by the Manager's supervisor,
+    outside its sandbox, when the Manager's current turn ends, and its next
+    instruction says the ticket's id or why it was refused.
+
+    Examples:
+      rite chore 1759068000123-4521-0
+    """
+    from rite_ai.managers import current_manager
+    from rite_ai.managers.chores import MAX_MESSAGES, request
+
+    root = _require_project_root()
+    speaking = current_manager()
+    if not speaking:
+        click.echo(
+            "refusing: `rite chore` is how a Manager asks rite to ticket a "
+            "User's instruction. From your own shell, file the ticket "
+            "directly with `rite board create`.",
+            err=True,
+        )
+        raise SystemExit(1)
+    ids = [i.strip() for i in message_ids if i.strip()]
+    if not ids or len(set(ids)) != len(ids) or len(ids) > MAX_MESSAGES:
+        click.echo(
+            f"refusing: name 1 to {MAX_MESSAGES} different message ids.", err=True
+        )
+        raise SystemExit(1)
+    request(root, speaking, ids)
+    click.echo(
+        f"chore requested from message(s) {', '.join(ids)}: rite creates it "
+        "when this turn ends, and your next instruction says its id."
     )
 
 
