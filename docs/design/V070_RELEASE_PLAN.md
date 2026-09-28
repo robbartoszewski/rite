@@ -1737,7 +1737,10 @@ order.
 - **TRQ4.** Does delegation ("you decide") count as acceptance?
   Recommendation: no; the Manager answers it with a proposal.
 - **TRQ5.** Routed free text that is really ticket work cannot be detected.
-  Recommendation: instruct, and state the hole.
+  Recommendation, revised 2026-09-28 now that enforcement is standard: every
+  route declares `--ticket <ID>` (checked) or `--no-ticket` (allowed,
+  recorded, and shown in the standup and `rite status`). The hole is then
+  visible, though not closed.
 - **TRQ6.** Does a ticket that already has a definition of done still take
   one "ok"? Recommendation: yes.
 - **TRQ7.** Is more than one `board` holder refused at parse?
