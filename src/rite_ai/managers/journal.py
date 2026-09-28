@@ -77,6 +77,7 @@ from __future__ import annotations
 import os
 import string
 from dataclasses import dataclass
+from dataclasses import field as _field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -215,7 +216,8 @@ def start_notice(root: Path, manager: str, *, enabled: bool = True) -> str:
     return (
         f"recording issues to {directory}\n"
         f"  (outside the project, like every Manager's own state; copy that "
-        f"directory to share or commit the entries)"
+        f"directory to share the entries, or `rite journal export {manager} "
+        f"--to <dir>` to bring them into the project to commit)"
     )
 
 
@@ -604,3 +606,53 @@ def write_retrospective(
         + _section("caught_elsewhere", caught_elsewhere)
     )
     return _write(root, manager, RETROSPECTIVE, body)
+
+
+@dataclass
+class Exported:
+    copied: list[str] = _field(default_factory=list)
+    already_there: list[str] = _field(default_factory=list)
+    refused: str = ""
+    source: Path | None = None
+    """Where the entries were read from, for the message."""
+
+
+def export(root: Path, manager: str, destination: Path) -> Exported:
+    """Copy this Manager's entries into `destination`, for sharing or
+    committing (MM8 piece 3).
+
+    Since MM8 the journal lives outside the project (`journal_dir`), which is
+    what keeps one Manager from writing another's on Linux. A person who
+    wants the entries in the project's history copies them in with this.
+    The journal itself is left as it is.
+
+    Never overwrites: an entry whose name is already in `destination` with
+    different content refuses the whole export, naming it, so nothing
+    half-exported is left behind. An identical file is counted and skipped.
+    """
+    import filecmp
+    import shutil
+
+    source = journal_dir(root, manager)
+    entries = sorted(source.glob("*.md")) if source.is_dir() else []
+    for entry in entries:
+        there = destination / entry.name
+        if there.exists() and not filecmp.cmp(entry, there, shallow=False):
+            return Exported(
+                source=source,
+                refused=(
+                    f"{there} already exists with different content, so "
+                    f"nothing was exported. Move it aside, or export "
+                    f"somewhere else"
+                ),
+            )
+    destination.mkdir(parents=True, exist_ok=True)
+    out = Exported(source=source)
+    for entry in entries:
+        there = destination / entry.name
+        if there.exists():
+            out.already_there.append(entry.name)
+            continue
+        shutil.copy2(entry, there)
+        out.copied.append(entry.name)
+    return out

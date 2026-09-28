@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased: 0.7.0 (notes in progress, completed at release)
+
+### Each Manager's own state has left the project
+
+A Manager's prompt, routes, Worker requests, check-ins, Slack relay state and
+journal used to live in `.rite/managers/<name>/`, inside the project. They
+now live beside its mail in rite's data directory
+(`~/Library/Application Support/rite/mail/…` on macOS,
+`~/.local/share/rite/mail/…` on Linux). Each Manager's sandbox grants its own
+directory and no other. On Linux that also means a Manager can now create new
+top-level files in its project, which it could not in 0.6.0.
+
+**On upgrade, the first `rite start` moves every Manager's state** out of the
+project, once. It will not move a Manager's state while that Manager is
+running: if one is, `rite start` refuses and names it, for example:
+
+    refusing to start Manager 'lead': ... Manager 'helper' is running ...
+    Stop it (`rite manager stop helper`), then run `rite start lead` again
+
+**The journal is no longer in the project**, so there is nothing to `git add`.
+To commit entries, copy them in with the new **`rite journal export <manager>
+--to <dir>`**, which never overwrites a different file.
+
 ## 0.6.0 (2026-09-27)
 
 **0.6.0 in one paragraph.** A Manager now runs inside a sandbox, behind a
