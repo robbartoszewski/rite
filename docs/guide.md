@@ -258,6 +258,13 @@ replies` and the Slack relay mark each question "needs your answer", and a
 message written without a kind (by an older rite, or by hand) is marked as
 needing you rather than passed as reading.
 
+**A question stays pending until it reaches you.** Posting it to Slack does
+not count. Your reply in its Slack thread does, and so does your reaction
+when the Slack app has `reactions:read`; without Slack, `rite replies`
+showing it to you does. Every check-in lists what is still waiting, and rite
+keeps reading a waiting question's thread for as long as it waits. Answer in
+the question's own thread: a message elsewhere cannot be matched to it.
+
 A Manager can also **defer** a question to your next check-in, but only by
 naming what it will do meanwhile:
 

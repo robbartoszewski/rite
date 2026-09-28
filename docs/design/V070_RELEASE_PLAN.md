@@ -567,7 +567,7 @@ here, with the reasoning, so nobody relitigates them from memory.
    dogfood Worker whose question went into a file nothing reads. The
    coordinator named this the part that matters most.
 
-**RP1 status (2026-09-28): piece 1 of 3 built.** (1) **Kinds**: every outbox
+**RP1 status (2026-09-28): pieces 1 and 2 of 3 built.** Piece 2 (SPEC 0.24.34): what needs the Owner stays pending until his thread reply or reaction (or, without Slack, `rite replies` showing it), is listed at every check-in until then, and its thread is read past the relay's limits. Piece 1: (1) **Kinds**: every outbox
 message records the command that wrote it (question, check-in, reply). A
 message with no kind needs action. `rite reply` refuses what reads as a
 question and names `rite ask`, erring toward refusing (SPEC 0.24.32). (2)

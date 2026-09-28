@@ -42,6 +42,18 @@ finds nothing to release (another handover already took the claims, or the
 worker held none, which rite cannot tell apart), it now posts a note saying
 exactly that and changes no label, instead of posting nothing.
 
+### A question stays pending until it reaches you
+
+A question from a Manager (and anything it sent without a kind) is now
+tracked until it reaches you: your reply in its Slack thread, your reaction
+if the Slack app has `reactions:read`, or, without Slack, `rite replies`
+showing it to you. Being posted to Slack does not count. Every check-in lists
+what is still waiting, and rite keeps reading a waiting question's thread
+for as long as it waits, so an answer days later still reaches the Manager.
+On upgrade, messages already in the outbox are recorded as predating this,
+and rite says so once. **Answer in the question's own thread**: a message
+elsewhere cannot be matched to it.
+
 ## 0.6.0 (2026-09-27)
 
 **0.6.0 in one paragraph.** A Manager now runs inside a sandbox, behind a
