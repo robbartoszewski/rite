@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.40 · **Date:** 2026-09-28
+**Version:** 0.24.41 · **Date:** 2026-09-28
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -3784,10 +3784,9 @@ project? [y/N]"*, asked before anything else.
   sections below. Then *"Reading <path> — languages, structure and conventions
   will be taken from what's there."* and one open question: *"Anything stale, or
   that you'd like changed? Free text, or Enter to skip."* The brief records the
-  path and that answer as `source.path` and `source.changes`, registers the
-  repositories in the source as modules the way Section 3 detects them (when
-  the source is inside the project), and none of the sections below is
-  asked. `source.path` is written relative to the project
+  path and that answer as `source.path` and `source.changes`, offers each
+  repository in the source as a module the way Section 3 does (when the
+  source is inside the project), and no other section below is asked. `source.path` is written relative to the project
   (`.` for the default answer), as `~/…` when it is elsewhere under home, and
   absolute only outside home: `brief.yaml` is committed, and a home path in it
   fails the publish gate's built-in rule (§11.3) on the first push. When the path is already a rite project, `init` says
@@ -3841,28 +3840,38 @@ If existing repos were detected:
 ```
 ─── Modules ────────────────────────────────────────
 Found 3 repositories:
+  this directory (./)  git@github.com:org/app.git
+  backend/  git@github.com:org/backend.git
+  shared/  local only
 
-  ✓ backend/     (git@github.com:org/backend.git)
-  ✓ frontend/    (git@github.com:org/frontend.git)
-  ✓ shared/      (local only)
-
-Add all as modules? [Y/n]
+Add this directory (./) as module 'app'? [Y/n]
+Add backend/ as module 'backend'? [Y/n]
+Add shared/ as module 'shared'? [Y/n]
 ```
 
-Default Yes. Individual repos can be deselected. For each added module,
-rite records the remote URL and the branch currently checked out.
+**Each repository is offered, and registered only when confirmed** (Robert,
+2026-09-29: "If there is a git repo in the root folder - it should ask if
+that's a module and add it if User confirms. If there are repos in the root
+directory, it should ask about those as well."). The candidates are the
+project root itself, when it is a git repository with at least one commit,
+then each immediate subdirectory that is one. Default yes. For each module
+rite records the remote URL and the branch currently checked out. The same
+offer is made on the existing-code path (above).
 
-The repositories are the project root's immediate subdirectories that are
-git repositories. When there are none and **the root is itself a repository
-with at least one commit**, the root is the one module, at path `./`: a
-single repository is the commonest project there is, and a Worker's
-workspace is its modules' clones, so registering nothing gave every Worker an
-empty workspace (dogfood F2). A root with nothing committed is not a module:
-it cannot be cloned, and is usually a workspace about to receive its modules.
-Every clone of a root module carries the project's committed `.rite/`, so a
-session in one would resolve to the clone; `rite sandbox start` gives each
-sandboxed Worker `RITE_PROJECT_ROOT`, which wins, and `rite doctor` reports
-the root module as a problem only when Workers are not sandboxed.
+**`--yes` answers yes to each, and prints one line per module it added**
+(`--yes: added this directory (./) as module 'app' (<url>)`). The other
+reading — add nothing unconfirmed — is how a `--yes` run ends up with an
+empty `modules.yaml` and Workers with nothing to clone (dogfood F2), looking
+on screen like an interactive run that added them.
+
+A root with nothing committed is not offered, and init says why: it cannot
+be cloned, which is the one thing a module is for here. A single repository
+is the commonest project there is, and a Worker's workspace is its modules'
+clones, so registering nothing gave every Worker an empty workspace (dogfood
+F2). Every clone of a root module carries the project's committed `.rite/`,
+so a session in one would resolve to the clone; `rite sandbox start` gives
+each sandboxed Worker `RITE_PROJECT_ROOT`, which wins, and `rite doctor`
+reports the root module as a problem only when Workers are not sandboxed.
 
 If no repos found:
 
@@ -7082,6 +7091,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.41 — `rite init` asks about each repository before registering it (Robert, 2026-09-29).** §9.3 Section 3: the project root (with a commit) and each immediate subdirectory repository are offered one at a time, root first, and registered on confirmation, on both the existing-code and from-scratch paths. Before this the existing-code path registered silently and the root was offered only when no subdirectory held a repository. `--yes` answers yes and prints a line per module added; a root with nothing committed is explained, not offered. Pre-registered dogfood tests re-run on this change under `~` with the hook installed: F1 (init with defaults → `git add -A; git commit; git push` → push exit 0, `rite publish check` clean, no `.rite/gitleaksignore` created) and F2 (`rite status` lists `app: ./`; `rite add worker alpha` → `workers/alpha/app/main.py`). Mutations each turn tests red: adding without asking, `--yes` adding nothing, `--yes` adding silently, the root dropped when subdirectories hold repositories.
 
 **Changes in 0.24.40 — ⚠ BEHAVIOUR CHANGE: a message a person sent is delivered, or the person is told it was not.** The coordinator's property, 2026-09-28, after the fifth instance in a day of one defect (a message sent, believed delivered, never seen). Found on Linux in SB11: `rite message lead` said "delivered at the start of its next turn", then `rite start lead` stopped on "the board has nothing ready" with the message in the inbox and nothing said. (1) **When a Manager starts changes:** an `idle` board with mail in the inbox now starts ONE session to deliver it. The inbox is read as a state at the moment of stopping, never as an event, so mail that arrived while nothing was watching is found. `closed` (the person's schedule) and the fault verdicts still start nothing, and the session ceiling still bounds. (2) **Not a loop (F22):** each delivery takes the mail, so another session needs new mail; and if the same messages are still there after a session started to deliver them, that session could not take them, which is REPORTED and not retried. (3) **Every run that ends with mail undelivered says so** (`supervise.undelivered_line`), at the terminal and in the Slack goodbye in the Owner's DM, from the `finally` at the end of `rite start`, so it holds however the run ended, an interrupted one and exits added later included. (4) **`rite message` says at send time** when the Manager is not running (`routing.supervisor_state`, recorded identity), instead of "delivered at the start of its next turn". Mutations, each red: an idle board never delivering (4), undelivered mail retried (1), `closed` overridden (1), the end of the run silent (3), the Slack goodbye omitting it (1), `rite message` claiming a next turn (1). A `last_basis` line meant to let F22 judge a delivery session was removed: an idle verdict's basis cannot equal a ready one's, so it could never change a decision.
 

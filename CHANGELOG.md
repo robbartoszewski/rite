@@ -31,12 +31,14 @@ before the other project's maintainer does. A fine-grained token enforces
 that (it cannot open a pull request on a repository you are not a member
 of); don't swap in a classic token to skip it.
 
-### `rite init` in a single repository registers it
+### `rite init` offers the repositories it finds as modules
 
 `rite init` in a repository with code used to register no module, so a
-Worker's workspace held nothing to work on. When the project root holds no
-repositories but is one (with at least one commit), it is now the module, at
-path `./`, with its origin URL and branch. An origin that is a directory
+Worker's workspace held nothing to work on. It now offers the project root
+(when it is a git repository with a commit) and each repository in a
+subdirectory, one at a time, and registers the ones you confirm, at `./` or
+their subdirectory, with their origin URL and branch. `rite init --yes`
+answers yes to each and prints a line for every module it added. An origin that is a directory
 under your home is written `~/…`, so it does not trip the publish gate. A project initialised by 0.6.0 can
 add it to `.rite/modules.yaml` by hand:
 
