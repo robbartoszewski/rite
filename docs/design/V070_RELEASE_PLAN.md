@@ -1615,7 +1615,7 @@ broke the Claude login.
 | C24 | **A requested Worker starts at the cycle boundary**, deliberately | `V060_RELEASE_PLAN.md` C24; `supervise.py::_honour_worker_requests` | a decision, not a fix. See the consolidated list |
 | SB9 | **On Linux a Manager can replace the Claude login that authenticates it; on macOS it cannot.** Shipped in v0.6.0 as a documented PLATFORM DIFFERENCE, by Robert's default (2026-09-26: "if it isn't cheap, ship it documented and fix it in v0.7.0"). Why: Claude must write its whole config directory (`248ba5b`: listing its entries one by one broke Claude silently), and Landlock cannot deny one file inside a granted tree | measured 2026-09-26 on macOS in the real profile: **(a)** with `CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR`, the token read from an open descriptor, out of a 0600 file OUTSIDE `claude/`, signs Claude in and is not copied into the config directory. **(b)** But a local listener showed the order: the descriptor's token is sent FIRST, and on a 401 Claude FALLS BACK to a planted `.credentials.json`. So the move is cheap (about one sitting) and restores only "rite's token wins while it is valid", which is why v0.6.0 ships the wording instead | the login held where the Manager cannot write, AND nothing in a writable directory that Claude will fall back to: either Claude stops falling back (upstream), or the config directory itself is not Manager-writable (which needs SB10's answer), or the credential broker, so that no token is held in the sandbox at all |
 | SB10 | **A Manager can plant settings for its own later runs, on BOTH platforms** (v0.6.0 readiness W11). `claude/settings.json` is loaded as USER settings: a planted `env.ANTHROPIC_BASE_URL` redirected the next run's model requests (2 of 2, macOS). It persists across runs. The project's `.claude/settings.json` is Manager-writable too | measured 2026-09-26; `--setting-sources project,local` stopped the user-settings path (0 requests) | exclude user settings, and make the project's `.claude/` read-only to the Manager (a seatbelt deny; on Landlock by listing the project root's entries, as the inbox fence does), or move user widening into rite's own settings file. A decision, then observe both platforms |
-| SB11 | **On Linux, the Manager's policy grants `/tmp` and `/var/tmp` read and write** (v0.7.0 by Robert's scope, 2026-09-26: "the `/tmp` grant fix"). Landlock has no deny rule and unions its grants, so for a project living under `/tmp` the wholesale grant overrode the enumeration that fences one Manager from another; the credential narrowing was defeated too (`spikes/MM2b-moving-the-inbox-out-of-the-project.md`). Linux only: seatbelt denies after granting, and the last match wins. The inbox half is gone since the mailbox left the tree (`935ceef`); the MM2b note records the rest as "a separate hole" | `b542c15`'s own message, and the MM2b note, which measured it | **`b542c15`** on `fix/landlock-no-wholesale-temp`, prepared and **not merged**: it removes both grants and keeps the engine's own `TMPDIR`. ⚠ Its message says what is not established: anything that hardcodes `/tmp` breaks, and a grep found nothing on the Manager path, which is not evidence for an engine and its subprocesses. So it needs an observed Manager cycle on Linux before it lands. **Status 2026-09-28: landed WITHOUT that cycle; the cycle is DEFERRED and is now a v0.7.0 tag blocker.** Robert's ruling of 2026-09-28 was "defer": the Ubuntu VM was suspended by the dogfood run to free memory for a 17 GB model and must not be resumed under it, and his Claude allowance is not spent on this now. A macOS cycle cannot stand in, because this change touches only the Landlock policy. Landed anyway because it is unreleased and fails closed: an engine that hardcodes `/tmp` gets a permission error rather than a hole. CI (x86_64, kernel 6.17, Landlock ABI 7) ran all 20 Landlock probes against the real policy, and caught two tests that had passed only through the grant. **What the deferred cycle must still observe:** on Linux, from `main`, one Manager cycle per engine (Claude; Goose; Cursor, whose Linux grants landed in #41 and are also "not measured on Linux") in a project that is NOT under `/tmp`, completing a turn that runs shell commands, with no permission error from `/tmp` or `/var/tmp` in the pane or the journal. Claude is the engine the risk matters most for, and running it spends Robert's allowance, so it needs his go-ahead. Not observed yet: whether Claude Code, Goose or their subprocesses write under `/tmp` rather than `$TMPDIR` ⚠ **A Cursor Manager will hit this (CU4):** with a long `CURSOR_DATA_DIR`, Cursor puts its socket directory in `/tmp/.cursor/`, so on Linux a Cursor Manager's launch will be refused there until CU4 either grants that one path or finds a data path under 84 characters. Fails closed. |
+| SB11 | **Observed 2026-09-28 for Claude and Goose, no `/tmp` permission error; Cursor not covered (§ SB11 observed).** **On Linux, the Manager's policy grants `/tmp` and `/var/tmp` read and write** (v0.7.0 by Robert's scope, 2026-09-26: "the `/tmp` grant fix"). Landlock has no deny rule and unions its grants, so for a project living under `/tmp` the wholesale grant overrode the enumeration that fences one Manager from another; the credential narrowing was defeated too (`spikes/MM2b-moving-the-inbox-out-of-the-project.md`). Linux only: seatbelt denies after granting, and the last match wins. The inbox half is gone since the mailbox left the tree (`935ceef`); the MM2b note records the rest as "a separate hole" | `b542c15`'s own message, and the MM2b note, which measured it | **`b542c15`** on `fix/landlock-no-wholesale-temp`, prepared and **not merged**: it removes both grants and keeps the engine's own `TMPDIR`. ⚠ Its message says what is not established: anything that hardcodes `/tmp` breaks, and a grep found nothing on the Manager path, which is not evidence for an engine and its subprocesses. So it needs an observed Manager cycle on Linux before it lands. **Status 2026-09-28: landed WITHOUT that cycle; the cycle is DEFERRED and is now a v0.7.0 tag blocker.** Robert's ruling of 2026-09-28 was "defer": the Ubuntu VM was suspended by the dogfood run to free memory for a 17 GB model and must not be resumed under it, and his Claude allowance is not spent on this now. A macOS cycle cannot stand in, because this change touches only the Landlock policy. Landed anyway because it is unreleased and fails closed: an engine that hardcodes `/tmp` gets a permission error rather than a hole. CI (x86_64, kernel 6.17, Landlock ABI 7) ran all 20 Landlock probes against the real policy, and caught two tests that had passed only through the grant. **What the deferred cycle must still observe:** on Linux, from `main`, one Manager cycle per engine (Claude; Goose; Cursor, whose Linux grants landed in #41 and are also "not measured on Linux") in a project that is NOT under `/tmp`, completing a turn that runs shell commands, with no permission error from `/tmp` or `/var/tmp` in the pane or the journal. Claude is the engine the risk matters most for, and running it spends Robert's allowance, so it needs his go-ahead. Not observed yet: whether Claude Code, Goose or their subprocesses write under `/tmp` rather than `$TMPDIR` ⚠ **A Cursor Manager will hit this (CU4):** with a long `CURSOR_DATA_DIR`, Cursor puts its socket directory in `/tmp/.cursor/`, so on Linux a Cursor Manager's launch will be refused there until CU4 either grants that one path or finds a data path under 84 characters. Fails closed. |
 | SB12 | 🔴 **A running process's ENVIRONMENT is readable from every sandbox on the machine, and that includes every credential rite hands a Worker by `--env`, on shipped v0.6.0** (`spikes/SB12-environment-readable-across-sandboxes.md`, measured 2026-09-28 with fake credentials). `sysctl(KERN_PROCARGS2)` from inside another Worker's yoloAI sandbox, and from inside a rite Manager's sandbox, read a Worker's `GITHUB_TOKEN` and `JIRA_API_TOKEN` from the environment of yoloAI's tmux server and session in that Worker. The secret FILES were refused. No rite seatbelt change tried stopped the read (six variants, including an explicit sysctl allowlist without `kern.procargs2`), and a Worker's profile is yoloAI's, not rite's. The same read is what breaks CU4's key route | measured, macOS; Linux and a real `--agent claude` Worker not measured | **With Robert; not a window to narrow.** ✅ **Measured since (SB12 note, section 4): a process owned by a DIFFERENT user is refused by the kernel (errno 22), from outside and from both sandboxes; so separating agents by OS user is the one thing found that closes the read** (targets were root-owned; between two ordinary users it is inferred; a user PER agent is needed for Worker-from-Worker; how rite runs an agent as another user is undesigned). Other directions, not measured: credentials a Worker needs delivered as files the agent reads, not the environment, where the engine supports it; process separation that `KERN_PROCARGS2` respects (a different user); fewer credentials per Worker (§5.3.4's fungibility trade, revisited) |
 
 **SBQ1. Do Workers belong to a Manager?** (a) No: Workers are project-level and
@@ -1880,7 +1880,7 @@ decision.
 - **PB1 needs** a path from the sandbox copy into the local repository, and
   a Manager that can commit inside its sandbox. D10 measured that the
   operator's commit signing and pre-push hook both fail there.
-- **SB11's observed Manager cycle on Linux is owed before the v0.7.0 tag.** The code landed without it on 2026-09-28 (deferred by Robert: the VM is suspended for the dogfood run, and the Claude cycle spends his allowance). What it must show is in the SB11 row.
+- **SB11's observed Manager cycle on Linux: Claude and Goose OBSERVED 2026-09-28, Cursor NOT COVERED.** Robert: "SB11: Please run it." Record below (§ SB11 observed).
 - **C32 is decided after RP1's design**, not before.
 - **CU2 → CU6** after CU1, as track CU orders them.
 
@@ -1907,3 +1907,65 @@ silent network refusal is the stall-without-a-message class again.
 
 **Not sized as a total, on purpose.** The v0.6.0 plan's note on units applies:
 sittings are ordinal, not a schedule.
+
+
+## SB11 observed: Linux Manager cycles, 2026-09-28
+
+Robert approved it ("SB11: Please run it"): one short Claude cycle on his
+allowance, and a Goose cycle. Cursor stays out, because it needs an
+authenticated turn, which is a separate conversation with Robert.
+
+**Conditions**
+
+- **VM:** Parallels "Ubuntu 24.04.3 ARM64", kernel 7.0.0-31, 15.9 GB RAM, 9.4 GB free, load 0.1.
+- **Suspend and resume:** the VM was suspended by the dogfood run and resumed today. Its clock read 01:42 right after the resume.
+- **VM clock at run time:** it agreed with the Mac's UTC to within 1 s (12:03:04Z on both), although `timedatectl` still reported `NTPSynchronized=no`. Nothing below depends on wall-clock intervals.
+- **Mac:** swap 24.15 of 25.6 GB used, load 4.4 to 6.6, 36% memory free.
+- **rite:** `main` at `a4ce798`, cloned fresh into `~/sb11-rite`. `rite_ai.__file__` was checked to be that clone.
+- **Project:** new, at `~/sb11-proj`, which is NOT under `/tmp`.
+  - Its config is copied from `~/rite-linux-claude` (Managers `lead`: claude; `small`: goose on `qwen3:8b`) plus `context_window: 32768`.
+  - `ticket_backend: none`, so no real board was touched. This makes `lead`'s cycle a SETUP session (a different prompt from a queue cycle; same engine and same Landlock policy).
+- **Driving:** one `rite message <m> "<six shell commands>"`, then `rite start <m> --sessions 1`.
+
+**Claude (`lead`)**
+
+- **Token:** the VM's `claude_token` was valid. A one-call Haiku check returned `ok`.
+- **The cycle:** Sonnet 5, 15 assistant messages, 14.1k output tokens, 393k cache-read and 130k cache-write tokens.
+- **The transcript, verbatim:**
+  - `echo "TMPDIR=$TMPDIR"` gave `TMPDIR=~/sb11-proj/.rite/user/enginetmp/lead`;
+  - `python3 -c 'import tempfile; print(tempfile.gettempdir())'` gave the same directory;
+  - `git status --short` gave no output;
+  - `ls notes` gave `README`.
+- **Refused by Claude Code's permission layer, not by Landlock:** `mktemp`, and `printf … > notes/SB11-lead.txt`. The transcript reads "Permission for this tool use was denied. It requires approval, and this session has no approval surface".
+- Claude Code created its own `claude-1000/` inside the engine `TMPDIR`.
+- **No `/tmp` error:** no "permission denied", EACCES, EPERM or "read-only file system" anywhere in `rite start`'s output, the transcript, the engine `TMPDIR` or the Manager's state. The transcript contains no `/tmp` path.
+- ⚠ **Not shown for Claude:** a shell subprocess writing a temp file. The two commands that would have done it were refused before Landlock was reached.
+
+**Goose (`small`, `qwen3:8b` pinned as `rite-ctx32768-qwen3-8b`, CPU)**
+
+- **The pane, verbatim:**
+  - `TMPDIR=~/sb11-proj/.rite/user/enginetmp/small`;
+  - `mktemp` gave `~/sb11-proj/.rite/user/enginetmp/small/tmp.vEdNhx3Sx7`;
+  - `tempfile.gettempdir()` gave the same directory;
+  - `printf` plus `cat` gave `sb11 small`, and the file is in `notes/`;
+  - `git status` gave `?? notes/SB11-small.txt`.
+- **No `/tmp` error:** the same search found nothing. The only `/tmp` strings are rite's own limitations text and the `enginetmp` path.
+- The model repeated `git status` and `ls` three times, then summarised in the pane rather than with `rite reply`. The outbox is empty. That is the model; the run ended cleanly at the window.
+- The truncation detector said "cannot tell … this Ollama server reports version 0.34.4, and the log line rite reads was verified only on 0.34.2", which is its designed answer for an unverified version.
+
+**Cursor:** not covered (see above).
+
+**Found on the way, not SB11's subject**
+
+1. 🔴 **A person's message is stranded when the board is idle.**
+   - What happened: `rite message lead …` said "delivered at the start of its next turn". `rite start lead`, whose project had a GitHub board with nothing ready, then printed "done: the board has nothing ready (0 session(s))" and stopped. The message stayed in the inbox, and nothing said so.
+   - Why: `supervise` asks the board verdict before the first cycle, and inbox mail is a cause only when routed work is outstanding (`_reason_to_wait`), which is not the case for an Owner with nothing routed, or for a solo Manager.
+   - The second attempt (no board, a setup session) delivered it.
+   - This is RP1's lesson from the other side: rite promised a delivery it then did not make.
+2. **rite's diagnosis of a refused `printf … > file` is wrong.**
+   - rite said the allowlist "DOES cover" the command and "The engine did not apply …/permissions.json".
+   - In the same session `echo`, `git status` and `ls` ran under that allowlist, so it WAS applied.
+   - The likelier cause, NOT verified, is that Claude Code treats a `>` file write as needing its own approval. `supervise._refusal_lines` matches the command string against `Bash(printf:*)` and cannot see that.
+3. **Stale tmux sessions:** 38 `rite-mgr-*` sessions from earlier VM runs are still alive. Left alone; they are not this run's.
+
+**Left on the VM:** `~/sb11-rite`, `~/sb11-proj`, `~/sb11-lead`, `~/sb11-small`, `~/sb11-lead-try1-board`, and the pinned model `rite-ctx32768-qwen3-8b` (136 bytes; `ollama rm` removes it).
