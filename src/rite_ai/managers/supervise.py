@@ -463,21 +463,56 @@ def _honour_worker_requests(root: Path, manager: str, broker, say) -> None:
     ⚠ **Every outcome is SAID.** A refusal nobody sees is the defect C21
     exists for, and here it is worse: a Manager that asked for something it
     may not have is either confused or compromised.
+
+    ⚠ **And every outcome is TOLD to the Manager that asked** (`telling`).
+    `broker.instructions` promises it "reports the result in your next
+    instruction"; this used to reach only `say`, the operator's terminal, so a
+    Manager whose request was refused never heard and waited for a Worker that
+    was never coming. Nothing compared the promise, in the Manager's
+    instructions, with where the outcome went, a terminal, so nothing would
+    have noticed (dogfood DF13). The note is mail: at an idle board it starts a
+    session to deliver it, and at any other exit `rite start` says it is
+    undelivered.
     """
+    from rite_ai.managers.telling import tell_manager
+
     pending = take_requests(root, manager)
     if not pending:
         return
+
+    def tell(text: str) -> None:
+        try:
+            tell_manager(root, manager, "a Worker you asked for", text)
+        except OSError as e:
+            say(f"could not tell {manager!r} what happened to its request: {e}")
+
     if broker is None:
-        say(
+        said = (
             f"{manager!r} asked to start {len(pending)} Worker(s), and this "
             "run has no broker configured to do it. Nothing was started — "
             "the requests are discarded rather than queued, because nothing "
             "here would run them later."
         )
+        say(said)
+        tell(
+            f"You asked for {len(pending)} Worker(s). None was started: this "
+            "run has no way to start Workers, and the requests were discarded, "
+            "not queued. Do not wait for them; say so to the User."
+        )
         return
     for _, raw in pending:
         ok, message = broker(raw)
         say(("started: " if ok else "") + message)
+        tell(
+            ("Started: " if ok else "NOT started: ")
+            + message
+            + (
+                ""
+                if ok
+                else " Nothing is running for this request; do not wait for "
+                "it. Fix what it names, or say so to the User."
+            )
+        )
 
 
 def _say_refusals(
