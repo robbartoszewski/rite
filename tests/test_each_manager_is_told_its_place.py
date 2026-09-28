@@ -96,3 +96,55 @@ def test_with_no_single_owner_they_are_told_nobody_routes():
     said = briefing("a", "", list(roles))
     assert "No Manager here holds 'route'" in said
     assert "Work only on instructions from this machine" in said
+
+
+# --- TR3: asking belongs before routing, and a Manager does not implement ---
+
+
+@pytest.mark.parametrize("board", [True, False], ids=["working", "setup"])
+def test_the_owner_is_told_to_ask_the_user_before_routing(tmp_path, monkeypatch, board):
+    said = _start(tmp_path, monkeypatch, TWO, "lead", board=board)
+    # The sentence that told the Owner to settle gaps itself is gone, not
+    # kept beside the new one.
+    assert "asking you back" not in said
+    assert "ask the User before you" in said
+    assert ' ask "<question>"' in said
+    assert "Never route a guess" in said
+
+
+@pytest.mark.parametrize("board", [True, False], ids=["working", "setup"])
+def test_a_secondary_hands_a_gap_back_rather_than_filling_it(
+    tmp_path, monkeypatch, board
+):
+    said = _start(tmp_path, monkeypatch, TWO, "helper", board=board)
+    assert "cannot be done as written" in said
+    assert "Do not fill the gap yourself" in said
+
+
+@pytest.mark.parametrize(
+    "config, manager", [(ONE, "lead"), (TWO, "lead")], ids=["lone", "owner"]
+)
+def test_the_owner_is_told_not_to_implement_tickets_itself(
+    tmp_path, monkeypatch, config, manager
+):
+    said = _start(tmp_path, monkeypatch, config, manager, board=True)
+    assert "## You do not implement tickets yourself" in said
+    # Exactly once: a lone Manager's prompt is composed from the same parts.
+    assert said.count("You do not implement tickets yourself") == 1
+
+
+def test_a_secondary_is_not_given_the_owners_rule(tmp_path, monkeypatch):
+    said = _start(tmp_path, monkeypatch, TWO, "helper", board=True)
+    assert "You do not implement tickets yourself" not in said
+
+
+def test_a_manager_whose_owner_cannot_be_named_is_given_the_rule():
+    from rite_ai.managers.prompt import TICKET_WORK, ticket_work
+
+    # Another Manager is the Owner, in one root: a secondary, so not given.
+    assert ticket_work("helper", "lead", one_root=True) == ""
+    # Everyone else is: itself the Owner, no single Owner, or a `remote`
+    # where the election, not this process, decides who the Owner is.
+    assert ticket_work("lead", "lead", one_root=True) == TICKET_WORK
+    assert ticket_work("a", "", one_root=True) == TICKET_WORK
+    assert ticket_work("helper", "lead", one_root=False) == TICKET_WORK
