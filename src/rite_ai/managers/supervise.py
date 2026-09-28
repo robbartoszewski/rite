@@ -43,6 +43,7 @@ from rite_ai.managers import (
     claude_login,
     cursor_chat,
     cursor_login,
+    delivered,
     designate,
     designated,
     designation_path,
@@ -895,6 +896,7 @@ def _supervise(
     broker: object = None,
     router: object = None,
     waiting: object = None,
+    chores: object = None,
     poll: float = POLL_SECONDS,
     now: object = None,
     watch: object = None,
@@ -1394,8 +1396,8 @@ def _supervise(
                 chat.expected = before.created_at_ms
                 # CU8: rite's allowlist, written fresh before EVERY launch, from
                 # outside the boundary, and checked after the cycle. The
-                # Manager cannot write this file on macOS
-                # (`github_access.profile_lines`); on Linux it can (open, CU8).
+                # Manager can write this file on every platform (Cursor must
+                # rewrite it each turn, CU8), so the check is the protection.
                 cursor_login.write_config(root, manager)
                 cycle_prompt = (
                     CONTINUATION if before.outcome == cursor_chat.CONTINUE else prompt
@@ -1425,6 +1427,17 @@ def _supervise(
             waiting_for_it = take_mail(root, manager, INBOX)
             if waiting_for_it:
                 say(f"delivering {len(waiting_for_it)} message(s) to {manager!r}")
+                # ⚠ TR9: `take_mail` has just deleted them, and a chore must
+                # quote the User's words as delivered, so they are kept here,
+                # outside the boundary, before the Manager ever sees an id.
+                try:
+                    delivered.record(root, manager, waiting_for_it)
+                except OSError as e:
+                    say(
+                        f"could not record the instructions delivered to "
+                        f"{manager!r} ({e}); a chore asked for from them will "
+                        "be refused"
+                    )
             # Composed once, for both launches below: the fallback needs the
             # same mail and the same reply instructions, differing only in
             # which opening text it starts from.
@@ -1662,6 +1675,11 @@ def _supervise(
                 root, cycle.started_at, say, engine, agent, live_pane, manager
             )
             _honour_worker_requests(root, manager, broker, say)
+            if callable(chores):
+                # TR9: at the boundary with the Worker requests, and for the
+                # same reason: it talks to the board, which the two-second
+                # poll must not wait on.
+                chores(say)
             if callable(router):
                 # And once more at the boundary, for a request written in the
                 # cycle's last two seconds.

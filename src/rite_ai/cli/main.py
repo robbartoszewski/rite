@@ -465,6 +465,41 @@ def doctor() -> None:
     click.echo("\nok")
 
 
+def _doctor_worker_github_token(root: Path, modules: list, problems: list) -> None:
+    from rite_ai.credentials.store import get_scoped, store_is_readable
+    from rite_ai.sandbox import (
+        GLOBAL_TOKEN_CREDENTIAL,
+        owner_repo_from_url,
+        resolve_worker_token,
+    )
+
+    on_github = [m.name for m in modules if m.url and owner_repo_from_url(m.url)]
+    if not on_github:
+        return
+    if not store_is_readable():
+        return  # reported above as the store being unreadable, not as missing
+    creds = _project_credentials()
+    workers_dir = root / "workers"
+    workers = (
+        sorted(p.name for p in workers_dir.iterdir() if (p / "worker.yml").is_file())
+        if workers_dir.is_dir()
+        else []
+    )
+    # With no Worker yet, the one every future Worker would fall back to.
+    lacking = [w for w in workers if resolve_worker_token(w, creds)[0] is None]
+    if not workers and not get_scoped(GLOBAL_TOKEN_CREDENTIAL, creds):
+        lacking = ["(any new Worker)"]
+    if lacking:
+        click.echo(
+            f"workers: no GitHub token for {_first_few(lacking)}, so sandboxed "
+            f"work on {_first_few(on_github)} could never be pushed — `rite "
+            "credential set github_token`"
+        )
+        problems.append(
+            f"no GitHub token for sandboxed Worker(s) {_first_few(lacking)}"
+        )
+
+
 def _first_few(names: list[str], limit: int = 5) -> str:
     """A list a person can read in one line: the first few, then a count."""
     if len(names) <= limit:
@@ -656,10 +691,23 @@ def _doctor_report(problems: list[str]) -> None:
         # modules.yaml by design, because `scaffold.AUTHORED_CONFIG`
         # re-includes them. Only the explicit override answers it, and
         # nothing else tells anyone — which is what this row is for.
-        if _is_project(module_dir):
+        is_the_root = module_dir.resolve() == root.resolve()
+        if is_the_root and module_sandbox.enabled:
+            # A single-repository project (dogfood F2): the module IS the
+            # project, so every clone of it carries the project's own
+            # `.rite/`. A sandboxed Worker is given RITE_PROJECT_ROOT by
+            # `rite sandbox start`, which wins over that marker, so its claims
+            # reach this project's ledger. Only an unsandboxed session started
+            # in the clone would miss it, which is the branch below.
+            click.echo(
+                f"module {m.name}: is the project itself; sandboxed Workers "
+                "are pointed at this project, so their claims are shared"
+            )
+        elif _is_project(module_dir):
             click.echo(
                 f"module {m.name}: is itself a rite project "
-                f"({m.path}/.rite/). A session started inside it resolves to "
+                f"({m.path.rstrip('/')}/.rite/). A session started inside it "
+                f"resolves to "
                 f"IT, not to this project, so its claims go to a private "
                 f"ledger and never collide with anyone else's. Set "
                 f"{PROJECT_ROOT_ENV}={root} in that session's environment."
@@ -704,6 +752,14 @@ def _doctor_report(problems: list[str]) -> None:
                 "        test: <the command that runs this module's tests>"
             )
             problems.append(f"module {m.name} has no test command")
+
+    # A sandboxed Worker pushes to GitHub with the token rite gives it and
+    # nothing else (§5.3.3), so a GitHub module with no token for Workers is
+    # a Worker that works and cannot deliver. Dogfood #28: doctor printed
+    # `github_token: not set` and counted nothing, and KAN-7's Worker hit
+    # `could not read Username`. `rite sandbox start` refuses the same state.
+    if module_sandbox.enabled:
+        _doctor_worker_github_token(root, modules, problems)
 
     # The WORKERS' checkouts, which the loop above never looked at. Every
     # module line it prints is about `<root>/<module>` — the project's own
@@ -5852,6 +5908,14 @@ def sandbox_start(
             f"project sets a new one.",
             err=True,
         )
+    # Refused BEFORE a sandbox is spent (dogfood KAN-7): a Worker with nothing
+    # cloned, or whose work cannot leave the sandbox, otherwise starts,
+    # works, and fails only at the push — and the one thing it can then do
+    # is ask for a credential through a side channel.
+    refusal = _worker_cannot_deliver(worker, worker_dir, modules, token)
+    if refusal:
+        click.echo(refusal, err=True)
+        raise SystemExit(1)
     result = start_worker(
         root,
         worker,
@@ -5866,6 +5930,56 @@ def sandbox_start(
     click.echo(result.message)
     if not result.ok:
         raise SystemExit(1)
+
+
+def _how_to_register(root: Path) -> str:
+    """The step that gives this project a module, for the one-line refusal.
+
+    `rite add module <name> <url>` clones into `<root>/<name>/`. For a
+    project that IS one repository (dogfood F2's pingr, created by a rite
+    older than the fix, so its committed `modules.yaml` is empty) that is a
+    second copy nested inside the first, one `git add -A` from being
+    committed. There the module is the root itself, so name the entry."""
+    from rite_ai.cli.init.detect import ROOT_MODULE_PATH, detect_repos
+    from rite_ai.config.parse import home_relative
+
+    repos = detect_repos(root)
+    if len(repos) == 1 and repos[0].path == ROOT_MODULE_PATH:
+        r = repos[0]
+        url = f", url: {home_relative(r.url)}" if r.url else ""
+        return (
+            "This project is itself the repository: add it to "
+            f".rite/modules.yaml as `{r.name}: {{path: ./{url}, branch: "
+            f"{r.branch}}}`"
+        )
+    return "Register the repository with `rite add module <name> <url>`"
+
+
+def _worker_cannot_deliver(
+    worker: str, worker_dir: Path, modules: list, token: str | None
+) -> str | None:
+    """Why this Worker could do no work that reaches anyone, or None."""
+    import shutil
+
+    from rite_ai.sandbox import (
+        clone_remotes,
+        push_access_refusal,
+        remote_access_refusal,
+    )
+
+    if not modules:
+        return (
+            f"not starting '{worker}': it has no module, so its workspace holds "
+            f"no code to work on. {_how_to_register(worker_dir.parent.parent)}, "
+            f"then `rite remove worker {worker}` and `rite add worker {worker}`"
+        )
+    gh = shutil.which("gh")
+    remotes = clone_remotes(worker_dir)
+    refusal = remote_access_refusal(worker, remotes, token, gh)
+    if refusal or not remotes:
+        return refusal
+    assert token  # remote_access_refusal refuses without one
+    return push_access_refusal(worker, remotes, token)
 
 
 @sandbox.command("stop")
@@ -6989,6 +7103,8 @@ def _start_a_manager(
     # "stopped on 'unknown' after 0 session(s) — this is a fault, not a
     # completion", which was neither true nor actionable for either.
     from rite_ai.managers.broker import for_project
+    from rite_ai.managers.chores import create_asked_for
+    from rite_ai.managers.chores import instructions as chore_instructions
 
     board, board_state, board_problem, composed_under = _board_for_manager(root)
     if board_state == "unreachable":
@@ -7128,6 +7244,9 @@ def _start_a_manager(
             # itself reads, so "is this a real ticket" has one answer in one
             # place; `for_project` refuses everything when there is none.
             broker=for_project(root, board),
+            # TR9: a User's instruction becomes a chore, written by rite
+            # outside the boundary, on the same board the broker checks.
+            chores=lambda say: create_asked_for(root, role.name, board, say),
             router=_router_for(root, role.name),
             # ⚠ DF2: a cycle can be CAUSED by mail. None for a lone Manager,
             # whose runs are exactly what they were.
@@ -7151,6 +7270,7 @@ def _start_a_manager(
                     role.name,
                     root=root,
                     extra=instructions(root, role.name, enabled=record_issues)
+                    + chore_instructions(root, role.name)
                     + _other_managers_briefing(root, role.name)
                     + _ticket_work_rule(root, role.name),
                 )
@@ -7462,6 +7582,51 @@ def route(manager_name: str, text: str) -> None:
     click.echo(
         f"route queued: {manager_name!r} receives it at its next turn, marked "
         f"as routed by {speaking!r}."
+    )
+
+
+@cli.command("chore")
+@click.argument("message_ids", nargs=-1, required=True)
+def chore(message_ids: tuple[str, ...]) -> None:
+    """Have rite make a chore ticket from the User's own message(s) — a Manager only.
+
+    Every piece of work a Worker or another Manager does carries a ticket.
+    When the User asks for work in a message and it is not a ticket
+    yet, the Manager names the message by the id shown beside it in its
+    instruction, and rite writes the ticket: the User's words as they were
+    delivered, labelled `chore` and `scheduled`. The Manager cannot give it a
+    title or text.
+
+    ⚠ This only ASKS. The ticket is created by the Manager's supervisor,
+    outside its sandbox, when the Manager's current turn ends, and its next
+    instruction says the ticket's id or why it was refused.
+
+    Examples:
+      rite chore 1759068000123-4521-0
+    """
+    from rite_ai.managers import current_manager
+    from rite_ai.managers.chores import MAX_MESSAGES, request
+
+    root = _require_project_root()
+    speaking = current_manager()
+    if not speaking:
+        click.echo(
+            "refusing: `rite chore` is how a Manager asks rite to ticket a "
+            "User's instruction. From your own shell, file the ticket "
+            "directly with `rite board create`.",
+            err=True,
+        )
+        raise SystemExit(1)
+    ids = [i.strip() for i in message_ids if i.strip()]
+    if not ids or len(set(ids)) != len(ids) or len(ids) > MAX_MESSAGES:
+        click.echo(
+            f"refusing: name 1 to {MAX_MESSAGES} different message ids.", err=True
+        )
+        raise SystemExit(1)
+    request(root, speaking, ids)
+    click.echo(
+        f"chore requested from message(s) {', '.join(ids)}: rite creates it "
+        "when this turn ends, and your next instruction says its id."
     )
 
 

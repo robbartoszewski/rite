@@ -17,6 +17,7 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
 from rite_ai.config.models import Module, RecordedCommands, SandboxConfig
+from rite_ai.names import name_problem
 
 _SKIP_DIRS = {
     ".git",
@@ -96,12 +97,36 @@ def iter_candidate_dirs(root: Path) -> list[Path]:
     return out
 
 
+ROOT_MODULE_PATH = "./"
+
+
 def detect_repos(root: Path) -> list[DetectedRepo]:
-    """Scan immediate subdirectories of root for git repositories."""
+    """The git repositories a Worker would clone: each immediate subdirectory
+    that is one, or else `root` itself when it is one.
+
+    ⚠ **The second half is the common case, and it used to be missing.**
+    Measured in the v0.6.0 dogfood (F2): `rite init` run inside an ordinary
+    single repository registered no module, so `modules.yaml` said
+    `modules: {}`, a Worker's workspace held no source, and the ticket it was
+    started on died with nothing to clone. A repository that holds other
+    repositories is a workspace and is not itself a module; one that holds
+    none is the code — once it has a commit. A `git init` with nothing
+    committed cannot be cloned, which is the one thing a module is for here,
+    and is usually a new workspace about to receive its modules.
+    """
     repos: list[DetectedRepo] = []
     for child in iter_candidate_dirs(root):
         if (child / ".git").exists():
             repos.append(_describe_repo(child))
+    if (
+        not repos
+        and (root / ".git").exists()
+        and _git(root, ["rev-parse", "--verify", "--quiet", "HEAD"]) is not None
+    ):
+        own = _describe_repo(root.resolve())
+        if not name_problem(own.name, kind="module name"):
+            own.path = ROOT_MODULE_PATH
+            repos.append(own)
     return repos
 
 

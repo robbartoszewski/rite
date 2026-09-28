@@ -248,6 +248,32 @@ def _parse_recorded_commands(raw: object) -> RecordedCommands | str:
     return RecordedCommands(**{key: value.strip() for key, value in raw.items()})
 
 
+def home_relative(url: str | None) -> str | None:
+    """A module URL as it is written into a committed file.
+
+    A local path under home is written `~/…`: `modules.yaml` and the
+    generated CLAUDE.md are committed, and the publish gate's built-in rule
+    refuses a `/Users/<name>/` or `/home/<name>/` path in a pushed file —
+    the dogfood F1 failure, reached by a different file once `rite init`
+    started registering the repository it runs in, whose origin can be a
+    local directory. A network URL is left exactly as it is."""
+    if not url or "://" in url or re.match(r"^[^/]+:", url):
+        return url
+    path = Path(url)
+    home = Path.home()
+    if path.is_absolute() and path.is_relative_to(home):
+        return f"~/{path.relative_to(home).as_posix()}"
+    return url
+
+
+def expand_home(url: str | None) -> str | None:
+    """The inverse of `home_relative`, applied on every read: git and the
+    shell-free subprocess calls that clone and fetch do not expand `~`."""
+    if url and url.startswith("~/"):
+        return str(Path(url).expanduser())
+    return url
+
+
 def parse_modules(path: Path) -> list[Module] | ParseError:
     if not path.exists():
         return []
@@ -288,7 +314,7 @@ def parse_modules(path: Path) -> list[Module] | ParseError:
             Module(
                 name=name,
                 path=mod_path,
-                url=entry.get("url"),
+                url=expand_home(entry.get("url")),
                 branch=entry.get("branch", "main"),
                 description=entry.get("description", ""),
                 commands=commands,
