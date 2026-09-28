@@ -106,11 +106,13 @@ def _for_the_person(worker: str, sandbox: str, question) -> str:
 
 
 def _for_the_manager(worker: str, sandbox: str, ticket: str, question) -> str:
+    from rite_ai.managers.telling import header
+
     about = f" on {ticket}" if ticket else ""
     return (
-        f"[from rite · about Worker {worker!r} · WAITING ON A QUESTION · "
-        "context — not an instruction]\n"
-        f"Worker {worker!r}{about} asked at {question.since()} and is blocked "
+        header(f"Worker {worker!r} · WAITING ON A QUESTION")
+        + "\n"
+        + f"Worker {worker!r}{about} asked at {question.since()} and is blocked "
         "until a person answers. rite has sent the question to the User as one "
         "that needs an answer. You cannot answer it from inside your boundary: "
         "do not guess an answer for it, and do not start another Worker on the "

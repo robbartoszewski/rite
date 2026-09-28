@@ -119,7 +119,9 @@ class TestTheManagerChoosesMessagesAndNothingElse:
         assert ids[DM] in description and "no Manager wrote it" in description
         assert labels == ["chore", "scheduled"]
         (told,) = _notes(tmp_path, "lead")
-        assert "chore RT-99 created" in told and told.startswith("[rite · chores")
+        # rite's one note header (`telling`).
+        assert "chore RT-99 created" in told
+        assert told.startswith("[from rite · about chores · ")
         assert not list(chores._chores_dir(tmp_path, "lead").iterdir())
 
     def test_a_route_named_as_a_chore_is_refused_and_the_manager_is_told(
