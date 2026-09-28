@@ -656,10 +656,23 @@ def _doctor_report(problems: list[str]) -> None:
         # modules.yaml by design, because `scaffold.AUTHORED_CONFIG`
         # re-includes them. Only the explicit override answers it, and
         # nothing else tells anyone — which is what this row is for.
-        if _is_project(module_dir):
+        is_the_root = module_dir.resolve() == root.resolve()
+        if is_the_root and module_sandbox.enabled:
+            # A single-repository project (dogfood F2): the module IS the
+            # project, so every clone of it carries the project's own
+            # `.rite/`. A sandboxed Worker is given RITE_PROJECT_ROOT by
+            # `rite sandbox start`, which wins over that marker, so its claims
+            # reach this project's ledger. Only an unsandboxed session started
+            # in the clone would miss it, which is the branch below.
+            click.echo(
+                f"module {m.name}: is the project itself; sandboxed Workers "
+                "are pointed at this project, so their claims are shared"
+            )
+        elif _is_project(module_dir):
             click.echo(
                 f"module {m.name}: is itself a rite project "
-                f"({m.path}/.rite/). A session started inside it resolves to "
+                f"({m.path.rstrip('/')}/.rite/). A session started inside it "
+                f"resolves to "
                 f"IT, not to this project, so its claims go to a private "
                 f"ledger and never collide with anyone else's. Set "
                 f"{PROJECT_ROOT_ENV}={root} in that session's environment."

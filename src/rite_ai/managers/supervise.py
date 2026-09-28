@@ -1361,8 +1361,8 @@ def _supervise(
                 chat.expected = before.created_at_ms
                 # CU8: rite's allowlist, written fresh before EVERY launch, from
                 # outside the boundary, and checked after the cycle. The
-                # Manager cannot write this file on macOS
-                # (`github_access.profile_lines`); on Linux it can (open, CU8).
+                # Manager can write this file on every platform (Cursor must
+                # rewrite it each turn, CU8), so the check is the protection.
                 cursor_login.write_config(root, manager)
                 cycle_prompt = (
                     CONTINUATION if before.outcome == cursor_chat.CONTINUE else prompt
