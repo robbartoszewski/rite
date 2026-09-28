@@ -384,8 +384,19 @@ class TestDestroyKeepsTwoIndependentGuards:
             patch("rite_ai.sandbox.subprocess.run") as run,
             tempfile.TemporaryDirectory() as tmp,
         ):
-            run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            exchange = tempfile.mkdtemp(dir=tmp)
+
+            def yoloai(args, *a, **kw):
+                # `files <name> path` is asked first (dogfood Q3): an empty
+                # exchange directory, so no question stands in the way and
+                # the assertions below are about a destroy that ran.
+                if len(args) >= 4 and args[1] == "files" and args[-1] == "path":
+                    return MagicMock(returncode=0, stdout=exchange, stderr="")
+                return MagicMock(returncode=0, stdout="", stderr="")
+
+            run.side_effect = yoloai
             destroy_worker("alpha", root=tmp, force=False)
+            assert run.call_args[0][0][1] == "destroy"
             assert "--abandon-unapplied" not in run.call_args[0][0]
 
             run.reset_mock()

@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -49,6 +50,20 @@ def _yoloai_calls(
         if "ls" in args:
             return MagicMock(returncode=0, stdout=ls_json, stderr="")
         return MagicMock(returncode=new_returncode, stdout="", stderr=new_stderr)
+
+    return run
+
+
+def _no_question(exchange: str):
+    """A fake `subprocess.run` for yoloAI that answers `files <name> path`
+    with an empty exchange directory (the sandbox exists, and its Worker
+    asked nothing) and succeeds at everything else. `destroy_worker` asks
+    for that directory before destroying (dogfood Q3)."""
+
+    def run(args, *a, **kw):
+        if len(args) >= 4 and args[1] == "files" and args[-1] == "path":
+            return MagicMock(returncode=0, stdout=exchange + "\n", stderr="")
+        return MagicMock(returncode=0, stdout="", stderr="")
 
     return run
 
@@ -666,11 +681,15 @@ class TestStopAndDestroy:
 
         # With a root, and no sandbox directory to inspect: rite has nothing
         # to say, so it proceeds — and leaves yoloAI's own refusal armed.
+        # yoloAI is asked where the exchange files are (the question check,
+        # dogfood Q3) and answers with an empty directory: no question.
         import tempfile
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as ex:
+            mock_run.side_effect = _no_question(ex)
             destroy_worker("alpha", root=tmp, force=False)
         args = mock_run.call_args[0][0]
+        assert args[1] == "destroy"
         assert "--abandon-unapplied" not in args
 
 
@@ -729,11 +748,13 @@ class TestWorkOnlyInTheSandboxCopy:
         real_run = subprocess.run
         calls = []
 
+        exchange = tempfile.mkdtemp()
+
         def run(args, *a, **kw):
             if args and args[0] == "git":
                 return real_run(args, *a, **kw)
             calls.append(list(args))
-            return MagicMock(returncode=0, stdout="", stderr="")
+            return _no_question(exchange)(args)
 
         return run, calls
 
