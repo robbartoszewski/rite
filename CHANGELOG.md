@@ -23,6 +23,17 @@ running: if one is, `rite start` refuses and names it, for example:
 To commit entries, copy them in with the new **`rite journal export <manager>
 --to <dir>`**, which never overwrites a different file.
 
+### A question is no longer a reply
+
+`rite ask` is for anything that needs you: a question, a blocker, a
+decision. `rite reply` is for reading only, and it now **refuses** anything
+that reads like one (a question mark, "should I", "blocked", "please", "your
+call" and similar), telling the Manager to use `rite ask`. It errs toward
+refusing too much, by design. Each Manager is told which command is which.
+`rite replies` and the Slack relay mark a question "needs your answer". A
+message written without a kind, by an older rite or by hand, is marked as
+needing you.
+
 ### `rite stop --skip-handover`
 
 `rite stop` hands over by default, as before. The new `--skip-handover`

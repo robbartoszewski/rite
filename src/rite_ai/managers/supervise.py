@@ -74,6 +74,7 @@ from rite_ai.managers.permissions import (
     settings_path,
     write_settings,
 )
+from rite_ai.managers.progress import Footprint, footprint
 from rite_ai.managers.session import (
     PROMPT_FILE,
     StartResult,
@@ -1041,6 +1042,15 @@ def _supervise(
                 f"starts fresh."
             )
 
+    # ⚠ THE NO-PROGRESS GUARD (F22). Set when a session the BOARD started
+    # ended having changed nothing rite can see; cleared by anything that
+    # changes. While set, a board that still reads the same starts no
+    # session. See `progress` for what counts and why.
+    stalled: _Stalled | None = None
+    # The board as the verdict last read it. A cycle mail started is judged
+    # against it too: mail is new INPUT, not progress, and a session handed a
+    # message that then changes nothing is as idle as one handed none.
+    last_basis = None
     while True:
         # ⚠ WHAT CAUSES THIS CYCLE. "" means the ordinary causes: the last
         # session ended cleanly and the board says continue. "mail" means a
@@ -1189,6 +1199,47 @@ def _supervise(
                     f"restart, one that continues costs quota.",
                     cycles,
                 )
+            elif (
+                stalled is not None
+                and _basis(answer) is not None
+                and _basis(answer) == stalled.basis
+            ):
+                # ⚠ F22: the board reads exactly as it did when a session that
+                # changed nothing began. Starting another would repeat it —
+                # observed, eight sessions in eighty seconds. Wait instead, in
+                # the one wait there is, spending nothing. Routed work keeps
+                # its own reasons to end the wait, so `waiting` goes in only
+                # when there is one (see `_wait_for_mail`).
+                why = _reason_to_wait(root, manager, waiting, router, slack, say)
+                stopped = _wait_for_mail(
+                    root,
+                    manager,
+                    waiting if why else None,
+                    router,
+                    slack,
+                    say,
+                    clock,
+                    deadline,
+                    poll,
+                    cycles,
+                    live,
+                    wake=_stalled_wake(root, manager, verdict, stalled, clock),
+                    idle_line=_idle_line(manager, stalled, clock),
+                )
+                if stopped is not None:
+                    return stopped
+                # Whatever woke it earns ONE session: the guard is set again
+                # only by another session that changes nothing.
+                stalled = None
+                if mail_waiting(root, manager, INBOX):
+                    cause = "mail"
+                else:
+                    # The board or the project changed: decide afresh, from
+                    # the top, bounds first.
+                    continue
+            if not cause:
+                last_basis = _basis(answer)
+        cycle_basis = last_basis
 
         try:
             # ⚠ **THE PREVIOUS SESSION IS ENDED HERE, and the position is the
@@ -1300,6 +1351,7 @@ def _supervise(
             # given that prompt, so that is the board its conversation began
             # under. Read here only for a caller that does not say.
             launched_under = began_under if began_under is not None else board_now(root)
+            before = footprint(root, manager) if cycle_basis is not None else None
             # Taken BEFORE the launch: the engine talks to its model the moment
             # tmux starts it, so a window opened after `launch` returns would
             # miss a cut in its first request (`_say_if_the_window_was_cut`).
@@ -1509,6 +1561,13 @@ def _supervise(
                 time.sleep(poll)
             cycle.ended_at = clock()
             cycle.attended = attended
+            # ⚠ BEFORE the Worker requests are honoured below, which removes
+            # them: a request is progress, and must still be here to count.
+            stalled = None
+            if before is not None:
+                after = footprint(root, manager)
+                if not after.differs_from(before):
+                    stalled = _Stalled(cycle.number, cycle_basis, after)
             refused = _say_refusals(
                 root, cycle.started_at, say, engine, agent, live_pane, manager
             )
@@ -1770,6 +1829,76 @@ def _relay_tick(root: Path, manager: str, router, slack, say) -> None:
             say(line)
 
 
+BOARD_RECHECK_SECONDS = 60.0
+"""How often a Manager waiting under the no-progress guard reads the board
+again. A read is a request to the backend, so not every poll tick."""
+PROJECT_RECHECK_SECONDS = 15.0
+"""How often it looks at the project again (two `git` calls)."""
+
+
+@dataclass(frozen=True)
+class _Stalled:
+    """A session the board started that changed nothing (F22)."""
+
+    number: int
+    basis: object
+    footprint: Footprint
+
+
+def _basis(answer) -> object:
+    """What the board looked like behind a verdict, or None when the verdict
+    carries none. Then the guard never engages: it cannot tell "unchanged"."""
+    return getattr(answer, "basis", None)
+
+
+def _stalled_wake(root: Path, manager: str, verdict, stalled: _Stalled, clock):
+    """`wake` for the guard's wait: why a session should start now, or ""."""
+    marks = {"board": clock(), "project": clock()}
+
+    def wake() -> str:
+        now = clock()
+        if now - marks["project"] >= PROJECT_RECHECK_SECONDS:
+            marks["project"] = now
+            changed = footprint(root, manager).differs_from(stalled.footprint)
+            if changed:
+                return "the project changed (" + ", ".join(changed) + ")"
+        if now - marks["board"] >= BOARD_RECHECK_SECONDS:
+            marks["board"] = now
+            answer = verdict(root)
+            if answer not in CONTINUE_VERDICTS or _basis(answer) != stalled.basis:
+                return "the board changed"
+        return ""
+
+    return wake
+
+
+def _idle_line(manager: str, stalled: _Stalled, clock):
+    """`idle_line` for the guard's wait: said when it begins, then every
+    `STILL_WAITING_EVERY` with a ⚠, as a routed wait is."""
+    from rite_ai.managers.routing import STILL_WAITING_EVERY
+
+    said: dict[str, float | None] = {"at": None}
+
+    def line() -> str:
+        now = clock()
+        if said["at"] is not None and now - said["at"] < STILL_WAITING_EVERY:
+            return ""
+        mark = "" if said["at"] is None else "⚠ still: "
+        said["at"] = now
+        return (
+            f"{mark}{manager!r} is waiting, spending nothing: session "
+            f"{stalled.number} changed nothing rite can see (no commit or edit "
+            "in the project, claim, reply, route or Worker request), and the "
+            "board reads as it did when that session began, "
+            "so another would repeat it. Mail wakes it (a Slack DM, a routed "
+            f"reply, `rite message {manager} …`), and so does a change on the "
+            f"board (read every {int(BOARD_RECHECK_SECONDS)}s) or in the "
+            "project. The window still ends the run."
+        )
+
+    return line
+
+
 def _reason_to_wait(root: Path, manager: str, waiting, router, slack, say) -> str:
     """Why to wait rather than stop, read so that a reply is never stranded.
     "" means stop.
@@ -1812,9 +1941,21 @@ def _wait_for_mail(
     poll: float,
     cycles,
     live: str,
+    wake=None,
+    idle_line=None,
 ) -> SuperviseResult | None:
     """Wait, with no engine running, until mail is in this Manager's inbox.
     None means start a cycle now, BECAUSE of that mail; a result means stop.
+
+    ⚠ **`waiting` may be None, and `wake` may end the wait too (F22).** The
+    no-progress guard waits here as well rather than in a wait of its own:
+    one place decides when a Manager with nothing to do spends nothing. With
+    no routed work outstanding the guard passes no `waiting`, because
+    `Waiting.over()` then answers "every routed message was handled" and
+    would end the wait at once as a STOP. `wake()` returns why to start a
+    session now (the board or the project changed), or "". `idle_line()` is
+    what the wait says, when a line is due, if there is no `waiting` to say
+    it. None returned for a wake means the same as for mail: start a cycle.
 
     ⚠ **WAKE ON STATE, NOT ON AN EVENT.** Anything in the inbox starts the
     cycle — a routed instruction, a collected reply, a Slack DM — so nothing
@@ -1832,10 +1973,11 @@ def _wait_for_mail(
     the window, or on Ctrl-C, and a wait that cannot end by itself is SAID
     every `routing.STILL_WAITING_EVERY`.
     """
-    waiting.begin()
+    if waiting is not None:
+        waiting.begin()
     try:
         while True:
-            ended = waiting.over()
+            ended = waiting.over() if waiting is not None else ""
             if ended:
                 # Decision 3: a wait ending because a Manager owing work is
                 # gone says so to the Owner FIRST. The note is mail, so the
@@ -1857,7 +1999,14 @@ def _wait_for_mail(
                     f"{len(cycles)} session(s)",
                     cycles,
                 )
-            line = waiting.still_waiting()
+            woke = wake() if callable(wake) else ""
+            if woke:
+                say(f"{woke}: starting a session for {manager!r}")
+                return None
+            if waiting is not None:
+                line = waiting.still_waiting()
+            else:
+                line = idle_line() if callable(idle_line) else ""
             if line:
                 say(line)
             _sleep(poll)

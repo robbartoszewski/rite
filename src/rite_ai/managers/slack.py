@@ -870,7 +870,7 @@ class Listener:
         into the Owner's DM the moment Slack was switched on. So an absent
         state file means "start from now", said once.
         """
-        from rite_ai.managers.mailbox import OUTBOX, mark_read, unread
+        from rite_ai.managers.mailbox import OUTBOX, action_label, mark_read, unread
 
         target = self._outward
         if self.project is None or not target:
@@ -927,7 +927,13 @@ class Listener:
                     f"answer it acts on. Answer with `rite message {self.manager} "
                     '"…"` on this machine._'
                 )
-            sent = _post(target, self.token, f"*{self.manager}*: {text}", call=call)
+            label = action_label(message)
+            sent = _post(
+                target,
+                self.token,
+                f"*{self.manager}*" + (f" ({label})" if label else "") + f": {text}",
+                call=call,
+            )
             if not sent.ok:
                 # Not marked read, so the next tick retries it — and the ones
                 # after it wait, so replies are never posted out of order.
@@ -938,12 +944,12 @@ class Listener:
                 "ts": sent.ts,
                 "posted_at": self.clock(),
             }
-            label = (
+            remembered = (
                 self._label("check-in", sent)
                 if checkin
                 else self._label(f'reply "{" ".join(text.split())[:40]}"', sent)
             )
-            self.remember(sent.channel, sent.ts, label)
+            self.remember(sent.channel, sent.ts, remembered)
             lines.append(
                 f"slack: posted {message.path.name} → {sent.channel} ts {sent.ts}"
             )

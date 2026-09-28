@@ -74,12 +74,6 @@ UNCALLED_ON_PURPOSE = {
         "onto bytes on disk, and this is the one function in rite whose "
         "output the kernel enforces."
     ),
-    "requests_dir": (
-        "Called by `instructions` and `take_requests` in the same file. "
-        "Public because it is the one place rite decides WHERE a Manager "
-        "writes a Worker request — a directory of its own rather than the "
-        "mailbox outbox a human reads — and a test pins that by name."
-    ),
     "launch_argv": (
         "Called by `honour` in the same file. Public because the exact argv "
         "IS the security property: two validated values, a list rather than "
