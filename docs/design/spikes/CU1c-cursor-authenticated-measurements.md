@@ -142,3 +142,8 @@ Kept once, here, so it can be reconstructed. Nothing else repeats it.
 Only the third is a measurement of Cursor. It is what the runtime message,
 the plan and any user-facing text state.
 
+4. **The macOS deny removed (2026-09-28):** #49's deny on the file stopped
+   every Cursor turn (item 2's table), so it came out, by the lead's
+   decision, pending Robert's confirmation. Neither platform protects the
+   file now; the after-cycle check does the work on both.
+
