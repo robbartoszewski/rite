@@ -346,13 +346,15 @@ def start(root: Path) -> StartResult:
     # `/rite-start` is what a session is told to type. Printed together,
     # here, because this is where someone is looking when they have just
     # brought the project up and do not yet know what to do next.
-    from rite_ai.loop.session import running_pid
+    from rite_ai.loop.session import describe_holder, loop_holder
 
-    loop_pid = running_pid(root)
-    if loop_pid:
+    held = loop_holder(root)
+    if held.known and held.running:
         actions.append(
-            f"loop: running (pid {loop_pid}) — `rite loop status` for the last cycle"
+            f"loop: running (pid {held.pid}) — `rite loop status` for the last cycle"
         )
+    elif not held.known:
+        actions.append(f"loop: {describe_holder(held)}")
     else:
         actions.append(
             "loop: not running — `rite loop start` watches the queue and "

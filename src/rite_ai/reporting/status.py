@@ -451,20 +451,22 @@ def _loop_line(root: Path) -> str:
     subprocess call at all"). Asking tmux here put a process spawn into the
     command people run most often, and the test caught it.
 
-    So this reads the loop's lock file and checks the pid with a signal, which
-    is a syscall rather than a process. The cost is a few seconds of lag at
-    startup — `start` releases its own lock before spawning, and the loop
-    takes it once running — during which this says "not running" and `rite
-    loop status` says the truth. That is the right way round: the cheap
-    overview may be briefly behind, the authoritative command never is.
+    So this asks the loop's kernel lock (`rite_ai.loop.lock.holder`), which
+    is a few syscalls rather than a process, and is exact about whether a
+    loop process holds it and which pid. It lags tmux for a moment at
+    startup, while tmux has started the loop and the loop has not yet taken
+    the lock. Then this says "not running" and `rite loop status` says the
+    truth. That is the right way round: the cheap overview may be briefly
+    behind, the authoritative command never is. It says "cannot tell" rather
+    than "not running" when the lock cannot be asked.
     """
-    from rite_ai.loop.session import draining, running_pid
+    from rite_ai.loop.session import describe_holder, draining, loop_holder
 
-    pid = running_pid(root)
-    if not pid:
-        return "not running"
+    held = loop_holder(root)
+    if not (held.known and held.running):
+        return describe_holder(held)
     drain = " (draining)" if draining(root) else ""
-    return f"running (pid {pid}){drain} — `rite loop status` for detail"
+    return f"running (pid {held.pid}){drain} — `rite loop status` for detail"
 
 
 def format_status(status: ProjectStatus) -> str:

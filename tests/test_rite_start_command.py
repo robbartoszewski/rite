@@ -261,103 +261,147 @@ def test_start_does_not_start_the_loop(tmp_path, monkeypatch):
         raise AssertionError("start started the loop")
 
     monkeypatch.setattr(loop_session, "start", explode)
-    monkeypatch.setattr(loop_session, "hold_lock", explode)
+    monkeypatch.setattr("rite_ai.loop.lock.acquire", explode)
 
     result = start(root)
 
     assert result.ok
-    assert not (root / ".rite" / "loop.lock").exists()
+    assert not (root / ".rite" / "loop-run.lock").exists()
+    assert not (root / ".rite" / "loop-run.gate").exists()
     assert not (root / ".rite" / "loop.log").exists()
     assert "loop: not running" in "\n".join(result.actions)
 
 
-def test_start_reports_a_running_loop_as_running(tmp_path, monkeypatch):
+def _hold_the_loop_in_another_process(root: Path):
+    """A real second process holding this project's loop lock until killed,
+    which is what a `rite loop run --watch` is to every reader. It prints once
+    it holds the lock, so the caller never races its startup."""
+    import subprocess
+    import sys
+
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import sys, time\n"
+            "from pathlib import Path\n"
+            "from rite_ai.loop import lock\n"
+            "o = lock.acquire(Path(sys.argv[1]))\n"
+            "print(type(o).__name__, flush=True)\n"
+            "time.sleep(600)\n",
+            str(root),
+        ],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    assert proc.stdout is not None
+    assert proc.stdout.readline().strip() == "LockAcquired"
+    return proc
+
+
+def test_start_reports_a_running_loop_as_running(tmp_path):
     """The other half. A `start` that always says "not running" is a line
     people learn to ignore, which is how the report stops being read at all.
 
-    THE LIVENESS IS SUBSTITUTED, NOT BORROWED. This wrote `os.getpid()` —
-    the pytest process — and asserted `start` reports a running loop. pytest
-    is not a loop, so the test asserted the exact false positive that pid
-    reuse produces and called it the feature. Round 2 caught it, and it is
-    the second test in this file to have that shape.
-
-    Now the pid is a fixed number and its aliveness is supplied, so the test
-    says "when the recorded process IS the loop, say so" and nothing else.
+    The holder is a REAL second process holding the loop lock. The pid-file
+    version had to substitute liveness, because the file could name anything:
+    once it named pytest itself, and the test asserted the exact false
+    positive pid reuse produces. The kernel lock names only its holder.
     """
-    import rite_ai.scheduler.lock as lock_module
     from rite_ai.lifecycle import start
-    from rite_ai.loop.session import lock_path
 
     root = project(tmp_path)
-    lock_path(root).write_text("4242 0\n")
-    monkeypatch.setattr(lock_module, "process_is_running", lambda pid: pid == 4242)
+    loop = _hold_the_loop_in_another_process(root)
+    try:
+        result = start(root)
+    finally:
+        loop.kill()
+        loop.wait()
 
-    result = start(root)
-
-    assert "loop: running (pid 4242)" in "\n".join(result.actions)
-
-
-# --- the stale lock, which `rite start` made visible -------------------------------
-#
-# These live here rather than in the loop's own test file because this change
-# is what surfaced them: `rite start` now reports the loop, so a lock that
-# lies had somewhere new to show up. They are about `rite loop`, and belong
-# beside it once somebody moves them.
+    assert f"loop: running (pid {loop.pid})" in "\n".join(result.actions)
 
 
-def test_a_held_lock_with_no_tmux_session_names_the_way_out(tmp_path, monkeypatch):
-    """THE WEDGE. A reboot leaves `.rite/loop.lock` behind — it is a project
-    file, not `/var/run` — and the OS can hand that pid to something else. The
-    loop then cannot be started again: tmux has no session, the lock looks
-    held, and `rite loop start` refuses.
+# --- no stale lock: what the kernel lock removed ---------------------------------
 
-    Its remedy used to read "`rite loop stop`", which does not touch the lock
-    and reports "no loop is running". Two commands, two true-sounding answers,
-    no way to reconcile them, and the one command that fixes it printed
-    nowhere. Permanent, and silent.
 
-    rite cannot tell a recycled pid from a `rite loop run --watch` somebody
-    started directly, so it names both and prints the escape — the same
-    report-rather-than-guess line the claims work landed on.
-    """
+def test_a_killed_loop_leaves_nothing_to_clear(tmp_path):
+    """THE WEDGE, GONE. A reboot or a SIGKILL used to leave `.rite/loop.lock`
+    naming a pid, which the OS could hand to something else, and then no loop
+    could start until somebody ran `rm`. The kernel drops the lock when its
+    holder dies, however it dies, so there is nothing left to clear."""
+    from rite_ai.lifecycle import start
+    from rite_ai.loop import lock as loop_lock
+    from rite_ai.reporting.status import _loop_line
+
+    root = project(tmp_path)
+    loop = _hold_the_loop_in_another_process(root)
+    loop.kill()
+    loop.wait()
+
+    assert loop_lock.holder(root) == loop_lock.Holder(known=True, running=False)
+    assert _loop_line(root) == "not running"
+    assert "loop: not running" in "\n".join(start(root).actions)
+
+
+@pytest.mark.parametrize("kind", ["zombie", "unrelated live process"])
+def test_a_pid_that_is_not_the_loop_is_not_a_running_loop(tmp_path, kind):
+    """A pid that exists is not a pid that is yours. Measured on the pid file
+    at `4f7e1d2`: a zombie (`ps` stat Z) or a live `sleep` whose pid was
+    recorded read as a running loop and refused every start. Here the same
+    pids sit in the new lock file's record, and nothing holds the lock."""
+    import os
+    import subprocess
+    import time
+
+    from rite_ai.loop import lock as loop_lock
+
+    root = project(tmp_path)
+    if kind == "zombie":
+        pid = os.fork()
+        if pid == 0:
+            os._exit(0)
+        time.sleep(0.2)
+        other = None
+    else:
+        other = subprocess.Popen(["sleep", "30"])
+        pid = other.pid
+    try:
+        loop_lock.lock_path(root).write_text(f'{{"pid": {pid}, "acquired_at": 0}}\n')
+
+        assert loop_lock.holder(root) == loop_lock.Holder(known=True, running=False)
+        held = loop_lock.acquire(root)
+        assert isinstance(held, loop_lock.LockAcquired)
+        loop_lock.release(held)
+    finally:
+        if other is None:
+            os.waitpid(pid, 0)
+        else:
+            other.kill()
+            other.wait()
+
+
+def test_a_loop_run_outside_tmux_is_named_exactly(tmp_path, monkeypatch):
+    """tmux has no session, and a loop holds the lock: a `rite loop run
+    --watch` started directly. The pid is exact, so the refusal names it, and
+    there is no stale-lock escape to print, because there is no stale lock."""
     import rite_ai.loop.session as loop_session
-    from rite_ai.loop.session import lock_path
 
     root = project(tmp_path)
-    lock_path(root).write_text("4242 0\n")
     monkeypatch.setattr(loop_session, "is_alive", lambda _name: False)
     monkeypatch.setattr(loop_session, "rite_command", lambda: "/usr/bin/rite")
-    monkeypatch.setattr(
-        "rite_ai.scheduler.lock.process_is_running", lambda pid: pid == 4242
-    )
-
-    refused = loop_session.start(root)
+    loop = _hold_the_loop_in_another_process(root)
+    try:
+        refused = loop_session.start(root)
+        stopped = loop_session.stop(root)
+    finally:
+        loop.kill()
+        loop.wait()
 
     text = f"{refused.reason} {refused.remedy}"
-    assert "4242" in text
-    assert "tmux has no session" in text
-    assert str(lock_path(root)) in text, "the escape has to be a command, not advice"
-    assert "run --watch" in text, "the legitimate case must be named too"
-
-
-def test_stop_says_the_lock_is_still_in_the_way(tmp_path, monkeypatch):
-    """The other end of the same wedge. Somebody refused by `start` arrives
-    here, and this branch used to report "no loop is running" while the lock
-    that caused the refusal sat untouched."""
-    import rite_ai.loop.session as loop_session
-    from rite_ai.loop.session import lock_path
-
-    root = project(tmp_path)
-    lock_path(root).write_text("4242 0\n")
-    monkeypatch.setattr(loop_session, "is_alive", lambda _name: False)
-    monkeypatch.setattr(
-        "rite_ai.scheduler.lock.process_is_running", lambda pid: pid == 4242
-    )
-
-    result = loop_session.stop(root)
-
-    assert "4242" in result.detail
-    assert str(lock_path(root)) in result.detail
+    assert str(loop.pid) in text
+    assert "outside tmux" in text
+    assert "rm " not in text
+    assert str(loop.pid) in stopped.detail
 
 
 def test_stop_stays_quiet_when_no_lock_is_held(tmp_path, monkeypatch):
@@ -371,115 +415,72 @@ def test_stop_stays_quiet_when_no_lock_is_held(tmp_path, monkeypatch):
     result = loop_session.stop(root)
 
     assert "no loop is running" in result.detail
-    assert "still held" not in result.detail
-    assert "loop.lock" not in result.detail
+    assert "outside tmux" not in result.detail
+    assert "cannot tell" not in result.detail
 
 
 # --- one reader for "is the loop up" -----------------------------------------------
 
 
-def test_the_status_line_reads_through_running_pid(tmp_path, monkeypatch):
-    """Three callers wanted this answer and two had their own copy of the
-    lock-read. Separate copies drift one bug at a time, and the first symptom
-    is two commands disagreeing about whether the loop is up.
-
-    SO THIS ASSERTS THE SHARED IMPLEMENTATION, NOT AGREEMENT. The first
-    version computed both values and compared them — which is the thing its
-    own docstring said not to do, and would pass with two divergent copies
-    that happen to agree on these inputs. A test that certifies the bug it
-    warns about is worse than no test, because the next reader trusts it.
-
-    Substituting `running_pid` and demanding the status line follow is the
-    only version that fails when the copy comes back.
-    """
-    import rite_ai.loop.session as loop_session
-    from rite_ai.reporting.status import _loop_line
-
-    root = project(tmp_path)
-    monkeypatch.setattr(loop_session, "running_pid", lambda _root: 4242)
-
-    assert "4242" in _loop_line(root)
-
-
 def test_the_status_line_and_start_report_the_same_loop(tmp_path):
-    """The behaviour the shared reader exists to produce, end to end: one
-    lock file, two commands, one answer."""
-    import os
-
+    """One lock, two commands, one answer, with a real holder."""
     from rite_ai.lifecycle import start
-    from rite_ai.loop.session import lock_path, running_pid
     from rite_ai.reporting.status import _loop_line
 
     root = project(tmp_path)
-    assert running_pid(root) == 0
     assert _loop_line(root) == "not running"
     assert "loop: not running" in "\n".join(start(root).actions)
 
-    lock_path(root).write_text(f"{os.getpid()} 0\n")
-    assert running_pid(root) == os.getpid()
-    assert str(os.getpid()) in _loop_line(root)
-    assert str(os.getpid()) in "\n".join(start(root).actions)
+    loop = _hold_the_loop_in_another_process(root)
+    try:
+        assert str(loop.pid) in _loop_line(root)
+        assert str(loop.pid) in "\n".join(start(root).actions)
+    finally:
+        loop.kill()
+        loop.wait()
 
 
-def test_a_dead_pid_in_the_lock_is_not_a_running_loop(tmp_path, monkeypatch):
-    """The reason this reads a pid rather than trusting the file's existence:
-    a loop killed with SIGKILL leaves its lock behind, and a lock file that
-    means "running" would make the queue watcher permanently, invisibly
-    unstartable.
-
-    The deadness is SUBSTITUTED rather than assumed. This wrote pid 999999,
-    which cannot exist on macOS (pid_max 99998) and can exist on Linux, whose
-    default pid_max is 4194304 — a test that passes on the machine you write
-    it on and is a coin flip on CI. This repository has lost three defects to
-    exactly that asymmetry.
-    """
-    import rite_ai.scheduler.lock as lock_module
-    from rite_ai.loop.session import lock_path, running_pid
+def test_a_lock_that_cannot_be_asked_is_not_reported_as_not_running(
+    tmp_path, monkeypatch
+):
+    """ "Could not tell" and "not running" must never render the same: a start
+    told "not running" by a reader that could not tell would make two. Here
+    `flock` is a no-op, as on some network filesystems."""
+    import rite_ai.loop.session as loop_session
+    from rite_ai import kernel_lock
+    from rite_ai.lifecycle import start
+    from rite_ai.loop import lock as loop_lock
+    from rite_ai.reporting.status import _loop_line
 
     root = project(tmp_path)
-    lock_path(root).write_text("4242 0\n")
-    monkeypatch.setattr(lock_module, "process_is_running", lambda _pid: False)
+    loop_lock.lock_path(root).write_text("")
+    monkeypatch.setattr(kernel_lock.fcntl, "flock", lambda fd, op: None)
+    monkeypatch.setattr(loop_session, "is_alive", lambda _name: False)
+    monkeypatch.setattr(loop_session, "rite_command", lambda: "/usr/bin/rite")
 
-    assert running_pid(root) == 0
+    assert "cannot tell" in _loop_line(root)
+    assert "cannot tell" in "\n".join(start(root).actions)
+    refused = loop_session.start(root)
+    assert "cannot tell" in refused.reason
 
 
 @pytest.mark.parametrize(
-    "contents",
-    [
-        "not-a-pid\n",
-        "",
-        "   \n",
-        "-1 0\n",
-        "0 0\n",
-        # THE ONE REVIEW FOUND. Parses as an int, then `os.kill` raises
-        # OverflowError — which is an ArithmeticError and was caught by
-        # nothing. `rite start`, `rite status` and `rite loop start` all
-        # tracebacked instead of answering, on the one input where a command
-        # whose job is reporting what is wrong has to keep working.
-        "99999999999 0\n",
-    ],
+    "contents", ["not-a-pid\n", "", "   \n", "-1 0\n", "0 0\n", "99999999999 0\n"]
 )
-def test_a_corrupt_lock_reads_as_not_running(tmp_path, contents):
-    """Not as an exception, and not as running."""
-    from rite_ai.loop.session import lock_path, running_pid
-
-    root = project(tmp_path)
-    lock_path(root).write_text(contents)
-
-    assert running_pid(root) == 0
-
-
-def test_start_survives_a_lock_file_that_cannot_be_parsed(tmp_path):
-    """The property that actually matters, asserted through the command
-    rather than the helper: orientation is what a session needs most when
-    something is wrong, so `rite start` must report rather than raise."""
+def test_a_corrupt_record_with_no_holder_reads_as_not_running(tmp_path, contents):
+    """Not as an exception, and not as running: the record is only read when
+    the kernel says the lock is held, and here nothing holds it. The pid file
+    once raised OverflowError on the last input, from `rite start`, `rite
+    status` and `rite loop start` alike."""
     from rite_ai.lifecycle import start
-    from rite_ai.loop.session import lock_path
+    from rite_ai.loop import lock as loop_lock
+    from rite_ai.reporting.status import _loop_line
 
     root = project(tmp_path)
-    lock_path(root).write_text("99999999999 0\n")
+    loop_lock.lock_path(root).write_text(contents)
 
+    assert loop_lock.holder(root) == loop_lock.Holder(known=True, running=False)
+    assert _loop_line(root) == "not running"
     result = start(root)
-
     assert result.ok
     assert "loop: not running" in "\n".join(result.actions)

@@ -553,13 +553,22 @@ def watch(
     """
     import time as _time
 
-    from rite_ai.loop.session import draining, hold_lock, release_lock
+    from rite_ai.loop import lock as loop_lock
+    from rite_ai.loop.session import draining
 
     sleep = _time.sleep if sleep is None else sleep
 
-    holder = hold_lock(root)
-    if holder is not None:
-        emit(f"loop: another loop holds this project (pid {holder}) — not starting")
+    # THIS process holds the lock for as long as it runs the loop: the kernel
+    # frees it when the process exits, however it exits (`rite_ai.loop.lock`).
+    held = loop_lock.acquire(root)
+    if isinstance(held, loop_lock.LockBusy):
+        emit(
+            f"loop: another loop holds this project (pid {held.holder_pid}) "
+            "— not starting"
+        )
+        return "locked"
+    if isinstance(held, loop_lock.LockUnavailable):
+        emit(f"loop: not starting — {held.reason}")
         return "locked"
 
     try:
@@ -612,7 +621,7 @@ def watch(
             emit(f"loop: {cycle.verdict}; sleeping {int(interval)}s")
             sleep(interval)
     finally:
-        release_lock(root)
+        loop_lock.release(held)
 
 
 def format_cycle(cycle: Cycle) -> list[str]:

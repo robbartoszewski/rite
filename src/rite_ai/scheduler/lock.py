@@ -92,9 +92,6 @@ excluded each other in the first place.
 
 from __future__ import annotations
 
-import errno
-import fcntl
-import json
 import os
 import time
 from collections.abc import Iterator
@@ -102,15 +99,20 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from rite_ai.kernel_lock import exclusion_problem as _exclusion_problem
+from rite_ai.kernel_lock import flock_failed as _flock_failed
+from rite_ai.kernel_lock import open_lock_file as _open
+from rite_ai.kernel_lock import read_record as _read_record
+from rite_ai.kernel_lock import refused as _refused
+from rite_ai.kernel_lock import same_file as _same_file
+from rite_ai.kernel_lock import write_record as _write_record
+
 LOCK_FILENAME = "scheduler-tick.lock"
 
 # See the module docstring: this changes the wording of a skip, never whether
 # the lock is taken. It must stay larger than any single bounded operation in
 # the package, so a merely slow tick is never described as wedged.
 _HELD_TOO_LONG_SECONDS = 900.0
-
-# The record is a few dozen bytes. Anything longer is not one of ours.
-_RECORD_MAX_BYTES = 4096
 
 
 @dataclass
@@ -196,9 +198,10 @@ def process_is_running(pid: int) -> bool:
     delivering anything. `PermissionError` means the pid exists but belongs
     to another user — still running, so still a live holder.
 
-    ⚠ The scheduler lock no longer uses this: it cannot tell a zombie or a
-    recycled pid from the process that wrote the number. It stays for the
-    loop lock (`loop/session.py`), which has not moved off pids yet."""
+    ⚠ No lock uses this any more: it cannot tell a zombie or a recycled pid
+    from the process that wrote the number. Its one caller is the dispatch
+    intents (`loop/intents.py`), where a wrong "running" only delays calling
+    an intent lost until its age says so."""
     if pid <= 0:
         return False
     try:
@@ -210,42 +213,6 @@ def process_is_running(pid: int) -> bool:
     except OSError:
         return False
     return True
-
-
-def _open(path: Path) -> int:
-    # O_NOFOLLOW: a symlink planted at the path would move the lock onto a
-    # file somebody else chose. O_CLOEXEC: a subprocess the tick starts must
-    # not inherit the descriptor and keep the lock alive after the tick.
-    return os.open(path, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW, 0o644)
-
-
-def _same_file(a: os.stat_result, b: os.stat_result) -> bool:
-    return (a.st_dev, a.st_ino) == (b.st_dev, b.st_ino)
-
-
-def _read_record(fd: int) -> tuple[int, float] | None:
-    """The holder's `(pid, acquired_at)`, or None. For the message only."""
-    try:
-        data = json.loads(os.pread(fd, _RECORD_MAX_BYTES, 0))
-        return int(data["pid"]), float(data["acquired_at"])
-    except (OSError, ValueError, KeyError, TypeError):
-        return None
-
-
-def _write_record(fd: int) -> None:
-    payload = json.dumps({"pid": os.getpid(), "acquired_at": time.time()}) + "\n"
-    os.ftruncate(fd, 0)
-    os.pwrite(fd, payload.encode(), 0)
-
-
-def _refused(fd: int) -> bool:
-    """Try `fd` for the lock without waiting. True: refused, someone holds
-    it. False: granted. Any other error is raised, never read as either."""
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        return True
-    return False
 
 
 def acquire(root: Path) -> LockAcquired | LockBusy | LockUnavailable:
@@ -291,58 +258,6 @@ def acquire(root: Path) -> LockAcquired | LockBusy | LockUnavailable:
         # say "not recorded" when it is missing. Not a reason to skip work.
         pass
     return LockAcquired(path=path, fd=fd)
-
-
-def _exclusion_problem(path: Path, fd: int) -> str:
-    """Why holding `fd`'s lock does not exclude other ticks, or "".
-
-    1. The path must still name the file we locked. Only something outside
-       rite deletes or replaces this file (see the module docstring), and if
-       it has, the next tick would open and lock a different file.
-    2. The kernel must refuse a second lock on it. Asked on a second open
-       file description of the same file, which conflicts with ours even in
-       one process — so a grant here means `flock` does not exclude on this
-       filesystem at all.
-    """
-    try:
-        held = os.fstat(fd)
-        if not _same_file(held, os.stat(path, follow_symlinks=False)):
-            return (
-                f"the lock file {path} was replaced while it was being taken, "
-                f"so holding it would not keep another tick out. Something "
-                f"other than rite is deleting or replacing it"
-            )
-        probe = _open(path)
-    except OSError as e:
-        return f"could not check the lock file {path}: {e}"
-    try:
-        if not _same_file(held, os.fstat(probe)):
-            return (
-                f"the lock file {path} was replaced while it was being taken. "
-                f"Something other than rite is deleting or replacing it"
-            )
-        if not _refused(probe):
-            fcntl.flock(probe, fcntl.LOCK_UN)
-            return (
-                f"flock does not exclude on the filesystem holding {path}: a "
-                f"second lock on a held file was granted. This happens on some "
-                f"network and VM-shared filesystems. Keep the project on a "
-                f"local disk"
-            )
-        return ""
-    except OSError as e:
-        return _flock_failed(path, e)
-    finally:
-        os.close(probe)
-
-
-def _flock_failed(path: Path, e: OSError) -> str:
-    if e.errno in (errno.ENOTSUP, errno.EOPNOTSUPP, errno.ENOLCK):
-        return (
-            f"the filesystem holding {path} does not support flock ({e}). "
-            f"Keep the project on a local disk"
-        )
-    return f"flock on {path} failed: {e}"
 
 
 def release(outcome: LockAcquired) -> None:
