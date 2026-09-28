@@ -95,6 +95,48 @@ are now written in one command and run from another.
 
 ---
 
+## 4. A process owned by a DIFFERENT user: the kernel refuses the read
+
+**Measured 2026-09-28**, same machine and method. The reader now reports the
+argument and environment counts, or the kernel's refusal with its errno, so
+"refused" cannot be confused with "readable but empty". No fake credential is
+needed here: the question is whether the read succeeds at all.
+
+**Targets:** three processes owned by **root** that are NOT Apple platform
+binaries, so their environment is not hidden for that reason: Docker's
+`com.docker.vmnetd` and two Parallels services (`prl_disp_service`,
+`prl_naptd`). **Positive control:** Cursor's `node`, run as the operator.
+
+| target | from outside (unsandboxed) | from a rite Manager's sandbox | from a yoloAI Worker's sandbox |
+|---|---|---|---|
+| operator's own `node` (control) | readable, 63 environment entries | readable, 63 | readable, 62 |
+| root, `com.docker.vmnetd` | **refused, errno 22** | **refused, errno 22** | **refused, errno 22** |
+| root, `prl_disp_service` | **refused, errno 22** | **refused, errno 22** | **refused, errno 22** |
+| root, `prl_naptd` | **refused, errno 22** | **refused, errno 22** | **refused, errno 22** |
+
+Both sandboxes were confirmed active by a refused write outside them.
+
+**What this shows:** for a caller that is not root, the kernel refuses
+`KERN_PROCARGS2` on a process of another user, even with no sandbox at all.
+So separating agents by OS user closes the read. Of everything tried, it is
+the only thing that does.
+
+**What it does NOT show, stated so it is not over-read:**
+- The targets were **root**, not a second ordinary user. That the same
+  refusal applies between two ordinary users is expected from the check being
+  a uid comparison, but it is **inferred, not measured**. Measuring it needs a
+  second macOS account, which is an administrator's action, and Robert's.
+- **One user per agent.** Agents that share one OS user can still read each
+  other. So "agents as a different user" protects the operator's own
+  processes, but Worker-from-Worker needs a user per Worker (or per project).
+- **How rite would run an agent as another user**, and what breaks. yoloAI's
+  seatbelt backend runs as the invoking user. Running as another needs
+  privilege (sudo rules or a launchd job), file ownership for the working
+  copy and the credential files, and a git and gh identity per user. None of
+  it is designed or measured.
+- **Linux**, where the equivalent is `/proc/<pid>/environ` and is also
+  uid-checked (inferred).
+
 ## Not measured
 
 - Linux (`/proc/<pid>/environ`, and whether Landlock's policy governs it);
