@@ -53,6 +53,7 @@ rule does not place is listed under "Fits neither release", not forced.
 | **MM8**, the per-Manager directory out of the project tree | track MM (new row, from readiness D17) | named. It removes D17 on Linux |
 | **SB11**, stop granting `/tmp` on Linux | track SB (new row, from `b542c15`) | named |
 | **Dogfood fixes** | "Fixes from the v0.6.0 dogfood test", below | named. Not known yet: the test has not run |
+| **TR0–TR6**, TRQ1–TRQ9: ticket refinement | track TR; design in `V070_TICKET_REFINEMENT.md` | named. Robert, 2026-09-28: "Yes, I expect the auto-refinement in v0.7.0". Enforcement (TR5) waits on TRQ1 |
 | **MM1** (flat state per Manager), **MM2** (the §5.4.7 test), **MM3** (claims carry the Manager), **MM6** (idempotence per name) | track MM | §5.4.8's P1, P3 and P4 between Managers that share one root, which v0.6.0 ships without (SPEC §5.4.8). One machine |
 | **MMQ3** (per-Manager worker cap), **MMQ4** (correlated failure), **MMQ5** (two standups) | track MM | several Managers on one machine |
 | `V070_MULTI_MANAGER.md` Q3 and Q4 | track MM | Q4 is literally "Managers on one host" |
@@ -111,10 +112,11 @@ on both starts, and is reported as a retry.
 | DF11 | ✅ **`rite init` wrote the home path into `.rite/brief.yaml`, and rite's own gate then blocked the first push (dogfood F1).** Fixed by #72 (`e21c7fa`, another session): the source path is written relative to the project (`.`), `~/…` elsewhere under home. | #72's own record, and `test_init_output_passes_the_gate.py`. |
 | DF10 | 🔴 **A Worker can ask, and nothing hears it (dogfood Q1–Q4).** Observed 2026-09-28 on macOS: Worker alpha on KAN-7 named its ticket's three unknowns and wrote them to yoloAI's `files/question.json`, as yoloAI's injected `CLAUDE.md` tells it to ("will be seen and answered by an external agent or user"). Nothing in rite read it; the Worker sat eight hours with three unanswered questions. Every view pointed away: `rite status` "not started", `rite sandbox status` "idle", `rite loop run` "busy — a sandbox is running", `rite doctor` "`yoloai destroy` frees it", and `rite sandbox destroy`, which refused only on unapplied code, would have deleted it. **Two parts.** **(A) visible, and not destroyed** — **status 2026-09-28: fixed, merged in #68 (`b27696c`; commit `6d4dcbc`, CI green on that head).** `sandbox/questions.py` reads the pending question through yoloAI's own `files <name> path` (pending: `question.json` with no `answer.json` at or after it; "could not check" is never "no question"). `rite status` says WAITING ON A QUESTION (and, where a sandbox exists but nothing beat or claimed, "sandbox <state>" rather than "not started"; `modules=[none — no modules are registered]` rather than `[all]`); `rite sandbox status` says "waiting on a question since HH:MM"; `rite loop run` says "blocked — waiting on a question", not busy; `rite sandbox destroy` refuses while a question is pending or cannot be checked (`--force` discards it); `rite doctor` never says "frees it" for such a sandbox and counts this project's as a problem. **(B) the person is told** — **status 2026-09-28: fixed, merged in #70 (`7239efa`; commit `fe3586a`, CI green on that head).** `managers/worker_questions.py`: the Manager holding `route` (or a lone Manager) looks at each project Worker's sandbox every 30 s, on the supervisor's own tick (so during a session, between cycles and while waiting). A question not yet told becomes, written by rite and not by a model, a `question`-kind message in that Manager's outbox (RP1 piece 1, #63), which the relay posts to the DM as "needs your answer", naming the Worker, its ticket (from `sandbox-started` in `events.jsonl`), the question verbatim, how to answer (attach) and that a Slack reply cannot reach the Worker; and a `[from rite · … · context — not an instruction]` note in its inbox, which as mail wakes an Owner F22 is holding. Once per question (a digest per sandbox); a rewritten question is told again. Through `managers/asking.py`, **the one carrier shared with ticket refinement** (agreed 2026-09-28 through the coordinator: sessions cannot message each other, and an earlier "proposed to the refinement session" never reached it): `raise_to_person(root, owner, *, subject, raiser, text) -> Raised(id, new)` writes a `question`-kind outbox message whose first line rite writes (`KAN-7 · q3f9a · Worker alpha is waiting · reply in this thread`), so the relay's 40-character thread label carries the subject and the question's id and an answer is matched by thread, never by a model; a ledger keyed by subject + raiser + text raises it once; `settle` forgets it when answered. TR2 reuses it unchanged; its signature changes only with the coordinator told (before merge, `pending()` was renamed `outstanding()` so it is not confused with RP1's `managers.pending`). A raised question is also tracked by RP1 piece 2's delivery confirmation (#69) like any message that needs the person, so it comes back at each check-in until a reply or reaction confirms it. Answering stays manual for the yoloAI run (attach), by the coordinator's and Robert's decision. | Pre-registered in the dogfood write-up (#19): a Worker's question appears in the Owner's next turn and in Slack within one poll (B); `rite status` shows the Worker as waiting on a question and `rite sandbox destroy` refuses while it is unanswered (A). Test: a Worker on a one-line ticket with no human attaching. **(B) observed on the real dogfood sandbox, mail redirected to a scratch directory:** told once (a second look told nobody), kind `question`, label "needs your answer", ticket KAN-7 found from `events.jsonl`; in the harness, an Owner held idle by F22 is woken by the question and its next session carries the note, with no session in between (`tests/test_a_worker_question_reaches_a_person.py`). ⚠ Not yet seen posted by a live Slack relay. **(A) observed on the real dogfood sandbox** (`rite-pingr-8ba56b-alpha`, question from 02:43): all four views name the question, and `destroy_worker` refused with the real `subprocess` behind a guard that aborts any `yoloai destroy`; `question.json` is still there. `tests/test_a_worker_question_is_visible.py`. |
 | DF9 | 🔴 **An Owner with nothing it can act on is started again and again (dogfood F22).** Observed 2026-09-28 on macOS, a Claude Owner on Jira board `KAN`, which it could not read (F11): after its last useful turn at 04:37, `rite start lead --sessions 10` started 8 more sessions in 80 s. Each ran `rite status`, said "No change — stopping here" and ended cleanly; the loop still said `ready`, because tickets were labelled `scheduled`; the run ended on `ceiling reached`, twice. **Cause:** the supervisor starts the next session whenever the last ended cleanly and the verdict continues, with no notion of "the last one changed nothing and neither has the board". **Status 2026-09-28: fixed, merged in #62 (`90b708f`; commit `35a71c6`, CI green on that head).** A no-progress guard judged outside the model (`managers/progress.py`): a session changed something if the project's HEAD or working tree, the claims ledger, its outbox, its routed ledger or its pending Worker requests differ after it. **The journal is deliberately not counted** (SPEC §9.15.5; a first draft read it and `test_nothing_in_rite_reads_the_journal` caught it). If nothing changed and the board's basis (verdict, ready ids, blocked) is unchanged (`LoopAnswer`, `cli/main.py`), no session starts: the supervisor waits in `_wait_for_mail`, the one no-session wait, which now also runs without a `Waiting` and takes a `wake`. It wakes on mail, on a board change (read every 60 s) or on a project change (every 15 s), and says why. Mail is input, not progress: a mail-started session that changes nothing is idle too. **Coordination:** TR2 (ticket refinement) adds its "a refinement round is open" reason to the same wait rather than a second one; TR's per-ticket no-progress guard sits on top of this generic floor. | Pre-registered in the dogfood write-up, and restated there as measurable: with a queue the Owner cannot act on, **at most one** session starts after the last session that changed anything, until mail arrives or the board changes. `tests/test_no_progress_guard.py`, on a fake engine and virtual clock: **on `main` `ec40f39`, 9 sessions after the last useful one (t = 0, 10 … 90 s) and the run ends on the ceiling; on the branch, 1, and the window ends it.** Mail, a board change and a project change each start exactly one session; sessions that each change something are not held; a verdict with no basis never engages it; a journal-only session is idle. ⚠ Not yet observed live against a real Claude Owner (that spends Robert's allowance and waits on his go-ahead). |
+| DF8 | 🔴 **Lazy tickets are not refined, and the one question asked reached nobody.** Robert's acceptance criterion for the run: "I expect rite to refine the lazy tickets before proceeding - ask user questions, define a definition of done etc." Observed 2026-09-28 on macOS, board `KAN` (Jira): the Claude Owner routed and assigned one-line tickets with no question about any of them, and it assigned a ticket it could not read (F11). The only refinement was a sandboxed Worker following `/ticket` step 1: it named KAN-7's three unknowns, wrote them to a file inside its sandbox, waited 180 s and stopped, and nobody saw the question. **Not a defect in the models: rite assigns refinement to nobody** (the audit's finding: asking is absent, a definition of done is instructed only as a reason to stop, and nothing enforces either). **Status 2026-09-28:** designed as track TR, not built | Track TR's TR6 |
 
 ## Where the tracks below stand after the re-filing
 
-Tracks MM, RP, PB, CU and SB are v0.7.0, except the rows the tables above
+Tracks MM, RP, PB, CU, SB and TR are v0.7.0, except the rows the tables above
 send to v0.8.0. Track ME is unscheduled. **Tracks MX and EG are in
 `V080_RELEASE_PLAN.md`.** Part 0 stays here, and the v0.8.0 plan cites it.
 
@@ -1646,6 +1648,101 @@ makes P1 cover Workers and changes `rite add worker`.
 
 ---
 
+## Track TR — Ticket refinement: a thin ticket is refined with the User before work starts
+
+**Robert, 2026-09-28, verbatim:** "Yes, I expect the auto-refinement in
+v0.7.0." It answers the dogfood run's acceptance criterion, also his: "I
+expect rite to refine the lazy tickets before proceeding - ask user
+questions, define a definition of done etc." (DF8).
+
+**Decided:** the feature, in v0.7.0. **Designed, not decided:**
+everything in `V070_TICKET_REFINEMENT.md`, the design note this track
+builds. Its part 7 holds TRQ1–TRQ9. **TRQ1, whether rite *enforces*
+refinement or only *instructs* it, is the one with a cost to his own
+boards**, and TR5 waits on it. Nothing here is built.
+
+### What exists on `main` today (`a75469d`, read from the code)
+
+- **Asking the User about a ticket: absent.** `rite reply` is a channel and
+  `checkins.RULE` says when to send a question a Manager already has.
+  Nothing tells a Manager to form one about a thin ticket
+  (`managers/prompt.py:65`).
+- **A definition of done: instructed only as a reason to stop.** `/ticket`
+  step 1 and the Worker's `CLAUDE.md` (`workspace/manage.py:773`) say
+  "say so and stop rather than guessing". `/refine` asks for one, and it
+  is framed as the human's step in their Dispatch session. Nothing tells a
+  Manager to run it.
+- **Enforcement: none.** The ready set is "labelled `scheduled`"
+  (`loop/__init__.py:428`), and the broker checks only that the ticket
+  exists (`managers/broker.py:168`).
+- **Two texts contradict the feature.** The Owner is told to "write each
+  instruction so it can be done without asking you back"
+  (`managers/routing.py:484`), and `/ticket` and `/refine` each make their
+  own judgement of "complete enough". Part 3.5 of the note rewrites both.
+
+### The design in one paragraph
+
+The Manager holding `board` refines, and never a secondary or a Worker,
+because neither can reach the User. rite hands it each unrefined
+`scheduled` ticket's text in its instruction, read by the supervisor
+outside the boundary, so this works on Jira even though a Manager cannot
+read Jira (F11). The Manager asks through `rite refine ask`, which lints
+the message before sending: at most three questions, a proposal from round
+2, and every proposed item tagged `ticket:`, `answer:` or `proposed`, with
+every quote checked verbatim. The question goes to the Owner's DM and onto
+the ticket. rite, not a model, attributes an answer to a ticket, by its
+Slack thread or its leading ticket id. One word from a small set accepts
+the latest proposal, and then **rite** writes a signed record as a board
+comment and reads it back. The description is never overwritten, because
+`update()` has no compare-and-swap on either backend. A ticket is REFINED
+iff one read shows exactly one valid, signed record whose hashes match the
+current title and description. Every consumer asks that one predicate: the
+Owner, `/refine`, `/ticket`, the Worker (whose start prompt carries the
+checked record itself), the loop and the broker. Rounds are bounded (N) and
+timed (a deadline judged by Slack's send time). The only failure end is
+PARKED, which is said, never a guess, and never an automatic re-ask. Every
+race is listed in part 4 of the note, each resolved without depending on
+order.
+
+### Tickets
+
+| # | item | done when OBSERVED | depends on | size |
+|---|---|---|---|---|
+| TR0 | **Measure what the design leans on** (the note, part 8): whether a model's Bash tool in the Claude app, Claude Code, Goose and Cursor has a controlling `/dev/tty`; whether `gh` returns every comment of an issue with more than 100, and whether `comments.totalCount` is readable in the same request; whether a record's JSON survives Jira's single-text-node `comment()` (`tickets/jira.py:495`) and `adf_to_text`, and whether Jira's embedded comment list pages; whether a key file under rite's data directory is unreadable from inside a Manager (seatbelt, Landlock) and a Worker (yoloAI), **under an ungranted root with a control**; whether a sandboxed Worker's handover or reply reaches the host | Each answer recorded in the note's part 8 with the command, the platform and the output. Where an answer breaks a part of the design, that part is corrected in the same change | — | 1 sitting |
+| TR1 | **The record and the predicate.** `rite refine status <ID>`: one single-issue read, comments included and shown complete; the chain, the MAC and the two hashes (the note, part 3.2). The key, granted to no profile and denied by name on seatbelt (CU4's shape for `cursor.key`). `rite refine accept <ID> [--file] [--as-written]`, reading its confirmation from `/dev/tty`. A status line in `rite board show`. Both backends | Against real GitHub and real Jira: `accept` writes a record and `status` says REFINED from a fresh read; an edited description turns it STALE; a deleted record comment makes it NOT REFINED; a record-shaped comment posted with a Manager's own token is not REFINED (the MAC); a comment list that cannot be shown complete is UNREADABLE; two records naming one parent are CONFLICT; `accept` with no tty refuses and prints the command. Each negative case also fails its test when its check is deleted (mutation by backup copy) | TR0 | 2–3 sittings |
+| TR2 | **The round protocol, in the supervisor.** `rite refine ask` and its lint; posting to the Owner's DM (or the outbox) and to the ticket; attribution by thread or leading id, with authority from rite's header only; the accept set; the record write with a re-read before it and a read-back after it; deadlines judged by `sent_at`; open round roots pinned outside `THREADS_MAX` and read past their deadline; PARKED with its three reasons; `rite refine reopen`; a round ledger outside the boundary under `flock`; the `waiting-on-user` wait that starts no session (the note, parts 3.4 and 4) | With real Slack: a partial answer produces a round-2 proposal asking only what is open; `ok` in the thread produces a REFINED record; silence produces PARKED (no answer) only after the thread was read past the deadline; a reply sent one minute before the deadline and read after it counts; eleven other replies posted while a round is open do not stop its answer being heard; an `ok` under a superseded proposal is refused with the round to answer; a fabricated quote is refused before anything is sent; no Manager session starts while every ticket waits on the User | TR1; DF2's wait between cycles | 3–4 sittings |
+| TR3 | **The instructions, and the text that contradicts them.** A `refinement.instructions(root, manager)` appended beside `checkins.instructions` (`supervise.py:1208`) for the `board` holder. The Owner's and the secondary's routing text rewritten as in the note's part 3.5: the line "without asking you back" is replaced, not kept beside the new one. `/ticket` step 1, `/refine`, the Worker's "Your ticket", and the root `CLAUDE.md`'s "Working the queue", "Commands" and role sections. The README's "3. Tickets". `rite refine ask` added to the Manager's allowlist (C4). `rite update --files-only` carries every changed section to existing projects, and the Worker's `CLAUDE.md` is refreshed too. SPEC §6.7, and the amendments to §9.4.2 and §9.10, written once TRQ1–TRQ9 are answered | A fresh `rite init`, and a v0.6.0 project after `rite update --files-only`, both carry the new text, and neither still says "without asking you back" or "say so and stop rather than guessing". **The instructed half observed:** a real Claude Owner and a lone Goose Manager on `qwen3:8b`, each given one of the dogfood's one-line tickets with enforcement off, ask the User through `rite refine ask` before routing or requesting a Worker. Recorded as observed per engine, and not as a gate | TR1 (the commands the text names) | 1–2 sittings |
+| TR4 | **The checked record is what gets delivered, and a Worker's stop reaches a person.** The Worker's start prompt (`cli/main.py:5754`) carries the record the supervisor just checked. `rite route --ticket <ID>` attaches it. `rite status` says "ticket changed since work began" when a worked ticket turns STALE. A Worker's "the record cannot be met as written" reaches its Manager's next instruction and `rite status`, **built on whatever TR0 found about how anything leaves a Worker's sandbox** | A Worker's pane shows the record text as its instruction, byte for byte the record that was checked; an edit after launch is reported by `rite status`; a Worker told to stop on an unmeetable record is seen stopping in the Manager's next instruction and in `rite status`, with no one attaching to its pane | TR1, TR0 | 2 sittings, plus TR0's Worker measurement |
+| TR5 | ⚠ **Enforcement: waits on TRQ1.** A `refinement.enforce` key in config (unknown keys are refused today, so the parser changes). `_ready` counts only REFINED. The broker and `route --ticket` refuse anything else, naming its state. The `waiting-on-user` verdict. At most one `board` holder while refinement is on (TRQ7). A start line saying whether refinement is enforced in this project. First, **enumerate every path that starts a Worker on a ticket**, with a test that fails when a new one appears (MM1's practice) | With enforcement on, a bare `scheduled` ticket gets no Worker by any enumerated path, and each refusal names the ticket's state. With it off, the start line says it is off. A project upgraded from 0.6.0 behaves as TRQ1 decided, and says so at its first start | TR1, TR2; **TRQ1** | 1–2 sittings |
+| TR6 | **The acceptance run, in Robert's words.** Dogfood-shaped: one-line tickets and a User who answers briefly, partly or not at all, on GitHub and on Jira, with a Claude Owner and a Goose secondary, and separately a lone Goose Manager | Each lazy ticket ends REFINED with a record whose provenance names the accepting message, or PARKED with the notice seen in Slack and on the ticket. **No ticket is worked on a guess.** Robert's criterion, read by him against the run, is the test and not a checklist | TR2, TR3, TR4 (and TR5 if TRQ1 enforces) | 1 sitting |
+
+### Open questions: Robert's (TRQ1–TRQ9, in full in the note's part 7)
+
+- **TRQ1. Enforce, or instruct only?** Recommendation: (b), enforced for
+  projects `rite init` creates under 0.7.0 and opt-in for existing ones,
+  which are told at every start. The cost of (a) falls on `RT`,
+  `rite-dogfood-board` and `KAN` at the first run after the upgrade: every
+  `scheduled` ticket stops until it is refined or attested, and even a
+  well-written ticket needs one word from a person.
+- **TRQ2.** Rounds per attempt, the deadline, open rounds per Manager.
+  Recommendation: 3, 24 h or the next check-in close, 5.
+- **TRQ3.** The accept words. Recommendation: `ok`, `yes`, `accept`,
+  `lgtm`.
+- **TRQ4.** Does delegation ("you decide") count as acceptance?
+  Recommendation: no; the Manager answers it with a proposal.
+- **TRQ5.** Routed free text that is really ticket work cannot be detected.
+  Recommendation: instruct, and state the hole.
+- **TRQ6.** Does a ticket that already has a definition of done still take
+  one "ok"? Recommendation: yes.
+- **TRQ7.** Is more than one `board` holder refused at parse?
+  Recommendation: yes.
+- **TRQ8.** Questions and parking notices go to the Owner's DM now, and to
+  RP1's action destination once it lands.
+- **TRQ9.** Are Verify commands optional but explicit (`"none agreed"`)?
+  Recommendation: yes.
+
+---
+
 ## Track ME — Memory
 
 ⚠ **UNSCHEDULED since 2026-09-26.** Memory was v0.7.0 scope. Robert's
@@ -1873,6 +1970,8 @@ this table, with the rest the re-filing places here.*
 | CUQ2 | Cursor's credential route (API key or stored login) | CU4 |
 | CUQ3 | what to do if CU1 finds `-p` takes the prompt only as an argument | CU2, after CU1 |
 | PB | what a v0.7.0 build does with `strategy: push_to_shared` before PB2 lands | PB1's config parser |
+| **TRQ1** | **enforce ticket refinement in code, or instruct only**; and, if enforced, from the upgrade or for new projects only. It changes behaviour on his own boards (`RT`, `rite-dogfood-board`, `KAN`) | TR5 |
+| TRQ2–TRQ9 | refinement's rounds and deadline, the accept words, delegation, routed free text, a ticket that already has a definition of done, one `board` holder, where notices go, optional Verify (`V070_TICKET_REFINEMENT.md` part 7) | TR2, TR3's SPEC text |
 
 ### Without a release
 
@@ -1889,7 +1988,7 @@ this table, with the rest the re-filing places here.*
 ### After the re-filing, 2026-09-26
 
 **What Robert named is the release:** Cursor (CU), the dogfood fixes, PB1,
-RP1, MM8 and SB11. The other rows filed in v0.7.0 are single-machine
+RP1, MM8 and SB11, and, from 2026-09-28, ticket refinement (track TR). The other rows filed in v0.7.0 are single-machine
 completeness under the same heading, and none of them is named as a
 condition of tagging. Which of them must land is Robert's to say.
 
@@ -1905,6 +2004,12 @@ decision.
 - **SB11's observed Manager cycle on Linux: Claude and Goose OBSERVED 2026-09-28, Cursor NOT COVERED.** Robert: "SB11: Please run it." Record below (§ SB11 observed).
 - **C32 is decided after RP1's design**, not before.
 - **CU2 → CU6** after CU1, as track CU orders them.
+- **TR0 first** (measurements, no decision needed), then TR1. **TR2
+  needs DF2's wait between cycles**, the same "awaiting a reply" state, so
+  it is built once. **TR5 waits on TRQ1.** TR3's SPEC text waits on
+  TRQ1–TRQ9, and the rest of TR3 does not.
+- **TR and RP1 meet** at where questions and parking notices go (TRQ8).
+  RP1's design should count a refinement question as an action.
 
 ### The sequencing as written on 2026-09-25, before the re-filing
 
