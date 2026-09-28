@@ -475,18 +475,10 @@ def perform_handover(
     result = HandoverResult()
     rite_dir = root / ".rite"
 
-    about_to_release: list = []
+    released: list = []
     claims_path = rite_dir / "claims.json"
     if claims_path.exists():
         ledger = ClaimsLedger(claims_path)
-        # Read the claims BEFORE releasing them — this is the only place
-        # the ticket ID lives when a caller doesn't pass one explicitly
-        # (§9.10 step 1: "the ACTIVE ticket"). Every production caller
-        # (`stop_cmd`) resolves it this way; an explicit `ticket` argument
-        # still wins when given (e.g. a future Owner acting on a stalled
-        # Manager's behalf, which may already know the ticket without
-        # reading that Manager's claims file).
-        about_to_release = ledger.claims_for(worker) if worker else ledger.list_claims()
         # A handover releases claims, and a release that the fleet never
         # hears about leaves those paths blocked on every other machine —
         # they expire on a lapsed heartbeat, and a machine that merely
@@ -494,18 +486,20 @@ def perform_handover(
         from rite_ai.coordination.identity import claims_channel
 
         layer, machine = claims_channel(root)
-        if worker:
-            result.released_claims = ledger.release(
-                worker, layer=layer, machine=machine
-            )
-        else:
-            for claim in about_to_release:
-                result.released_claims += ledger.release(
-                    claim.worker, layer=layer, machine=machine
-                )
+        # ⚠ The claims are read and released in ONE locked step, and
+        # everything below acts only on what THIS call released. Reading
+        # first and releasing after let two handovers of one Worker (a
+        # window boundary and a `rite stop` at once) both find the ticket
+        # and both comment on it. The claims are still the only place the
+        # ticket lives when a caller does not pass one (§9.10 step 1: "the
+        # ACTIVE ticket"). An explicit `ticket` argument still wins.
+        released = ledger.release_claims(worker or None, layer=layer, machine=machine)
+        result.released_claims = len(released)
 
     if not ticket:
-        for claim in about_to_release:
+        # A handover that released nothing derives no ticket, so it posts
+        # nothing: whoever released the claims is the one that hands over.
+        for claim in released:
             if claim.ticket:
                 ticket = claim.ticket
                 break
