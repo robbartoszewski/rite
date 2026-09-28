@@ -40,19 +40,25 @@ NONE_AGREED = "none agreed"
 """`verify` when no command was agreed (TRQ9, decided): explicit, never absent."""
 
 
-def board_identity(tb) -> dict:
-    """Which board a record belongs to: the Jira site or the GitHub repository.
+def board_identity(board) -> dict | None:
+    """Which board a record belongs to, from the backend itself: the Jira site
+    or the GitHub repository. None for a backend rite cannot identify, and a
+    record can then never be checked (UNREADABLE), never assumed to match.
 
-    Deliberately narrower than `board_context.record_of`, which includes Jira's
-    project mapping. Adding a project to `config.yaml` must not invalidate
-    every record on the site, while moving to another site or repository
-    must. A Jira ticket id already carries its project key.
+    Taken from the backend rather than from `config.yaml`, so the identity a
+    record is checked against is the board that was actually read. Narrower
+    than `board_context.record_of`, which includes Jira's project mapping:
+    adding a project must not invalidate every record on the site, while
+    moving to another site or repository must. A Jira id carries its project.
     """
-    if tb.type == "jira":
-        return {"type": "jira", "site": str(tb.site or "").rstrip("/").lower()}
-    if tb.type == "github":
-        return {"type": "github", "repo": str(tb.repo or "").lower()}
-    return {"type": str(tb.type)}
+    from rite_ai.tickets.github import GitHubBackend
+    from rite_ai.tickets.jira import JiraBackend, normalise_site
+
+    if isinstance(board, JiraBackend):
+        return {"type": "jira", "site": normalise_site(board.config.site).lower()}
+    if isinstance(board, GitHubBackend):
+        return {"type": "github", "repo": board.repo.strip().lower()}
+    return None
 
 
 def text_sha256(text: str) -> str:
@@ -196,6 +202,43 @@ def schema_problem(payload: dict) -> str:
     ):
         return "its provenance is not one of " + ", ".join(PROVENANCE_KINDS)
     return ""
+
+
+def render_for_worker(record: Record) -> str:
+    """The agreed definition of done as a Worker's start prompt carries it.
+
+    Deterministic: the same record always gives the same text, so what a
+    Worker was started against can be reproduced from the record id alone.
+    Items are normalised as ticket text is (SPEC §6.6.1): they came from a
+    board, and a board is not vetted (§6.6.3).
+    """
+    from rite_ai.normalise import normalise
+
+    def clean(text: str) -> str:
+        return normalise(text).text
+
+    lines = [
+        f"Agreed definition of done for {record.ticket} "
+        f"(refinement record {record.record_id}):",
+        *[f"- [ ] {clean(item)}" for item in record.definition_of_done],
+    ]
+    if record.scope_in:
+        lines += ["In scope:", *[f"- {clean(item)}" for item in record.scope_in]]
+    if record.scope_out:
+        lines += ["Out of scope:", *[f"- {clean(item)}" for item in record.scope_out]]
+    if isinstance(record.verify, str):
+        lines.append(
+            f"Verify: {record.verify}. Say in your report how you checked each item."
+        )
+    else:
+        lines += ["Verify with:", *[f"    {clean(c)}" for c in record.verify]]
+    how = (
+        "accepted by the User"
+        if record.provenance.get("kind") == ACCEPTED
+        else "attested by a session running as the person, not confirmed to be a person"
+    )
+    lines.append(f"This definition of done was {how}. Work to it, not to the title.")
+    return "\n".join(lines)
 
 
 def render(record: Record) -> str:

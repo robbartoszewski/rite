@@ -4005,38 +4005,18 @@ def refine_status(ticket_id: str, role: str) -> None:
       rite refine status KAN-7
       rite refine status 42
     """
-    from rite_ai.config.parse import ParseError, parse_config
-    from rite_ai.refinement import key as refinement_key
-    from rite_ai.refinement import record as refinement_record
     from rite_ai.refinement import status as refinement_status
 
-    root = _find_project_root()
-    config = parse_config(root / ".rite" / "config.yaml")
-    if isinstance(config, ParseError):
-        click.echo(f"config error: {config.message}", err=True)
-        raise SystemExit(1)
-    backend, err = _ticket_backend(role, root=root, config=config)
+    backend, err = _ticket_backend(role)
     if err:
         click.echo(err, err=True)
         raise SystemExit(1)
-    board = refinement_record.board_identity(config.ticket_backend)
-    result = refinement_status.evaluate(
-        ticket_id, board, backend.read_thread(ticket_id), refinement_key.load()
-    )
+    result = refinement_status.status(backend, ticket_id)
     click.echo(f"{ticket_id}: {result.state} — {result.detail}")
-    if result.head is not None and result.state == refinement_status.REFINED:
-        from rite_ai.normalise import normalise
+    if result.record is not None and result.state == refinement_status.REFINED:
+        from rite_ai.refinement.record import render_for_worker
 
-        click.echo("definition of done:")
-        for item in result.head.definition_of_done:
-            click.echo(f"  - {normalise(item).text}")
-        verify = result.head.verify
-        if isinstance(verify, str):
-            click.echo(f"verify: {verify}")
-        else:
-            click.echo("verify:")
-            for command in verify:
-                click.echo(f"  {normalise(command).text}")
+        click.echo(render_for_worker(result.record))
     raise SystemExit(0 if result.refined else 1)
 
 

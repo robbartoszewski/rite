@@ -22,9 +22,10 @@ TR2's. Until then a ticket with no record is NOT REFINED.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from rite_ai.refinement import record as rec
+from rite_ai.tickets.interface import Thread, Ticket
 
 NOT_REFINED = "NOT REFINED"
 REFINED = "REFINED"
@@ -35,25 +36,66 @@ UNREADABLE = "UNREADABLE"
 
 @dataclass(frozen=True)
 class Status:
+    """What the predicate answered, from ONE read of the board.
+
+    `record` is set only when the state is REFINED or STALE, and it is the
+    record from that same read. `ticket` is the ticket as that read returned
+    it, whenever the read succeeded. A caller that starts work hands the
+    Worker `record` and `ticket` from this object, and must not read the board
+    again: a second read lets an edit land between the two, so a Worker could
+    be started against text that no longer matches the state that authorised
+    it (the note's part 4, race 4).
+    """
+
     state: str
+    record: rec.Record | None
     detail: str
-    head: rec.Record | None = None
-    notes: tuple[str, ...] = field(default_factory=tuple)
+    ticket: Ticket | None = None
 
     @property
     def refined(self) -> bool:
         return self.state == REFINED
 
 
+def status(board, ticket_id: str) -> Status:
+    """Is `ticket_id` refined on `board` (a `TicketBackend`)?
+
+    Exactly one board read (`read_thread`), then the key, then `evaluate`.
+    The board's identity comes from `board` itself, so the record is checked
+    against the board that was actually read.
+    """
+    from rite_ai.refinement import key as refinement_key
+
+    identity = rec.board_identity(board)
+    thread = board.read_thread(ticket_id)
+    if identity is None:
+        return Status(
+            UNREADABLE,
+            None,
+            f"rite cannot identify this board ({type(board).__name__}), so no "
+            "record on it can be checked",
+            thread.ticket if isinstance(thread, Thread) else None,
+        )
+    return evaluate(ticket_id, identity, thread, refinement_key.load())
+
+
 def evaluate(ticket_id: str, board: dict, thread, loaded) -> Status:
-    """`thread` is a `tickets.Thread` or a `tickets.BackendError`; `loaded` is
-    `refinement.key.Loaded`."""
+    """The predicate itself, pure. `thread` is a `tickets.Thread` or a
+    `tickets.BackendError`; `board` is `record.board_identity` of the board
+    it was read from; `loaded` is `refinement.key.Loaded`."""
     from rite_ai.tickets import BackendError
 
     if isinstance(thread, BackendError):
-        return Status(UNREADABLE, f"the board could not be read: {thread.message}")
-    if not thread.complete:
         return Status(
+            UNREADABLE, None, f"the board could not be read: {thread.message}"
+        )
+    ticket = thread.ticket
+
+    def answer(state: str, detail: str, record: rec.Record | None = None) -> Status:
+        return Status(state, record, detail, ticket)
+
+    if not thread.complete:
+        return answer(
             UNREADABLE,
             "the ticket's comments could not be shown complete "
             f"({thread.note or 'the board returned fewer than it counted'}), "
@@ -62,10 +104,10 @@ def evaluate(ticket_id: str, board: dict, thread, loaded) -> Status:
 
     claimed = [c for c in thread.comments if rec.carries_marker(c.body)]
     if not claimed:
-        return Status(NOT_REFINED, "no agreed definition of done on the ticket")
+        return answer(NOT_REFINED, "no agreed definition of done on the ticket")
 
     if loaded.key is None:
-        return Status(
+        return answer(
             UNREADABLE,
             loaded.problem
             or "the ticket carries refinement records, but this machine has no "
@@ -79,39 +121,38 @@ def evaluate(ticket_id: str, board: dict, thread, loaded) -> Status:
         )
         payload = rec.extract(comment.body)
         if payload is None:
-            return Status(
+            return answer(
                 UNREADABLE,
                 f"{where} is marked as a refinement record, but no record could "
                 "be read from it. Delete the comment if it is not rite's",
             )
         if not rec.mac_verifies(payload, loaded.key):
-            return Status(
+            return answer(
                 UNREADABLE,
                 f"{where} is marked as a refinement record, but its signature "
                 "does not verify: it was edited, or rite did not write it. "
                 "Delete it, or restore rite's text",
             )
         if payload.get("ticket") != ticket_id:
-            return Status(
+            return answer(
                 UNREADABLE,
                 f"{where} is a record for {payload.get('ticket')!r}, not for "
                 f"{ticket_id}: a record does not transfer between tickets",
             )
         if payload.get("board") != board:
-            return Status(
+            return answer(
                 UNREADABLE,
                 f"{where} is a record written for a different board "
                 f"({payload.get('board')}); this project's board is {board}",
             )
         problem = rec.schema_problem(payload)
         if problem:
-            return Status(UNREADABLE, f"{where} is signed but {problem}")
+            return answer(UNREADABLE, f"{where} is signed but {problem}")
         record = rec.from_payload(payload)
         seen = records.get(record.record_id)
         if seen is not None and rec.canonical(seen[1]) != rec.canonical(payload):
-            return Status(
-                UNREADABLE,
-                f"two different records share the id {record.record_id}",
+            return answer(
+                UNREADABLE, f"two different records share the id {record.record_id}"
             )
         records[record.record_id] = (record, payload)
 
@@ -119,27 +160,29 @@ def evaluate(ticket_id: str, board: dict, thread, loaded) -> Status:
     heads = [r for r, _ in records.values() if r.record_id not in superseded]
     if len(heads) != 1:
         ids = ", ".join(sorted(r.record_id for r in heads)) or "none: a cycle"
-        return Status(
+        return answer(
             CONFLICT,
             f"{len(heads)} records each claim to be the current one ({ids}). A "
             "person decides which stands; rite does not pick by order",
         )
     head = heads[0]
-    title_now = rec.text_sha256(thread.ticket.title)
-    description_now = rec.text_sha256(thread.ticket.description)
     changed = [
         name
         for name, now, then in (
-            ("title", title_now, head.title_sha256),
-            ("description", description_now, head.description_sha256),
+            ("title", rec.text_sha256(ticket.title), head.title_sha256),
+            (
+                "description",
+                rec.text_sha256(ticket.description),
+                head.description_sha256,
+            ),
         )
         if now != then
     ]
     if changed:
-        return Status(
+        return answer(
             STALE,
             f"the ticket's {' and '.join(changed)} changed after the definition "
             f"of done was agreed (record {head.record_id})",
             head,
         )
-    return Status(REFINED, f"agreed definition of done: record {head.record_id}", head)
+    return answer(REFINED, f"agreed definition of done: record {head.record_id}", head)
