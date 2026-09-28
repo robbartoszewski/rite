@@ -17,6 +17,7 @@ HOME pointed at `alice`, which the unfixed code does trip — see
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -122,3 +123,33 @@ def test_a_source_inside_the_project_is_relative(home: Path):
 def test_a_source_outside_home_stays_absolute(tmp_path: Path, home: Path):
     elsewhere = tmp_path / "srv" / "spec"
     assert portable_source_path(home / "app", elsewhere) == str(elsewhere)
+
+
+@requires_gitleaks
+def test_a_local_origin_under_home_passes_the_gate_too(home: Path):
+    """Once init registers the repository it runs in (F2), that repository's
+    origin is written into `modules.yaml` and the generated CLAUDE.md. An
+    origin that is a local directory under home was the F1 failure again, in
+    two new files. It is written `~/…`, and a Worker still clones from it."""
+    remote = home / "remote.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
+    app = _app_with_code(home)
+    subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=app, check=True)
+    _init_with_defaults(app)
+
+    report = run_gate(app)
+
+    assert [(f.file, f.rule_id) for f in report.findings] == []
+    assert report.exit_code == EXIT_CLEAN
+    modules = yaml.safe_load((app / ".rite" / "modules.yaml").read_text())
+    assert modules["modules"]["app"]["url"] == "~/remote.git"
+
+
+def test_a_home_relative_module_url_is_read_back_absolute(home: Path):
+    from rite_ai.config.parse import expand_home, home_relative
+
+    local = str(home / "remote.git")
+    assert home_relative(local) == "~/remote.git"
+    assert expand_home("~/remote.git") == local
+    for url in ("https://github.com/acme/app.git", "git@github.com:acme/app.git"):
+        assert home_relative(url) == url
