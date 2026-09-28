@@ -8574,5 +8574,45 @@ def journal_retrospective(
     click.echo(f"recorded: {result.path}")
 
 
+@journal.command("export")
+@click.argument("manager")
+@click.option(
+    "--to",
+    "destination",
+    required=True,
+    type=click.Path(file_okay=False, path_type=Path),
+    help="Directory to copy the entries into, e.g. one in the project to commit.",
+)
+def journal_export(manager: str, destination: Path) -> None:
+    """Copy a Manager's journal entries somewhere to share or commit them.
+
+    Since 0.7.0 the journal lives outside the project, beside the Manager's
+    other state, so that one Manager cannot write another's. Exporting is how
+    entries reach the project's history, by a person's choice. It never
+    overwrites a different file.
+
+    Examples:
+      rite journal export lead --to docs/journal/lead
+    """
+    from rite_ai.managers.journal import export
+
+    root = _require_project_root()
+    result = export(root, manager, destination)
+    if result.refused:
+        click.echo(f"refusing to export: {result.refused}.", err=True)
+        raise SystemExit(1)
+    if not result.copied and not result.already_there:
+        click.echo(f"no entries to export in {result.source}")
+        return
+    click.echo(
+        f"exported {len(result.copied)} entr(ies) to {destination}"
+        + (
+            f"; {len(result.already_there)} already there, identical"
+            if result.already_there
+            else ""
+        )
+    )
+
+
 if __name__ == "__main__":  # pragma: no cover - see tests/test_module_entry_point.py
     cli()

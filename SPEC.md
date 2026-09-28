@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.30 · **Date:** 2026-09-28
+**Version:** 0.24.31 · **Date:** 2026-09-28
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -7020,6 +7020,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.31 — `rite journal export` (MM8 piece 3).** The journal left the project with the rest of a Manager's state (0.24.29). Committing entries is still a person's choice, so `rite journal export <manager> --to <dir>` copies them into a directory, typically in the project. It never overwrites a different file: a conflicting name refuses the whole export, so nothing is left half-exported. Identical files are skipped, and the journal is left as it is. `rite start --record-issues` names the command. MM8 is complete.
 
 **Changes in 0.24.30 — Linux grants a Manager its project as one tree (MM8 piece 2, D17).** Landlock has no deny rule, so while a Manager's own directory was in the tree, keeping one Manager out of another's meant enumerating the project root, and a Linux Manager could not create a new top-level file in its project. Since piece 1 no Manager's state is in the tree, so the enumeration is gone. Measured against the kernel (CI, 6.17, Landlock ABI 7): the new test failed with piece 1 alone and passes with this; one Manager still cannot write another's routes. `.rite/user/` was writable across Managers before this and still is (§5.4.8).
 
