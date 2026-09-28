@@ -538,6 +538,58 @@ Robert's reporting format (bullets, a marker for what needs him, nothing
 between scheduled reports) is not recorded in this repository; it is cited
 here as relayed.
 
+### ✅ DECIDED 2026-09-28 (Robert): RP1 and MM8, as recommended — "4. Let's do this"
+
+Approved as one block, verbatim above, on the recommendations below. Recorded
+here, with the reasoning, so nobody relitigates them from memory.
+
+**RP1, what needs Robert apart from what is reading.**
+1. **Where each goes:** the Owner's DM carries only what needs him (questions
+   from `rite ask`, blockers, decisions). Everything else goes in a thread
+   under that day's check-in. *Why:* the DM becomes the scan list, and the
+   rest stays in Slack, retrievable.
+2. **How a line is classed:** by the command that produced it, not by reading
+   its content, and never by trusting the model to mark it. `rite ask`,
+   blockers and decisions are action; `rite reply`'s free text is reading.
+   *Why:* structural. *The cost it carries:* a real question sent as `rite
+   reply` would land in the reading pile, so `rite reply` refuses or
+   redirects a question to `rite ask`, and **errs toward redirecting too much
+   rather than letting one question through** (coordinator, 2026-09-28).
+3. **"Nothing between scheduled reports"** is enforced for the reading pile
+   only. Anything needing action is never held back. *Why:* holding a
+   blocking question for hours is the failure it would cause.
+4. **Delivery confirmation:** an action item stays pending until Robert
+   reacts to it or replies in Slack, and comes back at the next check-in
+   until he does. *Why:* "did this reach a human" must be an observable
+   property, not an assumption. It would have caught the RP1/MM8 questions
+   themselves, which sat undelivered in a message that never arrived, and the
+   dogfood Worker whose question went into a file nothing reads. The
+   coordinator named this the part that matters most.
+
+**MM8, the per-Manager directory out of the project** (with MM1, as the plan
+requires):
+1. **The journal leaves the project**, with an export command for anyone who
+   wants it committed. *Why:* once Linux grants the project as one tree, a
+   journal left in it is writable by every Manager. Moving it costs little:
+   `.rite/*` is already ignored, and committing it needs `git add -f`.
+2. **Everything else per-Manager moves too**: check-in queue, Slack relay
+   state, Worker requests, `routes/`, `prompt.txt`. *Why:* Linux can grant the
+   project as one tree only when nothing one Manager must not write for
+   another is left in it; a partial move keeps D17's limitation and does the
+   work twice.
+3. **An upgrade while a Manager runs is refused**, by the run lock `rite
+   start` already takes (a kernel lock, exact, not a pid guess), and the
+   refusal NAMES the Manager and says what to do. *Why:* a vague error
+   mid-upgrade is the first-five-minutes experience the dogfood run says rite
+   is bad at.
+
+**Sequencing (coordinator, 2026-09-28):** the v0.6.0 dogfood winds down, its
+findings are fixed, and a fresh dogfood runs from scratch against a v0.7.0
+release candidate, **as a tag blocker**. **MM8 lands BEFORE that RC run**: it
+moves where every Manager's live state lives, and an RC dogfood of the old
+layout would test something about to be replaced. MM8 lands in pieces, not
+one merge.
+
 ### Ticket
 
 | # | work | done when | depends | size |
