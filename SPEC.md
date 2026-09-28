@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.43 · **Date:** 2026-09-29
+**Version:** 0.24.44 · **Date:** 2026-09-29
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -269,6 +269,21 @@ recovering from, and it is the only signal that will say so.
 bookkeeping, not in the lease.** This section used to record the Owner-lease
 guarantee as failing under extreme load (a "stated bound"). That reading is
 withdrawn; what follows is why, and what would still show a real failure.
+
+⚠ **v0.6.0 shipped with this section stating that limit, and the claim was
+not supported.** The lease, election and state-layer code v0.6.0 shipped is
+the code measured clean below: between the `v0.6.0` tag and the fix, it
+differs only by the additive `released_at`. Do not design around a load
+limit on the Owner lease; there is no evidence for one.
+
+**What the guarantee DOES rest on is clock agreement.** A challenger promotes
+once the lease has expired by ITS clock plus `skew_tolerance_seconds`
+(§2.4.1), and an incumbent whose renewal is uncertain keeps the role until
+its OWN clock says the lease has expired. Two machines whose clocks disagree
+by more than `skew_tolerance_seconds` can therefore have a challenger promote
+while the incumbent still believes it holds the role. That is real, cannot
+be exercised by a test whose processes share one clock by construction, and
+closing it needs a shared clock or fencing tokens: v0.8.0, LS3.
 
 `tests/test_graceful_handover_across_processes.py` asserted that no two
 ownership runs overlap. It failed twice: on 2026-09-20 in a full-suite run at
@@ -7115,6 +7130,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.44 — §2.4.1a says what v0.6.0 got wrong, and what the Owner lease really rests on.** The section as shipped in v0.6.0 stated a load limit on the Owner-lease guarantee; that claim is now marked unsupported, with how it was established (the lease code v0.6.0 shipped differs from the code measured clean only by the additive `released_at`). And the real residual is stated beside it: the guarantee rests on clocks agreeing within `skew_tolerance_seconds`, which one machine and the election tests cannot exercise, filed for v0.8.0 as LS3 (fencing or a shared clock).
 
 **Changes in 0.24.43 — §2.4.1a rewritten: the two Owners the graceful-handover test reported were its own bookkeeping, not the lease.** CI run 36476910158 (macOS) reproduced the 2026-09-20 failure. The test closed a handed-over Owner's run at its tick's end, after the release had landed; the successor promoted correctly in between. Established with ground truth from the remote's reflog: under an injected slow tail after the release, main reported two Owners in 20 of 20 runs while the remote showed a correct handover in 20 of 20; with the fix, 0 of 20; a control where the successor promotes over a valid lease is caught 3 of 3. The "stated bound" on the Owner-lease guarantee is withdrawn. A release now carries its stamp (`released_at`), the test closes the run there and checks the remote's writes directly, and the probe caption that claimed a diagnosis it could not make is corrected.
 

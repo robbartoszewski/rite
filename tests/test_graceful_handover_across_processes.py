@@ -145,6 +145,15 @@ def _manager(args):
             if lease is not None and lease.owner == name:
                 expires = parse_timestamp(lease.expires)
                 held = lease.acquired
+                # ⚠ A run STARTS late, at this tick's end, and that is safe on
+                # purpose; do not "fix" it to match how a handed-over run ENDS
+                # (at the release stamp, above). An error here can only
+                # shorten a run, so it can hide a real overlap but never
+                # invent one, and hiding is covered: the remote's own history
+                # (`promotions_over_valid_leases`) catches a promotion over a
+                # valid lease without using tick timing at all. An end taken
+                # late is the opposite error: it INVENTS overlaps, which is
+                # the false split brain of §2.4.1a.
                 rows.append(
                     {
                         "manager": name,

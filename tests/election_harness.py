@@ -35,6 +35,13 @@ def ownership_runs(rows: list[dict]) -> dict[tuple[str, str], list[float]]:
     reads as an overlap: the outgoing Owner appears to hold a lease it gave
     up minutes (of simulated time) earlier. Found by this test failing on
     the graceful path while the crash path was clean.
+
+    ⚠ **The two ends are not symmetric, and must not be made so.** A closed
+    run must end at the release's own stamp, taken before its write landed:
+    an end recorded late invents overlaps (§2.4.1a, CI run 36476910158). A
+    run's START may be late (the tick's end): that can only hide an overlap,
+    and a hidden one is caught by `promotions_over_valid_leases`, which reads
+    the remote's writes and no process's timing.
     """
     runs: dict[tuple[str, str], list[float]] = {}
     for row in rows:
