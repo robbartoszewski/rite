@@ -137,6 +137,16 @@ the only thing that does.
 - **Linux**, where the equivalent is `/proc/<pid>/environ` and is also
   uid-checked (inferred).
 
+## 5. The key outlives the turn in `worker-server`
+
+Read from Cursor's bundle (2026-09-28), not measured: `worker-server` is
+started with `spawn(execPath, ["worker-server"], {detached: false, env:
+{...process.env, ...}})`. So it inherits the engine's whole environment,
+`CURSOR_API_KEY` included, and it outlives the turn by about five minutes
+(CU1b), after `yoloai destroy` too. Under this note's finding, the key stays
+readable from every sandbox for that long after the run that needed it has
+ended. CU7's reaping ends it with the turn in a Manager's pane.
+
 ## Not measured
 
 - Linux (`/proc/<pid>/environ`, and whether Landlock's policy governs it);

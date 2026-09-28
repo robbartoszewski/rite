@@ -125,16 +125,16 @@ class Spelling:
     must be a UUID"*). Refused here rather than there, so the refusal names
     rite's caller instead of arriving as an engine error in a pane."""
 
-    permission_unexpressed: str = ""
-    """Where this engine keeps its permission mode, when rite cannot yet put
-    it there. Non-empty means a permission handed to `launch_command` is
-    REFUSED, naming this, rather than written somewhere the engine ignores or
-    dropped.
+    permission_in_file: str = ""
+    """The config file this engine reads its permission mode from, when rite
+    writes it there rather than on argv or in the environment. Non-empty
+    means a permission handed to `launch_command` is REFUSED: the supervisor
+    writes the file (`cursor_login.write_config`), and a flag would be one
+    the engine ignores.
 
-    ⚠ Cursor keeps its allowlist in `cli-config.json`, a file it also
-    rewrites itself (CU8). Neither argv nor the environment is its place, so
-    `permission_env` cannot describe it, and treating it as argv would put a
-    Claude `--settings` flag on Cursor's command line."""
+    ⚠ Cursor keeps its allowlist in `cli-config.json` in its config
+    directory, which it also rewrites itself (CU8). Treating it as argv would
+    put a Claude `--settings` flag on Cursor's command line."""
 
 
 CLAUDE = Spelling(
@@ -191,12 +191,12 @@ exists and is not Claude."""
 
 CURSOR = Spelling(
     binary="agent",
-    turn="-p --trust --output-format json",
+    turn="-p --trust --disable-project-configs --output-format json",
     start="--resume {handle}",
     resume="--resume {handle}",
     handle_is_ours=True,
     handle_is_uuid=True,
-    permission_unexpressed="Cursor's cli-config.json (CU8, not built)",
+    permission_in_file="cli-config.json",
 )
 """Measured 2026-09-27 (`spikes/CU1-cursor-cli.md`, CU1b), not read from a
 table. `agent -p` is one turn; `--trust` answers the workspace-trust prompt,
