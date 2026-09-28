@@ -140,7 +140,9 @@ def test_the_queue_is_under_the_managers_own_directory(project):
     root = project(CLOSED)
     _ask("--defer", "rename the flag?", "--while", "doing ticket 14")
     [q] = checkins._queued(root, "lead")
-    assert q.path.parent == root / ".rite" / "managers" / "lead" / "checkins" / "queue"
+    from rite_ai.managers import manager_dir
+
+    assert q.path.parent == manager_dir(root, "lead") / "checkins" / "queue"
     user = root / ".rite" / "user"
     assert not user.exists() or not list(user.glob("*.json"))
 

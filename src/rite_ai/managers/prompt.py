@@ -27,6 +27,7 @@ from __future__ import annotations
 import subprocess
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 from rite_ai import own_command
 from rite_ai.managers.broker import REQUESTS_DIRNAME
@@ -37,7 +38,7 @@ CONFIRM_TRIES = 20
 CONFIRM_PAUSE = 0.2
 
 
-def for_manager(manager: str, *, extra: str = "") -> str:
+def for_manager(manager: str, *, root: Path, extra: str = "") -> str:
     """The text a Manager is given at start.
 
     ⚠ **The Worker instructions changed shape in B9**: a Manager no longer
@@ -51,10 +52,15 @@ def for_manager(manager: str, *, extra: str = "") -> str:
     same contract `journal.instructions` and `journal.start_notice` use for
     their disabled case.
     """
-    # Relative to the project root, which is the pane's working directory —
-    # this function has the Manager's name and nothing else, and the request
-    # directory is a function of exactly that.
-    requests = f".rite/managers/{manager}/{REQUESTS_DIRNAME}"
+    # ABSOLUTE, and derived from the one place the directory is spelled
+    # (`manager_dir`). It was a path relative to the project,
+    # `.rite/managers/<name>/requests`, and since MM8 the directory is
+    # outside the project: a relative path would send requests where nothing
+    # reads them. `root` is required for that reason; a default would be a
+    # wrong path nobody notices.
+    from rite_ai.managers import manager_dir
+
+    requests = str(manager_dir(root, manager) / REQUESTS_DIRNAME)
     # ⚠ **Absolute, for the reason `mailbox.how_to_reply` gives**: a bare
     # `rite` names whatever is first on the Manager's PATH, which was
     # measured to be an older release than the one writing this text.

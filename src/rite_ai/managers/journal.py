@@ -188,7 +188,12 @@ def journal_dir(root: Path, manager: str) -> Path:
     is not a guard.
     """
     require_safe_name(manager, kind="manager name", must_be_a_tmux_target=True)
-    return Path(root) / ".rite" / "managers" / manager / "journal"
+    # Through `manager_dir`, the one place the directory is spelled: since
+    # MM8 it is outside the project, and a second spelling here kept writing
+    # into the tree.
+    from rite_ai.managers import manager_dir
+
+    return manager_dir(Path(root), manager) / "journal"
 
 
 def start_notice(root: Path, manager: str, *, enabled: bool = True) -> str:
@@ -198,24 +203,19 @@ def start_notice(root: Path, manager: str, *, enabled: bool = True) -> str:
     off when off". A Manager running without the flag must not be told about
     a facility it will not use.
 
-    The `-f` is the load-bearing character and the reason this prints a
-    command rather than a path. `.gitignore`'s `.rite/*` excludes
-    `.rite/managers` as a DIRECTORY, and git does not descend into an
-    excluded directory, so a plain `git add` on a journal path refuses —
-    measured against this repository, on the directory form printed here,
-    which is what an operator will paste. Telling somebody where the files
-    are and leaving them to discover that the obvious command silently
-    fails is the kind of documentation that reads as helpful and is not.
+    ⚠ **The journal is outside the project since MM8** (Robert, 2026-09-28):
+    once Linux grants the project as one tree, a journal left in it would be
+    writable by every Manager. So there is nothing to `git add` any more,
+    and this no longer prints the `git add -f` it used to. It says where the
+    entries are, which is what a person needs to share them.
     """
     if not enabled:
         return ""
     directory = journal_dir(root, manager).resolve()
-    relative = Path(".rite") / "managers" / manager / "journal"
     return (
         f"recording issues to {directory}\n"
-        f"  copy that directory to share the entries; to commit them "
-        f"instead, `git add -f {relative}` is needed "
-        f"(a plain `git add` refuses here)"
+        f"  (outside the project, like every Manager's own state; copy that "
+        f"directory to share or commit the entries)"
     )
 
 

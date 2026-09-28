@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.28 · **Date:** 2026-09-28
+**Version:** 0.24.29 · **Date:** 2026-09-28
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -2000,7 +2000,9 @@ not.** A Manager session carries `RITE_MANAGER` (`managers/__init__.py`,
 answer "which Manager am I". And `manager_dir()` gives each Manager
 `.rite/managers/<name>/`, where NEW state lives (the mailbox, the journal).
 *The mailbox has since left the tree, for `<data>/rite/mail/<checkout>/<name>/mail/`
-(§5.4.8, 0.24.15; out of `~/.rite` since DF3).*
+(§5.4.8, 0.24.15; out of `~/.rite` since DF3). And since 0.24.29 (MM8) so has
+the whole directory: `manager_dir()` is `<data>/rite/mail/<checkout>/<name>/state/`,
+beside the mail.*
 **Existing per-project state has not moved**, and no 0.6.0 ticket moves it.
 Step 2 is carried to 0.7.0 as MM1 in `docs/design/V070_RELEASE_PLAN.md`. The
 text below is the analysis as written before either landed.
@@ -2222,7 +2224,9 @@ be tested:
   `prompt.txt`. So Landlock still enumerates the project root to keep one
   Manager out of another's directory, and a Linux Manager still cannot
   create a new top-level entry in its project. That goes away only if the
-  whole per-Manager directory leaves the tree. The mailbox is keyed by the
+  whole per-Manager directory leaves the tree. *(0.24.29: it has left, MM8
+  piece 1; the enumeration is removed in piece 2, which is what lets Linux
+  grant the project as a tree.)* The mailbox is keyed by the
   checkout's path, not by the credential namespace, because every checkout
   of a project shares its namespace. Measured by
   `test_no_manager_writes_an_inbox.py` (macOS, real `sandbox-exec`) and
@@ -7016,6 +7020,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.29 — every Manager's own directory leaves the project (MM8, piece 1).** Approved by Robert on 2026-09-28. `manager_dir()` is now `<data>/rite/mail/<checkout>/<name>/state/`, beside the Manager's mail, holding its prompt, routes, Worker requests, check-ins, Slack relay state and journal. Two hand-spelled copies of the old path (the journal's, and the Worker-request path in the prompt) now go through it. Each profile grants its own directory by path. The in-tree `.rite/managers/` is denied, the Manager's own old directory included. The first `rite start` moves what an older rite left there, for EVERY Manager, each under its run lock (the `flock` v0.6.0 also takes, on the same file). A running Manager refuses the start by name, with what to do. An interrupted move finishes when both copies are identical, and refuses when they differ. The Linux root enumeration stays until piece 2.
 
 **Changes in 0.24.28 — a cut is the server's, and the clock is checked.** Ollama's log does not say whose prompt it cut, and several local Managers sharing one server is the ordinary case, so 0.24.27's report is scoped: a cut "on this server during this Manager's cycle", with the other Managers on the endpoint named, never "your prompt". The log's stamps are wall-clock only, so the cycle's wall-clock window is checked against a monotonic measurement, and a clock step or a daylight-saving change answers "cannot tell". The window opens before the launch; it had opened after it. 0.24.27 said a cut was recorded for the check-in; it was recorded under a name the standup did not read, and now it is read, scoped the same way.
 

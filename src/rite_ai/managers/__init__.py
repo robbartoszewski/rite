@@ -7,11 +7,21 @@ user is running one, its pid, its session — lives under `.rite/user/` and is
 never committed, because a shared config claiming a Manager is running on
 somebody else's laptop is worse than saying nothing (SPEC §9.14.9 item 4).
 
-**Each Manager also gets its own directory**, `.rite/managers/<name>/`, which
-is what makes §5.4's containment property statable at all: before this there
-was no per-Manager path and no per-process identity to key one on, so
-"nothing outside the acting Manager's own directory" named a thing that did
-not exist (D-77).
+**Each Manager also gets its own directory**, which is what makes §5.4's
+containment property statable at all: before it there was no per-Manager
+path and no per-process identity to key one on, so "nothing outside the
+acting Manager's own directory" named a thing that did not exist (D-77).
+
+⚠ **SINCE 0.7.0 (MM8) IT IS OUTSIDE THE PROJECT**, beside the Manager's
+mail in rite's data directory: `<data>/rite/mail/<checkout>/<name>/state/`
+(`manager_dir`). It was `.rite/managers/<name>/`, in the tree. On Linux,
+Landlock has no deny rule, so keeping one Manager out of another's
+directory there meant enumerating the project root, and a Manager could not
+create a new top-level file in its own project (readiness D17). Out of the
+tree, each Manager's profile grants its own directory by path and no other,
+with nothing to carve out of the project. An in-tree directory left by an
+older rite is moved at the next `rite start` (`relocate`), under every
+Manager's run lock.
 
 ⚠ **The identity is in the session's ENVIRONMENT, not in the prompt.** It
 used to be carried only by the prompt text `rite start` types in — "You are
@@ -95,15 +105,38 @@ def user_dir(root: Path) -> Path:
     return root / ".rite" / USER_DIRNAME
 
 
+STATE_DIRNAME = "state"
+
+
+def _checked(name: str) -> None:
+    problem = name_problem(name, kind="manager name", must_be_a_tmux_target=True)
+    if problem:
+        raise ValueError(problem)
+
+
 def manager_dir(root: Path, name: str) -> Path:
     """One Manager's own directory — §5.4's boundary, now a real path.
+
+    `<data>/rite/mail/<checkout>/<name>/state/`, beside the Manager's mail
+    (`mailbox.mail_root`) and outside the project (MM8, module docstring).
+    The ONE place it is spelled: everything a Manager keeps (its prompt,
+    routes, Worker requests, check-ins, Slack relay state, journal) is under
+    it, so moving it is moving this line.
 
     Validated rather than joined: a name reaching a path unchecked is the
     defect `rite_ai.names` exists for, and this is a new join.
     """
-    problem = name_problem(name, kind="manager name", must_be_a_tmux_target=True)
-    if problem:
-        raise ValueError(problem)
+    _checked(name)
+    from rite_ai.managers.mailbox import mail_root
+
+    return mail_root(root, name).parent / STATE_DIRNAME
+
+
+def legacy_manager_dir(root: Path, name: str) -> Path:
+    """`.rite/managers/<name>/`, where a Manager's directory lived before
+    MM8. Read only to move what is there (`relocate`), and to find the
+    pre-0.6.0 mailbox `mailbox.adopt_legacy` moves."""
+    _checked(name)
     return root / ".rite" / MANAGERS_DIRNAME / name
 
 

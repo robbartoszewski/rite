@@ -184,7 +184,7 @@ def test_a_second_start_leaves_a_RUNNING_managers_login_alone(tmp_path, monkeypa
     finally:
         os.close(running)
     assert result.exit_code == 1, result.output
-    assert "still running" in result.output
+    assert "holds its run lock" in result.output
     assert login.read_text().count(FAKE) == 1, "the running Manager's login stays"
 
 

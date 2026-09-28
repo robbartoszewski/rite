@@ -630,7 +630,12 @@ def _deliver_checkin(root: Path, manager: str) -> str:
         for e in ledger(root, manager)
         if e.get("event") == "withdrawn" and float(e.get("at") or 0) > since
     ]
-    ledger_path = (_checkins_dir(root, manager) / LEDGER_FILENAME).relative_to(root)
+    # Since MM8 the ledger is outside the project (`managers.manager_dir`), so
+    # it cannot be shown relative to it. Shown from `~`, because this message
+    # goes to Slack and an absolute path carries the operator's user name.
+    full = _checkins_dir(root, manager) / LEDGER_FILENAME
+    home = Path.home()
+    ledger_path = f"~/{full.relative_to(home)}" if full.is_relative_to(home) else full
     lines = [f"Check-in — {manager}", "", *standup.digest(root, manager, since)]
     lines += ["", "Deferred questions:", f"- {counts.line()} (ledger: {ledger_path})"]
     for e in withdrawn:

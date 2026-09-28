@@ -37,9 +37,13 @@ def project(tmp_path: Path) -> Path:
 
 class TestTheBoundaryIsAPathNow:
     def test_each_manager_gets_its_own_directory(self, project):
+        """Outside the project since MM8, beside the Manager's mail."""
+        from rite_ai.managers.mailbox import mail_root
+
         assert manager_dir(project, "planner") == (
-            project / ".rite" / "managers" / "planner"
+            mail_root(project, "planner").parent / "state"
         )
+        assert not manager_dir(project, "planner").is_relative_to(project)
         assert manager_dir(project, "lead") != manager_dir(project, "planner")
 
     @pytest.mark.parametrize("hostile", ["../escape", "a/b", "..", "/abs", ""])

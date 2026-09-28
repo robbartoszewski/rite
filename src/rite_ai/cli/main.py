@@ -6930,11 +6930,27 @@ def _start_a_manager(
     if run_lock is None:
         click.echo(
             f"refusing to start Manager {role.name!r}: another `rite start` "
-            "for it is still running in this project. Nothing was changed. "
-            f"Stop that one first (`rite manager stop {role.name}`).",
+            "holds its run lock, either one running it or, for a moment, one "
+            "moving this project's Managers' state out of the tree (rite "
+            "0.7.0). Nothing was changed. If it is running, stop it first "
+            f"(`rite manager stop {role.name}`); otherwise try again.",
             err=True,
         )
         raise SystemExit(1)
+    # ⚠ UNDER THE RUN LOCK, before anything reads a Manager's state: what an
+    # older rite left in `.rite/managers/` moves out of the tree, for EVERY
+    # Manager, each under its own run lock (`relocate`, MM8). A running one
+    # refuses the start, by name.
+    from rite_ai.managers import relocate
+
+    moved = relocate.move_out(root, role.name)
+    if moved.refused:
+        click.echo(
+            f"refusing to start Manager {role.name!r}: {moved.refused}.", err=True
+        )
+        raise SystemExit(1)
+    for note in relocate.notes(moved):
+        click.echo(note, err=True)
     # ⚠ UNDER THE RUN LOCK, before anything reads mail: the pre-0.6.0 in-tree
     # mailbox is moved once and never read again (`mailbox.adopt_legacy`).
     from rite_ai.managers.mailbox import (
@@ -6993,6 +7009,7 @@ def _start_a_manager(
                 if setting_up
                 else for_manager(
                     role.name,
+                    root=root,
                     extra=instructions(root, role.name, enabled=record_issues)
                     + _other_managers_briefing(root, role.name),
                 )
