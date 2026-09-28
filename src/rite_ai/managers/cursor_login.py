@@ -167,3 +167,134 @@ def manager_secrets(root: Path, manager: str, home: Path | None = None) -> list[
     except OSError:
         return []
     return [key] if key else []
+
+
+# --- CU8: the allowlist, owned by rite -----------------------------------------
+
+CONFIG_NAME = "cli-config.json"
+"""Cursor's config file in its `CURSOR_CONFIG_DIR`. It holds the allowlist
+(`permissions`), `approvalMode` and `attribution`."""
+
+_OWNED_KEYS = ("permissions", "approvalMode", "attribution")
+"""The keys rite decides. Cursor rewrites the file on every run, keeping these
+and dropping keys it does not know (measured 2026-09-28, no credential), so
+only these are compared."""
+
+REAP_SUFFIX = ' ; s=$? ; trap "" TERM ; kill -TERM 0 2>/dev/null ; exit $s'
+"""CU7, appended to a Cursor pane's command. The pane's shell is its process
+group's leader (tmux starts each pane in a session of its own), and because
+the engine is no longer the last command the shell does not exec into it, so
+it stays alive. After the engine exits it ignores TERM itself, signals its
+own group, and exits with the ENGINE's status, which is what `ending` reads.
+
+⚠ **Why this and not a lookup and a kill.** A pid that exists is not a pid
+that is yours: between finding `worker-server` and signalling it, it can exit
+and its number be reused. A live leader's group id cannot be recycled, so
+`kill 0` from the leader reaches its own group and nothing else.
+
+⚠ **What this rests on, not yet observed:** that Cursor's `worker-server`
+stays in the engine's process group. The bundle spawns it with
+`detached: false`, which keeps it there unless it leaves by itself, and no
+`worker-server` starts without an authenticated turn, which is held. Tested
+against a stand-in that spawns a child exactly that way."""
+
+
+def _cursor_allowlist(allow: tuple[str, ...] | None = None) -> list[str]:
+    """Claude's allowlist in Cursor's vocabulary: `Bash(x:*)` is `Shell(x)`.
+
+    Claude's own tool names (`Read`, `Edit`, ...) have no Cursor entry:
+    Cursor's file tools ran under `--trust` with no allowlist entry (CU1
+    section 5), so they are skipped by NAME, never silently. ⚠ Anything else is
+    REFUSED: an entry this cannot translate would otherwise vanish, and a
+    Manager would run with a narrower or wider list than rite's without a
+    word. Whether Cursor enforces `Shell(x)` as Claude enforces `Bash(x:*)`
+    needs an authenticated turn, and is held.
+    """
+    from rite_ai.managers.permissions import DEFAULT_ALLOW, TOOL_ALLOW
+
+    out: list[str] = []
+    for entry in DEFAULT_ALLOW if allow is None else allow:
+        if entry in TOOL_ALLOW:
+            continue
+        if entry.startswith("Bash(") and entry.endswith(":*)"):
+            command = entry[len("Bash(") : -len(":*)")]
+            if command and all(c.isalnum() or c in "-_.+" for c in command):
+                out.append(f"Shell({command})")
+                continue
+        raise ValueError(
+            f"allowlist entry {entry!r} has no Cursor spelling rite knows; "
+            "refused rather than dropped"
+        )
+    return out
+
+
+def rite_config() -> dict:
+    """What rite writes into a Cursor Manager's config, and later checks."""
+    return {
+        "version": 1,
+        "permissions": {"allow": _cursor_allowlist(), "deny": []},
+        "approvalMode": "allowlist",
+        # Robert's commits are not attributed to a tool by default. Cursor
+        # passes this to the model, which is what adds the attribution; it
+        # installs no git hook (read from the bundle).
+        "attribution": {"attributeCommitsToAgent": False, "attributePRsToAgent": False},
+    }
+
+
+def write_config(root: Path, manager: str, home: Path | None = None) -> Path:
+    """Write rite's config, fresh, before every launch, from OUTSIDE the
+    boundary. The Manager's profile denies writing it on macOS."""
+    import json
+
+    state = state_dir(root, manager, home)
+    state.mkdir(parents=True, exist_ok=True)
+    path = state / CONFIG_NAME
+    write_atomic(path, json.dumps(rite_config(), indent=2) + "\n")
+    return path
+
+
+def config_problem(root: Path, manager: str, home: Path | None = None) -> str:
+    """Why the config on disk is not the allowlist rite wrote, or "".
+
+    Missing or unreadable is a problem, never "fine": a config nobody can
+    read is one nobody can vouch for.
+    """
+    import json
+
+    path = state_dir(root, manager, home) / CONFIG_NAME
+    try:
+        on_disk = json.loads(path.read_text())
+    except (OSError, ValueError) as err:
+        return f"Cursor's allowlist at {path} could not be read back ({err})"
+    wanted = rite_config()
+    changed = [
+        k
+        for k in _OWNED_KEYS
+        if not isinstance(on_disk, dict) or on_disk.get(k) != wanted[k]
+    ]
+    if changed:
+        return (
+            f"Cursor's allowlist at {path} is not the one rite wrote "
+            f"({', '.join(changed)} changed during the cycle)"
+        )
+    return ""
+
+
+def announcement(manager: str) -> str:
+    """Said every run, so the operator sees what the Manager's permission is
+    and where it does not hold."""
+    import sys
+
+    where = (
+        "the Manager's sandbox cannot write it"
+        if sys.platform == "darwin"
+        else "⚠ on Linux the Manager CAN write it (Landlock cannot deny one "
+        "file inside a granted directory); rite checks it after every cycle "
+        "and stops on a change, which a process that restores it in time "
+        "would defeat"
+    )
+    return (
+        f"permissions: Manager {manager!r} runs Cursor with rite's allowlist, "
+        f"written to its {CONFIG_NAME} before every launch; {where}. Commit "
+        "attribution to Cursor is off."
+    )

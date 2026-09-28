@@ -34,7 +34,10 @@ def test_the_engine_named_cursor_speaks_cursor():
 
 def test_a_first_turn_names_its_chat_and_reads_the_prompt_from_stdin():
     built = launch_command("cursor", "", "/p", start_handle=HANDLE)
-    assert built == f"agent -p --trust --output-format json --resume {HANDLE} < /p"
+    assert built == (
+        "agent -p --trust --disable-project-configs --output-format json "
+        f"--resume {HANDLE} < /p"
+    )
 
 
 def test_a_continuation_is_spelled_exactly_like_a_first_turn():
@@ -67,9 +70,9 @@ def test_a_hostile_handle_is_refused_before_the_uuid_rule_is_asked():
 
 
 def test_a_permission_is_refused_not_written_as_a_claude_flag():
-    """CU8: Cursor's allowlist lives in its own config file. Until rite
-    writes it there, a Cursor Manager with a permission does not launch."""
-    with pytest.raises(ValueError, match="CU8"):
+    """CU8: Cursor reads its allowlist from a config file the supervisor
+    writes. A permission flag would be ignored, so it is refused."""
+    with pytest.raises(ValueError, match="cli-config.json"):
         launch_command("cursor", "", "/p", "--settings /s.json", start_handle=HANDLE)
 
 

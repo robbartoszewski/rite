@@ -244,16 +244,15 @@ def launch_command(
     # token is never an argument. (An earlier draft passed it through
     # `$RITE_PROMPT` in the inherited environment; the file is what ships,
     # and `session.PROMPT_FILE` records why.)
-    if permission and spelling.permission_unexpressed:
-        # ⚠ REFUSED, not written and not dropped. This engine keeps its
-        # permission somewhere rite does not yet write (Cursor: a config file
-        # it also rewrites itself). Written as argv it would hand Cursor a
-        # Claude flag; dropped, the Manager would run with whatever allowlist
-        # the file happened to hold.
+    if permission and spelling.permission_in_file:
+        # ⚠ REFUSED, not written and not dropped. This engine reads its
+        # permission from a config file the supervisor writes before every
+        # launch (`cursor_login.write_config`). A flag here would be one the
+        # engine ignores, which reads as a permission that is in force.
         raise ValueError(
-            f"{command!r} keeps its permission mode in "
-            f"{spelling.permission_unexpressed}, which rite does not write yet; "
-            "refused rather than launched without it"
+            f"{command!r} reads its permission mode from "
+            f"{spelling.permission_in_file}, which the supervisor writes; a "
+            "permission flag here would be ignored, so it is refused"
         )
     if permission:
         # ⚠ **EVERY cycle, not just the first.** Resuming with `-p` does not
@@ -863,6 +862,11 @@ def _supervise(
             "allowlist a `claude` Manager gets does not exist here, and the "
             "sandbox below is the ONLY boundary this Manager has."
         )
+    elif spelling.permission_in_file:
+        # CU8: the allowlist is written to the engine's own config file before
+        # every launch (`cursor_login.write_config`), not passed on argv.
+        permission = ""
+        say(cursor_login.announcement(manager))
     else:
         permission = launch_arguments(write_settings(root))
         say(announcement(manager))
@@ -1171,6 +1175,11 @@ def _supervise(
                         cycles,
                     )
                 chat.expected = before.created_at_ms
+                # CU8: rite's allowlist, written fresh before EVERY launch, from
+                # outside the boundary, and checked after the cycle. The
+                # Manager cannot write this file on macOS
+                # (`github_access.profile_lines`); on Linux it can (open, CU8).
+                cursor_login.write_config(root, manager)
                 cycle_prompt = (
                     CONTINUATION if before.outcome == cursor_chat.CONTINUE else prompt
                 )
@@ -1448,10 +1457,18 @@ def _supervise(
             # open and warned about.
             observed = next_id(root, manager, cycle.started_at)
             chat_broken = ""
+            config_tampered = ""
             if chat is not None:
                 chat_broken = _check_chat_after(
                     root, manager, chat, launched_under, say
                 )
+                # CU8: the allowlist rite wrote must still be the one on disk.
+                # A change means something inside the boundary rewrote it, so
+                # the run stops rather than continuing under an allowlist rite
+                # did not choose.
+                config_tampered = cursor_login.config_problem(root, manager)
+                if config_tampered:
+                    say(f"⚠ Manager {manager!r}: {config_tampered}")
             if observed and chat is None:
                 # A fresh cycle — including the fallback after a resume that
                 # did not take — records the board it began under; a continued
@@ -1497,6 +1514,15 @@ def _supervise(
             if said:
                 say(said)
 
+            if config_tampered:
+                return SuperviseResult(
+                    False,
+                    f"stopped after {len(cycles)} session(s): {config_tampered}. "
+                    "Nothing further runs on an allowlist rite did not write; "
+                    "the next `rite start` writes it afresh, and what changed "
+                    "it is worth finding first.",
+                    cycles,
+                )
             if chat_broken:
                 return SuperviseResult(
                     False,
@@ -2007,7 +2033,13 @@ def _default_starter(
                 start_handle,
             ),
             profile,
-        ),
+        )
+        # ⚠ CU7: the pane's shell stays alive as its process group's leader,
+        # and after the engine exits it signals that group (Cursor's
+        # `worker-server` included) and exits with the engine's status. A
+        # live leader's group id cannot be recycled, so the signal cannot
+        # reach a stranger, which a lookup-then-kill by pid could.
+        + (cursor_login.REAP_SUFFIX if cursor else ""),
         prompt=prompt,
         max_sessions=max_sessions,
         window_seconds=window_seconds,
