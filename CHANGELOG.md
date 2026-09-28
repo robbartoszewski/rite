@@ -213,6 +213,11 @@ to change code and commit it themselves: a ticket is worked by a Worker or
 routed, so that it gets a claim, a review and a pull request. This is an
 instruction, not yet enforced.
 
+A secondary Manager doing routed work is now told it may do only a chore or
+a trivial ticket itself, and then only on a branch named for the ticket and
+through a pull request, never a commit to a default branch; anything more
+goes to a Worker.
+
 ### A request in chat becomes a chore ticket, written by rite
 
 Work a Worker or another Manager does is meant to carry a ticket, including
