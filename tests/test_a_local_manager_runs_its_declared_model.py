@@ -14,18 +14,30 @@ from rite_ai.local.goose_agent import goose_environment
 from rite_ai.managers.session import ALLOWED_ON_TMUX_ARGV
 
 
-def _project(tmp_path, endpoint="http://localhost:11434/v1", model="qwen3:8b"):
+def _project(
+    tmp_path, endpoint="http://localhost:11434/v1", model="qwen3:8b", window=32768
+):
     (tmp_path / ".rite").mkdir(exist_ok=True)
+    declared = f", context_window: {window}" if window else ""
     (tmp_path / ".rite" / "config.yaml").write_text(
         "coordination:\n  managers: [small]\n  manager_roles:\n"
         f"  - {{name: small, engine: 'local:small', preset: lead, "
-        f"endpoint: '{endpoint}', model: '{model}', agent: goose}}\n"
+        f"endpoint: '{endpoint}', model: '{model}', agent: goose{declared}}}\n"
     )
     return tmp_path
 
 
 def _launch(tmp_path, monkeypatch, agent="goose", engine="local:small"):
     seen: dict = {}
+    import rite_ai.local.context_window as cw
+
+    # The pin talks to Ollama; answered here, as the model the pin would
+    # produce (`derived_name`), so what reaches the pane is checked by name.
+    monkeypatch.setattr(
+        cw,
+        "pin_window",
+        lambda endpoint, model, window: cw.Ensured(cw.derived_name(model, window)),
+    )
 
     def fake_start(root, manager, **kwargs):
         seen.update(kwargs)
@@ -54,9 +66,23 @@ class TestTheDeclaredModelReachesTheEngine:
     ):
         _, seen = _launch(_project(tmp_path), monkeypatch)
         env = seen["pane_env"]
-        assert env["GOOSE_MODEL"] == "qwen3:8b"
+        # The declared model, with the declared window pinned into it.
+        assert env["GOOSE_MODEL"] == "rite-ctx32768-qwen3-8b"
+        assert env["GOOSE_CONTEXT_LIMIT"] == "32768"
         assert env["GOOSE_PROVIDER"] == "ollama"
         assert env["OLLAMA_HOST"] == "http://localhost:11434"
+
+    def test_no_declared_window_refuses_rather_than_guessing(
+        self, tmp_path, monkeypatch
+    ):
+        """Ollama's default window is server-wide and unreadable before the
+        model loads, so "not declared" is "not known", and a Manager does not
+        start on it."""
+        result, seen = _launch(_project(tmp_path, window=0), monkeypatch)
+        assert not result.ok
+        assert "declares no context_window" in result.message
+        assert "context_window: <tokens>" in result.message
+        assert seen == {}, "a session was started without a known window"
 
     def test_the_worker_and_the_manager_use_one_definition(self):
         """So the two Goose paths cannot come to disagree again."""
@@ -68,7 +94,9 @@ class TestTheDeclaredModelReachesTheEngine:
         }
 
     def test_every_name_it_sets_may_travel_on_tmux_argv(self):
-        assert set(goose_environment("http://h/v1", "m")) <= ALLOWED_ON_TMUX_ARGV
+        names = set(goose_environment("http://h/v1", "m", context_limit=65536))
+        assert "GOOSE_CONTEXT_LIMIT" in names
+        assert names <= ALLOWED_ON_TMUX_ARGV
 
     def test_a_claude_manager_is_unchanged(self, tmp_path, monkeypatch):
         _, seen = _launch(tmp_path, monkeypatch, agent="", engine="claude")

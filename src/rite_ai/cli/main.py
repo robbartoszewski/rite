@@ -1151,6 +1151,12 @@ def _doctor_report(problems: list[str]) -> None:
         # than assumed. An engine that is not there fails every subtask routed
         # to it as infrastructure (RL-47): honest reports, all night, and no
         # progress.
+        if coordination.manager_roles:
+            from rite_ai.config.managers import effective_model
+
+            for role in coordination.manager_roles:
+                click.echo(effective_model(role))
+
         local_roles = [r for r in coordination.manager_roles if r.is_local]
         if local_roles:
             with _doctor_check("local engines", problems):
@@ -6812,6 +6818,13 @@ def _start_a_manager(
         "ends the run. Ctrl-C ends it too; a session already started keeps "
         "running."
     )
+    # Track MS: the effective model and its source, the same line `rite
+    # doctor` prints. `role` is None for an undeclared lone Manager, which
+    # runs Claude Code's default.
+    if role is not None and hasattr(role, "engine"):
+        from rite_ai.config.managers import effective_model
+
+        click.echo(effective_model(role))
     # Composed HERE because this layer is the one that knows what the user
     # asked for. `for_manager` takes an `extra` that the journal's
     # instructions fill when `--record-issues` is on (D-93); it is the empty

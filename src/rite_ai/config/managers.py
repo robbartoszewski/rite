@@ -72,8 +72,16 @@ PRESETS: dict[str, tuple[str, ...]] = {
 # class label is a name, not a configuration (design §3.1).
 _LOCAL_ONLY = ("endpoint", "model", "agent")
 _ENTRY_KEYS = frozenset(
-    {"name", "engine", "duties", "preset", "credential", *_LOCAL_ONLY}
+    {"name", "engine", "duties", "preset", "credential", "context_window", *_LOCAL_ONLY}
 )
+
+# A Claude Manager may name its model (`claude --model <name>`). A CLAUDE
+# model, not merely a well-formed word: `qwen3:8b` fits any safe pattern and
+# would reach `claude`, which cannot run it. So an alias, or a `claude-` id
+# (with Claude Code's `[1m]` long-context suffix). It also travels on tmux's
+# argv, which this closed spelling keeps safe.
+_CLAUDE_ALIASES = frozenset({"sonnet", "opus", "haiku", "fable", "opusplan", "default"})
+_CLAUDE_MODEL = re.compile(r"^claude-[a-z0-9][a-z0-9.-]{0,60}(\[1m\])?$")
 
 
 @dataclass(frozen=True)
@@ -88,6 +96,13 @@ class ManagerRole:
     endpoint: str = ""
     model: str = ""
     agent: str = ""
+    context_window: int = 0
+    """Tokens a local Manager's model is served with, pinned into the model
+    rite runs (`local.context_window.pin_window`). 0 means undeclared, and an
+    undeclared window REFUSES to start a Goose Manager: Ollama's own default
+    is server-wide and cannot be read without loading the model, and "could
+    not tell" read as "enough" is how a Manager ran out of context mid-cycle
+    and stopped replying."""
     # A KEY NAME, never a secret (SPEC §10). A local endpoint usually needs
     # none; one that does names a credential the keychain holds.
     credential: str = ""
@@ -149,9 +164,12 @@ def _entry_error(raw: dict, name: str) -> str:
             f"manager {name or '?'}: unknown key(s) {', '.join(unknown)} — "
             f"known keys are {', '.join(sorted(_ENTRY_KEYS))}"
         )
-    for key in _ENTRY_KEYS:
+    for key in _ENTRY_KEYS - {"context_window"}:
         if key in raw and not isinstance(raw[key], (str, list)):
             return f"manager {name or '?'}: {key} must be text"
+    window_problem = _window_error(raw, name)
+    if window_problem:
+        return window_problem
     preset = raw.get("preset", "")
     if preset and preset not in PRESETS:
         return (
@@ -180,11 +198,54 @@ def _entry_error(raw: dict, name: str) -> str:
             f"manager {name}: a {engine} engine must also say "
             f"{', '.join(missing)} — the class is a label, not a configuration"
         )
-    stray = [k for k in _LOCAL_ONLY if not local and raw.get(k)]
+    claude = engine == CLAUDE
+    stray = [
+        k
+        for k in _LOCAL_ONLY
+        if not local and raw.get(k) and not (claude and k == "model")
+    ]
+    if claude and raw.get("model"):
+        problem = claude_model_problem(str(raw["model"]))
+        if problem:
+            return f"manager {name}: model {raw['model']!r} {problem}"
     if stray:
         return (
             f"manager {name}: {', '.join(stray)} means nothing on a "
             f"{engine!r} engine — only 'local:<class>' runs a model rite drives"
+        )
+    return ""
+
+
+def claude_model_problem(model: str) -> str:
+    """Why `model` cannot be passed to `claude --model`, or ""."""
+    if model in _CLAUDE_ALIASES or _CLAUDE_MODEL.match(model):
+        return ""
+    return (
+        "is not a Claude model name (an alias such as 'sonnet', or an id such "
+        "as 'claude-opus-5-5'). A local model goes on a 'local:<class>' "
+        "Manager with its endpoint"
+    )
+
+
+def _window_error(raw: dict, name: str) -> str:
+    if "context_window" not in raw:
+        return ""
+    window = raw["context_window"]
+    engine = str(raw.get("engine", CLAUDE))
+    if not _LOCAL.match(engine):
+        return (
+            f"manager {name}: context_window means nothing on a {engine!r} "
+            "engine — only 'local:<class>' runs a model whose window rite sets"
+        )
+    if isinstance(window, bool) or not isinstance(window, int):
+        return f"manager {name}: context_window must be a whole number of tokens"
+    from rite_ai.local.engine_probe import MINIMUM_CONTEXT_WINDOW
+
+    if window < MINIMUM_CONTEXT_WINDOW:
+        return (
+            f"manager {name}: context_window {window} is below "
+            f"{MINIMUM_CONTEXT_WINDOW}, the smallest measured to work — an "
+            "agent's own system prompt and tool schemas do not fit below it"
         )
     return ""
 
@@ -227,6 +288,7 @@ def parse_managers(raw: object) -> ParsedManagers:
                 model=str(item.get("model", "")),
                 agent=str(item.get("agent", "")),
                 credential=str(item.get("credential", "")),
+                context_window=int(item.get("context_window", 0) or 0),
             )
         else:
             out.error = (
@@ -306,7 +368,7 @@ def to_yaml_entry(role: ManagerRole) -> str | dict:
         entry["preset"] = role.preset
     if role.duties:
         entry["duties"] = list(role.duties)
-    for key in (*_LOCAL_ONLY, "credential"):
+    for key in (*_LOCAL_ONLY, "credential", "context_window"):
         value = getattr(role, key)
         if value:
             entry[key] = value
@@ -449,3 +511,32 @@ def configuration_problems(
             "the router"
         )
     return problems
+
+
+def effective_model(role: ManagerRole) -> str:
+    """What model a Manager runs, and where that comes from, in one line.
+
+    Track MS's rule, "inspectable, never silent": `rite doctor` and `rite
+    start` both print this, from this one function, so the two cannot
+    disagree about what a Manager runs.
+    """
+    if role.engine == HUMAN:
+        return f"manager {role.name}: a person, no model"
+    if role.is_local:
+        window = (
+            f"a {role.context_window}-token window pinned into the model"
+            if role.context_window
+            else "NO context_window declared, so `rite start` refuses it"
+            if role.agent == "goose"
+            else "the server's default window"
+        )
+        return (
+            f"manager {role.name}: {role.model} at {role.endpoint}, "
+            f"{window} (declared in its role)"
+        )
+    if role.model:
+        return f"manager {role.name}: {role.model} (declared in its role)"
+    return (
+        f"manager {role.name}: Claude Code's default model for this login "
+        "(none declared in its role)"
+    )

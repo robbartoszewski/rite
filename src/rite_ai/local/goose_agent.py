@@ -86,7 +86,9 @@ def session_name(ticket: str, subtask_id: str) -> str:
     return f"rite-{safe.strip('-').lower()}"
 
 
-def goose_environment(endpoint: str, model: str) -> dict[str, str]:
+def goose_environment(
+    endpoint: str, model: str, *, context_limit: int = 0
+) -> dict[str, str]:
     """What tells Goose WHICH model to run, and where.
 
     Shared by a Worker (`GooseAgent`) and a Manager's launch
@@ -96,11 +98,16 @@ def goose_environment(endpoint: str, model: str) -> dict[str, str]:
     `model: qwen3:8b` ran `qwen3-vl:8b-instruct`, because only the Worker path
     set them.
     """
-    return {
+    env = {
         "GOOSE_PROVIDER": "ollama",
         "GOOSE_MODEL": model,
         "OLLAMA_HOST": endpoint.rstrip("/").removesuffix("/v1"),
     }
+    if context_limit:
+        # The window the model is served with, so Goose is not left to assume
+        # one. What Goose does with it as the window fills is not yet observed.
+        env["GOOSE_CONTEXT_LIMIT"] = str(context_limit)
+    return env
 
 
 @dataclass(frozen=True)

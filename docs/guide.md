@@ -620,7 +620,8 @@ coordination:
   manager_roles:
     - {name: lead, preset: lead}          # Claude; the Owner, it holds 'route'
     - {name: helper, engine: 'local:small', preset: executor,
-       endpoint: 'http://localhost:11434/v1', model: 'qwen3:8b', agent: goose}
+       endpoint: 'http://localhost:11434/v1', model: 'qwen3:8b', agent: goose,
+       context_window: 32768}
 ```
 
 - `managers` is the list of names; `manager_roles` says what each is for.
@@ -631,15 +632,22 @@ coordination:
   must hold it: only that one reads Slack and routes work, and `rite doctor`
   says so when none or several do.
 - `engine` defaults to `claude`. A `local:<class>` engine must also give
-  `endpoint`, `model` and `agent`; `goose` is the agent rite supports. Presets:
-  `lead`, `pm`, `planner`, `executor`.
+  `endpoint`, `model` and `agent`; `goose` is the agent rite supports. A
+  Goose Manager must give `context_window` too, and `rite start` refuses it
+  without one (see *A local model needs a context window you have to set*).
+  Presets: `lead`, `pm`, `planner`, `executor`.
+- **Each Manager names its own model.** A local one gives `model` with its
+  endpoint. A Claude one may give `model` too, as an alias (`sonnet`,
+  `opus`) or an id (`claude-opus-5-5`), and runs Claude's default without
+  it. A local model's name on a Claude Manager is refused, because `claude`
+  cannot run it.
 
 Before the first start:
 
 1. For `lead`: `claude setup-token`, then `rite credential set claude_token`
    (next section).
-2. For `helper`: install Goose and Ollama, `ollama pull qwen3:8b`, and set
-   `OLLAMA_CONTEXT_LENGTH=32768` before Ollama starts (see *A local model
+2. For `helper`: install Goose and Ollama, and `ollama pull qwen3:8b`. Its
+   `context_window` is set in its role, not in Ollama (see *A local model
    needs a context window you have to set*). Pick a model that calls tools
    reliably: a 1.7B model did not run `rite reply` when asked.
 3. A ticket backend, if a lone Manager should run more than one session
@@ -710,6 +718,37 @@ tool support, and you still get 4096. An agent's system prompt and tool
 schemas are bigger than that before your task is added — measured, opencode
 sends about 31KB on the wire and Goose about 19KB — so the window is full
 before the work starts.
+
+For a Manager, **set it in the Manager's role**, not in Ollama:
+
+```yaml
+    - {name: helper, engine: 'local:small', preset: executor,
+       endpoint: 'http://localhost:11434/v1', model: 'qwen3.8', agent: goose,
+       context_window: 65536}
+```
+
+At each start, rite makes sure the model it runs has that window **written
+into the model**, not left to the server. If `qwen3.8` does not already pin
+65536, rite creates `rite-ctx65536-qwen3.8`, a twin that shares its weights
+and costs about 136 bytes. It checks the window by reading it back, runs that
+twin, and gives Goose the same number (`GOOSE_CONTEXT_LIMIT`) rather than
+leaving it to assume one. `rite start` prints the twin's name and the `ollama
+rm` that removes it. Two Managers can run the same model with
+different windows. **A Goose Manager with no `context_window` does not
+start**: the server's default cannot be read until the model loads, so
+starting on it would be a guess.
+
+⚠ **Not yet observed with a model running:** that Ollama serves the pinned
+window to Goose's requests rather than its own default, and what Goose does
+as the window fills. `rite doctor` shows the served window once the model is
+loaded; if it differs from `context_window`, say so in an issue.
+
+⚠ **A bigger window costs memory.** The window's cache grows with it, on top
+of the model's weights. On a machine with little memory to spare, a window
+that does not fit shows up when the model loads, not in `rite doctor`.
+
+Outside a Manager (a Worker, or your own use), the server-wide setting still
+applies:
 
     export OLLAMA_CONTEXT_LENGTH=32768   # then restart the ollama server
 

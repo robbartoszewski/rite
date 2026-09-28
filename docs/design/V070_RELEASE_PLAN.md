@@ -936,6 +936,41 @@ would be stuck with.
   neither `manager_roles` nor models. The one example is the Goose snippet
   in the 0.6.0 release notes.
 
+### Status 2026-09-28: one model per Manager, and a local one's window, as configuration
+
+Within Robert's ruling below (a Manager keeps one model; stage switching is
+MS1's, for Workers), and prompted by the v0.6.0 dogfood run, where a
+`qwen3.8` Manager filled its 32k window after 45 minutes of detours and ended
+without replying:
+
+- **A Claude Manager may declare `model`**, an alias (`sonnet`, `opus`, …) or
+  a `claude-` id, passed QUOTED as `--model` (unquoted, `[1m]` is a shell
+  glob: measured, a file named `claude-opus-5-51` in the pane's directory
+  became the model). A local model's name on a Claude Manager is refused.
+- **A Goose Manager must declare `context_window`** (≥ 32768), or `rite
+  start` refuses it and `rite doctor` says so. Before, the served window was
+  Ollama's server-wide default, unreadable until the model loads, so usually
+  unknown, and unknown let a Manager start. rite pins the window into the
+  model it runs (a `rite-ctx<N>-<model>` twin, ~136 bytes, created on the
+  endpoint's own server, named at start with its `ollama rm`), reads the pin
+  back from `/api/show` rather than trusting `ollama create`, and passes it to
+  Goose as `GOOSE_CONTEXT_LIMIT` (read by Goose 1.51, per its binary).
+- **Inspectable:** `rite doctor` and `rite start` print each Manager's
+  effective model and its source, from one function.
+- Tests with a fake Ollama that really reads the Modelfile. Mutation-checked
+  (backup copies): trusting `ollama create` → red; an undeclared window
+  starting → red; an unquoted `--model` → red; Goose not told → 2 red; the
+  config writer dropping `context_window` (which the round-trip guard found
+  in the first version: `rite schedule set` would have deleted it) → red.
+
+⚠ **NOT YET OBSERVED with a model running**, and this is the half that
+decides whether it works: (1) that Ollama serves the pinned `num_ctx` to
+Goose's requests, rather than its server default or a `num_ctx` Goose sends
+itself; (2) what Goose does as the window fills, with `GOOSE_CONTEXT_LIMIT`
+and without; (3) whether a filled window can be SAID (a stated end, not a
+Manager that stops replying). Each needs a local model loaded, on a machine
+that was recovering from memory pressure (swap 9.6 GB of 11.3 GB at 06:37).
+
 ### Measured for this design: a resumed Claude conversation can change model
 
 2026-09-27, Claude Code 2.1.261, the operator's own login: turn 1
