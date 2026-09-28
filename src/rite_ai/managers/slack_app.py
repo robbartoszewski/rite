@@ -1,0 +1,168 @@
+"""One Slack app, one project: refused, not only advised.
+
+SPEC §9.16.6 (D-101) says each project uses its own Slack app, and until
+this nothing checked. What sharing one does, read from `slack.py` and
+observed in the v0.6.0 dogfood run, where a second project reused the first
+project's bot token:
+
+- **Both projects' Managers take the Owner's DM as an INSTRUCTION.** The DM's
+  channel id comes from posting to `slack.owner_user`, so two projects on one
+  app with one Owner get the SAME DM. Each relay delivers every top-level
+  message in it with the `INSTRUCTION` header (`Listener._relay`), so an
+  instruction meant for one project is acted on by both.
+- **Each project's Manager posts into a conversation the other project
+  reads.** That is the cross-project confidentiality failure rite fixed once
+  for mail (DF3), reintroduced through configuration.
+- **Stopping one project does not help.** A message sent while a project's
+  Manager is not running stays in Slack and is delivered at its next start
+  (A5), so the other project picks up instructions meant for the stopped one.
+
+So an app is BOUND to one project, persistently, and a second project is
+refused before its listener exists: nothing read, nothing delivered, nothing
+posted. It is keyed on the app's IDENTITY, the workspace and bot user that
+`auth.test` reports, not on which credential supplied the token. The token
+can come from a project's namespace, the machine-global entry or the
+environment (`credentials.store.get_scoped`), and all three reach the same
+bot.
+
+WHY A BINDING AND NOT A LOCK. A lock held while a relay runs would stop two
+projects at once and miss the third bullet. The binding stays until someone
+removes it.
+
+WHY IT CANNOT BE RACED. The binding is published with `os.link` from a file
+already written, which either creates the name with its full content or
+fails because the name exists. Two projects binding one app at the same
+instant get one winner. The loser reads the winner's record, which is
+complete by construction.
+
+WHERE IT CANNOT KNOW, IT REFUSES. If `auth.test` fails, or returns no
+workspace or bot user, there is no identity to check, so the relay does not
+open, and it says why. An unreadable binding file refuses too. Guessing
+either way would be the confidentiality failure again.
+
+⚠ **One machine only.** The bindings live in this machine's data directory.
+Two machines running projects on one app are not seen (v0.8.0, multi-machine).
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import tempfile
+import time
+from dataclasses import dataclass
+from pathlib import Path
+
+APPS_DIR_ENV = "RITE_SLACK_APPS_DIR"
+
+_ID = re.compile(r"^[A-Z0-9]{2,32}$")
+
+
+@dataclass(frozen=True)
+class Identity:
+    team: str
+    """The workspace id, `T…`."""
+    user: str
+    """The bot's user id, `U…`. Distinct per app in a workspace."""
+
+    @property
+    def name(self) -> str:
+        return f"{self.team}-{self.user}"
+
+
+@dataclass
+class Bound:
+    identity: Identity
+    newly: bool = False
+
+
+@dataclass
+class Refused:
+    reason: str
+
+
+def _apps_dir() -> Path:
+    """Beside the Manager mailboxes, under no path any Manager's profile
+    grants, so no Manager can edit or remove a binding."""
+    override = os.environ.get(APPS_DIR_ENV)
+    if override:
+        return Path(override)
+    from rite_ai.managers import github_access
+
+    return github_access._credential_root().parent / "slack-apps"  # noqa: SLF001
+
+
+def identity_of(token: str, *, call=None) -> Identity | Refused:
+    """Which app this token belongs to, from `auth.test`, or why not."""
+    from rite_ai.managers.slack import _call
+
+    caller = call or _call
+    try:
+        who = caller("auth.test", token, {})
+    except Exception as e:  # noqa: BLE001 - any failure means "cannot tell"
+        return Refused(
+            f"cannot tell which Slack app this token belongs to (auth.test "
+            f"failed: {type(e).__name__}), so cannot tell whether another "
+            f"project already uses it"
+        )
+    team = str((who or {}).get("team_id") or "")
+    user = str((who or {}).get("user_id") or "")
+    if not (who or {}).get("ok", True) or not _ID.match(team) or not _ID.match(user):
+        return Refused(
+            "cannot tell which Slack app this token belongs to (auth.test did "
+            "not name a workspace and bot user), so cannot tell whether "
+            "another project already uses it"
+        )
+    return Identity(team=team, user=user)
+
+
+def _binding_path(identity: Identity) -> Path:
+    return _apps_dir() / f"{identity.name}.json"
+
+
+def bind(identity: Identity, project: Path) -> Bound | Refused:
+    """Bind `identity` to `project`, or find it already bound. Never raises."""
+    project = project.resolve()
+    target = _binding_path(identity)
+    record = {
+        "project": str(project),
+        "team": identity.team,
+        "bot_user": identity.user,
+        "bound_at": time.time(),
+    }
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=".bind-", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(json.dumps(record) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+            try:
+                os.link(tmp, target)
+                return Bound(identity=identity, newly=True)
+            except FileExistsError:
+                pass
+        finally:
+            Path(tmp).unlink(missing_ok=True)
+    except OSError as e:
+        return Refused(f"cannot record which project uses this Slack app: {e}")
+
+    try:
+        holder = json.loads(target.read_text())["project"]
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        return Refused(
+            f"this Slack app's binding {target} cannot be read ({e}), so "
+            f"which project it belongs to is unknown"
+        )
+    if Path(holder) == project:
+        return Bound(identity=identity)
+    return Refused(
+        f"this Slack app (workspace {identity.team}, bot {identity.user}) "
+        f"belongs to another project: {holder}. Two projects on one app "
+        f"share the Owner's DM, so each would take the other's instructions "
+        f"and read the other's messages (SPEC §9.16.6). Give this project its "
+        f"own Slack app. If {holder} no longer uses this one, remove "
+        f"{target} and start again"
+    )

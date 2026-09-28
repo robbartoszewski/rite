@@ -187,6 +187,11 @@ def _no_real_credential_file(tmp_path_factory, monkeypatch):
     #
     # ⚠ A directory of its OWN, not inside `d`: `github_access` denies the
     # credential store's parent (here `d`) to every Manager.
+    # And which project each Slack app is bound to (`managers.slack_app`),
+    # which lives in the same data directory as the mail.
+    monkeypatch.setenv(
+        "RITE_SLACK_APPS_DIR", str(tmp_path_factory.mktemp("slackapps") / "apps")
+    )
     if "RITE_HOME_DIR" not in os.environ:
         monkeypatch.setenv(
             "RITE_HOME_DIR", str(tmp_path_factory.mktemp("ritehome") / "rite-home")

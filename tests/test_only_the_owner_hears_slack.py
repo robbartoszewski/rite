@@ -47,7 +47,15 @@ def opened(monkeypatch):
         def open(self):
             return []
 
+    def slack_api(method, token, params=None, payload=None):
+        # The one call made before a listener exists: which app is this, so
+        # a second project on it can be refused (`slack_app`). Answered here,
+        # because a test must never reach Slack.
+        assert method == "auth.test", method
+        return {"ok": True, "team_id": "T0TEAM", "user_id": "U0RITEBOT"}
+
     monkeypatch.setattr(slack_mod, "Listener", Recorder)
+    monkeypatch.setattr(slack_mod, "_call", slack_api)
     monkeypatch.setenv("RITE_SLACK_BOT_TOKEN", "xoxb-fake")
     return made
 
