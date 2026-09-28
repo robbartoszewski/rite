@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import time
 import uuid
@@ -942,6 +943,35 @@ class TestEndingAsksAboutTheManagersOwnPane:
             )
 
 
+def _agent_exiting_once_recorded(agent: Path, root: Path, manager: str = "lead"):
+    """An agent that exits cleanly once `start` has recorded its session.
+
+    ⚠ **A BARRIER, NOT A MARGIN.** These agents were `sleep 3; exit 0`,
+    meant to outlive `settled_alive`'s "2 s" window. That window is
+    `SETTLE_TRIES` polls of `SETTLE_PAUSE` PLUS a tmux round trip each:
+    2.16 s on a laptop (9 ms a call), past 3 s on a hosted macOS runner,
+    where the agent then exited inside the window on schedule and `start`
+    said it "exited immediately" (both tests failed at ~3.4 s, twice).
+    `record_instance` runs only after the window succeeds, and `supervise`
+    forgets the record before each continuation, so its appearing is the
+    event this agent waits for, on any machine. The cap turns a barrier
+    that never opens into a non-zero exit, not a hang."""
+    from rite_ai.managers import instance_path
+
+    record = shlex.quote(str(instance_path(root, manager)))
+    agent.write_text(
+        "#!/bin/sh\n"
+        "i=0\n"
+        f"while [ ! -e {record} ]; do\n"
+        '  i=$((i + 1)); [ "$i" -gt 600 ] && exit 3\n'
+        "  sleep 0.1\n"
+        "done\n"
+        "exit 0\n"
+    )
+    agent.chmod(0o755)
+    return agent
+
+
 @tmux_only
 class TestTheSecondCycleActuallyStarts:
     """⚠ **REAL tmux, REAL starter, two cycles.** The reason the resume path
@@ -965,12 +995,9 @@ class TestTheSecondCycleActuallyStarts:
     the test supplying the step production was missing.
     """
 
-    def _agent(self, tmp_path: Path) -> Path:
+    def _agent(self, root: Path, tmp_path: Path) -> Path:
         """Exits cleanly, unattended, after outliving `settled_alive`."""
-        agent = tmp_path / "agent.sh"
-        agent.write_text("#!/bin/sh\nsleep 3\nexit 0\n")
-        agent.chmod(0o755)
-        return agent
+        return _agent_exiting_once_recorded(tmp_path / "agent.sh", root)
 
     def _transcripts(self, monkeypatch, root: Path, tmp_path: Path) -> None:
         """A transcript newer than every cycle, so the id is never the
@@ -1000,7 +1027,7 @@ class TestTheSecondCycleActuallyStarts:
             result = supervise(
                 project,
                 "lead",
-                engine=str(self._agent(tmp_path)),
+                engine=str(self._agent(project, tmp_path)),
                 max_sessions=2,
                 window_seconds=0,
                 poll=0.3,
@@ -1230,11 +1257,8 @@ class TestALeftoverFromARunThatEndedBadly:
     and drops the record, which is what actually happens.
     """
 
-    def _agent_that_exits(self, tmp_path: Path) -> Path:
-        agent = tmp_path / "exits.sh"
-        agent.write_text("#!/bin/sh\nsleep 3\nexit 0\n")
-        agent.chmod(0o755)
-        return agent
+    def _agent_that_exits(self, root: Path, tmp_path: Path) -> Path:
+        return _agent_exiting_once_recorded(tmp_path / "exits.sh", root)
 
     def _leftover(self, project: Path, tmp_path: Path) -> str:
         """Start a Manager for real, let it end, then lose the record."""
@@ -1244,7 +1268,7 @@ class TestALeftoverFromARunThatEndedBadly:
         first = start(
             project,
             "lead",
-            command=str(self._agent_that_exits(tmp_path)),
+            command=str(self._agent_that_exits(project, tmp_path)),
             max_sessions=1,
             window_seconds=0,
         )
