@@ -576,8 +576,35 @@ stale, and the next reconciling read corrects it.
 | ready to be assigned | `label:ready-to-work` | `labels = ready-to-work` |
 | needs refinement | `label:scheduled -label:ready-to-work` | `labels = scheduled AND labels not in (ready-to-work)` |
 
-⚠ The JQL for "needs refinement" is written from the documented semantics
-of `not in` on a multi-valued field, not measured. TR0 checks it. When the
+**Both filters were run against real boards on 2026-09-28, read-only,
+using an existing label as a stand-in for `ready-to-work`, which no board
+carries yet.**
+
+- **Jira** (`bentora`, project `BEN`, stand-in `refined`):
+  `labels = scheduled` returned 147; `… AND labels = refined` returned 5;
+  `… AND labels not in (refined)` returned 142. That is 5 + 142 = 147, an
+  exact split, and it includes scheduled tickets carrying other labels
+  (`gate`, `bug`). `labels != refined` returned the same 142. The
+  hyphenated name parses unquoted: `labels not in (ready-to-work)` ran and
+  returned all 147, and `labels = ready-to-work` returned 0.
+- **GitHub** (search API): on `rite-dogfood-board`, `label:scheduled` and
+  `label:scheduled -label:ready-to-work` both returned 20, and the
+  intersection returned 0. No issue there has two labels, so the exclusion
+  was checked on a public repository: `repo:cli/cli is:issue label:bug`
+  returned 2258, `+label:needs-triage` 607, and `-label:needs-triage` 1651,
+  which is 607 + 1651 = 2258.
+- ⚠ **Not run on `ritetest`**, the Jira site Robert set up: this session's
+  Atlassian connector reaches only `bentora`. JQL is the same engine on
+  every Jira Cloud site, so this is expected to hold there, but it is not
+  observed there. TR7's done-when includes it.
+- **A trap found on the way.** GitHub drops the positive qualifier when a
+  query names the same label both ways: `label:scheduled -label:scheduled`
+  returned 5, the five issues with no labels, not 0. That is harmless for
+  these two filters, which name different labels, but it is why the check
+  used two labels.
+- **The board's own search index can lag** (DF4 measured list endpoints
+  lagging by about 2 s). A filter on the board is a view of a view. When it
+  matters, `rite board list --ready` is the fresh read. When the
 board view may be stale (no rite process has run lately),
 `rite board list --ready` and `rite board list --needs-refinement` compute
 the truth from a fresh read, with each ticket's state.
@@ -785,9 +812,9 @@ first run after the upgrade surprises no one.
   and whether it is absent from the argv and environment of every rite
   process that holds it, read with CU1b section 4's `KERN_PROCARGS2`
   reader.
-- **Whether the Jira filter for "needs refinement"** (`labels = scheduled
-  AND labels not in (ready-to-work)`) returns exactly the scheduled tickets
-  without the label, on a real site.
+- ~~Whether the Jira filter for "needs refinement" works~~: **measured
+  2026-09-28** on `bentora` (an exact 5 + 142 = 147 split), and the GitHub
+  filter on `cli/cli`. Not yet run on `ritetest` (part 3.10).
 - **Whether a sandboxed Worker's handover or reply reaches the host**
   (TR4). The dogfood suggests not, because its question stayed in the
   sandbox. That is one observation, not a measurement.
