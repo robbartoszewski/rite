@@ -37,6 +37,22 @@ refinement is enforced, as the standard, everywhere.** Robert, verbatim:
 label, part 3.10.** It is a view derived from the signed record, never the
 authority.
 
+**Also decided, 2026-09-28, the same day: what `scheduled` means once
+refinement exists.** Robert, verbatim:
+
+> "On 5 - I think that scheduled and refined aren't necessarily in conflict
+> here. We can say that scheduled + not refined => owner starts refinement
+> procedure, scheduled + refined => owner assigns it to a Manager"
+
+So **`scheduled` without a record is not an error: it is what starts
+refinement.** `scheduled` with a valid record is what the Owner may assign.
+Enforcement is exactly as strong as before: no Manager is assigned the
+work, and no Worker starts, without a valid signed record. What changed is
+its shape. A gate that *assigns* now hands an unrefined ticket to
+refinement, and only a gate that tries to *work* one refuses (part 3.7).
+Part 3.4 step 0 says what bounds the Owner, so that twenty unrefined
+tickets do not become twenty conversations at once.
+
 **Not decided:** the rest of what this note proposes about *how*, in
 TRQ2–TRQ9 (part 7), each with a recommendation.
 
@@ -118,16 +134,19 @@ the board** plus rite's local round ledger (part 3.4). It never uses a list
 endpoint: those lag a new issue by about 2 s (DF4), and the single-issue GET
 was measured consistent.
 
-| state | means | ready for work? |
-|---|---|---|
-| `NOT REFINED` | no valid record, and no round open | no |
-| `ASKING` | a round is open: questions sent, no attributed answer yet. Says which round of how many, and its deadline | no |
-| `PROPOSED` | the latest round carries a proposal the User can accept | no |
-| `REFINED` | exactly one valid record heads the chain, and it matches the ticket's current title and description | **yes** |
-| `STALE` | a record exists, and the title or description changed after it was written | no |
-| `PARKED` | refinement ended without agreement. The reason is one of: `no answer`, `not agreed after N rounds`, `thread unreadable` | no |
-| `CONFLICT` | two records claim to be the head (part 4, race 3) | no |
-| `UNREADABLE` | the board could not be read, the comment list could not be shown complete, or the record's signature cannot be checked | no |
+With Robert's semantics (part 0), each state of a `scheduled` ticket says
+what the Owner does with it:
+
+| state | means | may a Manager or Worker work it? | what happens to it, if `scheduled` |
+|---|---|---|---|
+| `NOT REFINED` | no valid record, and no round open | no | **the Owner starts refinement**, in turn (part 3.4 step 0) |
+| `ASKING` | a round is open: questions sent, no attributed answer yet. Says which round of how many, and its deadline | no | in refinement; waits for the User |
+| `PROPOSED` | the latest round carries a proposal the User can accept | no | in refinement; waits for the User's word |
+| `REFINED` | exactly one valid record heads the chain, and it matches the ticket's current title and description | **yes** | **the Owner assigns it** to a Manager; `ready-to-work` is on it until then |
+| `STALE` | a record exists, and the title or description changed after it was written | no | **the Owner starts refinement again**, like `NOT REFINED`; the round quotes the old record so the User sees what changed |
+| `PARKED` | refinement ended without agreement. The reason is one of: `no answer`, `not agreed after N rounds`, `thread unreadable`, `not started by the Manager` | no | waits for a person (part 3.4 step 7); **uses no sessions** |
+| `CONFLICT` | two records claim to be the head (part 4, race 3) | no | waits for a person; reported; **uses no sessions** |
+| `UNREADABLE` | the board could not be read, the comment list could not be shown complete, or the record's signature cannot be checked | no | reported; **uses no sessions**, because a session cannot read what rite could not |
 
 `UNREADABLE` is never read as `NOT REFINED` or as `REFINED`. An unreachable
 board is not an empty board (D-74), and the same applies here.
@@ -215,11 +234,48 @@ the User. In a multi-Manager root only the routing Owner reads Slack
 one ticket that needs an answer. A refinement **attempt** is at most **N**
 rounds (TRQ2 proposes N = 3).
 
+**0. What starts refinement, and what bounds it.** Under Robert's semantics
+a `scheduled` ticket in `NOT REFINED` or `STALE` is refinement work for the
+Owner, not a refusal. Unbounded, that is the failure the dogfood already
+showed: a supervisor spent eight sessions in eighty seconds on tickets it
+could not read. So the work is bounded four ways, each enforced by the
+supervisor rather than asked of the model:
+
+- **Order.** Tickets are taken oldest first, by the board's `created`
+  time with the id as tie-break. Both come from the same read, so the
+  order is deterministic. (Priority order is a later option, not this
+  one.)
+- **At most K refinements open at once per Manager** (TRQ2 proposes 5).
+  "Open" means `ASKING` or `PROPOSED`. A ticket beyond K stays `NOT
+  REFINED`, is listed as "queued for refinement, position n", and is not
+  handed over.
+- **At most S new refinements started per Owner session** (TRQ2 proposes
+  3), and **new starts are paced by the User.** A session is started *for
+  refinement* only in two cases. The first is the first cycle that finds
+  refinement work. The second is a cycle in which an attributed reply has
+  arrived or a round's deadline has passed. Starts are never the *reason*
+  for another session. So when the User answers nothing, rite adds no new
+  questions after the first batch, and the number of sessions refinement
+  can cause is at most one, plus one per reply, plus one per deadline.
+  Twenty unrefined tickets on the first run therefore mean three
+  conversations started, not twenty, and more only as the User engages.
+- **A no-progress guard.** A ticket handed to the Owner for which no round
+  was started by the end of that session counts one miss. After **two
+  consecutive misses** it is `PARKED (not started by the Manager)`, is no
+  longer handed over, and is reported as needing a person
+  (`rite refine reopen <ID>` retries it). A Manager that cannot or will not
+  start a ticket's refinement costs two sessions, not a session a minute.
+
+`PARKED`, `CONFLICT` and `UNREADABLE` never cause a session. Every
+refinement session also counts against the run's mandatory budget ceiling
+(§9.14.5), which stays the outer bound.
+
 **1. rite hands the ticket to the Manager.** At the start of each cycle the
 supervisor, **outside the boundary**, reads each `scheduled` ticket once
 (DF4's ledger decides the set, and a single GET reads each member) and
-computes its state. Tickets in `NOT REFINED`, `STALE`, `ASKING` or
-`PROPOSED` are listed in the board holder's instruction, with their title
+computes its state. Tickets in `ASKING` or `PROPOSED`, and those
+`NOT REFINED` or `STALE` tickets that step 0 admits this session, are listed
+in the board holder's instruction, with their title
 and description (normalised, SPEC §6.6.1) and where each round stands.
 **So a Manager never has to read the board to refine.** That is what makes
 this work on Jira today, where a Manager cannot read the board at all
@@ -343,15 +399,33 @@ reminder is a round, and rounds are bounded.
   and starts a new attempt from `NOT REFINED`. **A User who fixes the ticket
   themselves has resumed it.**
 
-**8. It never blocks the Manager.** Refinement is per-ticket state. While a
-ticket is `ASKING`, the Manager works anything that is `REFINED`. When
-every scheduled ticket is waiting on the User and nothing is in flight, the
-loop's verdict is a new one, `waiting-on-user`, never `idle`. Its line
-names each ticket and what it waits for. The supervisor then waits
-**without starting sessions** until an attributed reply arrives or a
-deadline passes. That is the same "awaiting a reply" wait DF2 needs, and it
-is built once (TR2 depends on it). The dogfood's F12 (five sessions in five
-minutes, none touching a ticket) is what happens without it.
+**8. It never blocks the Manager, and it never reads as an empty board.**
+Refinement is per-ticket state. While a ticket is `ASKING`, the Manager
+works anything that is `REFINED`. The loop gains two verdicts, and
+**`idle` is reserved for a board with nothing `scheduled` at all**:
+
+- **`refining`**: step 0 admits refinement work this cycle. A session
+  starts, as for `ready`.
+- **`waiting-on-user`**: every `scheduled` ticket is `ASKING`, `PROPOSED`,
+  `PARKED`, `CONFLICT` or `UNREADABLE`, or is queued behind K. Nothing is in
+  flight either. Its line names each ticket and what it waits for.
+
+⚠ **This corrects a defect in this note's first version.** There, the loop
+counted only `REFINED` as ready and had no `refining` verdict. A board
+whose `scheduled` tickets were all unrefined would have read `idle`, "the
+board has nothing ready", which ends the run
+(`supervise.py`, `CONTINUE_VERDICTS`). No Owner session would ever have
+started to refine anything. On `waiting-on-user` the supervisor waits **without starting sessions** until an
+attributed reply arrives or a deadline passes. **That wait already exists:
+DF2 built it in v0.6.0** (`8925c80`, `35beafc`: on a stop verdict,
+`supervise._reason_to_wait` asks `waiting.reason()`, and when that is not
+empty `_wait_for_mail` waits and spends no session; covered by
+`tests/test_mail_causes_a_cycle.py`). TR2 adds one reason to it, "a
+refinement round is open", instead of building a second wait.
+`waiting-on-user` joins `STOP_VERDICTS` and `refining` joins
+`CONTINUE_VERDICTS` (`supervise.py:142–143`). The dogfood's F12 (five
+sessions in five minutes, none touching a ticket) is what happens without
+the wait.
 
 ### 3.5 The two contradictions in today's text, resolved
 
@@ -445,22 +519,23 @@ ticket, and the next record supersedes the old one.
 
 ### 3.7 Everything that consumes the predicate
 
-*Not built.* Each consumer is marked "instructed" or "enforced". Both
-halves are standard (TRQ1, decided); the column says which mechanism does
-the work.
+*Not built.* Both halves are standard (TRQ1, decided). Under Robert's
+semantics (part 0) **each gate does one of two things with an unrefined
+ticket: an assigning gate routes it to refinement, and a working gate
+refuses it.** The "unrefined" column says which, and what it prints.
 
-| consumer | change | half |
+| consumer | change | unrefined `scheduled` ticket |
 |---|---|---|
-| **Worker launch** (`cli/main.py:5760`, `prompt = f"Work ticket {ticket}."`) | The supervisor reads the ticket once, checks it, and puts **the record itself** in the start prompt: id, checklist, scope, Verify. What was checked is what was delivered, so there is no window between the check and the Worker's read (part 4, race 4) | delivery: both halves. A refusal on a missing record is enforced |
-| **`rite route --ticket`** (new flag) | attaches the record snapshot to the routed text the same way | delivery: both; refusal: enforced |
-| **broker** (`managers/broker.py:168`) | refuses a Worker request for a ticket that is not REFINED, and says which state it is in | enforced |
-| **loop** (`loop/__init__.py:424`, `_ready`) | only REFINED counts as ready. The others are listed with their state, and the new `waiting-on-user` verdict applies | enforced |
-| **the Owner's assignment to Managers** (`scheduler/__init__.py:617`, which also lists `scheduled`) | assigns only tickets that are REFINED. It is a third reader of the ready signal, beside the loop and the broker, and it must not have its own | enforced |
-| **assignment to a Worker** (`coordination/distribution.py:164`, which removes `scheduled` when it adds the Worker's label) | removes `ready-to-work` in the same `label()` call (part 3.10) | view |
-| **`rite board show`** | a status line and the record | both |
-| **`/ticket`, the Worker's `CLAUDE.md`, `/refine`, the prompts** | part 3.5 | instructed |
-| **the review checklist** (`templates/review-checklist.md:202`) | its "would this ticket's definition of done still be met" test now has a definition of done to read: the record | both |
-| **the Worker's stop** | today it lands nowhere (`question.json`, part 1). It must reach the Manager, and through the Manager `rite status`. **Whether a sandboxed Worker's handover or reply reaches the host today is not established here.** TR4 establishes it before anything relies on it | both |
+| **the Owner's assignment to Managers** (`scheduler/__init__.py:617`, which also lists `scheduled`) | assigns only REFINED tickets. It is a third reader of readiness, beside the loop and the broker, and it must not have its own rule | **routes to refinement.** `NOT REFINED`/`STALE`: "RT-10: starting refinement" (or "queued for refinement, position n", behind K). `ASKING`/`PROPOSED`: "RT-10: in refinement, round k of N, waiting for you". `PARKED`: "RT-10: parked (<reason>); reply `RT-10 …` to resume". `CONFLICT`/`UNREADABLE`: "RT-10: needs a person: <why>". Never assigned, never refused |
+| **loop** (`loop/__init__.py:424`, `_ready`) | REFINED counts as ready for Workers. Unrefined `scheduled` tickets are refinement work: the `refining` verdict, bounded by part 3.4 step 0 | **routes to refinement**, with the same lines. Never `idle` while anything is `scheduled` |
+| **broker** (`managers/broker.py:168`) | a Worker request is an attempt to *work* the ticket | **refuses**: "refused: RT-10 has no agreed definition of done yet (NOT REFINED). It is in the queue for refinement; ask for a Worker once rite reports it REFINED." The state and its round are named |
+| **`rite route --ticket`** (new flag) | a route is an attempt to have another Manager work it. On REFINED it attaches the record snapshot, as the Worker launch does | **refuses**, in the broker's words |
+| **Worker launch** (`cli/main.py:5760`, `prompt = f"Work ticket {ticket}."`) | The supervisor reads the ticket once, checks it, and puts **the record itself** in the start prompt: id, checklist, scope, Verify. What was checked is what was delivered, so there is no window between the check and the Worker's read (part 4, race 4) | **refuses**, in the broker's words; reached only if something bypassed the broker |
+| **assignment to a Worker** (`coordination/distribution.py:164`, which removes `scheduled` when it adds the Worker's label) | removes `ready-to-work` in the same `label()` call (part 3.10) | not reached: only REFINED tickets are distributed |
+| **`rite board show`** | a status line and the record | shows the state and what happens next |
+| **`/ticket`, the Worker's `CLAUDE.md`, `/refine`, the prompts** | part 3.5 | instructed: `/ticket` with a person present refines with them; otherwise it says the state and stops |
+| **the review checklist** (`templates/review-checklist.md:202`) | its "would this ticket's definition of done still be met" test now has a definition of done to read: the record | — |
+| **the Worker's stop** | today it lands nowhere (`question.json`, part 1). It must reach the Manager, and through the Manager `rite status`. **Whether a sandboxed Worker's handover or reply reaches the host today is not established here.** TR4 establishes it before anything relies on it | — |
 
 **Every path that starts a Worker on a ticket must go through the broker's
 check, and every reader of readiness must use the predicate.** TR5
@@ -742,21 +817,32 @@ enforcement was off.
 | | instructed (TR1–TR4) | enforced (TR5) |
 |---|---|---|
 | The Owner refines before routing | the prompt says so | `route --ticket` refuses an unrefined ticket |
-| A Worker starts only on a refined ticket | its start prompt carries the record, and `/ticket` checks | the broker refuses. The loop does not count it as ready |
-| A bare ticket labelled `scheduled` | listed as NOT REFINED, and a Manager is told to refine it first | **not ready**, whatever its label |
+| A Worker starts only on a refined ticket | its start prompt carries the record, and `/ticket` checks | the broker refuses. The loop does not count it as ready for Workers |
+| A bare ticket labelled `scheduled` | the Owner is handed it to refine | **starts refinement** (Robert's semantics); never assigned or worked until REFINED |
 | Routed free text that is really ticket work | instructed: ticket work goes with `--ticket` | ⚠ **not enforceable as such**: rite cannot tell free text naming a ticket from any other text. TRQ5's recommendation makes every route declare `--ticket` or `--no-ticket`, and shows every `--no-ticket` route to a person |
 | A human `rite loop` with no Manager | reports NOT REFINED tickets | dispatches none of them until a person refines or attests them |
 
-**What enforcement changes, accepted with the ruling.** It changes
-behaviour for anyone who puts a bare ticket on a board and expects work to
-start, and that includes Robert's own boards: `RT` on Jira,
-`rite-dogfood-board` on GitHub, and the dogfood's `KAN`. Listed so that the
-first run after the upgrade surprises no one.
+**What enforcement changes.** It changes behaviour for anyone who puts a
+bare ticket on a board and expects work to start, and that includes
+Robert's own boards: `RT` on Jira, `rite-dogfood-board` on GitHub, and the
+dogfood's `KAN`.
+
+⚠ **Retracted, 2026-09-28: "nothing starts until each one is refined".**
+The first version of this part told Robert, in TRQ1's costs, that enforcing
+from the upgrade would *stop* every `scheduled` ticket on those boards until
+someone refined it. Under his semantics that is not what happens: they do
+not stop, they **queue for refinement**, and the Owner starts on them
+itself, oldest first and bounded by part 3.4 step 0. The claim was not
+invented, though. It was true of the design as first written, because
+that design had no `refining` verdict and would have read an all-unrefined
+board as `idle` and stopped (part 3.4 step 8). His model is what removed
+it. What is actually true:
 
 - On the first run after upgrading, **every** `scheduled` ticket is NOT
-  REFINED. Nothing starts until each one is refined. With N = 3, that is up
-  to three messages per ticket to the User, and at most K rounds open at
-  once.
+  REFINED, so **no Worker starts on any of them yet**, and the Owner begins
+  refining the oldest three (S). With N = 3, that is up to three messages
+  per ticket to the User, at most K open at once, and new ones only as the
+  User answers.
 - **A well-written ticket still needs a person's word**: one `ok`, or a
   `rite refine accept --as-written` at a terminal, under the fail-closed
   default of TRQ6. There is no blanket accept, deliberately: it would be
@@ -764,7 +850,8 @@ first run after the upgrade surprises no one.
 - Throughput on a board of properly written tickets drops by one
   round-trip to the User per ticket.
 - A project with no one reachable (no Slack, nobody at `rite connect`)
-  stops at `waiting-on-user` instead of working. Today it would work bare
+  stops at `waiting-on-user` after its first batch of questions, instead of
+  working. Today it would work bare
   tickets on guesses, which is what this feature exists to remove, but
   someone who relied on that will see it stop.
 
@@ -787,7 +874,7 @@ first run after the upgrade surprises no one.
 | id | question | options | recommendation, and why |
 |---|---|---|---|
 | ✅ **TRQ1**: **DECIDED 2026-09-28, enforced as the standard** | Enforce refinement in code, or instruct only? | (a) enforced everywhere; (b) enforced for new projects, opt-in for existing ones; (c) opt-in everywhere; (d) any of these plus a blanket accept | **Robert chose (a):** "There aren't really any 'existing projects' so let's just implement it as a standard." No configuration key. This note had recommended (b); the ruling replaces it. (d) stays rejected. The same ruling added the `ready-to-work` label (part 3.10) |
-| **TRQ2** | N rounds per attempt; the round deadline; K open rounds per Manager | N 2–4; deadline 12 h, 24 h, or the next check-in; K 3–8 | **N = 3, 24 h or the next check-in close if sooner, K = 5.** 24 h is Slack's thread horizon today, so a longer deadline needs the pinning in race 7 anyway. K = 5 stays inside Tier 3 with the relay's other reads |
+| **TRQ2** | N rounds per attempt; the round deadline; K open rounds per Manager; **S new refinements started per Owner session** (added 2026-09-28 with Robert's semantics, part 3.4 step 0) | N 2–4; deadline 12 h, 24 h, or the next check-in; K 3–8; S 1–K | **N = 3, 24 h or the next check-in close if sooner, K = 5, S = 3.** 24 h is Slack's thread horizon today, so a longer deadline needs the pinning in race 7 anyway. K = 5 stays inside Tier 3 with the relay's other reads. S = 3 is what a first run on a full board puts in front of the User at once. ⚠ All four numbers are judgement, not measurement. The bound itself, and the rule that new starts are paced by the User's replies, are the load-bearing part |
 | **TRQ3** | The accept set | a word list; also `<ID> ok` in the DM; also a batch `ok <ID> <ID>` for as-written proposals | **`ok`, `yes`, `accept`, `lgtm`, in-thread or as `<ID> ok`, with the batch form only for as-written proposals.** Deliberately small: every word added is one a model or a person could type by accident |
 | **TRQ4** | Does "you decide" (delegation) count as acceptance? | yes, for the Manager's next proposal; no | **No.** The Manager answers it with a proposal that one word accepts. P2 stays absolute, and the lazy User pays one more word |
 | **TRQ5** | Routed free text that is ticket work | (a) accept the hole and instruct; (b) require `--ticket` for every route to an executor-only Manager; (c) every route carries either `--ticket <ID>` (checked) or an explicit `--no-ticket` (allowed, recorded, and listed in the standup and `rite status`) | **(c)**, revised 2026-09-28 now that enforcement is the standard (the first recommendation was (a)). rite still cannot tell whether free text is ticket work, but under (c) the Owner must *say* which it is on every route, and a person can see every `--no-ticket` route. (b) is stricter, and it blocks legitimate non-ticket work such as "run the suite on branch X". ⚠ The residual hole is an Owner model marking ticket work `--no-ticket`: visible, not prevented |
@@ -821,9 +908,10 @@ first run after the upgrade surprises no one.
 - **Whether a proposal gets rubber-stamped.** This is not measurable before
   the acceptance run (TR6). It is recorded there as observed behaviour, and
   it is not a gate.
-- **DF2's wait.** TR2 depends on the supervisor waiting between cycles
-  without starting sessions. That is DF2's open fix, and if DF2 lands in a
-  different shape, part 3.4 step 8 follows it.
+- ~~DF2's wait is not built~~: **wrong, and corrected 2026-09-28.** It
+  shipped in v0.6.0 (`8925c80`, `35beafc`); part 3.4 step 8 now builds on
+  it. The DF2 row carried no status line, and absence was read as "not
+  built", which is the proxy-for-evidence error this note warns against.
 
 ## Part 9 — where the spec text goes once decided
 
