@@ -553,17 +553,47 @@ def _say_refusals(
     refused = list(dict.fromkeys(refused_commands(root, since, base=base)))
     for command in refused:
         if allowed(command):
+            # ⚠ TWO CAUSES, and the transcript does not say which (SB11,
+            # observed on Linux 2026-09-28): `printf … > notes/x.txt` was
+            # refused while `echo`, `git status` and `ls` ran under the same
+            # allowlist in the same session, so the settings WERE applied.
+            # This used to say flatly that they were not. A command that
+            # writes a file through a redirection is the observed case, so it
+            # is named first when the command has one.
+            redirect = _writes_through_a_redirection(command)
             say(
                 f"refused: {command.strip()!r} — which rite's own allowlist "
-                f"DOES cover. The engine did not apply "
-                f"{settings_path(root)}; under `-p` a settings file that "
-                f"fails validation is ignored without a message. Check that "
-                f"file parses, and check `permissions.deny` in "
-                f"{Path('.claude') / 'settings.json'}."
+                "appears to cover. rite cannot tell from the transcript why: "
+                + (
+                    "most likely the engine asks approval for the file this "
+                    "command writes through `>`, whatever the rule for its "
+                    "program (observed on Linux, with other allowlisted "
+                    "commands running in the same session); or "
+                    if redirect
+                    else "either the engine refuses this form of the command "
+                    "despite the rule, or "
+                )
+                + f"it did not apply {settings_path(root)} (under `-p` a "
+                "settings file that fails validation is ignored without a "
+                "message). If other allowlisted commands ran in that session, "
+                "it is the first. Otherwise check that file parses, and "
+                f"`permissions.deny` in {Path('.claude') / 'settings.json'}."
             )
         else:
             say(refusal(command, root))
     return [c.strip() for c in refused]
+
+
+def _writes_through_a_redirection(command: str) -> bool:
+    """A `>` or `>>` outside quotes. `2>&1` is not one: the lexer reads its
+    `>&` as one token, a descriptor duplication that writes no file."""
+    import shlex
+
+    try:
+        tokens = list(shlex.shlex(command, posix=True, punctuation_chars=True))
+    except ValueError:
+        return ">" in command
+    return any(token in (">", ">>", "&>", ">|") for token in tokens)
 
 
 def _resume_id_source(engine: str, agent: str = ""):
@@ -867,6 +897,7 @@ def _supervise(
     waiting: object = None,
     poll: float = POLL_SECONDS,
     now: object = None,
+    watch: object = None,
 ) -> SuperviseResult:
     """Run the Manager until a bound or a stop verdict ends it.
 
@@ -900,6 +931,21 @@ def _supervise(
     # Injectable so a test can read what a human would have been told,
     # and a no-op by default so nothing prints from a library call.
     say = note if callable(note) else (lambda _m: None)
+    if callable(watch):
+        # ⚠ `watch(say)` rides on the router, deliberately (dogfood Q1–Q4,
+        # part B): every place this supervisor does its file work with no
+        # engine to watch — each poll while a session runs, each cycle
+        # boundary, each tick of a wait — already calls `router(say)`. Joined
+        # here once, it runs at all of them, and a Worker's question is seen
+        # whether or not the Owner has a session. The watcher throttles
+        # itself; it is called at the poll rate.
+        routing_step = router
+
+        def router(say_):
+            if callable(routing_step):
+                routing_step(say_)
+            watch(say_)
+
     begin = clock()
     deadline = begin + window_seconds if window_seconds > 0 else None
     launch = starter if callable(starter) else _default_starter
@@ -2201,8 +2247,11 @@ def _engine_model_env(root: Path, manager: str, agent: str):
                 f"{manager!r} declares no context_window, so the window its model "
                 "is served with would be whatever this Ollama server defaults to, "
                 "which rite cannot read before the model loads, and Goose would "
-                "not know it. Add `context_window: <tokens>` to its entry in "
-                "coordination.manager_roles (at least 32768)"
+                f"not know it. Add this line to its entry (`- name: {manager}`) "
+                "under coordination.manager_roles in .rite/config.yaml:\n"
+                "      context_window: 32768\n"
+                "32768 is the least rite accepts; use the model's own window if "
+                "it is larger and the machine has the memory"
             ),
             "",
         )

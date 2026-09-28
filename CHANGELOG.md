@@ -16,6 +16,16 @@ add it to `.rite/modules.yaml` by hand:
         url: <the repo's origin URL>
         branch: main
 
+### `rite init`'s output passes rite's own gate on the first push
+
+`rite init` wrote the absolute path of your project into `.rite/brief.yaml`
+(`source.path`), and rite's own publish gate refuses a home path in a pushed
+file, so the first `git push` after init was blocked. It now writes `.` for
+the project itself, `~/…` for a path elsewhere under your home, and an
+absolute path only outside it. A project initialised by 0.6.0 still has the
+old line: change `source.path` to `.` by hand, and drop any
+`.rite/gitleaksignore` entry you added for it.
+
 ### Each Manager's own state has left the project
 
 A Manager's prompt, routes, Worker requests, check-ins, Slack relay state and
@@ -47,6 +57,18 @@ refusing too much, by design. Each Manager is told which command is which.
 `rite replies` and the Slack relay mark a question "needs your answer". A
 message written without a kind, by an older rite or by hand, is marked as
 needing you.
+
+### The Owner asks before it routes, and does not implement tickets itself
+
+The Owner used to be told to "write each instruction so it can be done
+without asking you back", which told it to settle a gap itself, on a guess.
+It is now told to ask you (`rite ask`) before it routes anything it would
+otherwise have to guess, and never to route a guess. A secondary that is
+routed something it cannot do as written replies saying so and stops,
+instead of filling the gap. The Owner, and a lone Manager, are also told not
+to change code and commit it themselves: a ticket is worked by a Worker or
+routed, so that it gets a claim, a review and a pull request. This is an
+instruction, not yet enforced.
 
 ### `rite stop --skip-handover`
 

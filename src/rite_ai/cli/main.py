@@ -6448,6 +6448,43 @@ def _other_sandbox_note(entry, asked) -> str:
     return f"no changes; `yoloai destroy {entry.name}` frees it"
 
 
+WORKER_QUESTION_EVERY = 30.0
+"""How often the Owner's supervisor looks at its Workers for a question: a
+`yoloai` call per Worker, so not at the poll rate."""
+
+
+def _worker_question_watch(root: Path, manager: str):
+    """The Owner's watcher for Workers waiting on a question (dogfood Q1–Q4,
+    part B), or None for a Manager that should not tell the person.
+
+    The Manager that tells is the one holding 'route', which is the one that
+    reads and posts Slack; with no roles declared, the lone Manager. A
+    secondary does not: two Managers telling the person the same question is
+    the noise that trains people to ignore both."""
+    from rite_ai.config.managers import routing_owner
+    from rite_ai.config.models import ProjectConfig
+    from rite_ai.config.parse import ParseError, parse_config
+    from rite_ai.managers.worker_questions import surface
+
+    parsed = parse_config(root / ".rite" / "config.yaml")
+    config = parsed if not isinstance(parsed, ParseError) else ProjectConfig()
+    if not config.sandbox.enabled:
+        return None
+    roles = list(config.coordination.manager_roles)
+    if roles and routing_owner(roles) != manager:
+        return None
+    last = {"at": None}
+
+    def watch(say) -> None:
+        now = time.monotonic()
+        if last["at"] is not None and now - last["at"] < WORKER_QUESTION_EVERY:
+            return
+        last["at"] = now
+        surface(root, manager, say)
+
+    return watch
+
+
 def _loop_verdict(root: Path, board=None) -> str:
     """The loop's own answer to "should this continue" (§9.14.4).
 
@@ -6490,6 +6527,21 @@ def _other_managers_briefing(root: Path, manager: str) -> str:
         return ""
     roles = list(config.coordination.manager_roles)
     return briefing(manager, routing_owner(roles), roles)
+
+
+def _ticket_work_rule(root: Path, manager: str) -> str:
+    """The start prompt's rule that a Manager does not implement tickets
+    itself (TR3), or "" for a secondary (`prompt.ticket_work`)."""
+    from rite_ai.config.managers import routing_owner, shares_one_root
+    from rite_ai.config.models import ProjectConfig
+    from rite_ai.config.parse import ParseError, parse_config
+    from rite_ai.managers.prompt import ticket_work
+
+    parsed = parse_config(root / ".rite" / "config.yaml")
+    config = parsed if not isinstance(parsed, ParseError) else ProjectConfig()
+    one_root = shares_one_root(config.coordination.remote)
+    owner = routing_owner(list(config.coordination.manager_roles))
+    return ticket_work(manager, owner, one_root=one_root)
 
 
 def _router_for(root: Path, manager: str):
@@ -7111,7 +7163,8 @@ def _start_a_manager(
                     role.name,
                     root=root,
                     extra=instructions(root, role.name, enabled=record_issues)
-                    + _other_managers_briefing(root, role.name),
+                    + _other_managers_briefing(root, role.name)
+                    + _ticket_work_rule(root, role.name),
                 )
             ),
             fresh=fresh,
@@ -7135,6 +7188,7 @@ def _start_a_manager(
             if setting_up
             else (lambda r: _loop_verdict(r, board)),
             note=lambda m: click.echo(m, err=True),
+            watch=_worker_question_watch(root, role.name),
         )
     finally:
         # Both credential copies go however the run ENDS. A KILLED run skips

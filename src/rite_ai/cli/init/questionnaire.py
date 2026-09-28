@@ -769,7 +769,35 @@ def _ask_role(preset: Preset, interactive: bool) -> str:
     return ui.select("Is this the Owner machine or a Manager machine?", ROLE_OPTIONS)
 
 
-__all__ = ["InitAnswers", "KbAnswers", "run_questionnaire", "source_answers"]
+__all__ = [
+    "InitAnswers",
+    "KbAnswers",
+    "portable_source_path",
+    "run_questionnaire",
+    "source_answers",
+]
+
+
+def portable_source_path(root: Path, source: Path) -> str:
+    """How `source.path` is written into the brief: never with a home path in it.
+
+    `brief.yaml` is committed, and rite's own publish gate refuses a
+    `/Users/<name>/` or `/home/<name>/` path in any pushed file. Measured in
+    the v0.6.0 dogfood (F1): init wrote the resolved absolute path, so the
+    first `git push` after `rite init` was blocked by rite, and the only ways
+    past were a throwaway suppression or `--no-verify`.
+
+    Inside the project it is relative to the root (`.` for the default
+    answer), elsewhere under home it is `~/…`, and only outside home is it
+    absolute. `_resolve_source` reads all three forms back.
+    """
+    root = root.resolve()
+    if source.is_relative_to(root):
+        return source.relative_to(root).as_posix() or "."
+    home = Path.home().resolve()
+    if source.is_relative_to(home):
+        return f"~/{source.relative_to(home).as_posix()}"
+    return str(source)
 
 
 def source_answers(
@@ -812,7 +840,7 @@ def source_answers(
             name=name,
             role=role,
             root_branch=detect_root_branch(base, detect_repos(base)) or "main",
-            source_path=str(source),
+            source_path=portable_source_path(root, source),
             source_changes=changes,
         ),
         modules=_source_modules(root, base),

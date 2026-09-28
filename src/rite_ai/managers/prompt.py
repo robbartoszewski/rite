@@ -114,6 +114,38 @@ def for_manager(manager: str, *, root: Path, extra: str = "") -> str:
     return base + extra
 
 
+TICKET_WORK = (
+    "\n\n## You do not implement tickets yourself\n\n"
+    "A ticket is worked by a Worker you request (above), or by a Manager you "
+    "route it to. Do not change a module's code and commit it yourself, "
+    "however small the ticket looks. A Worker's path is what gives the work a "
+    "claim, a review and a pull request; a commit you make directly skips all "
+    "three, and nothing rite reports shows that it happened. If no Worker can "
+    "take a ticket, say so and leave it on the board.\n"
+)
+"""⚠ **TR3, from the dogfood's F22.** An Owner did a ticket itself — "Done
+directly, committed as 818d1ab" — with no Worker, no review and no PR, and
+none of rite's gates saw it: they sit on the Worker launch, the broker and the
+route. This is ADVICE until PB1's publish step can refuse such a commit
+(TR10). Given to every Manager except a secondary under a single Owner, whose
+work is what the Owner routes to it (see `ticket_work`)."""
+
+
+def ticket_work(manager: str, owner: str, *, one_root: bool) -> str:
+    """`TICKET_WORK` for this Manager, or "".
+
+    "" only for a SECONDARY: a root with one Owner that is someone else. Its
+    work is routed to it, and whether an `executor` may commit routed work
+    itself is not settled here. Everyone else — a lone Manager (its own
+    Owner), the Owner, and any Manager whose Owner cannot be named here (a
+    `remote`, or no single `route` holder) — is told, because the failure is
+    silent and the text costs one paragraph.
+    """
+    if one_root and owner and owner != manager:
+        return ""
+    return TICKET_WORK
+
+
 @dataclass(frozen=True)
 class Delivery:
     """Whether the prompt REACHED THE TERMINAL. Not whether it was read.
