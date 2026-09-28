@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.22 · **Date:** 2026-09-28
+**Version:** 0.24.23 · **Date:** 2026-09-28
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -7005,6 +7005,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.23 — the loop lock is an `flock`.** The loop's one-per-project lock was a pid file, read and then overwritten. Measured on macOS against `4f7e1d2` (8 processes, 20 s): 51,120–52,154 overlapping holders per run, and a zombie or an unrelated live pid recorded in it refused every start. It is now a kernel `flock` the loop process holds for its life, behind a gate lock that every take, release and "is it running" goes through, so a reader's look can never make a starting loop fail. It answers running, not running, or cannot tell. Same harness: 0 overlaps; with the gate, 0 false refusals where removing it gave about 221,000 per run. `.rite/loop-run.lock` and `.rite/loop-run.gate` replace `.rite/loop.lock`.
 
 **Changes in 0.24.22 — §5.4.8: Linux no longer grants `/tmp` (SB11).** The Linux Manager policy granted `/tmp` and `/var/tmp` read and write to mirror seatbelt. Landlock unions its grants and has no deny rule, so for anything under them the grant overrode every narrower rule. Measured 2026-09-26: the in-tree inbox was writable, a third file in the credential directory was readable, and the Claude login was overwritable. Seatbelt is unaffected because its denies come after the grant and the last match wins. Both grants are gone. The engine keeps its own temp directory, which `TMPDIR` names. Linux is now narrower than macOS here, and a tool that hardcodes `/tmp` fails on Linux where it works on macOS. The tests no longer strip the grants to measure a narrow property; they run the real policy.
 

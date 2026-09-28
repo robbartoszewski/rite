@@ -14,6 +14,7 @@ import subprocess
 import time
 from pathlib import Path
 
+from rite_ai import kernel_lock
 from rite_ai.scheduler import lock, run_tick
 from rite_ai.scheduler.logfile import (
     KEEP,
@@ -186,7 +187,7 @@ class TestNoExclusionMeansNoTick:
         """What some network and VM-shared filesystems do: every flock is
         granted. The self-test on the held file must catch it."""
         root = _project(tmp_path)
-        monkeypatch.setattr(lock.fcntl, "flock", lambda fd, op: None)
+        monkeypatch.setattr(kernel_lock.fcntl, "flock", lambda fd, op: None)
 
         outcome = lock.acquire(root)
 
@@ -197,7 +198,7 @@ class TestNoExclusionMeansNoTick:
         from rite_ai.scheduler import LAST_TICK_FILENAME
 
         root = _project(tmp_path)
-        monkeypatch.setattr(lock.fcntl, "flock", lambda fd, op: None)
+        monkeypatch.setattr(kernel_lock.fcntl, "flock", lambda fd, op: None)
 
         result = run_tick(root)
 
@@ -213,7 +214,7 @@ class TestNoExclusionMeansNoTick:
             raise OSError(errno.ENOLCK, "No locks available")
 
         root = _project(tmp_path)
-        monkeypatch.setattr(lock.fcntl, "flock", unsupported)
+        monkeypatch.setattr(kernel_lock.fcntl, "flock", unsupported)
 
         outcome = lock.acquire(root)
 
@@ -232,7 +233,7 @@ class TestNoExclusionMeansNoTick:
         self, tmp_path, monkeypatch
     ):
         root = _project(tmp_path)
-        real_flock = lock.fcntl.flock
+        real_flock = kernel_lock.fcntl.flock
 
         def flock_then_replace(fd, op):
             real_flock(fd, op)
@@ -241,7 +242,7 @@ class TestNoExclusionMeansNoTick:
                 path.unlink()
                 path.write_text("")
 
-        monkeypatch.setattr(lock.fcntl, "flock", flock_then_replace)
+        monkeypatch.setattr(kernel_lock.fcntl, "flock", flock_then_replace)
 
         outcome = lock.acquire(root)
 
