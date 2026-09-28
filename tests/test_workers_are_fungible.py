@@ -32,22 +32,23 @@ def _resolves(mapping):
     )
 
 
-class TestEveryWorkerGetsEveryCredential:
-    def test_all_project_credentials_are_delivered(self):
+class TestEveryWorkerGetsTheSameNarrowSet:
+    def test_only_github_and_the_engine_are_delivered(self):
+        """Every Worker gets the SAME credentials (fungible), and since
+        2026-09-29 only what a Worker needs: GitHub and Claude. Jira and
+        Slack are held by the project and never delivered (§5.3.4)."""
         with _resolves(
             {
                 "jira_email": "me@example.com",
                 "jira_token": "JT",
+                "slack_bot_token": "xoxb-S",
                 "github_token": "GT",
+                "claude_token": "CT",
             }
         ):
             env = worker_environment(CredentialsConfig(namespace=NS))
 
-        assert env == {
-            "JIRA_EMAIL": "me@example.com",
-            "JIRA_API_TOKEN": "JT",
-            "GITHUB_TOKEN": "GT",
-        }
+        assert env == {"GITHUB_TOKEN": "GT", "CLAUDE_CODE_OAUTH_TOKEN": "CT"}
 
     def test_the_env_names_come_from_the_service_definition(self):
         """rite delivers `JIRA_API_TOKEN`, the name the service declares —

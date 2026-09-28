@@ -9,10 +9,21 @@ from unittest.mock import patch
 import pytest
 
 from rite_ai.credentials.services import SERVICES, service_key
-from rite_ai.credentials.store import get_scoped, service_env_name, worker_environment
+from rite_ai.credentials.store import (
+    WORKER_SERVICES,
+    get_scoped,
+    service_env_name,
+    worker_environment,
+)
 
+# What a Worker is given (§5.3.4, narrowed 2026-09-29). The Jira tests below
+# stay: a Manager's sandbox and the host still read Jira by these names.
 INJECTED_KEYS = [
-    service_key(s.name, f.name) for s in SERVICES.values() for f in s.secrets if f.env
+    service_key(s.name, f.name)
+    for s in SERVICES.values()
+    if s.name in WORKER_SERVICES
+    for f in s.secrets
+    if f.env
 ]
 
 
@@ -26,7 +37,7 @@ def empty_keychain_and_environment(monkeypatch):
 
 
 def test_every_name_a_sandbox_receives_is_read_back(monkeypatch):
-    assert "jira_token" in INJECTED_KEYS and "jira_email" in INJECTED_KEYS
+    assert set(INJECTED_KEYS) == {"github_token", "claude_token"}
     with patch("keyring.get_password", return_value="from-the-host-keychain"):
         delivered = worker_environment()
     assert set(delivered) == {service_env_name(k) for k in INJECTED_KEYS}

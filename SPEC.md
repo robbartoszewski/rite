@@ -1698,11 +1698,28 @@ allowlist at all.
 
 #### 5.3.4. Workers are fungible, so they all get the same credentials
 
-**Every Worker on a project receives every credential the project holds.** Not
-a per-Worker subset. This section previously specified narrow per-Worker
-scoping and presented it as least privilege; that is no longer what the design
-does, and leaving the claim in place would be overclaiming a security property
-the tool does not have.
+**Every Worker on a project receives the same credentials: GitHub and the
+engine's own (Claude), and nothing else** (`credentials.store.WORKER_SERVICES`).
+Not a per-Worker subset — that is what "fungible" below still means — and no
+longer "every credential the project holds".
+
+⚠ **Reversed 2026-09-29 — do not restore "every credential" as a fix.** From
+the fungibility decision until then, every Worker received every credential
+the project held: Jira, Slack and whatever else was stored. Robert reversed it
+("Narrow it down") on evidence rather than argument: the pingr Worker proof's
+launch line carried `SLACK_BOT_TOKEN`, `JIRA_API_TOKEN` and `JIRA_EMAIL`, none
+of which the Worker used for its work, and SB12 measured that a sandbox's
+environment is readable from other sandboxes on the same machine. Fewer
+credentials in a Worker's environment is less for another sandbox to read —
+the only SB12 mitigation available before v0.8.0 — and less for yoloAI to
+write into the sandbox's files (below). What was checked before narrowing,
+from the code rather than from one Worker: no Worker instruction or installed
+command uses Slack; the one Worker use of Jira is reading its own ticket with
+`rite board show` (see "Reading the ticket" below). A service joins
+`WORKER_SERVICES` only when a Worker is shown to need it.
+
+Fungibility is unaffected by the narrowing: every Worker still holds the same
+set, so assignment still never asks which Worker *can* do a job.
 
 **Why, and it is an engineering trade rather than a security argument.** A
 Worker is an abstract entity that maps to a workspace and, at any one moment,
@@ -1730,8 +1747,8 @@ narrower limit *between* Workers of the same project.
   inside the sandbox — `ro/secrets/<NAME>`, the shell history, the agent log
   and `sandbox.jsonl` — all of which survive `yoloai stop` and are removed only
   by `destroy` (measured 2026-09-12; this settles the report §5.3.3 previously
-  carried as unverified). Injecting a project's whole credential set rather than
-  one token multiplies that surface by the number of credentials. **`destroy`,
+  carried as unverified). That surface grows with every credential injected,
+  which is one reason the set is now two. **`destroy`,
   not `stop`, is therefore load-bearing** and is what the daily loop should use.
 - Least privilege now rests entirely on the permission bound (contents and pull
   requests) rather than on the repo bound.
@@ -2020,8 +2037,8 @@ making and neither delivers §5.4.1 on its own.
 #### 5.4.4. Credentials are scoped to what the Manager needs
 
 A Manager running a local engine holding the Claude token is an exposure with
-no purpose. §5.3.4 argues that *Workers* are fungible and so all get every
-credential; **Managers are not fungible** — they differ by engine, by duty and
+no purpose. §5.3.4 argues that *Workers* are fungible and so all get the same
+credentials; **Managers are not fungible** — they differ by engine, by duty and
 by which services their work touches — so the argument does not carry across
 and should not be assumed to.
 
