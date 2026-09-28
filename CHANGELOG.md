@@ -2,6 +2,16 @@
 
 ## Unreleased: 0.7.0 (notes in progress, completed at release)
 
+
+### `rite claim` works inside a Worker's sandbox
+
+Inside a sandbox `rite claim` and `rite release` failed with a
+`PermissionError` on the project's `workers/` directory, which the sandbox
+cannot read, so a sandboxed Worker could not claim its paths and nothing
+stopped two Workers taking the same file. They now read only what they need;
+a claim made inside lands in the project's ledger and a second Worker's
+overlapping claim is refused. A Worker's instructions now say to stop, not
+carry on, if `rite claim` errors.
 ### A Worker that could not deliver is not started
 
 `rite sandbox start` (and so every Worker a Manager starts) now refuses,
