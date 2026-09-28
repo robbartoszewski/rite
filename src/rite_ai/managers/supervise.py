@@ -359,14 +359,24 @@ def launch_command(
 
 
 def _say_if_the_window_was_cut(
-    root: Path, manager: str, agent: str, started: float, ended: float, say, told
+    root: Path,
+    manager: str,
+    agent: str,
+    started: float,
+    ended: float,
+    say,
+    told,
+    *,
+    monotonic_elapsed: float | None = None,
 ) -> list:
     """Say whether Ollama cut this local Manager's prompt during the cycle.
 
     Observed (plan, Track MS): a prompt over the window is cut from the front
     with no error, and the cycle then ends normally with work done on a
-    fragment. Only Ollama's log records it (`local.truncation`). Returns the
-    cuts, for the check-in record. A "cannot tell" is said once per reason per
+    fragment. Only Ollama's log records it (`local.truncation`), and it does
+    not say whose prompt it was: a cut is the SERVER'S, reported with the
+    other Managers on the same endpoint named. Returns the cuts, for the
+    check-in record. A "cannot tell" is said once per reason per
     run (`told`), because a line repeated every cycle is one nobody reads.
     """
     if agent != "goose":
@@ -382,8 +392,19 @@ def _say_if_the_window_was_cut(
     )
     if role is None or not role.endpoint:
         return []
-    verdict = truncation.check_cycle(role.endpoint, started, ended)
-    line = truncation.describe(manager, role.context_window, verdict)
+    verdict = truncation.check_cycle(
+        role.endpoint, started, ended, monotonic_elapsed=monotonic_elapsed
+    )
+
+    def base(endpoint: str) -> str:
+        return endpoint.rstrip("/").removesuffix("/v1")
+
+    sharing = tuple(
+        r.name
+        for r in parsed.coordination.manager_roles
+        if r.name != manager and r.is_local and base(r.endpoint) == base(role.endpoint)
+    )
+    line = truncation.describe(manager, role.context_window, verdict, sharing)
     if line and (verdict.cut or line not in told):
         told.add(line)
         say(line)
@@ -1279,6 +1300,10 @@ def _supervise(
             # given that prompt, so that is the board its conversation began
             # under. Read here only for a caller that does not say.
             launched_under = began_under if began_under is not None else board_now(root)
+            # Taken BEFORE the launch: the engine talks to its model the moment
+            # tmux starts it, so a window opened after `launch` returns would
+            # miss a cut in its first request (`_say_if_the_window_was_cut`).
+            launched_wall, launched_mono = clock(), time.monotonic()
             result: StartResult = launch(
                 root,
                 manager,
@@ -1494,7 +1519,18 @@ def _supervise(
                 router(say)
             _say_if_the_sandbox_refused(root, manager, live_pane, say)
             cuts = _say_if_the_window_was_cut(
-                root, manager, agent, cycle.started_at, cycle.ended_at, say, told
+                root,
+                manager,
+                agent,
+                launched_wall,
+                cycle.ended_at,
+                say,
+                told,
+                # Only a real wall clock can be checked against a monotonic
+                # one; an injected clock is a test's.
+                monotonic_elapsed=(
+                    time.monotonic() - launched_mono if clock is time.time else None
+                ),
             )
 
             how = ending(result.session, human_was_present=attended, pane=live_pane)
@@ -1553,17 +1589,17 @@ def _supervise(
                 },
             )
             for cut in cuts:
-                # For the standup: printed lines are gone by the check-in, and
-                # a Manager that acted on a fragment is exactly what the Owner
-                # has to hear about.
+                # For the standup, which renders it (`standup.digest`): printed
+                # lines are gone by the check-in. SERVER-scoped by name and by
+                # field, because the log does not say whose prompt it was.
                 checkins.record(
                     root,
                     manager,
                     {
-                        "event": "context_cut",
+                        "event": "ollama_cut",
+                        "scope": "server",
                         "at": cut.at,
                         "number": cycle.number,
-                        "session": observed or cycle.session,
                         "sent": cut.sent,
                         "kept": cut.kept,
                     },

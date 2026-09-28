@@ -37,10 +37,24 @@ or the answer is "can't tell":
    A line with no timestamp of its own (llama.cpp's slot lines) is taken to be
    at the time of the line before it, so it is checked too.
 
-⚠ **The log line does not name the model.** A cut during the cycle is
-reported as "while this Manager's cycle ran", not as this Manager's own. On a
-server shared with other clients that is the honest limit of what the log
-says.
+⚠ **A CUT IS THE SERVER'S, NOT THE MANAGER'S.** Nothing in the log says who
+sent a prompt: the truncation line has no model, request id or port, and the
+request line has only `127.0.0.1` and the path, the same for every local
+client. Checked in the real log, 2026-09-28. Several Managers sharing one
+Ollama server is the ordinary case since 0.6.0, and their lines interleave.
+So a cut is reported as "on this server during this Manager's cycle", with the
+other Managers in the project on the same endpoint named. Anything else using
+the server is invisible to rite. Telling Manager A its prompt was cut when it
+was B's would be a confident wrong answer, worse than silence.
+
+⚠ **THE LOG'S STAMPS ARE WALL-CLOCK ONLY.** `time=` carries a zone offset;
+the `[GIN]` request line is local time with no zone. A monotonic clock cannot
+be compared with them, so the cycle is bounded in wall-clock time. It is
+CHECKED against a monotonic measurement of the same cycle: if the two elapsed
+times disagree (the clock stepped: NTP, sleep, a manual change), or the local
+offset changed during the cycle (daylight saving, which makes the zone-less
+`[GIN]` stamps ambiguous), the answer is "cannot tell". The same hazard made a
+test fail for one minute every night (#40).
 
 ⚠ **Linux** usually runs Ollama under systemd, which logs to the journal,
 not a file. Unless `RITE_OLLAMA_LOG` names a file, the answer there is "can't
@@ -66,6 +80,10 @@ loud, not a quiet return to no detection."""
 LOG_ENV = "RITE_OLLAMA_LOG"
 _DEFAULT_LOG = Path.home() / ".ollama" / "logs" / "server.log"
 _LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+CLOCK_TOLERANCE_SECONDS = 2.0
+"""How far the wall-clock and monotonic lengths of a cycle may differ before
+the wall-clock window is not trusted. Scheduling jitter is milliseconds; a
+clock step is seconds or hours."""
 _READ_LIMIT = 32 * 1024 * 1024
 """The tail read from the log. If the cycle started before the oldest line
 in it, the answer is "can't tell", not a partial "clean"."""
@@ -114,12 +132,24 @@ def _log_path() -> Path:
     return Path(override) if override else _DEFAULT_LOG
 
 
+def _default_get(url: str):
+    """The real fetch. A module function, not a closure, so the test suite
+    can replace it and no test ever reaches a real Ollama server."""
+    import httpx
+
+    return httpx.get(url, timeout=5.0)
+
+
 def _server_version(endpoint: str, get) -> str:
     base = endpoint.rstrip("/").removesuffix("/v1")
     try:
         return str(get(base + "/api/version").json().get("version") or "")
     except Exception:  # noqa: BLE001 - any failure is "cannot tell which"
         return ""
+
+
+def _offset(at: float):
+    return datetime.fromtimestamp(at).astimezone().utcoffset()
 
 
 def _when(line: str) -> float | None:
@@ -148,9 +178,13 @@ def check_cycle(
     *,
     get=None,
     log: Path | None = None,
+    monotonic_elapsed: float | None = None,
 ) -> Verdict:
     """What Ollama's log says about prompts it cut between the two times.
-    Never raises."""
+    Never raises.
+
+    `monotonic_elapsed` is the same cycle's length on a monotonic clock. When
+    given, a wall clock that moved during the cycle answers "cannot tell"."""
     if not is_local(endpoint):
         return Verdict(
             False,
@@ -160,11 +194,29 @@ def check_cycle(
                 "runs on"
             ),
         )
+    if monotonic_elapsed is not None and (
+        abs((ended_at - started_at) - monotonic_elapsed) > CLOCK_TOLERANCE_SECONDS
+    ):
+        return Verdict(
+            False,
+            why=(
+                f"the wall clock moved during the cycle (it measured "
+                f"{ended_at - started_at:.0f}s where the cycle lasted "
+                f"{monotonic_elapsed:.0f}s), and Ollama's log is stamped in "
+                "wall-clock time, so which lines fall in the cycle is not known"
+            ),
+        )
+    if _offset(started_at) != _offset(ended_at):
+        return Verdict(
+            False,
+            why=(
+                "the local time's offset changed during the cycle (daylight "
+                "saving), and Ollama's request lines are stamped in local time "
+                "with no zone, so which of them fall in the cycle is not known"
+            ),
+        )
     if get is None:
-        import httpx
-
-        def get(url: str):
-            return httpx.get(url, timeout=5.0)
+        get = _default_get
 
     version = _server_version(endpoint, get)
     if version not in VERIFIED_OLLAMA:
@@ -238,19 +290,31 @@ def check_cycle(
     return Verdict(True, cuts=cuts)
 
 
-def describe(manager: str, window: int, verdict: Verdict) -> str:
-    """The line the supervisor says, or "" for an established clean cycle."""
+def describe(
+    manager: str, window: int, verdict: Verdict, sharing: tuple[str, ...] = ()
+) -> str:
+    """The line the supervisor says, or "" for an established clean cycle.
+
+    `sharing` names the project's other Managers on the same endpoint. A cut
+    is the SERVER'S (module docstring), so the line says whose it might be
+    rather than whose it is."""
     if not verdict.known:
         return f"cannot tell whether Ollama cut {manager!r}'s prompts: {verdict.why}"
     if not verdict.cuts:
         return ""
     worst = max(verdict.cuts, key=lambda c: c.sent - c.kept)
+    others = (
+        f"{', '.join(repr(m) for m in sharing)} in this project also use this "
+        "endpoint, so it may be theirs"
+        if sharing
+        else "no other Manager in this project uses this endpoint"
+    )
     return (
-        f"⚠ Ollama CUT a prompt {len(verdict.cuts)} time(s) while {manager!r}'s "
-        f"cycle ran, with no error: the largest was {worst.sent:,} tokens, of "
-        f"which the model was given {worst.kept:,}, from the END. The start "
-        f"(where the instructions are) was dropped, so what it did may rest on "
-        f"a fragment. Its window is {window:,}; raise context_window, or give "
-        "it less at once. (The log does not name the model; another client of "
-        "this Ollama server could be the source.)"
+        f"⚠ Ollama's log records {len(verdict.cuts)} prompt(s) CUT on this "
+        f"server during {manager!r}'s cycle, with no error: the largest was "
+        f"{worst.sent:,} tokens, of which {worst.kept:,} were kept, from the "
+        f"end, so the start was dropped. The log does not say which caller "
+        f"sent it: {others}, and anything else using this Ollama server is "
+        f"invisible to rite. If it was {manager!r}'s, its {window:,}-token "
+        "window is too small for what it was given."
     )

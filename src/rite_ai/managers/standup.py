@@ -169,6 +169,15 @@ def digest(
                 f"{e.get('ending')} ({_hhmm(float(e.get('started_at') or 0))}"
                 f"–{_hhmm(float(e.get('at') or 0))})"
             )
+        elif kind == "ollama_cut":
+            # The SERVER'S, not this Manager's: Ollama's log does not say
+            # whose prompt it cut (`local.truncation`).
+            observed.append(
+                f"- Ollama's log records a prompt CUT on this Manager's model "
+                f"server during cycle {e.get('number')} ({e.get('sent'):,} "
+                f"tokens sent, {e.get('kept'):,} kept, the start dropped); the "
+                "log does not say whose prompt it was"
+            )
         elif kind == "refusal":
             observed.append(
                 f"- refused by the engine in cycle {e.get('number')}, session "

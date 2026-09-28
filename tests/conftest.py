@@ -171,6 +171,24 @@ def _no_claude_login_step(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_ollama(monkeypatch):
+    """No test reaches a real Ollama server or reads its real log.
+
+    `local.truncation` asks the server its version and reads its log after
+    every Goose Manager cycle. On a machine running Ollama that made the
+    supervisor's tests read the operator's own server and log, and take a
+    different path on CI, where none runs. Tests of the module pass their own
+    `get` and `log`."""
+    import rite_ai.local.truncation as truncation
+
+    def refuse(url):
+        raise ConnectionError("the test suite does not reach a real Ollama")
+
+    monkeypatch.setattr(truncation, "_default_get", refuse)
+    monkeypatch.setenv("RITE_OLLAMA_LOG", "/nonexistent/rite-test/ollama.log")
+
+
+@pytest.fixture(autouse=True)
 def _no_real_credential_file(tmp_path_factory, monkeypatch):
     """rite's credential FILE store, per test, never the real one.
 
