@@ -992,7 +992,17 @@ server's own accounting.
    the truncation. Ollama's log does, exactly, one line per request:
    `level=WARN msg="truncating input prompt" limit=20482 prompt=79296 keep=4
    new=20482`. So a full window CAN be said, on the machine running Ollama,
-   and nowhere else. Making rite say it is the next piece, not built.
+   and nowhere else. **Built the same day** (`local/truncation.py`): after
+   each Goose Manager cycle, rite reads that log and says a cut (and records
+   it for the check-in), says nothing on an established clean cycle, or says
+   "cannot tell" and why. "Clean" needs positive evidence: a local endpoint,
+   an Ollama version the line was verified on (0.34.2 only), a readable log
+   spanning the cycle, and at least one model request logged inside it. An
+   unrecognised truncation line, a remote endpoint, an upgrade, a stale or
+   rotated log all answer "cannot tell". Read against this morning's real
+   log: run A's three cuts found (79,535 / 79,296 / 79,262 → 20,482), the
+   control clean, an idle window "cannot tell". Mutation-checked, each
+   safeguard red when removed.
 
 Cleaned up: the model was unloaded and `rite-ctx40960-qwen3-8b` removed
 (`ollama list` shows none). ⚠ Goose wrote these runs to the operator's
