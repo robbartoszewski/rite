@@ -342,7 +342,29 @@ class ClaimsLedger:
         layer=None,
         machine: str = "",
     ) -> int:
-        """Release claims. If paths is None, release all for worker.
+        """Release claims and return how many. See `release_claims`."""
+        return len(self.release_claims(worker, paths, layer=layer, machine=machine))
+
+    def release_claims(
+        self,
+        worker: str | None,
+        paths: list[str] | None = None,
+        *,
+        layer=None,
+        machine: str = "",
+    ) -> list[Claim]:
+        """Release claims and return exactly the ones THIS call removed.
+
+        `worker=None` releases every claim. If paths is None, release all for
+        the worker.
+
+        ⚠ **Read and release in one locked step, so a caller can act on what
+        it released.** `perform_handover` used to read a Worker's claims
+        under one lock and release them under another. Two handovers of one
+        Worker at once, a scheduled window boundary and a `rite stop`, both
+        read the same claims, both found the ticket, and both posted the
+        handover comment, though only one of them released anything. What
+        this returns is the only honest answer to "what did I hand over".
 
         **With a state layer, the release is PUBLISHED** (P2-5a). Releasing
         only locally leaves the path claimed as far as every other machine
@@ -364,23 +386,23 @@ class ClaimsLedger:
         """
         with self._locked():
             existing = self._read()
-            if paths is None:
-                after = [c for c in existing if c.worker != worker]
-            else:
+
+            def released(c: Claim) -> bool:
+                if worker is not None and c.worker != worker:
+                    return False
+                if paths is None:
+                    return True
                 normalised = {normalise_path(p) for p in paths}
-                after = [
-                    c
-                    for c in existing
-                    if c.worker != worker
-                    or not any(normalise_path(cp) in normalised for cp in c.paths)
-                ]
-            released = len(existing) - len(after)
+                return any(normalise_path(cp) in normalised for cp in c.paths)
+
+            gone = [c for c in existing if released(c)]
+            after = [c for c in existing if not released(c)]
             self._write(after)
             if layer is not None:
                 from rite_ai.coordination.claims_state import publish_claims
 
                 self.last_publish = publish_claims(layer, machine, after)
-            return released
+            return gone
 
     def _audit_path(self) -> Path:
         return self._path.parent / "force-releases.jsonl"

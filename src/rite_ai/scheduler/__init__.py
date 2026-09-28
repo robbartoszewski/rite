@@ -382,12 +382,20 @@ def _run_tick_locked(root: Path) -> TickResult:
                 from rite_ai.lifecycle import perform_handover
 
                 for worker in active_workers:
-                    perform_handover(
+                    handover = perform_handover(
                         root, worker=worker, reason="scheduled window boundary"
                     )
-                    messages.append(
-                        f"scheduled window boundary: handed over worker '{worker}'"
-                    )
+                    if handover.released_claims:
+                        messages.append(
+                            f"scheduled window boundary: handed over worker '{worker}'"
+                        )
+                    else:
+                        # A `rite stop` released them between our read and
+                        # the handover, and handed over itself.
+                        messages.append(
+                            f"scheduled window boundary: worker '{worker}' was "
+                            "already handed over by another process"
+                        )
             else:
                 messages.append("scheduled window boundary: 0 workers, nothing active")
         elif last_count is not None and last_count == 0 and current_count > 0:
