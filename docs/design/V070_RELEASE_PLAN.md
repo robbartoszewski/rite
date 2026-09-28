@@ -1924,7 +1924,7 @@ authenticated turn, which is a separate conversation with Robert.
 - **Token:** the VM's `claude_token` was valid. A one-call Haiku check returned `ok`.
 - **The cycle:** Sonnet 5, 15 assistant messages, 14.1k output tokens, 393k cache-read and 130k cache-write tokens.
 - **The transcript, verbatim:**
-  - `echo "TMPDIR=$TMPDIR"` gave `TMPDIR=/home/parallels/sb11-proj/.rite/user/enginetmp/lead`;
+  - `echo "TMPDIR=$TMPDIR"` gave `TMPDIR=~/sb11-proj/.rite/user/enginetmp/lead`;
   - `python3 -c 'import tempfile; print(tempfile.gettempdir())'` gave the same directory;
   - `git status --short` gave no output;
   - `ls notes` gave `README`.
@@ -1936,8 +1936,8 @@ authenticated turn, which is a separate conversation with Robert.
 **Goose (`small`, `qwen3:8b` pinned as `rite-ctx32768-qwen3-8b`, CPU)**
 
 - **The pane, verbatim:**
-  - `TMPDIR=/home/parallels/sb11-proj/.rite/user/enginetmp/small`;
-  - `mktemp` gave `/home/parallels/sb11-proj/.rite/user/enginetmp/small/tmp.vEdNhx3Sx7`;
+  - `TMPDIR=~/sb11-proj/.rite/user/enginetmp/small`;
+  - `mktemp` gave `~/sb11-proj/.rite/user/enginetmp/small/tmp.vEdNhx3Sx7`;
   - `tempfile.gettempdir()` gave the same directory;
   - `printf` plus `cat` gave `sb11 small`, and the file is in `notes/`;
   - `git status` gave `?? notes/SB11-small.txt`.
