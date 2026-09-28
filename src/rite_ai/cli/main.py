@@ -5910,28 +5910,6 @@ def sandbox_start(
             )
             raise SystemExit(1)
 
-    # ⚠ TR9: every piece of Worker work carries a ticket. `--prompt` files
-    # the chore here, AFTER the workspace is ready, so a refused prepare
-    # leaves nothing on the board, and before anything starts.
-    if prompt_text is not None:
-        from rite_ai.managers.chores import create_for_prompt
-
-        chore_board, board_problem = _ticket_backend(
-            "workers", root=root, config=config
-        )
-        made, refusal = create_for_prompt(chore_board, worker, prompt_text)
-        if refusal:
-            click.echo(
-                f"not starting '{worker}': {refusal}."
-                + (f" ({board_problem})" if board_problem else "")
-                + " Give it a ticket that is on the board with --ticket instead.",
-                err=True,
-            )
-            raise SystemExit(1)
-        click.echo(f"filed chore {made} from the prompt, labelled chore and {worker}")
-        ticket = made
-    prompt = f"Work ticket {ticket}." if ticket is not None else None
-
     token, tier = resolve_worker_token(worker, config.credentials)
     # Every credential this project holds, not just the git token (§5.3.4).
     env = worker_environment(config.credentials, worker_token=token)
@@ -5971,6 +5949,29 @@ def sandbox_start(
     if refusal:
         click.echo(refusal, err=True)
         raise SystemExit(1)
+    # ⚠ TR9: every piece of Worker work carries a ticket. `--prompt` files
+    # the chore HERE, after every refusal above (an unprepared workspace,
+    # work that could not leave the sandbox), so a start refused for any of
+    # them leaves nothing on the board. Only `start_worker` itself can fail
+    # after it, and that is said below.
+    if prompt_text is not None:
+        from rite_ai.managers.chores import create_for_prompt
+
+        chore_board, board_problem = _ticket_backend(
+            "workers", root=root, config=config
+        )
+        made, refusal = create_for_prompt(chore_board, worker, prompt_text)
+        if refusal:
+            click.echo(
+                f"not starting '{worker}': {refusal}."
+                + (f" ({board_problem})" if board_problem else "")
+                + " Give it a ticket that is on the board with --ticket instead.",
+                err=True,
+            )
+            raise SystemExit(1)
+        click.echo(f"filed chore {made} from the prompt, labelled chore and {worker}")
+        ticket = made
+    prompt = f"Work ticket {ticket}." if ticket is not None else None
     result = start_worker(
         root,
         worker,

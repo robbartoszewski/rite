@@ -326,12 +326,33 @@ class TestAPromptTypedAtThisMachine:
         return result, seen
 
     def test_the_worker_is_started_on_the_chore(self, tmp_path, monkeypatch):
+        import rite_ai.cli.main as main_mod
+
         self._project(tmp_path, monkeypatch, "github")
+        # This Worker has no module; whether its work can leave the sandbox
+        # is `test_worker_can_deliver`'s question, not this one's.
+        monkeypatch.setattr(main_mod, "_worker_cannot_deliver", lambda *a, **k: "")
         board = Board()
         result, seen = self._start(board)
         assert result.exit_code == 0, result.output
         assert seen["prompt"] == "Work ticket RT-99.\n"
         assert board.created[0][0] == "chore: add a CSV export"
+
+    def test_a_start_refused_for_another_reason_files_no_chore(
+        self, tmp_path, monkeypatch
+    ):
+        """Filed after every other refusal, so a refused start leaves nothing
+        on the board (found when `_worker_cannot_deliver` landed above it)."""
+        import rite_ai.cli.main as main_mod
+
+        self._project(tmp_path, monkeypatch, "github")
+        monkeypatch.setattr(
+            main_mod, "_worker_cannot_deliver", lambda *a, **k: "cannot deliver"
+        )
+        board = Board()
+        result, seen = self._start(board)
+        assert result.exit_code == 1 and "cannot deliver" in result.output
+        assert board.created == [] and "prompt" not in seen
 
     def test_with_no_board_nothing_starts(self, tmp_path, monkeypatch):
         self._project(tmp_path, monkeypatch, "none")
