@@ -39,6 +39,7 @@ from .detect import (
     DetectionSummary,
     detect_repos,
     detect_root_branch,
+    root_has_nothing_committed,
 )
 
 _KIND_OPTIONS = [
@@ -452,7 +453,7 @@ def run_questionnaire(
 
     # --- Section 3: Modules ---
     ui.section("Modules", 3, 7)
-    modules = _resolve_modules(preset, interactive, detected.repos)
+    modules = _resolve_modules(preset, interactive, detected.repos, root)
 
     # --- Section 4: What's being built ---
     title = (
@@ -636,7 +637,10 @@ def _resolve_kb_list(
 
 
 def _resolve_modules(
-    preset: Preset, interactive: bool, detected_repos: list[DetectedRepo]
+    preset: Preset,
+    interactive: bool,
+    detected_repos: list[DetectedRepo],
+    root: Path | None = None,
 ) -> list[Module]:
     if preset.has_modules():
         result: list[Module] = []
@@ -655,31 +659,16 @@ def _resolve_modules(
         return result
 
     if detected_repos:
-        plural = "y" if len(detected_repos) == 1 else "ies"
-        click.echo(f"Found {len(detected_repos)} repositor{plural}:")
-        click.echo()
-        for r in detected_repos:
-            origin = r.url if r.url else "local only"
-            click.echo(f"  ✓ {r.path:<14} ({origin})")
-        click.echo()
-
-        add_all = True
-        if interactive:
-            add_all = ui.confirm("Add all as modules?", default=True)
-
-        selected = detected_repos
-        if not add_all:
-            selected = [
-                r
+        return offer_modules(
+            [
+                Module(
+                    name=r.name, path=r.path, url=r.url, branch=r.branch, description=""
+                )
                 for r in detected_repos
-                if ui.confirm(f"  Add {r.path}?", default=True)
-            ]
-
-        return [
-            Module(name=r.name, path=r.path, url=r.url, branch=r.branch, description="")
-            for r in selected
-        ]
-
+            ],
+            interactive,
+        )
+    offer_modules([], interactive, root)  # says why an uncommitted root is not offered
     if not interactive:
         return []
 
@@ -843,10 +832,57 @@ def source_answers(
             source_path=portable_source_path(root, source),
             source_changes=changes,
         ),
-        modules=_source_modules(root, base),
+        modules=offer_modules(_source_modules(root, base), interactive, base),
         config=config,
         kb=KbAnswers(),
     )
+
+
+def _module_label(m: Module) -> str:
+    where = "this directory (./)" if m.path == ROOT_MODULE_PATH else m.path
+    return f"{where}  {m.url or 'local only'}"
+
+
+def offer_modules(
+    candidates: list[Module], interactive: bool, root: Path | None = None
+) -> list[Module]:
+    """Ask about each repository, and register the ones confirmed.
+
+    Asked one at a time, the project root first (Robert, 2026-09-29).
+
+    ⚠ **`--yes` means yes to these too, and says so, one line per module.**
+    Asking is meaningless with nobody there, and the other choice — add
+    nothing unless confirmed — is how a `--yes` run ends up with an empty
+    `modules.yaml` and Workers with nothing to clone (dogfood F2), with no
+    difference on screen from an interactive run that added them. Every
+    other `--yes` answer is the interactive default, and this one's default
+    is yes.
+    """
+    if not candidates:
+        if root is not None and root_has_nothing_committed(root):
+            ui.note(
+                "This directory is a git repository with nothing committed, so "
+                "it is not offered as a module: a Worker could not clone it. "
+                "Commit, then add it to .rite/modules.yaml as `path: ./`."
+            )
+        return []
+    plural = "y" if len(candidates) == 1 else "ies"
+    click.echo(f"Found {len(candidates)} repositor{plural}:")
+    for m in candidates:
+        click.echo(f"  {_module_label(m)}")
+    click.echo()
+    chosen: list[Module] = []
+    for m in candidates:
+        where = "this directory (./)" if m.path == ROOT_MODULE_PATH else m.path
+        if interactive:
+            if ui.confirm(f"Add {where} as module '{m.name}'?", default=True):
+                chosen.append(m)
+        else:
+            click.echo(
+                f"  --yes: added {where} as module '{m.name}' ({m.url or 'local only'})"
+            )
+            chosen.append(m)
+    return chosen
 
 
 def _source_modules(root: Path, base: Path) -> list[Module]:
