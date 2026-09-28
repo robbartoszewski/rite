@@ -1582,6 +1582,38 @@ def destroy_worker(
             "  destroying it deletes the copy; push that work first, or "
             f"`rite sandbox destroy {worker} --force` to discard it",
         )
+    if not force:
+        # ⚠ A QUESTION IS WORK TOO (dogfood Q3). The guard above looks at
+        # code (and refuses without a project root before anything runs);
+        # the one thing the v0.6.0 dogfood's Worker produced was a question
+        # in yoloAI's exchange directory, which this command would have
+        # deleted without a word. "Could not check" refuses too: it is not
+        # "no question".
+        from rite_ai.sandbox.questions import (
+            Unknown,
+            WorkerQuestion,
+            pending_question,
+        )
+
+        asked = pending_question(name)
+        if isinstance(asked, WorkerQuestion):
+            return SandboxResult(
+                False,
+                f"refusing to destroy sandbox '{name}': its Worker is waiting "
+                f"on a question, asked at {asked.since()} and never answered:\n"
+                f"  {asked.headline()}\n"
+                f"  destroying it deletes the question. Read it in full with "
+                f"`rite sandbox pane {worker}` or {asked.path}; answer it by "
+                f"attaching (`yoloai attach {name}`), or "
+                f"`rite sandbox destroy {worker} --force` to discard it",
+            )
+        if isinstance(asked, Unknown):
+            return SandboxResult(
+                False,
+                f"refusing to destroy sandbox '{name}': could not check whether "
+                f"its Worker is waiting on a question ({asked.reason}). "
+                f"`rite sandbox destroy {worker} --force` destroys it anyway",
+            )
     try:
         proc = subprocess.run(
             # `--abandon-unapplied` ONLY UNDER --force. It was passed

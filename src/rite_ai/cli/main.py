@@ -1087,17 +1087,30 @@ def _doctor_report(problems: list[str]) -> None:
                         "start as many as every project's cap allows "
                         '(set "max_sandboxes" in ~/.rite/machine.json)'
                     )
+                    # ⚠ A QUESTION IS NOT "NO CHANGES" (dogfood Q3). This
+                    # line used to recommend destroying any sandbox without
+                    # unapplied code, which is the documented way the v0.6.0
+                    # dogfood's one Worker question would have been deleted.
+                    from rite_ai.sandbox.questions import (
+                        WorkerQuestion,
+                        pending_question,
+                    )
+
+                    for entry in mine:
+                        asked = pending_question(entry.name)
+                        if isinstance(asked, WorkerQuestion):
+                            line = (
+                                f"sandboxes:   {entry.name} — its Worker is WAITING "
+                                f"ON A QUESTION since {asked.since()}, unanswered: "
+                                f"{asked.headline(120)} (`rite status` names the "
+                                "Worker; do NOT destroy it)"
+                            )
+                            click.echo(line)
+                            problems.append(line)
                     for entry in others:
                         where = f" ({entry.workdir})" if entry.workdir else ""
-                        click.echo(
-                            f"sandboxes:   {entry.name}{where} — "
-                            + (
-                                "holds unapplied changes, do NOT destroy"
-                                if entry.has_changes
-                                else "no changes; `yoloai destroy "
-                                f"{entry.name}` frees it"
-                            )
-                        )
+                        said = _other_sandbox_note(entry, pending_question(entry.name))
+                        click.echo(f"sandboxes:   {entry.name}{where} — {said}")
 
         # Phase 2. Settings that cannot work are reported whether or not a
         # remote is set: half a `coordination:` block does not fail, it
@@ -5972,14 +5985,38 @@ def sandbox_status(worker: str) -> None:
       rite sandbox status alpha
     """
     from rite_ai.sandbox import worker_sandbox_status
+    from rite_ai.sandbox.questions import Unknown, WorkerQuestion, worker_question
 
-    status = worker_sandbox_status(worker, _find_project_root())
-    click.echo(status.value)
+    root = _find_project_root()
+    status = worker_sandbox_status(worker, root)
     if not status.known:
+        click.echo(status.value)
         # The status could not be determined. Exiting 0 would report that
         # as an answer, which is how "yoloai is broken" came to look
         # exactly like "this worker has no sandbox".
         raise SystemExit(1)
+    # ⚠ NOT "idle" for a Worker that is waiting on a question (dogfood Q2):
+    # yoloAI's word describes the agent process, and an agent that asked and
+    # is waiting is idle only in that sense. The question is said first.
+    asked = worker_question(worker, root) if status.value != "not found" else None
+    if isinstance(asked, WorkerQuestion):
+        where = (
+            str(asked.path)
+            if status.value == "stopped"
+            else f"`rite sandbox pane {worker}`"
+        )
+        click.echo(
+            f"waiting on a question since {asked.since()} (sandbox "
+            f"{status.value}): {asked.headline()}\n"
+            f"  read it in full: {where}; answer it by attaching"
+        )
+    elif isinstance(asked, Unknown):
+        click.echo(
+            f"{status.value} (whether it is waiting on a question could not "
+            f"be checked: {asked.reason})"
+        )
+    else:
+        click.echo(status.value)
 
 
 # --- Multi-project registry (SPEC §8.9, D-34) ---
@@ -6371,6 +6408,31 @@ class LoopAnswer(str):
             tuple(sorted((getattr(cycle, "blocked", {}) or {}).items())),
         )
         return answer
+
+
+def _other_sandbox_note(entry, asked) -> str:
+    """What `rite doctor` says about another project's `rite-` sandbox.
+
+    ⚠ It used to say "`yoloai destroy <name>` frees it" for every sandbox
+    without unapplied code, which is the documented way the v0.6.0
+    dogfood's one Worker question would have been deleted (Q3). A question
+    outranks everything, and "could not check" never reads as safe.
+    """
+    from rite_ai.sandbox.questions import Unknown, WorkerQuestion
+
+    if isinstance(asked, WorkerQuestion):
+        return (
+            f"its Worker is waiting on a question since {asked.since()}, "
+            "unanswered; do NOT destroy"
+        )
+    if entry.has_changes:
+        return "holds unapplied changes, do NOT destroy"
+    if isinstance(asked, Unknown):
+        return (
+            "no changes, but whether it holds an unanswered question could "
+            f"not be checked ({asked.reason})"
+        )
+    return f"no changes; `yoloai destroy {entry.name}` frees it"
 
 
 def _loop_verdict(root: Path, board=None) -> str:

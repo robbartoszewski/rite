@@ -41,6 +41,7 @@ from rite_ai.label import project_name
 from rite_ai.pool import PoolStatus
 from rite_ai.pool import probe as probe_pool
 from rite_ai.reporting.heartbeat import StallReport, detect_stalls, not_started
+from rite_ai.sandbox.questions import Unknown, WorkerQuestion, worker_question
 from rite_ai.state import CorruptStateError
 
 
@@ -75,6 +76,13 @@ class ProjectStatus:
     it". Never released automatically — see `claims/suspect.py`."""
     stalled_workers: list[StallReport] = field(default_factory=list)
     not_started_workers: list[str] = field(default_factory=list)
+    worker_questions: dict = field(default_factory=dict)
+    """worker -> its sandbox's unanswered question (`WorkerQuestion`), or
+    `Unknown` when that could not be checked. Absent: no question, or the
+    project does not sandbox Workers (dogfood Q2)."""
+    worker_sandboxes: dict = field(default_factory=dict)
+    """worker -> its sandbox's state, where one exists. So a Worker whose
+    sandbox ran is not reported as "not started" (dogfood S1)."""
     handovers: list[HandoverSnapshot] = field(default_factory=list)
     coordination_cost: CoordinationCostCounts = field(
         default_factory=CoordinationCostCounts
@@ -249,6 +257,8 @@ def collect_status(root: Path, board: bool = False) -> ProjectStatus:
     if project.workers:
         status.stalled_workers = detect_stalls(root, names, threshold_seconds=threshold)
         status.not_started_workers = not_started(root, names)
+        if project.config.sandbox.enabled:
+            _sandbox_facts(root, names, status)
 
     # Outside the `if`, deliberately: this walks the LEDGER rather than the
     # roster, and the case it exists for is a claim held by a name nobody
@@ -311,6 +321,25 @@ def collect_status(root: Path, board: bool = False) -> ProjectStatus:
 # from five minutes ago. A file on a live repo sat claimed since 09-06 by a
 # session that never committed anything, and nothing in this output said so.
 _STALE_AFTER_HOURS = 12
+
+
+def _sandbox_facts(root: Path, names: list[str], status: ProjectStatus) -> None:
+    """Each Worker's sandbox state and unanswered question, into `status`.
+
+    Only for a project that sandboxes Workers: elsewhere there is no
+    sandbox to ask, and a missing `yoloai` must not make every Worker line
+    say "could not check". A state that could not be read is left out
+    rather than printed as one."""
+    from rite_ai.sandbox import worker_sandbox_status
+
+    for name in names:
+        state = worker_sandbox_status(name, root)
+        if not state.known or state.value in ("", "not found"):
+            continue
+        status.worker_sandboxes[name] = state.value
+        asked = worker_question(name, root)
+        if asked is not None:
+            status.worker_questions[name] = asked
 
 
 def format_claim_age(claim: Claim) -> str:
@@ -500,13 +529,37 @@ def format_status(status: ProjectStatus) -> str:
         lines.append(f"\nworkers ({len(status.workers)}):")
         for w in status.workers:
             mods = ", ".join(w.modules) if w.modules else "all"
+            if not w.modules and not status.modules:
+                # "all" of none is none (dogfood S1: a Worker with nothing
+                # checked out was reported as holding every module).
+                mods = "none — no modules are registered"
+            asked = status.worker_questions.get(w.name)
+            sandbox = status.worker_sandboxes.get(w.name, "")
             if w.name in stalled_names:
                 marker = " — STALLED"
+            elif isinstance(asked, WorkerQuestion):
+                # ⚠ Before "not started": a Worker that read its ticket and
+                # asked has started, and is blocked on a person (Q2).
+                marker = (
+                    f" — WAITING ON A QUESTION since {asked.since()}: "
+                    f"{asked.headline(120)}"
+                )
             elif w.name in status.not_started_workers:
-                marker = " — not started (no heartbeat or claims yet)"
+                marker = (
+                    f" — sandbox {sandbox}, no heartbeat or claims yet"
+                    if sandbox
+                    else " — not started (no heartbeat or claims yet)"
+                )
             else:
                 marker = ""
+            if isinstance(asked, Unknown):
+                marker += f" (could not check for a question: {asked.reason})"
             lines.append(f"  {w.name}: modules=[{mods}]{marker}")
+            if isinstance(asked, WorkerQuestion):
+                lines.append(
+                    f"    read it: `rite sandbox status {w.name}`; answer it by "
+                    "attaching. `rite sandbox destroy` refuses until it is."
+                )
     else:
         lines.append("\nno workers")
 

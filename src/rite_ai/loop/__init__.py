@@ -485,6 +485,26 @@ def _look_at_worker(root: Path, name: str, clock: float, sandbox_status) -> Work
             view.verdict = "cannot tell — the sandbox could not be asked"
             return view
         if str(status) not in ("not found", ""):
+            # ⚠ A Worker waiting on a question is not "busy" in any sense a
+            # reader can act on (dogfood Q2: this line said "busy — a
+            # sandbox is running" for a Worker blocked eight hours on three
+            # unanswered questions). Still not free: it holds its ticket.
+            from rite_ai.sandbox.questions import (
+                Unknown,
+                WorkerQuestion,
+                worker_question,
+            )
+
+            asked = worker_question(name, root)
+            if isinstance(asked, WorkerQuestion):
+                view.evidence.append(f"question: {asked.headline(120)}")
+                view.verdict = (
+                    f"blocked — waiting on a question since {asked.since()}, "
+                    f"unanswered (`rite sandbox status {name}`)"
+                )
+                return view
+            if isinstance(asked, Unknown):
+                view.evidence.append(f"could not check for a question: {asked.reason}")
             view.verdict = "busy — a sandbox is running for it"
             return view
 
