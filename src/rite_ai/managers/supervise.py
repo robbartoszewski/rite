@@ -1042,6 +1042,15 @@ def _supervise(
                 f"starts fresh."
             )
 
+    # RP1 piece 2: BEFORE the first session, so everything this Manager says
+    # from here is tracked until it reaches a person, and only what was
+    # already in its outbox is recorded as predating the tracking.
+    from rite_ai.managers import pending
+
+    tracking = pending.sync(root, manager)
+    if tracking:
+        say(tracking)
+
     # ⚠ THE NO-PROGRESS GUARD (F22). Set when a session the BOARD started
     # ended having changed nothing rite can see; cleared by anything that
     # changes. While set, a board that still reads the same starts no

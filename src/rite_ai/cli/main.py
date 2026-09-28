@@ -7284,6 +7284,11 @@ def replies(manager_name: str, reader: str, peek: bool) -> None:
         click.echo(f"{e}", err=True)
         raise SystemExit(1) from None
 
+    from rite_ai.managers import pending
+
+    said = pending.sync(root, manager_name)
+    if said:
+        click.echo(said, err=True)
     if not waiting_for_reader:
         click.echo(f"nothing new from {manager_name!r} for reader {reader!r}.")
     for message in waiting_for_reader:
@@ -7291,6 +7296,20 @@ def replies(manager_name: str, reader: str, peek: bool) -> None:
         click.echo((f"[{label}]\n" if label else "") + message.text.strip())
     if waiting_for_reader and not peek:
         mark_read(root, manager_name, OUTBOX, reader, waiting_for_reader)
+        # RP1 piece 2: shown to a person at the terminal is "reached a human"
+        # for what needs one. Not for a machine's reader (the Slack relay, an
+        # Owner's collector), and not for --peek, which marks nothing.
+        if reader != "slack" and not reader.startswith("owner-"):
+            import time as _time
+
+            for message in waiting_for_reader:
+                pending.confirm(
+                    root,
+                    manager_name,
+                    message.path.name,
+                    pending.BY_TERMINAL,
+                    at=_time.time(),
+                )
     # C23: retention runs on every read, and a box full of unread messages is
     # SAID — rite will not delete one to make room.
     warning = full_warning(prune(root, manager_name, OUTBOX), manager_name)
