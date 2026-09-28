@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.34 · **Date:** 2026-09-28
+**Version:** 0.24.36 · **Date:** 2026-09-28
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -3743,8 +3743,10 @@ project? [y/N]"*, asked before anything else.
   sections below. Then *"Reading <path> — languages, structure and conventions
   will be taken from what's there."* and one open question: *"Anything stale, or
   that you'd like changed? Free text, or Enter to skip."* The brief records the
-  path and that answer as `source.path` and `source.changes`, and none of the
-  sections below is asked. When the path is already a rite project, `init` says
+  path and that answer as `source.path` and `source.changes`, registers the
+  repositories in the source as modules the way Section 3 detects them (when
+  the source is inside the project), and none of the sections below is
+  asked. When the path is already a rite project, `init` says
   *"This is already a rite project — I'll apply your changes rather than starting
   over."* and records the answer in that project's brief; nothing else there is
   touched, an earlier answer is kept beside the new one, and Enter changes
@@ -3805,6 +3807,18 @@ Add all as modules? [Y/n]
 
 Default Yes. Individual repos can be deselected. For each added module,
 rite records the remote URL and the branch currently checked out.
+
+The repositories are the project root's immediate subdirectories that are
+git repositories. When there are none and **the root is itself a repository
+with at least one commit**, the root is the one module, at path `./`: a
+single repository is the commonest project there is, and a Worker's
+workspace is its modules' clones, so registering nothing gave every Worker an
+empty workspace (dogfood F2). A root with nothing committed is not a module:
+it cannot be cloned, and is usually a workspace about to receive its modules.
+Every clone of a root module carries the project's committed `.rite/`, so a
+session in one would resolve to the clone; `rite sandbox start` gives each
+sandboxed Worker `RITE_PROJECT_ROOT`, which wins, and `rite doctor` reports
+the root module as a problem only when Workers are not sandboxed.
 
 If no repos found:
 
@@ -7020,6 +7034,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.36 — `rite init` in a single repository registers it as the module (dogfood F2).** Measured in the v0.6.0 dogfood: `rite init` inside `pingr`, an ordinary repository with code, answered "yes, existing code, path `.`" and wrote `modules: {}`. A Worker's workspace is its modules' clones, so the Worker started on KAN-7 had no source, and no Worker in that run did code work end to end. §9.3 Section 3: when the root holds no repositories but is one with a commit, it is the module, at `./`, with its origin URL and current branch; the existing-code answer now registers what is in the source the same way. `rite doctor` reports a root module as "itself a rite project" only when Workers are not sandboxed, since `rite sandbox start` sets `RITE_PROJECT_ROOT` for a sandboxed one. `test_init_registers_the_repo_it_runs_in.py`: init → `rite add worker alpha` → `workers/alpha/app/main.py` is the committed file on the origin's branch. Removing the root branch in `detect_repos` turns 7 of its 9 tests red; removing the doctor branch turns the sandboxed doctor case red.
 
 **Changes in 0.24.34 — what needs the Owner stays pending until it reaches a person (RP1 piece 2, delivery confirmation).** Robert: "did this actually reach a human" must be an observable property, not an assumption; the coordinator named it the part of RP1 that matters most. `managers/pending.py` keeps a ledger, in the Manager's own directory, of every outbox message that needs the person (a question, a message with no kind, a check-in that holds questions). **Posting is not reaching**: a Slack post reaches a channel. An item is confirmed only by the Owner's reply in its Slack thread (any person's when there is no Owner), by their reaction when the app has `reactions:read` (said once when it lacks it; then only a reply counts), or, at the terminal, by `rite replies` showing it to a person (recorded as SEEN, never as answered; `--peek` and machine readers confirm nothing). **An unconfirmed item comes back at every check-in**, with how long it has waited and whether it was posted. **Its Slack thread outlives the relay's limits**: a pending root is exempt from `THREADS_MAX` and the 24-hour horizon, read every 30 s while fresh and every 5 min once old, and restored from the ledger on restart; the Owner's late answer is both confirmed and delivered to the Manager. **On upgrade**, what is already in the outbox is recorded as predating the tracking and said once, and `rite start` starts the tracking before the first session, so a new project's first question is tracked. Stated limit: the ledger is in a directory the Manager can write, so a Manager can remove its own questions from its own reminder list. Measured on macOS against a fake Slack: 16 tests; 11 mutations each red, among them the ledger lock removed (six concurrent confirmations lost four in round 0), posting treated as confirmation (8 red), and the horizon applied to pending threads.
 

@@ -2,6 +2,20 @@
 
 ## Unreleased: 0.7.0 (notes in progress, completed at release)
 
+### `rite init` in a single repository registers it
+
+`rite init` in a repository with code used to register no module, so a
+Worker's workspace held nothing to work on. When the project root holds no
+repositories but is one (with at least one commit), it is now the module, at
+path `./`, with its origin URL and branch. A project initialised by 0.6.0 can
+add it to `.rite/modules.yaml` by hand:
+
+    modules:
+      myapp:
+        path: ./
+        url: <the repo's origin URL>
+        branch: main
+
 ### Each Manager's own state has left the project
 
 A Manager's prompt, routes, Worker requests, check-ins, Slack relay state and
