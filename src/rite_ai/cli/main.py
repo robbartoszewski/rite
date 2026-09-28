@@ -5932,6 +5932,29 @@ def sandbox_start(
         raise SystemExit(1)
 
 
+def _how_to_register(root: Path) -> str:
+    """The step that gives this project a module, for the one-line refusal.
+
+    `rite add module <name> <url>` clones into `<root>/<name>/`. For a
+    project that IS one repository (dogfood F2's pingr, created by a rite
+    older than the fix, so its committed `modules.yaml` is empty) that is a
+    second copy nested inside the first, one `git add -A` from being
+    committed. There the module is the root itself, so name the entry."""
+    from rite_ai.cli.init.detect import ROOT_MODULE_PATH, detect_repos
+    from rite_ai.config.parse import home_relative
+
+    repos = detect_repos(root)
+    if len(repos) == 1 and repos[0].path == ROOT_MODULE_PATH:
+        r = repos[0]
+        url = f", url: {home_relative(r.url)}" if r.url else ""
+        return (
+            "This project is itself the repository: add it to "
+            f".rite/modules.yaml as `{r.name}: {{path: ./{url}, branch: "
+            f"{r.branch}}}`"
+        )
+    return "Register the repository with `rite add module <name> <url>`"
+
+
 def _worker_cannot_deliver(
     worker: str, worker_dir: Path, modules: list, token: str | None
 ) -> str | None:
@@ -5947,9 +5970,8 @@ def _worker_cannot_deliver(
     if not modules:
         return (
             f"not starting '{worker}': it has no module, so its workspace holds "
-            "no code to work on. Register the repository (`rite add module "
-            f"<name> <url>`), then `rite remove worker {worker}` and `rite add "
-            f"worker {worker}`"
+            f"no code to work on. {_how_to_register(worker_dir.parent.parent)}, "
+            f"then `rite remove worker {worker}` and `rite add worker {worker}`"
         )
     gh = shutil.which("gh")
     remotes = clone_remotes(worker_dir)

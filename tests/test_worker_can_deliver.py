@@ -317,3 +317,27 @@ def test_doctor_is_quiet_about_it_once_there_is_one(tmp_path, monkeypatch):
     monkeypatch.setenv("RITE_GITHUB_TOKEN", "tok")
     out = CliRunner().invoke(cli, ["doctor"]).output
     assert "workers: no GitHub token" not in out, out
+
+
+def test_a_single_repository_is_told_to_register_itself_not_add_a_clone(
+    tmp_path, monkeypatch
+):
+    """`rite add module <name> <url>` would clone a second copy inside the
+    repository. A project that IS the repository (initialised before rite
+    registered it) is told the modules.yaml entry for `./` instead."""
+    _project(tmp_path, monkeypatch, modules=False, origin="")
+    _git(tmp_path, "init", "-q", "-b", "trunk")
+    _git(tmp_path, "remote", "add", "origin", "https://github.com/acme/app.git")
+    (tmp_path / "main.py").write_text("x\n")
+    _git(tmp_path, "add", "main.py")
+    _git(tmp_path, "commit", "-qm", "code")
+
+    result = _start("--ticket", "KAN-7")
+
+    assert result.exit_code == 1, result.output
+    last = result.output.strip().splitlines()[-1]
+    assert "rite add module" not in last
+    assert (
+        f"{tmp_path.name}: {{path: ./, url: https://github.com/acme/app.git, "
+        "branch: trunk}" in last
+    )
