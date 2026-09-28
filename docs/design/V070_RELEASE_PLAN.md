@@ -963,13 +963,41 @@ without replying:
   config writer dropping `context_window` (which the round-trip guard found
   in the first version: `rite schedule set` would have deleted it) → red.
 
-⚠ **NOT YET OBSERVED with a model running**, and this is the half that
-decides whether it works: (1) that Ollama serves the pinned `num_ctx` to
-Goose's requests, rather than its server default or a `num_ctx` Goose sends
-itself; (2) what Goose does as the window fills, with `GOOSE_CONTEXT_LIMIT`
-and without; (3) whether a filled window can be SAID (a stated end, not a
-Manager that stops replying). Each needs a local model loaded, on a machine
-that was recovering from memory pressure (swap 9.6 GB of 11.3 GB at 06:37).
+**Observed with a model running, 2026-09-28 08:33–08:46 CEST.** macOS; Ollama
+server 0.34.2 (client 0.23.2); Goose 1.51.0; `qwen3:8b`, pinned by rite's own
+`pin_window` to 40,960, a number that cannot be confused with this Mac's
+32,768 default. A logging proxy between Goose and Ollama recorded every
+request. RAM 87% free before, 64% during, 87% after; **swap 8.35 GB of 9.2 GB
+before, 8.23 GB after**. The model at that window took 11.8 GB of VRAM.
+Nothing below is timing-sensitive: token counts and truncation are the
+server's own accounting.
+
+1. **The pin reaches Goose's requests. Yes.** Goose calls
+   `/v1/chat/completions` with no `options` and no `num_ctx`, and Ollama
+   loaded the model with `context_length` 40,960, the pin, not the default.
+2. **A prompt over the window is cut SILENTLY.** A codeword was planted at the
+   top of a prompt. Control: 23,458 tokens, inside the window, answered
+   correctly. At about 79,300 tokens, Ollama processed **20,482 tokens, half
+   the window, cut from the front**, returned `finish: stop` with **no error**,
+   and the model answered wrongly ("582", "You05"). Goose exited 0 both times.
+   - With `GOOSE_CONTEXT_LIMIT`, Goose said "Exceeded auto-compact threshold
+     of 80%. Performing auto-compaction… Compaction complete", but one
+     oversized message cannot be compacted into the window, so its compaction
+     requests were cut too. Without it, Goose attempted nothing.
+   - ⚠ **Not measured: the multi-turn case**, where the window fills with tool
+     output turn by turn. That is the dogfood's case, and it is the one where
+     compaction at 80% of a KNOWN limit can actually help. This measured one
+     oversized message.
+3. **Only the server says it.** Goose's output and exit status do not show
+   the truncation. Ollama's log does, exactly, one line per request:
+   `level=WARN msg="truncating input prompt" limit=20482 prompt=79296 keep=4
+   new=20482`. So a full window CAN be said, on the machine running Ollama,
+   and nowhere else. Making rite say it is the next piece, not built.
+
+Cleaned up: the model was unloaded and `rite-ctx40960-qwen3-8b` removed
+(`ollama list` shows none). ⚠ Goose wrote these runs to the operator's
+session store (`~/.local/share/goose/sessions/sessions.db`) although they
+used `--no-session`; left as it is, not edited.
 
 ### Measured for this design: a resumed Claude conversation can change model
 

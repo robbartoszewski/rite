@@ -1944,8 +1944,9 @@ def _engine_model_env(root: Path, manager: str, agent: str):
     # itself sets `num_ctx`, and that default cannot be read until a model is
     # loaded. So "unknown" was the common case, and it let a Manager start.
     # Goose was not told the window either (`GOOSE_CONTEXT_LIMIT`, which Goose
-    # 1.51 reads). ⚠ NOT YET OBSERVED with a model running: that Ollama serves
-    # the pin to Goose's requests, and what Goose does as the window fills.
+    # 1.51 reads). Observed 2026-09-28 (Ollama 0.34.2): the pin IS what Ollama
+    # serves Goose; a prompt over it is cut to half the window from the front
+    # with no error, and only Ollama's log says so (plan, Track MS).
     if not role.context_window:
         return (
             {},

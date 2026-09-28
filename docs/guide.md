@@ -738,10 +738,16 @@ different windows. **A Goose Manager with no `context_window` does not
 start**: the server's default cannot be read until the model loads, so
 starting on it would be a guess.
 
-⚠ **Not yet observed with a model running:** that Ollama serves the pinned
-window to Goose's requests rather than its own default, and what Goose does
-as the window fills. `rite doctor` shows the served window once the model is
-loaded; if it differs from `context_window`, say so in an issue.
+**What happens when a Manager's prompt outgrows the window** (measured with
+`qwen3:8b` pinned to 40,960): Ollama serves the pinned window to Goose,
+not its own default. A prompt that fits is sent whole. A prompt over the
+window is **cut to half the window, from the front, with no error**, and the
+model answers from what is left, so a Manager can reply confidently about
+instructions it never saw. Goose's exit status and output do not show it.
+Ollama's log does: look for `truncating input prompt` in
+`~/.ollama/logs/server.log` on the machine running Ollama. If you see it, the
+window is too small for what that Manager is being asked; raise
+`context_window`, or give it less to read at once.
 
 ⚠ **A bigger window costs memory.** The window's cache grows with it, on top
 of the model's weights. On a machine with little memory to spare, a window

@@ -49,6 +49,26 @@ And, in round 7, the review checklist itself: five of its twenty-four lines
 could not fire on the diff under review, every reviewer recorded all five as
 PASS, and a column of PASSes is indistinguishable from coverage.
 
+2026-09-28, three more in one session, each caught only because a control
+was run through the same harness:
+- **a mutation check that ran no tests.** The test paths were in one shell
+  variable, and zsh does not split an unquoted variable, so pytest got one
+  path that did not exist. Every mutation printed `no tests ran`, and pytest
+  exits 5 for that, not 0; reading the tail rather than the exit status and
+  the pass count is what makes it look like a verdict;
+- **a test that passed on the opposite of its claim.** It asserted
+  `"handover posted to ABC-1" in message`, and the message now said "no
+  handover posted to ABC-1", which contains it;
+- **a race harness that could not race.** Each process was given its own
+  `Barrier(n)`, so each waited alone at 0% CPU; bounded by a timeout, it would
+  have reported "no double binding". The first concurrency soak in
+  `test_blast_radius_concurrent.py` had the same shape: zero violations
+  against a lock known to be broken.
+
+The tell they share: the count of things exercised was absent from what was
+read. "0 failed" without "N passed", a race count without an acquisition
+count, a mutation result without the test count before and after.
+
 **Guarded by.** Individually, per instance. Structurally, by one habit with no
 enforcement: *delete the code under test, or break the property itself, and
 confirm the check goes red.* That habit is a checklist line, not a mechanism.
