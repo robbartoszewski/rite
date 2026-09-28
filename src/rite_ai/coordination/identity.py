@@ -158,12 +158,18 @@ def claims_channel(root: Path):
     bargain, not a new one — a machine that cannot see other machines'
     claims cannot safely take a shared path.
     """
-    from rite_ai.config.parse import load_project
+    from rite_ai.config.parse import ParseError, parse_config
 
-    project = load_project(root)
-    if isinstance(project, list):
+    # `config.yaml` alone, not `load_project`. Measured 2026-09-28: inside a
+    # Worker's sandbox `load_project` lists `<root>/workers/`, which the
+    # sandbox deliberately cannot read, so `rite claim` died with a
+    # PermissionError before writing the claim — and the Worker (dogfood
+    # proof on pingr) carried on without one. Nothing here needs the
+    # Workers, only the coordination settings.
+    parsed = parse_config(root / ".rite" / "config.yaml")
+    if isinstance(parsed, ParseError):
         return None, ""
-    config = project.config.coordination
+    config = parsed.coordination
     if not config.managers or not config.remote:
         return None, ""
     name = this_manager(root)

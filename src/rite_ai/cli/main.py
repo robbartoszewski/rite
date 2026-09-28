@@ -1392,7 +1392,16 @@ def _warn_if_unregistered(worker: str) -> None:
     cannot corrupt anything parsing stdout."""
     root = _find_project_root()
     manifest = root / "workers" / worker / "worker.yml"
-    if manifest.is_file():
+    try:
+        manifest.stat()
+        return
+    except FileNotFoundError:
+        pass
+    except OSError:
+        # "Could not look" is not "not registered". Inside a Worker's
+        # sandbox `workers/` is unreadable by design; Python 3.13's
+        # `is_file` raised there after the claim was recorded, and 3.14's
+        # returned False, which printed a false "not registered" warning.
         return
     from rite_ai.watchdog import _pool_slot_workers
 
