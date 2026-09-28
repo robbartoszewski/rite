@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.38 · **Date:** 2026-09-28
+**Version:** 0.24.39 · **Date:** 2026-09-28
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -1650,6 +1650,39 @@ allowlist at all.
   count; `stop` reports the same and stops anyway. The copy's location is
   yoloAI's layout as measured on 0.11.0, not an interface: a copy that
   cannot be found is reported, not taken as safe.
+- **Checked before the sandbox starts, and refused rather than discovered.**
+  `rite sandbox start` — the one path every Worker start takes, the
+  supervisor's included — refuses, in one line naming the remedy, a Worker
+  with no module (nothing to work on); one whose clone pushes to a host other
+  than github.com (rite delivers no credential for it); one with a GitHub
+  remote and no token, or no `gh`; and one whose token GitHub says cannot
+  push. The last is asked of GitHub the way a push asks first, and no
+  further: `GET <repo>.git/info/refs?service=git-receive-pack` with only the
+  Worker's token, from the host. A GET cannot send a ref, so rite still has
+  no path that writes to a remote (a first cut used `git push --dry-run`,
+  which also wrote nothing but put the push verb in rite, which
+  `test_blast_radius` forbids). Measured 2026-09-28: a repository the token
+  can write → 200 with the receive-pack advertisement, the only answer
+  allowed; one it can only read → 403; a bogus token, on a host whose own
+  login could push → 401; no token → 401; no such repository → 404. A check
+  that cannot finish refuses. Reading
+  (`GET repos/o/r`) is not the property: any token, or none, passes it for a
+  public repository such as a fork. Dogfood KAN-7 is the case this closes: a
+  Worker started with no clone, then no token, stopped at `could not read
+  Username`, and asked for a PAT through a side channel. `rite doctor` counts
+  a GitHub module with no Worker token as a problem while Workers are
+  sandboxed.
+- **An SSH origin is fetched and pushed over HTTPS inside.** Nothing under
+  `~/.ssh` is readable in a Worker's sandbox — measured, ssh stops at
+  `known_hosts: Operation not permitted` before trying a key — so the
+  sandbox's git environment rewrites `git@github.com:` and
+  `ssh://git@github.com/` to `https://github.com/`, which reaches the token.
+- **A fine-grained PAT cannot open a pull request on a repository its owner is
+  not a member of** (GitHub lists "contribute to public repos where the user
+  is not a member" among fine-grained tokens' gaps). A Worker contributing
+  through a fork can push to the fork; the pull request to the upstream is
+  opened by a person, or needs a classic token, whose scope §5.3.2 argues
+  against handing to a sandbox.
 - **Short expiry, easy rotation** — the same principle §10 already states for every
   credential rite manages: a credential that's painful to rotate never gets rotated.
 - **GitHub App installation tokens** (short-lived, scoped to the app's installation)
@@ -7041,6 +7074,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.39 — a Worker is started only when its work could leave the sandbox (dogfood KAN-7, #28).** In the v0.6.0 dogfood no Worker did code work end to end: KAN-7's Worker had no module, then no GitHub token, and stopped at `could not read Username for 'https://github.com'`; `rite doctor` printed `github_token: not set` and counted nothing. §5.3.3: `rite sandbox start` now refuses, before a sandbox is spent and in one line the supervisor relays, a Worker with no module, a non-GitHub remote, a GitHub remote with no token or no `gh`, or a token GitHub says cannot push (the receive-pack permission GET a push starts with, host-side, with only the Worker's token; it sends nothing). An SSH origin is rewritten to HTTPS inside the sandbox. `rite doctor` counts a missing Worker token as a problem. What a Worker RECEIVES is unchanged (§5.3.4). Measured on macOS: the check against GitHub (write → 200 receive-pack, allowed; read-only → 403; bogus token with a host login that could push → 401; no token → 401; no such repo → 404); ssh inside a seatbelt sandbox failing on `known_hosts` and the rewrite reaching the credential helper; the KAN-7 state through the real CLI refused with no sandbox created (11 before, 11 after). `test_worker_can_deliver.py`, 17 tests; mutations each turn tests red: rewrite removed, start check removed, doctor check removed, any 200 taken as yes, an unfinished check allowed. Not yet measured: a sandboxed Worker pushing a branch and opening a PR with a real token.
 
 **Changes in 0.24.38 — `rite init` in a single repository registers it as the module (dogfood F2).** Measured in the v0.6.0 dogfood: `rite init` inside `pingr`, an ordinary repository with code, answered "yes, existing code, path `.`" and wrote `modules: {}`. A Worker's workspace is its modules' clones, so the Worker started on KAN-7 had no source, and no Worker in that run did code work end to end. §9.3 Section 3: when the root holds no repositories but is one with a commit, it is the module, at `./`, with its origin URL and current branch; the existing-code answer now registers what is in the source the same way. `rite doctor` reports a root module as "itself a rite project" only when Workers are not sandboxed, since `rite sandbox start` sets `RITE_PROJECT_ROOT` for a sandboxed one. `test_init_registers_the_repo_it_runs_in.py`: init → `rite add worker alpha` → `workers/alpha/app/main.py` is the committed file on the origin's branch. Removing the root branch in `detect_repos` turns 7 of its 9 tests red; removing the doctor branch turns the sandboxed doctor case red. **It reached F1 again by a new route**, caught by re-running F1's pre-registered test on this change: a repository whose origin is a local directory under home had that path written into `modules.yaml` and the generated CLAUDE.md, and the first push was refused. A module URL that is a local path under home is now written `~/…` and expanded on read (git does not expand `~`); network URLs are untouched.
 
