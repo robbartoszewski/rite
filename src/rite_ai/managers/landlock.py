@@ -536,89 +536,33 @@ def _ensure_grantable(home: Path) -> None:
 
 
 def _fenced_project_paths(project: Path, manager: str) -> list[Path]:
-    """The project, granted so that no Manager writes another's directory (P1).
+    """The project, granted AS ONE TREE (MM8 piece 2, D17).
 
-    ⚠ **LANDLOCK HAS NO DENY RULE.** Seatbelt separates Managers with ordered
-    rules — deny `.rite/managers`, allow this Manager's own directory — and
-    takes the last match. Landlock rules only ever GRANT, and the effective
-    access is the UNION, so there is nothing to place last. A carve-out
-    therefore has to be an ENUMERATION: grant the siblings of the thing being
-    fenced, and never its parent.
+    ⚠ **LANDLOCK HAS NO DENY RULE**, so while a Manager's own directory was in
+    the tree (`.rite/managers/<name>/`, with the `routes/` the Owner's
+    supervisor delivers as INSTRUCTION, and the `prompt.txt` that IS the next
+    cycle's instruction), keeping one Manager out of another's meant
+    ENUMERATING the project root: granting each top-level entry, and never
+    the root. Measured 2026-09-26: then a Manager could not create a NEW
+    top-level entry in its project (`mkdir /proj/newtopdir` raised
+    PermissionError), and an entry that appeared mid-cycle was not covered
+    until the next launch. That was readiness D17.
 
-    Measured 2026-09-26 in a container, all three modes, as an ordinary user,
-    when the inboxes were still in the tree:
+    **Since MM8 piece 1 no Manager's state is in the tree** (`manager_dir` is
+    under rite's data directory, granted to its own Manager by path in
+    `compose_policy`), and nothing reads `.rite/managers/` any more except to
+    move out what an older rite left there, which `rite start` does before any
+    Manager launches (`relocate`). So nothing in the tree carries another
+    Manager's authority, and the enumeration is gone. Measured against the
+    kernel: `test_a_linux_manager_creates_a_new_top_level_file_in_its_project`
+    FAILED with the enumeration in place and passes without it, and one
+    Manager still cannot write another's routes.
 
-        granting the project as a tree   another's inbox WRITABLE, own WRITABLE
-        enumerating one level            another's refused, own still WRITABLE
-        enumerating two levels           both REFUSED, project source writable
-
-    ⚠ **THE INBOXES HAVE LEFT THE TREE, AND THIS ENUMERATION HAS NOT, ON
-    PURPOSE.** Since 0.6.0 the mailbox is under rite's data directory, fenced by
-    construction. But `.rite/managers/<name>/` still holds what a Manager's
-    supervisor acts on with that Manager's authority — `routes/`, which the
-    Owner's supervisor delivers as "routed by the Owner · INSTRUCTION", and
-    `prompt.txt`, which IS the next cycle's instruction. Granting the project
-    as a tree would let a secondary write the Owner's route requests. So the
-    tree is still enumerated. What changed is this Manager's own directory:
-    it is granted as a tree now, since there is no `mail/in` left in it to
-    carve out — the pre-0.6.0 box is moved once at start and never read again
-    (`mailbox.adopt_legacy`).
-
-    ⚠ **WHAT IT COSTS, because it is a real cost and not a theoretical one.**
-    The project root is not granted as a tree, so a Manager cannot create a
-    NEW TOP-LEVEL entry in its project during a cycle — measured:
-    `mkdir /proj/newtopdir` raises PermissionError. Everything inside an
-    existing top-level directory is unaffected, including new subdirectories:
-    `src/newpkg/` was created and written in the same run. So the limitation is
-    the project ROOT, not the project.
-
-    ⚠ **And it is a snapshot.** The enumeration happens when the policy is
-    written, which is every launch, so a directory that appears mid-cycle is
-    not covered until the next one. Seatbelt's subtree grant is dynamic and
-    this is not; that difference is the price of having no deny rule.
-
-    Removing both costs means moving the whole per-Manager directory out of
-    the project, as the mailbox was — not a better ruleset.
+    ⚠ `.rite/user/` was writable across Managers before this, on both
+    platforms, because the enumeration granted it too (SPEC §5.4.8). This
+    neither opens nor closes it.
     """
-    managers = project / ".rite" / "managers"
-    if not managers.is_dir():
-        # No Managers yet: nothing to fence, so the project is granted whole
-        # and a first cycle is not crippled before any inbox exists.
-        return [project]
-
-    # ⚠ **SYMLINKS ARE SKIPPED, AND THAT IS A FENCE PROPERTY.** Landlock rules
-    # name an INODE: a rule added for a symlink grants the inode it resolves
-    # to. Measured 2026-09-26 in review — granting ONLY a symlink that pointed
-    # at another Manager's `mail/in` made that inbox writable both through the
-    # link and directly. So an enumeration that included symlinks could hand
-    # back exactly what it is carving out, and one symlink anywhere in the
-    # project root would defeat MM-2.
-    #
-    # Skipped rather than resolved-and-checked: a link whose target moves
-    # between composing and applying would pass the check and grant the new
-    # target. Not granting a symlinked entry fails closed, and the cost is
-    # that a symlink in the project root is not writable — which is the
-    # correct trade for a boundary.
-    #
-    # ⚠ NOT applied to the system paths above: on Linux `/lib` and `/lib64`
-    # ARE symlinks into `/usr`, so refusing symlinks there would deny the
-    # loader and nothing would start.
-    def entries(directory: Path, skip) -> list[Path]:
-        return [
-            p
-            for p in sorted(directory.iterdir())
-            if p not in skip and not p.is_symlink()
-        ]
-
-    granted: list[Path] = []
-    rite_dir = project / ".rite"
-    # Every top-level entry except `.rite` — the parent must not be granted.
-    granted += entries(project, {rite_dir})
-    # Everything in `.rite` except `managers`. Since MM8 a Manager's own
-    # directory is outside the project (`managers.manager_dir`) and granted by
-    # `compose_policy`; `.rite/managers/` holds only what an older rite left.
-    granted += entries(rite_dir, {managers})
-    return granted
+    return [project]
 
 
 def write_profile(root: Path, manager: str, home: Path | None = None) -> Path:
