@@ -3616,7 +3616,11 @@ rite scheduler uninstall           # deregister it
 rite sandbox start <worker> [--ticket ID | --prompt TEXT]
                                     # process-isolate a Worker's session via yoloAI (§5.3).
                                     #   Prepares the workspace first (as `rite prepare`)
-                                    #   and refuses when it cannot. The opening prompt goes
+                                    #   and refuses when it cannot. `--prompt` first files
+                                    #   TEXT as a chore ticket (labelled `chore` and the
+                                    #   Worker), and refuses with no board or a refused
+                                    #   create: all Worker work carries a ticket (TR9).
+                                    #   The opening prompt goes
                                     #   in as a prompt file. The Worker works on yoloAI's
                                     #   full copy (`:copy-all`, gitignored files included:
                                     #   the default `:copy` omits them and nested repos

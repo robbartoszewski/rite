@@ -253,6 +253,46 @@ class JiraBackend(TicketBackend):
         except ValueError:
             return BackendError("JIRA returned non-JSON response")
 
+    def can_create(self) -> tuple[bool | None, str]:
+        """Read-only: may this login create a `Task` in the project, the type
+        `create` always uses? Jira's create metadata lists the issue types
+        the caller may create there.
+
+        ⚠ UNMEASURED against a live site (2026-09-28: the Jira token needed
+        re-entering). Built to Atlassian's documented
+        `GET /issue/createmeta/{project}/issuetypes`; the response is read
+        under both key names it has used (`issueTypes`, `values`). A page
+        that does not include `Task` and does not show itself complete is
+        "could not tell", never "no".
+        """
+        key = self.config.project_key
+        if not key:
+            return False, "no project_key, and Jira needs one to create issues"
+        result = self._request(
+            "GET",
+            f"/issue/createmeta/{key}/issuetypes",
+            params={"maxResults": 200},
+        )
+        if isinstance(result, BackendError):
+            return None, f"could not read {key}'s create metadata: {result.message}"
+        if not isinstance(result, dict):
+            return None, f"Jira's create metadata for {key} was not an object"
+        types = result.get("issueTypes", result.get("values"))
+        if not isinstance(types, list):
+            return None, f"Jira's create metadata for {key} lists no issue types"
+        if any(isinstance(t, dict) and t.get("name") == "Task" for t in types):
+            return True, f"this login may create a Task in {key}"
+        total = result.get("total")
+        if isinstance(total, int) and total <= len(types):
+            return False, (
+                f"this login may not create a Task in {key}, the type rite "
+                "files every ticket as"
+            )
+        return None, (
+            f"the first {len(types)} issue types of {key} include no Task, and "
+            "Jira did not say that was all of them"
+        )
+
     def create(
         self,
         title: str,

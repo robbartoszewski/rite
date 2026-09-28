@@ -95,6 +95,41 @@ class GitHubBackend(TicketBackend):
     def _gh(self, args: list[str]) -> str | BackendError:
         return _run_gh(args, cwd=self.cwd)
 
+    def can_create(self) -> tuple[bool | None, str]:
+        """Read-only: issues enabled, not archived, and labels applicable.
+
+        Measured 2026-09-28 on `rite-dogfood-board`, `rite` (both
+        `has_issues`, triage and push) and `cli/cli` (`has_issues`, pull
+        only). With pull only, an issue can be opened and not labelled, so a
+        chore would arrive without `chore` and `scheduled`: said, not passed.
+        What a token may WRITE is not provable without writing; this reads
+        what the repository says about the identity `gh` is logged in as.
+        """
+        result = self._gh(
+            [
+                "api",
+                f"repos/{self.repo}",
+                "--jq",
+                "{has_issues, archived, triage: .permissions.triage}",
+            ]
+        )
+        if isinstance(result, BackendError):
+            return None, f"could not read {self.repo}: {result.message}"
+        try:
+            got = json.loads(result)
+        except json.JSONDecodeError:
+            return None, f"could not parse what GitHub said about {self.repo}"
+        if got.get("archived") is True:
+            return False, f"{self.repo} is archived"
+        if got.get("has_issues") is not True:
+            return False, f"issues are turned off on {self.repo}"
+        if got.get("triage") is not True:
+            return False, (
+                f"this login can open issues on {self.repo} but not label "
+                "them, so a chore would arrive without its labels"
+            )
+        return True, f"issues can be opened and labelled on {self.repo}"
+
     def create(
         self,
         title: str,
