@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.46 · **Date:** 2026-09-29
+**Version:** 0.24.47 · **Date:** 2026-09-29
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -5051,7 +5051,7 @@ session lifecycle does not invent a second opinion:
 | `ready` | continue | work is ready and a Worker is free |
 | `saturated` | continue | a queue, not a fault |
 | `blocked` | continue | the work is real and the holder will let go — the loop's own text says stopping here is wrong |
-| `idle` | **stop** | the board has nothing ready; the work is done |
+| `idle` | **stop** | the board LISTED nothing ready. A board's list lags writes by seconds (GitHub measured, Jira documented), so every ticket rite created, labelled, moved or assigned is read back exactly (`tickets/own_writes.py`); one a person created seconds ago may not be listed, and the stop says so |
 | `deadlocked` | **stop** | nobody is coming back, so waiting is indefinite |
 | `unknown` | **stop** | something could not be established, and a loop's default on the unknown is to stop and say so |
 
@@ -7181,7 +7181,9 @@ Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
 
-**Changes in 0.24.46 — a Worker starts only on an agreed definition of done, and is handed that record (TR4).** §5.3.4 "Reading the ticket": `rite sandbox start` now reads the ticket through `refinement.status.of`, one read that returns the state, the signed record and the ticket text. Only REFINED starts a Worker; `TICKET.md` carries that read's text and, as "Agreed definition of done", that read's record, and the prompt names the record id. Every other state refuses, names itself and removes an earlier copy. `--prompt` files an unrefined chore labelled `chore` and `scheduled` and starts nothing (TRQ11, Robert, 2026-09-29), no longer the Worker's label, since nothing runs on it. Tests go through the real predicate with a real key and a signed record; only the network is faked. Mutations each turn tests red: an unrefined ticket allowed, a second board read for the text, the record not delivered, the record id not in the prompt, a stale copy left on refusal.
+**Changes in 0.24.47 — a Worker starts only on an agreed definition of done, and is handed that record (TR4).** §5.3.4 "Reading the ticket": `rite sandbox start` now reads the ticket through `refinement.status.of`, one read that returns the state, the signed record and the ticket text. Only REFINED starts a Worker; `TICKET.md` carries that read's text and, as "Agreed definition of done", that read's record, and the prompt names the record id. Every other state refuses, names itself and removes an earlier copy. `--prompt` files an unrefined chore labelled `chore` and `scheduled` and starts nothing (TRQ11, Robert, 2026-09-29), no longer the Worker's label, since nothing runs on it. Tests go through the real predicate with a real key and a signed record; only the network is faked. Mutations each turn tests red: an unrefined ticket allowed, a second board read for the text, the record not delivered, the record id not in the prompt, a stale copy left on refusal.
+
+**Changes in 0.24.46 — a board read sees what rite itself just wrote (DF4).** Measured 2026-09-29 on `rite-dogfood-board` (gh 2.98.0): after an issue is created and labelled `scheduled`, `gh issue list --label scheduled` missed it for 1.6–6.5 s (5 of 5) while `gh issue view` returned it on the first try; after `scheduled` was removed, the list still returned it for up to 1.9 s (3 of 3). Jira documents the same for `/search/jql` ("Recent updates might not be immediately visible"). Every ticket rite creates, labels, moves or assigns is recorded in `.rite/board-writes.json`; every list asks the board's consistent single-ticket read about each recorded ticket, which adds it or takes it out; an entry leaves only when the list shows the same state and `updated` time as that read. No wait or retry in the path. A ticket a person created is still subject to the lag, and `idle` says "listed", not "has". Through the real CLI against GitHub: `rite loop run` straight after `rite board create -l scheduled` listed the new issue 5 of 5; with the ledger removed, 0 of 5 (four empty, one offering an issue rite had just closed).
 
 **Changes in 0.24.45 — Workers receive GitHub and Claude credentials only; their ticket is delivered by the host (Robert, 2026-09-29: "Narrow it down").** §5.3.4 reversed: `worker_environment` delivers `WORKER_SERVICES` (github, claude) instead of every credential the project holds. The evidence: the pingr Worker proof's launch line carried `SLACK_BOT_TOKEN`, `JIRA_API_TOKEN` and `JIRA_EMAIL`, and SB12 measured a sandbox's environment readable from other sandboxes. Checked from the code first: no Worker uses Slack; the one Worker use of Jira was reading its ticket with `rite board show`, so the ticket is now read on the host and delivered as `TICKET.md` ("Reading the ticket"). Before/after through the real CLI with a stand-in `yoloai`: main passed the three to the Worker, this passes none. Tests: restoring the old set fails 3; skipping delivery, normalisation, the snapshot warning, the refusal of an unreadable ticket, or removing a stale copy each fail the delivery tests.
 

@@ -109,7 +109,7 @@ def test_an_idle_board_with_no_mail_still_starts_nothing(tmp_path, monkeypatch):
     root = _project(tmp_path)
     result, prompts, _ = _drive(monkeypatch, root, "idle")
     assert prompts == []
-    assert "the board has nothing ready (0 session(s))" in result.reason
+    assert "the board listed nothing ready (0 session(s))" in result.reason
 
 
 def test_mail_that_arrived_during_the_session_is_delivered_too(tmp_path, monkeypatch):

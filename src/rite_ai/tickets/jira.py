@@ -596,6 +596,27 @@ class JiraBackend(TicketBackend):
             return self._clarify(result, ticket_id)
         return None
 
+    def matches(self, ticket: Ticket, filters: TicketFilter | None) -> bool | None:
+        """The JQL `list_tickets` builds, applied to one issue as read. An
+        assignee filter is not decided here: JQL matches it against an
+        account, and a read ticket carries a display name."""
+        f = filters or TicketFilter()
+        if f.assignee:
+            return None
+        key = self.config.project_key
+        if key and not ticket.id.startswith(f"{key}-"):
+            return False
+        if f.status and (ticket.status or "").casefold() != f.status.casefold():
+            return False
+        wanted = [f.label] if f.label else []
+        wanted += list(f.labels or [])
+        return all(lbl in (ticket.labels or []) for lbl in wanted)
+
+    def missing(self, error: BackendError) -> bool:
+        # `read` turns a 404 caused by rejected credentials into its own
+        # message first, so a 404 left here is the issue itself.
+        return "→ 404" in error.message
+
     def list_tickets(
         self, filters: TicketFilter | None = None
     ) -> list[Ticket] | BackendError:

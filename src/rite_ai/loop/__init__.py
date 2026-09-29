@@ -37,7 +37,9 @@ CLOSED = "closed"
 sleep to the boundary, do not exit."""
 
 IDLE = "idle"
-"""The board has nothing ready. The ONE verdict that is a reason to stop."""
+"""The board LISTED nothing ready. The ONE verdict that is a reason to stop.
+rite's own writes are read back exactly (`tickets.own_writes`); a ticket a
+person created seconds ago may not be listed yet, and that is said (DF4)."""
 
 SATURATED = "saturated"
 """Work is ready and every Worker is busy. A queue, not a fault."""
@@ -239,7 +241,10 @@ def plan_cycle(
     if not cycle.ready:
         cycle.verdict = IDLE
         cycle.detail = (
-            f"nothing on the board is waiting; {len(free)} of "
+            # "listed", not "is": a board's list lags writes it did not get
+            # from rite (DF4). rite's own are read back in `own_writes`.
+            f"the board listed nothing waiting (a ticket created outside rite "
+            f"in the last few seconds may not be listed yet); {len(free)} of "
             f"{len(cycle.workers)} Worker(s) free"
         )
         return cycle

@@ -406,7 +406,7 @@ loop worth running:
 
 | | |
 |---|---|
-| `idle` | nothing on the board is waiting. **Stops the loop** |
+| `idle` | the board listed nothing waiting. **Stops the loop**. A ticket rite itself just filed or labelled is always seen; one a person created in the last few seconds may not be listed yet |
 | `saturated` | work is waiting and every worker is busy. A queue, not a fault |
 | `blocked` | work is waiting, a worker is free, and the paths it needs are held by someone still working |
 | `deadlocked` | same, except the holders look gone. **This will not clear on its own**, so the loop **stops** and prints what to release |

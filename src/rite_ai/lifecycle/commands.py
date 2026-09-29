@@ -83,12 +83,14 @@ class HandoverResult:
     ticket: str = ""
 
 
-def _build_ticket_backend(config: ProjectConfig) -> TicketBackend | BackendError:
+def _build_ticket_backend(
+    config: ProjectConfig, root: Path | None = None
+) -> TicketBackend | BackendError:
     tb = config.ticket_backend
     if tb.type == "none":
         return BackendError("no ticket backend configured")
     return create_backend_from_config(
-        tb, board_role="workers", credentials=config.credentials
+        tb, board_role="workers", credentials=config.credentials, root=root
     )
 
 
@@ -458,7 +460,7 @@ def start(root: Path) -> StartResult:
     if pending.is_dir():
         count = len(list(pending.glob("*.json")))
         if count:
-            backend = _build_ticket_backend(project.config)
+            backend = _build_ticket_backend(project.config, root)
             if isinstance(backend, BackendError):
                 actions.append(
                     f"{count} pending outbox message(s) — "
@@ -606,7 +608,7 @@ def perform_handover(
                 f"{e.file}: {e.message}" for e in project
             )
         else:
-            backend = _build_ticket_backend(project.config)
+            backend = _build_ticket_backend(project.config, root)
             if isinstance(backend, BackendError):
                 result.queued_reason = backend.message
             else:

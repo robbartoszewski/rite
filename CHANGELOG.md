@@ -28,6 +28,18 @@ A Manager whose Worker request is refused is told the same in its next
 instruction. Until the Owner can refine tickets with you over Slack (later in
 0.7.0), `rite refine accept` is how a ticket gets refined.
 
+### `rite start` sees a ticket rite has just filed
+
+A board's list lags new writes by seconds, on GitHub (measured, up to 6.5 s)
+and Jira (documented), so a `rite start` right after a ticket was filed or
+scheduled read "nothing ready" and stopped, and a cycle right after a
+dispatch could offer the ticket it had just handed out. rite now reads back
+every ticket it created, labelled, moved or assigned from the board's
+consistent single-ticket read, so its own writes are always seen, and seen
+as they are now. A ticket a person creates on the board's web page can still
+take a few seconds to be listed; the idle stop now says the board *listed*
+nothing and names that case.
+
 ### rite's verifier no longer contradicts a true reply about a file it cannot read
 
 The verifier runs inside the Owner's boundary, which cannot read another

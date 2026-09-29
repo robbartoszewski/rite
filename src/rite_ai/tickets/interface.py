@@ -142,6 +142,20 @@ class TicketBackend(ABC):
         self, filters: TicketFilter | None = None
     ) -> list[Ticket] | BackendError: ...
 
+    def matches(self, ticket: Ticket, filters: TicketFilter | None) -> bool | None:
+        """Whether `ticket`, as read, is one `list_tickets(filters)` returns
+        once the board's list has caught up (DF4, `tickets.own_writes`).
+
+        In the board's OWN semantics (GitHub lists open issues when no state
+        is given; Jira does not filter status). None when this backend cannot
+        decide it from a ticket, and the list's answer then stands."""
+        return None
+
+    def missing(self, error: BackendError) -> bool:
+        """Whether a failed read means the ticket does not exist, as opposed
+        to not being readable just now. Only the first is safe to forget."""
+        return False
+
     def can_create(self) -> tuple[bool | None, str]:
         """Whether rite could file a ticket here, read-only (TR9).
 
