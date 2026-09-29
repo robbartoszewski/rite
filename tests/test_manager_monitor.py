@@ -22,6 +22,7 @@ from rite_ai.coordination.monitor import ManagerMonitor
 from rite_ai.coordination.promotion import request_from_json
 from rite_ai.coordination.schemas import lease_from_json
 from rite_ai.coordination.state_layer import Absent, Unavailable
+from tests.refined_board import refined
 
 START = datetime(2026, 9, 17, 12, 0, 0, tzinfo=UTC)
 BEAT = HeartbeatConfig(interval_minutes=10, stall_threshold=3)
@@ -368,6 +369,7 @@ class TestTheTickAlsoDistributesWork:
             backend=board,
             workers=["w1", "w2"],
             schedule=self._schedule(),
+            refinement=refined,
         )
         tick = m.tick()
         assert tick.handouts == [("ABC-1", "w1")]
@@ -389,6 +391,7 @@ class TestTheTickAlsoDistributesWork:
             backend=board,
             workers=["w1"],
             schedule=self._schedule(),
+            refinement=refined,
         )
         first = m.tick()
         assert first.action == "promoted" and first.owner

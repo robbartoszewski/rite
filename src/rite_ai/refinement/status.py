@@ -126,6 +126,17 @@ def of(root, config, ticket_id: str, *, role: str = "workers") -> Status:
     return status(board, ticket_id)
 
 
+def checked(check, ticket_id: str) -> Status:
+    """`check(ticket_id)`, failing closed: a check that raises answered
+    nothing, and nothing is not REFINED. For the gates that ask the predicate
+    about many tickets in one tick (TR5's assignment and handout), where one
+    board that cannot answer must not take the rest of the tick with it."""
+    try:
+        return check(ticket_id)
+    except Exception as e:  # noqa: BLE001 — any failure is UNREADABLE, said
+        return Status(UNREADABLE, None, f"the refinement check failed ({e})")
+
+
 def refusal(state: str, ticket: str) -> str:
     """The one line a refused start ends with: the state, and what to do.
 

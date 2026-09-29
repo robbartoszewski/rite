@@ -275,6 +275,85 @@ class TestAssignmentNeedsARefinedTicket:
         assert board.reads == []
 
 
+# --- the handout to a Worker --------------------------------------------------
+
+
+def _hand_out(tmp_path, board, **kw):
+    from rite_ai.config.models import ScheduleConfig, ScheduleWindow
+    from rite_ai.coordination.distribution import distribute
+
+    return distribute(
+        tmp_path,
+        board,
+        manager="alpha",
+        workers=["w1", "w2", "w3"],
+        schedule=ScheduleConfig(
+            timezone="UTC", windows=[ScheduleWindow(hours="00:00-24:00", workers=3)]
+        ),
+        now=NOW,
+        busy=set(),
+        **kw,
+    )
+
+
+class TestAHandoutNeedsARefinedTicket:
+    """A Manager's name can be put on a ticket by hand, and a ticket can go
+    STALE after the Owner assigned it: either one handed out labels a Worker
+    with work its start then refuses."""
+
+    def test_only_the_refined_ticket_goes_to_a_worker(self, tmp_path, key):
+        board = Backlog(key, ["RT-1", "RT-2", "RT-3"], refined=["RT-2"], stale=["RT-3"])
+        for ticket in board.tickets:
+            ticket.labels.append("alpha")
+        got = _hand_out(tmp_path, board)
+        assert got.handouts == [("RT-2", "w1")]
+        assert got.held_back["RT-1"].startswith("NOT REFINED")
+        assert got.held_back["RT-3"].startswith("STALE")
+        assert [t for t, _ in board.labelled] == ["RT-2"]
+
+    def test_a_check_that_raises_holds_the_ticket_and_the_tick_goes_on(
+        self, tmp_path, key
+    ):
+        board = Backlog(key, ["RT-1", "RT-2"], refined=["RT-2"])
+        for ticket in board.tickets:
+            ticket.labels.append("alpha")
+
+        def flaky(ticket_id):
+            if ticket_id == "RT-1":
+                raise RuntimeError("connection reset")
+            return refinement_status.status(board, ticket_id)
+
+        got = _hand_out(tmp_path, board, refinement=flaky)
+        assert got.handouts == [("RT-2", "w1")]
+        assert got.held_back["RT-1"].startswith("UNREADABLE")
+
+    def test_the_default_check_is_the_board_itself_through_its_wrapper(
+        self, tmp_path, key
+    ):
+        inner = Backlog(key, ["RT-1", "RT-2"], refined=["RT-1"])
+        for ticket in inner.tickets:
+            ticket.labels.append("alpha")
+        wrapped = ReadsItsOwnWrites(inner, Path(tmp_path / "root"), "github:org/repo")
+        got = _hand_out(tmp_path, wrapped)
+        assert got.handouts == [("RT-1", "w1")], got
+        assert got.held_back["RT-2"].startswith("NOT REFINED")
+
+
+def test_a_board_that_cannot_answer_one_ticket_does_not_stop_assignment(tmp_path, key):
+    """The same fail-closed wrapper on the Owner's side: one ticket whose
+    check raises is left and said, and the next is still assigned."""
+    board = Backlog(key, ["RT-1", "RT-2"], refined=["RT-2"])
+
+    def flaky(ticket_id):
+        if ticket_id == "RT-1":
+            raise RuntimeError("connection reset")
+        return refinement_status.status(board, ticket_id)
+
+    lines = _assign(tmp_path, board, refinement=flaky)
+    assert [t for t, _ in board.labelled] == ["RT-2"], lines
+    assert any("RT-1 not assigned — UNREADABLE" in line for line in lines), lines
+
+
 def test_board_identity_sees_through_any_depth_of_wrapper(tmp_path, key):
     inner = Backlog(key, [])
     once = ReadsItsOwnWrites(inner, tmp_path, "github:org/repo")

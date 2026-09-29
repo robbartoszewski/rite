@@ -254,12 +254,10 @@ def _agreed(refinement, ticket: str) -> tuple[str, str]:
             "UNREADABLE: this supervisor has no board to check refinement "
             "on, so it routes nothing."
         )
-    try:
-        answer = refinement(ticket)
-    except Exception as e:  # noqa: BLE001 — any failure refuses, and says why
-        return "", f"UNREADABLE: the refinement check failed ({e})."
+    answer = refinement_status.checked(refinement, ticket)
     if not answer.refined or answer.record is None:
-        return "", refinement_status.refusal(answer.state, ticket)
+        why = refinement_status.refusal(answer.state, ticket)
+        return "", why + (f" ({answer.detail})" if answer.detail else "")
     return refinement_status.render_for_worker(answer.record), ""
 
 

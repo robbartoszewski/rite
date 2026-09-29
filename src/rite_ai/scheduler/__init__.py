@@ -638,8 +638,9 @@ def _assign_the_pool(
 
     # Rule 0. Before the fleet is read: an unrefined ticket goes nowhere
     # whoever is idle, and saying so is the part the Owner acts on.
+    from rite_ai.refinement import status as refinement_status
+
     if refinement is None:
-        from rite_ai.refinement import status as refinement_status
 
         def refinement(ticket_id: str):
             return refinement_status.status(board, ticket_id)
@@ -647,7 +648,7 @@ def _assign_the_pool(
     lines: list[str] = []
     refined = []
     for ticket in unassigned:
-        answer = refinement(ticket.id)
+        answer = refinement_status.checked(refinement, ticket.id)
         if answer.refined:
             refined.append(ticket)
         else:

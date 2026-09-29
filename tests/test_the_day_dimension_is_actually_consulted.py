@@ -36,6 +36,7 @@ import pytest
 
 from rite_ai.config.models import ScheduleConfig
 from rite_ai.schedule import ScheduleWindow, workers_at
+from tests.refined_board import refined
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "rite_ai"
 
@@ -225,6 +226,7 @@ class TestDistributionAgreesWithTheDay:
             now=when,
             busy=set(),
             modules=set(),
+            refinement=refined,
         )
         return getattr(result, "capacity", None)
 
