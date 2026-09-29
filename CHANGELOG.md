@@ -2,6 +2,16 @@
 
 ## Unreleased: 0.7.0 (notes in progress, completed at release)
 
+### A Worker no longer runs with your personal Claude settings
+
+yoloAI copies `~/.claude/settings.json` from your home into every Worker
+sandbox, so your own hooks and `env` ran inside Workers. rite now starts
+Workers (on seatbelt, macOS) with a home of its own holding an empty
+settings file. Your git `user.name` and `user.email` still sign the Worker's
+commits; nothing else from your `~/.gitconfig` reaches it. If you restart a
+Worker yourself with `yoloai start` or `yoloai restart`, yoloAI copies your
+settings into that sandbox again; rite runs neither.
+
 ### ⚠ Workers no longer merge; `rite deliver` brings a finished ticket home
 
 **A Worker's commits now leave its sandbox by rite, not by the Worker.**

@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.51 · **Date:** 2026-09-29
+**Version:** 0.24.52 · **Date:** 2026-09-29
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -1621,13 +1621,35 @@ backend, and what that backend actually restricts.
 ⚠ **And rite exposes no way to ask for network isolation on any backend.**
 `SandboxConfig` (`config/models.py`) has fields for `enabled`, `backend`,
 `token_permissions` and `max_concurrent_workers` — and nothing for the network.
-`start_worker` passes `new --backend <b> --agent claude`, an `--env` per credential
+`start_worker` passes `new --backend <b> --agent claude` (on seatbelt, after
+`--data-dir ~/.yoloai`, and run with rite's own `HOME`: below), an `--env` per credential
 plus `RITE_PROJECT_ROOT` and git's `GIT_CONFIG_*` settings, its `-d` mounts, an
 optional `--prompt-file`, `<name>` and `<workdir>` — never `--network-isolated`,
 never `--network-none`.
 **Until such a field exists, every rite-managed sandbox has unrestricted outbound
 network, on every backend.** That is a statement about rite, and it is the one that
 matters here — the backend differences below decide only what rite *could* ask for.
+
+⚠ **A Worker does not get the operator's Claude settings (0.24.49, dogfood #27).**
+yoloAI 0.11.0's claude agent copies `~/.claude/settings.json` (and `statusline.sh`)
+from the home of the process running it into every sandbox, on every `new`, `start`
+and `restart` (`internal/agent/agent.go` SeedFiles; `envsetup.CopySeedFiles` and
+`RefreshHomeSeed`; not `agent_files`, and no option turns it off). Measured on the
+v0.6.0 dogfood's Worker: its settings were the operator's hooks — a coordination
+system of their own, run at every session start and stop — and `env`, merged with
+yoloAI's. On seatbelt rite now runs `yoloai new` with `HOME` set to a directory it
+owns (`worker_home`: an empty `.claude/settings.json` and nothing else) and
+`--data-dir ~/.yoloai`, which is yoloAI's default, so its state stays where it was.
+Measured: the Worker's settings then hold yoloAI's hooks only. That home has no
+`.gitconfig`, which yoloAI otherwise links into the sandbox, so the operator's global
+`user.name` and `user.email` go in as two more `GIT_CONFIG_*` pairs and nothing else
+of that file does (the authorship ruling: a Worker commits as the identity its
+sandbox is given). Measured without them: git invents `<user>@<host>.home`.
+**Not covered:** a `yoloai start` or `restart` a person runs from their own shell
+copies their settings back into that sandbox (rite runs neither); sandboxes created
+before 0.24.49 keep what they were given; container backends are unchanged
+(unmeasured: their clients read configuration from the home); and the operator's
+`~/.tmux.conf` no longer styles a Worker's session.
 
 For completeness, from yoloAI 0.11.0's own `help security` (read from its
 documentation, not measured): `--network-isolated` installs an IPv4 allowlist, and
@@ -7334,6 +7356,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.52 — a Worker does not get the operator's Claude settings (dogfood #27).** §5.3.2 gains the paragraph, and `start_worker`'s argument list says what it now passes. yoloAI's claude agent copies the host's `~/.claude/settings.json` into every sandbox at every create, start and restart, with no switch; on seatbelt rite runs `yoloai new` with its own `HOME` (an empty settings file) and `--data-dir ~/.yoloai`, and passes the operator's `user.name`/`user.email` through `GIT_CONFIG_*`, because that home has no `.gitconfig`. Measured before building, with controls: the settings seed follows `HOME`, `start` re-seeds from whichever home it runs under, and without an identity git invents one from the host name. `tests/test_a_worker_does_not_carry_the_operators_claude_settings.py`, with a live opt-in test (`RITE_LIVE_YOLOAI=1`) that fails on the operator's hooks when the clean home is switched off.
 
 **Changes in 0.24.51 — "nothing ready" is said as a snapshot with its read time (DF4, coordinator's ruling 2026-09-29).** The `idle` row of the lifecycle table: `rite start` still stops when the board lists nothing ready, and now says when it looked ("done: the board listed nothing ready as of HH:MM:SS"), so a person who filed a ticket seconds before can see why it was not picked up. A second read after a delay would narrow the window rather than remove it, so there is none. The loop's idle detail says the same. Jira measured on ritetest KAN, 2026-09-29 13:10 CEST: `/search/jql` reflected a create on the first read in 5 of 5, and a label removal in 3 of 3 (KAN-20 to KAN-27, closed; KAN-12 to KAN-19 were a first batch whose probe could not tell "first check" from "never seen", discarded and closed). Atlassian documents that search may lag; it was not observed here, and `own_writes` covers it if it does.
 

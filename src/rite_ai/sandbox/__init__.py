@@ -1170,7 +1170,17 @@ def start_worker(
                 f'("max_sandboxes") or unset it for no bound.',
             )
 
-    args = [binary, "new", "--backend", config.backend, "--agent", "claude"]
+    # ⚠ The operator's own Claude settings stay out (dogfood #27). yoloAI's
+    # claude agent copies `~/.claude/settings.json` from the home of the
+    # process running it into every sandbox, on every create, start and
+    # restart (`envsetup.CopySeedFiles`, not `agent_files`, and no option
+    # turns it off). So `yoloai new` runs with a home rite owns, and
+    # `--data-dir` keeps yoloAI's own state where it always is.
+    clean_home = config.backend == "seatbelt"
+    args = [binary]
+    if clean_home:
+        args += ["--data-dir", str(Path.home() / ".yoloai")]
+    args += ["new", "--backend", config.backend, "--agent", "claude"]
     if allow_dirty:
         # yoloAI refuses a workdir with uncommitted changes unless told
         # otherwise, and a Worker part-way through a task is exactly that.
@@ -1197,6 +1207,8 @@ def start_worker(
     # would compete with the one passed below. Both start GIT_CONFIG_.
     for inherited in [k for k in yoloai_env if k.startswith("GIT_CONFIG_")]:
         del yoloai_env[inherited]
+    if clean_home:
+        yoloai_env["HOME"] = str(worker_home())
     claude_login = delivered.pop(CLAUDE_TOKEN_ENV_VAR, None)
     if claude_login:
         yoloai_env[CLAUDE_TOKEN_ENV_VAR] = claude_login
@@ -1213,7 +1225,8 @@ def start_worker(
     # `.rite/`, and inside the sandbox most of that walk is unreadable.
     delivered.setdefault("RITE_PROJECT_ROOT", str(root))
     git_notes = []
-    for key, value in sandbox_git_environment(shutil.which("gh")).items():
+    identity = host_git_identity() if clean_home else None
+    for key, value in sandbox_git_environment(shutil.which("gh"), identity).items():
         delivered.setdefault(key, value)
     if shutil.which("gh") is None:
         git_notes.append(
@@ -1343,7 +1356,57 @@ def start_worker(
     return SandboxResult(True, "\n".join(lines))
 
 
-def sandbox_git_environment(gh: str | None) -> dict[str, str]:
+def worker_home(home: Path | None = None) -> Path:
+    """The home `yoloai new` runs with: rite's, holding only an empty
+    `.claude/settings.json` (dogfood #27).
+
+    ⚠ **Measured on yoloAI 0.11.0, seatbelt, 2026-09-29.** With the
+    operator's home, a Worker's settings were theirs: their hooks (here, a
+    coordination system of their own, run on every session start and stop),
+    their `env`, merged with yoloAI's. With this home, only yoloAI's own
+    hooks. yoloAI copies the file rather than linking it, so the directory
+    is only needed while `yoloai new` runs, and it is rewritten each time.
+
+    Under the credential root's parent, which no Manager's profile grants.
+    Nothing in it is secret; that is just where rite keeps its own files.
+    """
+    from rite_ai.managers import github_access
+
+    path = github_access._credential_root(home).parent / "worker-home"  # noqa: SLF001
+    (path / ".claude").mkdir(parents=True, exist_ok=True)
+    (path / ".claude" / "settings.json").write_text("{}\n")
+    return path
+
+
+def host_git_identity() -> tuple[str, str] | None:
+    """The operator's global `user.name` and `user.email`, or None.
+
+    ⚠ **A Worker commits as the identity its sandbox is given, and rite adds
+    no other** (the authorship ruling, `V070_TICKET_REFINEMENT.md` part 3.13).
+    Under `worker_home` the sandbox no longer links the operator's
+    `~/.gitconfig`, so the identity it gave is passed on here and nothing
+    else of that file is. Measured without it: git made one up from the
+    account and host name (`<user>@<host>.home`), and that is what a pull
+    request to someone else's repository would have carried.
+    """
+    values = []
+    for key in ("user.name", "user.email"):
+        try:
+            done = subprocess.run(
+                ["git", "config", "--global", "--get", key],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        values.append(done.stdout.strip())
+    return (values[0], values[1]) if all(values) else None
+
+
+def sandbox_git_environment(
+    gh: str | None, identity: tuple[str, str] | None = None
+) -> dict[str, str]:
     """Git settings for inside a sandbox, as environment variables.
 
     Passed with `--env`, so they apply to that sandbox's session and change
@@ -1390,6 +1453,10 @@ def sandbox_git_environment(gh: str | None) -> dict[str, str]:
         ("tag.gpgsign", "false"),
         ("core.hooksPath", ".git/hooks"),
     ]
+    if identity:
+        # `host_git_identity`: the identity the operator's `~/.gitconfig`
+        # gave before `worker_home`, and nothing else from that file.
+        settings += [("user.name", identity[0]), ("user.email", identity[1])]
     env = {"GIT_CONFIG_COUNT": str(len(settings))}
     for i, (key, value) in enumerate(settings):
         env[f"GIT_CONFIG_KEY_{i}"] = key
