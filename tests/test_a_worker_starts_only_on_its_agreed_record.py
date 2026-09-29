@@ -83,6 +83,8 @@ def test_a_refined_ticket_is_delivered_with_the_record_rite_checked(
     assert board.reads == ["7"], "one read of the board, and only one"
     text = (worker / DELIVERY_FILE).read_text()
     section = text.split("## Agreed definition of done\n\n", 1)[1]
+    # Bounded at the next section (PB1 adds "## Publishing" after it).
+    section = section.split("\n## ", 1)[0]
     assert section.rstrip() == render_for_worker(record)
     assert "make it configurable or smth" in text.split("## The ticket", 1)[1]
     assert record.record_id in seen["prompt"]

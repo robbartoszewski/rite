@@ -402,7 +402,7 @@ def test_claims_stay_held_until_the_merge_under_a_pull_request(tmp_path):
 def test_the_record_is_outside_every_managers_grant(tmp_path):
     p = Project(tmp_path, "commit")
     p.start()
-    where = record.records_dir(p.root)
+    where = record._records_dir(p.root)
     assert not where.is_relative_to(p.root)
     body = json.loads((where / "alpha.json").read_text())
     assert body["modules"] == {
@@ -425,7 +425,7 @@ def test_the_record_is_outside_every_managers_grant(tmp_path):
 def test_a_damaged_record_is_unreadable_not_absent(tmp_path, text):
     p = Project(tmp_path, "commit")
     p.start()
-    (record.records_dir(p.root) / "alpha.json").write_text(text)
+    (record._records_dir(p.root) / "alpha.json").write_text(text)
     assert isinstance(record.read(p.root, "alpha"), record.Unreadable)
 
 

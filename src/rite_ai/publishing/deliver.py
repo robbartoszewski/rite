@@ -112,6 +112,7 @@ def _branch_ok(ticket: str) -> bool:
         ["git", "check-ref-format", "--branch", ticket],
         capture_output=True,
         text=True,
+        errors="replace",
         timeout=30,
     )
     return done.returncode == 0 and done.stdout.strip() == ticket
@@ -122,7 +123,7 @@ def _sha(repo: Path, ref: str) -> str | None:
     return done.stdout.strip() if done.returncode == 0 else None
 
 
-def contains(repo: Path, sha: str) -> bool:
+def _contains(repo: Path, sha: str) -> bool:
     """Is commit `sha` reachable from some ref in `repo`? Reachability, not
     presence: an object can sit in a repository unreferenced and be pruned."""
     done = _run(["git", "for-each-ref", "--contains", sha, "--format=%(refname)"], repo)
@@ -142,7 +143,7 @@ def collected(clone: Path, project: Path) -> bool:
             return False
         if on_remote.stdout.strip():
             continue
-        if not contains(project, sha):
+        if not _contains(project, sha):
             return False
     return True
 

@@ -2,6 +2,29 @@
 
 ## Unreleased: 0.7.0 (notes in progress, completed at release)
 
+### ⚠ Workers no longer merge; `rite deliver` brings a finished ticket home
+
+**A Worker's commits now leave its sandbox by rite, not by the Worker.**
+`rite deliver <worker>` collects each module's ticket branch from the
+Worker's sandbox into the project's own checkout of that module, as a
+branch you can rebase. It adds that branch and changes nothing else, and it
+squashes when `publish.squash` is on, keeping the full history beside it.
+The sandbox is removed once every module is delivered. Uncommitted work is
+refused, never committed for the Worker.
+
+The new `publish:` block in `config.yaml` sets what happens next: `strategy`
+is `commit`, `push` or `pull_request` (the default), and a module can
+override it in `modules.yaml`. `rite doctor` prints each module's strategy
+and where it came from. Under `commit` nothing is pushed, and a Worker is
+told so, per ticket, in its `TICKET.md`. **No Worker merges a pull request
+any more, under any strategy.**
+
+rite records the settings a Worker was started under. If they change before
+it is delivered, rite commits locally and does nothing else, says both
+values, and names the command for you to run. A change can take permission
+away from work in flight, never give it. `push_to_shared` and `shared_repo`
+are refused until v0.8.0.
+
 ### The verifier no longer contradicts a claim about ground it could not open
 
 #102 stopped the verifier contradicting a reply that names a file it cannot
