@@ -14,7 +14,7 @@ not known, and what will bite.
 
 ## 1. Where everything is
 
-`main` at `598a711` when this was written. Every PR below is merged unless it
+`main` at `ead5480` when this was written. Every PR below is merged unless it
 says otherwise.
 
 | item | state | where |
@@ -27,16 +27,17 @@ says otherwise.
 | TR4, a Worker starts only on a REFINED ticket | merged (TR4 session) | #106 |
 | TR5, route / assignment / handout refusal | merged | #114, plus the separator line #121 (other session) |
 | TR6, the acceptance run | **not run**; preconditions met | `V070_RC_DOGFOOD.md` 2.1, #127 |
-| TR7, `ready-to-work` label | **not built**; not a precondition | plan row; label ruling in #113 |
+| TR7, `ready-to-work` label | **not built**; not a precondition | plan row; label ruling (#113) |
 | TR8 | G2 pinned (#110); the identity report per TRQ12 is in its plan row | plan row |
 | TR9, every Worker job has a ticket | merged | #78, #81, #84 |
 | TR10, the Owner working an unrefined ticket itself | **after PB1** (enforced at publish) | plan row |
 | Test infra: the suite never touches the enclosing tmux | merged | #126 |
 
-**Open PRs of mine you inherit:** #113 (the label ruling in the plan; being
-landed as this was written, check it), #87 and #88 (CI: macOS job file list;
-both conflict since 2026-09-28 and may be overtaken by #90; decide or close
-them, do not merge them blind).
+**The label ruling** is in the plan (#113, merged as `ead5480`).
+
+**Open PRs of mine you inherit:** #87 and #88 (CI: the macOS job's file
+list; both conflict since 2026-09-28 and may be overtaken by #90; decide or
+close them, do not merge them blind).
 
 ## 2. Robert's rulings, in his words, and what each changed
 
