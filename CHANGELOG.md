@@ -1,6 +1,24 @@
 # Changelog
 
-## Unreleased
+## 0.7.0a2 (2026-09-30) — alpha: the setup fixes from 0.7.0a1's dogfood
+
+⚠ **Still an alpha, cut for the same dogfood** (a real contribution to yoloAI
+through rite). 0.7.0a1's setup, checked before its first run, found rite
+getting five things wrong; each is fixed below with a test shown able to fail.
+Not installed by default: `install.sh` still installs 0.6.0 unless you ask
+for this one (`RITE_VERSION=v0.7.0a2`). Everything 0.7.0a1 said is and is not
+in it still holds.
+
+**Upgrading a project from 0.7.0a1:** new projects are scoped to their own
+tickets automatically. An existing project that shares its board with another
+rite project must set `ticket_backend.scope_label` (see below), and its
+tickets need that label as well as `scheduled`; `rite start` refuses until it
+does.
+
+Also fixed for this release, found when 0.7.0a1 was tagged: the release's own
+files are recorded so `rite update` recognises them, the release-checksum tool
+names a pre-release's own tag, and a pre-release tag sorts as the release it
+is.
 
 ### `rite credential set jira` now makes Jira the board
 
