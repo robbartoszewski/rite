@@ -113,16 +113,25 @@ throwaway-app run or listed in part 3.
 Robert, verbatim: "I expect rite to refine the lazy tickets before proceeding
 - ask user questions, define a definition of done etc."
 
-- ⚠ **Precondition, not yet met: TR2.** Corrected 2026-09-29: the
-  refinement design (#43, `70564ba`), the record and predicate (TR1, #83,
-  `cb1fdbc`) and the delivery of a checked record to a Worker (TR4, #106,
-  `999aff4`) are merged. What is left for this criterion is **TR2, the round
-  protocol** (the supervisor asking the questions and holding the ticket
-  until they are answered). TR3a (the Owner told to ask before routing,
-  #73) and TR9 (every route names its ticket; chores, #81/#84) are merged;
-  TR3b (#108, working to the agreed definition of done) is open. **Run before TR2
-  lands and this criterion fails by construction**, so the run waits for it
-  or is recorded as run without it.
+- ⚠ **Precondition, not yet met: TR2, with its TR3 instructions; TR5's
+  route and assignment refusal alongside.** Corrected 2026-09-29, against
+  `main` by what each item requires; TR6's own dependency row in the plan is
+  stale.
+  - **TR2 (the round protocol) is the gate.** The Owner runs sandboxed and
+    cannot read the signing key, so without TR2 the only way to an agreed
+    definition of done is Robert typing `rite refine accept` at his own
+    terminal, which is not what this criterion tests. **Run before TR2 lands
+    and 2.1 fails by construction**: the run waits for it, or is recorded as
+    run without it.
+  - **TR5's route and assignment refusal** is strictly needed only if the run
+    includes an executor secondary; it is being built regardless, so the
+    start date does not hang on that setup choice.
+  - **Merged, not preconditions any more:** the design (#43, `70564ba`), the
+    record and predicate (TR1, #83, `cb1fdbc`), a Worker handed the checked
+    record (TR4, #106, `999aff4`), TR3a (#73) and TR3b (#108), TR9 (#81/#84),
+    and TR8's G2 (never editing a ticket's title or description).
+  - **Not preconditions:** TR7 (a filter view nothing decides from), TR8
+    beyond G2, TR10 (after PB1).
 - For each ticket Robert files in the dogfood's register (one line, no
   acceptance criteria):
   - Before any routing, Worker request or code, a question about **what the
@@ -248,6 +257,12 @@ A pass is a pass for **this** configuration. It says nothing about:
   reading a host-written `answer.json` has not been measured by anyone.
 - **Unattended operation.** Robert drives and watches. Anything that only
   fails with nobody there is not tested.
+- **Whether a Worker's pull request says what is true.** Nothing in rite
+  checks the claims in a Worker's PR description or commit messages: the
+  verifier reads only replies from secondary Managers. A confidently wrong
+  "tests pass" or "fixes #N" reaches the maintainer unless Robert checks the
+  description against the diff in §4 step 9, and a claim he catches there is
+  caught by him, not by rite.
 - **Other maintainers.** One external reader of one diff. Their judgement is
   evidence about that diff, not about rite's review process in general.
 - **Cost.** Sessions and allowance used are recorded, not judged: there is no
@@ -257,8 +272,8 @@ A pass is a pass for **this** configuration. It says nothing about:
 
 ## 4. What Robert does himself, in order
 
-1. **Confirm the preconditions:** TR2 merged (or decide to run without it
-   and record that 2.1 cannot pass); the release candidate tagged; the
+1. **Confirm the preconditions:** TR2 and TR5's route/assignment refusal
+   merged (or decide to run without TR2 and record that 2.1 cannot pass); the release candidate tagged; the
    board chosen (1.4).
 2. **Tell the other sessions** that `~/.local/bin/rite` is about to become the
    candidate, then install it with the released `install.sh` and
