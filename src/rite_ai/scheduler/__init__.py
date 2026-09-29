@@ -480,7 +480,7 @@ def _coordination_tick(root: Path, project) -> list[str]:
         # decide the handover on must be the same reading, or the tick can
         # advertise itself busy and hand over in the same breath.
         workers, in_flight = _this_machines_load(root)
-        board, off = _board_for_distribution(project)
+        board, off = _board_for_distribution(project, root)
         monitor = ManagerMonitor(
             holder,
             root=root,
@@ -524,7 +524,7 @@ def _coordination_tick(root: Path, project) -> list[str]:
     return lines
 
 
-def _board_for_distribution(project) -> tuple[object | None, str]:
+def _board_for_distribution(project, root=None) -> tuple[object | None, str]:
     """(board, why not) for an unattended tick's distribution arm (Q9).
 
     The board is built HERE rather than inside the monitor: the monitor is
@@ -543,6 +543,7 @@ def _board_for_distribution(project) -> tuple[object | None, str]:
         project.config.ticket_backend,
         board_role="workers",
         credentials=project.config.credentials,
+        root=root,
     )
     if isinstance(backend, BackendError):
         # Turned on and unreachable is not the same as turned off, and a

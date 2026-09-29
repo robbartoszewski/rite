@@ -325,6 +325,33 @@ class GitHubBackend(TicketBackend):
                 return result
         return None
 
+    def matches(self, ticket: Ticket, filters: TicketFilter | None) -> bool | None:
+        """`gh issue list`'s own filter, applied to one issue as read."""
+        f = filters or TicketFilter()
+        want = self._state_flag(f.status) if f.status else "open"
+        if isinstance(want, BackendError):
+            return None
+        if want != "all" and (ticket.status or "").lower() != want:
+            return False
+        if f.assignee:
+            logins = {
+                a.get("login", "")
+                for a in (ticket.metadata or {}).get("assignees") or []
+                if isinstance(a, dict)
+            }
+            if f.assignee not in logins:
+                return False
+        have = {lbl.casefold() for lbl in ticket.labels or []}
+        wanted = [f.label] if f.label else []
+        wanted += list(f.labels or [])
+        return all(lbl.casefold() in have for lbl in wanted)
+
+    def missing(self, error: BackendError) -> bool:
+        # `gh issue view` on a number that is not an issue here (measured,
+        # gh 2.98.0): "GraphQL: Could not resolve to an issue or pull request
+        # with the number of 999999."
+        return "Could not resolve to an issue" in error.message
+
     def list_tickets(
         self, filters: TicketFilter | None = None
     ) -> TicketPage | BackendError:

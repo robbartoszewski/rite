@@ -3620,7 +3620,7 @@ def _ticket_backend(board_role: str = "workers", root: Path | None = None, confi
         )
 
     backend = create_backend_from_config(
-        tb, board_role=board_role, credentials=config.credentials
+        tb, board_role=board_role, credentials=config.credentials, root=root
     )
 
     if isinstance(backend, BackendError):
@@ -3692,6 +3692,18 @@ def board_create(
         click.echo(result.message, err=True)
         raise SystemExit(1)
     click.echo(f"created {result.id}: {result.url or result.title}")
+    _say_unrecorded(backend)
+
+
+def _say_unrecorded(backend) -> None:
+    """A write rite could not note for reading back (DF4, `own_writes`):
+    the board has it, and a list straight after may not show it yet."""
+    for problem in getattr(backend, "notes", None) or []:
+        click.echo(
+            f"{problem}; a read of the board in the next few seconds may not "
+            "show this write",
+            err=True,
+        )
 
 
 @board.command("move")
@@ -3719,6 +3731,7 @@ def board_move(ticket_id: str, status: str, role: str) -> None:
     if isinstance(result, BackendError):
         click.echo(result.message, err=True)
         raise SystemExit(1)
+    _say_unrecorded(backend)
     # Recorded where rite saw the backend accept it, with where the ticket
     # actually LANDED — the standup cites this (plan § K4).
     if _has_project_in_scope():
@@ -3877,6 +3890,7 @@ def board_label(
     if remove:
         parts.append(f"removed {', '.join(remove)}")
     click.echo(f"{ticket_id}: {'; '.join(parts)}")
+    _say_unrecorded(backend)
 
 
 @board.command("assign")
@@ -3911,6 +3925,7 @@ def board_assign(ticket_id: str, worker: str, role: str) -> None:
     if isinstance(result, BackendError):
         click.echo(result.message, err=True)
         raise SystemExit(1)
+    _say_unrecorded(backend)
     click.echo(f"{ticket_id}: assigned to {worker}")
 
 
@@ -4486,7 +4501,7 @@ def loop_run(dry_run: bool, watch: bool, interval: float) -> None:
 
     Exit code carries the verdict, so a caller can branch without parsing
     prose: 0 when there is work or work is in flight, 1 when something could
-    not be established, 2 when the board is genuinely empty. "Empty" is the
+    not be established, 2 when the board listed nothing ready. "Empty" is the
     only one of the three that is a reason to stop, and it is given its own
     code for exactly that reason.
     """

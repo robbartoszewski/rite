@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .github import GitHubBackend
@@ -161,6 +162,7 @@ def create_backend_from_config(
     tb: TicketBackendConfig,
     board_role: str = "workers",
     credentials: object | None = None,
+    root: Path | None = None,
 ) -> TicketBackend | BackendError:
     """The single config→backend builder — call this, not `create_backend`
     directly, from anything that has a `TicketBackendConfig` (the CLI's
@@ -169,7 +171,7 @@ def create_backend_from_config(
     exactly the kind of divergence this package's own pre-push-hook fix
     just closed elsewhere — one builder here instead, so it can't happen
     again in this module)."""
-    return create_backend(
+    backend = create_backend(
         tb.type,
         site=tb.site,
         repo=tb.repo,
@@ -178,3 +180,11 @@ def create_backend_from_config(
         credential_name=tb.credential,
         credentials=credentials,
     )
+    if root is None or isinstance(backend, BackendError):
+        return backend
+    # ⚠ With a project root, the board reads back what rite itself wrote
+    # (DF4, `own_writes`): its lists lag writes by seconds on both GitHub
+    # and Jira, and "nothing ready" was being concluded from that lag.
+    from rite_ai.tickets.own_writes import ReadsItsOwnWrites, board_identity
+
+    return ReadsItsOwnWrites(backend, Path(root), board_identity(backend))
