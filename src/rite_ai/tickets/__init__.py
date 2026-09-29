@@ -185,11 +185,23 @@ def create_backend_from_config(
         credential_name=tb.credential,
         credentials=credentials,
     )
-    if root is None or isinstance(backend, BackendError):
+    if isinstance(backend, BackendError):
+        return backend
+    # ⚠ Named from the board itself, before any wrapper: the identity reads
+    # the board's own repo or site, which a wrapper does not carry.
+    from rite_ai.tickets.own_writes import ReadsItsOwnWrites, board_identity
+
+    identity = board_identity(backend)
+    # ⚠ Scoped HERE, the one place every board is built, and whether or not
+    # there is a root: a project's board reads only its own tickets, and no
+    # caller can build one that does not (v0.7.0 dogfood S1, `tickets.scope`).
+    if tb.scope_label:
+        from rite_ai.tickets.scope import Scoped
+
+        backend = Scoped(backend, tb.scope_label)
+    if root is None:
         return backend
     # ⚠ With a project root, the board reads back what rite itself wrote
     # (DF4, `own_writes`): its lists lag writes by seconds on both GitHub
     # and Jira, and "nothing ready" was being concluded from that lag.
-    from rite_ai.tickets.own_writes import ReadsItsOwnWrites, board_identity
-
-    return ReadsItsOwnWrites(backend, Path(root), board_identity(backend))
+    return ReadsItsOwnWrites(backend, Path(root), identity)

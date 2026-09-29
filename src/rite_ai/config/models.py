@@ -109,6 +109,10 @@ class TicketBackendConfig:
     repo: str = ""  # GitHub "owner/name" — unused for jira
     projects: dict[str, str] = field(default_factory=dict)
     credential: str = ""
+    scope_label: str = ""
+    """The label that marks a ticket as THIS project's (`tickets.scope`): ANDed
+    into every list rite makes of the board and stamped on every ticket rite
+    creates. Empty reads the whole board, as before it existed."""
 
 
 @dataclass

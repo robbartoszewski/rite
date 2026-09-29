@@ -488,10 +488,19 @@ def parse_config(path: Path) -> ProjectConfig | ParseError:
             repo=tb_raw.get("repo", ""),
             projects=tb_raw.get("projects", {}),
             credential=tb_raw.get("credential", ""),
+            scope_label=str(tb_raw.get("scope_label", "") or "").strip(),
         )
         if isinstance(tb_raw, dict)
         else TicketBackendConfig()
     )
+    # ⚠ Refused, not narrowed to "unscoped": a project whose scope label
+    # cannot be used and is quietly dropped reads every other project's
+    # tickets while its owner believes it is scoped (v0.7.0 dogfood S1).
+    from rite_ai.tickets.scope import label_problem
+
+    scope_problem = label_problem(ticket_backend.scope_label)
+    if scope_problem:
+        return ParseError(str(path), scope_problem)
 
     # A malformed `credentials` block narrows to the default (no
     # namespace -> bare keys -> the pre-namespacing layout) rather than

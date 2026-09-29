@@ -30,6 +30,7 @@ from rite_ai.config.models import (
     TicketBackendConfig,
 )
 from rite_ai.credentials.store import make_namespace
+from rite_ai.tickets.scope import label_for
 
 from . import ui
 from .config_file import Preset
@@ -559,6 +560,10 @@ def run_questionnaire(
         site=jira_site,
         projects={},
         credential="jira_token" if ticket_type == "jira" else "",
+        # Scoped from the start, whatever the board (Robert, 2026-09-29): a
+        # board set up later with `rite credential set jira` is then already
+        # this project's alone (v0.7.0 dogfood S1, `tickets.scope`).
+        scope_label=label_for(name),
     )
     # Generated HERE, once, and committed with the rest of config.yaml
     # (§10.2). Doing it at init rather than lazily on the first
@@ -817,6 +822,7 @@ def source_answers(
             borrowed_config = _borrow_owner_config(owner_ref)
     sandbox_enabled, sandbox_backend = _resolve_sandbox(preset, interactive, ui)
     config = ProjectConfig(
+        ticket_backend=TicketBackendConfig(scope_label=label_for(name)),
         credentials=CredentialsConfig(namespace=make_namespace(name)),
         sandbox=SandboxConfig(enabled=sandbox_enabled, backend=sandbox_backend),
     )

@@ -131,6 +131,11 @@ def run_init(
 
     write_config_path = scaffold.write_config(rite_dir, answers.config)
     created.append(str(write_config_path.relative_to(root)))
+    # Seen by this machine from its first command, so another project that
+    # reads the same board can tell (`tickets.scope.sharing_problems`).
+    from rite_ai.machine_projects import note
+
+    note(root)
 
     # Record which config schema these files were written against, so a
     # future migration can tell this project apart from one created before

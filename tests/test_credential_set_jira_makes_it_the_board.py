@@ -79,7 +79,9 @@ def test_the_board_is_then_read_as_jira(tmp_path: Path, monkeypatch):
 
     board, state, _problem, _record = _board_for_manager(root)
     assert state == "ok"
-    assert isinstance(getattr(board, "inner", board), JiraBackend)
+    from rite_ai.tickets.scope import unwrapped
+
+    assert isinstance(unwrapped(board), JiraBackend)
 
 
 def test_a_project_already_on_github_keeps_its_board_and_is_told(

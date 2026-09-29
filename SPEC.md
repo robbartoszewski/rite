@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.59 · **Date:** 2026-09-30
+**Version:** 0.24.60 · **Date:** 2026-09-30
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -2630,6 +2630,42 @@ is no first-class issue-dependency subcommand, so the GitHub backend is expected
 return `BackendError` here rather than fabricate a substitute — `gh api` against
 GitHub's REST issue-dependency endpoints is the escape hatch to evaluate if and when
 this becomes worth building, not assumed available now.
+
+#### 6.1.1. A project reads only its own tickets (0.24.60, Robert, 2026-09-29)
+
+Several rite projects can read one board. Measured before the v0.7.0a1 alpha
+run: three projects on one machine read Jira KAN, refinement listed `labels =
+"scheduled"` across the whole board, and the yoloAI project would have refined
+pingr's tickets and never its own.
+
+- **`ticket_backend.scope_label`**, when set, is ANDed into every list rite
+  makes of the board — refinement, loop, scheduler, distribution, status, `rite
+  board list` — and stamped on every ticket rite creates, chores included. One
+  wrapper (`tickets.scope.Scoped`), applied where every board is built
+  (`create_backend_from_config`), so no caller can build an unscoped board of a
+  scoped project. Empty is the whole board, as before.
+- **Not scoped:** a raw `rite board query` (the escape hatch, answered as
+  typed) and a read by id (an id names one ticket; refusing it on a label would
+  make "which project is this?" read as "it does not exist").
+- **`rite init` sets it to the project's name**, lowercased, anything outside
+  `[a-z0-9_.-]` made `-`; one of rite's own labels (`scheduled`, `chore`,
+  `blocked`) gets `project-` in front. A label a board cannot hold, or one of
+  those words, is a config error, never dropped: a dropped label would leave a
+  project reading every other project's tickets while its owner believes it is
+  scoped.
+- **`rite start` refuses a Manager, and `rite doctor` reports a problem,** when
+  another rite project on this machine reads a board this one reads and either
+  is unscoped, or both use the same label; and when the scope label is also a
+  Worker's or Manager's name (those names are assignment labels, §9.10).
+  Checkouts of the same project (the same credential namespace, committed with
+  the config) are not a collision.
+- **"On this machine" is `~/.rite/projects.json`**: the root of every project
+  that has run `rite init`, `rite start` or `rite doctor`, paths only, each
+  project's board and label read from its own config at the time of the check.
+  The Dispatch registry could not serve: it is opt-in, and neither colliding
+  project was in it. **Stated limits:** a project on another machine, or one
+  that has run none of those commands since this existed, is not seen; the
+  refusal says so.
 
 ### 6.2. JIRA (default backend)
 
@@ -7430,6 +7466,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.60 — a project reads only its own tickets on a board it shares (v0.7.0 dogfood S1; Robert, 2026-09-29, option A).** New §6.1.1. `ticket_backend.scope_label`; `tickets/scope.py` (`Scoped`, `label_for`, `label_problem`, `sharing_problems`, `name_problems`, `unwrapped`); `machine_projects.py`; `create_backend_from_config` wraps a scoped board, with or without a root; `refinement.record` sees through every wrapper; `rite init` defaults the label and records the project; `rite start` refuses before anything starts; `rite doctor` reports it as `board scope:`. Tests: a scoped list excludes another project's tickets (with the unscoped control), a create is stamped, a ticket rite relabelled is not read back into another project's list, the JQL Jira is sent carries the label; init's default and record; an unusable label refused; start refuses on either side unscoped, on one shared label and on a Worker's name, and starts with both scoped and for another checkout of the same project; doctor flags it and is quiet when both are scoped. Thirteen mutations each go red. The v0.7.0 dogfood's board test sees through every wrapper now that init scopes each project.
 
 **Changes in 0.24.59 — `rite init` warns when the repository is becoming its own project root (v0.7.0 dogfood).** §9.3 gains the paragraph. `questionnaire.doubling_as_root`, shown by `offer_modules` for the `./` candidate before it is asked about (and under `--yes`). Tests through the real CLI: interactive and `--yes` both warn before the answer, with this repository's name and URL in the separate-root commands; a workspace holding a repository is not warned about. Mutations (no warning, warned after the question, warned for every module) each go red.
 

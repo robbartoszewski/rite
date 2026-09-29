@@ -111,6 +111,7 @@ def config_to_yaml(config: ProjectConfig) -> str:
             "repo": config.ticket_backend.repo,
             "projects": config.ticket_backend.projects,
             "credential": config.ticket_backend.credential,
+            "scope_label": config.ticket_backend.scope_label,
         },
         # Committed ON PURPOSE (§10.2): a NAME, never a value. A fresh
         # clone reads which credentials this project needs and what they
