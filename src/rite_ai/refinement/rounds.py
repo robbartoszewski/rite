@@ -91,6 +91,12 @@ class Round:
     """When it was re-presented after the User came back. Once only."""
     answered_at: float = 0.0
     """When an attributed reply answered it, by Slack's send time. 0: not."""
+    items: list[str] = field(default_factory=list)
+    """The proposal's items as the User was shown them: what an accept word
+    makes the definition of done, and nothing else."""
+    body: str = ""
+    """The message as the User was shown it, so it can be put in front of
+    him again, unchanged, when he is back."""
 
     @property
     def answered(self) -> bool:
@@ -108,6 +114,17 @@ class Attempt:
     rounds: list[Round] = field(default_factory=list)
     parked: str = ""
     misses: int = 0
+    answers: list[dict] = field(default_factory=list)
+    """Every reply attributed to this attempt: `{"id", "words", "at"}`. A
+    proposal may quote only these, or the ticket (`ask.check`)."""
+    accepted: dict = field(default_factory=dict)
+    """An accept word whose record is not yet written (`{"id", "at", "k"}`):
+    PROPOSED (accepted, not yet written), retried and said each cycle."""
+    filing: float = 0.0
+    """For an attempt about a chat instruction: when rite began creating its
+    chore. Set, under the lock, BEFORE the board is asked, so a crash between
+    the two is seen as "may already exist" and never as "not yet", which
+    would file it twice (the note's part 3.14, race 11)."""
 
     @property
     def latest(self) -> Round | None:
@@ -154,6 +171,8 @@ def state_of(board: st.Status, attempt: Attempt | None, *, now: float) -> State:
         return State(board.state, board.detail)
     if attempt.parked:
         return State(PARKED, attempt.parked, attempt)
+    if attempt.accepted:
+        return State(PROPOSED, "accepted, not yet written", attempt)
     latest = attempt.latest
     if latest is None:
         return State(board.state, board.detail, attempt)
@@ -195,6 +214,9 @@ def _from(data: dict) -> Attempt | None:
             rounds=[Round(**r) for r in data.get("rounds", [])],
             parked=data.get("parked", ""),
             misses=int(data.get("misses", 0)),
+            answers=list(data.get("answers", [])),
+            accepted=dict(data.get("accepted", {})),
+            filing=float(data.get("filing", 0.0)),
         )
     except (KeyError, TypeError, ValueError):
         return None
@@ -277,6 +299,111 @@ def events_since(
             elif not r.answered and since < r.deadline <= now:
                 deadlines += 1
     return Events(first_look=last is None, replies=replies, deadlines=deadlines)
+
+
+def open_questions(root: Path, owner: str) -> dict[str, float]:
+    """Every round still waiting for an answer, by its question id, with its
+    deadline. The Slack relay keeps these threads read, past the 24-hour
+    horizon and outside its ten-thread limit, until they are answered (race
+    7): a reaction confirms a question was SEEN (RP1), not that it was
+    answered, so RP1's pin alone is not enough here."""
+    found: dict[str, float] = {}
+    for attempt in all_attempts(root, owner).values():
+        if attempt.parked:
+            continue
+        latest = attempt.latest
+        if latest is not None and latest.where and not latest.answered:
+            found[latest.where] = latest.deadline
+    return found
+
+
+def read_past_deadline(root: Path, owner: str, question: str, *, at: float) -> bool:
+    """The relay read `question`'s thread at `at`, after its deadline, and
+    found nothing new in it. Only then is silence WAITING FOR YOU (race 6):
+    a reply sent a minute before the deadline and read after it is found by
+    this same read, and answers the round. True if a round was marked."""
+    for ticket, attempt in all_attempts(root, owner).items():
+        latest = attempt.latest
+        if latest is None or latest.where != question:
+            continue
+        with locked(root, owner, ticket) as (current, save):
+            if current is None or current.latest is None:
+                return False
+            r = current.latest
+            if r.where != question or r.answered or at < r.deadline:
+                return False
+            if not r.read_past_deadline:
+                r.read_past_deadline = True
+                save(current)
+            return True
+    return False
+
+
+def count_misses(
+    root: Path, owner: str, handed: dict[str, str], *, since: float
+) -> list[str]:
+    """The no-progress guard (part 3.4 step 0), at the end of a session that
+    was handed `handed` (ticket -> text hash) to start refining at `since`.
+
+    A ticket with no round sent since then counts a miss; one with a round
+    has its count cleared. `MISSES_TO_PARK` consecutive misses park it (not
+    started by the Manager): a Manager that cannot or will not start a
+    ticket's refinement costs two sessions, not a session a minute. Returns
+    a line for each ticket parked."""
+    parked: list[str] = []
+    for ticket, text in handed.items():
+        with locked(root, owner, ticket) as (attempt, save):
+            if attempt is None or attempt.text_sha256 != text:
+                attempt = Attempt(ticket=ticket, text_sha256=text)
+            if attempt.parked:
+                continue
+            if any(r.sent_at >= since for r in attempt.rounds):
+                if attempt.misses:
+                    attempt.misses = 0
+                    save(attempt)
+                continue
+            attempt.misses += 1
+            if attempt.misses >= MISSES_TO_PARK:
+                attempt.parked = NOT_STARTED
+                parked.append(
+                    f"{ticket} is PARKED (not started by the Manager): it was "
+                    f"handed over {attempt.misses} times and no round was sent. "
+                    f"`rite refine reopen {ticket}` tries again"
+                )
+            save(attempt)
+    return parked
+
+
+def reopen(root: Path, owner: str, ticket: str) -> str:
+    """A person restarts a ticket's refinement (`rite refine reopen`). Its
+    rounds start again from 1 and its misses from 0; his answers are kept,
+    so a new proposal can still quote them. Returns what was done."""
+    with locked(root, owner, ticket) as (attempt, save):
+        if attempt is None:
+            return f"{ticket} has no refinement to reopen; the Owner starts one"
+        was = attempt.parked or ("waiting for you" if attempt.rounds else "not started")
+        attempt.parked = ""
+        attempt.misses = 0
+        attempt.accepted = {}
+        attempt.rounds = []
+        attempt.filing = 0.0
+        save(attempt)
+    return (
+        f"{ticket} reopened (it was {was}): the Owner refines it again from "
+        "round 1, and your earlier answers are kept"
+    )
+
+
+def move(root: Path, owner: str, old: str, attempt: Attempt) -> None:
+    """An attempt about a chat instruction becomes one about the chore rite
+    filed for it: saved under the ticket, then the old one removed. Its
+    rounds go with it, so a reply in a thread already asked still lands."""
+    with locked(root, owner, attempt.ticket) as (_existing, save):
+        save(attempt)
+    try:
+        _path(root, owner, old).unlink()
+    except OSError:
+        pass
 
 
 def all_attempts(root: Path, owner: str) -> dict[str, Attempt]:

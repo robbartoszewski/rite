@@ -20,9 +20,12 @@ true while a model is doing the asking:
   rite delivered for this ticket.** A quote rite cannot find is refused. So
   the Owner cannot put its own idea in the User's mouth.
 
-**rite writes the parts that carry authority.** The first line,
-`<ID> · refinement, round k of N · reply in this thread`, is rite's, and it
-is what an answer is matched by. An item the Owner tagged `[proposed]` is
+**rite writes the parts that carry authority.** The message goes out
+through `managers.asking.raise_to_person`, the one way rite puts a question
+in front of a person, whose first line (`<ID> · q1a2b · Manager lead is
+waiting · reply in this thread`) is what an answer is matched by. The line
+under it, `Refinement of <ID>, round k of N`, is rite's too. An item the
+Owner tagged `[proposed]` is
 rendered as *proposed by <manager>, not from the ticket or your answers*.
 The closing line naming the accept words is rite's. The Owner's words are
 never a header.
@@ -39,7 +42,10 @@ _QUESTIONS = re.compile(r"^\s*questions\s*:\s*$", re.IGNORECASE)
 _PROPOSAL = re.compile(r"^\s*proposal\s*:\s*$", re.IGNORECASE)
 _NUMBERED = re.compile(r"^\s*(\d+)[.)]\s+(\S.*)$")
 _ITEM = re.compile(r"^\s*[-*]\s+(\S.*)$")
-_HEADER_LIKE = re.compile(r"·\s*refinement,\s*round", re.IGNORECASE)
+_HEADER_LIKE = re.compile(
+    r"refinement\b.{0,40}\bround\s+\d+\s+of\s+\d+|reply in this thread",
+    re.IGNORECASE,
+)
 """rite's own first line. The Owner may not write one: a second header in
 the body is a line a person could take as rite's."""
 _TAG = re.compile(r'\[\s*(ticket|answer)\s*:\s*"([^"]+)"\s*\]|\[\s*(proposed)\s*\]')
@@ -205,9 +211,9 @@ def check(
 
 
 def first_line(ticket: str, k: int, rounds: int) -> str:
-    """rite's line, which the Slack relay's thread label is cut from: it
-    leads with the ticket id so an answer in the thread is matched to it."""
-    return f"{ticket} · refinement, round {k} of {rounds} · reply in this thread"
+    """rite's line naming the round. The thread label an answer is matched
+    by is `asking`'s line above it."""
+    return f"Refinement of {ticket}, round {k} of {rounds}"
 
 
 def render(

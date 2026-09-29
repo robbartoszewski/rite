@@ -249,6 +249,31 @@ class TestTheStopConditionComesFromTheLoop:
         )
         assert rounds.last_session(project, "lead") is not None
 
+    def test_a_refining_session_that_starts_nothing_counts_a_miss(
+        self, project, instant
+    ):
+        """The no-progress guard is wired: the session was handed RT-1 to
+        start and sent no round, so RT-1 counts a miss when it ends."""
+        from rite_ai.cli.main import LoopAnswer
+        from rite_ai.refinement import rounds
+
+        starter, _ = instant
+        answer = LoopAnswer("refining")
+        answer.basis = None
+        answer.starting = {"RT-1": "texthash"}
+        supervise(
+            project,
+            "lead",
+            engine="claude",
+            max_sessions=1,
+            window_seconds=0,
+            starter=starter,
+            verdict=lambda _r: answer,
+            resume_id_for=lambda _r, _m, _s=0.0: "sid",
+            poll=0,
+        )
+        assert rounds.load(project, "lead", "RT-1").misses == 1
+
     def test_a_wait_on_the_user_wakes_when_a_round_reaches_its_deadline(
         self, project, instant
     ):

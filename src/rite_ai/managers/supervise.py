@@ -975,6 +975,7 @@ def _supervise(
     poll: float = POLL_SECONDS,
     now: object = None,
     watch: object = None,
+    refine: object = None,
 ) -> SuperviseResult:
     """Run the Manager until a bound or a stop verdict ends it.
 
@@ -1003,6 +1004,10 @@ def _supervise(
     know a ceiling bounds anything.
     """
     clock = now if callable(now) else time.time
+    # TR2's no-progress guard: what a refinement session was handed to start,
+    # and when. Set when one starts, counted when it ends.
+    handed: dict = {}
+    handed_at = 0.0
     told: set[str] = set()
     """"Cannot tell" lines about cut prompts already said in this run."""
     # Injectable so a test can read what a human would have been told,
@@ -1434,7 +1439,9 @@ def _supervise(
                     continue
             if not cause:
                 last_basis = _basis(answer)
-                _record_refinement_session(root, manager, answer, clock, say)
+                handed, handed_at = _record_refinement_session(
+                    root, manager, answer, clock, say
+                )
         cycle_basis = last_basis
 
         try:
@@ -1542,11 +1549,13 @@ def _supervise(
                         f"{manager!r} ({e}); a chore asked for from them will "
                         "be refused"
                     )
+            refined_now = _refinement_heard(refine, waiting_for_it, say)
             # Composed once, for both launches below: the fallback needs the
             # same mail and the same reply instructions, differing only in
             # which opening text it starts from.
             extras = (
                 delivery_note(waiting_for_it)
+                + refined_now
                 + how_to_reply(root, manager)
                 + checkins.instructions(root, manager)
                 + boundary.instruction
@@ -1784,6 +1793,13 @@ def _supervise(
                 # same reason: it talks to the board, which the two-second
                 # poll must not wait on.
                 chores(say)
+            if callable(refine):
+                # TR2: the rounds the Owner asked for this turn go out, with
+                # the board, at the same boundary and for the same reason.
+                _refinement_step(refine, say)
+            # AFTER the rounds went out: a round sent this turn is progress.
+            _count_misses(root, manager, handed, handed_at, say)
+            handed, handed_at = {}, 0.0
             if callable(router):
                 # And once more at the boundary, for a request written in the
                 # cycle's last two seconds.
@@ -2057,6 +2073,35 @@ class _Stalled:
     footprint: Footprint
 
 
+def _refinement_step(refine, say) -> None:
+    """`refine(say)`: send the rounds asked for, retry unwritten accepts.
+    Never ends a run: a refinement that could not run is said."""
+    try:
+        refine(say)
+    except Exception as e:  # noqa: BLE001 - said, and the cycle goes on
+        say(f"refinement could not run this cycle: {type(e).__name__}: {e}")
+
+
+def _refinement_heard(refine, messages, say) -> str:
+    """What the User's replies just delivered did to their rounds, as a
+    section of this cycle's instruction, or "" (TR2). rite's lines, in
+    rite's words: whether an accept was recorded is rite's to say."""
+    if not callable(refine) or not messages:
+        return ""
+    try:
+        lines = refine(say, messages=messages) or []
+    except Exception as e:  # noqa: BLE001 - said, and the cycle goes on
+        say(f"refinement could not read the delivered replies: {e}")
+        return ""
+    if not lines:
+        return ""
+    return (
+        "\n\n## Refinement: what the User's replies did (rite)\n\n"
+        + "\n".join(f"- {line}" for line in lines)
+        + "\n"
+    )
+
+
 def _refinement_wake(root: Path, manager: str, clock):
     """`wake` for a wait on the User: a refinement round's deadline passed
     since the wait began. Read from the round ledger alone, never the board,
@@ -2075,19 +2120,39 @@ def _refinement_wake(root: Path, manager: str, clock):
     return wake
 
 
-def _record_refinement_session(root: Path, manager: str, answer, clock, say) -> None:
+def _record_refinement_session(
+    root: Path, manager: str, answer, clock, say
+) -> tuple[dict, float]:
     """A session starting for refinement is recorded, so the next one needs
-    the User to have done something first (the note's part 3.4 step 0)."""
+    the User to have done something first (the note's part 3.4 step 0).
+    Returns what it was handed to start and when, for `_count_misses`."""
     if str(answer) != "refining":
-        return
+        return {}, 0.0
     from rite_ai.refinement import rounds
 
+    at = clock()
+    handed = dict(getattr(answer, "starting", None) or {})
     try:
-        rounds.record_session(root, manager, clock())
+        rounds.record_session(root, manager, at)
     except OSError as e:
         # Unrecorded, the next cycle reads a first look again and may start
         # one more refinement session, still bounded by S and K. Said.
         say(f"could not record the refinement session for {manager!r}: {e}")
+    return handed, at
+
+
+def _count_misses(root: Path, manager: str, handed: dict, since: float, say) -> None:
+    """At the end of a refinement session: the no-progress guard. Never ends
+    a run; a guard that could not run is said."""
+    if not handed:
+        return
+    from rite_ai.refinement import rounds
+
+    try:
+        for line in rounds.count_misses(root, manager, handed, since=since):
+            say(f"refinement: {line}")
+    except OSError as e:
+        say(f"could not count refinement misses for {manager!r}: {e}")
 
 
 def _basis(answer) -> object:

@@ -160,11 +160,40 @@ def _title_of(words: str) -> str:
     return f"chore: {first}"
 
 
-def _description_of(entries: list[dict]) -> str:
-    """The User's words as delivered, then where each came from.
+def _unrefined_line(when: float | None = None) -> str:
+    """rite's first line on every chore it creates: visibly unrefined (TR2;
+    the note's part 3.14). Robert: a chore made from his words is "explicitly
+    unrefined, to be refined later". Worded to stay true once the chore IS
+    refined, because rite never edits a ticket's text afterwards (G2): it
+    says what the chore was when it was made, and where its state is now."""
+    at = time.strftime("%Y-%m-%d %H:%M", time.localtime(when or time.time()))
+    return (
+        f"**Unrefined when rite created it ({at}):** no definition of done "
+        "had been agreed, and no work starts on it until one is. Whether one "
+        "is agreed now is in rite's record on this ticket (`rite refine "
+        "status`)."
+    )
 
-    The words come first and unaltered, so a reader of the ticket sees what
-    the User said before anything rite says about it.
+
+def _agreed_line() -> str:
+    """rite's first line on a chore created because the User ACCEPTED a
+    definition of done for his message: the record follows at once."""
+    return (
+        "**Agreed with the User before rite created it:** its definition of "
+        "done is rite's record on this ticket (`rite refine status`)."
+    )
+
+
+def _description_of(
+    entries: list[dict], created_at: float | None = None, *, agreed: bool = False
+) -> str:
+    """rite's unrefined line, then the User's words as delivered, then where
+    each came from.
+
+    The words come unaltered and before anything rite says ABOUT them, so a
+    reader sees what the User said; only the line saying the chore is not
+    agreed yet comes first, because a chore that looks like agreed work is
+    how an unrefined one gets worked on.
     """
     blocks = [str(e["words"]).strip() for e in entries]
     sources = []
@@ -177,7 +206,9 @@ def _description_of(entries: list[dict]) -> str:
         )
         sources.append(f"- message `{e['id']}`, {e.get('where', '?')}, {when}")
     return (
-        "\n\n".join(blocks)
+        (_agreed_line() if agreed else _unrefined_line(created_at))
+        + "\n\n"
+        + "\n\n".join(blocks)
         + "\n\n---\n\n"
         + "Chore created by rite from the User's instruction"
         + ("s" if len(entries) > 1 else "")
@@ -263,7 +294,9 @@ def create_asked_for(root: Path, manager: str, board, say) -> int:
                 ids = ", ".join(e["id"] for e in entries)
                 said = (
                     f"chore {made.id} created from message(s) {ids}, labelled "
-                    f"{' and '.join(LABELS)}. Work it as ticket {made.id}."
+                    f"{' and '.join(LABELS)}. It is unrefined: refine it with "
+                    f"the User (`rite refine ask {made.id} -`) before routing "
+                    "it or starting a Worker on it."
                 )
         say(f"{manager!r}: {said}")
         try:
@@ -299,7 +332,9 @@ def create_for_prompt(board, worker: str, text: str) -> tuple[str, str]:
             "tracked. Every piece of Worker work carries a ticket"
         )
     description = (
-        text.strip()
+        _unrefined_line()
+        + "\n\n"
+        + text.strip()
         + "\n\n---\n\n"
         + "Chore created by rite from the prompt a person typed at this "
         f"machine: `rite sandbox start {worker} --prompt`. The text above is "

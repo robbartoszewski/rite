@@ -99,6 +99,25 @@ questions, not twenty. The limits, and the words that accept a proposal
 accept word people type to refuse ("no", "stop", …), is refused rather than
 corrected. Whether refinement is enforced is not configurable.
 
+**The Owner refines tickets with you in Slack.** It asks with `rite refine
+ask <ID> -` (the text on stdin): at most three numbered questions, and from
+the second round a proposed definition of done you can accept in one word.
+rite checks every round before you see it: an item it says came from the
+ticket or from you must quote the ticket or your answer exactly, and items
+that are the Owner's own idea are labelled as its proposal. The round goes
+to your DM (as something that needs you, so it comes back at your check-in
+until you answer) and onto the ticket as a comment. Reply in its thread, or
+in your DM starting with the ticket's id. `ok`, `yes`, `accept`, `lgtm` or
+`proceed`, alone, under the latest proposal records it, signed, with your
+message as its provenance; anything else is an answer the next round builds
+on. If the ticket changed after the proposal, nothing is recorded and you
+are told. A question you have not answered by its deadline (24 hours, or the
+end of your next check-in if sooner) is not asked again while you are away;
+it comes back once when you are next active. Three rounds you answered
+without agreeing, or a ticket the Owner was handed twice without asking you
+anything, is parked: rite tells you, and `rite refine reopen <ID>` (or
+replying about it, or editing the ticket) starts it again.
+
 ### `rite start` sees a ticket rite has just filed
 
 A board's list lags new writes by seconds, on GitHub (measured, up to 6.5 s)

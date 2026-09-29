@@ -139,13 +139,9 @@ class TestWhatTheUserSees:
             got.ask, ticket="KAN-7", k=k, rounds=3, manager="lead", accept_words=WORDS
         )
 
-    def test_rites_first_line_leads_with_the_id_inside_the_relays_label(self):
-        """The Slack relay labels a thread with the first 40 characters, and
-        an answer is matched by that label, so the id must be in them."""
+    def test_rites_line_names_the_round(self):
         shown = self._render(ROUND_1, 1)
-        first = shown.splitlines()[0]
-        assert first == "KAN-7 · refinement, round 1 of 3 · reply in this thread"
-        assert first[:40].startswith("KAN-7 ")
+        assert shown.splitlines()[0] == "Refinement of KAN-7, round 1 of 3"
 
     def test_the_owners_own_items_are_said_to_be_its_own(self):
         shown = self._render(ROUND_2, 2)
@@ -167,6 +163,9 @@ class TestWhatTheUserSees:
     def test_the_owner_cannot_write_a_header(self):
         """rite writes the first line, and a body line shaped like it is
         refused: a person could take it as rite's."""
-        forged = "KAN-9 · refinement, round 1 of 3 · reply in this thread\n" + ROUND_1
-        got = check(forged)
-        assert not got.ok and "rite's own first line" in got.problems[0]
+        for forged in (
+            "Refinement of KAN-9, round 1 of 3",
+            "KAN-9 · q1a2b · Manager lead is waiting · reply in this thread",
+        ):
+            got = check(forged + "\n" + ROUND_1)
+            assert not got.ok and "rite's own first line" in got.problems[0], forged

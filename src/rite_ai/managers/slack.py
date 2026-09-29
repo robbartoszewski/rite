@@ -52,6 +52,7 @@ argv — `SLACK_BOT_TOKEN` is deliberately absent from
 from __future__ import annotations
 
 import json
+import re
 import time
 import urllib.parse
 import urllib.request
@@ -420,6 +421,16 @@ class _Relayed(str):
     sent_at: float | None = None
 
 
+_QUESTION_IN_LABEL = re.compile(r"\bq[0-9a-f]{4}\b")
+
+
+def _round_of(root: Root, open_rounds: dict[str, float]) -> str:
+    """The open refinement round `root` carries, by the question id in its
+    label (`asking`'s first line), or ""."""
+    found = _QUESTION_IN_LABEL.search(root.label)
+    return found.group(0) if found and found.group(0) in open_rounds else ""
+
+
 def _pending_label(item) -> str:
     return f'rite\'s question "{" ".join(item.first.split())[:40]}"'
 
@@ -553,8 +564,10 @@ class Listener:
         self._bound_roots()
 
     def _bound_roots(self) -> None:
-        """`THREADS_MAX` of the ordinary roots, plus every pending one."""
-        ordinary = [r for r in self.roots if not r.item]
+        """`THREADS_MAX` of the ordinary roots, plus every pending one and
+        every one carrying an open refinement round."""
+        pinned = self._open_rounds()
+        ordinary = [r for r in self.roots if not r.item and not _round_of(r, pinned)]
         drop = {id(r) for r in ordinary[:-THREADS_MAX]}
         self.roots = [r for r in self.roots if id(r) not in drop]
 
@@ -700,7 +713,12 @@ class Listener:
     def _read_a_thread(self, *, call=None) -> list[str]:
         now = self.clock()
         horizon = now - THREAD_HOURS * 3600
-        self.roots = [r for r in self.roots if r.item or _as_ts(r.ts) >= horizon]
+        pinned = self._open_rounds()
+        self.roots = [
+            r
+            for r in self.roots
+            if r.item or _round_of(r, pinned) or _as_ts(r.ts) >= horizon
+        ]
         due = [r for r in self.roots if r.due <= now]
         if not due:
             return []
@@ -729,10 +747,41 @@ class Listener:
         ]
         if root.item:
             self._confirm_if_answered(root, fresh, call=call)
+        question = _round_of(root, pinned)
+        if question and not fresh and now >= pinned[question]:
+            # TR2, race 6: read past its deadline with nothing new under it.
+            # A reply sent before the deadline would be in `fresh`.
+            self._read_past_deadline(question, now)
         if heard.newest and _as_ts(heard.newest) > _as_ts(root.last):
             root.last = heard.newest
             self._save()
         return [self._relay(root.channel, m, under=root.label) for m in fresh]
+
+    def _open_rounds(self) -> dict[str, float]:
+        """The refinement rounds this Manager is waiting on, by question id
+        (TR2). {} with no project, or when the ledger cannot be read: the
+        threads are then bounded as before, and nothing is marked."""
+        if self.project is None:
+            return {}
+        from rite_ai.refinement import rounds
+
+        try:
+            return rounds.open_questions(self.project, self.manager)
+        except OSError:
+            return {}
+
+    def _read_past_deadline(self, question: str, now: float) -> None:
+        from rite_ai.refinement import rounds
+
+        try:
+            if rounds.read_past_deadline(self.project, self.manager, question, at=now):
+                self._unsaid.append(
+                    f"slack: refinement question {question} had no answer by "
+                    "its deadline; it waits for the person and is not asked "
+                    "again until they are back"
+                )
+        except OSError as e:
+            self._problem(f"cannot record a refinement deadline: {e}")
 
     def _counts_as_the_person(self, user: str) -> bool:
         """The Owner, when there is one; any person, when there is not (then
