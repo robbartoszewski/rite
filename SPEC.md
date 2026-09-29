@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.55 · **Date:** 2026-09-29
+**Version:** 0.24.56 · **Date:** 2026-09-29
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -7010,6 +7010,14 @@ teammate clones the project, already has the site and the board key, and needs
 only their own token. One command sets up a working integration instead of
 setting a credential and then separately discovering the config it also needed.
 
+**And the board's type with them (0.24.56).** A service that is a ticket board
+(`board_type` in `credentials/services.py`; today only `jira`) also sets
+`ticket_backend.type` when the project has no board (`none`). The site and the
+project key alone were not a board: measured in the v0.7.0 dogfood, `rite init`
+answered `none`, `rite credential set jira` recorded both, `type` stayed `none`,
+and rite read no board at all. A project already on another board keeps it and
+is told how to switch; rite does not replace a board it did not choose.
+
 **rite stores and injects; it does not interpret.** A credential is a name, a
 set of fields, and a destination environment variable. rite does not know what
 the API does and must not grow per-service logic beyond the field list and its
@@ -7396,6 +7404,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.56 — `rite credential set jira` makes Jira the board on a project with none (v0.7.0 dogfood).** §10.5 gains the paragraph. `Service.board_type` (`jira`); `_set_service` sets `ticket_backend.type` from it when the type is `none`, reports it with the other recorded config, and leaves any other board in place with a note. Tests through the real CLI in the dogfood's order (`rite init --yes`, then `rite credential set jira`): the type becomes `jira` and the Manager's board is Jira's and not ABSENT; a GitHub project keeps GitHub and is told. Mutations (type not set, the whole step removed, any board overwritten) each go red.
 
 **Changes in 0.24.55 — every Worker commit credits rite and Claude (Robert, 2026-09-29).** §5.1.1 gains the paragraph. `publishing/attribution.py`: `credit`, and the hook `install_hooks` puts in each clone from `start_worker`; `_squash_message` credits the commit rite builds. Tests with real git (plain, `--no-verify`, a Claude-Code-style trailer, another trailer, amend, a pre-existing hook, the squash end to end, hook and `credit` agreeing byte for byte) and a control without the hook; five mutations each go red (install skipped, squash uncredited, no trailer, no body line, body line after the trailers).
 

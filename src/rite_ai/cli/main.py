@@ -2163,6 +2163,25 @@ def _set_service(service_name: str, global_: bool, root, config) -> None:
         key = service_key(svc.name, field.name)
         stored.append((key, _store_one(key, value, global_, root, config)))
 
+    if configured and svc.board_type:
+        # ⚠ **The site and the project key alone are not a board.** Measured
+        # in the v0.7.0 dogfood: `rite init` answered `none`, then `rite
+        # credential set jira` recorded the site and `projects.workers`, and
+        # `type` stayed `none`, so rite read no board at all and every ticket
+        # command said none was configured. A project with no board gets this
+        # one; a project already on another board keeps it, and is told.
+        current = config.ticket_backend.type
+        if current == "none":
+            config.ticket_backend.type = svc.board_type
+            configured.append(("ticket_backend.type", svc.board_type))
+        elif current != svc.board_type:
+            click.echo(
+                f"  note: ticket_backend.type is {current!r}, so rite still reads "
+                f"that board. Set it to {svc.board_type!r} in .rite/config.yaml "
+                f"to use {svc.name} instead.",
+                err=True,
+            )
+
     if configured:
         from rite_ai.cli.init.scaffold import write_config
 

@@ -82,6 +82,11 @@ class Service:
     label: str
     fields: tuple[Field, ...]
     note: str = ""
+    board_type: str = ""
+    """The `ticket_backend.type` this service is, when it is a ticket board.
+    Setting its config fields on a project with no board (`type: none`) makes
+    it the board: recording the site and the project key while leaving `none`
+    configured a board rite never reads (v0.7.0 dogfood)."""
 
     @property
     def secrets(self) -> tuple[Field, ...]:
@@ -96,6 +101,7 @@ SERVICES: dict[str, Service] = {
     "jira": Service(
         name="jira",
         label="JIRA (Atlassian) — the ticket board",
+        board_type="jira",
         fields=(
             Field(
                 "site",
