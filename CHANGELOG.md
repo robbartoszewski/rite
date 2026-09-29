@@ -2,6 +2,19 @@
 
 ## Unreleased: 0.7.0 (notes in progress, completed at release)
 
+### rite's verifier no longer contradicts a true reply about a file it cannot read
+
+The verifier runs inside the Owner's boundary, which cannot read another
+Manager's state. In the v0.6.0 dogfood it answered CONTRADICTED to a
+secondary's true report that it had written its journal, because it could
+not see the directory, and the Owner was told not to relay it. rite now
+looks at every path a reply cites itself, outside the boundary, and checks
+from inside it whether the verifier can read it. A path the verifier cannot
+read is given to it as rite's own observation (exists, size, time; or does
+not exist). A CONTRADICTED from a verifier that could not read a cited file
+that exists is delivered as COULD NOT TELL, saying why and keeping the
+verifier's words. A false claim about a file the verifier can see is still
+CONTRADICTED.
 ### `rite status` no longer says a Worker is "not started"
 
 It said so for any Worker with no heartbeat and no claims, without looking at
