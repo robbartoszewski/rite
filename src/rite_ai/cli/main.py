@@ -4044,6 +4044,175 @@ def _provenance_line(provenance: dict) -> str:
     )
 
 
+@refine.command("ask")
+@click.argument("ticket_id")
+@click.argument("text")
+@click.option(
+    "--message",
+    "is_message",
+    is_flag=True,
+    help="TICKET_ID is the id of the User's message, as shown beside it in "
+    "your instruction: an instruction that is not a ticket yet. rite files "
+    "it as a chore with exactly his words when he accepts, or, unrefined, "
+    "if he does not reply in time.",
+)
+def refine_ask(ticket_id: str, text: str, is_message: bool) -> None:
+    """Ask the User about a ticket — the Owner Manager only (TR2).
+
+    One round: at most three numbered questions under `Questions:`, and from
+    round 2 a proposal under `Proposal:` he can accept in one word, each item
+    ending `[ticket: "…"]`, `[answer: "…"]` (exact quotes) or `[proposed]`.
+    rite checks it against the ticket and his answers, puts it in front of
+    him, and posts it on the ticket. His reply comes to you as a message;
+    an accept word writes the agreed definition of done, and you never write
+    it yourself.
+
+    ⚠ This only ASKS. The round is checked and sent by your supervisor,
+    outside your sandbox; whether it went, or why not, is in your next
+    instruction. **The text is `-`, on stdin (F14).**
+
+    An instruction he gave in chat is refined straight away too, before it
+    is a ticket: `--message <message-id>`. If he accepts, rite files it as a
+    chore with exactly his words and the agreed definition of done; if he
+    has not replied after `refinement.chore_after_minutes`, rite files it
+    unrefined, so nothing he asked for is lost, and refinement goes on.
+
+    Examples:
+      rite refine ask KAN-7 - <<'RITE_TEXT_1f2e3d'
+      Questions:
+      1. Which timeout: a file's, or the HTTP call's?
+      2. A flag, an environment variable, or a config key?
+      RITE_TEXT_1f2e3d
+    """
+    from rite_ai.config.managers import routing_owner
+    from rite_ai.managers import current_manager, stdin_text
+    from rite_ai.managers.routing import ticket_problem
+    from rite_ai.refinement import ask as refinement_ask
+    from rite_ai.refinement import protocol
+
+    root = _require_project_root()
+    speaking = current_manager()
+    if not speaking:
+        click.echo(
+            "refusing: `rite refine ask` is how the Owner Manager asks the User "
+            "about a ticket. From your own shell, agree it yourself with `rite "
+            f'refine accept {ticket_id} --item "…"`, or `/refine {ticket_id}`.',
+            err=True,
+        )
+        raise SystemExit(1)
+    roles, problems = _manager_roles(root)
+    if problems:
+        click.echo("cannot read this project's Managers:", err=True)
+        for problem in problems[:3]:
+            click.echo(f"  {problem}", err=True)
+        raise SystemExit(1)
+    owner = routing_owner(list(roles)) if roles else speaking
+    if speaking != owner:
+        click.echo(
+            f"refusing: refinement is the Owner's, and {speaking!r} is not it"
+            + (f" ({owner!r} is)" if owner else "")
+            + ". If a ticket you were given needs the User, say so to the "
+            "Owner with `rite reply`.",
+            err=True,
+        )
+        raise SystemExit(1)
+    try:
+        text = stdin_text.read(text)
+    except stdin_text.OnTheCommandLine:
+        click.echo(
+            stdin_text.refusal(f"rite refine ask {ticket_id}", "<your round>"),
+            err=True,
+        )
+        raise SystemExit(1)
+    problem = ticket_problem(ticket_id)
+    if problem:
+        click.echo(f"refusing: {problem}.", err=True)
+        raise SystemExit(1)
+    if not text.strip():
+        click.echo("refusing to send an empty round.", err=True)
+        raise SystemExit(1)
+    target = ticket_id.strip()
+    if is_message:
+        target = protocol.MESSAGE + target
+    # The shape, checked here so a mistake costs no turn. The quotes and the
+    # round number are checked by the supervisor, against the ticket and his
+    # answers, which this side of the boundary cannot be trusted to hold.
+    checked = refinement_ask.check(text, k=1, ticket_text="", answers=[])
+    shape = [p for p in checked.problems if "Quote exactly" not in p]
+    if shape:
+        click.echo("refusing: the round is not in the shape rite sends:", err=True)
+        for p in shape:
+            click.echo(f"  - {p}", err=True)
+        raise SystemExit(1)
+    protocol.request(root, speaking, target, text)
+    click.echo(
+        f"round queued for {target}: rite checks it against the "
+        "ticket and the User's answers, then puts it in front of him and on "
+        "the ticket. Whether it went, or why not, is in your next instruction."
+    )
+
+
+@refine.command("reopen")
+@click.argument("ticket_id")
+@click.option(
+    "--manager",
+    default="",
+    help="The Manager that refines, when rite cannot tell: the one holding "
+    "`route`, or the project's only Manager, is used otherwise.",
+)
+def refine_reopen(ticket_id: str, manager: str) -> None:
+    """Restart a ticket's refinement — a person, at the host (TR2).
+
+    For a ticket PARKED (unanswered too many times in a row, its thread unreadable,
+    or not started by the Manager), or one you want asked again from the
+    start. Its rounds begin again at 1, and your earlier answers are kept.
+    Replying about it in your DM, starting with its id, resumes it too, and
+    so does editing the ticket.
+
+    Examples:
+      rite refine reopen KAN-7
+    """
+    from rite_ai.config.managers import routing_owner
+    from rite_ai.managers import current_manager
+    from rite_ai.refinement import rounds
+
+    root = _require_project_root()
+    if current_manager():
+        click.echo(
+            "refusing: reopening a ticket's refinement is a person's decision, "
+            "and this is a Manager's session. Tell the User what is parked and "
+            "why; he can reply about it, or run this himself.",
+            err=True,
+        )
+        raise SystemExit(1)
+    roles, problems = _manager_roles(root)
+    if problems:
+        click.echo("cannot read this project's Managers:", err=True)
+        for problem in problems[:3]:
+            click.echo(f"  {problem}", err=True)
+        raise SystemExit(1)
+    owner = manager.strip() or (routing_owner(list(roles)) if roles else "")
+    if not owner:
+        from rite_ai.config.parse import ParseError, parse_config
+
+        parsed = parse_config(root / ".rite" / "config.yaml")
+        names = [r.name for r in roles] or (
+            list(parsed.coordination.managers)
+            if not isinstance(parsed, ParseError)
+            else []
+        )
+        if len(names) != 1:
+            click.echo(
+                "refusing: rite cannot tell which Manager refines here (none "
+                "holds `route`). Name it: `rite refine reopen "
+                f"{ticket_id} --manager <name>`.",
+                err=True,
+            )
+            raise SystemExit(1)
+        owner = names[0]
+    click.echo(rounds.reopen(root, owner, ticket_id.strip()))
+
+
 @refine.command("accept")
 @click.argument("ticket_id")
 @click.option(
@@ -6198,36 +6367,12 @@ def _board_source(config, role: str = "workers") -> str:
 
 
 def refused_for_refinement(state: str, ticket: str) -> str:
-    """The one line a refused start ends with: the state, and what to do.
-
-    What a Manager's next instruction carries when its Worker request is
-    refused for refinement, so it names the remedy, not only the state: a
-    refusal that names no way forward is how a person learns to look for a
-    way round. At most 200 characters for any ticket id rite accepts (64),
-    because that is all `broker.honour` keeps.
-    """
+    """The one line a refused start ends with. It lives beside the check in
+    `refinement.status.refusal`, so a refused route (TR5) says exactly what a
+    refused Worker start says."""
     from rite_ai.refinement import status as st
 
-    if state == st.NOT_REFINED:
-        return (
-            "NOT REFINED: this ticket has no agreed definition of done. A person "
-            f'agrees one on the host: `rite refine accept {ticket} --item "…"`.'
-        )
-    if state == st.STALE:
-        return (
-            "STALE: the ticket changed after its definition of done was agreed. "
-            "A person re-agrees it on the host: "
-            f'`rite refine accept {ticket} --item "…"`.'
-        )
-    if state == st.CONFLICT:
-        return (
-            "CONFLICT: two records each claim to be current. A person decides "
-            f"which stands; `rite refine status {ticket}` on the host names them."
-        )
-    return (
-        f"{state}: rite could not confirm a definition of done; nothing was "
-        f"assumed. `rite refine status {ticket}` on the host says why."
-    )
+    return st.refusal(state, ticket)
 
 
 def _deliver_ticket(
@@ -6845,16 +6990,27 @@ class LoopAnswer(str):
     is not in it, because a Worker finishing moves the claims ledger, which
     `progress.footprint` reads."""
 
-    basis: tuple = ()
+    basis: tuple | None = ()
+    detail: str = ""
+    starting: dict | None = None
 
     @classmethod
     def of(cls, cycle) -> "LoopAnswer":
         answer = cls(str(getattr(cycle, "verdict", "unknown") or "unknown"))
+        answer.detail = str(getattr(cycle, "detail", "") or "")
         answer.basis = (
             str(answer),
             tuple(sorted(getattr(cycle, "ready", []) or [])),
             tuple(sorted((getattr(cycle, "blocked", {}) or {}).items())),
         )
+        if str(answer) == "refining":
+            # ⚠ No basis for F22's guard to compare (TR2). `refining` is
+            # given only when the User answered or a deadline passed since
+            # the last refinement session, so two in a row are two events,
+            # not one session repeated; the pacing is the guard here.
+            answer.basis = None
+            # What the session is handed to start, for the no-progress guard.
+            answer.starting = dict(getattr(cycle.refinement, "texts", {}) or {})
         return answer
 
 
@@ -6920,7 +7076,7 @@ def _worker_question_watch(root: Path, manager: str):
     return watch
 
 
-def _loop_verdict(root: Path, board=None) -> str:
+def _loop_verdict(root: Path, board=None, manager: str | None = None) -> str:
     """The loop's own answer to "should this continue" (§9.14.4).
 
     `unknown` when it cannot be established, which is a STOP — the loop's
@@ -6939,7 +7095,12 @@ def _loop_verdict(root: Path, board=None) -> str:
         from rite_ai.loop import plan_cycle
         from rite_ai.sandbox import worker_sandbox_status
 
-        cycle = plan_cycle(root, board=board, sandbox_status=worker_sandbox_status)
+        cycle = plan_cycle(
+            root,
+            board=board,
+            sandbox_status=worker_sandbox_status,
+            refiner=manager,
+        )
         return LoopAnswer.of(cycle)
     except Exception:  # noqa: BLE001 - an unreadable project is `unknown`
         return "unknown"
@@ -6977,6 +7138,35 @@ def _ticket_work_rule(root: Path, manager: str) -> str:
     one_root = shares_one_root(config.coordination.remote)
     owner = routing_owner(list(config.coordination.manager_roles))
     return ticket_work(manager, owner, one_root=one_root)
+
+
+def _refinement_briefing(root: Path, manager: str, board) -> str:
+    """`refinement.instructions` then `refinement.brief`, for `manager`."""
+    from rite_ai.config.parse import ParseError, parse_config
+    from rite_ai.refinement import instructions as refinement_instructions
+
+    config = parse_config(root / ".rite" / "config.yaml")
+    if isinstance(config, ParseError):
+        return ""
+    return refinement_instructions.instructions(
+        root, manager, config
+    ) + refinement_instructions.brief(root, manager, board, config)
+
+
+def _with_refinement(router, refine):
+    """`router`, then `refine`, as one step. Either may be None."""
+    if router is None and refine is None:
+        return None
+
+    def step(say) -> None:
+        if callable(router):
+            router(say)
+        if callable(refine):
+            from rite_ai.managers.supervise import _refinement_step
+
+            _refinement_step(refine, say)
+
+    return step
 
 
 def _router_for(root: Path, manager: str, board=None):
@@ -7024,9 +7214,25 @@ def _router_for(root: Path, manager: str, board=None):
     # ⚠ TR9: a route's ticket is checked with ONE single-issue read of the
     # board the broker is given. None (no board) refuses every route.
     read_ticket = getattr(board, "read", None)
+    # ⚠ TR5: and it must be REFINED, checked on that same board. None (no
+    # board) refuses every route, as it does above.
+    refinement = None
+    if board is not None:
+        from rite_ai.refinement import status as refinement_status
+
+        def refinement(ticket: str):
+            return refinement_status.status(board, ticket)
 
     def step(say) -> None:
-        deliver_routes(root, manager, owner, names, say, read_ticket=read_ticket)
+        deliver_routes(
+            root,
+            manager,
+            owner,
+            names,
+            say,
+            read_ticket=read_ticket,
+            refinement=refinement,
+        )
         if owner and manager == owner:
             # ⚠ Every reply is checked by rite before the Owner reads it, in a
             # fresh session given only the reply and the workspace (A6
@@ -7037,7 +7243,7 @@ def _router_for(root: Path, manager: str, board=None):
                 owner,
                 names,
                 say,
-                verify=lambda _sender, text: verify(root, owner, text),
+                verify=lambda sender, text: verify(root, owner, text, claimant=sender),
                 sweep_seconds=60.0 * sweep_minutes,
             )
 
@@ -7285,6 +7491,13 @@ def _slack_listener(root: Path, manager: str):
         owner=config.slack.owner_user,
         broadcast=config.slack.broadcast,
         project=root,
+        # TR2 (TRQ8): refinement rounds to a private channel, when configured
+        # and when rite can both post and read there; the DM otherwise.
+        refinement_channel=(
+            config.refinement.channel
+            if config.refinement.questions_to == "channel"
+            else ""
+        ),
     )
     for line in listener.open():
         click.echo(line)
@@ -7443,6 +7656,7 @@ def _start_a_manager(
     from rite_ai.managers.broker import for_project
     from rite_ai.managers.chores import create_asked_for
     from rite_ai.managers.chores import instructions as chore_instructions
+    from rite_ai.refinement.protocol import step as refinement_step
 
     board, board_state, board_problem, composed_under = _board_for_manager(root)
     if board_state == "unreachable":
@@ -7585,7 +7799,24 @@ def _start_a_manager(
             # TR9: a User's instruction becomes a chore, written by rite
             # outside the boundary, on the same board the broker checks.
             chores=lambda say: create_asked_for(root, role.name, board, say),
-            router=_router_for(root, role.name, board),
+            # TR2: the rounds this Manager asks for, and what the User's
+            # replies to them do, decided outside the boundary on this board.
+            # Only the Manager that refines does anything (TRQ7).
+            refine=lambda say, messages=(): refinement_step(
+                root, role.name, board, say, messages=messages
+            ),
+            # TR2/TR3: how the Owner refines, and this cycle's refinement
+            # work, from one read of each scheduled ticket; "" for a Manager
+            # that does not refine.
+            refinement_brief=lambda say: _refinement_briefing(root, role.name, board),
+            # TR2: refinement runs wherever routing runs (before, during and
+            # after a cycle, and in every wait), so a round the Owner asks
+            # for goes out in seconds and a chat instruction he left
+            # unanswered is filed without a session being spent on it.
+            router=_with_refinement(
+                _router_for(root, role.name, board),
+                lambda say: refinement_step(root, role.name, board, say),
+            ),
             # ⚠ DF2: a cycle can be CAUSED by mail. None for a lone Manager,
             # whose runs are exactly what they were.
             waiting=waiting,
@@ -7632,7 +7863,7 @@ def _start_a_manager(
                 else (lambda _r: "ready")
             )
             if setting_up
-            else (lambda r: _loop_verdict(r, board)),
+            else (lambda r: _loop_verdict(r, board, role.name)),
             note=lambda m: click.echo(m, err=True),
             watch=_worker_question_watch(root, role.name),
         )
@@ -7861,7 +8092,8 @@ def replies(manager_name: str, reader: str, peek: bool) -> None:
     default="",
     help="The ticket this work is for. Required: every piece of routed work "
     "carries a ticket, and rite refuses the route if the board does not "
-    "return it. For work the User asked for in a message, make the ticket "
+    "return it or it is not REFINED (you are told why in your next "
+    "instruction). For work the User asked for in a message, make the ticket "
     "first with `rite chore <message-id>`.",
 )
 @click.argument("manager_name")
@@ -7879,11 +8111,16 @@ def route(manager_name: str, text: str, ticket: str) -> None:
     and the Owner's supervisor delivers it — and delivers only for the
     Manager holding `route`, whatever the request says.
 
+    ⚠ **TEXT IS `-`, AND THE TEXT COMES ON STDIN (F14)**, as for `rite
+    reply`. Routed work quotes tickets more than anything else does.
+
     Examples:
-      rite route --ticket RT-12 helper "run the test suite on branch fix-12 and report"
+      rite route --ticket RT-12 helper - <<'RITE_TEXT_1f2e3d'
+      run the test suite on branch fix-12 and report
+      RITE_TEXT_1f2e3d
     """
     from rite_ai.config.managers import routing_owner
-    from rite_ai.managers import current_manager
+    from rite_ai.managers import current_manager, stdin_text
     from rite_ai.managers.routing import request
 
     root = _require_project_root()
@@ -7921,6 +8158,17 @@ def route(manager_name: str, text: str, ticket: str) -> None:
             err=True,
         )
         raise SystemExit(1)
+    try:
+        text = stdin_text.read(text)
+    except stdin_text.OnTheCommandLine:
+        click.echo(
+            stdin_text.refusal(
+                f"rite route --ticket {ticket.strip() or '<ID>'} {manager_name}",
+                "<what to do>",
+            ),
+            err=True,
+        )
+        raise SystemExit(1)
     if not text.strip():
         click.echo("refusing to route an empty message.", err=True)
         raise SystemExit(1)
@@ -7930,9 +8178,9 @@ def route(manager_name: str, text: str, ticket: str) -> None:
     if problem:
         click.echo(
             f"refusing: {problem}. Every route names the ticket the work is "
-            'for: `rite route --ticket <ID> <manager> "…"`. If the User asked '
-            "for it in a message, make it a ticket first with `rite chore "
-            "<message-id>`.",
+            "for: `rite route --ticket <ID> <manager> -`, the text on stdin. "
+            "If the User asked for it in a message, make it a ticket first "
+            "with `rite chore <message-id>`.",
             err=True,
         )
         raise SystemExit(1)
@@ -8014,10 +8262,17 @@ def reply(text: str, manager: str) -> None:
     goes with `rite ask`. Anything that reads as one is refused here and
     redirected, erring toward refusing too much (`reads_as_action`).
 
+    ⚠ **TEXT IS `-`, AND THE TEXT COMES ON STDIN (F14).** Text on the
+    command line is refused: in double quotes the shell runs whatever is in
+    backticks first, and a Manager's text often quotes a ticket someone else
+    wrote (`managers/stdin_text`).
+
     Examples:
-      rite reply --manager planner "tickets 12 and 13 merged; CI green on a1b2c3d"
+      rite reply --manager planner - <<'RITE_TEXT_1f2e3d'
+      tickets 12 and 13 merged; CI green on a1b2c3d
+      RITE_TEXT_1f2e3d
     """
-    from rite_ai.managers import current_manager
+    from rite_ai.managers import current_manager, stdin_text
     from rite_ai.managers.mailbox import OUTBOX, REPLY, full_warning, prune, send
     from rite_ai.managers.reads_as_action import sign_of_action
 
@@ -8042,6 +8297,14 @@ def reply(text: str, manager: str) -> None:
         known = ", ".join(sorted(r.name for r in roles)) or "none declared"
         click.echo(f"no Manager named {speaking!r} in this project — {known}", err=True)
         raise SystemExit(1)
+    try:
+        text = stdin_text.read(text)
+    except stdin_text.OnTheCommandLine:
+        click.echo(
+            stdin_text.refusal(f"rite reply --manager {speaking}", "<your message>"),
+            err=True,
+        )
+        raise SystemExit(1)
     if not text.strip():
         # Refused for the reason `rite message` refuses: `read` skips blank
         # text, so the file would be written and never shown.
@@ -8055,7 +8318,8 @@ def reply(text: str, manager: str) -> None:
             f"refusing to send this as a reply: it contains {sign}, so it may "
             "ask the User for something, and a reply is filed for reading, "
             "where nobody is asked to answer. Ask it instead:\n"
-            f'  rite ask --manager {speaking} "<the same text>"\n'
+            + stdin_text.heredoc(f"rite ask --manager {speaking} -", "<the same text>")
+            + "\n"
             "If it asks for nothing, say it again without that. When unsure, "
             "it is a question.",
             err=True,
@@ -8117,12 +8381,18 @@ def ask(question: str, defer: bool, meanwhile: str, manager: str) -> None:
     this asks now, exactly as `rite reply` does, and every case where a
     deferral cannot be honoured safely asks now too and says why.
 
+    ⚠ **QUESTION IS `-`, AND THE QUESTION COMES ON STDIN (F14)**, as for
+    `rite reply`.
+
     Examples:
-      rite ask --manager planner "which of the two schemas should ticket 12 use?"
-      rite ask --manager planner --defer "rename the CLI flag to --out?" \\
-          --while "implementing tickets 14 and 15, which do not touch the CLI"
+      rite ask --manager planner - <<'RITE_TEXT_1f2e3d'
+      which of the two schemas should ticket 12 use?
+      RITE_TEXT_1f2e3d
+      rite ask --manager planner --defer --while "tickets 14, 15" - <<'RITE_TEXT_1f2e3d'
+      rename the CLI flag to --out?
+      RITE_TEXT_1f2e3d
     """
-    from rite_ai.managers import checkins, current_manager
+    from rite_ai.managers import checkins, current_manager, stdin_text
     from rite_ai.managers.mailbox import OUTBOX, QUESTION, full_warning, prune, send
 
     root = _require_project_root()
@@ -8146,6 +8416,14 @@ def ask(question: str, defer: bool, meanwhile: str, manager: str) -> None:
         known = ", ".join(sorted(r.name for r in roles)) or "none declared"
         click.echo(f"no Manager named {asking!r} in this project — {known}", err=True)
         raise SystemExit(1)
+    try:
+        question = stdin_text.read(question)
+    except stdin_text.OnTheCommandLine:
+        click.echo(
+            stdin_text.refusal(f"rite ask --manager {asking}", "<your question>"),
+            err=True,
+        )
+        raise SystemExit(1)
     if not question.strip():
         click.echo("refusing to send an empty question.", err=True)
         raise SystemExit(1)
@@ -8157,7 +8435,7 @@ def ask(question: str, defer: bool, meanwhile: str, manager: str) -> None:
         click.echo(
             f"refusing to defer: no --while. If you cannot say what you will "
             f"do meanwhile, {checkins.REFUSED_WITHOUT_WHILE}:\n"
-            f'  rite ask --manager {asking} "<question>"',
+            + stdin_text.heredoc(f"rite ask --manager {asking} -", "<question>"),
             err=True,
         )
         raise SystemExit(1)
@@ -8406,7 +8684,8 @@ def message(manager_name: str, text: str) -> None:
             f"refusing: this is Manager {speaking_as!r}, and a Manager does "
             f"not write a Manager's inbox — a message there is delivered as "
             f"the Owner's instruction. To answer the person, use `rite reply "
-            f'--manager {speaking_as} "…"`, or `rite ask` for a question.',
+            f"--manager {speaking_as} -` with the text on stdin, or `rite ask` "
+            "for a question.",
             err=True,
         )
         raise SystemExit(1)

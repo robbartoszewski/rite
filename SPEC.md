@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.47 · **Date:** 2026-09-29
+**Version:** 0.24.50 · **Date:** 2026-09-29
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -2743,6 +2743,100 @@ here. It is the command allowlist (C4) today, and destination control
 (§5.5, v0.8.0, decided and not built), which makes a fooled agent harmless
 rather than trying to stop it being fooled.
 
+### 6.7. Refinement: the record, the predicate, the protocol
+
+**The property (Robert, 2026-09-28): no work starts on a ticket whose
+definition of done the User has not agreed**, and that definition of done is
+never invented: it is the User's accepted text, or a person's attested text,
+and nothing else. The design, with every race and every ruling, is
+`docs/design/V070_TICKET_REFINEMENT.md`; this section states what rite does,
+and marks what is decided and not built. Enforcement is the standard, with no
+setting and no exemption (D-102).
+
+#### 6.7.1. The record and the one predicate — BUILT (TR1)
+
+A ticket is **REFINED** if and only if ONE read of the board (the ticket and
+its comments, shown complete) finds exactly one head record, rite's HMAC over
+it verifies with the refinement key, and it was signed against the ticket's
+current title and description. The record is a board **comment**, never an
+edit to the description (G2: rite never rewrites the person's text). The key
+lives beside the credential root, in no path any Manager or Worker profile
+grants, and never enters an argv or an environment. Measured unreadable (TR0,
+2026-09-29) from a Manager on macOS and on Linux and from a yoloAI Worker on
+macOS, where seatbelt still shows the file's size and mode (harmless for an
+HMAC key); **a Linux Worker is not yet measured**, and is on the release
+candidate run's checklist.
+
+Every other state names itself and is never read as another: **NOT REFINED**
+(no record), **STALE** (the ticket changed after it was agreed), **CONFLICT**
+(two heads; a person decides, never "latest wins"), **UNREADABLE** (the board,
+the comments or the key could not be read). **UNREADABLE means rite could not
+check, never "no definition of done"** (D-74: an unreachable board is not an
+empty one).
+
+`refinement.status.of(root, config, id)` is **the one path from a ticket id to
+a state**, and `refinement.status.status(board, id)` its core for a caller
+that already holds a board: `rite refine status`, a Worker's start, a route
+and the Owner's assignment all go through them, and
+`test_nothing_else_composes_the_predicate` fails if anything composes the
+check itself.
+`rite refine status <ID>` exits 0 only for REFINED. `rite refine accept <ID>
+--item … [--verify …] [--as-written]` writes a record from a session running as
+the person, outside any sandbox, marked **attested** and carrying
+`rite-attested`, with nothing identifying the machine (D-111). A sandboxed
+agent cannot sign: it cannot read the key.
+
+#### 6.7.2. Every path to work asks it — BUILT (TR4, TR5, TR9)
+
+| path | what rite does with a ticket that is not REFINED |
+|---|---|
+| `rite sandbox start --ticket` (and every Manager's Worker request, which runs it) | refuses, naming the state and the remedy in a last line of at most 200 characters, because that line is what reaches the Manager (`broker.honour`, then `tell_manager`) |
+| `rite route --ticket` (the Owner to another Manager) | refuses, in the same words, through the Owner's next instruction |
+| the Owner's assignment of waiting tickets to Managers | leaves it unassigned and says so, ticket by ticket, with its state; a check that fails for one ticket holds that ticket and the tick goes on. The check is the board itself by default, so there is no call site that could forget it |
+
+**What a REFINED ticket carries.** A Worker's `TICKET.md` holds the ticket's
+text and, as "Agreed definition of done", the record, **both from the same
+read that found it REFINED** (race 4: what was checked is what is delivered),
+and the start prompt names the record id for the Worker to cite. A route
+carries the same rendering after the Owner's quoted text, quoted, below one
+unquoted line only rite can write (`routing.RECORD_FOLLOWS`), so the secondary
+works to what the User agreed, not to the Owner's summary of it.
+
+**Why a Worker never checks.** The host checked the record, in that same read,
+before the sandbox existed. From inside a sandbox the check could only answer
+UNREADABLE for a refined ticket (no key by design, no board credential since
+§5.3.4's narrowing), and trusting the delivered file instead would let a file
+the Worker can edit decide refinement. A person's own session, which can read
+both, runs `rite refine status` (`/ticket` step 1).
+
+**Every piece of Worker work carries a ticket (D-106).** `rite route` requires
+`--ticket`. A User's chat instruction becomes a chore: the Manager names the
+delivered message (`rite chore <message-id>`) and rite writes the ticket from
+the User's words as delivered, labelled `chore` and `scheduled`; a Manager
+cannot author one. `rite sandbox start --prompt` files an unrefined chore and
+starts nothing. A chore goes through the same predicate (D-110).
+
+#### 6.7.3. Who refines, and how — DECIDED, NOT BUILT (TR2)
+
+The Owner refines, and only the Owner: it is the one Manager that talks to the
+User (`routing_owner`), so there is at most one refiner (D-107's dissolved
+question). A secondary and a Worker never refine; they report a gap and stop.
+Until TR2 is built, **a ticket is refined only by a person's `rite refine
+accept`**, which `/refine` walks through with the person present: at most three
+numbered questions, every proposed item tagged with where it came from, an
+explicit yes, then `accept`.
+
+Not built, decided: rounds through `rite refine ask` with a lint, answers
+attributed by thread or leading id and never by a model, a configurable
+accept-word set (D-104), "you decide" answered with a recommendation to
+confirm (D-105), rounds bounded and timed (D-103), a silent ticket shown as
+waiting for the User and a silent chat instruction becoming an unrefined chore
+after `chore_after_minutes` (D-110), the questions in the DM or a private
+channel (D-108), the `ready-to-work` label as a view of the record and never
+an input (TR7), and the loop's third verdict for a board whose work exists but
+none of which can start yet, neither `idle` nor `ready` (TR2).
+
+
 ## 7. Review convention and checklists
 
 ### 7.1. The convention `rite init` ships
@@ -4176,7 +4270,10 @@ no other Managers' state.
 **Worker** — minimal CLAUDE.md: the modules it works on, its Manager's name,
 the claims system, the review convention, the ticket workflow. No org chart, no
 board management, no other workers' state. A worker should be able to start cold
-on a ticket with only its own CLAUDE.md.
+on a ticket with only its own CLAUDE.md **and the `TICKET.md` rite delivers**:
+it works to that file's "Agreed definition of done", the record rite checked,
+and never judges for itself whether a ticket is complete enough. A definition
+of done that cannot be met as written is reported and the Worker stops (§6.7).
 
 #### 9.4.3. Templated versus derived
 
@@ -4333,7 +4430,8 @@ After setup, Dispatch reads the project state and acts on the first matching con
 | Blocked tickets with unresolved blockers | Surface blockers to the human; work on unblocked items |
 | No project spec registered (`spec.paths` empty) | Run `/spec` before planning or ticketing (§9.13.1). `rite start` and `rite doctor` report this row, and report a spec file that exists but is not registered as that instead |
 | `modules.yaml` lists repos with no review checklist | Generate default review checklists |
-| `scheduled` tickets in the backlog, at least one claim-safe | Pick the first safe one and start (same logic as §5.2 claims check) |
+| `scheduled` tickets in the backlog, none REFINED | Not "nothing to do": they need their definition of done agreed with the person first (§6.7). A Worker will not start on one, and saying which ones and why is the action |
+| `scheduled` tickets in the backlog, at least one REFINED and claim-safe | Pick the first safe one and start (same logic as §5.2 claims check). A ticket rite does not report REFINED is not ready, however it is labelled |
 | `scheduled` tickets in the backlog, but every claim attempt is refused | Report "nothing safe to start" to the human; increment the coordination-cost counter (§2.7.2) — this is a distinct, counted state, not silently the same as either neighbouring row |
 | Board is empty | Report "nothing to do" and wait for work |
 
@@ -6261,6 +6359,22 @@ and 0.6.0. The Slack relay and the check-ins that use it are planned in
 `docs/design/V060_CHECKINS.md`. *Both are built and observed in 0.6.0
 (`docs/design/V060_TAG_READINESS.md`, D7 and D8).*
 
+**A Manager's text reaches rite on stdin, never on the command line (0.24.48,
+F14).** `rite reply`, `rite ask` and `rite route` take `-` where the text was,
+read the text from stdin, and refuse text given as an argument. A Manager's
+instructions show each as a quoted heredoc (`<<'…'`), in which the shell
+expands nothing, ending on a delimiter rite draws fresh for each set of
+instructions, so text quoted from a ticket cannot end it early. The reason is
+command injection, observed: in the v0.6.0 dogfood a Claude Owner's
+`rite reply "… \`rite update --files-only\` …"` ran that command — Claude Code
+allows a substitution whose inner command is on the allowlist — and the
+output reached the person. A Manager's text often quotes a ticket, an issue or
+another Manager, so double quotes let whoever wrote that text run commands.
+**Not covered:** rite cannot stop a model putting a substitution into some
+other command (`gh issue comment --body "…"`); the refusal cannot un-run a
+substitution the shell already ran, only keep its output from being sent; and
+`--while` on `rite ask --defer` is still an argument.
+
 #### 9.16.1. Two separate questions, and neither answers the other
 
 Every message that reaches a Manager is asked two things, and they are
@@ -6504,7 +6618,7 @@ such a project behaves as before.
 
 **The Owner routes, and cannot do it by writing an inbox (built).** No
 Manager may write a Manager's inbox (§5.4.8, P1), so the Owner ASKS, as it
-does for a Worker. `rite route --ticket <ID> <manager> "…"` writes a request
+does for a Worker. `rite route --ticket <ID> <manager> -`, the text on stdin (§9.16), writes a request
 into the Owner's own directory. **Every route names its ticket (TR9):** the
 supervisor refuses a request with none, or one whose ticket a single-issue
 read of the board does not return (a board that cannot be read refuses too),
@@ -7172,6 +7286,18 @@ happened once already and left no trace until this review found it.
 | D-99 | Where may an agent talk, and where is that enforced? | **Only to destinations the operator sanctioned, inbound and outbound, enforced at the NETWORK layer — never by which program runs** | A permitted list is closed by construction, and a list of threats loses to the one nobody listed. It is the control that makes §6.6.3's 8-of-8 survivable: it does not care what the agent believes. The tool layer cannot carry it, because `git` and `gh` are permitted and reach the network, and `python -c` or a hook can make any request. Measured constraint: for IP, a seatbelt profile can confine to loopback and name no host, so a Manager's host list is enforced outside its boundary. Local sockets it can refuse by path. §5.5. |
 | D-100 | What content is scanned on the way out? | **Only payloads to ALLOWED destinations that PUBLISH, with the structural credential rule. Model calls are NEVER scanned** | The destination is the primary control, and scanning covers the one case it passes: a token in an issue body on the operator's own repository. A scanner on the model path alarms on every request, or is tuned to ignore it and watches nothing while appearing to watch. Which destinations count as publishing is open. §5.5.4. |
 | D-101 | How do several projects share one Slack workspace? | **One Slack app per project** | A DM is with the APP, so two projects on one app read the same DM and both act on it. Rate limits are per method, per workspace, **per app**: one relay's history poll is 30/min, two on one app are 60 against Tier 3's "50+", and three are 90. An app per project gives each its own DM and its own bucket, which removes both problems at once. A free workspace allows 10 third-party or custom apps (Slack help centre), so it holds about ten projects. Private channels bound to a project are a v0.7.0 convenience, not the binding. §9.16.6. |
+| D-102 | Is refinement enforced? | **Yes, as the standard: no setting, no exemption** | Robert, TRQ1: "There aren't really any 'existing projects' so let's just implement it as a standard." `scheduled` and not refined is refinement work for the Owner; `scheduled` and REFINED is assignable. §6.7. |
+| D-103 | How many rounds, how long, how many at once? | **3 rounds, 24 h, 5 open, 3 started per Owner session, all configurable** | Robert, TRQ2: "the limits sound good. We can make them configurable for advanced users." Not built (TR2). §6.7.3. |
+| D-104 | What accepts a proposal? | **One word from a configurable set: `ok`, `yes`, `accept`, `lgtm`, `proceed`** | Robert, TRQ3. No model decides whether a reply is a yes; words that read as refusals are refused in configuration. Not built (TR2). |
+| D-105 | What does "you decide" do? | **rite comes back with a complete recommendation, for a final confirmation** | Robert, TRQ4. Nothing is recorded until the word arrives, so a definition of done is still never invented. Not built (TR2). |
+| D-106 | Work with no ticket? | **Every piece of Worker work carries a ticket; a chat instruction becomes a chore written by rite** | Robert, TRQ5: "Can we just ticket all work that Workers do?" `route` requires `--ticket`; a chore quotes the User's delivered words and a Manager cannot author one. Built (TR9). §6.7.2. |
+| D-107 | A ticket the person already wrote properly? | **Guardrail: no agent replaces the User's text without explicit permission; rite never edits a title or description** | Robert, TRQ6, reframed. G2 is built and pinned by a test; trusting a well-written ticket without one word needs agent board identity (D-112). TRQ7 (two refiners) dissolved: the Owner owns the board, and there is one Owner. |
+| D-108 | Where do refinement questions go? | **The DM, or a private channel with the app in it, configurable** | Robert, TRQ8. In the channel only `owner_user` may answer or accept. Not built (TR2). |
+| D-109 | Must a definition of done name commands that verify it? | **Optional but explicit: commands, or "none agreed"** | Robert, TRQ9. A Worker on "none agreed" says in its report how it checked each item. Built. |
+| D-110 | Does a chore need refinement? | **Yes, the same predicate; ask at once and refine in place; on silence, an unrefined chore with exactly the User's words** | Robert, TRQ11: "the Owner should ask follow up questions (if it has any doubts) and refine straight away. If the User doesn't reply within some timeout, create a chore with what it's got and then refine later". Built: chores go through the predicate and `--prompt` files an unrefined one. The timeout is not built (TR2). |
+| D-111 | May a session running as the person attest a definition of done? | **Yes, marked `attested` and findable** | Robert, TRQ10: "Allow it." rite cannot tell the person from a model running as them, and says so in the record; the Slack DM stays the stronger path. `/dev/tty` confirmation was measured not to be a barrier and is not used. Built (`rite refine accept`). |
+| D-112 | Should agents write to the board under their own identity? | **rite builds no identity management** | Robert, TRQ12: "Can't the User control it by choosing if they give rite their token or create a separate account for them?" rite works under either choice, says which is in use, and enforces the guardrail where the choice allows it. The same principle covers commit authorship. |
+| D-113 | May an executor Manager do routed work itself? | **Only a chore or a trivial ticket, only REFINED, only on a ticket-named branch through a PR** | Robert, Q4: "Yes, close the bypass. However, instruct that it's meant for chores and trivial tickets. Any serious work should be passed to workers." Instructed (TR3); enforced only once PB1's publish step can refuse (TR10). |
 
 ---
 
@@ -7180,6 +7306,12 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.50 — §6.7, refinement, as built and as decided (TR3).** New §6.7 states the property (no work starts on a ticket whose definition of done the User has not agreed, and none is invented), the record and the one predicate (BUILT, TR1), every path to work that asks it (the Worker start, the route and the Owner's assignment, BUILT, TR4, TR5, TR9), why a Worker never checks from inside its sandbox, and the round protocol (DECIDED, NOT BUILT, TR2). D-102 to D-113 record Robert's rulings on TRQ1 to TRQ12 and Q4, each marked built or not. §9.4.2: a Worker starts cold with its CLAUDE.md and the delivered `TICKET.md`, and works to its record. §9.10's orientation table: a backlog with nothing REFINED is its own row, not "nothing to do", and only REFINED is ready. Written only from what is on `main`; the design note keeps the races and the protocol's detail.
+
+**Changes in 0.24.49 — the verifier's CONTRADICTED is not a finding when it rested on the claimant's own state, which it cannot open.** #102 covered replies that cite a file; a pathless "I journaled it" still met a verifier that runs in the Owner's boundary and cannot open another Manager's state (dogfood V1). The verifier must now say what its verdict rested on (`rested_on`, required in its schema). Whether that ground was readable is established by trying from inside the verifier's own boundary, never by rite looking on its behalf, and rite never reads the journal (§9.15.5 holds: a journal that could change how its author's replies are judged would be a control channel into its own verification). A CONTRADICTED that rested on the claimant's state folder, or its pre-MM8 `.rite/managers/<claimant>/`, becomes COULD NOT TELL, said as rite being unable to establish the claim, with the verifier's words unaltered; the #102 path guard now speaks the same way. One that names nothing stands and is counted in the verification summary and the standup. A false "I journaled it" also comes out COULD NOT TELL: nothing that could see checked it. No boundary moved (an exception to DF3 was proposed and withdrawn). Tests: the seeded false claim stays CONTRADICTED; a pathless true claim through the real `sandbox-exec` is COULD NOT TELL, the stand-in's own CONTRADICTED the control; `test_nothing_in_rite_reads_the_journal` passes unexempted. Mutations (guard ignoring `rested_on`, empty `rested_on` firing, no guard, not counted) each turn a test red.
+
+**Changes in 0.24.48 — a Manager's text is read from stdin, never the command line (F14, W9).** §9.16 gains the paragraph, and the routing paragraph ("The Owner routes") shows the new form. Found in the v0.6.0 dogfood: a Claude Owner's double-quoted `rite reply` ran `rite update --files-only` and `rite doctor` through backticks and sent their output to the person. `rite reply`, `rite ask` and `rite route` now take `-` and read stdin, refuse text as an argument, and are taught as quoted heredocs with a fresh unguessable delimiter. W9 (v0.6.0 readiness): a refused command containing backticks or `$( )` is now reported as a substitution, not as a settings file the engine failed to apply. Tested with a ticket's text run through the Owner's instructions by real bash and zsh, with a control showing the old form runs the canary (`tests/test_a_managers_text_never_becomes_shell.py`).
 
 **Changes in 0.24.47 — a Worker starts only on an agreed definition of done, and is handed that record (TR4).** §5.3.4 "Reading the ticket": `rite sandbox start` now reads the ticket through `refinement.status.of`, one read that returns the state, the signed record and the ticket text. Only REFINED starts a Worker; `TICKET.md` carries that read's text and, as "Agreed definition of done", that read's record, and the prompt names the record id. Every other state refuses, names itself and removes an earlier copy. `--prompt` files an unrefined chore labelled `chore` and `scheduled` and starts nothing (TRQ11, Robert, 2026-09-29), no longer the Worker's label, since nothing runs on it. Tests go through the real predicate with a real key and a signed record; only the network is faked. Mutations each turn tests red: an unrefined ticket allowed, a second board read for the text, the record not delivered, the record id not in the prompt, a stale copy left on refusal.
 

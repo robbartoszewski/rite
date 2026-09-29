@@ -120,6 +120,7 @@ class ManagerMonitor:
         modules: set[str] | None = None,
         draining: str = "",
         distribution_off: str = "",
+        refinement=None,
     ) -> None:
         self.holder = holder
         self.root = root
@@ -144,6 +145,9 @@ class ManagerMonitor:
         # and "nobody wired a board" are different facts, and a reader who is
         # told the second while the first is true goes looking for a bug.
         self.distribution_off = distribution_off
+        # TR5: whether a ticket is REFINED before it is handed to a Worker.
+        # None asks the predicate about `backend` itself; tests inject one.
+        self.refinement = refinement
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self.last: Tick | None = None
@@ -285,6 +289,7 @@ class ManagerMonitor:
             # So a refusal lands where the Owner can read it (Q9 rule 2), not
             # only as a board comment nothing reads back.
             layer=self.holder.layer,
+            refinement=self.refinement,
         )
         if not isinstance(handed, Distributed):
             result.problems.append(handed.reason)

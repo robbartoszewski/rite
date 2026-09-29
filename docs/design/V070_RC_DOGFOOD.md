@@ -113,13 +113,36 @@ throwaway-app run or listed in part 3.
 Robert, verbatim: "I expect rite to refine the lazy tickets before proceeding
 - ask user questions, define a definition of done etc."
 
-- ⚠ **Precondition, not yet met:** the refinement protocol (the record and
-  predicate, TR1; the round protocol, TR2; the delivery of a checked record,
-  TR4) is designed in #43 and **not merged** as of `f57f645`. TR3 (the Owner
-  told to ask before routing, #73) and TR9 (every route names its ticket;
-  chores) are merged. **Run before TR1/TR2 land and this criterion fails by
-  construction**, so the run waits for them or is recorded as run without
-  them.
+- ✅ **Preconditions: met, 2026-09-29.** Corrected against `main` by what
+  each item requires (the earlier list, and TR6's old dependency row, named
+  TR7 and more than the run needs).
+  - **TR2, the round protocol, the gate:** landed in three slices, #117
+    (limits, round ledger, round check, the `refining` and
+    `waiting-on-user` verdicts), #119 (`rite refine ask`, attribution,
+    accept on a word, silence read not assumed, chat instructions filed
+    unrefined) and #120 (the Owner's refinement brief, the private channel,
+    Robert's correction to TRQ2 and his escalation ladder). Without it the
+    only way to an agreed definition of done is Robert typing `rite refine
+    accept` at his own terminal, which is not what this criterion tests.
+  - **TR5, the route and assignment refusal:** #114, with #121.
+  - **TR3, the instructions and the spec:** #73, #108, #115, #122.
+  - **Earlier:** the design (#43), the record and predicate (TR1, #83), a
+    Worker handed the checked record (TR4, #106), TR9 (#78/#81/#84), and
+    TR8's G2 (#110).
+  - **Not preconditions:** TR7 (a filter view nothing decides from), TR8
+    beyond G2, TR10 (after PB1).
+  - **Owed, not a precondition:** SPEC §9.16.5's amendment for the
+    refinement channel's authority (TR3's text). It matters only if the run
+    sets `refinement.questions_to: channel`.
+- **Already seen once with Robert** (`V070_TR2_LIVE_EXCHANGE.md`, one
+  sitting, a Claude Owner): rounds shaped as designed, replies matched by
+  thread, an inline "Definition of done: ok" correctly not taken as a yes,
+  silence read past its deadline and not re-asked. **Not reached there, so
+  this run must:** a bare `ok` writing a record; a chat instruction filed as
+  an unrefined chore; three unanswered messages parking a ticket; the same
+  question coming back when he is next active; an unchanged proposal said,
+  and a third one escalated as a blocker; a local-model Owner; the private
+  channel, if configured.
 - For each ticket Robert files in the dogfood's register (one line, no
   acceptance criteria):
   - Before any routing, Worker request or code, a question about **what the
@@ -129,8 +152,9 @@ Robert, verbatim: "I expect rite to refine the lazy tickets before proceeding
     agreed from Robert's reply, before work starts.
   - Robert answers at least one question partially or tersely. The ticket
     still reaches a definition of done by rite's protocol (a proposal he can
-    accept in a word), or is PARKED and says so; it is never worked on a
-    guess.
+    accept in a word), or is PARKED or BLOCKED and says so; it is never
+    worked on a guess. While he is answering there is no limit on rounds
+    (his correction to TRQ2); three messages in a row with no reply park it.
 - The v0.6.0 failure it must not repeat: KAN-8 "output is ugly, table?" was
   implemented and committed, and only then did the Owner ask whether the JSON
   output mattered for cron.
@@ -245,6 +269,12 @@ A pass is a pass for **this** configuration. It says nothing about:
   reading a host-written `answer.json` has not been measured by anyone.
 - **Unattended operation.** Robert drives and watches. Anything that only
   fails with nobody there is not tested.
+- **Whether a Worker's pull request says what is true.** Nothing in rite
+  checks the claims in a Worker's PR description or commit messages: the
+  verifier reads only replies from secondary Managers. A confidently wrong
+  "tests pass" or "fixes #N" reaches the maintainer unless Robert checks the
+  description against the diff in §4 step 9, and a claim he catches there is
+  caught by him, not by rite.
 - **Other maintainers.** One external reader of one diff. Their judgement is
   evidence about that diff, not about rite's review process in general.
 - **Cost.** Sessions and allowance used are recorded, not judged: there is no
@@ -254,8 +284,8 @@ A pass is a pass for **this** configuration. It says nothing about:
 
 ## 4. What Robert does himself, in order
 
-1. **Confirm the preconditions:** TR1/TR2 merged (or decide to run without
-   them and record that 2.1 cannot pass); the release candidate tagged; the
+1. **Confirm the preconditions:** TR2 and TR5 are merged (2.1); the release
+   candidate tagged; the
    board chosen (1.4).
 2. **Tell the other sessions** that `~/.local/bin/rite` is about to become the
    candidate, then install it with the released `install.sh` and

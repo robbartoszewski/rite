@@ -23,9 +23,11 @@ sessions to claim and who to ask.
   (macOS's `sandbox-exec`) through [yoloAI](https://yoloai.dev), which `rite
   init` offers to install. A session you open yourself is not sandboxed.
   Inside the sandbox, outbound network is not restricted and Claude Code skips
-  permission prompts. Every worker gets every credential the project holds;
-  `rite add worker --scoped-token` gives one its own GitHub token in place of
-  the shared one. On other platforms `rite init` leaves sandboxing off. On
+  permission prompts. Every worker gets the project's GitHub credential and
+  its engine's own login, and nothing else; `rite add worker --scoped-token`
+  gives one its own GitHub token in place of the shared one. How well one
+  sandbox's process environment is kept from other processes running as you
+  depends on the sandbox provider, and is being addressed upstream. On other platforms `rite init` leaves sandboxing off. On
   Docker, a dogfood run found file locking does not lock, so two workers can
   be granted the same path: run one worker there.
 - **101 numbered decisions** in [`SPEC.md`](SPEC.md), each with the question it
@@ -278,7 +280,7 @@ coordination:
 `helper` needs Goose, Ollama with the model pulled, and
 `OLLAMA_CONTEXT_LENGTH=32768` set before Ollama starts. Run each Manager in
 its own terminal (`rite start lead …`, `rite start helper …`). The Owner hands
-work down with `rite route --ticket RT-12 helper "…"` (every route names its
+work down with `rite route --ticket RT-12 helper -`, the text on stdin (every route names its
 ticket; work you asked for in chat becomes a chore ticket first); while that work is unfinished its
 supervisor waits, spending no session, and starts the Owner's next session,
 within the same `rite start`, when the reply arrives. **A local model's report is not trusted:** in testing,

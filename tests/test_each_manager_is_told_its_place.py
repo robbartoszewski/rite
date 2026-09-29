@@ -57,7 +57,7 @@ def test_the_owner_is_told_it_routes_and_to_whom(tmp_path, monkeypatch, board):
     said = _start(tmp_path, monkeypatch, TWO, "lead", board=board)
     assert "You are the OWNER" in said
     assert "- 'helper': engine claude; duties execute" in said
-    assert ' route --ticket <ID> <manager> "' in said
+    assert " route --ticket <ID> <manager> - <<'RITE_TEXT_" in said
     assert " chore <message-id>" in said
     assert "no authority over you" in said
     # A6: a reply is verified before a person is told it happened.
@@ -109,7 +109,7 @@ def test_the_owner_is_told_to_ask_the_user_before_routing(tmp_path, monkeypatch,
     # kept beside the new one.
     assert "asking you back" not in said
     assert "ask the User before you" in said
-    assert ' ask "<question>"' in said
+    assert " ask -`, as above" in said
     assert "Never route a guess" in said
 
 
@@ -134,16 +134,24 @@ def test_the_owner_is_told_not_to_implement_tickets_itself(
     assert said.count("You do not implement tickets yourself") == 1
 
 
-def test_a_secondary_is_not_given_the_owners_rule(tmp_path, monkeypatch):
+def test_a_secondary_may_do_only_chores_and_trivial_tickets_through_a_pr(
+    tmp_path, monkeypatch
+):
+    """Robert, Q4: the executor's own path is for chores and trivial tickets,
+    on a branch and through a pull request; real work goes to a Worker."""
     said = _start(tmp_path, monkeypatch, TWO, "helper", board=True)
     assert "You do not implement tickets yourself" not in said
+    assert said.count("## Routed work you do yourself") == 1
+    assert "only when it is a chore or a trivial ticket" in said
+    assert "never a commit to a default branch" in said
+    assert "request one (above)" in said
 
 
 def test_a_manager_whose_owner_cannot_be_named_is_given_the_rule():
-    from rite_ai.managers.prompt import TICKET_WORK, ticket_work
+    from rite_ai.managers.prompt import ROUTED_TICKET_WORK, TICKET_WORK, ticket_work
 
-    # Another Manager is the Owner, in one root: a secondary, so not given.
-    assert ticket_work("helper", "lead", one_root=True) == ""
+    # Another Manager is the Owner, in one root: a secondary, given its own.
+    assert ticket_work("helper", "lead", one_root=True) == ROUTED_TICKET_WORK
     # Everyone else is: itself the Owner, no single Owner, or a `remote`
     # where the election, not this process, decides who the Owner is.
     assert ticket_work("lead", "lead", one_root=True) == TICKET_WORK

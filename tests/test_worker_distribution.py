@@ -20,6 +20,7 @@ from rite_ai.coordination.distribution import (
     distribute,
 )
 from rite_ai.tickets import BackendError, Ticket
+from tests.refined_board import refined
 
 NOON = datetime(2026, 9, 17, 12, 0, tzinfo=UTC)
 NIGHT = datetime(2026, 9, 17, 23, 0, tzinfo=UTC)
@@ -78,6 +79,7 @@ class TestHandingOutWork:
             workers=["w1", "w2"],
             schedule=schedule(),
             now=NOON,
+            refinement=refined,
         )
         assert isinstance(got, Distributed)
         assert got.handouts == [("ABC-1", "w1")]
@@ -94,6 +96,7 @@ class TestHandingOutWork:
             workers=["w1"],
             schedule=schedule(),
             now=NOON,
+            refinement=refined,
         )
         assert backend.writes == [("ABC-1", ["w1"], ["beta", "scheduled"])]
 
@@ -110,6 +113,7 @@ class TestHandingOutWork:
             workers=["w1", "w2", "w3"],
             schedule=schedule(),
             now=NOON,
+            refinement=refined,
         )
         assert got.handouts == [("ABC-1", "w1"), ("ABC-2", "w2")]
 
@@ -124,6 +128,7 @@ class TestHandingOutWork:
             workers=["w1", "w2"],
             schedule=schedule(),
             now=NOON,
+            refinement=refined,
         )
         assert got.handouts == [("ABC-2", "w1")]
         assert [w[0] for w in backend.writes] == ["ABC-2"]
@@ -142,6 +147,7 @@ class TestTheScheduleDecidesHowMany:
             workers=["w1", "w2", "w3", "w4"],
             schedule=schedule(workers=2),
             now=NOON,
+            refinement=refined,
         )
         assert got.capacity == 2
         assert len(got.handouts) == 2
@@ -160,6 +166,7 @@ class TestTheScheduleDecidesHowMany:
             workers=["w1", "w2", "w3", "w4"],
             schedule=schedule(workers=3),
             now=NOON,
+            refinement=refined,
         )
         assert got.handouts == [("ABC-1", "w3")]
         assert "ABC-2" in got.held_back
@@ -176,6 +183,7 @@ class TestTheScheduleDecidesHowMany:
             workers=["w1"],
             schedule=schedule(),
             now=NIGHT,
+            refinement=refined,
         )
         assert got.capacity == 0
         assert got.handouts == []
@@ -217,6 +225,7 @@ class TestTheScheduleDecidesHowMany:
             workers=["w1"],
             schedule=schedule(timezone="Mars/Olympus"),
             now=NOON,
+            refinement=refined,
         )
         assert not isinstance(got, NotDistributed), (
             "distribution refused on an unresolvable timezone while "
@@ -248,6 +257,7 @@ class TestWhenAWriteFails:
             workers=["w1", "w2"],
             schedule=schedule(),
             now=NOON,
+            refinement=refined,
         )
         assert got.handouts == [("ABC-2", "w1")], got.handouts
         assert "refused" in got.held_back["ABC-1"]
@@ -261,6 +271,7 @@ class TestWhenAWriteFails:
             workers=["w1"],
             schedule=schedule(),
             now=NOON,
+            refinement=refined,
         )
         assert isinstance(got, NotDistributed)
         assert backend.writes == []
@@ -279,5 +290,6 @@ class TestWhenAWriteFails:
             workers=["w1", "w2"],
             schedule=schedule(),
             now=NOON,
+            refinement=refined,
         )
         assert got.handouts == [("ABC-2", "w1")]

@@ -22,6 +22,7 @@ from rite_ai.coordination.refusal import (
     refuse_assignment,
 )
 from rite_ai.tickets import BackendError, Ticket
+from tests.refined_board import refined
 
 NOON = datetime(2026, 9, 17, 12, 0, tzinfo=UTC)
 NIGHT = datetime(2026, 9, 17, 23, 0, tzinfo=UTC)
@@ -137,6 +138,7 @@ class TestRefusalDuringDistribution:
             schedule=schedule(),
             now=NOON,
             modules={"backend"},
+            refinement=refined,
         )
         assert isinstance(got, Distributed)
         assert got.handouts == [("ABC-2", "w1")]
@@ -153,6 +155,7 @@ class TestRefusalDuringDistribution:
             schedule=schedule(),
             now=NOON,
             draining="stop requested",
+            refinement=refined,
         )
         assert got.handouts == []
         assert set(got.refused) == {"ABC-1", "ABC-2"}
@@ -170,6 +173,7 @@ class TestRefusalDuringDistribution:
             workers=["w1", "w2", "w3"],
             schedule=schedule(workers=1),
             now=NOON,
+            refinement=refined,
         )
         assert len(got.handouts) == 1
         assert got.refused == {}
@@ -190,6 +194,7 @@ class TestRefusalDuringDistribution:
             schedule=schedule(),
             now=NIGHT,
             modules={"backend"},
+            refinement=refined,
         )
         assert "ABC-1" in got.refused
         assert got.held_back == {}
@@ -208,6 +213,7 @@ class TestRefusalDuringDistribution:
             schedule=schedule(),
             now=NOON,
             modules={"backend"},
+            refinement=refined,
         )
         assert got.refused == {}
         assert got.handouts == []

@@ -83,8 +83,10 @@ def delivery_text(
         "",
         "⚠ This is a copy taken at that moment, not the live ticket. If the "
         "ticket has changed since, you are working from this copy. Nothing in "
-        "this sandbox can read the board: if something here is unclear or "
-        "looks out of date, say so and stop rather than guessing.",
+        "this sandbox can read the board. Work to the agreed definition of "
+        "done below; if it cannot be met as written, or this copy looks out "
+        "of date, report exactly that and stop. Never invent the missing "
+        "piece.",
         "",
         "## The ticket",
         "",

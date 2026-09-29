@@ -2,6 +2,37 @@
 
 ## Unreleased: 0.7.0 (notes in progress, completed at release)
 
+### The verifier no longer contradicts a claim about ground it could not open
+
+#102 stopped the verifier contradicting a reply that names a file it cannot
+read. A reply that says "I journaled the observation" without a path was
+still exposed: the verifier runs as the Owner, and cannot open another
+Manager's state. The verifier now has to say what its answer rested on, and
+rite checks, from inside the verifier's own boundary, whether it could open
+that. When it could not, the Owner reads that rite could not establish the
+claim either way, not that it looks false. rite never reads a Manager's
+journal to decide this. How often a contradiction names nothing it rested
+on is counted in the verification summary and the standup.
+
+### ⚠ A Manager's text goes on stdin: `rite reply`, `rite ask` and `rite route` take `-`
+
+**Text given to these commands as an argument is now refused.** In the
+v0.6.0 dogfood, a Manager's `rite reply "… \`rite update --files-only\` …"`
+ran that command, because the shell runs backticks inside double quotes, and
+the output was sent to the person. A Manager's text often quotes a ticket
+someone else wrote, so this let the ticket's author run commands. Each
+command now takes `-` and reads the text from stdin, and the Managers'
+instructions show a quoted heredoc:
+
+    rite reply --manager lead - <<'RITE_TEXT_1f2e3d'
+    tickets 12 and 13 merged; `make test` green
+    RITE_TEXT_1f2e3d
+
+A Manager started on an earlier release is given the new form in its next
+instruction. If you script these commands, pipe the text in. A refused
+command with backticks or `$( )` in it is now reported as that, not as a
+broken settings file.
+
 ### ⚠ Workers now start only on a ticket with an agreed definition of done
 
 **Read this before upgrading: Workers stop starting on tickets you have not
@@ -25,8 +56,91 @@ and what to do:
   no definition of done.
 
 A Manager whose Worker request is refused is told the same in its next
-instruction. Until the Owner can refine tickets with you over Slack (later in
+instruction.
+
+The same check now comes earlier, so an unrefined ticket does not reach a
+Manager at all. **The Owner's routes** (`rite route --ticket <ID>`) are
+delivered only for a REFINED ticket, with its agreed definition of done
+quoted beneath the Owner's text; any other state is refused and the Owner is
+told which, in the same words. **Unattended assignment** (with board writes
+turned on) labels only REFINED `scheduled` tickets with a Manager's name, and
+the tick's report names each ticket it left and its state; a Manager hands
+a ticket to one of its Workers only if it is REFINED at that moment, so a
+ticket given a Manager's name by hand, or changed after it was assigned, is
+held and its state said. Until the Owner can refine tickets with you over Slack (later in
 0.7.0), `rite refine accept` is how a ticket gets refined.
+
+`/ticket` now sends a Worker to the agreed definition of done in `TICKET.md`,
+and a person's session to `rite refine status`; nothing asks an agent to judge
+whether a ticket is "complete enough" any more. Run `rite update --files-only`
+to carry the new `/ticket` into an existing project.
+
+`/refine` now ends by recording what you agreed with `rite refine accept`,
+after an explicit yes from you, instead of rewriting the ticket's
+description. It asks at most three questions at a time, and marks which
+items are its own proposal rather than your words or the ticket's.
+
+**A board of unrefined tickets is work, not an empty board.** `rite loop`
+and the Owner's supervisor count only REFINED tickets as ready for Workers,
+and have two new verdicts for the rest. `refining`: nothing is refined yet
+and the Owner may start refining now, so a session starts. `waiting-on-user`:
+nothing can start until you answer, so the Owner waits and starts no
+session until you reply or a question's deadline passes. `idle` now means
+nothing is scheduled at all. A secondary Manager never refines; that is the
+Owner's.
+
+Refinement is bounded so a backlog of unrefined tickets cannot flood you or
+spend sessions: oldest first, at most 5 open at once, at most 3 started per
+session, and new ones only after you have replied (or a deadline passed)
+since the last refinement session. Twenty unrefined tickets mean three
+questions, not twenty. The limits, and the words that accept a proposal
+(`ok`, `yes`, `accept`, `lgtm`, `proceed`), are configurable under a new
+`refinement:` section in `.rite/config.yaml`; a value out of range, or an
+accept word people type to refuse ("no", "stop", …), is refused rather than
+corrected. Whether refinement is enforced is not configurable.
+
+**The Owner refines tickets with you in Slack.** It asks with `rite refine
+ask <ID> -` (the text on stdin): at most three numbered questions, and from
+the second round a proposed definition of done you can accept in one word.
+rite checks every round before you see it: an item it says came from the
+ticket or from you must quote the ticket or your answer exactly, and items
+that are the Owner's own idea are labelled as its proposal. The round goes
+to your DM (as something that needs you, so it comes back at your check-in
+until you answer) and onto the ticket as a comment. Reply in its thread, or
+in your DM starting with the ticket's id. `ok`, `yes`, `accept`, `lgtm` or
+`proceed`, alone, under the latest proposal records it, signed, with your
+message as its provenance; anything else is an answer the next round builds
+on. If the ticket changed after the proposal, nothing is recorded and you
+are told. A question you have not answered by its deadline (24 hours, or the
+end of your next check-in if sooner) is not asked again while you are away;
+it comes back when you are next active. There is no limit on rounds while
+you are answering: a complex ticket takes the rounds it needs, and if the
+Owner's proposal has not changed from one round to the next, the message
+says so. What is limited is asking without a reply: after three messages in
+a row about a ticket go unanswered (`refinement.unanswered`), or when the
+Owner was handed a ticket twice without asking you anything, it is parked:
+rite tells you, and replying about it, `rite refine reopen <ID>`, or editing
+the ticket brings it back. Any reply resets the count.
+
+An instruction you give the Owner in chat is refined straight away too. If
+you do not reply within `refinement.chore_after_minutes` (60 by default),
+rite files it as a chore with exactly your words, so it is not lost, and
+refinement continues on it. Every chore rite files now opens by saying it
+was unrefined when created, and no work starts on it until a definition of
+done is agreed.
+
+The Owner is told, every cycle, which tickets to refine and where each
+stands, with the ticket's text and your earlier answers, so it never has to
+read the board to refine (which it cannot on Jira).
+
+**Refinement questions can go to a private channel** instead of your DM:
+`refinement.questions_to: channel` and `refinement.channel: <its id>`, with
+the app invited (`/invite @rite`) and, for a private channel, the app's
+`groups:history` scope. rite checks at start that it can post and read
+there; if not, the questions go to your DM and it says why. Only your own
+replies in a question's thread there count as answers; a teammate's are
+context. The check-in stays in your DM, and a question you have not
+confirmed seeing comes back there.
 
 ### `rite start` sees a ticket rite has just filed
 
@@ -212,6 +326,11 @@ instead of filling the gap. The Owner, and a lone Manager, are also told not
 to change code and commit it themselves: a ticket is worked by a Worker or
 routed, so that it gets a claim, a review and a pull request. This is an
 instruction, not yet enforced.
+
+A secondary Manager doing routed work is now told it may do only a chore or
+a trivial ticket itself, and then only on a branch named for the ticket and
+through a pull request, never a commit to a default branch; anything more
+goes to a Worker.
 
 ### A request in chat becomes a chore ticket, written by rite
 

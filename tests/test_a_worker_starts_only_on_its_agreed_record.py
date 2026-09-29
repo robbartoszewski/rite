@@ -188,3 +188,46 @@ def test_a_managers_refused_request_tells_it_the_state_and_the_remedy(
     (note,) = read(tmp_path, "lead", INBOX)
     assert "NOT started: NOT REFINED" in note.text
     assert 'rite refine accept 7 --item "…"' in note.text
+
+
+def test_ticket_md_and_the_ticket_command_send_a_worker_to_the_record():
+    """TR3: a Worker works to rite's record, and judges no ticket "complete
+    enough" itself. Neither text still says "stop rather than guessing", and
+    `/ticket` does not send a sandboxed Worker to a command it cannot run."""
+    from rite_ai.sandbox.delivery import delivery_text, render_ticket
+
+    root = Path(__file__).resolve().parent.parent
+    command = (root / "templates" / "commands" / "ticket.md").read_text()
+    step_one = command.split("\n2. ", 1)[0]
+    assert "stop rather than guessing" not in command
+    assert '"Agreed definition of done"' in step_one
+    assert "try `rite board show` or `rite refine status`" in step_one
+    # Why the Worker does not check, beside the instruction not to, so the
+    # branching is not "fixed" by adding a check back.
+    assert "rite checked that record on the host, in the same\n     read" in step_one
+    assert "UNREADABLE means rite could not check" in step_one
+
+    text = delivery_text(render_ticket(TICKET), "2026-09-29T00:00:00Z", "GitHub")
+    assert "stop rather than guessing" not in text
+    assert "Work to the agreed definition of done" in text
+
+
+def test_refine_records_with_accept_after_a_yes_and_never_rewrites_the_ticket():
+    """TR3: `/refine` is the refinement protocol with a person present. It ends
+    at `rite refine accept`, only after an explicit yes, and leaves the
+    person's own text alone (TR8's G2: an agent does not replace their words)."""
+    root = Path(__file__).resolve().parent.parent
+    text = (root / "templates" / "commands" / "refine.md").read_text()
+    assert "rite refine accept <ID> --item" in text
+    assert "Nothing is recorded until they say\n   yes." in text
+    assert "Do not edit the ticket's title or description." in text
+    assert "Write the ticket body to full quality" not in text
+
+
+def test_the_queue_rule_says_only_refined_is_ready():
+    """Now true, and enforced by TR4: no Worker starts without a record."""
+    from rite_ai.cli.init.claude_gen import _working_the_queue_section
+
+    section = _working_the_queue_section()
+    assert "A ticket rite does not report REFINED is not ready" in section
+    assert "no Worker starts without one" in section

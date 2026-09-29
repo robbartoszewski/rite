@@ -140,3 +140,13 @@ def any_ticket_refined():
             board = _AnyTicketRefined(refinement_key.ensure())
             with patch("rite_ai.refinement.status.board_for", return_value=board):
                 yield board
+
+
+def refined(ticket_id: str):
+    """A `refinement` check for tests about something else (TR5's route and
+    assignment gates): the REAL predicate answers REFINED for `ticket_id`,
+    over a record signed with a real key made for this one call."""
+    from rite_ai.refinement import status as refinement_status
+
+    with any_ticket_refined() as board:
+        return refinement_status.status(board, ticket_id)
