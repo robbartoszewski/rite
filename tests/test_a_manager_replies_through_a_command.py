@@ -42,9 +42,9 @@ def project(tmp_path: Path, monkeypatch) -> Path:
 
 def test_the_instruction_names_a_command_and_no_format(tmp_path):
     said = how_to_reply(tmp_path, "lead")
-    assert 'rite reply --manager lead "' in said
+    assert "rite reply --manager lead - <<'RITE_TEXT_" in said
     # RP1: questions have their own command, and the instruction names it.
-    assert 'rite ask --manager lead "' in said
+    assert "rite ask --manager lead - <<'RITE_TEXT_" in said
     for shape in ('"text"', "timestamp", ".json", "<pid>"):
         assert shape not in said, f"the Manager is still handed a format: {shape}"
 
@@ -61,7 +61,9 @@ def test_what_the_manager_is_told_to_run_reaches_the_user(
     else:
         monkeypatch.delenv(MANAGER_ENV, raising=False)
     runner = CliRunner()
-    sent = runner.invoke(cli, ["reply", "--manager", "lead", "ticket 12 skipped"])
+    sent = runner.invoke(
+        cli, ["reply", "--manager", "lead", "-"], input="ticket 12 skipped"
+    )
     assert sent.exit_code == 0, sent.output
     shown = runner.invoke(cli, ["replies", "lead"])
     assert "ticket 12 skipped" in shown.output, shown.output
@@ -70,7 +72,7 @@ def test_what_the_manager_is_told_to_run_reaches_the_user(
 @pytest.mark.parametrize(
     "args, why",
     [
-        (["reply", "--manager", "lead", "   "], "empty"),
+        (["reply", "--manager", "lead", "-"], "empty"),
         (["reply", "--manager", "ghost", "x"], "no Manager named"),
         (["reply", "x"], "no --manager"),
     ],

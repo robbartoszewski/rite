@@ -702,6 +702,7 @@ def instructions(root: Path, manager: str) -> str:
     of one text is how they drift.
     """
     from rite_ai import own_command
+    from rite_ai.managers import stdin_text
 
     rite = own_command()
     state = windows(root)
@@ -717,13 +718,18 @@ def instructions(root: Path, manager: str) -> str:
         "waited costs the User thirty seconds. So asking now is the "
         "default, and every doubt is resolved by asking now.",
         "",
-        f'To ask now: `{rite} ask --manager {manager} "<question>"`.',
+        "To ask now:",
+        stdin_text.heredoc(f"{rite} ask --manager {manager} -", "<question>"),
+        stdin_text.RULE,
         "",
         "Only when a question is CLEARLY deferrable, meaning you have real "
         "work to do meanwhile that does not depend on the answer, you may "
         "defer it to the User's next check-in:",
-        f'  {rite} ask --manager {manager} --defer "<question>" --while '
-        '"<what you will do meanwhile>"',
+        stdin_text.heredoc(
+            f"{rite} ask --manager {manager} --defer "
+            '--while "<what you will do meanwhile>" -',
+            "<question>",
+        ),
         "If you cannot name that work, the question blocks you: ask now. A "
         "deferral with no --while is refused.",
         "",
