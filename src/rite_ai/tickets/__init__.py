@@ -57,6 +57,7 @@ def _missing_credential(key: str, credentials: object | None) -> str:
     from the key is a thing that command explains and a one-line error
     cannot.
     """
+    from rite_ai.credentials.services import how_to_set
     from rite_ai.credentials.store import project_account, service_env_name
 
     env = f"RITE_{key.upper()}"
@@ -73,8 +74,8 @@ def _missing_credential(key: str, credentials: object | None) -> str:
 
     return (
         f"{key} not found — looked in: {', '.join(looked)}.\n"
-        f"  Set it for this project:  rite credential set {key}\n"
-        f"  Or machine-wide:          rite credential set {key} --global\n"
+        f"  Set it for this project:  rite credential set {how_to_set(key)}\n"
+        f"  Or machine-wide:          rite credential set {how_to_set(key)} --global\n"
         f"  Or in the environment:    export {env}=...\n"
         f"  What this project needs:  rite credential list"
     )

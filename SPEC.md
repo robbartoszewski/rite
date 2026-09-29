@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.56 · **Date:** 2026-09-29
+**Version:** 0.24.57 · **Date:** 2026-09-29
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -7018,6 +7018,14 @@ answered `none`, `rite credential set jira` recorded both, `type` stayed `none`,
 and rite read no board at all. A project already on another board keeps it and
 is told how to switch; rite does not replace a board it did not choose.
 
+**Every hint names the same command (0.24.57).** A hint for a missing
+credential names the service when a prompt can set the key (`rite credential set
+github`), and the key only where the service form cannot take it: a multi-line
+key, a `--stdin` read, or a per-Worker `sandbox_token_<worker>`
+(`services.how_to_set`, the one answer every hint uses). Measured in the v0.7.0
+dogfood: one `rite doctor` report said `set github_token` where `rite credential
+list` said `set github` for the same gap.
+
 **rite stores and injects; it does not interpret.** A credential is a name, a
 set of fields, and a destination environment variable. rite does not know what
 the API does and must not grow per-service logic beyond the field list and its
@@ -7404,6 +7412,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.57 — every missing-credential hint names the command `rite credential list` names (v0.7.0 dogfood).** §10.5 gains the paragraph. `credentials.services.how_to_set` is the one answer (the CLI's `_how_to_set` delegates to it; a multi-line key stays a key, where it used to suggest `set github_app`, which refuses it). Seven hints named a key where the service works: doctor's Worker-token line, the sandbox's no-token and cannot-push refusals (the second now also names `sandbox_token_<worker>`), `rite deliver`, a Claude Manager's missing login, the board's missing-credential message and `rite credential check`; and four doc lines. Tests: `how_to_set` for every promptable key and the keys that stay keys; a scan of every source file with split string literals joined (and a control that it sees a split one); each hint as a person reads it. Six mutations (each site back to the key, and `how_to_set` suggesting a service for a multi-line key) each go red. One existing assertion was vacuous — `set jira_token` was never printed, so "not printed" could not fail — and now asserts on the table's rows.
 
 **Changes in 0.24.56 — `rite credential set jira` makes Jira the board on a project with none (v0.7.0 dogfood).** §10.5 gains the paragraph. `Service.board_type` (`jira`); `_set_service` sets `ticket_backend.type` from it when the type is `none`, reports it with the other recorded config, and leaves any other board in place with a note. Tests through the real CLI in the dogfood's order (`rite init --yes`, then `rite credential set jira`): the type becomes `jira` and the Manager's board is Jira's and not ABSENT; a GitHub project keeps GitHub and is told. Mutations (type not set, the whole step removed, any board overwritten) each go red.
 

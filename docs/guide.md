@@ -694,7 +694,7 @@ coordination:
 
 Before the first start:
 
-1. For `lead`: `claude setup-token`, then `rite credential set claude_token`
+1. For `lead`: `claude setup-token`, then `rite credential set claude`
    (next section).
 2. For `helper`: install Goose and Ollama, and `ollama pull qwen3:8b`. Its
    `context_window` is set in its role, not in Ollama (see *A local model
@@ -737,7 +737,7 @@ sandbox**, so it cannot ask you to log in and cannot read your keychain
 login. Give each project with a Claude Manager a token of its own, once:
 
     claude setup-token                  # prints a one-year token
-    rite credential set claude_token    # paste it
+    rite credential set claude          # paste it
 
     rite start <manager> --sessions 3 --minutes 90
 

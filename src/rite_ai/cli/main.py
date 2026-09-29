@@ -514,7 +514,7 @@ def _doctor_worker_github_token(root: Path, modules: list, problems: list) -> No
         click.echo(
             f"workers: no GitHub token for {_first_few(lacking)}, so sandboxed "
             f"work on {_first_few(on_github)} could never be pushed — `rite "
-            "credential set github_token`"
+            f"credential set {_how_to_set('github_token')}`"
         )
         problems.append(
             f"no GitHub token for sandboxed Worker(s) {_first_few(lacking)}"
@@ -1991,15 +1991,10 @@ def _echo_known_credentials(extra: tuple[str, ...]) -> None:
 
 
 def _how_to_set(key: str) -> str:
-    """The argument to suggest for a missing key: its service when one
-    owns it, otherwise the key itself (a per-worker sandbox token is not
-    a service and never will be)."""
-    from rite_ai.credentials.services import SERVICES, service_key
+    """The argument to suggest for a missing key (`services.how_to_set`)."""
+    from rite_ai.credentials.services import how_to_set
 
-    for svc in SERVICES.values():
-        if any(service_key(svc.name, f.name) == key for f in svc.fields):
-            return svc.name
-    return key
+    return how_to_set(key)
 
 
 def _echo_credential_status(extra: tuple[str, ...], just_set: str = "") -> None:
@@ -2542,7 +2537,7 @@ def credential_check(name: str) -> None:
             )
         else:
             click.echo(
-                f"  run `rite credential set {name}`, "
+                f"  run `rite credential set {_how_to_set(name)}`, "
                 f"or set RITE_{name.upper()} in the environment",
                 err=True,
             )
@@ -3139,7 +3134,7 @@ def _provision_worker_token(root, worker, config) -> None:
     click.echo(_token_permission_line(config.sandbox.token_permissions))
     click.echo("  create one at https://github.com/settings/personal-access-tokens/new")
     if not click.confirm("  store the token now?", default=False):
-        click.echo(f"  skipped — run `rite credential set {key}` later")
+        click.echo(f"  skipped — run `rite credential set {_how_to_set(key)}` later")
         return
 
     value = click.prompt("  token", hide_input=True, confirmation_prompt=True)
@@ -6333,7 +6328,7 @@ def sandbox_start(
             # someone is starting work.
             f"Give the project its own: `rite credential migrate "
             f"{GLOBAL_TOKEN_CREDENTIAL}` moves the one you have, or `rite "
-            f"credential set {GLOBAL_TOKEN_CREDENTIAL}` from inside the "
+            f"credential set {_how_to_set(GLOBAL_TOKEN_CREDENTIAL)}` from inside the "
             f"project sets a new one.",
             err=True,
         )

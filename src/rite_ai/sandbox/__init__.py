@@ -1557,12 +1557,14 @@ def remote_access_refusal(
             "rite gives a sandboxed Worker a credential for github.com only, "
             "so its work could never leave the sandbox"
         )
+    from rite_ai.credentials.services import how_to_set
+
     first = "/".join(remotes[0].github or ())
     if not token:
         return (
             f"not starting '{worker}': no GitHub token for Workers, so its work "
             f"on {first} could never be pushed. Run `rite credential set "
-            "github_token` in this project, then start it again"
+            f"{how_to_set('github_token')}` in this project, then start it again"
         )
     if not gh:
         return (
@@ -1603,6 +1605,8 @@ def push_access_refusal(
     import urllib.error
     import urllib.request
 
+    from rite_ai.credentials.services import how_to_set
+
     basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
     for remote in remotes:
         if remote.github is None:
@@ -1634,7 +1638,9 @@ def push_access_refusal(
                 f"not starting '{worker}': its GitHub token cannot push to "
                 f"{owner}/{repo} ({why}). Give the token Contents: read and "
                 "write on that repository, or set another with `rite "
-                "credential set github_token`"
+                f"credential set {how_to_set('github_token')}` (or `rite "
+                f"credential set sandbox_token_{worker}`, if this Worker has "
+                "a token of its own)"
             )
     return None
 

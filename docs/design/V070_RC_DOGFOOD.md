@@ -69,7 +69,7 @@ Required, in this order, and recorded in the run log:
   github`. **Not a classic token**: it would skip step 10 of part 4 and also
   give every sandbox every repository Robert can write to (#85). `rite doctor`
   shows no GitHub-token problem for any Worker (#77, #86).
-- `claude setup-token`, stored with `rite credential set claude_token`, for
+- `claude setup-token`, stored with `rite credential set claude`, for
   the Owner and for sandboxed Workers.
 - **A Slack app of this project's own**, not one shared with another project.
   Since the v0.6.0 dogfood a second project on one app is refused (the

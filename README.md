@@ -256,7 +256,7 @@ coordination:
 
 ```bash
 claude setup-token                 # a Claude Manager needs a token of its own
-rite credential set claude_token   # paste it
+rite credential set claude         # paste it
 rite start lead --sessions 3 --minutes 90
 ```
 

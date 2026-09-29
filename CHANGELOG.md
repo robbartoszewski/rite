@@ -9,6 +9,15 @@ recorded the Jira site and project key but left the backend `none`, so rite
 read no board at all. It now sets `ticket_backend.type: jira` too, and says
 so. A project already on a GitHub board keeps it, and is told how to switch.
 
+### Every hint for a missing credential names the same command
+
+`rite doctor`, `rite sandbox start`, `rite deliver` and others told you to run
+`rite credential set github_token` where `rite credential list` said `rite
+credential set github`. Both work; now every hint names the service
+(`github`, `claude`, `jira`, `slack`), and names the key only where the service
+form cannot take it (a key read from a file with `--stdin`, or a Worker's own
+`sandbox_token_<worker>`).
+
 ## 0.7.0a1 (2026-09-29) — alpha: ticket refinement and Worker safety, a preview
 
 ⚠ **An alpha, not a release candidate.** It is cut to run one dogfood — a

@@ -592,7 +592,7 @@ class TestCredentialCheckExitCode:
             info.return_value.name = "jira_token"
             result = CliRunner().invoke(cli, ["credential", "check", "jira_token"])
 
-        assert "rite credential set jira_token" in result.output
+        assert "rite credential set jira`" in result.output
         assert "RITE_JIRA_TOKEN" in result.output
 
     def test_output_is_prose_not_an_internal_enum(self):
