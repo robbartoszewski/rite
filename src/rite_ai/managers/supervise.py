@@ -1745,7 +1745,7 @@ def _supervise(
             # ⚠ Deliveries BEFORE Worker requests: "deliver alpha, then start
             # alpha on its next ticket" in one cycle needs alpha's sandbox gone
             # first, and a delivery removes it (PB1).
-            from rite_ai.publishing.requests import honour as honour_deliveries
+            from rite_ai.publishing.requests import honour_deliveries
 
             honour_deliveries(root, manager, say)
             _honour_worker_requests(root, manager, broker, say)

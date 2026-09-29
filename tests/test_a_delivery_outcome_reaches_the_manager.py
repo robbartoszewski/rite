@@ -4,7 +4,7 @@ The Manager's instructions promise it hears every outcome in its next
 instruction (`publishing.requests.instructions`). A refusal that reaches only
 the terminal leaves a Manager waiting on work that went nowhere (DF13's
 shape). So each test here goes the whole way: a request file as the Manager
-writes it, `requests.honour` as the supervisor calls it, then the inbox taken
+writes it, `requests.honour_deliveries` as the supervisor calls it, then the inbox taken
 and composed into an instruction exactly as `supervise` does (`take` then
 `delivery_note`), and the check is on THAT text.
 
@@ -48,7 +48,7 @@ def _next_instruction(root: Path) -> str:
 
 def _honour(root: Path) -> list[str]:
     said: list[str] = []
-    requests.honour(root, MANAGER, said.append)
+    requests.honour_deliveries(root, MANAGER, said.append)
     return said
 
 
