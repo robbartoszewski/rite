@@ -333,6 +333,41 @@ def read_past_deadline(root: Path, owner: str, question: str, *, at: float) -> b
     return False
 
 
+def count_misses(
+    root: Path, owner: str, handed: dict[str, str], *, since: float
+) -> list[str]:
+    """The no-progress guard (part 3.4 step 0), at the end of a session that
+    was handed `handed` (ticket -> text hash) to start refining at `since`.
+
+    A ticket with no round sent since then counts a miss; one with a round
+    has its count cleared. `MISSES_TO_PARK` consecutive misses park it (not
+    started by the Manager): a Manager that cannot or will not start a
+    ticket's refinement costs two sessions, not a session a minute. Returns
+    a line for each ticket parked."""
+    parked: list[str] = []
+    for ticket, text in handed.items():
+        with locked(root, owner, ticket) as (attempt, save):
+            if attempt is None or attempt.text_sha256 != text:
+                attempt = Attempt(ticket=ticket, text_sha256=text)
+            if attempt.parked:
+                continue
+            if any(r.sent_at >= since for r in attempt.rounds):
+                if attempt.misses:
+                    attempt.misses = 0
+                    save(attempt)
+                continue
+            attempt.misses += 1
+            if attempt.misses >= MISSES_TO_PARK:
+                attempt.parked = NOT_STARTED
+                parked.append(
+                    f"{ticket} is PARKED (not started by the Manager): it was "
+                    f"handed over {attempt.misses} times and no round was sent. "
+                    f"`rite refine reopen {ticket}` tries again"
+                )
+            save(attempt)
+    return parked
+
+
 def all_attempts(root: Path, owner: str) -> dict[str, Attempt]:
     """Every attempt this Owner holds, by ticket."""
     found: dict[str, Attempt] = {}

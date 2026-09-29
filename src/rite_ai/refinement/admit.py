@@ -55,6 +55,9 @@ class Admission:
     """PARKED, CONFLICT, UNREADABLE: why, for each. No sessions."""
     ready: list[str] = field(default_factory=list)
     """REFINED: the Owner assigns these (TR5), and the loop counts them."""
+    texts: dict[str, str] = field(default_factory=dict)
+    """The text hash each ticket in `start` was admitted with: what the
+    no-progress guard counts a miss against (`rounds.count_misses`)."""
 
     @property
     def work(self) -> bool:
@@ -119,6 +122,7 @@ def admit(
             continue
         if len(out.start) < allowed:
             out.start.append(ticket.id)
+            out.texts[ticket.id] = rounds.text_of(ticket)
         else:
             out.queued.append(ticket.id)
     return out

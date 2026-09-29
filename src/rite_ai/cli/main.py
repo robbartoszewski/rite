@@ -6915,6 +6915,7 @@ class LoopAnswer(str):
 
     basis: tuple | None = ()
     detail: str = ""
+    starting: dict | None = None
 
     @classmethod
     def of(cls, cycle) -> "LoopAnswer":
@@ -6931,6 +6932,8 @@ class LoopAnswer(str):
             # the last refinement session, so two in a row are two events,
             # not one session repeated; the pacing is the guard here.
             answer.basis = None
+            # What the session is handed to start, for the no-progress guard.
+            answer.starting = dict(getattr(cycle.refinement, "texts", {}) or {})
         return answer
 
 

@@ -276,3 +276,49 @@ def test_writers_take_turns(tmp_path):
     assert sorted(r.k for r in rounds.load(tmp_path, "lead", t.id).rounds) == list(
         range(1, 21)
     )
+
+
+# --- the no-progress guard ------------------------------------------------------
+
+
+def test_a_ticket_handed_over_twice_with_no_round_is_parked(tmp_path):
+    t = ticket(1)
+    handed = {t.id: rounds.text_of(t)}
+    assert rounds.count_misses(tmp_path, "lead", handed, since=NOW) == []
+    assert rounds.load(tmp_path, "lead", t.id).misses == 1
+    (line,) = rounds.count_misses(tmp_path, "lead", handed, since=NOW + 60)
+    assert "PARKED (not started by the Manager)" in line
+    assert "rite refine reopen RT-1" in line
+    got = rounds.state_of(
+        board(st.NOT_REFINED, t), rounds.load(tmp_path, "lead", t.id), now=NOW
+    )
+    assert (got.name, got.detail) == (rounds.PARKED, rounds.NOT_STARTED)
+
+
+def test_a_round_sent_in_the_session_clears_the_count(tmp_path):
+    t = ticket(1)
+    handed = {t.id: rounds.text_of(t)}
+    rounds.count_misses(tmp_path, "lead", handed, since=NOW)
+    with rounds.locked(tmp_path, "lead", t.id) as (a, save):
+        a.rounds.append(sent(1, ago=-120))
+        save(a)
+    assert rounds.count_misses(tmp_path, "lead", handed, since=NOW + 60) == []
+    assert rounds.load(tmp_path, "lead", t.id).misses == 0
+
+
+def test_two_misses_must_be_consecutive(tmp_path):
+    t = ticket(1)
+    handed = {t.id: rounds.text_of(t)}
+    rounds.count_misses(tmp_path, "lead", handed, since=NOW)
+    with rounds.locked(tmp_path, "lead", t.id) as (a, save):
+        a.rounds.append(sent(1, ago=-120))
+        save(a)
+    rounds.count_misses(tmp_path, "lead", handed, since=NOW + 60)
+    assert rounds.count_misses(tmp_path, "lead", handed, since=NOW + 7200) == []
+    assert rounds.load(tmp_path, "lead", t.id).misses == 1
+
+
+def test_admission_hands_over_what_it_starts_with_its_text(tmp_path):
+    got = ad.admit(unrefined(5), open_max=5, start_per_session=2)
+    assert set(got.texts) == {"RT-1", "RT-2"}
+    assert got.texts["RT-1"] == rounds.text_of(ticket(1))
