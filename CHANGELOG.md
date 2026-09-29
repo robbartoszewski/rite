@@ -1,6 +1,46 @@
 # Changelog
 
-## Unreleased: 0.7.0 (notes in progress, completed at release)
+## 0.7.0a1 (2026-09-29) — alpha: ticket refinement and Worker safety, a preview
+
+⚠ **An alpha, not a release candidate.** It is cut to run one dogfood — a
+real contribution to yoloAI through rite — on ticket refinement and the
+Worker-safety work below. It is **not** the v0.7.0 scope, and it is not
+installed by default: `install.sh` still installs 0.6.0 unless you ask for
+this one (`RITE_VERSION=v0.7.0a1`).
+
+**What is in it:** ticket refinement (a Worker starts only on a ticket whose
+definition of done you agreed, refined with you in Slack; the record and
+predicate, the round protocol, delivering the record to the Worker, the
+refusal to route or assign unrefined work, every route carrying a ticket);
+publishing (`rite deliver`: `commit`, `push`, `pull_request`, `squash`,
+gated `auto_merge`; a pull request only as a draft, only on a repository the
+token's owner owns); and the Worker-safety fixes listed below — no GitHub
+token in a Worker's sandbox, no operator Claude settings in it, no Manager
+text run as shell, every Worker commit credited. Plus the fixes from the
+v0.6.0 dogfood and the per-Manager directory move (MM8).
+
+**What is NOT in it**, though the v0.7.0 plan (`docs/design/V070_RELEASE_PLAN.md`)
+names it:
+
+- **Cursor**: no Cursor Workers; no `rite doctor` for Cursor (CU5); the cost
+  observation (CU6) not done. Cursor Managers exist, and CU4 — the Cursor key
+  is readable from sibling sandboxes — is unresolved.
+- **Multi-Manager correctness**: per-Manager state (MM1), the cross-Manager
+  write test (MM2), claims carrying the Manager (MM3), the per-name argument
+  (MM6).
+- **The scenario gate**: not built (a design pass is open).
+- **Manager sandbox**: SB5, SB7, SB8, SB10 open.
+- **Refinement**: the `ready-to-work` label (TR7), TR8 beyond "rite never edits
+  a ticket's text", and the gate on an Owner working an unrefined ticket itself
+  (TR10).
+- **v0.6.0 leftovers not landed**: B7, C1, C3, C14, C15, C31, C33, C34, W14.
+
+⚠ **A Worker's sandbox is escapable in the yoloAI that ships today (dogfood
+#35).** From inside a Worker, a command handed to a tmux server running
+outside the sandbox runs as you. The fix belongs in yoloAI's seatbelt profile;
+it has been measured working **only in a locally patched yoloAI build**, and
+is not released by yoloAI. Until it is, run Workers only with that patched
+build first on `PATH`, or treat every Worker as able to act as you.
 
 ### Every commit a worker makes credits rite and Claude
 
