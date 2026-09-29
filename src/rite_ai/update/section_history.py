@@ -4,7 +4,7 @@ SHA-256 of each CLAUDE.md section every tagged release wrote identically
 for every project, so a file written before markers existed can still be
 shown to be rite's own rather than a user's edit.
 
-From: v0.1.0 (15/23 static), v0.2.0 (16/24 static), v0.3.0 (16/26 static), v0.4.0 (13/26 static), v0.5.0 (16/29 static), v0.5.1 (16/29 static), v0.6.0 (16/29 static).
+From: v0.1.0 (15/23 static), v0.2.0 (16/24 static), v0.3.0 (16/26 static), v0.4.0 (13/26 static), v0.5.0 (16/29 static), v0.5.1 (16/29 static), v0.6.0 (16/29 static), v0.7.0a1 (16/29 static).
 """
 
 # ruff: noqa: E501 — these lines are the bytes a release wrote.
@@ -19,6 +19,7 @@ RELEASES: tuple[str, ...] = (
     "v0.5.0",
     "v0.5.1",
     "v0.6.0",
+    "v0.7.0a1",
 )
 
 SECTIONS: dict[str, frozenset[str]] = {
@@ -37,6 +38,7 @@ SECTIONS: dict[str, frozenset[str]] = {
         {
             "8293dd7072da6b29e6ebd5dd186ca1beb705b73538944bfd69c5422b385d70a1",
             "9128f33b816e55ea173b2af5b405a7d2e3046d7783bf1ac31b39164f66b54ee3",
+            "cb84ff866f23e270bbd279e5a617d141610cabe484aad0965b1941209225f043",
             "ce1412363c47c552d631897ea6c587cefccd6b9cfc459a1f48ffe87718e1f9be",
         }
     ),
@@ -45,6 +47,7 @@ SECTIONS: dict[str, frozenset[str]] = {
             "396fed1df8a0e14f3bfa83cc9db2a2fe7e4201e73f243e970cd736e0e386a7fa",
             "abe50ebbb80bcd7eff0242f85307646d70286d6084b44bebb913337b643ba8fd",
             "ae4fa6690fa507602191ed5913afe1e6ff061ffdee0646b5bf813a0dc62a53d4",
+            "e96dce3a816df13149efd8aaca5db2920513f9b2c8cb2fd7e883762964e862d3",
         }
     ),
     "Publish gate": frozenset(
@@ -62,17 +65,20 @@ SECTIONS: dict[str, frozenset[str]] = {
     "Ticket workflow": frozenset(
         {
             "2ce6b90e5f6b32c021e6dabab1ec1e1101a685020b664d690cc4df2fb7a2db95",
+            "5ae99eaabf86d6709d6f665c9d54905ebe8d0545a0b8fb7b11cf86590d5a6637",
             "944f0aec70c690489ab8096d955c97c15d03dc6704159c766eb8e8657d9b72f5",
         }
     ),
     "What you must not do": frozenset(
         {
+            "5813ef11bba6f6b0fd135f2f951ed94b12aa1fc0812cfcbc4293e99d83bf12d9",
             "6fd3b38385e6b8a2fc90306e80e5323dc7d1607ecba941bc5e5d62ae6f78708d",
             "fb4fc0490f98d41d2acee58e8de0215eb6ef55d18811b49f87f592cf3258081a",
         }
     ),
     "When this ticket is done": frozenset(
         {
+            "b2bd6cd4d9643564cf000b1e3e0cfaa6a7b112d9fca30e2e1d902e1f40087cd2",
             "ebb3e542519785410680fd95e13ba56864ad490b73675f15df58a61e2d74f018",
         }
     ),
@@ -84,6 +90,7 @@ SECTIONS: dict[str, frozenset[str]] = {
     "Working the queue": frozenset(
         {
             "9e26bd753ebe9152372a009e18eebc2fde60e693dc99d6ffb234b56d577b4c04",
+            "a19fbc544305ecbd853418a77099441ccf97a8393d139cf9b9927ede1d8368a4",
         }
     ),
     "Your ticket": frozenset(
@@ -113,6 +120,22 @@ PATTERNS: dict[str, tuple[tuple[str | int, ...], ...]] = {
             3,
             "<!-- rite:sha256=c82e5fda773511b0 -->",
         ),
+        (
+            "## Modules checked out in your workspace",
+            "",
+            3,
+            "",
+            "**This is not an assignment, and not a specialism. A Worker is a workspace —",
+            "not a module, a component or a specialism** (SPEC.md §5.3.4). Every Worker",
+            "carries the same project credentials, so any Worker can take any ticket;",
+            "tickets go to whoever is free. Two Workers editing different files of the",
+            "same module at once is normal, and `rite claim` on the paths is what keeps",
+            'you apart — not which module you are "for". If you were started on a ticket',
+            "for something not checked out above, say so rather than assuming the ticket",
+            "went to the wrong Worker.",
+            3,
+            "<!-- rite:sha256=f5861daddda46046 -->",
+        ),
     ),
     "Role: Manager": (
         (
@@ -130,6 +153,24 @@ PATTERNS: dict[str, tuple[tuple[str | int, ...], ...]] = {
             "`workers/<name>/` with its own checkouts and its own scoped instructions.",
             "",
             3,
+        ),
+        (
+            "## Role: Manager",
+            "",
+            "You dispatch work to your own Workers and defer to the Owner on project-wide",
+            "matters (SPEC.md §2.2). You do not see or control another Manager's Workers.",
+            "",
+            "**Workers are interchangeable, and a Worker is a workspace — not a module,",
+            "a component or a specialism** (SPEC.md §5.3.4). Assign by who is free, never",
+            "one Worker per module; `rite claim` on the paths is what keeps two Workers",
+            "out of each other's way.",
+            "",
+            "**Workers:** none yet. Add one with `rite add worker <name>` — it creates",
+            "`workers/<name>/` with its own checkouts and its own scoped instructions.",
+            "",
+            3,
+            "",
+            "<!-- rite:sha256=056f79b16cab4661 -->",
         ),
         (
             "## Role: Manager",
@@ -220,6 +261,28 @@ PATTERNS: dict[str, tuple[tuple[str | int, ...], ...]] = {
             "",
             4,
             "",
+            "<!-- rite:sha256=056f79b16cab4661 -->",
+        ),
+        (
+            "## Role: Owner",
+            "",
+            "You own the board and the project-wide ticket queue (SPEC.md §2.3): assign",
+            "work, monitor blocked and stalled tickets, and make project-wide calls that",
+            "a Worker or Manager shouldn't make alone.",
+            "",
+            "**Workers are interchangeable, and a Worker is a workspace — not a module,",
+            "a component or a specialism** (SPEC.md §5.3.4). `workers/<name>/` holds its",
+            "own checkout of every module, and every Worker carries the same project",
+            "credentials, so any Worker can take any ticket. Assign by who is free, and",
+            "never keep one Worker per module: two Workers editing different files of the",
+            "same module at once is normal, and `rite claim` on the paths is what keeps",
+            "them apart. Naming Workers after modules is the mistake this note exists to",
+            "prevent — it makes half of them idle while the rest queue.",
+            "",
+            3,
+            "",
+            4,
+            "",
             "<!-- rite:sha256=944f0aec70c69048 -->",
         ),
         (
@@ -287,6 +350,60 @@ PATTERNS: dict[str, tuple[tuple[str | int, ...], ...]] = {
         ),
     ),
     "Workflow": (
+        (
+            "## Workflow",
+            "",
+            3,
+            "   repos, right branches, no residue from a previous task (SPEC §2.1). A",
+            "   dirty tree blocks and is never discarded. In a sandbox, `rite sandbox",
+            "   start` already ran it before your session began, and it cannot run from",
+            "   inside: skip it.",
+            "2. Claim paths before touching them:",
+            3,
+            "   directories, never a whole module. If the claim is refused, another",
+            "   worker holds an overlapping path: do not work on those paths, and do not",
+            "   claim a narrower or wider path to get around the refusal. If `rite claim`",
+            "   fails any other way (an error, not a refusal), you hold nothing: say so",
+            "   and stop rather than working unclaimed.",
+            "3. While you hold a claim, beat every ten minutes or so:",
+            3,
+            "   liveness record `rite status` and the watchdog read — a worker that never",
+            "   beats is reported STALLED.",
+            "4. Work the ticket on its own branch: if a module is on its default branch,",
+            "   create one named for the ticket first (`git checkout -b <ticket-id>`).",
+            "   Commit as you go, not only at the end: a session can stop at any moment,",
+            "   and an uncommitted change is the one thing nothing collects. **Whether you",
+            "   push is not yours to decide**: `TICKET.md`, under **Publishing**, says for",
+            "   each module whether to push the branch or only commit it, as the project",
+            "   was configured when you started. Under `commit` you never push; rite",
+            "   brings your commits out of the sandbox itself.",
+            "5. Run the module's own **test and lint** commands. `rite prepare` prints",
+            "   them every time it runs, resolved at that moment — those are the ones to",
+            "   use. **Module commands** above lists them as `Test:` and `Lint:` as of",
+            "   when this Worker was created, and the module map in the",
+            "   project root's `CLAUDE.md` has them as of `rite init`; a command recorded",
+            "   in `modules.yaml` since then appears only in `rite prepare`'s output. In a",
+            "   sandbox `rite prepare` ran before you started and you cannot see its",
+            "   output, so use **Module commands** above. Run",
+            '   them as written; where an entry says "not detected", ask rather than',
+            "   inventing a command, because one that is wrong in a way that still exits",
+            "   0 looks exactly like a passing suite.",
+            "6. Verify your own fix before review. A green suite says the project still",
+            "   works, not that your change does anything — delete the fix and re-run",
+            "   whatever proves it.",
+            "7. Run `/review` (the review convention from the project root).",
+            "8. Do with your final commits what **Publishing** in `TICKET.md` says:",
+            "   commit them, and push and open a pull request only where it says so.",
+            "   **Never merge a pull request yourself.** Merging after checks is the",
+            "   User's decision, or rite's own step that checks the green is on exactly",
+            "   the commit being merged.",
+            "9. Leave your claim held, and do not release it yourself: it is released",
+            "   when your work lands, which is when it is delivered under `commit`, and",
+            "   after the merge otherwise. Holding it until then is what stops another",
+            "   Worker changing the same paths first.",
+            "",
+            "<!-- rite:sha256=6fb2f4a2a49f2514 -->",
+        ),
         (
             "## Workflow",
             "",
@@ -441,6 +558,32 @@ PATTERNS: dict[str, tuple[tuple[str | int, ...], ...]] = {
         ),
     ),
     "Your ticket": (
+        (
+            "## Your ticket",
+            "",
+            "You are started with a ticket ID and the id of its refinement record. Both",
+            "the ticket's text and its **agreed definition of done** are in `TICKET.md` in",
+            "your working directory: rite read them from the board on the host just before",
+            "this session started, checked that the definition of done is one the User",
+            "agreed, and the file says when. You hold no board credential, so",
+            "`rite board show` will not work here; the file is your ticket. It is a copy",
+            "taken at that time, not the live ticket.",
+            "",
+            'Work to the section "Agreed definition of done", not to the title: its',
+            "checklist, scope and Verify are what done means, and you do not judge",
+            "whether the ticket is complete enough. Cite the record id in your last",
+            "commit message. ⚠ Give `git` your commit message in a file, `git commit -F",
+            "<file>`, never in double quotes on the command line: there the shell runs",
+            "anything in backticks or `$( )` before git sees it, and your text quotes a",
+            "ticket someone else wrote. You hold no GitHub credential: rite pushes your",
+            "branch and opens the pull request itself. If there is no `TICKET.md`, or it",
+            'has no "Agreed definition of done" section, say so and stop. If the',
+            "definition of done cannot be met as written (a path it names does not exist,",
+            "two items contradict), report",
+            "exactly that and stop: never invent the missing piece.",
+            "",
+            3,
+        ),
         (
             "## Your ticket",
             "",
