@@ -55,6 +55,9 @@ class Admission:
     """PARKED, CONFLICT, UNREADABLE: why, for each. No sessions."""
     ready: list[str] = field(default_factory=list)
     """REFINED: the Owner assigns these (TR5), and the loop counts them."""
+    owed: list[str] = field(default_factory=list)
+    """Open, with his answer in and the Owner's next round not sent: handed
+    over for that round, and counted by the no-progress guard like a start."""
     texts: dict[str, str] = field(default_factory=dict)
     """The text hash each ticket in `start` was admitted with: what the
     no-progress guard counts a miss against (`rounds.count_misses`)."""
@@ -109,6 +112,10 @@ def admit(
             out.ready.append(ticket.id)
         elif state.open:
             out.open.append(ticket.id)
+            latest = state.attempt.latest if state.attempt else None
+            if latest is not None and latest.answered and not state.attempt.accepted:
+                out.owed.append(ticket.id)
+                out.texts[ticket.id] = rounds.text_of(ticket)
         elif state.name == rounds.WAITING:
             out.waiting.append(ticket.id)
         elif state.name in NEEDS_STARTING:
@@ -129,7 +136,12 @@ def admit(
 
 
 def reason_to_start(
-    admission: Admission, *, first_look: bool, replies: int, deadlines: int
+    admission: Admission,
+    *,
+    first_look: bool,
+    replies: int,
+    deadlines: int,
+    owed: int = 0,
 ) -> str:
     """Why a session starts for refinement this cycle, or "" (step 0).
 
@@ -143,6 +155,8 @@ def reason_to_start(
         return f"{replies} repl{'y' if replies == 1 else 'ies'} to refinement arrived"
     if deadlines:
         return f"{deadlines} refinement round(s) reached their deadline"
+    if owed:
+        return f"{owed} answered round(s) are waiting for the Owner's next round"
     if first_look and admission.work:
         return "refinement work is waiting and none has started in this run"
     return ""

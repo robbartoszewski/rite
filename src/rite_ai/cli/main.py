@@ -4137,9 +4137,7 @@ def refine_ask(ticket_id: str, text: str, is_message: bool) -> None:
     # The shape, checked here so a mistake costs no turn. The quotes and the
     # round number are checked by the supervisor, against the ticket and his
     # answers, which this side of the boundary cannot be trusted to hold.
-    checked = refinement_ask.check(
-        text, k=1, rounds=refinement_ask.MAX_QUESTIONS, ticket_text="", answers=[]
-    )
+    checked = refinement_ask.check(text, k=1, ticket_text="", answers=[])
     shape = [p for p in checked.problems if "Quote exactly" not in p]
     if shape:
         click.echo("refusing: the round is not in the shape rite sends:", err=True)
@@ -4165,7 +4163,7 @@ def refine_ask(ticket_id: str, text: str, is_message: bool) -> None:
 def refine_reopen(ticket_id: str, manager: str) -> None:
     """Restart a ticket's refinement — a person, at the host (TR2).
 
-    For a ticket PARKED (not agreed after its rounds, its thread unreadable,
+    For a ticket PARKED (unanswered too many times in a row, its thread unreadable,
     or not started by the Manager), or one you want asked again from the
     start. Its rounds begin again at 1, and your earlier answers are kept.
     Replying about it in your DM, starting with its id, resumes it too, and
@@ -7146,6 +7144,19 @@ def _ticket_work_rule(root: Path, manager: str) -> str:
     return ticket_work(manager, owner, one_root=one_root)
 
 
+def _refinement_briefing(root: Path, manager: str, board) -> str:
+    """`refinement.instructions` then `refinement.brief`, for `manager`."""
+    from rite_ai.config.parse import ParseError, parse_config
+    from rite_ai.refinement import instructions as refinement_instructions
+
+    config = parse_config(root / ".rite" / "config.yaml")
+    if isinstance(config, ParseError):
+        return ""
+    return refinement_instructions.instructions(
+        root, manager, config
+    ) + refinement_instructions.brief(root, manager, board, config)
+
+
 def _with_refinement(router, refine):
     """`router`, then `refine`, as one step. Either may be None."""
     if router is None and refine is None:
@@ -7484,6 +7495,13 @@ def _slack_listener(root: Path, manager: str):
         owner=config.slack.owner_user,
         broadcast=config.slack.broadcast,
         project=root,
+        # TR2 (TRQ8): refinement rounds to a private channel, when configured
+        # and when rite can both post and read there; the DM otherwise.
+        refinement_channel=(
+            config.refinement.channel
+            if config.refinement.questions_to == "channel"
+            else ""
+        ),
     )
     for line in listener.open():
         click.echo(line)
@@ -7791,6 +7809,10 @@ def _start_a_manager(
             refine=lambda say, messages=(): refinement_step(
                 root, role.name, board, say, messages=messages
             ),
+            # TR2/TR3: how the Owner refines, and this cycle's refinement
+            # work, from one read of each scheduled ticket; "" for a Manager
+            # that does not refine.
+            refinement_brief=lambda say: _refinement_briefing(root, role.name, board),
             # TR2: refinement runs wherever routing runs (before, during and
             # after a cycle, and in every wait), so a round the Owner asks
             # for goes out in seconds and a chat instruction he left

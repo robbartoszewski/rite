@@ -142,3 +142,31 @@ def test_a_secondary_does_not_refine(tmp_path, key):
     board = Backlog(key, _ids(3))
     assert _cycle(root, board, refiner="helper").verdict == IDLE
     assert _cycle(root, board, refiner="lead").verdict == REFINING
+
+
+def test_an_answered_round_whose_next_round_was_never_sent_is_owed(tmp_path, key):
+    """Found in the TR2 live run: he answered at 10:58, the sessions meant to
+    send round 2 failed, and with his reply older than the last session the
+    loop would have waited on him while the Owner owed him the next round."""
+    root = project(tmp_path)
+    board = Backlog(key, _ids(1))
+    with rounds.locked(root, "lead", "RT-1") as (_a, save):
+        save(
+            rounds.Attempt(
+                ticket="RT-1",
+                text_sha256=rounds.text_of(board.tickets[0]),
+                rounds=[
+                    rounds.Round(
+                        k=1,
+                        sent_at=NOW - 900,
+                        deadline=NOW + DAY,
+                        proposal=False,
+                        answered_at=NOW - 800,
+                    )
+                ],
+            )
+        )
+    rounds.record_session(root, "lead", NOW - 60)  # after his answer
+    got = _cycle(root, board)
+    assert got.verdict == REFINING and "next round" in got.detail, got.detail
+    assert got.refinement.owed == ["RT-1"] and "RT-1" in got.refinement.texts

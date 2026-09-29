@@ -976,6 +976,7 @@ def _supervise(
     now: object = None,
     watch: object = None,
     refine: object = None,
+    refinement_brief: object = None,
 ) -> SuperviseResult:
     """Run the Manager until a bound or a stop verdict ends it.
 
@@ -1556,6 +1557,7 @@ def _supervise(
             extras = (
                 delivery_note(waiting_for_it)
                 + refined_now
+                + _refinement_brief(refinement_brief, say)
                 + how_to_reply(root, manager)
                 + checkins.instructions(root, manager)
                 + boundary.instruction
@@ -2080,6 +2082,22 @@ def _refinement_step(refine, say) -> None:
         refine(say)
     except Exception as e:  # noqa: BLE001 - said, and the cycle goes on
         say(f"refinement could not run this cycle: {type(e).__name__}: {e}")
+
+
+def _refinement_brief(brief, say) -> str:
+    """How the Owner refines, and this cycle's refinement work (TR2), or "".
+    Never ends a run: a brief that could not be composed is said, and the
+    cycle goes on without it, which the Owner is told."""
+    if not callable(brief):
+        return ""
+    try:
+        return brief(say) or ""
+    except Exception as e:  # noqa: BLE001 - said, and the cycle goes on
+        say(f"the refinement brief could not be composed: {e}")
+        return (
+            "\n\n## Refinement: this cycle (rite)\n\nrite could not compose "
+            "this cycle's refinement list. Do not refine from memory.\n"
+        )
 
 
 def _refinement_heard(refine, messages, say) -> str:

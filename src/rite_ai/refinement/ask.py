@@ -43,7 +43,7 @@ _PROPOSAL = re.compile(r"^\s*proposal\s*:\s*$", re.IGNORECASE)
 _NUMBERED = re.compile(r"^\s*(\d+)[.)]\s+(\S.*)$")
 _ITEM = re.compile(r"^\s*[-*]\s+(\S.*)$")
 _HEADER_LIKE = re.compile(
-    r"refinement\b.{0,40}\bround\s+\d+\s+of\s+\d+|reply in this thread",
+    r"refinement of \S+, round \d+|reply in this thread|^\s*rite:",
     re.IGNORECASE,
 )
 """rite's own first line. The Owner may not write one: a second header in
@@ -88,20 +88,38 @@ def _parse_item(line: str) -> Item:
     return Item(text=text, quotes=quotes, proposed=proposed)
 
 
+def _quoted_in(quote: str, text: str) -> bool:
+    """`quote` appears in `text` as whole words: "ok" is not in "look"."""
+    pattern = (r"\b" if quote[:1].isalnum() else "") + re.escape(quote)
+    pattern += r"\b" if quote[-1:].isalnum() else ""
+    return re.search(pattern, text) is not None
+
+
+def _carries_meaning(quote: str, accept_words) -> bool:
+    """A quote says where an item came from only if it holds a real word:
+    one of at least three letters that is not an accept word. Found live
+    (TR2, 2026-09-29): an item the Owner invented was tagged
+    `[answer: "ok"]`, which is in his reply and says nothing about the item."""
+    accepting = {w.casefold() for w in accept_words}
+    return any(
+        len(word) >= 3 and word.casefold() not in accepting
+        for word in re.findall(r"[A-Za-z]+", quote)
+    )
+
+
 def check(
-    text: str, *, k: int, rounds: int, ticket_text: str, answers: list[str]
+    text: str,
+    *,
+    k: int,
+    ticket_text: str,
+    answers: list[str],
+    accept_words=("ok", "yes", "accept", "lgtm", "proceed"),
 ) -> Checked:
     """Parse and lint one round's message. Every problem is listed, so the
-    Owner fixes the message once, not one refusal at a time."""
+    Owner fixes the message once, not one refusal at a time. **There is no
+    cap on rounds** (Robert's correction to TRQ2): a complex topic takes the
+    rounds it needs while he is answering."""
     problems: list[str] = []
-    if k > rounds:
-        return Checked(
-            None,
-            [
-                f"this would be round {k}, and a ticket gets {rounds} rounds "
-                "(refinement.rounds)"
-            ],
-        )
     ask = Ask()
     section = "intro"
     intro: list[str] = []
@@ -132,11 +150,13 @@ def check(
             numbered = _NUMBERED.match(line)
             if numbered:
                 numbers.append(int(numbered.group(1)))
-                ask.questions.append(numbered.group(2).strip())
+                # Tags belong on proposal items. In a question they would be
+                # shown to him raw (found live), so they are dropped.
+                ask.questions.append(_TAG.sub("", numbered.group(2)).strip())
                 continue
             if ask.questions and not _ITEM.match(line):
                 # A continuation of the question above.
-                ask.questions[-1] += " " + line.strip()
+                ask.questions[-1] += " " + _TAG.sub("", line).strip()
                 continue
             problems.append(
                 f"line {n} is under Questions: and is not a numbered question (`1. …`)"
@@ -197,7 +217,14 @@ def check(
                 "split it, so the User sees which part is yours"
             )
         for source, quote in item.quotes:
-            if not any(quote in hay for hay in haystacks[source]):
+            if not _carries_meaning(quote, accept_words):
+                problems.append(
+                    f'proposal item {i} quotes {source}: "{quote}", which is too '
+                    "short to say where the item came from. Quote the words that "
+                    "say it, or tag it [proposed]"
+                )
+                continue
+            if not any(_quoted_in(quote, hay) for hay in haystacks[source]):
                 where = (
                     "the ticket's title or description"
                     if source == "ticket"
@@ -210,10 +237,31 @@ def check(
     return Checked(None if problems else ask, problems)
 
 
-def first_line(ticket: str, k: int, rounds: int) -> str:
+def first_line(ticket: str, k: int) -> str:
     """rite's line naming the round. The thread label an answer is matched
     by is `asking`'s line above it."""
-    return f"Refinement of {ticket}, round {k} of {rounds}"
+    return f"Refinement of {ticket}, round {k}"
+
+
+def normalised_items(items) -> tuple[str, ...]:
+    """A proposal as compared across rounds: each item's words, case and
+    spacing aside. Rewording counts as a change; that is his to judge."""
+    return tuple(" ".join(str(i).casefold().split()) for i in items)
+
+
+_ORDINAL = {2: "second", 3: "third", 4: "fourth", 5: "fifth"}
+
+
+def unchanged_line(same: int, since: int) -> str:
+    """rite's line when a proposal is the same as the round before it: no
+    progress, made visible, never enforced (the coordinator's safeguard for
+    uncapped rounds). `same` counts this round too."""
+    nth = _ORDINAL.get(same, f"{same}th")
+    return (
+        f"rite: this is the {nth} round in a row with the same proposal: "
+        f"nothing in it has changed since round {since}. Reply `ok` to accept "
+        "it as it is, or say what is still wrong with it."
+    )
 
 
 def render(
@@ -221,13 +269,16 @@ def render(
     *,
     ticket: str,
     k: int,
-    rounds: int,
     manager: str,
     accept_words: list[str],
+    unchanged: str = "",
 ) -> str:
     """The message the User sees. rite's lines are rite's; the Owner's
-    `[proposed]` items are said to be the Owner's."""
-    lines = [first_line(ticket, k, rounds)]
+    `[proposed]` items are said to be the Owner's; `unchanged` is rite's
+    line when the proposal has not moved."""
+    lines = [first_line(ticket, k)]
+    if unchanged:
+        lines += ["", unchanged]
     if ask.intro:
         lines += ["", ask.intro]
     if ask.questions:

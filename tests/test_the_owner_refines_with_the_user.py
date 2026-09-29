@@ -74,6 +74,18 @@ class Board(GitHubBackend):
         self.comments[ticket_id].append(text)
         return None
 
+    def label(self, ticket_id, labels, remove=None):
+        """Recorded, never sent: this board has no network behind it."""
+        self.labels = getattr(self, "labels", {})
+        now = set(self.labels.get(ticket_id, set()))
+        now |= set(labels)
+        now -= set(remove or [])
+        self.labels[ticket_id] = now
+        return None
+
+    def list_tickets(self, _filter=None):
+        return list(self.tickets.values())
+
     def create(self, title, description="", labels=None):
         """A new issue, kept as a board keeps it: with its trailing
         whitespace trimmed, as GitHub does."""
@@ -154,7 +166,7 @@ class TestARoundGoesOutChecked:
         assert question.kind == mailbox.QUESTION, "an action item, tracked by RP1"
         first, second = question.text.splitlines()[:2]
         assert first.startswith(f"KAN-7 · {sent.question} · Manager lead is waiting")
-        assert second == "Refinement of KAN-7, round 1 of 3"
+        assert second == "Refinement of KAN-7, round 1"
         assert board.comments["KAN-7"] == [question.text.split("\n", 1)[1]]
         (r,) = rounds.load(tmp_path, OWNER, "KAN-7").rounds
         assert (r.k, r.where, r.deadline) == (1, sent.question, NOW + 24 * HOUR)
@@ -357,30 +369,131 @@ class TestAcceptingIsAWordNotAJudgement:
 
 
 class TestParking:
-    def test_n_rounds_answered_without_an_accept_parks_and_says_how_to_resume(
+    def test_a_discussion_he_is_part_of_is_never_capped(self, tmp_path, key):
+        """Robert, correcting TRQ2: "A topic may be complex and need many
+        rounds to resolve. As long as the User is responsive, the limit
+        shouldn't apply". Six rounds, each answered, and none of them an
+        accept: still asking, never parked."""
+        board = Board(kan7())
+        _to_round_two(tmp_path, board)
+        for n in range(3, 7):
+            reply_to_latest(
+                tmp_path, board, f"not quite, try {n}s", sent_at=NOW + n * HOUR
+            )
+            item = f'- The default is {n} seconds [answer: "try {n}s"]\n'
+            assert send(
+                tmp_path,
+                board,
+                text=ROUND_2.replace("[proposed]\n", "[proposed]\n" + item),
+                now=NOW + n * HOUR + 60,
+            ).ok, n
+        attempt = rounds.load(tmp_path, OWNER, "KAN-7")
+        assert attempt.latest.k == 6 and not attempt.parked
+        assert attempt.unanswered == 0
+
+    def test_three_unanswered_messages_park_and_say_how_to_bring_it_back(
         self, tmp_path, key
     ):
         board = Board(kan7())
-        _to_round_two(tmp_path, board)
-        reply_to_latest(tmp_path, board, "make it 10s", sent_at=NOW + 3 * HOUR)
-        third = ROUND_2.replace(
-            "[proposed]\n",
-            '[proposed]\n- The default is 10 seconds [answer: "make it 10s"]\n',
-        )
-        assert send(tmp_path, board, text=third, now=NOW + 4 * HOUR).ok
-        _, notes = reply_to_latest(
-            tmp_path, board, "hmm not sure", sent_at=NOW + 5 * HOUR
-        )
-        assert any("PARKED: not agreed after 3 rounds" in n for n in notes)
+        assert send(tmp_path, board).ok  # message 1
+        at = NOW
+        for n in (1, 2, 3):
+            at += 25 * HOUR
+            question = rounds.load(tmp_path, OWNER, "KAN-7").latest.where
+            assert rounds.read_past_deadline(tmp_path, OWNER, question, at=at)
+            assert rounds.load(tmp_path, OWNER, "KAN-7").unanswered == n
+            if n == 3:  # at the cap, not yet parked: no fourth message
+                assert protocol.nudge(tmp_path, OWNER, at=at, limits=LIMITS) == []
+            parked = protocol.park_unanswered(tmp_path, OWNER, board, limits=LIMITS)
+            if n < 3:
+                assert parked == []
+                lines = protocol.nudge(tmp_path, OWNER, at=at, limits=LIMITS)
+                assert any(f"({n} of 3 unanswered)" in x for x in lines), lines
+        assert parked and "3 messages in a row went unanswered" in parked[0]
+        assert rounds.load(tmp_path, OWNER, "KAN-7").parked == rounds.NOT_ANSWERED
+        assert protocol.nudge(tmp_path, OWNER, at=at, limits=LIMITS) == []
         notice = [m for m in outbox(tmp_path) if "is parked" in m.text]
-        assert notice and "rite refine reopen KAN-7" in notice[-1].text
+        assert notice and "reply in your DM starting with `KAN-7`" in notice[-1].text
         assert any("is parked" in c for c in board.comments["KAN-7"])
+        questions = [m for m in outbox(tmp_path) if m.kind == "question"]
+        assert len(questions) == 4  # the round, two nudges, the notice
+
+    def test_any_reply_resets_the_count(self, tmp_path, key):
+        """A qualified accept included: "ok but make it 10s" is a reply."""
+        board = Board(kan7())
+        _to_round_two(tmp_path, board)
+        question = rounds.load(tmp_path, OWNER, "KAN-7").latest.where
+        rounds.read_past_deadline(tmp_path, OWNER, question, at=NOW + 30 * HOUR)
+        assert rounds.load(tmp_path, OWNER, "KAN-7").unanswered == 1
+        reply_to_latest(tmp_path, board, "ok but make it 10s", sent_at=NOW + 31 * HOUR)
+        assert rounds.load(tmp_path, OWNER, "KAN-7").unanswered == 0
+
+    def test_the_same_proposal_twice_is_said_in_the_message(self, tmp_path, key):
+        """No cap on a discussion, so no progress is made visible."""
+        board = Board(kan7())
+        _to_round_two(tmp_path, board)
+        reply_to_latest(tmp_path, board, "hmm", sent_at=NOW + 3 * HOUR)
+        assert send(tmp_path, board, text=ROUND_2, now=NOW + 3 * HOUR + 60).ok
+        shown = [m for m in outbox(tmp_path) if "Refinement of KAN-7" in m.text]
+        assert "same proposal" not in shown[1].text, "round 2 is new"
+        assert (
+            "rite: this is the second round in a row with the same proposal: "
+            "nothing in it has changed since round 2"
+        ) in shown[2].text
+
+    def test_a_third_identical_proposal_escalates_as_a_blocker(self, tmp_path, key):
+        """Robert: if the Owner loops without converging, "it says so loudly
+        and escalates it as a blocker on the board and in the checkpoint
+        status updates". The blocker is for deciding: what was proposed,
+        what he said, what is still open."""
+        board = Board(kan7())
+        _to_round_two(tmp_path, board)
+        for n in (3, 5):
+            reply_to_latest(
+                tmp_path, board, f"hmm, not sure {n}", sent_at=NOW + n * HOUR
+            )
+            got = send(tmp_path, board, text=ROUND_2, now=NOW + n * HOUR + 60)
+        assert not got.ok and "ESCALATED AS A BLOCKER" in got.message
+        rounds_sent = [m for m in outbox(tmp_path) if "Refinement of KAN-7" in m.text]
+        assert len(rounds_sent) == 3, "the third identical round was not sent"
+        attempt = rounds.load(tmp_path, OWNER, "KAN-7")
+        assert attempt.parked == rounds.NO_PROGRESS
+        (blocker,) = [m for m in outbox(tmp_path) if "is BLOCKED" in m.text]
+        assert blocker.kind == "question", "it needs him, and comes back"
+        text = blocker.text
+        assert "proposed the same thing in round 2" in text
+        assert "1. The HTTP request timeout in main.py is set by a flag" in text
+        assert "> hmm, not sure 3" in text and "> hmm, not sure 5" in text
+        assert "Still open, as the Owner last asked it:" in text
+        assert "reply starting with `KAN-7`" in text
+        assert board.labels["KAN-7"] == {"blocked"}
+        assert board.comments["KAN-7"][-1] == text
+        assert any(
+            "BLOCKED, needs your decision" in x
+            for x in protocol.checkin_lines(tmp_path, OWNER)
+        )
+        # He decides: his reply unblocks it and takes the label off.
+        text_in = slack._header(
+            "Owner's DM", "sent Tue 18:00", "addressed", "INSTRUCTION"
+        )
+        reply = protocol.attribute(
+            tmp_path,
+            OWNER,
+            text_in + "\n" + slack._quoted("KAN-7 fine: a flag, default 10s, done"),
+            message="m9",
+            sent_at=NOW + 8 * HOUR,
+        )
+        notes = protocol.handle(tmp_path, OWNER, board, reply, limits=LIMITS)
+        assert any("restarts it" in n for n in notes)
+        assert board.labels["KAN-7"] == set()
+        assert rounds.load(tmp_path, OWNER, "KAN-7").parked == ""
+        assert protocol.checkin_lines(tmp_path, OWNER) == []
 
     def test_his_reply_restarts_a_parked_ticket(self, tmp_path, key):
         board = Board(kan7())
         send(tmp_path, board)
         with rounds.locked(tmp_path, OWNER, "KAN-7") as (a, save):
-            a.parked = rounds.NOT_AGREED
+            a.parked = rounds.NOT_ANSWERED
             save(a)
         text = (
             slack._header("Owner's DM", "sent Tue 11:00", "addressed", "INSTRUCTION")
@@ -403,3 +516,39 @@ def test_a_request_is_taken_once_and_a_bad_one_is_said(tmp_path):
     }
     assert got[1] == {"ticket": "KAN-7", "text": ROUND_1}
     assert protocol.take(tmp_path, OWNER) == []
+
+
+def test_the_checkpoint_status_update_carries_the_blocker(tmp_path, key):
+    """Wired into the check-in itself, not only available."""
+    from rite_ai.managers import checkins
+
+    (tmp_path / ".rite").mkdir(exist_ok=True)
+    with rounds.locked(tmp_path, OWNER, "KAN-7") as (_a, save):
+        save(
+            rounds.Attempt(
+                ticket="KAN-7",
+                text_sha256="t",
+                rounds=[rounds.Round(k=4, sent_at=NOW, deadline=NOW, proposal=True)],
+                parked=rounds.NO_PROGRESS,
+                blocker="KAN-7 is BLOCKED: …",
+            )
+        )
+    checkins._deliver_checkin(tmp_path, OWNER)
+    (checkin,) = [m for m in outbox(tmp_path) if m.kind == "checkin"]
+    assert "BLOCKED, needs your decision:" in checkin.text
+    assert "- KAN-7: no agreed definition of done" in checkin.text
+
+
+def test_a_qualified_accept_updates_the_proposal_and_writes_nothing(tmp_path, key):
+    """Robert: only a bare accept word writes the record; "ok but make it
+    10s" is an answer that updates the proposal, never discarded."""
+    board = Board(kan7())
+    _to_round_two(tmp_path, board)
+    _, notes = reply_to_latest(
+        tmp_path, board, "ok but make it 10s", sent_at=NOW + 3 * HOUR
+    )
+    assert st.status(board, "KAN-7").state == st.NOT_REFINED
+    assert any("WITH A CHANGE" in n and "make it 10s" in n for n in notes), notes
+    assert rounds.load(tmp_path, OWNER, "KAN-7").answers[-1]["words"] == (
+        "ok but make it 10s"
+    )
