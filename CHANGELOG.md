@@ -106,6 +106,26 @@ without agreeing, or a ticket the Owner was handed twice without asking you
 anything, is parked: rite tells you, and `rite refine reopen <ID>` (or
 replying about it, or editing the ticket) starts it again.
 
+An instruction you give the Owner in chat is refined straight away too. If
+you do not reply within `refinement.chore_after_minutes` (60 by default),
+rite files it as a chore with exactly your words, so it is not lost, and
+refinement continues on it. Every chore rite files now opens by saying it
+was unrefined when created, and no work starts on it until a definition of
+done is agreed.
+
+The Owner is told, every cycle, which tickets to refine and where each
+stands, with the ticket's text and your earlier answers, so it never has to
+read the board to refine (which it cannot on Jira).
+
+**Refinement questions can go to a private channel** instead of your DM:
+`refinement.questions_to: channel` and `refinement.channel: <its id>`, with
+the app invited (`/invite @rite`) and, for a private channel, the app's
+`groups:history` scope. rite checks at start that it can post and read
+there; if not, the questions go to your DM and it says why. Only your own
+replies in a question's thread there count as answers; a teammate's are
+context. The check-in stays in your DM, and a question you have not
+confirmed seeing comes back there.
+
 ### `rite start` sees a ticket rite has just filed
 
 A board's list lags new writes by seconds, on GitHub (measured, up to 6.5 s)
