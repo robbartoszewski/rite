@@ -1429,6 +1429,7 @@ def host_git_identity() -> tuple[str, str] | None:
                 ["git", "config", "--global", "--get", key],
                 capture_output=True,
                 text=True,
+                errors="replace",
                 timeout=10,
             )
         except (OSError, subprocess.SubprocessError):
