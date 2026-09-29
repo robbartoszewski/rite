@@ -140,10 +140,11 @@ def test_a_ticket_that_cannot_be_read_refuses_the_start(tmp_path, monkeypatch):
         result, seen = _start(_Board(), "--ticket", "KAN-7")
 
     assert result.exit_code == 1
-    last = result.output.strip().splitlines()[-1]
+    *_, detail, last = result.output.strip().splitlines()
     # UNREADABLE, said as rite could not check: never as "no definition of done".
-    assert "ticket KAN-7" in last and "UNREADABLE" in last
-    assert "JIRA rejected the credentials" in last
+    assert "ticket KAN-7: UNREADABLE" in detail
+    assert "JIRA rejected the credentials" in detail
+    assert last.startswith("UNREADABLE: rite could not confirm")
     assert "new" not in seen, "no sandbox was created"
     assert not (worker / DELIVERY_FILE).exists()
 

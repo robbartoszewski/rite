@@ -2,6 +2,32 @@
 
 ## Unreleased: 0.7.0 (notes in progress, completed at release)
 
+### ⚠ Workers now start only on a ticket with an agreed definition of done
+
+**Read this before upgrading: Workers stop starting on tickets you have not
+refined.** This applies to every ticket on your boards, old ones included.
+
+`rite sandbox start --ticket <ID>`, which is also what a Manager's Worker
+request runs, checks the ticket with one read of the board and starts the
+Worker only if rite reports it REFINED. The Worker is then given the ticket
+and its agreed definition of done in `TICKET.md`, and the record id to cite
+in its pull request. Any other state refuses the start, and says which state
+and what to do:
+
+- **NOT REFINED** (no agreed definition of done): agree one on the host with
+  `rite refine accept <ID> --item "…"` (repeat `--item`; add `--verify` for
+  commands that prove it), or `--as-written` if the ticket already has a
+  "Definition of done" heading. Then start it again.
+- **STALE** (the ticket changed after it was agreed): agree it again, the
+  same way.
+- **CONFLICT** or **UNREADABLE**: `rite refine status <ID>` says why. rite
+  assumes nothing: UNREADABLE means rite could not check, not that there is
+  no definition of done.
+
+A Manager whose Worker request is refused is told the same in its next
+instruction. Until the Owner can refine tickets with you over Slack (later in
+0.7.0), `rite refine accept` is how a ticket gets refined.
+
 ### rite's verifier no longer contradicts a true reply about a file it cannot read
 
 The verifier runs inside the Owner's boundary, which cannot read another
@@ -187,15 +213,6 @@ title or text of its own, and only your messages can become one: a
 message in the Owner's DM, or one sent from this machine. A message routed
 by another Manager, or said in a channel, cannot. The Manager is told
 the new ticket's id, or why the board refused it, in its next instruction.
-
-**A Worker starts only on a ticket with an agreed definition of done.**
-`rite sandbox start --ticket` checks the ticket with one read of the board and
-starts the Worker only if rite reports it REFINED; `TICKET.md` then carries
-the ticket and its agreed definition of done from that same read, and the
-Worker is told the record id to cite in its pull request. Any other state (NOT
-REFINED, STALE, CONFLICT, UNREADABLE) refuses the start and says which. This
-applies to every ticket on your boards from this release: agree a definition
-of done with `rite refine accept <ID>` first.
 
 **`rite sandbox start <worker> --prompt "…"`** files your text, exactly as
 typed, as a chore labelled `chore` and `scheduled`, and starts nothing: the

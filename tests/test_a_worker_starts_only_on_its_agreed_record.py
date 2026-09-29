@@ -96,7 +96,8 @@ def test_an_unrefined_ticket_starts_no_worker_and_leaves_no_copy(tmp_path, monke
         result, seen = _start("--ticket", "7")
 
     assert result.exit_code == 1
-    assert "NOT REFINED" in result.output and "rite refine status 7" in result.output
+    last = result.output.strip().splitlines()[-1]
+    assert last.startswith("NOT REFINED") and "rite refine accept 7" in last
     assert "new" not in seen, "no sandbox was created"
     assert not (worker / DELIVERY_FILE).exists()
 
@@ -132,3 +133,58 @@ def test_a_prompt_files_an_unrefined_chore_and_starts_nothing(tmp_path, monkeypa
     assert "rite refine accept 8" in result.output
     assert "rite sandbox start alpha --ticket 8" in result.output
     assert "new" not in seen
+
+
+# --- the refusal reaches the Manager, with what to do (DF13's path) ----------
+
+
+def test_every_refusal_line_names_a_remedy_and_survives_the_brokers_cut():
+    """`broker.honour` keeps the last line of stderr, cut to 200 characters,
+    and that is what the Manager's next instruction carries. So the last line
+    must name the state and the remedy, for the longest ticket id accepted."""
+    from rite_ai.cli.main import refused_for_refinement
+    from rite_ai.managers.broker import _TICKET_MAX
+    from rite_ai.refinement import status as st
+
+    longest = "K" * _TICKET_MAX
+    for state in (st.NOT_REFINED, st.STALE, st.CONFLICT, st.UNREADABLE):
+        line = refused_for_refinement(state, longest)
+        assert len(line) <= 200, (state, len(line))
+        assert line.startswith(state)
+        verb = "accept" if state in (st.NOT_REFINED, st.STALE) else "status"
+        assert f"rite refine {verb} {longest}" in line
+
+
+def test_a_managers_refused_request_tells_it_the_state_and_the_remedy(
+    tmp_path, monkeypatch
+):
+    """End to end on the Manager's side: the CLI's real refusal, through the
+    broker's real extraction and DF13's note, into the Manager's inbox."""
+    import subprocess
+
+    from rite_ai.managers import broker as broker_mod
+    from rite_ai.managers.mailbox import INBOX, read
+    from rite_ai.managers.supervise import _honour_worker_requests
+
+    _project(tmp_path, monkeypatch)
+    with board_with(tmp_path, monkeypatch, TICKET, refined=False):
+        cli_result, _ = _start("--ticket", "7")
+    assert cli_result.exit_code == 1
+
+    def launched(argv, **kw):
+        return subprocess.CompletedProcess(argv, 1, "", cli_result.output)
+
+    monkeypatch.setattr(broker_mod.subprocess, "run", launched)
+    request = broker_mod.Request(worker="alpha", ticket="7")
+    requests = broker_mod.requests_dir(tmp_path, "lead")
+    requests.mkdir(parents=True, exist_ok=True)
+    (requests / "1.json").write_text('{"worker": "alpha", "ticket": "7"}')
+    _honour_worker_requests(
+        tmp_path,
+        "lead",
+        lambda raw: broker_mod.honour(tmp_path, request),
+        lambda _line: None,
+    )
+    (note,) = read(tmp_path, "lead", INBOX)
+    assert "NOT started: NOT REFINED" in note.text
+    assert 'rite refine accept 7 --item "…"' in note.text

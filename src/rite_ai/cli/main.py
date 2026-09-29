@@ -6182,6 +6182,39 @@ def _board_source(config, role: str = "workers") -> str:
     return tb.type
 
 
+def refused_for_refinement(state: str, ticket: str) -> str:
+    """The one line a refused start ends with: the state, and what to do.
+
+    What a Manager's next instruction carries when its Worker request is
+    refused for refinement, so it names the remedy, not only the state: a
+    refusal that names no way forward is how a person learns to look for a
+    way round. At most 200 characters for any ticket id rite accepts (64),
+    because that is all `broker.honour` keeps.
+    """
+    from rite_ai.refinement import status as st
+
+    if state == st.NOT_REFINED:
+        return (
+            "NOT REFINED: this ticket has no agreed definition of done. A person "
+            f'agrees one on the host: `rite refine accept {ticket} --item "…"`.'
+        )
+    if state == st.STALE:
+        return (
+            "STALE: the ticket changed after its definition of done was agreed. "
+            "A person re-agrees it on the host: "
+            f'`rite refine accept {ticket} --item "…"`.'
+        )
+    if state == st.CONFLICT:
+        return (
+            "CONFLICT: two records each claim to be current. A person decides "
+            f"which stands; `rite refine status {ticket}` on the host names them."
+        )
+    return (
+        f"{state}: rite could not confirm a definition of done; nothing was "
+        f"assumed. `rite refine status {ticket}` on the host says why."
+    )
+
+
 def _deliver_ticket(
     worker: str, worker_dir: Path, ticket: str, root, config
 ) -> tuple[str, str]:
@@ -6214,13 +6247,18 @@ def _deliver_ticket(
     checked = of(root, config, ticket)
     if not checked.refined or checked.record is None or checked.ticket is None:
         clear_delivery(worker_dir)
+        # ⚠ TWO lines, and the LAST one is the one that matters. A Manager's
+        # Worker request reaches its next instruction as the last line of
+        # this command's stderr, cut to 200 characters (`broker.honour`, then
+        # DF13's `tell_manager`). So the last line carries the state and what
+        # to do, and fits for any ticket id; the detail, which can be long,
+        # comes first, for the terminal.
         click.echo(
-            f"not starting '{worker}': ticket {ticket} has no agreed definition "
-            f"of done that rite could confirm ({checked.state}: {checked.detail}). "
-            "A Worker starts only on a ticket rite reports REFINED "
-            f"(`rite refine status {ticket}`).",
+            f"not starting '{worker}': ticket {ticket}: {checked.state}: "
+            f"{checked.detail}",
             err=True,
         )
+        click.echo(refused_for_refinement(checked.state, ticket), err=True)
         raise SystemExit(1)
     read_at = read_at_now()
     rendered = render_ticket(checked.ticket)
