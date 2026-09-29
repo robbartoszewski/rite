@@ -62,6 +62,12 @@ class Outcome:
     ok: bool
     why: str
     fix: str = ""
+    # Set when a pull request was opened or found: its number, repository
+    # and the exact head rite pushed, which is the only head `auto_merge`
+    # will ever merge (piece 5).
+    pr: int | None = None
+    repo: str = ""
+    head: str = ""
 
     def note(self) -> str:
         head = "Delivered" if self.ok else "NOT delivered"
@@ -379,9 +385,16 @@ def _open_pull_request(
             f"could not ask GitHub for an open PR from {branch}: {_said(existing)}",
             "Check the token's pull_requests permission, then deliver again",
         )
+    head = _sha(project, f"refs/heads/{branch}") or ""
     if found:
         return Outcome(
-            module.name, ticket, True, f"{home}; pushed; PR {found[0]['url']}"
+            module.name,
+            ticket,
+            True,
+            f"{home}; pushed; PR {found[0]['url']}",
+            pr=int(found[0]["number"]),
+            repo=slug,
+            head=head,
         )
     log = _run(
         ["git", "log", "--reverse", "--format=- %s", f"{module.branch}..{branch}"],
@@ -424,7 +437,16 @@ def _open_pull_request(
             "Open it by hand from the pushed branch, or deliver again",
         )
     url = (made.stdout.strip().splitlines() or [""])[-1]
-    return Outcome(module.name, ticket, True, f"{home}; pushed; PR {url}")
+    number = url.rstrip("/").rsplit("/", 1)[-1]
+    return Outcome(
+        module.name,
+        ticket,
+        True,
+        f"{home}; pushed; PR {url}",
+        pr=int(number) if number.isdigit() else None,
+        repo=slug,
+        head=head,
+    )
 
 
 def _changed_key(then: dict, now: dict) -> tuple[str, str]:
@@ -467,7 +489,12 @@ def _worker_modules(root: Path, worker: str, modules: list[Module]) -> list[Modu
 
 
 def deliver(
-    root: Path, worker: str, ticket: str | None = None, *, by_user: bool = False
+    root: Path,
+    worker: str,
+    ticket: str | None = None,
+    *,
+    by_user: bool = False,
+    manager: str = "",
 ) -> Delivered | Refused:
     """Deliver `worker`'s finished task. See the module docstring."""
     from rite_ai.config.parse import ParseError, parse_config, parse_modules
@@ -637,6 +664,42 @@ def deliver(
         sandbox = "sandbox kept, stopped, so nothing in it is lost"
     if released:
         sandbox = f"{sandbox}; {released}"
+
+    # Every pull request opened or found is watched from now on (piece 5):
+    # its merge releases the claims, and `auto_merge` may merge it.
+    from rite_ai.publishing import merging
+
+    for outcome in outcomes:
+        if outcome.pr is not None:
+            then = (
+                started.modules.get(outcome.module, {})
+                if isinstance(started, publish_record.Record)
+                else {}
+            )
+            try:
+                merging.watch(
+                    root,
+                    merging.Watched(
+                        worker=worker,
+                        ticket=ticket,
+                        module=outcome.module,
+                        repo=outcome.repo,
+                        number=outcome.pr,
+                        head=outcome.head,
+                        manager=manager,
+                        auto_merge_at_start=then.get("auto_merge") is True,
+                    ),
+                )
+            except OSError as e:
+                # Said on the outcome: an unwatched PR is one whose merge
+                # never releases the claims and that auto_merge never sees.
+                outcomes[outcomes.index(outcome)] = Outcome(
+                    outcome.module,
+                    outcome.ticket,
+                    False,
+                    f"{outcome.why}, but rite cannot watch it ({e})",
+                    "It must be merged, and the claims released, by hand",
+                )
 
     from rite_ai.reporting import events
 

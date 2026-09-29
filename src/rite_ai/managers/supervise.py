@@ -1748,6 +1748,11 @@ def _supervise(
             from rite_ai.publishing.requests import honour_deliveries
 
             honour_deliveries(root, manager, say)
+            # And the PRs delivered earlier: merged ones release their
+            # claims, and `auto_merge` merges through its gate (PB1 piece 5).
+            from rite_ai.publishing.merging import tick as watch_pull_requests
+
+            watch_pull_requests(root, manager, say)
             _honour_worker_requests(root, manager, broker, say)
             if callable(chores):
                 # TR9: at the boundary with the Worker requests, and for the

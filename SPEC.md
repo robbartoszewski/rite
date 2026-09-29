@@ -1411,9 +1411,15 @@ pushes the ticket branch and opens a pull request with `gh pr create`. Both
 run only after rite's publish gate passed on exactly the commits being sent
 (a gate that could not run is not a pass), with the Worker's own token, and
 never with `--force`: a branch that moved is refused by the remote and
-reported, never rebased. `rite deliver` never merges; `gh pr merge` appears
-nowhere in the package. `tests/test_blast_radius.py` allows `git push` and
-`gh pr` in `rite_ai/publishing/deliver.py` and nowhere else. A test enumerates every `["git", ...]` argument
+reported, never rebased. `rite deliver` never merges. **rite merges in one place,
+`rite_ai/publishing/merging.py`, only under `publish.auto_merge`, which the
+settings the Worker was started under AND the config read at that attempt
+must both allow**, only when `merge_gate` finds a green on exactly the head
+rite pushed that contains the base's live tip, on a base branch requiring
+up-to-date branches, with the publish gate passed by name, and only as
+`gh pr merge --match-head-commit <that head>`. `tests/test_blast_radius.py`
+allows `git push` in `deliver.py`, `gh pr` in `deliver.py` and `merging.py`,
+and `gh pr merge` only in `merging.py` with `--match-head-commit`. A test enumerates every `["git", ...]` argument
 list rather than grepping file text, because docstrings legitimately discuss
 pushing.
 

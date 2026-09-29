@@ -166,12 +166,27 @@ def _responses(**overrides):
         ],
         f"repos/o/r/commits/{HEAD}/check-runs": {
             "check_runs": [
-                {"id": 1, "name": "tests", "head_sha": HEAD, "status": "completed",
-                 "conclusion": "failure"},
-                {"id": 2, "name": "tests", "head_sha": HEAD, "status": "completed",
-                 "conclusion": "success"},
-                {"id": 3, "name": GATE_CHECK, "head_sha": HEAD,
-                 "status": "completed", "conclusion": "success"},
+                {
+                    "id": 1,
+                    "name": "tests",
+                    "head_sha": HEAD,
+                    "status": "completed",
+                    "conclusion": "failure",
+                },
+                {
+                    "id": 2,
+                    "name": "tests",
+                    "head_sha": HEAD,
+                    "status": "completed",
+                    "conclusion": "success",
+                },
+                {
+                    "id": 3,
+                    "name": GATE_CHECK,
+                    "head_sha": HEAD,
+                    "status": "completed",
+                    "conclusion": "success",
+                },
             ]
         },
         f"repos/o/r/commits/{HEAD}/status": {"sha": HEAD, "statuses": []},

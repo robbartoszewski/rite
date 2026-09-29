@@ -158,7 +158,7 @@ def refusal(facts: Facts, published_head: str) -> str | None:
     return None
 
 
-def gh_api(path: str) -> object:
+def _gh_api(path: str) -> object:
     """`gh api <path>`, parsed as JSON. Raises on failure: a read that failed
     is never a read that found nothing."""
     done = subprocess.run(
@@ -193,7 +193,7 @@ def _latest_per_name(runs: list[dict]) -> list[Check]:
     ]
 
 
-def read_facts(repo: str, number: int, api=gh_api) -> Facts:
+def read_facts(repo: str, number: int, api=_gh_api) -> Facts:
     """Everything `refusal` needs, from GitHub. `repo` is `owner/name`."""
     pr = api(f"repos/{repo}/pulls/{number}")
     head = str(pr["head"]["sha"])
