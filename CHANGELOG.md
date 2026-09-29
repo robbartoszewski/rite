@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### `rite credential set jira` now makes Jira the board
+
+On a project whose ticket backend was `none`, `rite credential set jira`
+recorded the Jira site and project key but left the backend `none`, so rite
+read no board at all. It now sets `ticket_backend.type: jira` too, and says
+so. A project already on a GitHub board keeps it, and is told how to switch.
+
 ## 0.7.0a1 (2026-09-29) — alpha: ticket refinement and Worker safety, a preview
 
 ⚠ **An alpha, not a release candidate.** It is cut to run one dogfood — a
