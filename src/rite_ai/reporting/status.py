@@ -41,7 +41,7 @@ from rite_ai.label import project_name
 from rite_ai.pool import PoolStatus
 from rite_ai.pool import probe as probe_pool
 from rite_ai.reporting.heartbeat import StallReport, detect_stalls, not_started
-from rite_ai.sandbox.questions import Unknown, WorkerQuestion, worker_question
+from rite_ai.sandbox.questions import WorkerQuestion
 from rite_ai.state import CorruptStateError
 
 
@@ -76,13 +76,12 @@ class ProjectStatus:
     it". Never released automatically — see `claims/suspect.py`."""
     stalled_workers: list[StallReport] = field(default_factory=list)
     not_started_workers: list[str] = field(default_factory=list)
-    worker_questions: dict = field(default_factory=dict)
-    """worker -> its sandbox's unanswered question (`WorkerQuestion`), or
-    `Unknown` when that could not be checked. Absent: no question, or the
-    project does not sandbox Workers (dogfood Q2)."""
     worker_sandboxes: dict = field(default_factory=dict)
-    """worker -> its sandbox's state, where one exists. So a Worker whose
-    sandbox ran is not reported as "not started" (dogfood S1)."""
+    """worker -> `SandboxActivity`: what yoloAI says of its sandbox, and the
+    question pending in it (dogfood Q2), in the sentence `rite sandbox
+    status` and `rite loop run` print too (S1). Absent only when nothing was
+    asked; `sandbox_unchecked` then says why."""
+    sandbox_unchecked: str = ""
     handovers: list[HandoverSnapshot] = field(default_factory=list)
     coordination_cost: CoordinationCostCounts = field(
         default_factory=CoordinationCostCounts
@@ -257,8 +256,7 @@ def collect_status(root: Path, board: bool = False) -> ProjectStatus:
     if project.workers:
         status.stalled_workers = detect_stalls(root, names, threshold_seconds=threshold)
         status.not_started_workers = not_started(root, names)
-        if project.config.sandbox.enabled:
-            _sandbox_facts(root, names, status)
+        _sandbox_facts(root, names, status, project.config.sandbox.enabled)
 
     # Outside the `if`, deliberately: this walks the LEDGER rather than the
     # roster, and the case it exists for is a claim held by a name nobody
@@ -323,23 +321,24 @@ def collect_status(root: Path, board: bool = False) -> ProjectStatus:
 _STALE_AFTER_HOURS = 12
 
 
-def _sandbox_facts(root: Path, names: list[str], status: ProjectStatus) -> None:
-    """Each Worker's sandbox state and unanswered question, into `status`.
+def _sandbox_facts(
+    root: Path, names: list[str], status: ProjectStatus, enabled: bool
+) -> None:
+    """Each Worker's sandbox, observed once, into `status`.
 
-    Only for a project that sandboxes Workers: elsewhere there is no
-    sandbox to ask, and a missing `yoloai` must not make every Worker line
-    say "could not check". A state that could not be read is left out
-    rather than printed as one."""
-    from rite_ai.sandbox import worker_sandbox_status
+    Asked whatever `sandbox.enabled` says: that setting governs setup, and
+    `rite sandbox start` runs without it, so a project with it off can still
+    have a Worker running in a sandbox. Only a project with it off AND no
+    yoloAI on the machine is not asked, and the report says so rather than
+    reading the silence as "no sandbox"."""
+    from rite_ai.sandbox import _yoloai_binary
+    from rite_ai.sandbox.activity import observe
 
+    if not enabled and _yoloai_binary() is None:
+        status.sandbox_unchecked = "yoloai is not installed"
+        return
     for name in names:
-        state = worker_sandbox_status(name, root)
-        if not state.known or state.value in ("", "not found"):
-            continue
-        status.worker_sandboxes[name] = state.value
-        asked = worker_question(name, root)
-        if asked is not None:
-            status.worker_questions[name] = asked
+        status.worker_sandboxes[name] = observe(name, root)
 
 
 def format_claim_age(claim: Claim) -> str:
@@ -528,32 +527,42 @@ def format_status(status: ProjectStatus) -> str:
     if status.workers:
         lines.append(f"\nworkers ({len(status.workers)}):")
         for w in status.workers:
-            mods = ", ".join(w.modules) if w.modules else "all"
-            if not w.modules and not status.modules:
-                # "all" of none is none (dogfood S1: a Worker with nothing
-                # checked out was reported as holding every module).
-                mods = "none — no modules are registered"
-            asked = status.worker_questions.get(w.name)
-            sandbox = status.worker_sandboxes.get(w.name, "")
+            # A Worker's modules are the ones cloned into it when it was
+            # added; an empty list is none, never "all" (dogfood S1:
+            # `modules=[all]` for a Worker created with 0 modules).
+            mods = ", ".join(w.modules) or (
+                "none" if status.modules else "none — no modules are registered"
+            )
+            seen = status.worker_sandboxes.get(w.name)
+            asked = seen.question if seen is not None else None
+            quiet = w.name in status.not_started_workers
+            said: list[str] = []
             if w.name in stalled_names:
-                marker = " — STALLED"
-            elif isinstance(asked, WorkerQuestion):
-                # ⚠ Before "not started": a Worker that read its ticket and
-                # asked has started, and is blocked on a person (Q2).
-                marker = (
-                    f" — WAITING ON A QUESTION since {asked.since()}: "
+                said.append("STALLED")
+            if isinstance(asked, WorkerQuestion):
+                # A Worker that read its ticket and asked has started, and is
+                # blocked on a person (Q2); the question says the sandbox.
+                said.append(
+                    f"WAITING ON A QUESTION since {asked.since()}: "
                     f"{asked.headline(120)}"
                 )
-            elif w.name in status.not_started_workers:
-                marker = (
-                    f" — sandbox {sandbox}, no heartbeat or claims yet"
-                    if sandbox
-                    else " — not started (no heartbeat or claims yet)"
-                )
             else:
-                marker = ""
-            if isinstance(asked, Unknown):
-                marker += f" (could not check for a question: {asked.reason})"
+                # ⚠ Never "not started" (dogfood S1: said of a Worker whose
+                # sandbox had read its ticket). What was observed is said as
+                # observed: no heartbeat and no claim, and the sandbox in the
+                # sentence every other view prints.
+                if quiet:
+                    said.append("no heartbeat or claims yet")
+                if seen is None:
+                    if quiet:
+                        said.append(f"no sandbox checked ({status.sandbox_unchecked})")
+                elif quiet or seen.exists is not False:
+                    said.append(seen.describe())
+                if quiet and (seen is None or seen.exists is not True):
+                    said.append(
+                        "a session opened by hand shows only once it beats or claims"
+                    )
+            marker = f" — {'; '.join(said)}" if said else ""
             lines.append(f"  {w.name}: modules=[{mods}]{marker}")
             if isinstance(asked, WorkerQuestion):
                 lines.append(

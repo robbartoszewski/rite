@@ -246,9 +246,17 @@ def plan_cycle(
 
     if not free:
         cycle.verdict = SATURATED
+        # "A queue" only of Workers seen working. One waiting on a question,
+        # or whose sandbox sits at its prompt, is not queued work (dogfood
+        # S1: a Worker blocked eight hours was counted as saturation).
+        stuck = [w.name for w in cycle.workers if not w.verdict.startswith("busy")]
         cycle.detail = (
             f"{len(cycle.ready)} ticket(s) waiting and no Worker free — a "
             "queue, not a fault, and NOT a reason to stop"
+            if not stuck
+            else f"{len(cycle.ready)} ticket(s) waiting and no Worker free, "
+            f"but {', '.join(stuck)} not seen working (see workers above) — "
+            "NOT a reason to stop, and not a queue that clears on its own"
         )
         return cycle
 
@@ -477,25 +485,24 @@ def _look_at_worker(root: Path, name: str, clock: float, sandbox_status) -> Work
         view.evidence.append("no heartbeat recorded")
 
     if sandbox_status is not None:
-        status = sandbox_status(name, root)
-        view.evidence.append(f"sandbox: {status}")
-        if not getattr(status, "known", True):
+        from rite_ai.sandbox.activity import observe
+        from rite_ai.sandbox.questions import WorkerQuestion
+
+        # The same sentence `rite status` and `rite sandbox status` print
+        # (dogfood S1: these three views said "busy", "not started" and
+        # "idle" about one Worker at one moment).
+        seen = observe(name, root, sandbox_status)
+        view.evidence.append(seen.describe())
+        if seen.exists is None:
             # "Could not ask" is not "no sandbox", and only one of them is
             # safe to dispatch onto.
             view.verdict = "cannot tell — the sandbox could not be asked"
             return view
-        if str(status) not in ("not found", ""):
+        if seen.exists:
             # ⚠ A Worker waiting on a question is not "busy" in any sense a
-            # reader can act on (dogfood Q2: this line said "busy — a
-            # sandbox is running" for a Worker blocked eight hours on three
-            # unanswered questions). Still not free: it holds its ticket.
-            from rite_ai.sandbox.questions import (
-                Unknown,
-                WorkerQuestion,
-                worker_question,
-            )
-
-            asked = worker_question(name, root)
+            # reader can act on (dogfood Q2). Still not free: it holds its
+            # ticket.
+            asked = seen.question
             if isinstance(asked, WorkerQuestion):
                 view.evidence.append(f"question: {asked.headline(120)}")
                 view.verdict = (
@@ -503,9 +510,15 @@ def _look_at_worker(root: Path, name: str, clock: float, sandbox_status) -> Work
                     f"unanswered (`rite sandbox status {name}`)"
                 )
                 return view
-            if isinstance(asked, Unknown):
-                view.evidence.append(f"could not check for a question: {asked.reason}")
-            view.verdict = "busy — a sandbox is running for it"
+            # Not free while any sandbox exists for it: start refuses a
+            # second one. The verdict is that decision; the state is the
+            # shared sentence in the evidence, not a word of the loop's own
+            # ("busy" said working of an agent waiting at its prompt).
+            view.verdict = (
+                "busy — its sandbox's agent is working"
+                if str(seen.status) == "active"
+                else "not free — a sandbox exists for it"
+            )
             return view
 
     view.free = True
