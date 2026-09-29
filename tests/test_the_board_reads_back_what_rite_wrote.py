@@ -327,3 +327,27 @@ class TestEachBoardsOwnFilter:
         assert jira.matches(t, TicketFilter(status="to do")) is True
         assert jira.matches(Ticket(id="RT-1", title="t"), None) is False
         assert jira.matches(t, TicketFilter(assignee="alpha")) is None
+
+
+class TestTheWrapperHidesNothing:
+    def test_every_backend_method_is_forwarded(self):
+        """A method the base class implements (a fail-closed default) is found
+        on the wrapper before `__getattr__` is ever asked, so a wrapper that
+        does not define it answers with the base's default instead of the
+        board's. Found when TR1 added `read_thread` while this was in review:
+        every wrapped board said it could not read comments."""
+        import inspect
+
+        missing = [
+            name
+            for name, _ in inspect.getmembers(TicketBackend, inspect.isfunction)
+            if not name.startswith("_") and name not in ReadsItsOwnWrites.__dict__
+        ]
+        assert missing == []
+
+    def test_a_wrapped_board_reads_its_threads(self, board, tmp_path):
+        from rite_ai.tickets.interface import Thread
+
+        thread = Thread(ticket=Ticket(id="1", title="t"), comments=[], complete=True)
+        board.read_thread = lambda ticket_id: thread
+        assert _rite(board, tmp_path).read_thread("1") is thread

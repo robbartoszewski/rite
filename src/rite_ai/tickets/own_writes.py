@@ -293,6 +293,9 @@ class ReadsItsOwnWrites(TicketBackend):
     def comment(self, ticket_id, text):
         return self.inner.comment(ticket_id, text)
 
+    def read_thread(self, ticket_id):
+        return self.inner.read_thread(ticket_id)
+
     def query(self, raw_query):
         return self.inner.query(raw_query)
 
