@@ -521,6 +521,56 @@ def _doctor_worker_github_token(root: Path, modules: list, problems: list) -> No
         )
 
 
+def _doctor_publishing(project, problems: list[str]) -> None:
+    """Each module's EFFECTIVE publish settings, and where each came from.
+
+    ⚠ **Per module, never "the project's strategy".** A module override that
+    silently does not apply is the failure PB1's resolution exists to
+    prevent, so the line printed is `effective`'s, the same function the
+    publish step reads."""
+    from rite_ai.publishing.settings import effective, refusals
+
+    for module in project.modules:
+        click.echo(f"publish: {effective(project.config.publish, module).describe()}")
+    for refusal in refusals(project.config, project.modules):
+        click.echo(f"publish: REFUSED — {refusal}")
+        problems.append(f"publish: {refusal}")
+
+
+def _refuse_unavailable_publishing(root: Path) -> None:
+    """Refuse to start when a publish setting cannot run (PB1).
+
+    At START, so a Worker never spends a session on work that then cannot
+    leave.
+
+    ⚠ **Reads config.yaml and modules.yaml only, and an unreadable one
+    REFUSES.** `load_project` would also fail on any Worker's broken
+    `worker.yml`, and a draft that returned quietly on that failure let
+    `push_to_shared` through whenever an unrelated file was broken:
+    "could not read the settings" answered as "no setting is refused"."""
+    from rite_ai.config.parse import ParseError, parse_config, parse_modules
+    from rite_ai.publishing.settings import refusals
+
+    config = parse_config(root / ".rite" / "config.yaml")
+    modules = parse_modules(root / ".rite" / "modules.yaml")
+    unreadable = [p for p in (config, modules) if isinstance(p, ParseError)]
+    if unreadable:
+        click.echo(
+            "refusing to start: rite cannot read which publish settings are in "
+            "force, so it cannot tell whether they can run",
+            err=True,
+        )
+        for problem in unreadable:
+            click.echo(f"  {problem.file}: {problem.message}", err=True)
+        raise SystemExit(1)
+    found = refusals(config, modules)
+    if found:
+        click.echo("refusing to start: a publish setting cannot run here", err=True)
+        for refusal in found:
+            click.echo(f"  {refusal}", err=True)
+        raise SystemExit(1)
+
+
 def _first_few(names: list[str], limit: int = 5) -> str:
     """A list a person can read in one line: the first few, then a count."""
     if len(names) <= limit:
@@ -926,6 +976,7 @@ def _doctor_report(problems: list[str]) -> None:
             click.echo(f"config: {err.file}: {err.message}")
             problems.append(f"config {err.file}: {err.message}")
     else:
+        _doctor_publishing(project, problems)
         from rite_ai.coordination.config_check import coordination_problems
         from rite_ai.coordination.identity import (
             enrolment,
@@ -6023,6 +6074,7 @@ def sandbox_start(
     )
 
     root, config = _load_config_for_write()
+    _refuse_unavailable_publishing(root)
 
     # Prepare first, outside the sandbox. The sandbox works on a copy of the
     # workspace and cannot run `rite prepare` itself, so a Worker started on
@@ -8690,6 +8742,8 @@ def start_cmd(
             click.echo(f"  {problem}", err=True)
         click.echo("  `rite doctor` shows the full picture.", err=True)
         raise SystemExit(1)
+    if here_is_a_project:
+        _refuse_unavailable_publishing(here)
 
     # D-78/D-80. A draft gated this on `directory != "."`, so bare
     # `rite start` never reached it and "one works bare" / "2+ refuses and
@@ -8761,6 +8815,7 @@ def start_cmd(
         raise SystemExit(1)
 
     root = _resolve_directory_or_alias(directory)
+    _refuse_unavailable_publishing(root)
     result = start(root)
     if not result.ok:
         click.echo(result.message, err=True)

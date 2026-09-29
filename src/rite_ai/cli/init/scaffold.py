@@ -87,6 +87,10 @@ def modules_to_yaml(modules: list[Module]) -> str:
             # Only when something was recorded: `commands: {}` under every
             # module would rewrite every existing modules.yaml to say nothing.
             entry["commands"] = recorded
+        overridden = {k: v for k, v in asdict(m.publish).items() if v is not None}
+        if overridden:
+            # Only when something is overridden, for `commands`' reason.
+            entry["publish"] = overridden
         data["modules"][m.name] = entry
     return yaml.safe_dump(
         data, sort_keys=False, default_flow_style=False, allow_unicode=True
@@ -188,6 +192,14 @@ def config_to_yaml(config: ProjectConfig) -> str:
             "app_id": config.github_app.app_id,
             "installation_id": config.github_app.installation_id,
             "repository": config.github_app.repository,
+        },
+        # ⚠ APPENDED last, for `checkins`' reason. Written even when it is the
+        # default: which strategy is in force is the one setting a reader of
+        # this file most needs to see (PB1).
+        "publish": {
+            "strategy": config.publish.strategy,
+            "squash": config.publish.squash,
+            "auto_merge": config.publish.auto_merge,
         },
     }
     return yaml.safe_dump(
