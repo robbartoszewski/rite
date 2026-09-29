@@ -245,6 +245,24 @@ unless Robert makes it one before the run.
 
 ## 3. What this run cannot cover
 
+### ⛔ Blocking, not a limit: the Worker sandbox is escapable (WRITEUP #35, plan DF16)
+
+Added 2026-09-29 (Robert's gate). A stated limit is something the run ships
+around; this is not one. From inside a Worker sandbox, a direct write to an
+ungranted path is refused, and the same write handed to a tmux server
+started outside the sandbox succeeds, run as the operator. A Worker working
+on a stranger's repository is then not contained against anything Robert
+can do: his keychain, rite's credential store, `~/.ssh`, every project,
+other sandboxes, host-side `rite`, and `gh` with his own token — which also
+defeats rite's check that a Worker's token cannot open a pull request
+upstream (that check is a constraint only once this is closed). The fix is
+in yoloAI's Worker profile; the patch is written, and nothing has been
+built or proven. **The run does not start until the #35 probe passes
+against a yoloAI binary with the fix, on this machine.** A run started
+before that is void, whatever it produces.
+
+### Limits
+
 A pass is a pass for **this** configuration. It says nothing about:
 
 - **Several repositories.** One fork, one module. Module routing, claims
