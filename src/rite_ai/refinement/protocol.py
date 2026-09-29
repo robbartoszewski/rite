@@ -205,6 +205,7 @@ def send(
             k=k,
             ticket_text=subject_text,
             answers=[str(a.get("words", "")) for a in attempt.answers],
+            accept_words=limits.accept_words,
         )
         if not checked.ok:
             return Sent(
@@ -515,12 +516,29 @@ def handle(root: Path, owner: str, board, reply: Reply, *, limits) -> list[str]:
             latest.answered_at = reply.sent_at
             asking.settle(root, owner, latest.where)
         save(attempt)
+    if qualified_accept(reply.words, limits.accept_words) and latest.proposal:
+        notes.append(
+            f"{reply.ticket}: the User accepted round {reply.k}'s proposal WITH "
+            f'A CHANGE ("{reply.words}"). That is not a yes yet, and it is not '
+            "a rejection: send the same proposal with his change made, quoting "
+            "him, for a one-word accept. Ask nothing else"
+        )
+        return notes
     notes.append(
         f"{reply.ticket}: the User answered round {reply.k}. Your next round "
         "proposes a definition of done he can accept in one word, quoting his "
         "answer exactly, and asks only what is still open"
     )
     return notes
+
+
+def qualified_accept(words: str, accept_words: list[str]) -> bool:
+    """An accept word followed by a change: "ok but make it 10s". An answer
+    that updates the proposal, never discarded and never a record (Robert:
+    only a bare accept word writes it)."""
+    first, _, rest = words.strip().partition(" ")
+    first = re.sub(r"[.,!:;]+$", "", first).casefold()
+    return bool(rest.strip()) and first in {w.casefold() for w in accept_words}
 
 
 def _write(root: Path, owner: str, board, attempt, save) -> list[str]:

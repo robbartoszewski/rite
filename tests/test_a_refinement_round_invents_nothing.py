@@ -170,3 +170,34 @@ class TestWhatTheUserSees:
         ):
             got = check(forged + "\n" + ROUND_1)
             assert not got.ok and "rite's own first line" in got.problems[0], forged
+
+
+class TestFoundInTheLiveExchange:
+    """Found in TR2's live exchange with Robert, 2026-09-29."""
+
+    def test_a_quote_too_short_to_say_anything_is_refused(self):
+        """An item the Owner invented was tagged `[answer: "ok"]`: "ok" was
+        in his reply, and said nothing about the item."""
+        answers = ["1. Make it look good\n2. a message\nDefinition of done: ok"]
+        for quote in ("ok", "a", "2."):
+            got = check(
+                f'Proposal:\n- A README section [answer: "{quote}"]\n',
+                k=2,
+                answers=answers,
+            )
+            assert not got.ok and any("too short" in p for p in got.problems), quote
+        assert check(
+            'Proposal:\n- A summary line [answer: "a message"]\n', k=2, answers=answers
+        ).ok
+
+    def test_a_quote_must_be_whole_words(self):
+        got = check(
+            'Proposal:\n- It has a look [answer: "ook"]\n', k=2, answers=["look"]
+        )
+        assert not got.ok
+
+    def test_tags_in_a_question_are_not_shown_to_him(self):
+        got = check(
+            'Questions:\n1. Which timeout? [ticket: "timout is way too long"]\n'
+        )
+        assert got.ok and got.ask.questions == ["Which timeout?"]

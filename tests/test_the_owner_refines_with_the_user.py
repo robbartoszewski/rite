@@ -537,3 +537,18 @@ def test_the_checkpoint_status_update_carries_the_blocker(tmp_path, key):
     (checkin,) = [m for m in outbox(tmp_path) if m.kind == "checkin"]
     assert "BLOCKED, needs your decision:" in checkin.text
     assert "- KAN-7: no agreed definition of done" in checkin.text
+
+
+def test_a_qualified_accept_updates_the_proposal_and_writes_nothing(tmp_path, key):
+    """Robert: only a bare accept word writes the record; "ok but make it
+    10s" is an answer that updates the proposal, never discarded."""
+    board = Board(kan7())
+    _to_round_two(tmp_path, board)
+    _, notes = reply_to_latest(
+        tmp_path, board, "ok but make it 10s", sent_at=NOW + 3 * HOUR
+    )
+    assert st.status(board, "KAN-7").state == st.NOT_REFINED
+    assert any("WITH A CHANGE" in n and "make it 10s" in n for n in notes), notes
+    assert rounds.load(tmp_path, OWNER, "KAN-7").answers[-1]["words"] == (
+        "ok but make it 10s"
+    )

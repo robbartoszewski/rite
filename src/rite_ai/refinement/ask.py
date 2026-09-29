@@ -88,7 +88,33 @@ def _parse_item(line: str) -> Item:
     return Item(text=text, quotes=quotes, proposed=proposed)
 
 
-def check(text: str, *, k: int, ticket_text: str, answers: list[str]) -> Checked:
+def _quoted_in(quote: str, text: str) -> bool:
+    """`quote` appears in `text` as whole words: "ok" is not in "look"."""
+    pattern = (r"\b" if quote[:1].isalnum() else "") + re.escape(quote)
+    pattern += r"\b" if quote[-1:].isalnum() else ""
+    return re.search(pattern, text) is not None
+
+
+def _carries_meaning(quote: str, accept_words) -> bool:
+    """A quote says where an item came from only if it holds a real word:
+    one of at least three letters that is not an accept word. Found live
+    (TR2, 2026-09-29): an item the Owner invented was tagged
+    `[answer: "ok"]`, which is in his reply and says nothing about the item."""
+    accepting = {w.casefold() for w in accept_words}
+    return any(
+        len(word) >= 3 and word.casefold() not in accepting
+        for word in re.findall(r"[A-Za-z]+", quote)
+    )
+
+
+def check(
+    text: str,
+    *,
+    k: int,
+    ticket_text: str,
+    answers: list[str],
+    accept_words=("ok", "yes", "accept", "lgtm", "proceed"),
+) -> Checked:
     """Parse and lint one round's message. Every problem is listed, so the
     Owner fixes the message once, not one refusal at a time. **There is no
     cap on rounds** (Robert's correction to TRQ2): a complex topic takes the
@@ -124,11 +150,13 @@ def check(text: str, *, k: int, ticket_text: str, answers: list[str]) -> Checked
             numbered = _NUMBERED.match(line)
             if numbered:
                 numbers.append(int(numbered.group(1)))
-                ask.questions.append(numbered.group(2).strip())
+                # Tags belong on proposal items. In a question they would be
+                # shown to him raw (found live), so they are dropped.
+                ask.questions.append(_TAG.sub("", numbered.group(2)).strip())
                 continue
             if ask.questions and not _ITEM.match(line):
                 # A continuation of the question above.
-                ask.questions[-1] += " " + line.strip()
+                ask.questions[-1] += " " + _TAG.sub("", line).strip()
                 continue
             problems.append(
                 f"line {n} is under Questions: and is not a numbered question (`1. …`)"
@@ -189,7 +217,14 @@ def check(text: str, *, k: int, ticket_text: str, answers: list[str]) -> Checked
                 "split it, so the User sees which part is yours"
             )
         for source, quote in item.quotes:
-            if not any(quote in hay for hay in haystacks[source]):
+            if not _carries_meaning(quote, accept_words):
+                problems.append(
+                    f'proposal item {i} quotes {source}: "{quote}", which is too '
+                    "short to say where the item came from. Quote the words that "
+                    "say it, or tag it [proposed]"
+                )
+                continue
+            if not any(_quoted_in(quote, hay) for hay in haystacks[source]):
                 where = (
                     "the ticket's title or description"
                     if source == "ticket"
