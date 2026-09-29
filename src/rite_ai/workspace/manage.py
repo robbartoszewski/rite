@@ -777,10 +777,11 @@ taken at that time, not the live ticket.
 
 Work to the section "Agreed definition of done", not to the title: its
 checklist, scope and Verify are what done means, and you do not judge
-whether the ticket is complete enough. Cite the record id in your pull
-request. ⚠ Give `gh` and `git` your text in a file, never in double quotes on
-the command line: `gh pr create --body-file <file>`, `gh … comment
---body-file <file>`, `git commit -F <file>`. In double quotes the shell runs
+whether the ticket is complete enough. Cite the record id in your last
+commit message, and in your pull request if you open one. ⚠ Give `gh` and
+`git` your text in a file, never in double quotes on the command line:
+`gh pr create --body-file <file>`, `gh … comment --body-file <file>`,
+`git commit -F <file>`. In double quotes the shell runs
 anything in backticks or `$( )` before `gh` sees it, and your text quotes a
 ticket someone else wrote. If there is no `TICKET.md`, or it has no "Agreed
 definition of done" section, say so and stop. If the definition of done cannot be met as
@@ -807,11 +808,12 @@ exactly that and stop: never invent the missing piece.
    beats is reported STALLED.
 4. Work the ticket on its own branch: if a module is on its default branch,
    create one named for the ticket first (`git checkout -b <ticket-id>`).
-   Push that branch after every commit, not only at the end —
-   `git push -u origin <ticket-id>`. Your work exists outside this session
-   only once it is pushed. In a sandbox this checkout is a copy that is
-   discarded with the sandbox, and a session can stop at any moment, so a
-   commit that was never pushed is gone.
+   Commit as you go, not only at the end: a session can stop at any moment,
+   and an uncommitted change is the one thing nothing collects. **Whether you
+   push is not yours to decide**: `TICKET.md`, under **Publishing**, says for
+   each module whether to push the branch or only commit it, as the project
+   was configured when you started. Under `commit` you never push; rite
+   brings your commits out of the sandbox itself.
 5. Run the module's own **test and lint** commands. `rite prepare` prints
    them every time it runs, resolved at that moment — those are the ones to
    use. **Module commands** above lists them as `Test:` and `Lint:` as of
@@ -827,8 +829,14 @@ exactly that and stop: never invent the missing piece.
    works, not that your change does anything — delete the fix and re-run
    whatever proves it.
 7. Run `/review` (the review convention from the project root).
-8. Push your final commits, then open a PR, get it reviewed, and merge.
-9. Release your claim (after merge, not before): `rite release --worker {manifest.name}`
+8. Do with your final commits what **Publishing** in `TICKET.md` says:
+   commit them, and push and open a pull request only where it says so.
+   **Never merge a pull request yourself.** Merging after checks is the
+   User's decision, or rite's own step that checks the green is on exactly
+   the commit being merged.
+9. Leave your claim held. rite releases it when your work is delivered, or
+   when the pull request merges: holding it until then is what stops
+   another Worker changing the same paths first.
 
 ## When this ticket is done
 
@@ -845,6 +853,8 @@ needs somebody woken up.
 ## What you must not do
 
 - Push directly to the root branch.
+- Push at all where `TICKET.md`'s **Publishing** says not to.
+- Merge a pull request, including your own.
 - Make project-wide decisions — escalate to your Manager.
 - Touch paths claimed by another worker, or work around a refused claim.
 - Open a PR without running the module's test and lint commands.

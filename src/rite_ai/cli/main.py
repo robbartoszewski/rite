@@ -6152,7 +6152,7 @@ def sandbox_start(
     # cloned, or whose work cannot leave the sandbox, otherwise starts,
     # works, and fails only at the push — and the one thing it can then do
     # is ask for a credential through a side channel.
-    refusal = _worker_cannot_deliver(worker, worker_dir, modules, token)
+    refusal = _worker_cannot_deliver(worker, worker_dir, modules, token, config)
     if refusal:
         click.echo(refusal, err=True)
         raise SystemExit(1)
@@ -6192,12 +6192,16 @@ def sandbox_start(
         clear_delivery(worker_dir)
         prompt = None
     else:
-        read_at, record_id = _deliver_ticket(worker, worker_dir, ticket, root, config)
+        read_at, record_id = _deliver_ticket(
+            worker, worker_dir, ticket, root, config, modules
+        )
+        _record_publish_settings(root, worker, ticket, config, modules)
         prompt = (
             f"Work ticket {ticket} to its agreed definition of done, refinement "
             f"record {record_id}. The ticket and that definition of done, as rite "
             f"read them from the board at {read_at} UTC, are in {DELIVERY_FILE} "
-            "in your working directory. Cite the record id in your pull request."
+            "in your working directory, with what to do with your commits under "
+            "Publishing. Cite the record id in your last commit message."
         )
     result = start_worker(
         root,
@@ -6258,8 +6262,28 @@ def refused_for_refinement(state: str, ticket: str) -> str:
     return st.refusal(state, ticket)
 
 
+def _record_publish_settings(root: Path, worker: str, ticket: str, config, modules):
+    """Record what this Worker is started under (PB1, read once), or exit.
+
+    From the SAME parse that wrote TICKET.md's Publishing section, so what
+    the Worker was told and what `rite deliver` compares against are one
+    read. A record that cannot be written refuses the start: without it the
+    delivery could only ever be commit-only, and nothing would say why."""
+    from rite_ai.publishing import record
+
+    try:
+        record.write(root, worker, ticket, config, modules)
+    except (OSError, ValueError) as e:
+        click.echo(
+            f"not starting '{worker}': rite could not record which publish "
+            f"settings it starts under ({e})",
+            err=True,
+        )
+        raise SystemExit(1) from e
+
+
 def _deliver_ticket(
-    worker: str, worker_dir: Path, ticket: str, root, config
+    worker: str, worker_dir: Path, ticket: str, root, config, modules=()
 ) -> tuple[str, str]:
     """Check TICKET is refined and write it, with its agreed definition of
     done, into the Worker's workspace, or exit. Returns the UTC time of the
@@ -6279,6 +6303,7 @@ def _deliver_ticket(
     is removed, so nothing stale is left for a later start to trust. UNREADABLE
     is said as rite could not check, never as "no definition of done"."""
     from rite_ai import phrases
+    from rite_ai.publishing.instructions import for_worker
     from rite_ai.refinement.status import of, render_for_worker
     from rite_ai.sandbox.delivery import (
         clear_delivery,
@@ -6311,7 +6336,10 @@ def _deliver_ticket(
         rendered,
         read_at,
         _board_source(config),
-        sections=(("Agreed definition of done", render_for_worker(checked.record)),),
+        sections=(
+            ("Agreed definition of done", render_for_worker(checked.record)),
+            ("Publishing", for_worker(config, list(modules), ticket)),
+        ),
     )
     record_id = checked.record.record_id
     click.echo(
@@ -6322,9 +6350,14 @@ def _deliver_ticket(
 
 
 def _worker_cannot_deliver(
-    worker: str, worker_dir: Path, modules: list, token: str | None
+    worker: str, worker_dir: Path, modules: list, token: str | None, config=None
 ) -> str | None:
-    """Why this Worker could do no work that reaches anyone, or None."""
+    """Why this Worker could do no work that reaches anyone, or None.
+
+    ⚠ **Remote access is asked only for modules whose work leaves by a
+    push** (PB1). Under `strategy: commit` nothing is pushed, by design, and
+    `rite deliver` collects the commits on the host: an on-premise project
+    with no reachable remote, or no token, must still be able to run it."""
     import shutil
 
     from rite_ai.sandbox import (
@@ -6341,11 +6374,52 @@ def _worker_cannot_deliver(
         )
     gh = shutil.which("gh")
     remotes = clone_remotes(worker_dir)
+    if config is not None:
+        from rite_ai.publishing.settings import effective
+
+        local = {
+            m.name for m in modules if effective(config.publish, m).strategy == "commit"
+        }
+        remotes = [r for r in remotes if Path(r.clone).name not in local]
     refusal = remote_access_refusal(worker, remotes, token, gh)
     if refusal or not remotes:
         return refusal
     assert token  # remote_access_refusal refuses without one
     return push_access_refusal(worker, remotes, token)
+
+
+@cli.command("deliver")
+@click.argument("worker")
+@click.option(
+    "--ticket",
+    default=None,
+    help="The ticket the Worker was started on; by default, the one rite recorded.",
+)
+def deliver_cmd(worker: str, ticket: str | None) -> None:
+    """Deliver WORKER's finished ticket under the project's publish strategy.
+
+    Collects each module's ticket branch from the Worker's sandbox into the
+    project's own checkout of that module (adding a branch, nothing else),
+    squashes it when `publish.squash` is on, and removes the sandbox once
+    every module is delivered. Uncommitted work is refused, never committed
+    for the Worker. Run by you, it uses the config as it is now.
+
+    Examples:
+      rite deliver alpha
+      rite deliver alpha --ticket KAN-8
+    """
+    from rite_ai.publishing.deliver import Refused, deliver
+
+    root = _find_project_root()
+    result = deliver(root, worker, ticket, by_user=True)
+    if isinstance(result, Refused):
+        click.echo(f"not delivered: {result.why}", err=True)
+        raise SystemExit(1)
+    for outcome in result.outcomes:
+        click.echo(outcome.note())
+    click.echo(result.sandbox)
+    if not result.ok:
+        raise SystemExit(1)
 
 
 @sandbox.command("stop")

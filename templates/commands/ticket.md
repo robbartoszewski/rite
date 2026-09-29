@@ -116,17 +116,24 @@ Work ticket `$ARGUMENTS` end to end.
 
 7. **Run the review convention** (`/review`) before opening a PR.
 
-8. **Open the PR**, referencing the ticket. Run `rite publish check` by hand
+8. **Publish as the project's strategy says**, per module: `rite doctor`
+   prints each module's `publish:` line. Under `commit`, stop at the commit
+   on the ticket branch: nothing is pushed. Otherwise push the branch and
+   open the PR, referencing the ticket, and run `rite publish check` by hand
    before pushing. A pre-push hook and a CI workflow run the same scan, but
    neither is guaranteed to be armed in this project — `core.hooksPath` can
    disable the hook with no signal, and the workflow may never have been
    installed — so run it yourself rather than assuming.
 
-9. **Merge once reviewed.** Do not release your claims yet — a second
-   Worker claiming your paths while review is still open, or while comments
-   are being addressed, is exactly the collision claims exist to prevent.
+9. **Never merge a pull request yourself**, your own included. Merging after
+   checks is the User's, or rite's own gated step, which merges only on a
+   green matched to the exact head that contains the base's current tip.
+   Do not release your claims yet — a second Worker claiming your paths
+   while review is still open is exactly the collision claims exist to
+   prevent.
 
-10. **Release your claims after the merge lands, not before:**
+10. **Release your claims once the work has landed** — delivered under
+    `commit`, merged otherwise — not before:
 
     ```
     rite release --worker <your-name>
