@@ -4047,7 +4047,16 @@ def _provenance_line(provenance: dict) -> str:
 @refine.command("ask")
 @click.argument("ticket_id")
 @click.argument("text")
-def refine_ask(ticket_id: str, text: str) -> None:
+@click.option(
+    "--message",
+    "is_message",
+    is_flag=True,
+    help="TICKET_ID is the id of the User's message, as shown beside it in "
+    "your instruction: an instruction that is not a ticket yet. rite files "
+    "it as a chore with exactly his words when he accepts, or, unrefined, "
+    "if he does not reply in time.",
+)
+def refine_ask(ticket_id: str, text: str, is_message: bool) -> None:
     """Ask the User about a ticket — the Owner Manager only (TR2).
 
     One round: at most three numbered questions under `Questions:`, and from
@@ -4061,6 +4070,12 @@ def refine_ask(ticket_id: str, text: str) -> None:
     ⚠ This only ASKS. The round is checked and sent by your supervisor,
     outside your sandbox; whether it went, or why not, is in your next
     instruction. **The text is `-`, on stdin (F14).**
+
+    An instruction he gave in chat is refined straight away too, before it
+    is a ticket: `--message <message-id>`. If he accepts, rite files it as a
+    chore with exactly his words and the agreed definition of done; if he
+    has not replied after `refinement.chore_after_minutes`, rite files it
+    unrefined, so nothing he asked for is lost, and refinement goes on.
 
     Examples:
       rite refine ask KAN-7 - <<'RITE_TEXT_1f2e3d'
@@ -4116,6 +4131,9 @@ def refine_ask(ticket_id: str, text: str) -> None:
     if not text.strip():
         click.echo("refusing to send an empty round.", err=True)
         raise SystemExit(1)
+    target = ticket_id.strip()
+    if is_message:
+        target = protocol.MESSAGE + target
     # The shape, checked here so a mistake costs no turn. The quotes and the
     # round number are checked by the supervisor, against the ticket and his
     # answers, which this side of the boundary cannot be trusted to hold.
@@ -4128,9 +4146,9 @@ def refine_ask(ticket_id: str, text: str) -> None:
         for p in shape:
             click.echo(f"  - {p}", err=True)
         raise SystemExit(1)
-    protocol.request(root, speaking, ticket_id.strip(), text)
+    protocol.request(root, speaking, target, text)
     click.echo(
-        f"round queued for {ticket_id.strip()}: rite checks it against the "
+        f"round queued for {target}: rite checks it against the "
         "ticket and the User's answers, then puts it in front of him and on "
         "the ticket. Whether it went, or why not, is in your next instruction."
     )
@@ -7124,6 +7142,22 @@ def _ticket_work_rule(root: Path, manager: str) -> str:
     return ticket_work(manager, owner, one_root=one_root)
 
 
+def _with_refinement(router, refine):
+    """`router`, then `refine`, as one step. Either may be None."""
+    if router is None and refine is None:
+        return None
+
+    def step(say) -> None:
+        if callable(router):
+            router(say)
+        if callable(refine):
+            from rite_ai.managers.supervise import _refinement_step
+
+            _refinement_step(refine, say)
+
+    return step
+
+
 def _router_for(root: Path, manager: str, board=None):
     """The routing step for this Manager's supervisor, or None: route the
     Owner's requests down (MM-3), and bring the others' replies up (MM-4).
@@ -7753,7 +7787,14 @@ def _start_a_manager(
             refine=lambda say, messages=(): refinement_step(
                 root, role.name, board, say, messages=messages
             ),
-            router=_router_for(root, role.name, board),
+            # TR2: refinement runs wherever routing runs (before, during and
+            # after a cycle, and in every wait), so a round the Owner asks
+            # for goes out in seconds and a chat instruction he left
+            # unanswered is filed without a session being spent on it.
+            router=_with_refinement(
+                _router_for(root, role.name, board),
+                lambda say: refinement_step(root, role.name, board, say),
+            ),
             # ⚠ DF2: a cycle can be CAUSED by mail. None for a lone Manager,
             # whose runs are exactly what they were.
             waiting=waiting,

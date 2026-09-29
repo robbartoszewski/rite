@@ -239,3 +239,32 @@ class TestAPersonReopens:
     def test_nothing_to_reopen_is_said(self, project, monkeypatch):
         got = self._reopen(monkeypatch, "KAN-8")
         assert got.exit_code == 0 and "no refinement to reopen" in got.output
+
+
+def test_a_round_about_his_message_is_queued_under_the_message(project, monkeypatch):
+    monkeypatch.setenv(MANAGER_ENV, "lead")
+    got = CliRunner().invoke(
+        cli,
+        ["refine", "ask", "--message", "1790000000000_1_000000000000", "-"],
+        input=ROUND_1,
+    )
+    assert got.exit_code == 0, got.output
+    (queued,) = protocol.take(project, "lead")
+    assert queued["ticket"] == "message-1790000000000_1_000000000000"
+
+
+def test_refinement_runs_wherever_routing_runs():
+    """`rite start` composes the two, so a round goes out mid-cycle and in
+    the waits, not only at a cycle's end."""
+    from rite_ai.cli.main import _with_refinement
+
+    calls: list[str] = []
+    step = _with_refinement(
+        lambda say: calls.append("route"), lambda say: calls.append("refine")
+    )
+    step(lambda _m: None)
+    assert calls == ["route", "refine"]
+    alone = _with_refinement(None, lambda say: calls.append("refine only"))
+    alone(lambda _m: None)
+    assert calls[-1] == "refine only"
+    assert _with_refinement(None, None) is None

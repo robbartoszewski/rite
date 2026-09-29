@@ -74,6 +74,21 @@ class Board(GitHubBackend):
         self.comments[ticket_id].append(text)
         return None
 
+    def create(self, title, description="", labels=None):
+        """A new issue, kept as a board keeps it: with its trailing
+        whitespace trimmed, as GitHub does."""
+        self.created = getattr(self, "created", [])
+        ticket = Ticket(
+            id=f"KAN-{100 + len(self.created)}",
+            title=title,
+            description=description.rstrip(),
+            labels=list(labels or []),
+        )
+        self.created.append(ticket)
+        self.tickets[ticket.id] = ticket
+        self.comments[ticket.id] = []
+        return ticket
+
 
 @pytest.fixture
 def key(tmp_path):

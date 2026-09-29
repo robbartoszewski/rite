@@ -40,6 +40,10 @@ from rite_ai.refinement import record as rec
 from rite_ai.refinement import status as st
 
 ASKS_DIRNAME = "refine-asks"
+MESSAGE = "message-"
+SUBJECT_OF_A_MESSAGE = "your message"
+"""The key of an attempt about a chat instruction that is not a ticket yet:
+`message-<id>`, the id shown beside it in the Owner's instruction."""
 _THREAD = re.compile(r'reply in the thread under rite\'s [^"]*"([^"]*)"')
 """The relay's header part naming the thread a reply was written in
 (`slack._relay`): the root's label, whose quoted part is the first 40
@@ -140,21 +144,34 @@ def send(
     checkins=None,
     zone: str = "",
 ) -> Sent:
-    """Check the Owner's round, put it in front of the User, record it."""
+    """Check the Owner's round, put it in front of the User, record it.
+
+    `ticket_id` is a ticket, or `message-<id>` for a chat instruction that is
+    not a ticket yet (TRQ11): its text is then his words as rite delivered
+    them (`delivered`), and nothing is posted on a board."""
     from rite_ai.managers import asking
 
-    answer = st.checked(lambda t: st.status(board, t), ticket_id)
-    if answer.state == st.REFINED:
-        return Sent(False, f"{ticket_id} is already REFINED; there is nothing to ask")
-    if answer.state not in (st.NOT_REFINED, st.STALE) or answer.ticket is None:
-        return Sent(
-            False,
-            f"{ticket_id} is {answer.state} ({answer.detail}); a round is only "
-            "sent about a ticket rite can read",
-        )
-    ticket = answer.ticket
+    if ticket_id.startswith(MESSAGE):
+        words, why = instruction_words(root, owner, ticket_id)
+        if why:
+            return Sent(False, why)
+        subject_text, current, on_board = words, rec.text_sha256(words), False
+    else:
+        answer = st.checked(lambda t: st.status(board, t), ticket_id)
+        if answer.state == st.REFINED:
+            return Sent(
+                False, f"{ticket_id} is already REFINED; there is nothing to ask"
+            )
+        if answer.state not in (st.NOT_REFINED, st.STALE) or answer.ticket is None:
+            return Sent(
+                False,
+                f"{ticket_id} is {answer.state} ({answer.detail}); a round is "
+                "only sent about a ticket rite can read",
+            )
+        ticket = answer.ticket
+        subject_text = f"{ticket.title}\n{ticket.description}"
+        current, on_board = rounds.text_of(ticket), True
     with rounds.locked(root, owner, ticket_id) as (attempt, save):
-        current = rounds.text_of(ticket)
         if attempt is None or attempt.text_sha256 != current:
             attempt = rounds.Attempt(ticket=ticket_id, text_sha256=current)
         if attempt.parked:
@@ -187,7 +204,7 @@ def send(
             text,
             k=k,
             rounds=limits.rounds,
-            ticket_text=f"{ticket.title}\n{ticket.description}",
+            ticket_text=subject_text,
             answers=[str(a.get("words", "")) for a in attempt.answers],
         )
         if not checked.ok:
@@ -204,8 +221,16 @@ def send(
             manager=owner,
             accept_words=limits.accept_words,
         )
+        # The subject leads the thread label, which the relay cuts at 40
+        # characters, and an answer is matched by the question id after it.
+        # A message id is long enough to push that id out, so a round about
+        # his message is labelled "your message".
         raised = asking.raise_to_person(
-            root, owner, subject=ticket_id, raiser=f"manager:{owner}", text=body
+            root,
+            owner,
+            subject=SUBJECT_OF_A_MESSAGE if on_board is False else ticket_id,
+            raiser=f"manager:{owner}",
+            text=body,
         )
         if not raised.new:
             return Sent(
@@ -226,7 +251,7 @@ def send(
         )
         attempt.misses = 0
         save(attempt)
-    posted = board.comment(ticket_id, body)
+    posted = board.comment(ticket_id, body) if on_board else None
     shown = (
         ""
         if posted is None
@@ -334,7 +359,10 @@ def handle(root: Path, owner: str, board, reply: Reply, *, limits) -> list[str]:
             }
             latest.answered_at = reply.sent_at
             save(attempt)
-            notes.extend(_write(root, owner, board, attempt, save))
+            if attempt.ticket.startswith(MESSAGE):
+                notes.extend(_file(root, owner, board, attempt, save, agreed=True))
+            else:
+                notes.extend(_write(root, owner, board, attempt, save))
             asking.settle(root, owner, latest.where)
             return notes
         # An answer, or a correction: kept, so the next round may quote it.
@@ -453,6 +481,121 @@ def _park_notice(root: Path, owner: str, board, ticket: str, limits) -> None:
     board.comment(ticket, text)
 
 
+# --- a chat instruction becomes a chore -----------------------------------------
+
+
+def instruction_words(root: Path, owner: str, key: str) -> tuple[str, str]:
+    """(his words, "") for `message-<id>`, or ("", why not). Only a message
+    rite delivered as the User's (`delivered`) has words to refine."""
+    from rite_ai.managers import delivered
+
+    entries, why = delivered.lookup(root, owner, [key[len(MESSAGE) :]])
+    if why:
+        return "", why
+    return str(entries[0]["words"]), ""
+
+
+def _file(root: Path, owner: str, board, attempt, save, *, agreed: bool) -> list[str]:
+    """File a chat instruction as a chore with exactly his words, and move
+    its refinement onto it (TRQ11; the note's part 3.14). Under the
+    attempt's lock. `agreed`: he accepted a proposal, so the record is
+    written on the new ticket at once; otherwise it is visibly unrefined.
+
+    Exactly once: `filing` is saved before the board is asked. A crash in
+    between leaves it set with no ticket, and that is reported and waits for
+    a person, never filed again, because a silent duplicate is worse than a
+    question.
+    """
+    from rite_ai.managers import chores, delivered
+    from rite_ai.tickets import BackendError, Ticket
+
+    key = attempt.ticket
+    if attempt.filing:
+        return [
+            f"a chore for your message {key[len(MESSAGE) :]} may already exist "
+            f"(rite began filing it at {_when(attempt.filing)} and did not hear "
+            "back). Check the board, then `rite refine reopen "
+            f"{key}` to try again"
+        ]
+    entries, why = delivered.lookup(root, owner, [key[len(MESSAGE) :]])
+    if why:
+        return [f"{key}: not filed: {why}"]
+    if board is None:
+        return [f"{key}: not filed: this supervisor has no board"]
+    attempt.filing = time.time()
+    save(attempt)
+    title = chores._title_of(entries[0]["words"])  # noqa: SLF001
+    description = chores._description_of(  # noqa: SLF001
+        entries, attempt.filing, agreed=agreed
+    )
+    try:
+        made = board.create(title, description, labels=list(chores.LABELS))
+    except Exception as e:  # noqa: BLE001 - said, never raised
+        made = BackendError(str(e))
+    if isinstance(made, BackendError) or not getattr(made, "id", ""):
+        said = made.message if isinstance(made, BackendError) else "no id came back"
+        return [
+            f"{key}: the board did not confirm the chore ({said}). It may exist "
+            f"without its labels: check the board, then `rite refine reopen {key}`"
+        ]
+    ticket_id = str(made.id)
+    # The text as the BOARD keeps it, read back: a board that trims or
+    # re-wraps what it was given would otherwise make the moved attempt's
+    # hash differ from the ticket's, and his accept be refused as an edit.
+    kept = st.checked(lambda t: st.status(board, t), ticket_id).ticket or Ticket(
+        id=ticket_id, title=title, description=description
+    )
+    moved = rounds.Attempt(
+        ticket=ticket_id,
+        text_sha256=rounds.text_of(kept),
+        rounds=attempt.rounds,
+        answers=attempt.answers,
+        accepted=attempt.accepted,
+    )
+    rounds.move(root, owner, key, moved)
+    if not agreed:
+        _tell_user(
+            root,
+            owner,
+            f"So your message is not lost, rite filed it as {ticket_id}, with "
+            "exactly your words, unrefined: no work starts on it until you "
+            "agree what done means. The question above still stands.",
+        )
+        return [
+            f"{ticket_id}: filed from the User's message, unrefined, because "
+            "he did not reply in time. Refinement continues on it"
+        ]
+    with rounds.locked(root, owner, ticket_id) as (current, save_moved):
+        return [f"{ticket_id}: filed from the User's message. "] + _write(
+            root, owner, board, current, save_moved
+        )
+
+
+def file_unanswered(root: Path, owner: str, board, *, limits, now: float) -> list[str]:
+    """Every chat instruction whose latest round he has not answered after
+    `chore_after_minutes` is filed as an unrefined chore with exactly his
+    words (TRQ11: "create a chore with what it's got and then refine
+    later"). Nothing is lost, nothing is blocked, nothing is invented."""
+    lines: list[str] = []
+    due = limits.chore_after_minutes * 60
+    for key, attempt in rounds.all_attempts(root, owner).items():
+        latest = attempt.latest
+        if (
+            not key.startswith(MESSAGE)
+            or attempt.parked
+            or attempt.accepted
+            or latest is None
+            or latest.answered
+            or now - latest.sent_at < due
+        ):
+            continue
+        with rounds.locked(root, owner, key) as (current, save):
+            if current is None or current.latest is None or current.latest.answered:
+                continue
+            lines.extend(_file(root, owner, board, current, save, agreed=False))
+    return lines
+
+
 # --- he is back -----------------------------------------------------------------
 
 
@@ -486,7 +629,7 @@ def present_again(root: Path, owner: str, *, at: float) -> list[str]:
             raised = asking.raise_to_person(
                 root,
                 owner,
-                subject=ticket,
+                subject=SUBJECT_OF_A_MESSAGE if ticket.startswith(MESSAGE) else ticket,
                 raiser=f"manager:{owner}",
                 text=r.body,
             )
@@ -569,6 +712,12 @@ def step(root: Path, manager: str, board, say, *, messages=(), now=None) -> list
     if board is not None:
         for line in retry_accepted(root, owner, board):
             tell(line)
+        for line in file_unanswered(
+            root, owner, board, limits=config.refinement, now=now
+        ):
+            # Said, and not a note in the Owner's inbox: a note is mail, and
+            # mail starts a session, which filing a chore does not need.
+            say(f"refinement: {line}")
     lines: list[str] = []
     for message in messages:
         reply = attribute(

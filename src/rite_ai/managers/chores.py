@@ -175,7 +175,18 @@ def unrefined_line(when: float | None = None) -> str:
     )
 
 
-def _description_of(entries: list[dict], created_at: float | None = None) -> str:
+def agreed_line() -> str:
+    """rite's first line on a chore created because the User ACCEPTED a
+    definition of done for his message: the record follows at once."""
+    return (
+        "**Agreed with the User before rite created it:** its definition of "
+        "done is rite's record on this ticket (`rite refine status`)."
+    )
+
+
+def _description_of(
+    entries: list[dict], created_at: float | None = None, *, agreed: bool = False
+) -> str:
     """rite's unrefined line, then the User's words as delivered, then where
     each came from.
 
@@ -195,7 +206,7 @@ def _description_of(entries: list[dict], created_at: float | None = None) -> str
         )
         sources.append(f"- message `{e['id']}`, {e.get('where', '?')}, {when}")
     return (
-        unrefined_line(created_at)
+        (agreed_line() if agreed else unrefined_line(created_at))
         + "\n\n"
         + "\n\n".join(blocks)
         + "\n\n---\n\n"

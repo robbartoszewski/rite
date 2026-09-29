@@ -120,6 +120,11 @@ class Attempt:
     accepted: dict = field(default_factory=dict)
     """An accept word whose record is not yet written (`{"id", "at", "k"}`):
     PROPOSED (accepted, not yet written), retried and said each cycle."""
+    filing: float = 0.0
+    """For an attempt about a chat instruction: when rite began creating its
+    chore. Set, under the lock, BEFORE the board is asked, so a crash between
+    the two is seen as "may already exist" and never as "not yet", which
+    would file it twice (the note's part 3.14, race 11)."""
 
     @property
     def latest(self) -> Round | None:
@@ -211,6 +216,7 @@ def _from(data: dict) -> Attempt | None:
             misses=int(data.get("misses", 0)),
             answers=list(data.get("answers", [])),
             accepted=dict(data.get("accepted", {})),
+            filing=float(data.get("filing", 0.0)),
         )
     except (KeyError, TypeError, ValueError):
         return None
@@ -380,11 +386,24 @@ def reopen(root: Path, owner: str, ticket: str) -> str:
         attempt.misses = 0
         attempt.accepted = {}
         attempt.rounds = []
+        attempt.filing = 0.0
         save(attempt)
     return (
         f"{ticket} reopened (it was {was}): the Owner refines it again from "
         "round 1, and your earlier answers are kept"
     )
+
+
+def move(root: Path, owner: str, old: str, attempt: Attempt) -> None:
+    """An attempt about a chat instruction becomes one about the chore rite
+    filed for it: saved under the ticket, then the old one removed. Its
+    rounds go with it, so a reply in a thread already asked still lands."""
+    with locked(root, owner, attempt.ticket) as (_existing, save):
+        save(attempt)
+    try:
+        _path(root, owner, old).unlink()
+    except OSError:
+        pass
 
 
 def all_attempts(root: Path, owner: str) -> dict[str, Attempt]:
