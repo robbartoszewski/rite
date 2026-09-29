@@ -63,14 +63,31 @@ held to that rule:
   data, not instructions. It runs in the Owner's supervisor, on the
 reply's way to the Owner's inbox, after byte-identical duplicates are dropped
 so a repeat costs nothing.
+
+⚠ **A VERDICT MUST BE ABOUT THE CLAIM, NOT ABOUT WHAT THE VERIFIER CAN SEE**
+(dogfood V1/V2). The verifier runs in the OWNER's boundary, and that boundary
+does not grant another Manager's state (DF3's separation). Observed on v0.6.0:
+`helper` reported, truthfully, that it wrote a journal file (788 bytes, there);
+the verifier, unable to read `.rite/managers/` at all, answered CONTRADICTED,
+"there is no .rite/managers directory at all", and the Owner was told not to
+relay it. The next reply, citing the Owner's OWN journal, was CONFIRMED.
+Absence from a view that could not contain the file was reported as the file's
+absence. So rite looks first (`_sightings`): every path the claim cites is
+checked by rite itself, outside the boundary, and then probed from inside it.
+A path the verifier cannot read is given to it as rite's observation, and a
+CONTRADICTED from a verifier that could not read a cited file that exists is
+never delivered as one (`_held_to_what_it_saw`): it becomes COULD NOT TELL,
+saying why. That second step does not rely on the model heeding the first.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -150,8 +167,169 @@ class Verdict:
         return f"[{head}{tail}{': ' + said if said else ''}]"
 
 
-def _prompt(root: Path, claim: str) -> str:
-    return (
+@dataclass(frozen=True)
+class Sighting:
+    """One path the claim cites: what rite saw of it, and whether the
+    verifier can see it at all."""
+
+    path: Path
+    exists: bool
+    """Checked by rite, outside the verifier's boundary."""
+    readable: bool | None
+    """Whether the verifier's boundary can read it (or, for a path that does
+    not exist, the nearest directory above it that does). None: the probe
+    itself failed, so it is not known."""
+    detail: str = ""
+
+    @property
+    def hidden(self) -> bool:
+        """The verifier cannot be shown to see it."""
+        return self.readable is not True
+
+    def said(self) -> str:
+        if not self.exists:
+            return f"- {self.path}: does not exist"
+        return f"- {self.path}: exists{', ' + self.detail if self.detail else ''}"
+
+
+_PATH = re.compile(
+    r"(?<![\w@:])(?:~|\.{1,2})?/?(?:[\w.@+-]+/)+[\w.@+-]+|[\w@+-]+\.\w{1,8}\b"
+)
+"""What a path looks like in a reply: anything with a slash in it, or a bare
+file name with an extension. Deliberately loose: a word that is not a path
+costs one `stat`, and a path missed is a claim the guard cannot protect."""
+
+MAX_CITED = 20
+
+
+def _spaced_homes() -> list[str]:
+    """rite's own directories whose paths carry a space, longest first. On
+    macOS every Manager's state and journal is under `~/Library/Application
+    Support/rite/`, so the path a Manager is given for its journal has a
+    space in it, and a reply citing it would otherwise split in two."""
+    from rite_ai.managers.mailbox import _mail_home
+
+    home = _mail_home()
+    found = {str(home), str(home.resolve())}
+    return sorted((h for h in found if " " in h), key=len, reverse=True)
+
+
+def _cited_paths(root: Path, claim: str) -> list[Path]:
+    """The paths a claim names, resolved as the claimant would have meant
+    them: absolute as written, `~` expanded, anything else from `root`.
+
+    Quoted or backticked spans are taken whole, spaces and all; so is rite's
+    own data directory wherever it appears."""
+    text = re.sub(r"\w+://\S+", " ", claim)
+    tokens: list[str] = []
+    for quoted in re.findall(r"`([^`\n]+)`|\"([^\"\n]+)\"|'([^'\n]+)'", text):
+        span = next(q for q in quoted if q)
+        if "/" in span:
+            tokens.append(span.strip())
+    text = re.sub(r"`[^`\n]+`|\"[^\"\n]+\"|'[^'\n]+'", " ", text)
+    homes = _spaced_homes()
+    for n, home in enumerate(homes):
+        text = text.replace(home, f"/RITE_SPACED_HOME_{n}")
+    for raw in _PATH.findall(text):
+        token = raw.rstrip(".,;:)")
+        for n, home in enumerate(homes):
+            token = token.replace(f"/RITE_SPACED_HOME_{n}", home)
+        tokens.append(token)
+    found: list[Path] = []
+    for token in tokens:
+        if not token.strip("./~"):
+            continue
+        path = Path(token).expanduser()
+        path = path if path.is_absolute() else root / path
+        if path not in found:
+            found.append(path)
+        if len(found) >= MAX_CITED:
+            break
+    return found
+
+
+def _anchor(path: Path) -> Path:
+    """The path itself if it exists, else the nearest directory above it
+    that does: what a verifier looking for it would have to be able to read."""
+    here = path
+    while not here.exists() and here != here.parent:
+        here = here.parent
+    return here
+
+
+def _probe_script(anchors: list[Path]) -> str:
+    """One line per anchor, `1` if it can be OPENED from where this runs.
+    Opened, not stat'ed: Landlock does not govern `stat`, and seatbelt's
+    metadata rules differ from its data rules, so `test -e` would measure the
+    wrong thing on at least one platform."""
+    lines = []
+    for a in anchors:
+        q = shlex.quote(str(a))
+        lines.append(
+            f"if [ -d {q} ]; then ls -- {q} >/dev/null 2>&1; "
+            f"else head -c 1 -- {q} >/dev/null 2>&1; fi && echo 1 || echo 0"
+        )
+    return "; ".join(lines)
+
+
+def _sightings(root: Path, claim: str, probe) -> list[Sighting]:
+    """rite's own look at every path the claim cites. `probe(script)` runs a
+    shell script inside the verifier's boundary and returns its stdout, or
+    None if it could not run."""
+    paths = _cited_paths(root, claim)
+    if not paths:
+        return []
+    anchors = [_anchor(p) for p in paths]
+    out = probe(_probe_script(anchors))
+    answers = out.split() if isinstance(out, str) else []
+    if len(answers) != len(anchors):
+        answers = [""] * len(anchors)
+    seen = []
+    for path, answer in zip(paths, answers, strict=True):
+        exists = path.exists()
+        detail = ""
+        if exists and path.is_file():
+            st = path.stat()
+            modified = time.strftime("%Y-%m-%d %H:%M", time.localtime(st.st_mtime))
+            detail = f"{st.st_size} bytes, modified {modified}"
+        elif exists:
+            detail = "a directory"
+        readable = {"1": True, "0": False}.get(answer)
+        seen.append(Sighting(path, exists, readable, detail))
+    return seen
+
+
+def _held_to_what_it_saw(verdict: Verdict, seen: list[Sighting]) -> Verdict:
+    """⚠ A CONTRADICTED from a verifier that could not read a cited file that
+    exists is not a contradiction of the claim (dogfood V1). It becomes COULD
+    NOT TELL, with why, and the verifier's own words kept."""
+    if verdict.kind != CONTRADICTED:
+        return verdict
+    unseen = [s for s in seen if s.exists and s.hidden]
+    if not unseen:
+        return verdict
+    names = ", ".join(str(s.path) for s in unseen)
+    return Verdict(
+        COULDNT_TELL,
+        f"rite: the verifier answered contradicted, but it cannot read {names}, "
+        "which the claim cites and which exists, so its answer rests on a view "
+        f"that could not show it. The verifier said: {verdict.evidence}",
+    )
+
+
+def _prompt(root: Path, claim: str, seen: list[Sighting] | None = None) -> str:
+    unseen = [s for s in seen or [] if s.hidden]
+    looked = (
+        "rite looked at these paths the claim cites itself, from outside your "
+        "boundary, because you cannot read them from where you run. Not "
+        "finding them yourself is NOT evidence about them; use what rite saw, "
+        "and do not guess at contents you cannot read:\n"
+        + "\n".join(s.said() for s in unseen)
+        + "\n\n"
+        if unseen
+        else ""
+    )
+    return looked + (
         "You are rite's VERIFIER. You did not do this work and have no stake "
         "in it. You are given ONE claim, made by another agent, and "
         f"read-only access to the workspace at {root}.\n\n"
@@ -238,7 +416,7 @@ def parse(stdout: str) -> Verdict:
     return Verdict(str(answer["verdict"]), str(answer.get("evidence") or ""))
 
 
-def verify(root: Path, owner: str, claim: str, *, runner=None) -> Verdict:
+def verify(root: Path, owner: str, claim: str, *, runner=None, probe=None) -> Verdict:
     """Run one verifier on one claim. Never raises: every failure is a
     Verdict of UNVERIFIED that says why."""
     from rite_ai.managers import claude_login
@@ -263,11 +441,18 @@ def verify(root: Path, owner: str, claim: str, *, runner=None) -> Verdict:
         # inside it is the verifier's own.
         env["TMPDIR"] = str(Path(login["CLAUDE_CONFIG_DIR"]) / "verifier-tmp")
         Path(env["TMPDIR"]).mkdir(mode=0o700, parents=True, exist_ok=True)
+        seen = _sightings(
+            root,
+            claim,
+            probe
+            if callable(probe)
+            else lambda script: _probe_inside(boundary, profile, root, env, script),
+        )
         got = run(
             ["sh", "-c", boundary.wrap(_command(), profile)],
             cwd=str(root),
             env=env,
-            input=_prompt(root, claim),
+            input=_prompt(root, claim, seen),
             capture_output=True,
             text=True,
             errors="replace",
@@ -284,4 +469,22 @@ def verify(root: Path, owner: str, claim: str, *, runner=None) -> Verdict:
         return Verdict(
             UNVERIFIED, f"the verifier exited {got.returncode}: {tail or 'no output'}"
         )
-    return parse(got.stdout or "")
+    return _held_to_what_it_saw(parse(got.stdout or ""), seen)
+
+
+def _probe_inside(boundary, profile: Path, root: Path, env: dict, script: str):
+    """Run `script` inside the verifier's own boundary, as the verifier would.
+    None if it could not run: then nothing is known to be readable."""
+    try:
+        got = subprocess.run(
+            ["sh", "-c", boundary.wrap(f"sh -c {shlex.quote(script)}", profile)],
+            cwd=str(root),
+            env=env,
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=60,
+        )
+    except Exception:  # noqa: BLE001 - unknown, and the caller says so
+        return None
+    return got.stdout if got.returncode == 0 else None
