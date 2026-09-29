@@ -32,6 +32,7 @@ from click.testing import CliRunner
 
 from rite_ai.cli.main import cli
 from rite_ai.sandbox import sandbox_name
+from tests.refined_board import refined
 
 IDLE = "sandbox idle: its agent is waiting at its prompt"
 
@@ -207,6 +208,7 @@ def test_saturation_is_not_claimed_of_a_worker_nobody_saw_working(
         board=Board(),
         sandbox_status=worker_sandbox_status,
         now=datetime.now(UTC).replace(hour=12),
+        refinement=refined,
     )
     assert cycle.verdict == SATURATED
     assert "a queue, not a fault" not in cycle.detail

@@ -65,6 +65,20 @@ smaller is used so a path that works here works there."""
 
 
 @pytest.fixture(autouse=True)
+def _not_inside_the_callers_tmux(monkeypatch):
+    """No test sees the tmux session the suite was started from.
+
+    Inside a tmux session `$TMUX` names the enclosing server, and tmux obeys
+    it before `TMUX_TMPDIR` or a default socket. So a test that set up a
+    private server with `TMUX_TMPDIR`, then froze and killed "its" server,
+    froze and killed the caller's instead: found 2026-09-29, when a suite run
+    from tmux took down a live supervisor and every session on that server
+    (`test_the_suite_never_touches_the_enclosing_tmux`)."""
+    monkeypatch.delenv("TMUX", raising=False)
+    monkeypatch.delenv("TMUX_PANE", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _isolated_claude_projects_dir(tmp_path_factory, monkeypatch):
     empty_dir = tmp_path_factory.mktemp("empty-claude-projects")
     monkeypatch.setenv("RITE_CLAUDE_PROJECTS_DIR", str(empty_dir))

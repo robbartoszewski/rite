@@ -45,6 +45,9 @@ LEDGER_FILE = "instructions.json"
 KEPT_SECONDS = 14 * 24 * 3600.0
 KEPT_MAX = 500
 OWNERS_DM = "Owner's DM"
+REFINEMENT_CHANNEL = "refinement channel"
+"""`slack.REFINEMENT_CHANNEL`, spelled here too so this module needs no Slack
+import; a test pins the two equal."""
 INSTRUCTION = "INSTRUCTION"
 THIS_MACHINE = "this machine"
 
@@ -83,7 +86,10 @@ def classify(text: str) -> Heard:
     parts = _header_parts(first)
     if parts is None:
         return Heard(True, text.strip(), THIS_MACHINE)
-    if parts[0] != OWNERS_DM or parts[-1] != INSTRUCTION:
+    # TR2 (TRQ8): the refinement channel is the User's only where the relay
+    # marked it INSTRUCTION, which it does for the Owner replying in a
+    # refinement thread there and for nobody else.
+    if parts[0] not in (OWNERS_DM, REFINEMENT_CHANNEL) or parts[-1] != INSTRUCTION:
         return Heard(
             False,
             "",
@@ -105,7 +111,7 @@ def classify(text: str) -> Heard:
     words = "\n".join(line[2:] for line in body).strip()
     if not words:
         return Heard(False, "", OWNERS_DM, "it is empty")
-    return Heard(True, words, OWNERS_DM)
+    return Heard(True, words, parts[0])
 
 
 def message_id(path: Path) -> str:
