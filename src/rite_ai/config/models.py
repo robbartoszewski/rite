@@ -305,6 +305,51 @@ class CheckinsConfig:
     windows: list[CheckinWindow] = field(default_factory=list)
 
 
+ACCEPT_WORDS = ("ok", "yes", "accept", "lgtm", "proceed")
+"""TRQ3, decided: the words that accept a proposal. Robert added `proceed`."""
+
+NEVER_ACCEPT = frozenset({"no", "not", "stop", "wait", "cancel", "don't"})
+"""Refused in `accept_words`: a mistake in that list turns a refusal into
+consent, so the words most likely typed as the opposite of yes cannot be in
+it (the note's part 3.11)."""
+
+
+@dataclass
+class RefinementConfig:
+    """The limits on refining a ticket with the User (TR2; TRQ2, TRQ3, TRQ8,
+    TRQ11, decided; `V070_TICKET_REFINEMENT.md` part 3.11).
+
+    Every key is optional and these defaults are Robert's. **Whether
+    refinement is enforced is not here, and never will be (TRQ1).** A value
+    out of range is refused by the parser rather than clamped: a limit
+    silently changed is a limit the User believes they set."""
+
+    unanswered: int = 3
+    """N: consecutive messages about one ticket that reached their deadline
+    with no reply, before it is PARKED. **Not a cap on rounds** (Robert's
+    correction to TRQ2, 2026-09-29: "This limit should apply to nudging
+    without a reply, not to a discussion. A topic may be complex and need
+    many rounds to resolve. As long as the User is responsive, the limit
+    shouldn't apply"). Any reply resets it to zero."""
+    deadline_hours: float = 24
+    """How long one message waits for a reply, or until the next check-in
+    closes if sooner. A message past it unanswered counts one toward
+    `unanswered`, and he is nudged with the same question when he is next
+    active."""
+    open_max: int = 5
+    """K: refinements open at once per Manager (inside their deadline)."""
+    start_per_session: int = 3
+    """S: new refinements started per Owner session."""
+    accept_words: list[str] = field(default_factory=lambda: list(ACCEPT_WORDS))
+    chore_after_minutes: int = 60
+    """A chat instruction the User has not answered about becomes an
+    unrefined chore carrying exactly his words, after this long (TRQ11)."""
+    questions_to: str = "dm"
+    """`dm`, or `channel` for a private channel rite is invited to (TRQ8)."""
+    channel: str = ""
+    """That channel's id, when `questions_to` is `channel`."""
+
+
 @dataclass
 class CredentialsConfig:
     """Which keychain accounts THIS project's credentials live under
@@ -461,6 +506,7 @@ class ProjectConfig:
     budget: BudgetConfig = field(default_factory=BudgetConfig)
     schedule: ScheduleConfig = field(default_factory=ScheduleConfig)
     checkins: CheckinsConfig = field(default_factory=CheckinsConfig)
+    refinement: RefinementConfig = field(default_factory=RefinementConfig)
     spec: SpecConfig = field(default_factory=SpecConfig)
     coordination: CoordinationConfig = field(default_factory=CoordinationConfig)
     slack: SlackConfig = field(default_factory=SlackConfig)

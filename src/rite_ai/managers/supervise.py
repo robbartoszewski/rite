@@ -141,8 +141,10 @@ from.
 # Loop verdicts that end the lifecycle (§9.14.4). `closed` is here because a
 # window authorising zero Workers is the user saying "not now", and a Manager
 # that kept spending through it would be ignoring them.
-STOP_VERDICTS = frozenset({"idle", "deadlocked", "unknown", "closed"})
-CONTINUE_VERDICTS = frozenset({"ready", "saturated", "blocked"})
+STOP_VERDICTS = frozenset(
+    {"idle", "deadlocked", "unknown", "closed", "waiting-on-user"}
+)
+CONTINUE_VERDICTS = frozenset({"ready", "saturated", "blocked", "refining"})
 """⚠ **Stated, so that continuing is a DECISION rather than a fallthrough.**
 
 A draft had only `STOP_VERDICTS` and `if answer in STOP_VERDICTS: return` —
@@ -162,8 +164,13 @@ The asymmetry decides the default for anything in NEITHER set: an
 unrecognised verdict that stops costs a restart, and one that continues
 costs quota. §5.1.1 — a safety property may fail closed, never open.
 
-Together they are exhaustive over `loop`'s seven verdicts, and a test
-asserts it, so an eighth cannot be added without classifying it."""
+Together they are exhaustive over `loop`'s nine verdicts, and a test
+asserts it, so a tenth cannot be added without classifying it.
+
+⚠ **`waiting-on-user` stops only the SESSIONS, not the run (TR2).** It
+waits in `_wait_for_mail` and spends nothing until the User answers (a
+reply is mail) or a refinement round's deadline passes. Ending the run
+there would drop an Owner whose only work is waiting on him."""
 
 
 def launch_command(
@@ -968,6 +975,8 @@ def _supervise(
     poll: float = POLL_SECONDS,
     now: object = None,
     watch: object = None,
+    refine: object = None,
+    refinement_brief: object = None,
 ) -> SuperviseResult:
     """Run the Manager until a bound or a stop verdict ends it.
 
@@ -996,6 +1005,10 @@ def _supervise(
     know a ceiling bounds anything.
     """
     clock = now if callable(now) else time.time
+    # TR2's no-progress guard: what a refinement session was handed to start,
+    # and when. Set when one starts, counted when it ends.
+    handed: dict = {}
+    handed_at = 0.0
     told: set[str] = set()
     """"Cannot tell" lines about cut prompts already said in this run."""
     # Injectable so a test can read what a human would have been told,
@@ -1307,6 +1320,34 @@ def _supervise(
                     )
                     if stopped is None:
                         cause = "mail"
+                if not cause and answer == "waiting-on-user" and stopped is None:
+                    # TR2: work is on the board and none of it can start
+                    # until the User answers. Wait, spending nothing; a reply
+                    # is mail, and a round's deadline passing wakes it too.
+                    say(
+                        f"{manager!r} waits on the User: "
+                        f"{getattr(answer, 'detail', '') or 'refinement'}"
+                    )
+                    stopped = _wait_for_mail(
+                        root,
+                        manager,
+                        None,
+                        router,
+                        slack,
+                        say,
+                        clock,
+                        deadline,
+                        poll,
+                        cycles,
+                        live,
+                        wake=_refinement_wake(root, manager, clock),
+                    )
+                    if stopped is not None:
+                        return stopped
+                    if mail_waiting(root, manager, INBOX):
+                        cause = "mail"
+                    else:
+                        continue
                 if not cause and answer == "idle" and stopped is None:
                     # ⚠ AN IDLE BOARD IS NOT NOTHING TO DO WHILE A MESSAGE
                     # WAITS. Found on Linux (SB11, 2026-09-28): `rite message`
@@ -1399,6 +1440,9 @@ def _supervise(
                     continue
             if not cause:
                 last_basis = _basis(answer)
+                handed, handed_at = _record_refinement_session(
+                    root, manager, answer, clock, say
+                )
         cycle_basis = last_basis
 
         try:
@@ -1506,11 +1550,14 @@ def _supervise(
                         f"{manager!r} ({e}); a chore asked for from them will "
                         "be refused"
                     )
+            refined_now = _refinement_heard(refine, waiting_for_it, say)
             # Composed once, for both launches below: the fallback needs the
             # same mail and the same reply instructions, differing only in
             # which opening text it starts from.
             extras = (
                 delivery_note(waiting_for_it)
+                + refined_now
+                + _refinement_brief(refinement_brief, say)
                 + how_to_reply(root, manager)
                 + checkins.instructions(root, manager)
                 + boundary.instruction
@@ -1759,6 +1806,13 @@ def _supervise(
                 # same reason: it talks to the board, which the two-second
                 # poll must not wait on.
                 chores(say)
+            if callable(refine):
+                # TR2: the rounds the Owner asked for this turn go out, with
+                # the board, at the same boundary and for the same reason.
+                _refinement_step(refine, say)
+            # AFTER the rounds went out: a round sent this turn is progress.
+            _count_misses(root, manager, handed, handed_at, say)
+            handed, handed_at = {}, 0.0
             if callable(router):
                 # And once more at the boundary, for a request written in the
                 # cycle's last two seconds.
@@ -2030,6 +2084,104 @@ class _Stalled:
     number: int
     basis: object
     footprint: Footprint
+
+
+def _refinement_step(refine, say) -> None:
+    """`refine(say)`: send the rounds asked for, retry unwritten accepts.
+    Never ends a run: a refinement that could not run is said."""
+    try:
+        refine(say)
+    except Exception as e:  # noqa: BLE001 - said, and the cycle goes on
+        say(f"refinement could not run this cycle: {type(e).__name__}: {e}")
+
+
+def _refinement_brief(brief, say) -> str:
+    """How the Owner refines, and this cycle's refinement work (TR2), or "".
+    Never ends a run: a brief that could not be composed is said, and the
+    cycle goes on without it, which the Owner is told."""
+    if not callable(brief):
+        return ""
+    try:
+        return brief(say) or ""
+    except Exception as e:  # noqa: BLE001 - said, and the cycle goes on
+        say(f"the refinement brief could not be composed: {e}")
+        return (
+            "\n\n## Refinement: this cycle (rite)\n\nrite could not compose "
+            "this cycle's refinement list. Do not refine from memory.\n"
+        )
+
+
+def _refinement_heard(refine, messages, say) -> str:
+    """What the User's replies just delivered did to their rounds, as a
+    section of this cycle's instruction, or "" (TR2). rite's lines, in
+    rite's words: whether an accept was recorded is rite's to say."""
+    if not callable(refine) or not messages:
+        return ""
+    try:
+        lines = refine(say, messages=messages) or []
+    except Exception as e:  # noqa: BLE001 - said, and the cycle goes on
+        say(f"refinement could not read the delivered replies: {e}")
+        return ""
+    if not lines:
+        return ""
+    return (
+        "\n\n## Refinement: what the User's replies did (rite)\n\n"
+        + "\n".join(f"- {line}" for line in lines)
+        + "\n"
+    )
+
+
+def _refinement_wake(root: Path, manager: str, clock):
+    """`wake` for a wait on the User: a refinement round's deadline passed
+    since the wait began. Read from the round ledger alone, never the board,
+    so a long wait costs no board reads. A reply needs no wake: it is mail."""
+    from rite_ai.refinement import rounds
+
+    began = clock()
+
+    def wake() -> str:
+        now = clock()
+        events = rounds.events_since(rounds.all_attempts(root, manager), began, now=now)
+        if events.deadlines:
+            return f"{events.deadlines} refinement round(s) reached their deadline"
+        return ""
+
+    return wake
+
+
+def _record_refinement_session(
+    root: Path, manager: str, answer, clock, say
+) -> tuple[dict, float]:
+    """A session starting for refinement is recorded, so the next one needs
+    the User to have done something first (the note's part 3.4 step 0).
+    Returns what it was handed to start and when, for `_count_misses`."""
+    if str(answer) != "refining":
+        return {}, 0.0
+    from rite_ai.refinement import rounds
+
+    at = clock()
+    handed = dict(getattr(answer, "starting", None) or {})
+    try:
+        rounds.record_session(root, manager, at)
+    except OSError as e:
+        # Unrecorded, the next cycle reads a first look again and may start
+        # one more refinement session, still bounded by S and K. Said.
+        say(f"could not record the refinement session for {manager!r}: {e}")
+    return handed, at
+
+
+def _count_misses(root: Path, manager: str, handed: dict, since: float, say) -> None:
+    """At the end of a refinement session: the no-progress guard. Never ends
+    a run; a guard that could not run is said."""
+    if not handed:
+        return
+    from rite_ai.refinement import rounds
+
+    try:
+        for line in rounds.count_misses(root, manager, handed, since=since):
+            say(f"refinement: {line}")
+    except OSError as e:
+        say(f"could not count refinement misses for {manager!r}: {e}")
 
 
 def _basis(answer) -> object:
@@ -2308,12 +2460,24 @@ def _why(answer: str, started: int) -> str:
     identically for all of them tells a human "finished" when it means
     "jammed" (§9.14.4)."""
     if answer == "idle":
-        # "listed": the board's list lags any write rite did not make itself
-        # (DF4), so this is what it listed, not what it holds.
+        # A snapshot with its time (DF4, coordinator 2026-09-29): a person who
+        # created a ticket seconds ago can see why it was not picked up, rather
+        # than conclude rite is broken. A second read after a delay would only
+        # narrow that window, so rite stops and says when it looked.
+        read_at = getattr(answer, "read_at", None)
+        if read_at is None:
+            return (
+                f"done: the board listed nothing ready ({started} session(s)); "
+                "a ticket created outside rite shortly before may not have been "
+                "listed"
+            )
+        from rite_ai.loop import as_of
+
         return (
-            f"done: the board listed nothing ready ({started} session(s)); a "
-            "ticket created outside rite in the last few seconds may not have "
-            "been listed yet"
+            f"done: the board listed nothing ready as of {as_of(read_at)} "
+            f"({started} session(s)); a ticket created outside rite shortly "
+            "before then, or since, is not in that read. `rite start` again "
+            "reads it afresh"
         )
     if answer == "closed":
         return (
