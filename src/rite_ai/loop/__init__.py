@@ -96,6 +96,13 @@ class WorkerView:
     held_paths: tuple[str, ...] = ()
 
 
+def as_of(moment: float | None) -> str:
+    """`HH:MM:SS` local time of a board read, for "nothing ready as of"."""
+    if moment is None:
+        return "an unrecorded time"
+    return time.strftime("%H:%M:%S", time.localtime(moment))
+
+
 @dataclass
 class Cycle:
     """What one pass found, and what it would do about it."""
@@ -121,6 +128,10 @@ class Cycle:
     problems: list[str] = field(default_factory=list)
     scheduled: int = 0
     """How many `scheduled` tickets the board listed, refined or not."""
+    board_read_at: float | None = None
+    """Wall-clock time the board's list came back. What "nothing ready" is
+    true AS OF: a list is a snapshot, and a ticket created outside rite just
+    before or after it is not in it (DF4). None when the board was not read."""
     refinement: object = None
     """The Owner's refinement work (`refinement.admit.Admission`), or None
     when this Manager is not the one that refines (TRQ7)."""
@@ -256,6 +267,7 @@ def plan_cycle(
     # out loud — not a reason to call the whole cycle unknown.
     before = len(cycle.problems)
     cycle.ready = _ready(root, project, board, cycle, clock, refiner, refinement)
+    cycle.board_read_at = time.time()
     if len(cycle.problems) > before:
         cycle.verdict = UNKNOWN
         cycle.detail = "the board could not be read"
@@ -277,11 +289,12 @@ def plan_cycle(
     if not cycle.ready:
         cycle.verdict = IDLE
         cycle.detail = (
-            # "listed", not "is": a board's list lags writes it did not get
-            # from rite (DF4). rite's own are read back in `own_writes`.
-            f"the board listed nothing waiting (a ticket created outside rite "
-            f"in the last few seconds may not be listed yet); {len(free)} of "
-            f"{len(cycle.workers)} Worker(s) free"
+            # A snapshot with its time, not "the board is empty": a list lags
+            # writes rite did not make itself (DF4); rite's own are read back
+            # in `own_writes`.
+            f"the board listed nothing waiting as of {as_of(cycle.board_read_at)} "
+            f"(a ticket created outside rite shortly before then, or since, is "
+            f"not in that read); {len(free)} of {len(cycle.workers)} Worker(s) free"
         )
         return cycle
 
