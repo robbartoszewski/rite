@@ -778,14 +778,14 @@ taken at that time, not the live ticket.
 Work to the section "Agreed definition of done", not to the title: its
 checklist, scope and Verify are what done means, and you do not judge
 whether the ticket is complete enough. Cite the record id in your last
-commit message, and in your pull request if you open one. ⚠ Give `gh` and
-`git` your text in a file, never in double quotes on the command line:
-`gh pr create --body-file <file>`, `gh … comment --body-file <file>`,
-`git commit -F <file>`. In double quotes the shell runs
-anything in backticks or `$( )` before `gh` sees it, and your text quotes a
-ticket someone else wrote. If there is no `TICKET.md`, or it has no "Agreed
-definition of done" section, say so and stop. If the definition of done cannot be met as
-written (a path it names does not exist, two items contradict), report
+commit message. ⚠ Give `git` your commit message in a file, `git commit -F
+<file>`, never in double quotes on the command line: there the shell runs
+anything in backticks or `$( )` before git sees it, and your text quotes a
+ticket someone else wrote. You hold no GitHub credential: rite pushes your
+branch and opens the pull request itself. If there is no `TICKET.md`, or it
+has no "Agreed definition of done" section, say so and stop. If the
+definition of done cannot be met as written (a path it names does not exist,
+two items contradict), report
 exactly that and stop: never invent the missing piece.
 
 ## Workflow

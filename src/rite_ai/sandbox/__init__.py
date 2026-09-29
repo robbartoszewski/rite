@@ -69,6 +69,8 @@ from rite_ai.config.models import Module, SandboxConfig
 from rite_ai.machine import max_sandboxes
 
 TOKEN_ENV_VAR = "GITHUB_TOKEN"
+_GITHUB_TOKEN_ENV = frozenset({"GITHUB_TOKEN", "GH_TOKEN", "GH_ENTERPRISE_TOKEN"})
+"""Never passed into a Worker's sandbox (`start_worker`)."""
 CLAUDE_TOKEN_ENV_VAR = "CLAUDE_CODE_OAUTH_TOKEN"
 
 
@@ -1058,7 +1060,6 @@ def start_worker(
     root: str | os.PathLike[str],
     worker: str,
     config: SandboxConfig,
-    token: str | None = None,
     agent_args: list[str] | None = None,
     env: dict[str, str] | None = None,
     allow_dirty: bool = False,
@@ -1187,14 +1188,21 @@ def start_worker(
         # Opt-in rather than always-on: its warning ("could be modified or
         # lost") is about the Worker's own unpushed work.
         args.append("--allow-dirty")
-    # Every credential the project holds, one `--env` each (§5.3.4).
-    # `token` remains for callers that have only the git token; when both
-    # are given `env` is authoritative and already carries it, because
-    # `worker_environment` puts the Worker's own token in GITHUB_TOKEN
-    # ahead of any machine-global one.
+    # The Worker's credentials, one `--env` each (§5.3.4): its engine's
+    # login, and never a GitHub token. rite pushes and opens the pull
+    # request on the host (`rite deliver`); a token in here would let the
+    # Worker push, open a pull request anywhere, or merge, forbidden only by
+    # its instructions. Refused here whatever the caller passed, so no
+    # future caller can hand one over by accident.
     delivered = dict(env or {})
-    if token and TOKEN_ENV_VAR not in delivered:
-        delivered[TOKEN_ENV_VAR] = token
+    github = sorted(k for k in delivered if k in _GITHUB_TOKEN_ENV)
+    if github:
+        return SandboxResult(
+            False,
+            f"not starting '{worker}': a GitHub token was about to be passed "
+            f"into its sandbox ({', '.join(github)}); Workers hold none, since "
+            "rite pushes and opens the pull request on the host",
+        )
     # The Claude login goes to yoloAI, not to `--env`. yoloAI treats
     # CLAUDE_CODE_OAUTH_TOKEN as the claude agent's own credential and reads
     # it from the environment `yoloai new` runs in (`yoloai system agents

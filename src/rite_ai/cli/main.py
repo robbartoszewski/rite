@@ -6287,8 +6287,9 @@ def sandbox_start(
             raise SystemExit(1)
 
     token, tier = resolve_worker_token(worker, config.credentials)
-    # Every credential this project holds, not just the git token (§5.3.4).
-    env = worker_environment(config.credentials, worker_token=token)
+    # What a Worker receives (§5.3.4): its engine's login, and no GitHub
+    # token — `token` stays on the host, for `rite deliver` to push with.
+    env = worker_environment(config.credentials)
     if tier == "global":
         # Loud, every time — but ONLY for a token belonging to the whole
         # machine. It used to fire for this project's own `github_token`
@@ -6376,7 +6377,6 @@ def sandbox_start(
         root,
         worker,
         config.sandbox,
-        token=token,
         agent_args=list(agent_args) or None,
         env=env,
         allow_dirty=allow_dirty,
@@ -6665,8 +6665,10 @@ def _injected_secret_values(root: Path | None, worker: str) -> list[str]:
         if not isinstance(project, list):
             credentials = project.config.credentials
     token, _tier = resolve_worker_token(worker, credentials)
-    injected = worker_environment(credentials, worker_token=token)
-    return [value for value in injected.values() if value]
+    injected = worker_environment(credentials)
+    # The GitHub token is no longer given to a Worker, but a sandbox started
+    # by an earlier rite may still show it: keep masking it.
+    return [value for value in [*injected.values(), token] if value]
 
 
 @sandbox.command("pane")

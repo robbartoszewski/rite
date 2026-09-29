@@ -37,7 +37,8 @@ def empty_keychain_and_environment(monkeypatch):
 
 
 def test_every_name_a_sandbox_receives_is_read_back(monkeypatch):
-    assert set(INJECTED_KEYS) == {"github_token", "claude_token"}
+    # Claude only since 2026-09-29: rite pushes and opens PRs on the host.
+    assert set(INJECTED_KEYS) == {"claude_token"}
     with patch("keyring.get_password", return_value="from-the-host-keychain"):
         delivered = worker_environment()
     assert set(delivered) == {service_env_name(k) for k in INJECTED_KEYS}

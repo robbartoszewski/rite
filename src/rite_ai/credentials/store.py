@@ -463,15 +463,22 @@ def warn_if_global(key: str, credentials: object | None = None) -> str | None:
     return message
 
 
-# The services whose credentials a Worker receives: GitHub, to clone, push
-# and open a pull request, and Claude, the engine every Worker runs
-# (`start_worker` passes `--agent claude`). Nothing else.
-WORKER_SERVICES: tuple[str, ...] = ("github", "claude")
+# The services whose credentials a Worker receives: Claude, the engine every
+# Worker runs (`start_worker` passes `--agent claude`). Nothing else.
+#
+# ⚠ **Not GitHub, since 2026-09-29 (Robert: "push and PR are the
+# deterministic code's job").** rite clones and fetches on the host before
+# the sandbox starts (`rite prepare`), and `rite deliver` collects the
+# Worker's commits and pushes and opens the pull request on the host, with a
+# token it resolves there (`publishing/deliver.py`). Nothing a Worker is told
+# to do needs GitHub, and in the two Worker transcripts on this machine no
+# Worker ran git fetch/pull/push/clone/remote or gh at all. A token in the
+# sandbox could only let a Worker push, open a pull request — upstream too —
+# or merge, which only instructions forbade.
+WORKER_SERVICES: tuple[str, ...] = ("claude",)
 
 
-def worker_environment(
-    credentials: object | None = None, worker_token: str | None = None
-) -> dict[str, str]:
+def worker_environment(credentials: object | None = None) -> dict[str, str]:
     """The credentials a Worker receives, as env var -> value (§5.3.4).
 
     ⚠ **Only `WORKER_SERVICES`, never "every credential the project holds".**
@@ -491,9 +498,6 @@ def worker_environment(
     Each env var name comes from the service field's own `env`, so rite
     delivers `GITHUB_TOKEN` rather than a name of its own invention — the
     §10.5 boundary: rite stores and injects, and does not interpret.
-
-    `worker_token` is that Worker's own git token and takes precedence for
-    `GITHUB_TOKEN` (§5.3.3).
     """
     from rite_ai.credentials.services import SERVICES, service_key
 
@@ -506,8 +510,6 @@ def worker_environment(
             value = get_scoped(service_key(svc.name, field.name), credentials)
             if value:
                 env[field.env] = value
-    if worker_token:
-        env["GITHUB_TOKEN"] = worker_token
     return env
 
 

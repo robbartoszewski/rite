@@ -16,7 +16,8 @@ up to date" off, GitHub accepts a stale green.
 
 **No Worker pushes, under any strategy** (PB1 piece 4). rite pushes and
 opens the pull request on the host, after its publish gate passes on exactly
-the commits being sent, with the Worker's own token.
+the commits being sent, with the Worker's GitHub token, which rite holds
+on the host and the Worker never does (`WORKER_SERVICES`).
 """
 
 from __future__ import annotations

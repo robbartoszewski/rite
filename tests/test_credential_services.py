@@ -88,8 +88,10 @@ class TestEveryServiceCarriesItsOwnFields:
         )
         values = set(store.worker_environment().values())
         assert "VALUE-OF-github_app_key" not in values
+        # Nor, since 2026-09-29, the GitHub token itself: rite pushes on the host.
+        assert "VALUE-OF-github_token" not in values
         # The control: the same stub does deliver an ordinary credential.
-        assert "VALUE-OF-github_token" in values
+        assert "VALUE-OF-claude_token" in values
 
     def test_the_cursor_key_never_reaches_a_worker_by_env(self, monkeypatch):
         """Measured the same way as the App key, with the same control."""
@@ -100,7 +102,7 @@ class TestEveryServiceCarriesItsOwnFields:
         )
         values = set(store.worker_environment().values())
         assert "VALUE-OF-cursor_api_key" not in values
-        assert "VALUE-OF-github_token" in values
+        assert "VALUE-OF-claude_token" in values
 
     def test_config_fields_are_not_secrets_and_name_a_config_path(self):
         """A JIRA site and board key are the same for the whole team and
