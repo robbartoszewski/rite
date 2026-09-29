@@ -160,8 +160,9 @@ Then, per ticket:
 
 ```bash
 rite sandbox start alpha --ticket ABC-12     # GitHub Issues: --ticket 42
+                                            # starts only on a REFINED ticket
                                             # not a ticket yet: --prompt "<what to do>"
-                                            #   files it as a chore ticket first
+                                            #   files an unrefined chore, starts nothing
 ```
 
 Start prepares the worker's workspace first and refuses one it cannot prepare,

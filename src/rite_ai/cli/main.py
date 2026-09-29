@@ -6089,11 +6089,12 @@ def sandbox_start(
     if refusal:
         click.echo(refusal, err=True)
         raise SystemExit(1)
-    # ⚠ TR9: every piece of Worker work carries a ticket. `--prompt` files
-    # the chore HERE, after every refusal above (an unprepared workspace,
-    # work that could not leave the sandbox), so a start refused for any of
-    # them leaves nothing on the board. Only `start_worker` itself can fail
-    # after it, and that is said below.
+    # ⚠ TR9 and TRQ11 (Robert, 2026-09-29): `--prompt` files the person's
+    # words as a chore, explicitly unrefined, and starts NOTHING on it. A
+    # Worker starts only on a REFINED ticket (TR4, below), and a chore filed a
+    # moment ago has no agreed definition of done by construction. Filed HERE,
+    # after every refusal above, so a start refused for another reason leaves
+    # nothing on the board.
     if prompt_text is not None:
         from rite_ai.managers.chores import create_for_prompt
 
@@ -6109,18 +6110,27 @@ def sandbox_start(
                 err=True,
             )
             raise SystemExit(1)
-        click.echo(f"filed chore {made} from the prompt, labelled chore and {worker}")
-        ticket = made
+        click.echo(
+            f"filed chore {made} from the prompt, labelled chore and scheduled. "
+            f"not starting '{worker}': the chore has no agreed definition of done "
+            f"yet, and a Worker starts only on one that has. Agree it with "
+            f'`rite refine accept {made} --item "…"`, then `rite sandbox start '
+            f"{worker} --ticket {made}`.",
+            err=True,
+        )
+        raise SystemExit(1)
     from rite_ai.sandbox.delivery import DELIVERY_FILE, clear_delivery
 
     if ticket is None:
         clear_delivery(worker_dir)
         prompt = None
     else:
-        read_at = _deliver_ticket(worker, worker_dir, ticket, root, config)
+        read_at, record_id = _deliver_ticket(worker, worker_dir, ticket, root, config)
         prompt = (
-            f"Work ticket {ticket}. Its text, as rite read it from the board at "
-            f"{read_at} UTC, is in {DELIVERY_FILE} in your working directory."
+            f"Work ticket {ticket} to its agreed definition of done, refinement "
+            f"record {record_id}. The ticket and that definition of done, as rite "
+            f"read them from the board at {read_at} UTC, are in {DELIVERY_FILE} "
+            "in your working directory. Cite the record id in your pull request."
         )
     result = start_worker(
         root,
@@ -6135,15 +6145,6 @@ def sandbox_start(
     )
     click.echo(result.message)
     if not result.ok:
-        if prompt_text is not None:
-            # Said, not undone: deleting a ticket is not something rite does,
-            # and a chore nobody knows about is the untracked work TR9 closes.
-            click.echo(
-                f"the chore {ticket} filed for this stays on the board, labelled "
-                f"chore and {worker}. Start it again with `rite sandbox start "
-                f"{worker} --ticket {ticket}`, or close it.",
-                err=True,
-            )
         raise SystemExit(1)
 
 
@@ -6181,34 +6182,62 @@ def _board_source(config, role: str = "workers") -> str:
     return tb.type
 
 
-def _deliver_ticket(worker: str, worker_dir: Path, ticket: str, root, config) -> str:
-    """Read TICKET on the host and write it into the Worker's workspace, or
-    exit. Returns the UTC time of the read.
+def _deliver_ticket(
+    worker: str, worker_dir: Path, ticket: str, root, config
+) -> tuple[str, str]:
+    """Check TICKET is refined and write it, with its agreed definition of
+    done, into the Worker's workspace, or exit. Returns the UTC time of the
+    read and the record id.
 
-    A sandboxed Worker holds no board credential (§5.3.4), so this read is
-    the only way it learns what its ticket says. A ticket that cannot be
-    read refuses the start: a Worker that cannot see its ticket would stop
-    at once, or guess."""
+    A sandboxed Worker holds no board credential (§5.3.4), so this is the
+    only way it learns what its ticket says and what counts as done.
+
+    ⚠ **ONE read (TR4, the note's part 4, race 4).** `refinement.status.of`
+    reads the board once and returns the state, the signed record and the
+    ticket from that read. The ticket text written here is that read's, never
+    a second one: an edit landing between two reads would hand the Worker
+    ticket text that does not match the record rite checked.
+
+    ⚠ **Only REFINED starts a Worker** (TRQ1, enforcement is the standard).
+    Every other state refuses and names itself, and the previous ticket's copy
+    is removed, so nothing stale is left for a later start to trust. UNREADABLE
+    is said as rite could not check, never as "no definition of done"."""
     from rite_ai import phrases
-    from rite_ai.sandbox.delivery import read_at_now, render_ticket, write_delivery
-    from rite_ai.tickets import BackendError
+    from rite_ai.refinement.status import of, render_for_worker
+    from rite_ai.sandbox.delivery import (
+        clear_delivery,
+        read_at_now,
+        render_ticket,
+        write_delivery,
+    )
 
-    backend, problem = _ticket_backend("workers", root=root, config=config)
-    ticket_read = backend.read(ticket) if not problem else None
-    if problem or isinstance(ticket_read, BackendError) or ticket_read is None:
-        why = problem or getattr(ticket_read, "message", "nothing came back")
+    checked = of(root, config, ticket)
+    if not checked.refined or checked.record is None or checked.ticket is None:
+        clear_delivery(worker_dir)
         click.echo(
-            f"not starting '{worker}': could not read ticket {ticket} from the "
-            f"board ({why}), and a Worker cannot read the board itself",
+            f"not starting '{worker}': ticket {ticket} has no agreed definition "
+            f"of done that rite could confirm ({checked.state}: {checked.detail}). "
+            "A Worker starts only on a ticket rite reports REFINED "
+            f"(`rite refine status {ticket}`).",
             err=True,
         )
         raise SystemExit(1)
     read_at = read_at_now()
-    rendered = render_ticket(ticket_read)
-    phrases.report(root, f"ticket {ticket_read.id}", rendered.scanned)
-    path = write_delivery(worker_dir, rendered, read_at, _board_source(config))
-    click.echo(f"delivered ticket {ticket} as read at {read_at} UTC to {path}")
-    return read_at
+    rendered = render_ticket(checked.ticket)
+    phrases.report(root, f"ticket {checked.ticket.id}", rendered.scanned)
+    path = write_delivery(
+        worker_dir,
+        rendered,
+        read_at,
+        _board_source(config),
+        sections=(("Agreed definition of done", render_for_worker(checked.record)),),
+    )
+    record_id = checked.record.record_id
+    click.echo(
+        f"delivered ticket {ticket} and its agreed definition of done (record "
+        f"{record_id}) as read at {read_at} UTC to {path}"
+    )
+    return read_at, record_id
 
 
 def _worker_cannot_deliver(

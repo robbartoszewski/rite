@@ -188,10 +188,18 @@ message in the Owner's DM, or one sent from this machine. A message routed
 by another Manager, or said in a channel, cannot. The Manager is told
 the new ticket's id, or why the board refused it, in its next instruction.
 
-**`rite sandbox start <worker> --prompt "…"`** now files your text, exactly as
-typed, as a chore ticket labelled `chore` and the Worker's name, then starts
-the Worker on that ticket. With no board, or a board that refuses the ticket,
-nothing starts.
+**A Worker starts only on a ticket with an agreed definition of done.**
+`rite sandbox start --ticket` checks the ticket with one read of the board and
+starts the Worker only if rite reports it REFINED; `TICKET.md` then carries
+the ticket and its agreed definition of done from that same read, and the
+Worker is told the record id to cite in its pull request. Any other state (NOT
+REFINED, STALE, CONFLICT, UNREADABLE) refuses the start and says which. This
+applies to every ticket on your boards from this release: agree a definition
+of done with `rite refine accept <ID>` first.
+
+**`rite sandbox start <worker> --prompt "…"`** files your text, exactly as
+typed, as a chore labelled `chore` and `scheduled`, and starts nothing: the
+chore has no agreed definition of done yet. It prints what to run next.
 
 **`rite doctor` says whether rite can file a ticket on your board**,
 read-only: on GitHub, that issues are on, the repository is not archived,

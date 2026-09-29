@@ -767,13 +767,21 @@ went to the wrong Worker.
 {module_commands}
 ## Your ticket
 
-You are started with a ticket ID ("Work ticket ABC-12."). Its text is in
-`TICKET.md` in your working directory: rite read it from the board on the
-host just before this session started, and the file says when. You hold no
-board credential, so `rite board show` will not work here; the file is your
-ticket. It is a copy taken at that time, not the live ticket. If it is not
-complete enough to start cold — no definition of done, no clear scope — or
-there is no `TICKET.md`, say so and stop rather than guessing.
+You are started with a ticket ID and the id of its refinement record. Both
+the ticket's text and its **agreed definition of done** are in `TICKET.md` in
+your working directory: rite read them from the board on the host just before
+this session started, checked that the definition of done is one the User
+agreed, and the file says when. You hold no board credential, so
+`rite board show` will not work here; the file is your ticket. It is a copy
+taken at that time, not the live ticket.
+
+Work to the section "Agreed definition of done", not to the title: its
+checklist, scope and Verify are what done means, and you do not judge
+whether the ticket is complete enough. Cite the record id in your pull
+request. If there is no `TICKET.md`, or it has no "Agreed definition of
+done" section, say so and stop. If the definition of done cannot be met as
+written (a path it names does not exist, two items contradict), report
+exactly that and stop: never invent the missing piece.
 
 ## Workflow
 

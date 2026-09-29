@@ -272,16 +272,19 @@ def test_every_manager_is_told_how_to_make_a_chore(tmp_path):
 
 class TestAPromptTypedAtThisMachine:
     """`rite sandbox start <worker> --prompt "…"`: the person's words, filed as
-    a chore before the Worker starts, and the Worker started on that ticket."""
+    a chore, explicitly unrefined (TRQ11, Robert, 2026-09-29). No Worker
+    starts on it until it is refined (TR4)."""
 
-    def test_the_chore_is_the_prompt_labelled_for_that_worker_not_scheduled(self):
+    def test_the_chore_is_the_prompt_labelled_as_a_chat_chore_is(self):
         board = Board()
         made, refusal = chores.create_for_prompt(board, "alpha", "add a CSV export\n")
         assert (made, refusal) == ("RT-99", "")
         ((title, description, labels),) = board.created
         assert title == "chore: add a CSV export"
         assert description.startswith("add a CSV export\n\n---")
-        assert labels == ["chore", "alpha"]
+        # Not the Worker's label: nothing runs on it, and a Worker's label
+        # reads as that Worker's work in progress.
+        assert labels == ["chore", "scheduled"]
 
     def test_no_board_or_a_refused_create_is_a_refusal(self):
         assert chores.create_for_prompt(None, "alpha", "x")[1]
@@ -334,7 +337,7 @@ class TestAPromptTypedAtThisMachine:
             )
         return result, seen
 
-    def test_the_worker_is_started_on_the_chore(self, tmp_path, monkeypatch):
+    def test_the_chore_is_filed_and_no_worker_starts(self, tmp_path, monkeypatch):
         import rite_ai.cli.main as main_mod
 
         self._project(tmp_path, monkeypatch, "github")
@@ -343,13 +346,11 @@ class TestAPromptTypedAtThisMachine:
         monkeypatch.setattr(main_mod, "_worker_cannot_deliver", lambda *a, **k: "")
         board = Board()
         result, seen = self._start(board)
-        assert result.exit_code == 0, result.output
-        assert seen["prompt"].startswith("Work ticket RT-99. Its text, as rite read")
+        assert result.exit_code == 1
         assert board.created[0][0] == "chore: add a CSV export"
-        # The chore reaches the Worker the way every ticket does: read back
-        # from the board on the host and delivered into its workspace.
-        delivered = (tmp_path / "workers" / "alpha" / "TICKET.md").read_text()
-        assert "RT-99" in delivered and board.created[0][1].strip() in delivered
+        assert "filed chore RT-99" in result.output
+        assert "rite refine accept RT-99" in result.output
+        assert "prompt" not in seen
 
     def test_a_start_refused_for_another_reason_files_no_chore(
         self, tmp_path, monkeypatch

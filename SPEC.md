@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.45 · **Date:** 2026-09-29
+**Version:** 0.24.46 · **Date:** 2026-09-29
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -1771,10 +1771,22 @@ directory in. The file names the board and the UTC time of the read and says
 it is **a copy taken at that moment, not the live ticket**: if the ticket
 changes afterwards, the Worker works from the copy, and the record shows what
 it worked from. A ticket that cannot be read refuses the start; a start with
-no ticket removes a previous copy. Further host-read content for a Worker —
-the agreed refinement record (TR4) is the first expected — is a section of
-the same file (`write_delivery(..., sections=...)`), so board content reaches
-a Worker by one path. Measured 2026-09-29 through the real CLI against
+no ticket removes a previous copy. Further host-read content for a Worker is a
+section of the same file (`write_delivery(..., sections=...)`), so board
+content reaches a Worker by one path.
+
+**Only an agreed definition of done starts a Worker (TR4, built).** The read
+above is `refinement.status.of`: ONE read of the ticket and its comments,
+which returns the refinement state, the signed record and the ticket text
+together. Only REFINED starts a Worker. `TICKET.md` then carries that read's
+ticket text and, as the section "Agreed definition of done", that read's
+record (`render_for_worker`); the opening prompt names the record id, and the
+Worker cites it in its pull request. The board is never read a second time for
+the text, so a Worker can never be handed ticket text that does not match the
+record rite checked (the refinement note's race 4). Every other state (NOT
+REFINED, STALE, CONFLICT, UNREADABLE) refuses the start, names itself, and
+removes any earlier copy. `--prompt` files an unrefined chore (TRQ11) and
+starts nothing. Measured 2026-09-29 through the real CLI against
 ritetest Jira and GitHub, with a stand-in `yoloai` that recorded only the
 names of the variables passed: main passed `JIRA_API_TOKEN`, `JIRA_EMAIL`
 and `SLACK_BOT_TOKEN` to a Worker; after this change none of them, and
@@ -3697,10 +3709,10 @@ rite scheduler uninstall           # deregister it
 rite sandbox start <worker> [--ticket ID | --prompt TEXT]
                                     # process-isolate a Worker's session via yoloAI (§5.3).
                                     #   Prepares the workspace first (as `rite prepare`)
-                                    #   and refuses when it cannot. `--prompt` first files
-                                    #   TEXT as a chore ticket (labelled `chore` and the
-                                    #   Worker), and refuses with no board or a refused
-                                    #   create: all Worker work carries a ticket (TR9).
+                                    #   and refuses when it cannot. Starts only on a ticket
+                                    #   rite reports REFINED, handing it that record (TR4).
+                                    #   `--prompt` files TEXT as an unrefined chore
+                                    #   (`chore`, `scheduled`) and starts nothing (TRQ11).
                                     #   The opening prompt goes
                                     #   in as a prompt file. The Worker works on yoloAI's
                                     #   full copy (`:copy-all`, gitignored files included:
@@ -7168,6 +7180,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.46 — a Worker starts only on an agreed definition of done, and is handed that record (TR4).** §5.3.4 "Reading the ticket": `rite sandbox start` now reads the ticket through `refinement.status.of`, one read that returns the state, the signed record and the ticket text. Only REFINED starts a Worker; `TICKET.md` carries that read's text and, as "Agreed definition of done", that read's record, and the prompt names the record id. Every other state refuses, names itself and removes an earlier copy. `--prompt` files an unrefined chore labelled `chore` and `scheduled` and starts nothing (TRQ11, Robert, 2026-09-29), no longer the Worker's label, since nothing runs on it. Tests go through the real predicate with a real key and a signed record; only the network is faked. Mutations each turn tests red: an unrefined ticket allowed, a second board read for the text, the record not delivered, the record id not in the prompt, a stale copy left on refusal.
 
 **Changes in 0.24.45 — Workers receive GitHub and Claude credentials only; their ticket is delivered by the host (Robert, 2026-09-29: "Narrow it down").** §5.3.4 reversed: `worker_environment` delivers `WORKER_SERVICES` (github, claude) instead of every credential the project holds. The evidence: the pingr Worker proof's launch line carried `SLACK_BOT_TOKEN`, `JIRA_API_TOKEN` and `JIRA_EMAIL`, and SB12 measured a sandbox's environment readable from other sandboxes. Checked from the code first: no Worker uses Slack; the one Worker use of Jira was reading its ticket with `rite board show`, so the ticket is now read on the host and delivered as `TICKET.md` ("Reading the ticket"). Before/after through the real CLI with a stand-in `yoloai`: main passed the three to the Worker, this passes none. Tests: restoring the old set fails 3; skipping delivery, normalisation, the snapshot warning, the refusal of an unreadable ticket, or removing a stale copy each fail the delivery tests.
 
