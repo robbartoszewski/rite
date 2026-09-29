@@ -128,7 +128,7 @@ every ticket it created, labelled, moved or assigned from the board's
 consistent single-ticket read, so its own writes are always seen, and seen
 as they are now. A ticket a person creates on the board's web page can still
 take a few seconds to be listed; the idle stop now says the board *listed*
-nothing and names that case.
+nothing, and when: "nothing ready as of 14:32:05".
 
 ### rite's verifier no longer contradicts a true reply about a file it cannot read
 

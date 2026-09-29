@@ -2431,12 +2431,24 @@ def _why(answer: str, started: int) -> str:
     identically for all of them tells a human "finished" when it means
     "jammed" (§9.14.4)."""
     if answer == "idle":
-        # "listed": the board's list lags any write rite did not make itself
-        # (DF4), so this is what it listed, not what it holds.
+        # A snapshot with its time (DF4, coordinator 2026-09-29): a person who
+        # created a ticket seconds ago can see why it was not picked up, rather
+        # than conclude rite is broken. A second read after a delay would only
+        # narrow that window, so rite stops and says when it looked.
+        read_at = getattr(answer, "read_at", None)
+        if read_at is None:
+            return (
+                f"done: the board listed nothing ready ({started} session(s)); "
+                "a ticket created outside rite shortly before may not have been "
+                "listed"
+            )
+        from rite_ai.loop import as_of
+
         return (
-            f"done: the board listed nothing ready ({started} session(s)); a "
-            "ticket created outside rite in the last few seconds may not have "
-            "been listed yet"
+            f"done: the board listed nothing ready as of {as_of(read_at)} "
+            f"({started} session(s)); a ticket created outside rite shortly "
+            "before then, or since, is not in that read. `rite start` again "
+            "reads it afresh"
         )
     if answer == "closed":
         return (

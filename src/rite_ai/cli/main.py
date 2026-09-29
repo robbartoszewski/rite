@@ -6995,11 +6995,15 @@ class LoopAnswer(str):
     basis: tuple | None = ()
     detail: str = ""
     starting: dict | None = None
+    read_at: float | None = None
+    """When the board read behind this verdict came back, so a stop on
+    `idle` can say what it saw AS OF when (DF4)."""
 
     @classmethod
     def of(cls, cycle) -> "LoopAnswer":
         answer = cls(str(getattr(cycle, "verdict", "unknown") or "unknown"))
         answer.detail = str(getattr(cycle, "detail", "") or "")
+        answer.read_at = getattr(cycle, "board_read_at", None)
         answer.basis = (
             str(answer),
             tuple(sorted(getattr(cycle, "ready", []) or [])),
