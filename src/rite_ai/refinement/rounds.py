@@ -91,6 +91,9 @@ class Round:
     """When it was re-presented after the User came back. Once only."""
     answered_at: float = 0.0
     """When an attributed reply answered it, by Slack's send time. 0: not."""
+    items: list[str] = field(default_factory=list)
+    """The proposal's items as the User was shown them: what an accept word
+    makes the definition of done, and nothing else."""
 
     @property
     def answered(self) -> bool:
@@ -108,6 +111,12 @@ class Attempt:
     rounds: list[Round] = field(default_factory=list)
     parked: str = ""
     misses: int = 0
+    answers: list[dict] = field(default_factory=list)
+    """Every reply attributed to this attempt: `{"id", "words", "at"}`. A
+    proposal may quote only these, or the ticket (`ask.check`)."""
+    accepted: dict = field(default_factory=dict)
+    """An accept word whose record is not yet written (`{"id", "at", "k"}`):
+    PROPOSED (accepted, not yet written), retried and said each cycle."""
 
     @property
     def latest(self) -> Round | None:
@@ -154,6 +163,8 @@ def state_of(board: st.Status, attempt: Attempt | None, *, now: float) -> State:
         return State(board.state, board.detail)
     if attempt.parked:
         return State(PARKED, attempt.parked, attempt)
+    if attempt.accepted:
+        return State(PROPOSED, "accepted, not yet written", attempt)
     latest = attempt.latest
     if latest is None:
         return State(board.state, board.detail, attempt)
@@ -195,6 +206,8 @@ def _from(data: dict) -> Attempt | None:
             rounds=[Round(**r) for r in data.get("rounds", [])],
             parked=data.get("parked", ""),
             misses=int(data.get("misses", 0)),
+            answers=list(data.get("answers", [])),
+            accepted=dict(data.get("accepted", {})),
         )
     except (KeyError, TypeError, ValueError):
         return None
