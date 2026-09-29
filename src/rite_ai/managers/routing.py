@@ -44,6 +44,16 @@ without the command. The check is ONE read of that ticket, never a list,
 because a list lags a new ticket (DF4) and pages at 100. A read that fails
 for any reason refuses: an unreachable board is not an absent ticket, and
 not a present one either (D-74).
+
+⚠ **And it must be REFINED (TR5).** A route is how work reaches a Manager
+that will start a Worker on it, so an unrefined ticket routed is the same
+gap as an unrefined ticket started: the Worker's own start refuses it (TR4),
+but only after a Manager has planned around it. The supervisor asks
+`refinement` (the one predicate, `refinement.status`) after the ticket check,
+refuses anything that is not REFINED with the line a refused start carries,
+and delivers a REFINED route with the agreed definition of done quoted under
+the Owner's text, from that same read. No `refinement` refuses every route:
+a supervisor that cannot check is not one that may assume.
 """
 
 from __future__ import annotations
@@ -201,15 +211,23 @@ def _quoted(text: str) -> str:
 
 
 def _routed_message(
-    owner: str, text: str, ticket: str, now: datetime | None = None
+    owner: str,
+    text: str,
+    ticket: str,
+    now: datetime | None = None,
+    agreed: str = "",
 ) -> str:
     """What the secondary receives: rite's header, naming the ticket rite
-    checked, then the Owner's text."""
+    checked, then the Owner's text, then the agreed definition of done rite
+    checked it against (TR5). Both quoted: neither may forge a header."""
     when = (now or datetime.now()).strftime("%a %H:%M")
-    return (
+    message = (
         f"[routed by the Owner Manager {owner!r} · ticket {ticket} · sent {when} "
         f"· INSTRUCTION]\n{_quoted(text)}"
     )
+    if agreed:
+        message += "\n" + _quoted(agreed)
+    return message
 
 
 def _tell_owner(root: Path, owner: str, text: str, say) -> None:
@@ -221,8 +239,36 @@ def _tell_owner(root: Path, owner: str, text: str, say) -> None:
         say(f"could not tell {owner!r} its route was refused: {e}")
 
 
+def _agreed(refinement, ticket: str) -> tuple[str, str]:
+    """(the agreed definition of done to quote, why the route is refused).
+
+    Exactly one of the two is set. Anything but REFINED refuses, with the
+    line a refused Worker start ends with, so the Owner learns the same
+    remedy either way. A check that raises refuses too: it is a check that
+    did not answer, and not answering is not REFINED.
+    """
+    from rite_ai.refinement import status as refinement_status
+
+    if refinement is None:
+        return "", (
+            "UNREADABLE: this supervisor has no board to check refinement "
+            "on, so it routes nothing."
+        )
+    answer = refinement_status.checked(refinement, ticket)
+    if not answer.refined or answer.record is None:
+        why = refinement_status.refusal(answer.state, ticket)
+        return "", why + (f" ({answer.detail})" if answer.detail else "")
+    return refinement_status.render_for_worker(answer.record), ""
+
+
 def deliver_routes(
-    root: Path, manager: str, owner: str, managers: list[str], say, read_ticket=None
+    root: Path,
+    manager: str,
+    owner: str,
+    managers: list[str],
+    say,
+    read_ticket=None,
+    refinement=None,
 ) -> int:
     """Deliver what `manager` asked to route, if it is the Owner. Returns how
     many were delivered.
@@ -252,11 +298,21 @@ def deliver_routes(
                 root, owner, f"your route was not delivered: {verdict.reason}.", say
             )
             continue
+        agreed, why_not = _agreed(refinement, verdict.ticket)
+        if why_not:
+            say(f"route from {owner!r} for {verdict.ticket}: {why_not}")
+            _tell_owner(
+                root,
+                owner,
+                f"your route for {verdict.ticket} was not delivered. {why_not}",
+                say,
+            )
+            continue
         path = send(
             root,
             verdict.to,
             INBOX,
-            _routed_message(owner, verdict.text, verdict.ticket),
+            _routed_message(owner, verdict.text, verdict.ticket, agreed=agreed),
         )
         # Recorded as DELIVERED, by the inbox file's name, so this Owner's
         # supervisor knows work is outstanding without asking a model.

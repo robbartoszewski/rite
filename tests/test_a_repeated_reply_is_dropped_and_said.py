@@ -17,6 +17,7 @@ correction, the two differed, so both must be (and are) delivered.
 from __future__ import annotations
 
 from rite_ai.managers import checkins, mailbox, routing, standup
+from tests.refined_board import refined
 
 OWNER, SECONDARY = "lead", "small"
 NAMES = [OWNER, SECONDARY]
@@ -32,7 +33,13 @@ def _on_board(ticket_id):
 def _route(root, text="write HELLO.txt"):
     routing.request(root, OWNER, SECONDARY, text, "RT-1")
     routing.deliver_routes(
-        root, OWNER, OWNER, NAMES, lambda _m: None, read_ticket=_on_board
+        root,
+        OWNER,
+        OWNER,
+        NAMES,
+        lambda _m: None,
+        read_ticket=_on_board,
+        refinement=refined,
     )
 
 
