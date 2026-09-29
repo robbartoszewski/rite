@@ -1640,7 +1640,10 @@ system of their own, run at every session start and stop — and `env`, merged w
 yoloAI's. On seatbelt rite now runs `yoloai new` with `HOME` set to a directory it
 owns (`worker_home`: an empty `.claude/settings.json` and nothing else) and
 `--data-dir ~/.yoloai`, which is yoloAI's default, so its state stays where it was.
-Measured: the Worker's settings then hold yoloAI's hooks only. That home has no
+Measured: the Worker's settings then hold yoloAI's hooks only. The home also decides
+what the sandbox may read (yoloAI's seatbelt profile grants `<home>/.local` and some
+Swift/Xcode paths): measured with an empty home, `rite` inside a Worker could not load
+its Python, so `worker_home` links those paths to the operator's own. That home has no
 `.gitconfig`, which yoloAI otherwise links into the sandbox, so the operator's global
 `user.name` and `user.email` go in as two more `GIT_CONFIG_*` pairs and nothing else
 of that file does (the authorship ruling: a Worker commits as the identity its

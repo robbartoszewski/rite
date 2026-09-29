@@ -71,11 +71,26 @@ def test_a_settings_file_left_in_rites_home_is_emptied_again():
     stray = home / ".claude" / "settings.json"
     stray.write_text(json.dumps({"hooks": {"SessionStart": []}}))
     home = worker_home()
-    assert sorted(p.relative_to(home).as_posix() for p in home.rglob("*")) == [
-        ".claude",
-        ".claude/settings.json",
-    ]
+    assert sorted(p.name for p in (home / ".claude").iterdir()) == ["settings.json"]
     assert json.loads((home / ".claude" / "settings.json").read_text()) == {}
+
+
+def test_rites_home_links_what_yoloai_grants_and_not_the_git_config(tmp_path):
+    """The home decides what the sandbox may read (`writeProfileHomeDir`).
+    Measured with an empty home: `rite` inside could not load its Python."""
+    real = tmp_path / "real"
+    (real / ".local" / "bin").mkdir(parents=True)
+    (real / "Library" / "Developer" / "Xcode").mkdir(parents=True)
+    (real / ".gitconfig").write_text("[user]\n\tname = x\n")
+    (real / ".config" / "git").mkdir(parents=True)
+    with patch("rite_ai.sandbox.Path.home", return_value=real):
+        home = worker_home()
+    assert (home / ".local").resolve() == (real / ".local").resolve()
+    xcode = home / "Library" / "Developer" / "Xcode"
+    assert xcode.resolve() == (real / "Library" / "Developer" / "Xcode").resolve()
+    assert not (home / "Library" / "Caches" / "swift-build").exists()
+    assert not (home / ".gitconfig").exists()
+    assert not (home / ".config").exists()
 
 
 def test_the_operators_identity_is_passed_on_and_nothing_else_of_their_git_config(
@@ -176,6 +191,75 @@ def test_live_a_real_workers_settings_carry_none_of_the_operators_hooks(
         got = _hook_commands(json.loads(seeded.read_text()))
         assert got, "yoloAI's own hooks should be there"
         assert not (got & theirs), got & theirs
+    finally:
+        subprocess.run(
+            ["yoloai", "destroy", "--abandon-unapplied", name],
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
+        )
+
+
+@pytest.mark.skipif(
+    os.environ.get("RITE_LIVE_YOLOAI") != "1" or shutil.which("yoloai") is None,
+    reason="live yoloAI run: set RITE_LIVE_YOLOAI=1 on a machine with yoloAI",
+)
+def test_live_rite_runs_inside_a_sandbox_started_from_rites_home(tmp_path_factory):
+    """What the settings test above cannot see: under an empty home rite's
+    own Python was unreadable inside, so every rite command a Worker runs
+    failed. yoloAI's `test` agent runs the prompt as a shell command; the
+    home, PATH and data dir are the ones `start_worker` uses."""
+    if shutil.which("rite", path=sb.sandbox_environment()["PATH"]) is None:
+        pytest.skip("no machine-wide rite for a sandbox to run")
+    repo = tmp_path_factory.mktemp("lr")
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@t.invalid"]
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    (repo / "f").write_text("x\n")
+    subprocess.run([*git, "-C", str(repo), "add", "f"], check=True)
+    subprocess.run([*git, "-C", str(repo), "commit", "-qm", "init"], check=True)
+    env = {**sb.sandbox_environment(), "HOME": str(worker_home())}
+    env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+    name = f"rite-lr-{os.getpid()}"
+    probe = (
+        "rite --version > out.txt 2>&1; git add out.txt; "
+        "git -c user.name=t -c user.email=t@t.invalid commit -qm out"
+    )
+    try:
+        subprocess.run(
+            [
+                "yoloai",
+                "--data-dir",
+                str(Path.home() / ".yoloai"),
+                "new",
+                name,
+                str(repo),
+                "--backend",
+                "seatbelt",
+                "--agent",
+                "test",
+                "-p",
+                probe,
+            ],
+            env=env,
+            check=True,
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
+            timeout=300,
+        )
+        subprocess.run(
+            ["yoloai", "wait", name],
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
+            timeout=120,
+        )
+        diff = subprocess.run(
+            ["yoloai", "diff", name],
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            timeout=60,
+        ).stdout
+        assert "+rite, version" in diff, diff
+        assert "Library not loaded" not in diff, diff
     finally:
         subprocess.run(
             ["yoloai", "destroy", "--abandon-unapplied", name],

@@ -1369,13 +1369,46 @@ def worker_home(home: Path | None = None) -> Path:
 
     Under the credential root's parent, which no Manager's profile grants.
     Nothing in it is secret; that is just where rite keeps its own files.
+
+    ⚠ **The home also decides what the sandbox may READ.** yoloAI's seatbelt
+    profile grants `<home>/.local` and a few Swift/Xcode paths, resolving
+    symlinks (`runtime/seatbelt/profile.go`, `writeProfileHomeDir`).
+    Measured with an empty home: `rite` inside the Worker was found but its
+    Python could not load (`Library not loaded: @rpath/libpython3.13.dylib`,
+    under `~/.local/share/uv/python`), so nothing rite does inside a Worker
+    worked. Those paths are linked to the operator's own, which gives the
+    grants yoloAI gives today; `.gitconfig` and `.config/git`, which it also
+    grants, are left out on purpose (`host_git_identity`).
     """
     from rite_ai.managers import github_access
 
+    real = Path.home()
     path = github_access._credential_root(home).parent / "worker-home"  # noqa: SLF001
     (path / ".claude").mkdir(parents=True, exist_ok=True)
     (path / ".claude" / "settings.json").write_text("{}\n")
+    for granted in _HOME_GRANTS:
+        link, target = path / granted, real / granted
+        if link.is_symlink():
+            if link.readlink() == target:
+                continue
+            link.unlink()
+        elif link.exists():
+            continue  # not rite's link; leave it rather than delete it
+        if target.exists():
+            link.parent.mkdir(parents=True, exist_ok=True)
+            link.symlink_to(target)
     return path
+
+
+_HOME_GRANTS = (
+    ".local",
+    "Library/Caches/org.swift.swiftpm",
+    "Library/Developer/Xcode",
+    "Library/Caches/swift-build",
+    "Library/org.swift.swiftpm",
+)
+"""What yoloAI 0.11.0's seatbelt profile grants under the home, less its git
+config (`writeProfileHomeDir`). Linked from `worker_home` to the real ones."""
 
 
 def host_git_identity() -> tuple[str, str] | None:
