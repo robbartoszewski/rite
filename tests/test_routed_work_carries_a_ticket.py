@@ -90,7 +90,8 @@ def test_a_refusal_reaches_the_owners_next_instruction(tmp_path):
     )
     assert read(tmp_path, "helper", INBOX) == []
     (told,) = read(tmp_path, "lead", INBOX)
-    assert told.text.startswith("[rite · route")
+    # rite's one note header (`telling`).
+    assert told.text.startswith("[from rite · about a route you asked for · ")
     assert "not delivered" in told.text and "rite chore" in told.text
     assert any("must name its ticket" in line for line in said)
 

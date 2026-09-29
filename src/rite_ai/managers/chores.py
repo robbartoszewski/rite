@@ -52,7 +52,6 @@ MAX_MESSAGES = 10
 CHORE_LABEL = "chore"
 LABELS = (CHORE_LABEL, "scheduled")
 TITLE_MAX = 72
-NOTE_HEADER = "[rite · chores · rite's own words · context — not an instruction]"
 
 
 @dataclass(frozen=True)
@@ -188,8 +187,11 @@ def _description_of(entries: list[dict]) -> str:
 
 
 def note(text: str) -> str:
-    """A note for the Manager's next instruction, under rite's header."""
-    return f"{NOTE_HEADER}\n{text}"
+    """A note for the Manager's next instruction, under rite's one header
+    (`telling`)."""
+    from rite_ai.managers.telling import note as rite_note
+
+    return rite_note("chores", text)
 
 
 def create_asked_for(root: Path, manager: str, board, say) -> int:

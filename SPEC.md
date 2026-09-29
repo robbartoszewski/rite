@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.40 · **Date:** 2026-09-28
+**Version:** 0.24.44 · **Date:** 2026-09-29
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -263,53 +263,79 @@ third number to keep in step. **Log a lease rejected as not-credible distinctly*
 it means somebody's clock is wrong, which is worth knowing rather than silently
 recovering from, and it is the only signal that will say so.
 
-#### 2.4.1a. ⚠ OBSERVED ONCE: two simultaneous Owners under extreme load
+#### 2.4.1a. Two simultaneous Owners reported by the graceful-handover test: a measurement fault, not the lease
 
-**The property this section exists to provide failed once, and the
-mechanism is not established.** Recorded here rather than closed, because a
-safety property that has been seen to break belongs in the spec even when
-it cannot be reproduced.
+**Status 2026-09-29: the mechanism is established, and it is in the test's
+bookkeeping, not in the lease.** This section used to record the Owner-lease
+guarantee as failing under extreme load (a "stated bound"). That reading is
+withdrawn; what follows is why, and what would still show a real failure.
 
-`tests/test_graceful_handover_across_processes.py` asserts
-`not overlapping_owners(runs)`. On 2026-09-20 it failed inside a full-suite
-run:
+⚠ **v0.6.0 shipped with this section stating that limit, and the claim was
+not supported.** The lease, election and state-layer code v0.6.0 shipped is
+the code measured clean below: between the `v0.6.0` tag and the fix, it
+differs only by the additive `released_at`. Do not design around a load
+limit on the Owner lease; there is no evidence for one.
 
-    beta's lease   ...0594.8 -> ...3644.8
-    alpha acquired ...3540.9
-    OVERLAP          103.9s
+**What the guarantee DOES rest on is clock agreement.** A challenger promotes
+once the lease has expired by ITS clock plus `skew_tolerance_seconds`
+(§2.4.1), and an incumbent whose renewal is uncertain keeps the role until
+its OWN clock says the lease has expired. Two machines whose clocks disagree
+by more than `skew_tolerance_seconds` can therefore have a challenger promote
+while the incumbent still believes it holds the role. That is real, cannot
+be exercised by a test whose processes share one clock by construction, and
+closing it needs a shared clock or fencing tokens: v0.8.0, LS3.
 
-⚠ **Note the direction: alpha acquired 103.9s BEFORE beta's lease
-expired.** `stand_for_owner` cannot promote against a lease its holder
-reads as `HELD` — it returns `StillOwner`/`NotOwner` and stops. So alpha
-did not take the role because beta was slow to yield. Either alpha read a
-lease that beta had already renewed past, or the two processes' clocks
-disagreed by more than `skew_tolerance_seconds`. **Which of those it was is
-unknown**, and the difference matters: one is a defect in the state layer's
-read, one is a defect in `verdict`, and one is an environment fact.
+`tests/test_graceful_handover_across_processes.py` asserted that no two
+ownership runs overlap. It failed twice: on 2026-09-20 in a full-suite run at
+load ~140 (overlap 103.9 simulated s), and on 2026-09-28 in CI on macOS (run
+36476910158, head `36f103d`, overlap 78.2 simulated s; the clock runs 600x,
+so 0.17 s and 0.13 s real).
 
-**What is established, and what is not:**
+**What was wrong.** The test closed the incumbent's ownership run when its
+handover TICK returned. The release lands before that: after its push the
+tick still runs the write's housekeeping and returns, and a loaded or
+descheduled process can take longer over that than the successor takes to
+read the release, wait out `skew_tolerance`, and promote. The run therefore
+ended after the successor's began, and the test reported two Owners while
+only one held the lease. The earlier reading here ("alpha acquired BEFORE
+beta's lease expired") took the late close for the lease's end.
 
-| | |
-|---|---|
-| The failure is the PROPERTY, not a timeout | established — the assertion is `overlapping_owners` |
-| It occurred at load average ~140, 1023 processes | established |
-| Reachable at ordinary CPU contention | **NO** — 10 consecutive passes at 14 hogs on 14 cores |
-| The mechanism | **NOT established** |
+**What established it** (macOS, this Mac, swap 26.8-26.9 GB of 27.6 GB used,
+load 4.1-6.8, one harness for all rows):
 
-⚠ **"It needs load 140" is not "it is not real".** A dogfood run on
-somebody else's machine is not a controlled environment, and this is the
-guarantee the whole coordination layer exists to provide. It is recorded as
-a **stated bound** — the Owner-lease guarantee has been observed to fail
-under load roughly ten times core saturation — rather than as a closed
-ticket.
+| run | test reported two Owners | a write took a lease that still held |
+|---|---|---|
+| unmodified, 40 runs | 0 | 0 |
+| 0.4 s added after beta's pushes, main `f34c32b`, 20 runs | **20** | 0 |
+| the same, with the fix, 20 runs | 0 | 0 |
+| control: alpha misjudges beta's valid lease, 3 runs | 3 | **3** |
 
-**The next occurrence is self-diagnosing.** The harness now records, every
-tick, the lease each process actually READ beside that process's own clock,
-and the failure message splits the three causes: a promotion where
-`read_was_expired=False` means the challenger promoted against a lease it
-read as VALID (`verdict`); `True` means it acted correctly on a stale read
-(the state layer, or clock skew). Neither could be told from the timestamps
-alone, which is why this took a conversation rather than a log line.
+The right-hand column is **ground truth from the remote**: with its reflog
+on, every write that landed is kept in order, and a write naming a new owner
+while the previous lease (plus the skew margin) still held is a real split
+brain. It needs no process's reading of events. The control shows it catches
+one.
+
+**The fix.** A release now carries the stamp it wrote (`Released`,
+`HandedOver` and `Tick` carry `released_at`), stamped before its push, and
+the test closes a handed-over run there. The test also checks the remote's
+history directly (`election_harness.lease_history`,
+`promotions_over_valid_leases`), and a variant with 1.0 s between a release
+landing and returning reproduces the old failure on demand; each of three
+mutations of the fix turns it red in 3 of 3 runs.
+
+⚠ **The earlier "self-diagnosing" probe could not diagnose this.** It read
+the lease AFTER each tick, so at a promotion it showed the challenger's own
+new lease, and its caption ("promoted against a lease it read as VALID")
+described a read it never recorded. It is kept as a record of what each
+process held after acting, and the caption now says so.
+
+**What is NOT established.** The 2026-09-20 occurrence was before the remote
+check existed, so it cannot be shown to be the same fault; it has the same
+signature (a successor's run starting inside an incumbent's run that ends at
+a late close), which is consistent with it and no more. And a lease that
+genuinely fails would now show in the right-hand column rather than as an
+overlap alone.
 
 #### 2.4.2. Atomic promotion via git push
 
@@ -1642,14 +1668,27 @@ allowlist at all.
   Prefer `rite sandbox destroy` over `rite sandbox stop` once a token is no longer
   wanted on a machine, and rotate it if a stopped sandbox has been sitting
   around** (§10 already requires rotation to be cheap for exactly this reason).
-  Note that `destroy` passes `--abandon-unapplied`, so it discards whatever is
-  in the sandbox's copy of the Worker's workspace. A Worker's work leaves by
-  pushing its branch; anything not pushed is gone. So `destroy` first reads
-  the copy with local git and refuses, without `--force`, while it holds
-  uncommitted changes or commits on no remote, naming module, branch and
-  count; `stop` reports the same and stops anyway. The copy's location is
-  yoloAI's layout as measured on 0.11.0, not an interface: a copy that
-  cannot be found is reported, not taken as safe.
+  A Worker's work leaves by pushing its branch; anything not pushed is lost
+  with the sandbox's copy. So `destroy` has two checks that fail
+  independently. rite's own reads the copy with local git and refuses,
+  without `--force`, while it holds uncommitted changes or commits on no
+  remote, naming module, branch and count (`stop` reports the same and stops
+  anyway). yoloAI's own refuses while anything is "unapplied", and rite
+  passes `--abandon-unapplied` only under `--force` — with one exception.
+  **yoloAI's "unapplied" means "not copied back with `yoloai apply`", and a
+  Worker's work never leaves that way**, so a finished Worker whose branch is
+  pushed is still "unapplied" (measured on the pingr proof, 2026-09-28: the
+  only unapplied path was the clone, its one commit already on origin). That
+  made every ordinary destroy need `--force`, which teaches that the guard is
+  skippable (dogfood F1's shape). So when yoloAI refuses for unapplied work,
+  rite stops the sandbox (its agent can no longer commit), asks yoloAI which
+  paths it means, and abandons them only if every path is one of the
+  Worker's clones in a copy rite found and each clone holds nothing
+  uncommitted and no commit on no remote. Anything else — a file outside the
+  clones, work that appeared before the stop, a diff or copy rite cannot
+  read — keeps the refusal, names what is in the way, and leaves the sandbox
+  stopped. The copy's location is yoloAI's layout as measured on 0.11.0, not
+  an interface: a copy that cannot be found is reported, not taken as safe.
 - **Checked before the sandbox starts, and refused rather than discovered.**
   `rite sandbox start` — the one path every Worker start takes, the
   supervisor's included — refuses, in one line naming the remedy, a Worker
@@ -3801,10 +3840,9 @@ project? [y/N]"*, asked before anything else.
   sections below. Then *"Reading <path> — languages, structure and conventions
   will be taken from what's there."* and one open question: *"Anything stale, or
   that you'd like changed? Free text, or Enter to skip."* The brief records the
-  path and that answer as `source.path` and `source.changes`, registers the
-  repositories in the source as modules the way Section 3 detects them (when
-  the source is inside the project), and none of the sections below is
-  asked. `source.path` is written relative to the project
+  path and that answer as `source.path` and `source.changes`, offers each
+  repository in the source as a module the way Section 3 does (when the
+  source is inside the project), and no other section below is asked. `source.path` is written relative to the project
   (`.` for the default answer), as `~/…` when it is elsewhere under home, and
   absolute only outside home: `brief.yaml` is committed, and a home path in it
   fails the publish gate's built-in rule (§11.3) on the first push. When the path is already a rite project, `init` says
@@ -3858,28 +3896,38 @@ If existing repos were detected:
 ```
 ─── Modules ────────────────────────────────────────
 Found 3 repositories:
+  this directory (./)  git@github.com:org/app.git
+  backend/  git@github.com:org/backend.git
+  shared/  local only
 
-  ✓ backend/     (git@github.com:org/backend.git)
-  ✓ frontend/    (git@github.com:org/frontend.git)
-  ✓ shared/      (local only)
-
-Add all as modules? [Y/n]
+Add this directory (./) as module 'app'? [Y/n]
+Add backend/ as module 'backend'? [Y/n]
+Add shared/ as module 'shared'? [Y/n]
 ```
 
-Default Yes. Individual repos can be deselected. For each added module,
-rite records the remote URL and the branch currently checked out.
+**Each repository is offered, and registered only when confirmed** (Robert,
+2026-09-29: "If there is a git repo in the root folder - it should ask if
+that's a module and add it if User confirms. If there are repos in the root
+directory, it should ask about those as well."). The candidates are the
+project root itself, when it is a git repository with at least one commit,
+then each immediate subdirectory that is one. Default yes. For each module
+rite records the remote URL and the branch currently checked out. The same
+offer is made on the existing-code path (above).
 
-The repositories are the project root's immediate subdirectories that are
-git repositories. When there are none and **the root is itself a repository
-with at least one commit**, the root is the one module, at path `./`: a
-single repository is the commonest project there is, and a Worker's
-workspace is its modules' clones, so registering nothing gave every Worker an
-empty workspace (dogfood F2). A root with nothing committed is not a module:
-it cannot be cloned, and is usually a workspace about to receive its modules.
-Every clone of a root module carries the project's committed `.rite/`, so a
-session in one would resolve to the clone; `rite sandbox start` gives each
-sandboxed Worker `RITE_PROJECT_ROOT`, which wins, and `rite doctor` reports
-the root module as a problem only when Workers are not sandboxed.
+**`--yes` answers yes to each, and prints one line per module it added**
+(`--yes: added this directory (./) as module 'app' (<url>)`). The other
+reading — add nothing unconfirmed — is how a `--yes` run ends up with an
+empty `modules.yaml` and Workers with nothing to clone (dogfood F2), looking
+on screen like an interactive run that added them.
+
+A root with nothing committed is not offered, and init says why: it cannot
+be cloned, which is the one thing a module is for here. A single repository
+is the commonest project there is, and a Worker's workspace is its modules'
+clones, so registering nothing gave every Worker an empty workspace (dogfood
+F2). Every clone of a root module carries the project's committed `.rite/`,
+so a session in one would resolve to the clone; `rite sandbox start` gives
+each sandboxed Worker `RITE_PROJECT_ROOT`, which wins, and `rite doctor`
+reports the root module as a problem only when Workers are not sandboxed.
 
 If no repos found:
 
@@ -7099,6 +7147,14 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.44 — §2.4.1a says what v0.6.0 got wrong, and what the Owner lease really rests on.** The section as shipped in v0.6.0 stated a load limit on the Owner-lease guarantee; that claim is now marked unsupported, with how it was established (the lease code v0.6.0 shipped differs from the code measured clean only by the additive `released_at`). And the real residual is stated beside it: the guarantee rests on clocks agreeing within `skew_tolerance_seconds`, which one machine and the election tests cannot exercise, filed for v0.8.0 as LS3 (fencing or a shared clock).
+
+**Changes in 0.24.43 — §2.4.1a rewritten: the two Owners the graceful-handover test reported were its own bookkeeping, not the lease.** CI run 36476910158 (macOS) reproduced the 2026-09-20 failure. The test closed a handed-over Owner's run at its tick's end, after the release had landed; the successor promoted correctly in between. Established with ground truth from the remote's reflog: under an injected slow tail after the release, main reported two Owners in 20 of 20 runs while the remote showed a correct handover in 20 of 20; with the fix, 0 of 20; a control where the successor promotes over a valid lease is caught 3 of 3. The "stated bound" on the Owner-lease guarantee is withdrawn. A release now carries its stamp (`released_at`), the test closes the run there and checks the remote's writes directly, and the probe caption that claimed a diagnosis it could not make is corrected.
+
+**Changes in 0.24.42 — `rite init` asks about each repository before registering it (Robert, 2026-09-29).** §9.3 Section 3: the project root (with a commit) and each immediate subdirectory repository are offered one at a time, root first, and registered on confirmation, on both the existing-code and from-scratch paths. Before this the existing-code path registered silently and the root was offered only when no subdirectory held a repository. `--yes` answers yes and prints a line per module added; a root with nothing committed is explained, not offered. Pre-registered dogfood tests re-run on this change under `~` with the hook installed: F1 (init with defaults → `git add -A; git commit; git push` → push exit 0, `rite publish check` clean, no `.rite/gitleaksignore` created) and F2 (`rite status` lists `app: ./`; `rite add worker alpha` → `workers/alpha/app/main.py`). Mutations each turn tests red: adding without asking, `--yes` adding nothing, `--yes` adding silently, the root dropped when subdirectories hold repositories.
+
+**Changes in 0.24.41 — `rite sandbox destroy` destroys a finished Worker without `--force` (pingr Worker proof, finding 7).** §5.3.3: yoloAI's "unapplied" means "not copied back with `yoloai apply`", and a Worker's work leaves by push, so every finished Worker was unapplied and every ordinary destroy needed `--force` — F1's shape. When yoloAI refuses for unapplied work, rite stops the sandbox, asks `yoloai diff --name-only --json` which paths it means, and passes `--abandon-unapplied` only when every path is a clone in a copy rite found and `unsaved_work` finds nothing there after the stop; otherwise the refusal stands, naming the paths, with the sandbox stopped. Measured with yoloAI 0.11.0 on macOS through the CLI: a pushed-only Worker — main refused (`1 sandbox(es) have unapplied changes`), the fix destroyed it; the same plus `NOTES.md` outside the clone — refused, `not a pushed clone: NOTES.md`, sandbox stopped, file kept. Tests replace a fake yoloAI whose `destroy` always succeeded (why the existing pushed-work test was green) with one that refuses as measured; five mutations each turn them red. SPEC's sentence that `destroy` always passes `--abandon-unapplied` was stale and is replaced.
 
 **Changes in 0.24.40 — ⚠ BEHAVIOUR CHANGE: a message a person sent is delivered, or the person is told it was not.** The coordinator's property, 2026-09-28, after the fifth instance in a day of one defect (a message sent, believed delivered, never seen). Found on Linux in SB11: `rite message lead` said "delivered at the start of its next turn", then `rite start lead` stopped on "the board has nothing ready" with the message in the inbox and nothing said. (1) **When a Manager starts changes:** an `idle` board with mail in the inbox now starts ONE session to deliver it. The inbox is read as a state at the moment of stopping, never as an event, so mail that arrived while nothing was watching is found. `closed` (the person's schedule) and the fault verdicts still start nothing, and the session ceiling still bounds. (2) **Not a loop (F22):** each delivery takes the mail, so another session needs new mail; and if the same messages are still there after a session started to deliver them, that session could not take them, which is REPORTED and not retried. (3) **Every run that ends with mail undelivered says so** (`supervise.undelivered_line`), at the terminal and in the Slack goodbye in the Owner's DM, from the `finally` at the end of `rite start`, so it holds however the run ended, an interrupted one and exits added later included. (4) **`rite message` says at send time** when the Manager is not running (`routing.supervisor_state`, recorded identity), instead of "delivered at the start of its next turn". Mutations, each red: an idle board never delivering (4), undelivered mail retried (1), `closed` overridden (1), the end of the run silent (3), the Slack goodbye omitting it (1), `rite message` claiming a next turn (1). A `last_basis` line meant to let F22 judge a delivery session was removed: an idle verdict's basis cannot equal a ready one's, so it could never change a decision.
 

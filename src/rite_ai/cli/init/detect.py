@@ -101,33 +101,38 @@ ROOT_MODULE_PATH = "./"
 
 
 def detect_repos(root: Path) -> list[DetectedRepo]:
-    """The git repositories a Worker would clone: each immediate subdirectory
-    that is one, or else `root` itself when it is one.
+    """The git repositories a Worker could clone: `root` itself when it is
+    one, then each immediate subdirectory that is one. `rite init` offers
+    each of them as a module and registers the ones the person confirms
+    (Robert, 2026-09-29: "If there is a git repo in the root folder - it
+    should ask if that's a module and add it if User confirms. If there are
+    repos in the root directory, it should ask about those as well.").
 
-    ⚠ **The second half is the common case, and it used to be missing.**
-    Measured in the v0.6.0 dogfood (F2): `rite init` run inside an ordinary
-    single repository registered no module, so `modules.yaml` said
-    `modules: {}`, a Worker's workspace held no source, and the ticket it was
-    started on died with nothing to clone. A repository that holds other
-    repositories is a workspace and is not itself a module; one that holds
-    none is the code — once it has a commit. A `git init` with nothing
-    committed cannot be cloned, which is the one thing a module is for here,
-    and is usually a new workspace about to receive its modules.
+    Measured in the v0.6.0 dogfood (F2): `rite init` inside an ordinary
+    single repository registered nothing, so a Worker's workspace held no
+    source. The root is offered only once it has a commit: a `git init`
+    with nothing committed cannot be cloned, which is the one thing a
+    module is for here (`root_has_nothing_committed` says so instead).
     """
     repos: list[DetectedRepo] = []
-    for child in iter_candidate_dirs(root):
-        if (child / ".git").exists():
-            repos.append(_describe_repo(child))
-    if (
-        not repos
-        and (root / ".git").exists()
-        and _git(root, ["rev-parse", "--verify", "--quiet", "HEAD"]) is not None
-    ):
+    if (root / ".git").exists() and _has_a_commit(root):
         own = _describe_repo(root.resolve())
         if not name_problem(own.name, kind="module name"):
             own.path = ROOT_MODULE_PATH
             repos.append(own)
+    for child in iter_candidate_dirs(root):
+        if (child / ".git").exists():
+            repos.append(_describe_repo(child))
     return repos
+
+
+def _has_a_commit(path: Path) -> bool:
+    return _git(path, ["rev-parse", "--verify", "--quiet", "HEAD"]) is not None
+
+
+def root_has_nothing_committed(root: Path) -> bool:
+    """The root is a repository a Worker could not clone yet."""
+    return (root / ".git").exists() and not _has_a_commit(root)
 
 
 def _describe_repo(path: Path) -> DetectedRepo:

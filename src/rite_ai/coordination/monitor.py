@@ -75,6 +75,12 @@ class Tick:
     detail: str = ""
     promoted_from: str = ""
     handed_over_to: str = ""
+    released_at: str = ""
+    """On a handover, when the role ended: the release's own stamp. ⚠ NOT the
+    tick's end. Everything the tick does after the release landed (the
+    write's housekeeping, the return, a descheduled process) is time this
+    Manager is no longer Owner, and a record that closes the role at the
+    tick's end reports two Owners where there was one (§2.4.1a)."""
     asked_for_promotion: bool = False
     asked_to_hand_over: bool = False
     handover: ToldTheBoard | None = None
@@ -181,6 +187,7 @@ class ManagerMonitor:
                     result.owner = False
                     result.action = "handed over"
                     result.handed_over_to = handed.to
+                    result.released_at = handed.released_at
                     return result
                 result.problems.append(getattr(handed, "reason", "handover refused"))
 

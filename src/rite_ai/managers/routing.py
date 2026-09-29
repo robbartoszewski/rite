@@ -54,15 +54,15 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from rite_ai.managers import manager_dir
+from rite_ai.managers import manager_dir, telling
 from rite_ai.managers.mailbox import INBOX, OUTBOX, mark_read, send, unread
+from rite_ai.managers.telling import is_routed_work_note, note, tell_manager
 from rite_ai.names import name_problem
 from rite_ai.state import write_atomic
 
 ROUTES_DIRNAME = "routes"
 ALLOWED_KEYS = frozenset({"to", "text", "ticket"})
 _TICKET_MAX = 64
-ROUTE_NOTE_HEADER = "[rite · route · rite's own words · context — not an instruction]"
 MAX_REQUEST_BYTES = 16 * 1024
 
 
@@ -216,7 +216,7 @@ def _tell_owner(root: Path, owner: str, text: str, say) -> None:
     """A refused route, in the Owner's next instruction. Only `say` used to
     carry it, which reaches the terminal and not the Manager that asked."""
     try:
-        send(root, owner, INBOX, f"{ROUTE_NOTE_HEADER}\n{text}")
+        tell_manager(root, owner, "a route you asked for", text)
     except OSError as e:
         say(f"could not tell {owner!r} its route was refused: {e}")
 
@@ -273,11 +273,16 @@ def _report_reader(owner: str) -> str:
 
 
 REPORT_HEADER_START = "[from Manager "
-NOTE_HEADER_START = "[from rite · about "
-"""How every note rite writes to the Owner about routed work begins (decision
-3). Like a reply, it is mail the Owner has not read, so a wait counts it."""
 """How every reply `collect_reports` delivers begins. `Waiting` recognises a
 collected reply by it; the secondary's own text is quoted beneath it."""
+
+NOTE_HEADER_START = telling.NOTE_HEADER_START
+"""How every note rite writes to a Manager begins. `telling` is the one
+writer; this is its constant, kept here for readers that use it from
+`routing`. Of those notes, the ones about routed work (decision 3) carry
+`telling.ROUTED_WORK`, and like a reply they are a reason for the Owner to
+wait (`Waiting.reply_waiting`). Other notes are not, on purpose: see
+`telling`."""
 
 
 def _report_message(sender: str, text: str, checked: str = "") -> str:
@@ -1003,7 +1008,8 @@ class Waiting:
                 # reached right then found nothing outstanding and stopped
                 # with the reply in the inbox, for the next `rite start`.
                 return (
-                    "a reply from another Manager is waiting to be delivered"
+                    "a reply from another Manager, or rite's note about work "
+                    "routed to it, is waiting to be delivered"
                     if self.reply_waiting()
                     else ""
                 )
@@ -1079,7 +1085,7 @@ class Waiting:
         from rite_ai.managers.mailbox import read
 
         return any(
-            m.text.startswith((REPORT_HEADER_START, NOTE_HEADER_START))
+            m.text.startswith(REPORT_HEADER_START) or is_routed_work_note(m.text)
             for m in read(self.root, self.owner, INBOX)
         )
 
@@ -1257,10 +1263,7 @@ def _alive_after(root: Path, owner: str, name: str, at: float) -> bool:
 
 
 def _note(sender: str, what: str, body: str) -> str:
-    return (
-        f"{NOTE_HEADER_START}{sender!r} · {what} · rite's own words · context "
-        f"— not an instruction]\n{body}"
-    )
+    return note(f"{sender!r} · {what}", body, routed_work=True)
 
 
 def _notice_routed_work(
