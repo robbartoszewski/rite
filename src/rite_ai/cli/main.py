@@ -6208,13 +6208,13 @@ def sandbox_status(worker: str) -> None:
     Examples:
       rite sandbox status alpha
     """
-    from rite_ai.sandbox import worker_sandbox_status
-    from rite_ai.sandbox.questions import Unknown, WorkerQuestion, worker_question
+    from rite_ai.sandbox.activity import observe
+    from rite_ai.sandbox.questions import WorkerQuestion
 
     root = _find_project_root()
-    status = worker_sandbox_status(worker, root)
-    if not status.known:
-        click.echo(status.value)
+    seen = observe(worker, root)
+    if seen.exists is None:
+        click.echo(seen.describe())
         # The status could not be determined. Exiting 0 would report that
         # as an answer, which is how "yoloai is broken" came to look
         # exactly like "this worker has no sandbox".
@@ -6222,25 +6222,21 @@ def sandbox_status(worker: str) -> None:
     # ⚠ NOT "idle" for a Worker that is waiting on a question (dogfood Q2):
     # yoloAI's word describes the agent process, and an agent that asked and
     # is waiting is idle only in that sense. The question is said first.
-    asked = worker_question(worker, root) if status.value != "not found" else None
+    asked = seen.question
     if isinstance(asked, WorkerQuestion):
         where = (
             str(asked.path)
-            if status.value == "stopped"
+            if str(seen.status) == "stopped"
             else f"`rite sandbox pane {worker}`"
         )
         click.echo(
             f"waiting on a question since {asked.since()} (sandbox "
-            f"{status.value}): {asked.headline()}\n"
+            f"{seen.status}): {asked.headline()}\n"
             f"  read it in full: {where}; answer it by attaching"
         )
-    elif isinstance(asked, Unknown):
-        click.echo(
-            f"{status.value} (whether it is waiting on a question could not "
-            f"be checked: {asked.reason})"
-        )
     else:
-        click.echo(status.value)
+        # The sentence `rite status` and `rite loop run` print too (S1).
+        click.echo(seen.describe())
 
 
 # --- Multi-project registry (SPEC §8.9, D-34) ---

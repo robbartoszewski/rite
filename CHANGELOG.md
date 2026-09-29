@@ -15,6 +15,21 @@ not exist). A CONTRADICTED from a verifier that could not read a cited file
 that exists is delivered as COULD NOT TELL, saying why and keeping the
 verifier's words. A false claim about a file the verifier can see is still
 CONTRADICTED.
+### `rite status` no longer says a Worker is "not started"
+
+It said so for any Worker with no heartbeat and no claims, without looking at
+its sandbox, and in the v0.6.0 dogfood a Manager passed it on as "no
+progress" about a Worker that had read its ticket and was waiting at its
+prompt. `rite status`, `rite sandbox status` and `rite loop run` now print
+one sentence about a Worker's sandbox, from one look at yoloAI: its word and
+what yoloAI says it means (`sandbox idle: its agent is waiting at its
+prompt`). Where yoloAI cannot be asked, all three say the state is unknown;
+with no sandbox, status says so, and that a session opened by hand shows only
+once it beats or claims. The sandbox is looked at whatever `sandbox.enabled`
+says, since `rite sandbox start` runs either way. `rite loop run` says
+"busy" only of an agent yoloAI reports working, and no longer calls a queue
+"not a fault" when a Worker holding it is not working. A Worker created with
+no modules shows `modules=[none]`, not `[all]`.
 
 
 ### `rite sandbox destroy` no longer needs `--force` for a finished Worker

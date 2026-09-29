@@ -176,6 +176,12 @@ class TestDestroyDoesNotDeleteAQuestion:
         assert run.call_args[0][0][1] == "destroy"
 
 
+def _seen(status: str, asked=None):
+    from rite_ai.sandbox.activity import SandboxActivity
+
+    return SandboxActivity(status=SandboxStatus(status), question=asked)
+
+
 class TestRiteStatus:
     def _status(self, **facts):
         from rite_ai.config.models import WorkerManifest
@@ -195,8 +201,7 @@ class TestRiteStatus:
 
         out = format_status(
             self._status(
-                worker_questions={"alpha": _question()},
-                worker_sandboxes={"alpha": "idle"},
+                worker_sandboxes={"alpha": _seen("idle", _question())},
             )
         )
         [line] = [x for x in out.splitlines() if x.startswith("  alpha:")]
@@ -209,9 +214,9 @@ class TestRiteStatus:
         """S1: the dogfood said "not started" for a Worker whose sandbox ran."""
         from rite_ai.reporting.status import format_status
 
-        out = format_status(self._status(worker_sandboxes={"alpha": "idle"}))
+        out = format_status(self._status(worker_sandboxes={"alpha": _seen("idle")}))
         [line] = [x for x in out.splitlines() if x.startswith("  alpha:")]
-        assert "sandbox idle, no heartbeat or claims yet" in line
+        assert "sandbox idle: its agent is waiting at its prompt" in line
         assert "not started" not in line
 
     def test_no_modules_is_not_all_modules(self):
@@ -225,8 +230,9 @@ class TestRiteStatus:
 
         out = format_status(
             self._status(
-                worker_questions={"alpha": q.Unknown("rite-p-alpha", "lock held")},
-                worker_sandboxes={"alpha": "idle"},
+                worker_sandboxes={
+                    "alpha": _seen("idle", q.Unknown("rite-p-alpha", "lock held"))
+                },
             )
         )
         assert "could not check for a question: lock held" in out
@@ -253,7 +259,7 @@ class TestTheLoop:
         view = _look_at_worker(
             tmp_path, "alpha", time.time(), lambda n, r: SandboxStatus("active")
         )
-        assert view.verdict == "busy — a sandbox is running for it"
+        assert view.verdict == "busy — its sandbox's agent is working"
 
 
 class TestSandboxStatus:
@@ -281,9 +287,10 @@ class TestSandboxStatus:
         assert "/x/rw/files/question.json" in result.output
         assert "sandbox pane" not in result.output
 
-    def test_no_question_prints_yoloais_word_as_before(self, monkeypatch):
+    def test_no_question_prints_the_sentence_every_view_prints(self, monkeypatch):
         result = self._run(monkeypatch, "idle", None)
-        assert result.output.strip() == "idle"
+        said = result.output.strip()
+        assert said == "sandbox idle: its agent is waiting at its prompt"
 
 
 class TestDoctor:
