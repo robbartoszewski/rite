@@ -35,6 +35,7 @@ from rite_ai.loop import (
     format_cycle,
 )
 from rite_ai.loop import plan_cycle as _plan_cycle
+from tests.refined_board import refined
 
 NOW = 1_759_000_000.0
 
@@ -49,6 +50,9 @@ def plan_cycle(root: Path, **kwargs):
     23:59:08 UTC, on a PR that changed only a docstring.
     """
     kwargs.setdefault("now", datetime.fromtimestamp(kwargs.get("clock", NOW), UTC))
+    # These tests are about Workers, claims and the schedule, so every ticket
+    # is REFINED, through the real predicate (TR2 gates `ready` on it).
+    kwargs.setdefault("refinement", refined)
     return _plan_cycle(root, **kwargs)
 
 

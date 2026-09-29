@@ -122,7 +122,11 @@ class TestTheManagerChoosesMessagesAndNothingElse:
         assert chores.create_asked_for(tmp_path, "lead", board, said.append) == 1
         ((title, description, labels),) = board.created
         assert title == "chore: fix the timeout thing"
-        assert description.startswith("fix the timeout thing\nthe http one\n\n---")
+        # TR2: rite's line says it is unrefined, first; then his words,
+        # unaltered, before anything rite says about them.
+        first, rest = description.split("\n\n", 1)
+        assert first.startswith("**Unrefined when rite created it (")
+        assert rest.startswith("fix the timeout thing\nthe http one\n\n---")
         assert ids[DM] in description and "no Manager wrote it" in description
         assert labels == ["chore", "scheduled"]
         (told,) = _notes(tmp_path, "lead")
@@ -281,7 +285,9 @@ class TestAPromptTypedAtThisMachine:
         assert (made, refusal) == ("RT-99", "")
         ((title, description, labels),) = board.created
         assert title == "chore: add a CSV export"
-        assert description.startswith("add a CSV export\n\n---")
+        first, rest = description.split("\n\n", 1)
+        assert first.startswith("**Unrefined when rite created it (")
+        assert rest.startswith("add a CSV export\n\n---")
         # Not the Worker's label: nothing runs on it, and a Worker's label
         # reads as that Worker's work in progress.
         assert labels == ["chore", "scheduled"]

@@ -74,6 +74,10 @@ _VALID_ALTERNATES = {
     "github_app.app_id": "123456",
     "github_app.installation_id": "7890123",
     "github_app.repository": "org/board",
+    # TR2: a closed vocabulary, and `channel` is required with it and
+    # schema-validated.
+    "refinement.questions_to": "channel",
+    "refinement.channel": "G012AB3CD",
     # A closed vocabulary, and `auto_merge` (flipped to true) is refused beside
     # any strategy but a pull request. `_populated` starts from `commit`, so
     # this alternate is both distinct and valid with auto_merge on.

@@ -662,6 +662,11 @@ def _deliver_checkin(root: Path, manager: str) -> str:
     from rite_ai.managers import pending
 
     lines += pending.checkin_lines(root, manager, now=time.time())
+    # TR2: an escalated refinement is in every checkpoint until he decides it
+    # (Robert: "escalates it as a blocker ... in the checkpoint status updates").
+    from rite_ai.refinement import protocol as refinement_protocol
+
+    lines += refinement_protocol.checkin_lines(root, manager)
     path = send(root, manager, OUTBOX, "\n".join(lines), kind=CHECKIN)
     now = time.time()
     # Which outbox file IS a check-in, kept here rather than in the message

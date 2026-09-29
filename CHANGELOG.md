@@ -103,6 +103,68 @@ after an explicit yes from you, instead of rewriting the ticket's
 description. It asks at most three questions at a time, and marks which
 items are its own proposal rather than your words or the ticket's.
 
+**A board of unrefined tickets is work, not an empty board.** `rite loop`
+and the Owner's supervisor count only REFINED tickets as ready for Workers,
+and have two new verdicts for the rest. `refining`: nothing is refined yet
+and the Owner may start refining now, so a session starts. `waiting-on-user`:
+nothing can start until you answer, so the Owner waits and starts no
+session until you reply or a question's deadline passes. `idle` now means
+nothing is scheduled at all. A secondary Manager never refines; that is the
+Owner's.
+
+Refinement is bounded so a backlog of unrefined tickets cannot flood you or
+spend sessions: oldest first, at most 5 open at once, at most 3 started per
+session, and new ones only after you have replied (or a deadline passed)
+since the last refinement session. Twenty unrefined tickets mean three
+questions, not twenty. The limits, and the words that accept a proposal
+(`ok`, `yes`, `accept`, `lgtm`, `proceed`), are configurable under a new
+`refinement:` section in `.rite/config.yaml`; a value out of range, or an
+accept word people type to refuse ("no", "stop", …), is refused rather than
+corrected. Whether refinement is enforced is not configurable.
+
+**The Owner refines tickets with you in Slack.** It asks with `rite refine
+ask <ID> -` (the text on stdin): at most three numbered questions, and from
+the second round a proposed definition of done you can accept in one word.
+rite checks every round before you see it: an item it says came from the
+ticket or from you must quote the ticket or your answer exactly, and items
+that are the Owner's own idea are labelled as its proposal. The round goes
+to your DM (as something that needs you, so it comes back at your check-in
+until you answer) and onto the ticket as a comment. Reply in its thread, or
+in your DM starting with the ticket's id. `ok`, `yes`, `accept`, `lgtm` or
+`proceed`, alone, under the latest proposal records it, signed, with your
+message as its provenance; anything else is an answer the next round builds
+on. If the ticket changed after the proposal, nothing is recorded and you
+are told. A question you have not answered by its deadline (24 hours, or the
+end of your next check-in if sooner) is not asked again while you are away;
+it comes back when you are next active. There is no limit on rounds while
+you are answering: a complex ticket takes the rounds it needs, and if the
+Owner's proposal has not changed from one round to the next, the message
+says so. What is limited is asking without a reply: after three messages in
+a row about a ticket go unanswered (`refinement.unanswered`), or when the
+Owner was handed a ticket twice without asking you anything, it is parked:
+rite tells you, and replying about it, `rite refine reopen <ID>`, or editing
+the ticket brings it back. Any reply resets the count.
+
+An instruction you give the Owner in chat is refined straight away too. If
+you do not reply within `refinement.chore_after_minutes` (60 by default),
+rite files it as a chore with exactly your words, so it is not lost, and
+refinement continues on it. Every chore rite files now opens by saying it
+was unrefined when created, and no work starts on it until a definition of
+done is agreed.
+
+The Owner is told, every cycle, which tickets to refine and where each
+stands, with the ticket's text and your earlier answers, so it never has to
+read the board to refine (which it cannot on Jira).
+
+**Refinement questions can go to a private channel** instead of your DM:
+`refinement.questions_to: channel` and `refinement.channel: <its id>`, with
+the app invited (`/invite @rite`) and, for a private channel, the app's
+`groups:history` scope. rite checks at start that it can post and read
+there; if not, the questions go to your DM and it says why. Only your own
+replies in a question's thread there count as answers; a teammate's are
+context. The check-in stays in your DM, and a question you have not
+confirmed seeing comes back there.
+
 ### `rite start` sees a ticket rite has just filed
 
 A board's list lags new writes by seconds, on GitHub (measured, up to 6.5 s)
@@ -113,7 +175,7 @@ every ticket it created, labelled, moved or assigned from the board's
 consistent single-ticket read, so its own writes are always seen, and seen
 as they are now. A ticket a person creates on the board's web page can still
 take a few seconds to be listed; the idle stop now says the board *listed*
-nothing and names that case.
+nothing, and when: "nothing ready as of 14:32:05".
 
 ### rite's verifier no longer contradicts a true reply about a file it cannot read
 
