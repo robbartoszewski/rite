@@ -201,7 +201,10 @@ def test_ticket_md_and_the_ticket_command_send_a_worker_to_the_record():
     step_one = command.split("\n2. ", 1)[0]
     assert "stop rather than guessing" not in command
     assert '"Agreed definition of done"' in step_one
-    assert "do not try `rite board\n     show` or `rite refine status`" in step_one
+    assert "try `rite board show` or `rite refine status`" in step_one
+    # Why the Worker does not check, beside the instruction not to, so the
+    # branching is not "fixed" by adding a check back.
+    assert "rite checked that record on the host, in the same\n     read" in step_one
     assert "UNREADABLE means rite could not check" in step_one
 
     text = delivery_text(render_ticket(TICKET), "2026-09-29T00:00:00Z", "GitHub")
