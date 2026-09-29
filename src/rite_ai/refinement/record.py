@@ -58,14 +58,13 @@ def board_identity(board) -> dict | None:
     """
     from rite_ai.tickets.github import GitHubBackend
     from rite_ai.tickets.jira import JiraBackend, normalise_site
-    from rite_ai.tickets.own_writes import ReadsItsOwnWrites
+    from rite_ai.tickets.scope import unwrapped
 
-    # ⚠ Through the DF4 wrapper to the board it wraps. A project's board is
-    # built wrapped whenever a root is given (`create_backend_from_config`),
-    # and a wrapped board answering None would make every record on it
-    # UNREADABLE: every gate refusing, for a reason no one could see.
-    while isinstance(board, ReadsItsOwnWrites):
-        board = board.inner
+    # ⚠ Through every rite wrapper to the board (DF4's `ReadsItsOwnWrites`,
+    # S1's `Scoped`). A project's board is built wrapped, and a wrapped board
+    # answering None would make every record on it UNREADABLE: every gate
+    # refusing, for a reason no one could see.
+    board = unwrapped(board)
     if isinstance(board, JiraBackend):
         return {"type": "jira", "site": normalise_site(board.config.site).lower()}
     if isinstance(board, GitHubBackend):

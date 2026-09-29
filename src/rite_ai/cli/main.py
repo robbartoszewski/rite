@@ -1398,6 +1398,11 @@ def _doctor_report(problems: list[str]) -> None:
         with _doctor_check("refinement", problems):
             _doctor_refinement_reaches_you(root, problems)
 
+        with _doctor_check("board scope", problems):
+            for problem in _scope_problems(root):
+                click.echo(f"board scope: {problem}")
+                problems.append(f"board scope: {problem}")
+
     return
 
 
@@ -7753,6 +7758,50 @@ def _engine_ready_for(role):
     return ready
 
 
+def _scope_problems(root: Path) -> list[str]:
+    """Why this project's board reads may take another project's tickets
+    (`tickets.scope`), one line each; [] when it cannot say (an unreadable
+    config is reported by what reads it, not as a collision)."""
+    from rite_ai.config.parse import ParseError, parse_config
+    from rite_ai.machine_projects import note
+    from rite_ai.tickets.scope import name_problems, sharing_problems
+
+    note(root)
+    config = parse_config(root / ".rite" / "config.yaml")
+    if isinstance(config, ParseError):
+        return []
+    workers_dir = root / "workers"
+    names = [r.name for r in config.coordination.manager_roles]
+    names += list(config.coordination.managers)
+    if workers_dir.is_dir():
+        names += [p.name for p in workers_dir.iterdir() if (p / "worker.yml").is_file()]
+    scope = config.ticket_backend.scope_label
+    return name_problems(scope, sorted(set(names))) + sharing_problems(root, config)
+
+
+def _refuse_a_shared_board(root: Path, manager: str) -> None:
+    """Refuse a Manager whose board another project on this machine also reads
+    unscoped (Robert, 2026-09-29: refused, not warned — the window is designed
+    out, not watched for). Before anything is started or printed as starting."""
+    problems = _scope_problems(root)
+    if not problems:
+        return
+    click.echo(
+        f"refusing to start Manager {manager!r}: it could take another "
+        "project's tickets as its own.",
+        err=True,
+    )
+    for problem in problems:
+        click.echo(f"  - {problem}", err=True)
+    click.echo(
+        "  rite can see only projects on this machine that have run `rite "
+        "init`, `rite start` or `rite doctor`; a project elsewhere sharing the "
+        "board is not checked. Nothing was started.",
+        err=True,
+    )
+    raise SystemExit(1)
+
+
 def _start_a_manager(
     root: Path,
     role,
@@ -7789,6 +7838,8 @@ def _start_a_manager(
             err=True,
         )
         raise SystemExit(1)
+
+    _refuse_a_shared_board(root, role.name)
 
     # `supervise`, not a single `start`: the feature is KEEPING the Manager
     # working. This runs in the FOREGROUND — it is the human's own process,

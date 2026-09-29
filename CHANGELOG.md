@@ -34,6 +34,19 @@ that repository. It now says so before asking, and for someone else's project
 or a fork you contribute from, gives the commands for a separate project root
 instead.
 
+### A project reads only its own tickets on a board it shares
+
+Two rite projects on one board used to see each other's tickets: refinement
+took any ticket labelled `scheduled`, whichever project it was for. A project
+now has `ticket_backend.scope_label` (`rite init` sets it to the project's
+name): rite reads only tickets that carry it, and puts it on every ticket it
+creates. `rite start` refuses a Manager, and `rite doctor` reports a problem,
+when another project on this machine reads the same board without a scope
+label of its own, or with the same one.
+
+**To upgrade a project that shares a board:** set `ticket_backend.scope_label`
+in its config, and add that label to its tickets, alongside `scheduled`.
+
 ## 0.7.0a1 (2026-09-29) — alpha: ticket refinement and Worker safety, a preview
 
 ⚠ **An alpha, not a release candidate.** It is cut to run one dogfood — a
