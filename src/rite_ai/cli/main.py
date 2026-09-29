@@ -4136,6 +4136,67 @@ def refine_ask(ticket_id: str, text: str) -> None:
     )
 
 
+@refine.command("reopen")
+@click.argument("ticket_id")
+@click.option(
+    "--manager",
+    default="",
+    help="The Manager that refines, when rite cannot tell: the one holding "
+    "`route`, or the project's only Manager, is used otherwise.",
+)
+def refine_reopen(ticket_id: str, manager: str) -> None:
+    """Restart a ticket's refinement — a person, at the host (TR2).
+
+    For a ticket PARKED (not agreed after its rounds, its thread unreadable,
+    or not started by the Manager), or one you want asked again from the
+    start. Its rounds begin again at 1, and your earlier answers are kept.
+    Replying about it in your DM, starting with its id, resumes it too, and
+    so does editing the ticket.
+
+    Examples:
+      rite refine reopen KAN-7
+    """
+    from rite_ai.config.managers import routing_owner
+    from rite_ai.managers import current_manager
+    from rite_ai.refinement import rounds
+
+    root = _require_project_root()
+    if current_manager():
+        click.echo(
+            "refusing: reopening a ticket's refinement is a person's decision, "
+            "and this is a Manager's session. Tell the User what is parked and "
+            "why; he can reply about it, or run this himself.",
+            err=True,
+        )
+        raise SystemExit(1)
+    roles, problems = _manager_roles(root)
+    if problems:
+        click.echo("cannot read this project's Managers:", err=True)
+        for problem in problems[:3]:
+            click.echo(f"  {problem}", err=True)
+        raise SystemExit(1)
+    owner = manager.strip() or (routing_owner(list(roles)) if roles else "")
+    if not owner:
+        from rite_ai.config.parse import ParseError, parse_config
+
+        parsed = parse_config(root / ".rite" / "config.yaml")
+        names = [r.name for r in roles] or (
+            list(parsed.coordination.managers)
+            if not isinstance(parsed, ParseError)
+            else []
+        )
+        if len(names) != 1:
+            click.echo(
+                "refusing: rite cannot tell which Manager refines here (none "
+                "holds `route`). Name it: `rite refine reopen "
+                f"{ticket_id} --manager <name>`.",
+                err=True,
+            )
+            raise SystemExit(1)
+        owner = names[0]
+    click.echo(rounds.reopen(root, owner, ticket_id.strip()))
+
+
 @refine.command("accept")
 @click.argument("ticket_id")
 @click.option(

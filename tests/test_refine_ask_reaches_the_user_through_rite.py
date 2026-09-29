@@ -199,3 +199,43 @@ def test_the_status_of_a_ticket_in_refinement_is_the_boards(project, key):
     protocol.step(project, "lead", board, lambda _m: None)
     assert st.status(board, "KAN-7").state == st.NOT_REFINED
     assert CONFIG  # the project fixture's two-Manager root
+
+
+class TestAPersonReopens:
+    def _reopen(self, monkeypatch, *args, as_manager=""):
+        if as_manager:
+            monkeypatch.setenv(MANAGER_ENV, as_manager)
+        else:
+            monkeypatch.delenv(MANAGER_ENV, raising=False)
+        return CliRunner().invoke(cli, ["refine", "reopen", *args])
+
+    def test_a_parked_ticket_starts_again_from_round_one_keeping_answers(
+        self, project, monkeypatch
+    ):
+        with rounds.locked(project, "lead", "KAN-7") as (_a, save):
+            save(
+                rounds.Attempt(
+                    ticket="KAN-7",
+                    text_sha256="t",
+                    rounds=[
+                        rounds.Round(k=1, sent_at=1.0, deadline=2.0, proposal=False)
+                    ],
+                    parked=rounds.NOT_AGREED,
+                    misses=1,
+                    answers=[{"id": "m1", "words": "the http one", "at": 1.5}],
+                )
+            )
+        got = self._reopen(monkeypatch, "KAN-7")
+        assert got.exit_code == 0, got.output
+        assert "reopened (it was not agreed after N rounds)" in got.output
+        attempt = rounds.load(project, "lead", "KAN-7")
+        assert (attempt.parked, attempt.misses, attempt.rounds) == ("", 0, [])
+        assert attempt.answers[0]["words"] == "the http one"
+
+    def test_a_manager_cannot_reopen(self, project, monkeypatch):
+        got = self._reopen(monkeypatch, "KAN-7", as_manager="lead")
+        assert got.exit_code == 1 and "a person's decision" in got.output
+
+    def test_nothing_to_reopen_is_said(self, project, monkeypatch):
+        got = self._reopen(monkeypatch, "KAN-8")
+        assert got.exit_code == 0 and "no refinement to reopen" in got.output

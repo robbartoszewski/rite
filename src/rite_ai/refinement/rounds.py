@@ -368,6 +368,25 @@ def count_misses(
     return parked
 
 
+def reopen(root: Path, owner: str, ticket: str) -> str:
+    """A person restarts a ticket's refinement (`rite refine reopen`). Its
+    rounds start again from 1 and its misses from 0; his answers are kept,
+    so a new proposal can still quote them. Returns what was done."""
+    with locked(root, owner, ticket) as (attempt, save):
+        if attempt is None:
+            return f"{ticket} has no refinement to reopen; the Owner starts one"
+        was = attempt.parked or ("waiting for you" if attempt.rounds else "not started")
+        attempt.parked = ""
+        attempt.misses = 0
+        attempt.accepted = {}
+        attempt.rounds = []
+        save(attempt)
+    return (
+        f"{ticket} reopened (it was {was}): the Owner refines it again from "
+        "round 1, and your earlier answers are kept"
+    )
+
+
 def all_attempts(root: Path, owner: str) -> dict[str, Attempt]:
     """Every attempt this Owner holds, by ticket."""
     found: dict[str, Attempt] = {}
