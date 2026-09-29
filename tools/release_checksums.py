@@ -68,13 +68,27 @@ def _git(*args: str) -> bytes:
 
 
 def release_ref() -> str:
-    """The tag `install.sh` itself installs, read out of `install.sh`.
+    """The tag `install.sh` itself installs, read out of `install.sh` — or,
+    while `VERSION` is a pre-release, `VERSION`'s own tag.
 
     Not a second copy of the version string: the installer's `VERSION=`
     default IS the release, so reading it is what keeps this tool and the
     thing it describes from disagreeing about which release is being
     published.
     """
+    # ⚠ **A pre-release is not what `install.sh` installs by default**, and
+    # must not be: `VERSION` 0.7.0a1 left `install.sh` naming v0.6.0 on
+    # purpose (an alpha is installed only when asked for, `RITE_VERSION=`).
+    # Reading `install.sh` then named the stable release, and the notes for
+    # the alpha would have carried v0.6.0's digest. For a pre-release the
+    # release is `VERSION` itself; its own tag's `install.sh` is what a
+    # reader of those notes downloads.
+    try:
+        version = (REPO_ROOT / "VERSION").read_text().strip()
+    except OSError:
+        version = ""  # no pre-release to say; `install.sh` names the release
+    if version and not re.fullmatch(r"\d+\.\d+\.\d+", version):
+        return f"v{version}"
     # Read from disk rather than from a ref, necessarily: this is the value
     # that NAMES the ref everything else is read from. Wrapped, because an
     # absent file raised FileNotFoundError straight past the ToolError
