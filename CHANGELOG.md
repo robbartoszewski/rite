@@ -273,6 +273,11 @@ goes through carries the ticket's agreed definition of done to the Manager
 it was routed to, so that Manager works to what you agreed, not to the
 Owner's summary of it.
 
+With several Managers across machines, the Owner's assignment of waiting
+tickets to Managers also assigns only tickets with an agreed definition of
+done. The rest are listed in one line per tick, with their state and what to
+do, and a check that cannot be made assigns nothing.
+
 ### `rite stop --skip-handover`
 
 `rite stop` hands over by default, as before. The new `--skip-handover`

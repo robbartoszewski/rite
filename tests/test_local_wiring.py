@@ -428,6 +428,14 @@ def _project_for_pool(names):
     )
 
 
+def _refined(ticket_id):
+    """Rule 0 (TR5): these tests are about rules 1 to 3, so every ticket is
+    REFINED, through a real signed record."""
+    from tests.refined_board import refined_status
+
+    return refined_status(ticket_id)
+
+
 def test_the_owner_assigns_waiting_tickets_to_a_manager(tmp_path):
     """P2-3a, and one of Phase 2's nine complete-and-uncalled functions. The
     exemption in `test_no_dead_wiring` said the wiring was "one call in
@@ -437,7 +445,13 @@ def test_the_owner_assigns_waiting_tickets_to_a_manager(tmp_path):
     layer, board = _pool_setup(tmp_path, ["ABC-1"], {"alpha": 0, "beta": 2})
     project = _project_for_pool(["alpha", "beta"])
     lines = _assign_the_pool(
-        layer, project.config.coordination, project, "alpha", board, NOW
+        layer,
+        project.config.coordination,
+        project,
+        "alpha",
+        board,
+        NOW,
+        check_ticket=_refined,
     )
     assert board.labelled == [("ABC-1", ["alpha"])], lines
     assert any("assigned ABC-1 to alpha" in line for line in lines)
@@ -452,7 +466,13 @@ def test_a_ticket_a_manager_already_holds_is_left_alone(tmp_path):
     board.tickets = [FakeTicket("ABC-1", ["scheduled", "beta"])]
     project = _project_for_pool(["alpha", "beta"])
     lines = _assign_the_pool(
-        layer, project.config.coordination, project, "alpha", board, NOW
+        layer,
+        project.config.coordination,
+        project,
+        "alpha",
+        board,
+        NOW,
+        check_ticket=_refined,
     )
     assert board.labelled == [] and lines == []
 
@@ -467,7 +487,15 @@ def test_five_tickets_do_not_all_land_on_the_idlest_manager(tmp_path):
         tmp_path, ["ABC-1", "ABC-2", "ABC-3", "ABC-4"], {"alpha": 0, "beta": 0}
     )
     project = _project_for_pool(["alpha", "beta"])
-    _assign_the_pool(layer, project.config.coordination, project, "alpha", board, NOW)
+    _assign_the_pool(
+        layer,
+        project.config.coordination,
+        project,
+        "alpha",
+        board,
+        NOW,
+        check_ticket=_refined,
+    )
 
     went_to = [labels[0] for _, labels in board.labelled]
     assert went_to.count("alpha") == 2 and went_to.count("beta") == 2, went_to
@@ -503,7 +531,15 @@ def test_rule_2_a_manager_does_not_get_back_the_ticket_it_refused(tmp_path):
     layer, board = _pool_setup(tmp_path, ["ABC-1"], {"alpha": 0, "beta": 5})
     _refuse(layer, "ABC-1", "alpha", "this machine does not have module 'router'")
     project = _project_for_pool(["alpha", "beta"])
-    _assign_the_pool(layer, project.config.coordination, project, "alpha", board, NOW)
+    _assign_the_pool(
+        layer,
+        project.config.coordination,
+        project,
+        "alpha",
+        board,
+        NOW,
+        check_ticket=_refined,
+    )
 
     assert board.labelled == [("ABC-1", ["beta"])]
 
@@ -517,7 +553,15 @@ def test_rule_2_forgets_a_refusal_whose_reason_has_passed(tmp_path):
     layer, board = _pool_setup(tmp_path, ["ABC-1"], {"alpha": 0, "beta": 5})
     _refuse(layer, "ABC-1", "alpha", "shutting down: reboot")
     project = _project_for_pool(["alpha", "beta"])
-    _assign_the_pool(layer, project.config.coordination, project, "alpha", board, NOW)
+    _assign_the_pool(
+        layer,
+        project.config.coordination,
+        project,
+        "alpha",
+        board,
+        NOW,
+        check_ticket=_refined,
+    )
 
     # alpha is publishing heartbeats again, so it is not shutting down now.
     assert board.labelled == [("ABC-1", ["alpha"])]
@@ -533,7 +577,13 @@ def test_a_ticket_everyone_refused_does_not_stop_the_next_one(tmp_path):
         _refuse(layer, "ABC-1", manager, "this machine does not have module 'x'")
     project = _project_for_pool(["alpha", "beta"])
     lines = _assign_the_pool(
-        layer, project.config.coordination, project, "alpha", board, NOW
+        layer,
+        project.config.coordination,
+        project,
+        "alpha",
+        board,
+        NOW,
+        check_ticket=_refined,
     )
 
     assert [t for t, _ in board.labelled] == ["ABC-2"]
@@ -552,7 +602,13 @@ def test_rule_3_does_not_assign_past_the_schedule(tmp_path):
         timezone="UTC", windows=[ScheduleWindow(hours="00:00-23:59", workers=2)]
     )
     lines = _assign_the_pool(
-        layer, project.config.coordination, project, "alpha", board, NOW
+        layer,
+        project.config.coordination,
+        project,
+        "alpha",
+        board,
+        NOW,
+        check_ticket=_refined,
     )
 
     assert board.labelled == []
@@ -569,3 +625,125 @@ def test_rule_3_needs_no_new_heartbeat_field(tmp_path):
     fields = set(ManagerStatus.__dataclass_fields__)
     assert "in_flight" in fields
     assert "capacity" not in fields
+
+
+# --- Rule 0 (TR5): only a REFINED ticket is assigned -------------------------------
+
+
+def test_an_unrefined_ticket_is_not_assigned_and_the_tick_says_why(tmp_path):
+    """Robert: "scheduled + not refined => owner starts refinement procedure,
+    scheduled + refined => owner assigns it to a Manager"."""
+    from rite_ai.scheduler import _assign_the_pool
+    from tests.refined_board import refined_status, unrefined_status
+
+    layer, board = _pool_setup(tmp_path, ["ABC-1", "ABC-2"], {"alpha": 0, "beta": 0})
+    project = _project_for_pool(["alpha", "beta"])
+    asked: list[str] = []
+
+    def check(ticket_id):
+        asked.append(ticket_id)
+        return (
+            unrefined_status(ticket_id)
+            if ticket_id == "ABC-1"
+            else refined_status(ticket_id)
+        )
+
+    lines = _assign_the_pool(
+        layer,
+        project.config.coordination,
+        project,
+        "alpha",
+        board,
+        NOW,
+        check_ticket=check,
+    )
+    assert [t for t, _ in board.labelled] == ["ABC-2"], lines
+    assert asked == ["ABC-1", "ABC-2"], "one check per ticket"
+    (said,) = [line for line in lines if "not assigned — no agreed" in line]
+    assert "ABC-1 (NOT REFINED)" in said and "rite refine accept" in said
+
+
+def test_with_no_way_to_check_nothing_is_assigned(tmp_path):
+    """A check that could not be made is not a pass."""
+    from rite_ai.scheduler import _assign_the_pool
+
+    layer, board = _pool_setup(tmp_path, ["ABC-1"], {"alpha": 0, "beta": 0})
+    project = _project_for_pool(["alpha", "beta"])
+    lines = _assign_the_pool(
+        layer, project.config.coordination, project, "alpha", board, NOW
+    )
+    assert board.labelled == []
+    assert lines and "assigned nothing" in lines[0]
+
+
+def test_a_check_that_raises_is_not_a_pass(tmp_path):
+    from rite_ai.scheduler import _assign_the_pool
+
+    layer, board = _pool_setup(tmp_path, ["ABC-1"], {"alpha": 0, "beta": 0})
+    project = _project_for_pool(["alpha", "beta"])
+
+    def check(ticket_id):
+        raise OSError("network down")
+
+    lines = _assign_the_pool(
+        layer,
+        project.config.coordination,
+        project,
+        "alpha",
+        board,
+        NOW,
+        check_ticket=check,
+    )
+    assert board.labelled == []
+    assert any("ABC-1 (UNREADABLE (network down))" in line for line in lines)
+
+
+def test_the_owners_assignment_is_wired_to_the_one_refinement_check(
+    tmp_path, monkeypatch
+):
+    """Wired, not merely available: `_owner_duties` hands `_assign_the_pool`
+    a check that IS `refinement.status.of` for this project, the one read
+    TR4's launch and TR5's route use. Without this, unwiring it passes every
+    other test, because each calls `_assign_the_pool` directly."""
+    from types import SimpleNamespace
+
+    import rite_ai.coordination.claims_state as claims_state
+    import rite_ai.coordination.takeover as takeover
+    import rite_ai.refinement.status as status_mod
+    import rite_ai.scheduler as scheduler
+
+    monkeypatch.setattr(takeover, "hand_over_stalled_manager", lambda *a, **k: None)
+    monkeypatch.setattr(
+        claims_state,
+        "expire_offline_claims",
+        lambda *a, **k: SimpleNamespace(expired={}, refused=""),
+    )
+    handed: dict = {}
+    monkeypatch.setattr(
+        scheduler,
+        "_assign_the_pool",
+        lambda *a, check_ticket=None, **k: handed.update(check=check_ticket) or [],
+    )
+    asked: list[tuple] = []
+    monkeypatch.setattr(
+        status_mod,
+        "of",
+        lambda root, config, ticket_id: asked.append((root, config, ticket_id)),
+    )
+    project = SimpleNamespace(
+        config=SimpleNamespace(
+            heartbeat=SimpleNamespace(interval_minutes=5, stall_threshold=3)
+        )
+    )
+    scheduler._owner_duties(
+        tmp_path,
+        None,
+        SimpleNamespace(managers=["alpha"]),
+        project,
+        "alpha",
+        SimpleNamespace(owner=True),
+        board=object(),
+    )
+    assert callable(handed.get("check"))
+    handed["check"]("ABC-1")
+    assert asked == [(tmp_path, project.config, "ABC-1")]

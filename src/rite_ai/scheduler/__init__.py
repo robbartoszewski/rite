@@ -572,8 +572,19 @@ def _distribution_lines(tick) -> list[str]:
     return lines
 
 
-def _assign_the_pool(layer, config, project, name: str, board, now) -> list[str]:
+def _assign_the_pool(
+    layer, config, project, name: str, board, now, check_ticket=None
+) -> list[str]:
     """The Owner labels waiting tickets with a Manager's name (P2-3a, §2.3).
+
+    **RULE 0 — only a REFINED ticket is assigned (TR5).** Robert's semantics:
+    "scheduled + not refined => owner starts refinement procedure, scheduled
+    + refined => owner assigns it to a Manager". `check_ticket(id)` is
+    `refinement.status.of` for this project, one read per ticket; anything
+    but REFINED is left unassigned, and said, in ONE line for the tick, since
+    a board of unrefined tickets would otherwise print a line per ticket
+    every tick. **No `check_ticket` assigns nothing** and says why: a check
+    that could not be made is not a pass.
 
     `manager_views`, `choose_manager` and `assign_to_manager` were three of
     Phase 2's nine complete-and-uncalled functions, and `test_no_dead_wiring`
@@ -666,8 +677,25 @@ def _assign_the_pool(layer, config, project, name: str, board, now) -> list[str]
     stage = "decompose" if roles else ""
     live = {v.name for v in views if v.assignable}
 
+    # Rule 0.
+    if check_ticket is None:
+        return [
+            f"coordination: assigned nothing — rite cannot check whether the "
+            f"{len(unassigned)} waiting ticket(s) have an agreed definition of "
+            "done here, and only one that has is assigned"
+        ]
+
     lines: list[str] = []
+    unrefined: list[str] = []
     for ticket in unassigned:
+        try:
+            checked = check_ticket(ticket.id)
+            state = checked.state if not checked.refined else ""
+        except Exception as e:  # noqa: BLE001 - a failed check is not a pass
+            state = f"UNREADABLE ({e})"
+        if state:
+            unrefined.append(f"{ticket.id} ({state})")
+            continue
         refused_by = {
             manager
             for manager, why in refusals.get(ticket.id, {}).items()
@@ -701,6 +729,15 @@ def _assign_the_pool(layer, config, project, name: str, board, now) -> list[str]
             continue
         lines.append(f"coordination: {ticket.id} not assigned — {outcome.reason}")
         break
+    if unrefined:
+        lines.append(
+            f"coordination: {len(unrefined)} waiting ticket(s) not assigned — no "
+            "agreed definition of done yet: "
+            + ", ".join(unrefined[:10])
+            + (f" and {len(unrefined) - 10} more" if len(unrefined) > 10 else "")
+            + ". A person agrees one on the host with `rite refine accept <ID> "
+            '--item "…"`; `rite refine status <ID>` says why for any other state.'
+        )
     return lines
 
 
@@ -807,7 +844,21 @@ def _owner_duties(
         # to the machine that is gone. Gated by the same Q9 switch as
         # distribution — `board` is None when the project has not turned it
         # on, and `_distribution_lines` has already said so.
-        lines.extend(_assign_the_pool(layer, config, project, name, board, now))
+        # TR5: assignment asks `refinement.status.of`, the one read TR4's
+        # launch and TR5's route use, whether each ticket is REFINED.
+        from rite_ai.refinement.status import of
+
+        lines.extend(
+            _assign_the_pool(
+                layer,
+                config,
+                project,
+                name,
+                board,
+                now,
+                check_ticket=lambda ticket_id: of(root, project.config, ticket_id),
+            )
+        )
     return lines
 
 
