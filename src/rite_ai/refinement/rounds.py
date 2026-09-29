@@ -89,6 +89,12 @@ class Round:
     answered (race 6). Only then is silence WAITING FOR YOU."""
     presented_again_at: float = 0.0
     """When it was re-presented after the User came back. Once only."""
+    answered_at: float = 0.0
+    """When an attributed reply answered it, by Slack's send time. 0: not."""
+
+    @property
+    def answered(self) -> bool:
+        return self.answered_at > 0
 
 
 @dataclass
@@ -100,8 +106,6 @@ class Attempt:
     """The ticket's title and description the attempt is refining. Another
     text is another attempt (the ticket was edited)."""
     rounds: list[Round] = field(default_factory=list)
-    answered: list[int] = field(default_factory=list)
-    """The rounds an attributed reply has answered."""
     parked: str = ""
     misses: int = 0
 
@@ -154,7 +158,7 @@ def state_of(board: st.Status, attempt: Attempt | None, *, now: float) -> State:
     if latest is None:
         return State(board.state, board.detail, attempt)
     of = f"round {latest.k}"
-    if latest.k not in attempt.answered and now >= latest.deadline:
+    if not latest.answered and now >= latest.deadline:
         if latest.read_past_deadline:
             return State(WAITING, f"{of}: no answer by its deadline", attempt)
         return State(
@@ -162,7 +166,7 @@ def state_of(board: st.Status, attempt: Attempt | None, *, now: float) -> State:
             f"{of}: deadline passed, thread not yet read past it",
             attempt,
         )
-    if latest.k in attempt.answered:
+    if latest.answered:
         # Answered and not yet followed by a new round: the Owner's move.
         return State(ASKING, f"{of} answered; the next round is due", attempt)
     return State(PROPOSED if latest.proposal else ASKING, of, attempt)
@@ -189,7 +193,6 @@ def _from(data: dict) -> Attempt | None:
             ticket=data["ticket"],
             text_sha256=data["text_sha256"],
             rounds=[Round(**r) for r in data.get("rounds", [])],
-            answered=list(data.get("answered", [])),
             parked=data.get("parked", ""),
             misses=int(data.get("misses", 0)),
         )
@@ -227,6 +230,53 @@ def locked(root: Path, owner: str, ticket: str):
         yield load(root, owner, ticket), save
     finally:
         os.close(fd)
+
+
+PACING_FILE = "pacing.json"
+
+
+def last_session(root: Path, owner: str) -> float | None:
+    """When a session last started for refinement, or None if never.
+    Written by the supervisor when it starts one (`record_session`)."""
+    try:
+        data = json.loads((_dir(root, owner) / PACING_FILE).read_text("utf-8"))
+        return float(data["last_session"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def record_session(root: Path, owner: str, at: float) -> None:
+    from rite_ai.state import write_atomic
+
+    where = _dir(root, owner)
+    where.mkdir(parents=True, exist_ok=True)
+    write_atomic(where / PACING_FILE, json.dumps({"last_session": at}) + "\n")
+
+
+@dataclass(frozen=True)
+class Events:
+    """What the User did since the last refinement session: the only things
+    that may start another one (part 3.4 step 0)."""
+
+    first_look: bool
+    replies: int
+    deadlines: int
+
+
+def events_since(
+    attempts: dict[str, Attempt], last: float | None, *, now: float
+) -> Events:
+    since = last if last is not None else float("-inf")
+    replies = deadlines = 0
+    for attempt in attempts.values():
+        if attempt.parked:
+            continue
+        for r in attempt.rounds:
+            if r.answered and r.answered_at > since:
+                replies += 1
+            elif not r.answered and since < r.deadline <= now:
+                deadlines += 1
+    return Events(first_look=last is None, replies=replies, deadlines=deadlines)
 
 
 def all_attempts(root: Path, owner: str) -> dict[str, Attempt]:

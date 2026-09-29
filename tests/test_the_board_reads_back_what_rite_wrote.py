@@ -27,6 +27,7 @@ import pytest
 from rite_ai.tickets import BackendError, Ticket, TicketFilter
 from rite_ai.tickets.interface import TicketBackend, TicketPage
 from rite_ai.tickets.own_writes import ReadsItsOwnWrites, ledger_path, written
+from tests.refined_board import refined
 
 T0 = datetime(2026, 9, 29, 3, 13, tzinfo=UTC)
 
@@ -292,8 +293,13 @@ class TestTheLoopSeesIt:
         rite.create("KAN-7 timeout", labels=["scheduled"])
         now = datetime.now(UTC).replace(hour=12)
         # Control: the same cycle on the board's own list is idle.
-        assert plan_cycle(root, board=board, now=now).verdict == IDLE
-        assert plan_cycle(root, board=rite, now=now).verdict == READY
+        # The ticket is REFINED: this is about the list, not refinement (TR2).
+        assert (
+            plan_cycle(root, board=board, now=now, refinement=refined).verdict == IDLE
+        )
+        assert (
+            plan_cycle(root, board=rite, now=now, refinement=refined).verdict == READY
+        )
 
 
 class TestEachBoardsOwnFilter:

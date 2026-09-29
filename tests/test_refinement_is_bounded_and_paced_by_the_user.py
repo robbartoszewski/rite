@@ -88,7 +88,9 @@ class TestWhatAnUnrefinedTicketWaitsFor:
 
     def test_a_proposal_out_is_proposed(self):
         t = ticket(1)
-        a = attempt_on(t, sent(1, ago=DAY), sent(2, proposal=True), answered=[1])
+        a = attempt_on(
+            t, sent(1, ago=DAY, answered_at=NOW - 60), sent(2, proposal=True)
+        )
         got = rounds.state_of(board(st.NOT_REFINED, t), a, now=NOW)
         assert got.name == rounds.PROPOSED and "round 2" in got.detail
 
@@ -223,7 +225,7 @@ class TestNewStartsArePacedByTheUser:
 
 def test_the_ledger_round_trips_and_quotes_an_id_into_one_file(tmp_path):
     t = Ticket(id="org/repo#12", title="x", description="y")
-    a = attempt_on(t, sent(1), sent(2, proposal=True), answered=[1], misses=1)
+    a = attempt_on(t, sent(1, answered_at=NOW), sent(2, proposal=True), misses=1)
     with rounds.locked(tmp_path, "lead", t.id) as (before, save):
         assert before is None
         save(a)

@@ -29,6 +29,7 @@ a board, and the supervisor and `rite refine status` cannot disagree.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -65,6 +66,16 @@ class Admission:
         return self.queued.index(ticket) + 1 if ticket in self.queued else 0
 
 
+def _natural(ticket_id: str) -> tuple:
+    """`RT-2` before `RT-10`: the numbers in an id compared as numbers, the
+    order a person reading the board expects."""
+    return tuple(
+        (0, int(part), "") if part.isdigit() else (1, 0, part)
+        for part in re.split(r"(\d+)", ticket_id)
+        if part
+    )
+
+
 def _order(item) -> tuple:
     ticket, _state = item
     created = getattr(ticket, "created_at", None)
@@ -73,7 +84,7 @@ def _order(item) -> tuple:
     return (
         created is None,
         created or datetime.min,
-        str(ticket.id),
+        _natural(str(ticket.id)),
     )
 
 

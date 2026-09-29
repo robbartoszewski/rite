@@ -141,8 +141,10 @@ from.
 # Loop verdicts that end the lifecycle (§9.14.4). `closed` is here because a
 # window authorising zero Workers is the user saying "not now", and a Manager
 # that kept spending through it would be ignoring them.
-STOP_VERDICTS = frozenset({"idle", "deadlocked", "unknown", "closed"})
-CONTINUE_VERDICTS = frozenset({"ready", "saturated", "blocked"})
+STOP_VERDICTS = frozenset(
+    {"idle", "deadlocked", "unknown", "closed", "waiting-on-user"}
+)
+CONTINUE_VERDICTS = frozenset({"ready", "saturated", "blocked", "refining"})
 """⚠ **Stated, so that continuing is a DECISION rather than a fallthrough.**
 
 A draft had only `STOP_VERDICTS` and `if answer in STOP_VERDICTS: return` —
@@ -162,8 +164,13 @@ The asymmetry decides the default for anything in NEITHER set: an
 unrecognised verdict that stops costs a restart, and one that continues
 costs quota. §5.1.1 — a safety property may fail closed, never open.
 
-Together they are exhaustive over `loop`'s seven verdicts, and a test
-asserts it, so an eighth cannot be added without classifying it."""
+Together they are exhaustive over `loop`'s nine verdicts, and a test
+asserts it, so a tenth cannot be added without classifying it.
+
+⚠ **`waiting-on-user` stops only the SESSIONS, not the run (TR2).** It
+waits in `_wait_for_mail` and spends nothing until the User answers (a
+reply is mail) or a refinement round's deadline passes. Ending the run
+there would drop an Owner whose only work is waiting on him."""
 
 
 def launch_command(
@@ -1307,6 +1314,34 @@ def _supervise(
                     )
                     if stopped is None:
                         cause = "mail"
+                if not cause and answer == "waiting-on-user" and stopped is None:
+                    # TR2: work is on the board and none of it can start
+                    # until the User answers. Wait, spending nothing; a reply
+                    # is mail, and a round's deadline passing wakes it too.
+                    say(
+                        f"{manager!r} waits on the User: "
+                        f"{getattr(answer, 'detail', '') or 'refinement'}"
+                    )
+                    stopped = _wait_for_mail(
+                        root,
+                        manager,
+                        None,
+                        router,
+                        slack,
+                        say,
+                        clock,
+                        deadline,
+                        poll,
+                        cycles,
+                        live,
+                        wake=_refinement_wake(root, manager, clock),
+                    )
+                    if stopped is not None:
+                        return stopped
+                    if mail_waiting(root, manager, INBOX):
+                        cause = "mail"
+                    else:
+                        continue
                 if not cause and answer == "idle" and stopped is None:
                     # ⚠ AN IDLE BOARD IS NOT NOTHING TO DO WHILE A MESSAGE
                     # WAITS. Found on Linux (SB11, 2026-09-28): `rite message`
@@ -1399,6 +1434,7 @@ def _supervise(
                     continue
             if not cause:
                 last_basis = _basis(answer)
+                _record_refinement_session(root, manager, answer, clock, say)
         cycle_basis = last_basis
 
         try:
@@ -2019,6 +2055,39 @@ class _Stalled:
     number: int
     basis: object
     footprint: Footprint
+
+
+def _refinement_wake(root: Path, manager: str, clock):
+    """`wake` for a wait on the User: a refinement round's deadline passed
+    since the wait began. Read from the round ledger alone, never the board,
+    so a long wait costs no board reads. A reply needs no wake: it is mail."""
+    from rite_ai.refinement import rounds
+
+    began = clock()
+
+    def wake() -> str:
+        now = clock()
+        events = rounds.events_since(rounds.all_attempts(root, manager), began, now=now)
+        if events.deadlines:
+            return f"{events.deadlines} refinement round(s) reached their deadline"
+        return ""
+
+    return wake
+
+
+def _record_refinement_session(root: Path, manager: str, answer, clock, say) -> None:
+    """A session starting for refinement is recorded, so the next one needs
+    the User to have done something first (the note's part 3.4 step 0)."""
+    if str(answer) != "refining":
+        return
+    from rite_ai.refinement import rounds
+
+    try:
+        rounds.record_session(root, manager, clock())
+    except OSError as e:
+        # Unrecorded, the next cycle reads a first look again and may start
+        # one more refinement session, still bounded by S and K. Said.
+        say(f"could not record the refinement session for {manager!r}: {e}")
 
 
 def _basis(answer) -> object:

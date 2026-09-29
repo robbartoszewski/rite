@@ -185,7 +185,7 @@ class TestTheWindowBounds:
 
 
 class TestTheStopConditionComesFromTheLoop:
-    @pytest.mark.parametrize("verdict", sorted(STOP_VERDICTS))
+    @pytest.mark.parametrize("verdict", sorted(STOP_VERDICTS - {"waiting-on-user"}))
     def test_every_stop_verdict_stops_before_spending(self, project, instant, verdict):
         starter, _ = instant
         result = supervise(
@@ -203,7 +203,91 @@ class TestTheStopConditionComesFromTheLoop:
             f"'{verdict}' is a stop verdict and a session was started anyway"
         )
 
-    @pytest.mark.parametrize("verdict", ["ready", "saturated", "blocked"])
+    def test_waiting_on_the_user_spends_nothing_and_waits_rather_than_ends(
+        self, project, instant
+    ):
+        """TR2: work is on the board and none of it can start until the User
+        answers. No session, and the run waits (until mail, a deadline, or
+        here its window) instead of ending: ending would drop an Owner whose
+        only work is waiting on him. With no window it would wait for mail,
+        which is why this one has one."""
+        starter, _ = instant
+        result = supervise(
+            project,
+            "lead",
+            engine="claude",
+            max_sessions=99,
+            window_seconds=0.3,
+            starter=starter,
+            verdict=lambda _r: "waiting-on-user",
+            resume_id_for=lambda _r, _m, _s=0.0: "sid",
+            poll=0.02,
+        )
+        assert result.sessions_started == 0
+        assert "window elapsed while waiting" in result.reason, result.reason
+
+    def test_a_refining_session_is_recorded_so_the_next_needs_the_user(
+        self, project, instant
+    ):
+        """TR2 step 0: new refinement starts are paced by the User. The
+        session is recorded when it starts, so the loop's next `refining`
+        needs a reply or a deadline since."""
+        from rite_ai.refinement import rounds
+
+        starter, _ = instant
+        assert rounds.last_session(project, "lead") is None
+        supervise(
+            project,
+            "lead",
+            engine="claude",
+            max_sessions=1,
+            window_seconds=0,
+            starter=starter,
+            verdict=lambda _r: "refining",
+            resume_id_for=lambda _r, _m, _s=0.0: "sid",
+            poll=0,
+        )
+        assert rounds.last_session(project, "lead") is not None
+
+    def test_a_wait_on_the_user_wakes_when_a_round_reaches_its_deadline(
+        self, project, instant
+    ):
+        """The deadline moves a ticket from asking to waiting, and the thread
+        must be read past it (race 6), so it is a reason to look again. Read
+        from the round ledger: the wait costs no board reads."""
+        import time
+
+        from rite_ai.refinement import rounds
+
+        starter, _ = instant
+        now = time.time()
+        with rounds.locked(project, "lead", "RT-1") as (_a, save):
+            save(
+                rounds.Attempt(
+                    ticket="RT-1",
+                    text_sha256="x",
+                    rounds=[
+                        rounds.Round(
+                            k=1, sent_at=now - 60, deadline=now + 0.2, proposal=False
+                        )
+                    ],
+                )
+            )
+        verdicts = iter(["waiting-on-user"])
+        result = supervise(
+            project,
+            "lead",
+            engine="claude",
+            max_sessions=1,
+            window_seconds=5,
+            starter=starter,
+            verdict=lambda _r: next(verdicts, "refining"),
+            resume_id_for=lambda _r, _m, _s=0.0: "sid",
+            poll=0.02,
+        )
+        assert result.sessions_started == 1, result.reason
+
+    @pytest.mark.parametrize("verdict", ["ready", "saturated", "blocked", "refining"])
     def test_a_continue_verdict_does_not_stop(self, project, instant, verdict):
         starter, _ = instant
         result = supervise(
