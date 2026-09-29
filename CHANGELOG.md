@@ -3,6 +3,19 @@
 ## Unreleased: 0.7.0 (notes in progress, completed at release)
 
 
+
+### Sandboxed workers get only GitHub and Claude credentials
+
+A sandboxed worker used to receive every credential the project held,
+including the Jira and Slack tokens, none of which it needs to do its work,
+and another sandbox on the same machine can read a sandbox's environment.
+Workers now receive the GitHub token and the Claude login only.
+
+A worker therefore no longer reads its ticket from the board itself.
+`rite sandbox start` reads it on your machine and puts it in the worker's
+directory as `TICKET.md`, with the board and the time it was read; the worker
+works from that copy. If the ticket cannot be read, the worker is not
+started.
 ### `rite sandbox destroy` no longer needs `--force` for a finished Worker
 
 yoloAI refuses to destroy a sandbox with "unapplied changes", and it counts

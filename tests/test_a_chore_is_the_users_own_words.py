@@ -43,6 +43,13 @@ class Board:
         self.created.append((title, description, labels))
         return self.result or Ticket(id="RT-99", title=title)
 
+    def read(self, ticket_id):
+        """What the host reads back before starting the Worker."""
+        title, description, labels = self.created[-1]
+        return Ticket(
+            id=ticket_id, title=title, description=description, labels=labels or []
+        )
+
 
 def _deliver(tmp_path, manager, *texts):
     for text in texts:
@@ -337,8 +344,12 @@ class TestAPromptTypedAtThisMachine:
         board = Board()
         result, seen = self._start(board)
         assert result.exit_code == 0, result.output
-        assert seen["prompt"] == "Work ticket RT-99.\n"
+        assert seen["prompt"].startswith("Work ticket RT-99. Its text, as rite read")
         assert board.created[0][0] == "chore: add a CSV export"
+        # The chore reaches the Worker the way every ticket does: read back
+        # from the board on the host and delivered into its workspace.
+        delivered = (tmp_path / "workers" / "alpha" / "TICKET.md").read_text()
+        assert "RT-99" in delivered and board.created[0][1].strip() in delivered
 
     def test_a_start_refused_for_another_reason_files_no_chore(
         self, tmp_path, monkeypatch
