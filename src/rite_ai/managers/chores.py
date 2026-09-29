@@ -160,7 +160,7 @@ def _title_of(words: str) -> str:
     return f"chore: {first}"
 
 
-def unrefined_line(when: float | None = None) -> str:
+def _unrefined_line(when: float | None = None) -> str:
     """rite's first line on every chore it creates: visibly unrefined (TR2;
     the note's part 3.14). Robert: a chore made from his words is "explicitly
     unrefined, to be refined later". Worded to stay true once the chore IS
@@ -175,7 +175,7 @@ def unrefined_line(when: float | None = None) -> str:
     )
 
 
-def agreed_line() -> str:
+def _agreed_line() -> str:
     """rite's first line on a chore created because the User ACCEPTED a
     definition of done for his message: the record follows at once."""
     return (
@@ -206,7 +206,7 @@ def _description_of(
         )
         sources.append(f"- message `{e['id']}`, {e.get('where', '?')}, {when}")
     return (
-        (agreed_line() if agreed else unrefined_line(created_at))
+        (_agreed_line() if agreed else _unrefined_line(created_at))
         + "\n\n"
         + "\n\n".join(blocks)
         + "\n\n---\n\n"
@@ -332,7 +332,7 @@ def create_for_prompt(board, worker: str, text: str) -> tuple[str, str]:
             "tracked. Every piece of Worker work carries a ticket"
         )
     description = (
-        unrefined_line()
+        _unrefined_line()
         + "\n\n"
         + text.strip()
         + "\n\n---\n\n"
