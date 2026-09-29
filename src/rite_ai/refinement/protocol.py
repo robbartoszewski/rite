@@ -203,7 +203,6 @@ def send(
         checked = ask.check(
             text,
             k=k,
-            rounds=limits.rounds,
             ticket_text=subject_text,
             answers=[str(a.get("words", "")) for a in attempt.answers],
         )
@@ -213,13 +212,14 @@ def send(
                 f"round {k} for {ticket_id} was not sent:\n"
                 + "\n".join(f"- {p}" for p in checked.problems),
             )
+        same, since = _unchanged_for(attempt, checked.ask)
         body = ask.render(
             checked.ask,
             ticket=ticket_id,
             k=k,
-            rounds=limits.rounds,
             manager=owner,
             accept_words=limits.accept_words,
+            unchanged=ask.unchanged_line(same, since) if same > 1 else "",
         )
         # The subject leads the thread label, which the relay cuts at 40
         # characters, and an answer is matched by the question id after it.
@@ -259,10 +259,29 @@ def send(
     )
     return Sent(
         True,
-        f"{ticket_id}: round {k} of {limits.rounds} is in front of the User as "
+        f"{ticket_id}: round {k} is in front of the User as "
         f"question {raised.id}.{shown}",
         raised.id,
     )
+
+
+def _unchanged_for(attempt, current) -> tuple[int, int]:
+    """(how many rounds in a row, this one included, carry the same proposal,
+    the round it first appeared in). (1, k) when it changed or there is none.
+
+    The safeguard for uncapped rounds: no progress is made visible, never
+    enforced. A proposal that does not change is a PROPERTY of the rounds,
+    not a guess at whether the talk is going anywhere."""
+    k = len(attempt.rounds) + 1
+    if not current.proposal:
+        return 1, k
+    now = ask.normalised_items(i.text for i in current.proposal)
+    same, since = 1, k
+    for r in reversed(attempt.rounds):
+        if not r.proposal or ask.normalised_items(r.items) != now:
+            break
+        same, since = same + 1, r.k
+    return same, since
 
 
 def _when(at: float) -> str:
@@ -352,6 +371,7 @@ def handle(root: Path, owner: str, board, reply: Reply, *, limits) -> list[str]:
             )
             return notes
         if accepting and latest.proposal and latest.items:
+            attempt.unanswered = 0
             attempt.accepted = {
                 "id": reply.message,
                 "at": reply.sent_at,
@@ -366,6 +386,10 @@ def handle(root: Path, owner: str, board, reply: Reply, *, limits) -> list[str]:
             asking.settle(root, owner, latest.where)
             return notes
         # An answer, or a correction: kept, so the next round may quote it.
+        # Any reply resets the unanswered count, a qualified accept and an
+        # answer that raises new questions included: the cap is on nudging
+        # without a reply, not on a discussion (Robert, correcting TRQ2).
+        attempt.unanswered = 0
         if attempt.parked:
             notes.append(
                 f"{reply.ticket} was PARKED ({attempt.parked}); the User's reply "
@@ -379,15 +403,6 @@ def handle(root: Path, owner: str, board, reply: Reply, *, limits) -> list[str]:
         if reply.k == latest.k and not latest.answered:
             latest.answered_at = reply.sent_at
             asking.settle(root, owner, latest.where)
-        if latest.k >= limits.rounds and latest.answered:
-            attempt.parked = rounds.NOT_AGREED
-            notes.append(
-                f"{reply.ticket} is PARKED: not agreed after {limits.rounds} "
-                "rounds. rite told the User what resumes it"
-            )
-            save(attempt)
-            _park_notice(root, owner, board, reply.ticket, limits)
-            return notes
         save(attempt)
     notes.append(
         f"{reply.ticket}: the User answered round {reply.k}. Your next round "
@@ -472,10 +487,10 @@ def _park_notice(root: Path, owner: str, board, ticket: str, limits) -> None:
     from rite_ai.managers.mailbox import OUTBOX, QUESTION, send
 
     text = (
-        f"{ticket} is parked: {limits.rounds} rounds did not reach a definition "
-        "of done you accepted, so no work starts on it. To resume it, reply in "
-        f"your DM starting with `{ticket}`, or run `rite refine reopen {ticket}`, "
-        "or edit the ticket."
+        f"{ticket} is parked: rite asked about it {limits.unanswered} times in a "
+        "row with no reply, so it has stopped asking, and no work starts on it. "
+        f"To bring it back, reply in your DM starting with `{ticket}`, or run "
+        f"`rite refine reopen {ticket}`, or edit the ticket."
     )
     send(root, owner, OUTBOX, text, kind=QUESTION)
     board.comment(ticket, text)
@@ -599,12 +614,16 @@ def file_unanswered(root: Path, owner: str, board, *, limits, now: float) -> lis
 # --- he is back -----------------------------------------------------------------
 
 
-def present_again(root: Path, owner: str, *, at: float) -> list[str]:
-    """He is back: every round waiting for him goes in front of him again,
-    once, unchanged, in the same round (part 3.4 step 7). "Back" is an
-    event rite observed (a message from him was delivered), never a model's
-    guess. It spends no round, and it is not a reminder: a round he has not
-    been away from is not repeated. Returns lines for the Owner."""
+def nudge(
+    root: Path, owner: str, *, at: float, limits, checkins=None, zone: str = ""
+) -> list[str]:
+    """He is back: every question that reached its deadline unanswered goes
+    in front of him again, unchanged, in the same round, with a new
+    deadline (part 3.4 step 7). "Back" is an event rite observed (a message
+    from him was delivered), never a model's guess, so he is never nudged
+    while he is away. Each such message counts toward `unanswered` when it
+    too goes unanswered (`rounds.read_past_deadline`), and
+    `park_unanswered` stops at the cap. Returns lines for the Owner."""
     from rite_ai.managers import asking
 
     lines: list[str] = []
@@ -615,13 +634,13 @@ def present_again(root: Path, owner: str, *, at: float) -> list[str]:
             or latest is None
             or latest.answered
             or not latest.read_past_deadline
-            or latest.presented_again_at
+            or attempt.unanswered >= limits.unanswered
             or not latest.body
         ):
             continue
         with rounds.locked(root, owner, ticket) as (current, save):
             r = current.latest if current is not None else None
-            if r is None or r.where != latest.where or r.presented_again_at:
+            if r is None or r.where != latest.where or not r.read_past_deadline:
                 continue
             # Settled first: `asking` raises a question once, and this is the
             # same question, deliberately raised again.
@@ -635,11 +654,35 @@ def present_again(root: Path, owner: str, *, at: float) -> list[str]:
             )
             r.where = raised.id
             r.presented_again_at = at
+            r.read_past_deadline = False
+            r.deadline = deadline(at, limits, checkins, zone)
             save(current)
+            count = current.unanswered
         lines.append(
-            f"{ticket}: round {latest.k} was waiting for the User since its "
-            "deadline; he is back, so rite put the same question in front of "
-            "him again. Nothing new was asked"
+            f"{ticket}: round {latest.k} had no reply by its deadline ({count} "
+            f"of {limits.unanswered} unanswered); he is back, so rite put the "
+            "same question in front of him again. Nothing new was asked"
+        )
+    return lines
+
+
+def park_unanswered(root: Path, owner: str, board, *, limits) -> list[str]:
+    """A ticket whose last `refinement.unanswered` messages all went
+    unanswered is PARKED: rite stops asking (Robert, correcting TRQ2)."""
+    lines: list[str] = []
+    for ticket, attempt in rounds.all_attempts(root, owner).items():
+        if attempt.parked or attempt.unanswered < limits.unanswered:
+            continue
+        with rounds.locked(root, owner, ticket) as (current, save):
+            if current is None or current.parked:
+                continue
+            current.parked = rounds.NOT_ANSWERED
+            save(current)
+        if board is not None and not ticket.startswith(MESSAGE):
+            _park_notice(root, owner, board, ticket, limits)
+        lines.append(
+            f"{ticket} is PARKED: {limits.unanswered} messages in a row went "
+            "unanswered. rite told the User how to bring it back"
         )
     return lines
 
@@ -736,9 +779,19 @@ def step(root: Path, manager: str, board, say, *, messages=(), now=None) -> list
             )
             continue
         lines.extend(handle(root, owner, board, reply, limits=config.refinement))
+    lines.extend(park_unanswered(root, owner, board, limits=config.refinement))
     # After attributing: his message may itself have answered a waiting round.
     if any(delivered.classify(m.text).users for m in messages):
-        lines.extend(present_again(root, owner, at=now))
+        lines.extend(
+            nudge(
+                root,
+                owner,
+                at=now,
+                limits=config.refinement,
+                checkins=config.checkins,
+                zone=config.schedule.timezone,
+            )
+        )
     for line in lines:
         say(f"refinement: {line}")
     return lines

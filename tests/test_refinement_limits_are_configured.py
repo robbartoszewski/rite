@@ -26,7 +26,7 @@ def _parse(tmp_path: Path, body: str):
 def test_the_defaults_are_roberts(tmp_path):
     config = _parse(tmp_path, "ticket_backend:\n  type: none\n")
     assert config.refinement == RefinementConfig(
-        rounds=3,
+        unanswered=3,
         deadline_hours=24,
         open_max=5,
         start_per_session=3,
@@ -41,7 +41,7 @@ def test_every_key_can_be_set(tmp_path):
     config = _parse(
         tmp_path,
         "refinement:\n"
-        "  rounds: 4\n"
+        "  unanswered: 4\n"
         "  deadline_hours: 36\n"
         "  open_max: 8\n"
         "  start_per_session: 2\n"
@@ -51,7 +51,7 @@ def test_every_key_can_be_set(tmp_path):
         "  channel: G012AB3CD\n",
     )
     assert config.refinement == RefinementConfig(
-        rounds=4,
+        unanswered=4,
         deadline_hours=36,
         open_max=8,
         start_per_session=2,
@@ -65,13 +65,13 @@ def test_every_key_can_be_set(tmp_path):
 @pytest.mark.parametrize(
     "body, says",
     [
-        ("rounds: 0", "refinement.rounds"),
+        ("unanswered: 0", "refinement.unanswered"),
         ("open_max: -1", "refinement.open_max"),
         ("start_per_session: 0", "refinement.start_per_session"),
         ("chore_after_minutes: 0", "refinement.chore_after_minutes"),
-        ("rounds: true", "refinement.rounds"),
-        ("rounds: '3'", "refinement.rounds"),
-        ("rounds: 2.5", "refinement.rounds"),
+        ("unanswered: true", "refinement.unanswered"),
+        ("unanswered: '3'", "refinement.unanswered"),
+        ("unanswered: 2.5", "refinement.unanswered"),
         ("open_max: 2\n  start_per_session: 3", "more than refinement.open_max"),
         ("deadline_hours: 0", "refinement.deadline_hours"),
         ("deadline_hours: -2", "refinement.deadline_hours"),
@@ -109,7 +109,9 @@ def test_a_deadline_longer_than_slacks_thread_horizon_is_allowed(tmp_path):
 
 def test_enforcement_is_not_a_setting(tmp_path):
     """TRQ1: standard, with no opt-out. A key that looks like one is refused
-    as unknown, never read as nothing."""
-    for key in ("enforce", "enabled", "required"):
+    as unknown, never read as nothing. So is `rounds`: rounds are not capped
+    (Robert's correction to TRQ2), and a cap someone believes they set must
+    not be silently ignored."""
+    for key in ("enforce", "enabled", "required", "rounds"):
         got = _parse(tmp_path, f"refinement:\n  {key}: false\n")
         assert isinstance(got, ParseError) and key in got.message, got

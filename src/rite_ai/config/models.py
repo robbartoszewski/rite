@@ -289,11 +289,18 @@ class RefinementConfig:
     out of range is refused by the parser rather than clamped: a limit
     silently changed is a limit the User believes they set."""
 
-    rounds: int = 3
-    """N: rounds with an answering User before the ticket is PARKED."""
+    unanswered: int = 3
+    """N: consecutive messages about one ticket that reached their deadline
+    with no reply, before it is PARKED. **Not a cap on rounds** (Robert's
+    correction to TRQ2, 2026-09-29: "This limit should apply to nudging
+    without a reply, not to a discussion. A topic may be complex and need
+    many rounds to resolve. As long as the User is responsive, the limit
+    shouldn't apply"). Any reply resets it to zero."""
     deadline_hours: float = 24
-    """How long one round waits, or until the next check-in closes if sooner.
-    The deadline moves a ticket to WAITING FOR YOU; it never parks it."""
+    """How long one message waits for a reply, or until the next check-in
+    closes if sooner. A message past it unanswered counts one toward
+    `unanswered`, and he is nudged with the same question when he is next
+    active."""
     open_max: int = 5
     """K: refinements open at once per Manager (inside their deadline)."""
     start_per_session: int = 3

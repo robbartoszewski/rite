@@ -63,14 +63,14 @@ class TestTheBoardAlwaysWins:
     @pytest.mark.parametrize("state", [st.REFINED, st.CONFLICT, st.UNREADABLE])
     def test_the_boards_answer_stands_whatever_the_ledger_says(self, state):
         t = ticket(1)
-        parked = attempt_on(t, sent(), parked=rounds.NOT_AGREED)
+        parked = attempt_on(t, sent(), parked=rounds.NOT_ANSWERED)
         got = rounds.state_of(board(state, t), parked, now=NOW)
         assert got.name == state
 
     def test_an_attempt_on_other_text_is_over_when_the_ticket_is_edited(self):
         """A User who fixes the ticket himself has resumed it (step 7)."""
         before = ticket(1)
-        parked = attempt_on(before, sent(), parked=rounds.NOT_AGREED)
+        parked = attempt_on(before, sent(), parked=rounds.NOT_ANSWERED)
         after = Ticket(id="RT-1", title="ticket 1", description="the http timeout")
         got = rounds.state_of(board(st.NOT_REFINED, after), parked, now=NOW)
         assert got.name == st.NOT_REFINED
@@ -123,7 +123,7 @@ class TestWhatAnUnrefinedTicketWaitsFor:
         """TRQ11, and Robert's "nothing parked": the three reasons are the
         only ones, and none of them is silence."""
         assert rounds.PARK_REASONS == (
-            "not agreed after N rounds",
+            "not answered after N messages",
             "thread unreadable",
             "not started by the Manager",
         )
@@ -179,7 +179,7 @@ class TestTheBoundsOnStarting:
         t1, t2, t3, t4 = ticket(1), ticket(2), ticket(3), ticket(4)
         got = ad.admit(
             [
-                (t1, rounds.State(rounds.PARKED, rounds.NOT_AGREED)),
+                (t1, rounds.State(rounds.PARKED, rounds.NOT_ANSWERED)),
                 (t2, rounds.State(st.CONFLICT, "two heads")),
                 (t3, rounds.State(st.UNREADABLE, "502")),
                 (t4, rounds.State(st.REFINED, "")),

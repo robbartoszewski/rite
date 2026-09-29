@@ -34,10 +34,16 @@ ledger, in that order, so the board always wins:
   User who fixes the ticket himself has resumed it (part 3.4 step 7). The
   board's own state stands.
 
-Robert's rulings this encodes (TRQ11): silence past the deadline is WAITING
-FOR YOU, never PARKED, and is not asked again while he is away; being
-re-presented when he is back spends no round; PARKED is only "not agreed
-after N rounds", "thread unreadable" or "not started by the Manager".
+Robert's rulings this encodes. TRQ11: silence past the deadline is WAITING
+FOR YOU, and he is not asked again while he is away; when he is back the
+same question comes back. His correction to TRQ2 (2026-09-29): "This limit
+should apply to nudging without a reply, not to a discussion. A topic may be
+complex and need many rounds to resolve. As long as the User is responsive,
+the limit shouldn't apply". So rounds are uncapped; what is counted is
+consecutive messages that reached their deadline unanswered, any reply
+resets the count, and that many park the ticket. PARKED is only "not
+answered after N messages", "thread unreadable" or "not started by the
+Manager".
 """
 
 from __future__ import annotations
@@ -58,10 +64,12 @@ PROPOSED = "PROPOSED"
 WAITING = "WAITING FOR YOU"
 PARKED = "PARKED"
 
-NOT_AGREED = "not agreed after N rounds"
+NOT_ANSWERED = "not answered after N messages"
+"""Robert's correction to TRQ2: the cap is on nudging without a reply, never
+on a discussion he is taking part in."""
 THREAD_UNREADABLE = "thread unreadable"
 NOT_STARTED = "not started by the Manager"
-PARK_REASONS = (NOT_AGREED, THREAD_UNREADABLE, NOT_STARTED)
+PARK_REASONS = (NOT_ANSWERED, THREAD_UNREADABLE, NOT_STARTED)
 
 MISSES_TO_PARK = 2
 """Consecutive sessions a ticket was handed to the Owner without a round
@@ -114,6 +122,10 @@ class Attempt:
     rounds: list[Round] = field(default_factory=list)
     parked: str = ""
     misses: int = 0
+    unanswered: int = 0
+    """Consecutive messages about this ticket that reached their deadline
+    with no reply. Any reply resets it; `refinement.unanswered` of them
+    parks the ticket (Robert's correction to TRQ2)."""
     answers: list[dict] = field(default_factory=list)
     """Every reply attributed to this attempt: `{"id", "words", "at"}`. A
     proposal may quote only these, or the ticket (`ask.check`)."""
@@ -214,6 +226,7 @@ def _from(data: dict) -> Attempt | None:
             rounds=[Round(**r) for r in data.get("rounds", [])],
             parked=data.get("parked", ""),
             misses=int(data.get("misses", 0)),
+            unanswered=int(data.get("unanswered", 0)),
             answers=list(data.get("answers", [])),
             accepted=dict(data.get("accepted", {})),
             filing=float(data.get("filing", 0.0)),
@@ -355,6 +368,7 @@ def read_past_deadline(root: Path, owner: str, question: str, *, at: float) -> b
             if r.read_past_deadline:
                 return False  # marked already: said once, not every read
             r.read_past_deadline = True
+            current.unanswered += 1
             save(current)
             return True
     return False
@@ -405,6 +419,7 @@ def reopen(root: Path, owner: str, ticket: str) -> str:
         was = attempt.parked or ("waiting for you" if attempt.rounds else "not started")
         attempt.parked = ""
         attempt.misses = 0
+        attempt.unanswered = 0
         attempt.accepted = {}
         attempt.rounds = []
         attempt.filing = 0.0

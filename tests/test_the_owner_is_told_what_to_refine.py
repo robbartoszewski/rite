@@ -64,7 +64,7 @@ def test_the_brief_says_where_an_open_round_stands_and_his_answers(project, key)
         now=NOW,
     ).ok
     waiting = ri.brief(project, "lead", board, _config(project), now=NOW + 60)
-    assert "**KAN-1** (ASKING): round 1 of 3 is with him; wait" in waiting
+    assert "**KAN-1** (ASKING): round 1 is with him; wait" in waiting
     # He answers.
     with rounds.locked(project, "lead", "KAN-1") as (a, save):
         a.latest.answered_at = NOW + 120
@@ -99,12 +99,12 @@ def test_waiting_queued_and_needing_a_person_are_listed(project, key):
             rounds.Attempt(
                 ticket="KAN-2",
                 text_sha256=rounds.text_of(tickets[1]),
-                parked=rounds.NOT_AGREED,
+                parked=rounds.NOT_ANSWERED,
             )
         )
     got = ri.brief(project, "lead", board, _config(project), now=NOW)
     assert "**Waiting for him**" in got and "KAN-1" in got
-    assert "**KAN-2 needs a person**: PARKED: not agreed after N rounds" in got
+    assert "**KAN-2 needs a person**: PARKED: not answered after N messages" in got
     assert "start refining it now" in got  # KAN-3..5, three at most
     assert got.count("start refining it now") == 3
 

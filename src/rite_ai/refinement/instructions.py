@@ -88,9 +88,13 @@ def instructions(root: Path, manager: str, config) -> str:
             "too, by its message id (`--message`). If he does not reply in "
             f"{limits.chore_after_minutes} minutes, rite files it as a chore "
             "with exactly his words, unrefined, so it is not lost.",
-            f"- After {limits.rounds} rounds without agreement, rite parks the "
-            "ticket and tells him how to resume it. Nothing is ever worked on "
-            "a guess.",
+            "- **Take the rounds the topic needs.** While he is answering "
+            "there is no limit on rounds. If your proposal has not changed "
+            "from one round to the next, rite tells him so in the message: "
+            "change it in response to what he said, or ask what is still "
+            "wrong. If he does not reply to "
+            f"{limits.unanswered} messages in a row about a ticket, rite stops "
+            "asking and parks it. Nothing is ever worked on a guess.",
             "",
             "To send a round about a ticket:",
             stdin_text.heredoc(f"{rite} refine ask <ID> -", "<your round>"),
@@ -181,9 +185,7 @@ def _open_entry(ticket, state, config) -> list[str]:
             "quotes his answer exactly and asks only what is still open"
         )
     else:
-        what = (
-            f"round {k} of {config.refinement.rounds} is with him; wait for his answer"
-        )
+        what = f"round {k} is with him; wait for his answer"
     lines = [
         f"- **{ticket.id}** ({state.name}): {what}. Title and description:",
         _quoted(f"{ticket.title}\n{ticket.description}"),

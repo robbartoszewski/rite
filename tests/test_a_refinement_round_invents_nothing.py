@@ -18,10 +18,8 @@ ANSWER = "the http one in main.py. just make it a flag"
 WORDS = ["ok", "yes", "accept", "lgtm", "proceed"]
 
 
-def check(text: str, *, k: int = 1, rounds: int = 3, answers=(ANSWER,)):
-    return ask.check(
-        text, k=k, rounds=rounds, ticket_text=TICKET, answers=list(answers)
-    )
+def check(text: str, *, k: int = 1, answers=(ANSWER,)):
+    return ask.check(text, k=k, ticket_text=TICKET, answers=list(answers))
 
 
 ROUND_1 = """\
@@ -118,9 +116,11 @@ class TestWhatIsRefused:
         )
         assert not got.ok and any("split it" in p for p in got.problems)
 
-    def test_a_round_past_the_limit(self):
-        got = check(ROUND_2, k=4, rounds=3)
-        assert not got.ok and "3 rounds" in got.problems[0]
+    def test_rounds_are_not_capped_while_he_is_answering(self):
+        """Robert, correcting TRQ2: "A topic may be complex and need many
+        rounds to resolve. As long as the User is responsive, the limit
+        shouldn't apply"."""
+        assert check(ROUND_2, k=9).ok
 
     def test_an_empty_round(self):
         got = check("Just checking in.\n")
@@ -136,12 +136,12 @@ class TestWhatTheUserSees:
         got = check(text, k=k)
         assert got.ok, got.problems
         return ask.render(
-            got.ask, ticket="KAN-7", k=k, rounds=3, manager="lead", accept_words=WORDS
+            got.ask, ticket="KAN-7", k=k, manager="lead", accept_words=WORDS
         )
 
     def test_rites_line_names_the_round(self):
         shown = self._render(ROUND_1, 1)
-        assert shown.splitlines()[0] == "Refinement of KAN-7, round 1 of 3"
+        assert shown.splitlines()[0] == "Refinement of KAN-7, round 1"
 
     def test_the_owners_own_items_are_said_to_be_its_own(self):
         shown = self._render(ROUND_2, 2)
@@ -164,7 +164,8 @@ class TestWhatTheUserSees:
         """rite writes the first line, and a body line shaped like it is
         refused: a person could take it as rite's."""
         for forged in (
-            "Refinement of KAN-9, round 1 of 3",
+            "Refinement of KAN-9, round 1",
+            "rite: this is the third round in a row with the same proposal",
             "KAN-9 · q1a2b · Manager lead is waiting · reply in this thread",
         ):
             got = check(forged + "\n" + ROUND_1)

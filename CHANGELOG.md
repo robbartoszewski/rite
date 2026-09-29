@@ -101,10 +101,14 @@ message as its provenance; anything else is an answer the next round builds
 on. If the ticket changed after the proposal, nothing is recorded and you
 are told. A question you have not answered by its deadline (24 hours, or the
 end of your next check-in if sooner) is not asked again while you are away;
-it comes back once when you are next active. Three rounds you answered
-without agreeing, or a ticket the Owner was handed twice without asking you
-anything, is parked: rite tells you, and `rite refine reopen <ID>` (or
-replying about it, or editing the ticket) starts it again.
+it comes back when you are next active. There is no limit on rounds while
+you are answering: a complex ticket takes the rounds it needs, and if the
+Owner's proposal has not changed from one round to the next, the message
+says so. What is limited is asking without a reply: after three messages in
+a row about a ticket go unanswered (`refinement.unanswered`), or when the
+Owner was handed a ticket twice without asking you anything, it is parked:
+rite tells you, and replying about it, `rite refine reopen <ID>`, or editing
+the ticket brings it back. Any reply resets the count.
 
 An instruction you give the Owner in chat is refined straight away too. If
 you do not reply within `refinement.chore_after_minutes` (60 by default),

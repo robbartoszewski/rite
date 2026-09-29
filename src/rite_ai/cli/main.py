@@ -4137,9 +4137,7 @@ def refine_ask(ticket_id: str, text: str, is_message: bool) -> None:
     # The shape, checked here so a mistake costs no turn. The quotes and the
     # round number are checked by the supervisor, against the ticket and his
     # answers, which this side of the boundary cannot be trusted to hold.
-    checked = refinement_ask.check(
-        text, k=1, rounds=refinement_ask.MAX_QUESTIONS, ticket_text="", answers=[]
-    )
+    checked = refinement_ask.check(text, k=1, ticket_text="", answers=[])
     shape = [p for p in checked.problems if "Quote exactly" not in p]
     if shape:
         click.echo("refusing: the round is not in the shape rite sends:", err=True)
@@ -4165,7 +4163,7 @@ def refine_ask(ticket_id: str, text: str, is_message: bool) -> None:
 def refine_reopen(ticket_id: str, manager: str) -> None:
     """Restart a ticket's refinement — a person, at the host (TR2).
 
-    For a ticket PARKED (not agreed after its rounds, its thread unreadable,
+    For a ticket PARKED (unanswered too many times in a row, its thread unreadable,
     or not started by the Manager), or one you want asked again from the
     start. Its rounds begin again at 1, and your earlier answers are kept.
     Replying about it in your DM, starting with its id, resumes it too, and

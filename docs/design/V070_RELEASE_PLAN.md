@@ -2034,6 +2034,7 @@ this table, with the rest the re-filing places here.*
 | PB | what a v0.7.0 build does with `strategy: push_to_shared` before PB2 lands | PB1's config parser |
 | ✅ **TRQ1**: decided 2026-09-28, enforced as the standard ("let's just implement it as a standard") | enforce ticket refinement in code, or instruct only | nothing now; TR5 is unblocked |
 | ✅ TRQ2–TRQ9: answered 2026-09-28 (the note's part 0) | refinement's limits, accept words, "you decide", guardrail, destination, Verify, ticketed work, one Owner | nothing now |
+| ✅ **TRQ2 corrected by Robert, 2026-09-29** | the cap counts unanswered messages, not rounds | "This limit should apply to nudging without a reply, not to a discussion. A topic may be complex and need many rounds to resolve. As long as the User is responsive, the limit shouldn't apply". Built in TR2c: `refinement.unanswered` (3) consecutive unanswered messages park a ticket; any reply resets it; rounds are uncapped; an unchanged proposal is said in the message, never enforced |
 | ✅ TRQ11: decided 2026-09-29, reshaped | a chore is refined; silence makes an unrefined chore with the User's exact words | nothing now |
 | ✅ TRQ12: decided 2026-09-29, premise rejected | rite builds no identity management; it reports which one is in use | nothing now |
 | ✅ TRQ10: decided 2026-09-29, "Allow it" | an unsandboxed session may attest, labelled and findable | nothing now; TR1's `accept` can be built |
