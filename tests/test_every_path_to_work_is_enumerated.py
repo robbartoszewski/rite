@@ -66,6 +66,12 @@ KNOWN = {
     ("lifecycle/commands.py", "_deliver", "label"): (
         "the function `_deliver_via_backend` is nested in: the same calls"
     ),
+    ("refinement/protocol.py", "_escalate", "label"): (
+        "adds `blocked` to a ticket escalated as a blocker (TR2); gives it to nobody"
+    ),
+    ("refinement/protocol.py", "handle", "label"): (
+        "removes `blocked` when his reply unblocks it (TR2); gives it to nobody"
+    ),
     ("cli/main.py", "board_label", "label"): (
         "`rite board label`: a hand write; nothing starts from a label, and "
         "the Worker start refuses an unrefined ticket (TR4)"

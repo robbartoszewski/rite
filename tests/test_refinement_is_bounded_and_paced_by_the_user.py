@@ -119,13 +119,15 @@ class TestWhatAnUnrefinedTicketWaitsFor:
         assert (got.name, got.detail) == (rounds.PARKED, rounds.THREAD_UNREADABLE)
         assert not got.uses_sessions
 
-    def test_silence_is_not_a_reason_to_park(self):
-        """TRQ11, and Robert's "nothing parked": the three reasons are the
-        only ones, and none of them is silence."""
+    def test_the_reasons_to_park_are_these_and_no_others(self):
+        """Silence parks only as N unanswered MESSAGES (Robert's correction to
+        TRQ2), never a discussion he is part of; and a proposal that stops
+        changing parks as a blocker (his escalation ladder)."""
         assert rounds.PARK_REASONS == (
             "not answered after N messages",
             "thread unreadable",
             "not started by the Manager",
+            "blocked: the same proposal round after round",
         )
 
 
