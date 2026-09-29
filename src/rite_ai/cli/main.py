@@ -6198,36 +6198,10 @@ def _board_source(config, role: str = "workers") -> str:
 
 
 def refused_for_refinement(state: str, ticket: str) -> str:
-    """The one line a refused start ends with: the state, and what to do.
+    """The one line a refused start ends with (`refinement.refused`)."""
+    from rite_ai.refinement.refused import remedy_line
 
-    What a Manager's next instruction carries when its Worker request is
-    refused for refinement, so it names the remedy, not only the state: a
-    refusal that names no way forward is how a person learns to look for a
-    way round. At most 200 characters for any ticket id rite accepts (64),
-    because that is all `broker.honour` keeps.
-    """
-    from rite_ai.refinement import status as st
-
-    if state == st.NOT_REFINED:
-        return (
-            "NOT REFINED: this ticket has no agreed definition of done. A person "
-            f'agrees one on the host: `rite refine accept {ticket} --item "…"`.'
-        )
-    if state == st.STALE:
-        return (
-            "STALE: the ticket changed after its definition of done was agreed. "
-            "A person re-agrees it on the host: "
-            f'`rite refine accept {ticket} --item "…"`.'
-        )
-    if state == st.CONFLICT:
-        return (
-            "CONFLICT: two records each claim to be current. A person decides "
-            f"which stands; `rite refine status {ticket}` on the host names them."
-        )
-    return (
-        f"{state}: rite could not confirm a definition of done; nothing was "
-        f"assumed. `rite refine status {ticket}` on the host says why."
-    )
+    return remedy_line(state, ticket)
 
 
 def _deliver_ticket(
@@ -7021,12 +6995,15 @@ def _router_for(root: Path, manager: str, board=None):
         )
         sweep_minutes = 30
 
-    # ⚠ TR9: a route's ticket is checked with ONE single-issue read of the
-    # board the broker is given. None (no board) refuses every route.
-    read_ticket = getattr(board, "read", None)
+    # ⚠ TR5: a route's ticket is checked with `refinement.status.of`, the one
+    # read TR4's launch uses: it must be REFINED, and its record travels with
+    # the route. No board refuses every route.
+    from rite_ai.refinement.status import of
+
+    check_ticket = (lambda t: of(root, config, t)) if board is not None else None
 
     def step(say) -> None:
-        deliver_routes(root, manager, owner, names, say, read_ticket=read_ticket)
+        deliver_routes(root, manager, owner, names, say, check_ticket=check_ticket)
         if owner and manager == owner:
             # ⚠ Every reply is checked by rite before the Owner reads it, in a
             # fresh session given only the reply and the workspace (A6

@@ -58,6 +58,8 @@ def test_the_owner_is_told_it_routes_and_to_whom(tmp_path, monkeypatch, board):
     assert "You are the OWNER" in said
     assert "- 'helper': engine claude; duties execute" in said
     assert " route --ticket <ID> <manager> - <<'RITE_TEXT_" in said
+    # TR5: a route needs a REFINED ticket, and carries its definition of done.
+    assert "rite refuses the route unless that ticket has an agreed" in said
     assert " chore <message-id>" in said
     assert "no authority over you" in said
     # A6: a reply is verified before a person is told it happened.

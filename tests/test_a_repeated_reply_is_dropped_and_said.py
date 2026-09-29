@@ -23,16 +23,16 @@ NAMES = [OWNER, SECONDARY]
 
 
 def _on_board(ticket_id):
-    """One single-issue read that finds the ticket (TR9: routes carry one)."""
-    from rite_ai.tickets.interface import Ticket
+    """The one read's answer for a REFINED ticket (TR5: routes need one)."""
+    from tests.refined_board import refined_status
 
-    return Ticket(id=ticket_id, title="t")
+    return refined_status(ticket_id)
 
 
 def _route(root, text="write HELLO.txt"):
     routing.request(root, OWNER, SECONDARY, text, "RT-1")
     routing.deliver_routes(
-        root, OWNER, OWNER, NAMES, lambda _m: None, read_ticket=_on_board
+        root, OWNER, OWNER, NAMES, lambda _m: None, check_ticket=_on_board
     )
 
 

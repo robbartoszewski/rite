@@ -140,3 +140,20 @@ def any_ticket_refined():
             board = _AnyTicketRefined(refinement_key.ensure())
             with patch("rite_ai.refinement.status.board_for", return_value=board):
                 yield board
+
+
+def refined_status(ticket_id: str):
+    """What `refinement.status.of` returns for a REFINED ticket: a real
+    signed record, for callers (routing) that take the check as a function."""
+    from rite_ai.refinement import status as st
+
+    ticket = Ticket(id=ticket_id, title="a ticket", description="its text")
+    record = signed_record(ticket, b"k" * 32, {"type": "github", "repo": "org/repo"})
+    return st.Status(st.REFINED, record, "agreed", ticket)
+
+
+def unrefined_status(ticket_id: str, state: str = "NOT REFINED", detail: str = ""):
+    from rite_ai.refinement import status as st
+
+    ticket = Ticket(id=ticket_id, title="a ticket", description="its text")
+    return st.Status(state, None, detail or "no agreed definition of done", ticket)

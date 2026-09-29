@@ -26,10 +26,10 @@ MANAGERS = ["lead", "helper"]
 
 
 def _on_board(ticket_id):
-    """One single-issue read that finds the ticket (TR9: routes carry one)."""
-    from rite_ai.tickets.interface import Ticket
+    """The one read's answer for a REFINED ticket (TR5: routes need one)."""
+    from tests.refined_board import refined_status
 
-    return Ticket(id=ticket_id, title="t")
+    return refined_status(ticket_id)
 
 
 class TestDecide:
@@ -38,7 +38,7 @@ class TestDecide:
             json.dumps({"to": "helper", "text": "run the tests", "ticket": "RT-7"}),
             owner="lead",
             managers=MANAGERS,
-            read_ticket=_on_board,
+            check_ticket=_on_board,
         )
         assert got.ok and got.to == "helper" and got.text == "run the tests"
         assert got.ticket == "RT-7"
@@ -67,7 +67,7 @@ class TestDeliverRoutes:
         said: list[str] = []
         assert (
             deliver_routes(
-                tmp_path, "lead", "lead", MANAGERS, said.append, read_ticket=_on_board
+                tmp_path, "lead", "lead", MANAGERS, said.append, check_ticket=_on_board
             )
             == 1
         )
@@ -84,7 +84,12 @@ class TestDeliverRoutes:
         said: list[str] = []
         assert (
             deliver_routes(
-                tmp_path, "helper", "lead", MANAGERS, said.append, read_ticket=_on_board
+                tmp_path,
+                "helper",
+                "lead",
+                MANAGERS,
+                said.append,
+                check_ticket=_on_board,
             )
             == 0
         )
@@ -97,7 +102,7 @@ class TestDeliverRoutes:
         said: list[str] = []
         assert (
             deliver_routes(
-                tmp_path, "lead", "", MANAGERS, said.append, read_ticket=_on_board
+                tmp_path, "lead", "", MANAGERS, said.append, check_ticket=_on_board
             )
             == 0
         )
@@ -178,17 +183,27 @@ class TestTheCommand:
         assert not list((project / ".rite" / "managers").rglob("routes/*.json"))
 
 
-def test_supervise_routes_while_the_owners_cycle_runs(project):
+def test_supervise_routes_while_the_owners_cycle_runs(project, monkeypatch):
     """Wired, not merely available: the router is called from the wait loop,
-    and the delivery lands in the secondary's inbox during the Owner's cycle."""
+    and the delivery lands in the secondary's inbox during the Owner's cycle.
+    The check it is wired to is `refinement.status.of` (TR5)."""
+    import rite_ai.refinement.status as status_mod
     from rite_ai.cli.main import _router_for
 
-    board = type("Board", (), {"read": staticmethod(_on_board)})()
-    router = _router_for(project, "lead", board)
+    asked: list[str] = []
+
+    def of(root, config, ticket_id):
+        asked.append(ticket_id)
+        return _on_board(ticket_id)
+
+    monkeypatch.setattr(status_mod, "of", of)
+    router = _router_for(project, "lead", object())
     request(project, "lead", "helper", "pick up ticket 7", "RT-1")
     router(lambda _m: None)
     (msg,) = read(project, "helper", INBOX)
     assert "> pick up ticket 7" in msg.text
+    assert asked == ["RT-1"]
+    assert "Agreed definition of done for RT-1" in msg.text
 
 
 class TestReportsComeUpAsContext:

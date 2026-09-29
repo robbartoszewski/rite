@@ -6521,10 +6521,14 @@ such a project behaves as before.
 **The Owner routes, and cannot do it by writing an inbox (built).** No
 Manager may write a Manager's inbox (§5.4.8, P1), so the Owner ASKS, as it
 does for a Worker. `rite route --ticket <ID> <manager> -`, the text on stdin (§9.16), writes a request
-into the Owner's own directory. **Every route names its ticket (TR9):** the
-supervisor refuses a request with none, or one whose ticket a single-issue
-read of the board does not return (a board that cannot be read refuses too),
-and the refusal reaches the Owner's next instruction. The Owner's supervisor, outside the boundary, delivers
+into the Owner's own directory. **Every route names a REFINED ticket (TR9,
+TR5):** the supervisor checks it with `refinement.status.of`, the same one
+read `rite sandbox start` uses, and refuses a request with no ticket, or one
+that is not REFINED (a board that cannot be read is UNREADABLE and refuses
+too), naming the state and what to do; the refusal reaches the Owner's next
+instruction. A REFINED route carries the ticket's agreed definition of done,
+from that same read, after the Owner's quoted text and in rite's own words,
+so an executor secondary works to what the User agreed. The Owner's supervisor, outside the boundary, delivers
 it: every wait-loop tick, and at the cycle boundary. **Who is asking comes
 from the supervisor, never from the request**, and delivery happens only for
 the routing Owner, so a secondary's request is discarded and said to be. The

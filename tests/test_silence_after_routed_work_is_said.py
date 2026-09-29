@@ -26,10 +26,10 @@ NAMES = [OWNER, SECONDARY]
 
 
 def _on_board(ticket_id):
-    """One single-issue read that finds the ticket (TR9: routes carry one)."""
-    from rite_ai.tickets.interface import Ticket
+    """The one read's answer for a REFINED ticket (TR5: routes need one)."""
+    from tests.refined_board import refined_status
 
-    return Ticket(id=ticket_id, title="t")
+    return refined_status(ticket_id)
 
 
 def _setup(root):
@@ -37,7 +37,7 @@ def _setup(root):
     routing.record_supervisor(root, SECONDARY, os.getpid())
     routing.request(root, OWNER, SECONDARY, "write notes/HELLO.txt", "RT-1")
     routing.deliver_routes(
-        root, OWNER, OWNER, NAMES, lambda _m: None, read_ticket=_on_board
+        root, OWNER, OWNER, NAMES, lambda _m: None, check_ticket=_on_board
     )
     return [m.path.name for m in mailbox.take(root, SECONDARY, mailbox.INBOX)]
 
@@ -123,7 +123,7 @@ def test_a_death_from_before_the_work_was_handed_out_is_not_noted(tmp_path):
     routing._store(path, data)
     routing.request(tmp_path, OWNER, SECONDARY, "x", "RT-1")
     routing.deliver_routes(
-        tmp_path, OWNER, OWNER, NAMES, lambda _m: None, read_ticket=_on_board
+        tmp_path, OWNER, OWNER, NAMES, lambda _m: None, check_ticket=_on_board
     )
     _tick(tmp_path, sweep_seconds=0.0)
     assert _notes(tmp_path) == []

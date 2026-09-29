@@ -264,11 +264,14 @@ read-only: on GitHub, that issues are on, the repository is not archived,
 and your login can label them; on Jira, that it may create a `Task` in the
 project. "Could not tell" is reported as a problem, not passed.
 
-**`rite route` now requires `--ticket <ID>`**, and the Owner's supervisor
-refuses a route whose ticket one read of the board does not return,
-including when the board cannot be read. The refusal reaches the Owner's
-next instruction, and the Manager it was routed to sees which ticket rite
-checked.
+**`rite route` now requires `--ticket <ID>`, and that ticket must have an
+agreed definition of done.** The Owner's supervisor checks it with the same
+one read a Worker's start uses, and refuses a route whose ticket is not
+REFINED (including when the board cannot be read), saying which state and
+what to do. The refusal reaches the Owner's next instruction. A route that
+goes through carries the ticket's agreed definition of done to the Manager
+it was routed to, so that Manager works to what you agreed, not to the
+Owner's summary of it.
 
 ### `rite stop --skip-handover`
 
