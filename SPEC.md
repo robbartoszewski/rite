@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.48 · **Date:** 2026-09-29
+**Version:** 0.24.49 · **Date:** 2026-09-29
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -7196,6 +7196,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.49 — the verifier's CONTRADICTED is not a finding when it rested on the claimant's own state, which it cannot open.** #102 covered replies that cite a file; a pathless "I journaled it" still met a verifier that runs in the Owner's boundary and cannot open another Manager's state (dogfood V1). The verifier must now say what its verdict rested on (`rested_on`, required in its schema). Whether that ground was readable is established by trying from inside the verifier's own boundary, never by rite looking on its behalf, and rite never reads the journal (§9.15.5 holds: a journal that could change how its author's replies are judged would be a control channel into its own verification). A CONTRADICTED that rested on the claimant's state folder, or its pre-MM8 `.rite/managers/<claimant>/`, becomes COULD NOT TELL, said as rite being unable to establish the claim, with the verifier's words unaltered; the #102 path guard now speaks the same way. One that names nothing stands and is counted in the verification summary and the standup. A false "I journaled it" also comes out COULD NOT TELL: nothing that could see checked it. No boundary moved (an exception to DF3 was proposed and withdrawn). Tests: the seeded false claim stays CONTRADICTED; a pathless true claim through the real `sandbox-exec` is COULD NOT TELL, the stand-in's own CONTRADICTED the control; `test_nothing_in_rite_reads_the_journal` passes unexempted. Mutations (guard ignoring `rested_on`, empty `rested_on` firing, no guard, not counted) each turn a test red.
 
 **Changes in 0.24.48 — a Manager's text is read from stdin, never the command line (F14, W9).** §9.16 gains the paragraph, and the routing paragraph ("The Owner routes") shows the new form. Found in the v0.6.0 dogfood: a Claude Owner's double-quoted `rite reply` ran `rite update --files-only` and `rite doctor` through backticks and sent their output to the person. `rite reply`, `rite ask` and `rite route` now take `-` and read stdin, refuse text as an argument, and are taught as quoted heredocs with a fresh unguessable delimiter. W9 (v0.6.0 readiness): a refused command containing backticks or `$( )` is now reported as a substitution, not as a settings file the engine failed to apply. Tested with a ticket's text run through the Owner's instructions by real bash and zsh, with a control showing the old form runs the canary (`tests/test_a_managers_text_never_becomes_shell.py`).
 

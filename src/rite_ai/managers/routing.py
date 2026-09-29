@@ -387,6 +387,7 @@ def collect_reports(
     be. Dedup does nothing about a false report; only verification does.
     """
     from rite_ai.managers import checkins
+    from rite_ai.managers.verifier import event_fields
 
     _mark_seen_running(root, owner, managers)
     brought = 0
@@ -444,6 +445,7 @@ def collect_reports(
                     "at": time.time(),
                     "from": sender,
                     "verdict": verdict.kind,
+                    **event_fields(verdict),
                 },
             )
             brought += 1
@@ -1244,19 +1246,24 @@ def verification_summary(root: Path, owner: str, since: float) -> str:
     verification is rite's own session, not an Owner session, and a single
     number mixing the two is how the cap was once mis-sized."""
     from rite_ai.managers import checkins
+    from rite_ai.managers.verifier import guard_counts
 
     counts: dict[str, int] = {}
+    events = []
     for e in checkins.ledger(root, owner):
         if e.get("event") == "verification" and float(e.get("at") or 0) >= since:
             kind = str(e.get("verdict"))
             counts[kind] = counts.get(kind, 0) + 1
+            events.append(e)
     if not counts:
         return ""
     total = sum(counts.values())
     parts = ", ".join(f"{n} {k.replace('_', ' ')}" for k, n in sorted(counts.items()))
+    guards = guard_counts(events)
     return (
         f"rite ran {total} verification(s) of replies ({parts}); they are "
         "rite's own sessions, not the Owner's, and not counted against its cap"
+        + (f"; {guards}" if guards else "")
     )
 
 

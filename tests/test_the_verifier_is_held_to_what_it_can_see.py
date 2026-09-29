@@ -99,8 +99,12 @@ class TestHeldToWhatItSaw:
         said = Verdict(CONTRADICTED, "no .rite/managers directory at all")
         got = verifier._held_to_what_it_saw(said, _seen())
         assert got.kind == COULDNT_TELL
-        assert "cannot read /p/j.md" in got.evidence
-        assert "no .rite/managers directory at all" in got.evidence  # kept
+        assert "/p/j.md" in got.changed_by_rite
+        assert "cannot read" in got.changed_by_rite
+        assert got.evidence == "no .rite/managers directory at all"  # kept
+        line = got.line()
+        assert "rite changed that to COULD NOT TELL" in line  # said, not silent
+        assert "not a finding that the reply is wrong" in line
 
     def test_a_probe_that_failed_is_not_readable(self):
         said = Verdict(CONTRADICTED, "not there")
@@ -265,7 +269,7 @@ def test_a_helpers_true_journal_claim_is_never_contradicted(machine):
     assert raw[0].kind == CONTRADICTED, raw
     assert got.kind in (CONFIRMED, COULDNT_TELL), got
     assert got.kind == COULDNT_TELL
-    assert str(journal) in got.evidence
+    assert str(journal) in got.changed_by_rite
 
 
 def test_the_legacy_in_tree_journal_the_dogfood_cited(machine):
@@ -326,3 +330,222 @@ def test_control_the_owners_own_journal_is_readable(machine):
     )
     assert got.kind == CONFIRMED, got
     assert os.path.exists(own / JOURNAL_NAME)
+
+
+# --- a CONTRADICTED resting on the claimant's own state (option B) ----------
+
+
+def _answering(readable: str):
+    """A probe that answers `readable` ("1" or "0") for every area asked."""
+    return lambda script: "\n".join([readable] * script.count("echo 1")) + "\n"
+
+
+@pytest.fixture
+def helper_state(tmp_path, monkeypatch):
+    from rite_ai.managers import manager_dir
+
+    monkeypatch.setenv("RITE_MAIL_DIR", str(tmp_path / "data"))
+    root = tmp_path / "proj"
+    (root / ".rite").mkdir(parents=True)
+    state = manager_dir(root, "helper")
+    state.mkdir(parents=True)
+    return {"root": root, "state": state}
+
+
+def _state(helper_state, readable="0"):
+    return verifier._claimant_state(
+        helper_state["root"], "helper", _answering(readable)
+    )
+
+
+def _contradicted(*rested):
+    return Verdict(
+        CONTRADICTED,
+        "no such journal entry",
+        rested_on=tuple(rested) if rested != (None,) else None,
+    )
+
+
+class TestTheClaimantStateGuard:
+    def test_resting_on_the_claimants_unreadable_state_is_couldnt_tell(
+        self, helper_state
+    ):
+        rested = str(helper_state["state"] / "journal")
+        got = verifier._held_to_the_claimants_state(
+            _contradicted(rested), _state(helper_state), helper_state["root"]
+        )
+        assert got.kind == COULDNT_TELL
+        assert rested in got.changed_by_rite
+        assert "nothing that could see it checked the claim" in got.changed_by_rite
+        assert got.evidence == "no such journal entry"  # its words, unaltered
+        line = got.line()
+        assert "rite changed that to COULD NOT TELL" in line
+        assert "not a finding that the reply is wrong" in line
+
+    def test_the_old_in_tree_managers_folder_counts_too(self, helper_state):
+        legacy = f".rite/managers/helper/journal/{JOURNAL_NAME}"
+        got = verifier._held_to_the_claimants_state(
+            _contradicted(legacy), _state(helper_state), helper_state["root"]
+        )
+        assert got.kind == COULDNT_TELL
+
+    def test_a_seeded_false_claim_it_could_see_stays_contradicted(self, helper_state):
+        """V1's pre-registered second half."""
+        said = _contradicted("tests/x.py")
+        got = verifier._held_to_the_claimants_state(
+            said, _state(helper_state), helper_state["root"]
+        )
+        assert got == said
+
+    def test_naming_nothing_stands(self, helper_state):
+        for said in (_contradicted(), _contradicted(None)):
+            got = verifier._held_to_the_claimants_state(
+                said, _state(helper_state), helper_state["root"]
+            )
+            assert got == said
+
+    def test_state_the_verifier_can_open_stands(self, helper_state):
+        """Readability is what the verifier's boundary answered, not a rule."""
+        said = _contradicted(str(helper_state["state"]))
+        got = verifier._held_to_the_claimants_state(
+            said, _state(helper_state, readable="1"), helper_state["root"]
+        )
+        assert got == said
+
+    def test_the_prompt_says_where_absence_is_not_evidence(self, helper_state):
+        prompt = verifier._prompt(helper_state["root"], "x", [], _state(helper_state))
+        assert str(helper_state["state"]) in prompt
+        assert "NOT evidence" in prompt
+        assert "rested_on" in prompt
+
+
+def test_rite_never_reads_the_journal():
+    """§9.15.5, the reason option A was rejected: the verifier module must not
+    locate or list any Manager's journal."""
+    import inspect
+
+    src = inspect.getsource(verifier)
+    assert "journal_dir(" not in src
+    assert "scandir" not in src and "iterdir" not in src
+
+
+class TestRestedOnIsParsed:
+    def _parse(self, answer: dict):
+        out = {"type": "result", "is_error": False, "structured_output": answer}
+        return verifier.parse(json.dumps(out))
+
+    def test_a_list_is_kept(self):
+        answer = {"verdict": "contradicted", "evidence": "e", "rested_on": ["a"]}
+        assert self._parse(answer).rested_on == ("a",)
+
+    def test_missing_is_none_not_empty(self):
+        got = self._parse({"verdict": "contradicted", "evidence": "e"})
+        assert got.rested_on is None
+
+    def test_the_schema_requires_it(self):
+        assert "rested_on" in verifier.SCHEMA["required"]
+
+
+class TestTheSilentPathIsCounted:
+    """The coordinator's condition: a CONTRADICTED that names nothing stands,
+    and is counted where a person reads it, so a guard starved of input is
+    seen rather than read as the problem being gone."""
+
+    def test_the_event_says_which_it_was(self):
+        assert verifier.event_fields(_contradicted())["unanchored"] is True
+        assert verifier.event_fields(_contradicted(None))["unanchored"] is True
+        assert verifier.event_fields(_contradicted("x"))["unanchored"] is False
+        changed = Verdict(COULDNT_TELL, "e", changed_by_rite="because")
+        assert verifier.event_fields(changed) == {
+            "changed_by_rite": True,
+            "unanchored": False,
+        }
+
+    def test_the_summary_says_both_counts(self, tmp_path):
+        import time
+
+        from rite_ai.managers import checkins, routing
+
+        start = time.time() - 1
+        changed = Verdict(COULDNT_TELL, "e", changed_by_rite="because")
+        for verdict in (
+            _contradicted(),
+            _contradicted(None),
+            _contradicted("x"),
+            changed,
+        ):
+            checkins.record(
+                tmp_path,
+                "lead",
+                {
+                    "event": "verification",
+                    "at": time.time(),
+                    "verdict": verdict.kind,
+                    **verifier.event_fields(verdict),
+                },
+            )
+        said = routing.verification_summary(tmp_path, "lead", start)
+        assert "2 CONTRADICTED did not say what it rested on" in said
+        assert "rite changed 1 CONTRADICTED to COULD NOT TELL" in said
+
+
+PATHLESS_VERIFIER = r"""#!/bin/sh
+# Stands in for the model on a claim with no path: it looks in the folder it
+# was pointed at, answers contradicted when it cannot open it, names where it
+# looked, and ignores anything rite said.
+cat >/dev/null
+where="__WHERE__"
+head='{"type":"result","is_error":false,"result":"","structured_output":'
+if ls -- "$where" >/dev/null 2>&1; then
+  ok='"verdict":"confirmed","evidence":"listed'
+  printf '%s{%s %s","rested_on":["%s"]}}\n' "$head" "$ok" "$where" "$where"
+else
+  no='"verdict":"contradicted","evidence":"no journal at'
+  printf '%s{%s %s","rested_on":["%s"]}}\n' "$head" "$no" "$where" "$where"
+fi
+"""
+
+
+def _pathless(machine, where: Path) -> Path:
+    fake = machine["root"] / "pathless-verifier.sh"
+    fake.write_text(PATHLESS_VERIFIER.replace("__WHERE__", str(where)))
+    fake.chmod(0o755)
+    return fake
+
+
+def test_a_pathless_true_journal_claim_is_not_contradicted(machine):
+    """End to end through the real `sandbox-exec`: "I journaled the
+    observation", no path."""
+    root = machine["root"]
+    entry = _helper_journal(root)
+    raw: list = []
+    got = verifier.verify(
+        root,
+        "lead",
+        "KAN-9 is blocked on scope; I journaled the observation.",
+        runner=_through_the_real_boundary(_pathless(machine, entry.parent), raw),
+        claimant="helper",
+    )
+    assert raw[0].kind == CONTRADICTED, raw  # control: the wall is real
+    assert got.kind == COULDNT_TELL, got
+    assert str(entry.parent) in got.changed_by_rite
+
+
+def test_control_the_owners_own_state_is_not_guarded(machine):
+    """The same stand-in, pointed at the Owner's own journal, which its
+    boundary opens: it confirms, and nothing is changed."""
+    from rite_ai.managers.journal import journal_dir
+
+    root = machine["root"]
+    own = journal_dir(root, "lead")
+    own.mkdir(parents=True)
+    raw: list = []
+    got = verifier.verify(
+        root,
+        "lead",
+        "I journaled the observation.",
+        runner=_through_the_real_boundary(_pathless(machine, own), raw),
+        claimant="helper",
+    )
+    assert got.kind == CONFIRMED, got
+    assert not got.changed_by_rite
