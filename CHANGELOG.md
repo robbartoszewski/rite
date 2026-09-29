@@ -2,6 +2,15 @@
 
 ## Unreleased: 0.7.0 (notes in progress, completed at release)
 
+### rite opens a pull request only as a draft, on your own repository
+
+Under `publish.strategy: pull_request`, rite now opens the pull request as a
+draft, and only when the token it pushes with belongs to the owner of both
+the repository it pushes to and the one the pull request goes to, against
+that repository's default branch. It checks before pushing. So a module
+pointed at a repository you do not own (upstream) is refused, and you open
+that pull request yourself, from your fork.
+
 ### Workers no longer receive a GitHub token
 
 rite pushes a worker's branch and opens its pull request itself, on your

@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.53 · **Date:** 2026-09-29
+**Version:** 0.24.54 · **Date:** 2026-09-29
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -1407,7 +1407,14 @@ than by fast-forward, and never deletes one.
 **And `rite deliver` writes to a remote, in the same file only, under a
 strategy that permits it.** Under `publish.strategy: push` it pushes the
 collected ticket branch onto the module's branch; under `pull_request` it
-pushes the ticket branch and opens a pull request with `gh pr create`. Both
+pushes the ticket branch and opens a pull request with `gh pr create --draft`.
+**Only a draft, only on a repository the operator owns, only against its
+default branch (0.24.54, Robert, 2026-09-29: rite opens PRs on his fork, and he
+takes them upstream himself)** — checked BEFORE the push, since a branch pushed
+to someone else's repository has already gone upstream: the owner of the token
+rite pushes with (asked of GitHub, `gh api user`) must own both `origin` and
+the repository the module's URL names, and the base must be that repository's
+default branch; anything rite cannot establish refuses. Both
 run only after rite's publish gate passed on exactly the commits being sent
 (a gate that could not run is not a pass), with the Worker's own token, and
 never with `--force`: a branch that moved is refused by the remote and
@@ -7376,6 +7383,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.54 — rite opens a pull request only as a draft, on a repository the operator owns, against its default branch (Robert, 2026-09-29).** §5.1.1: `_pull_request_target_refusal` runs before the push under `pull_request`; `gh pr create` gains `--draft`. Tests: the operator's own fork allowed; someone else's origin, PR target, or both refused; an unreadable token owner or default branch refused; a non-default base refused; end to end, a refused target leaves origin without the branch. Mutations (the check removed from `_publish`, the ownership comparison disabled, `--draft` removed, an unreadable owner allowed) each go red.
 
 **Changes in 0.24.53 — Workers hold no GitHub credential (Robert, 2026-09-29).** §5.3.4: `WORKER_SERVICES` is Claude only; `worker_environment` no longer takes a Worker token; `start_worker` no longer takes one and refuses a sandbox that would receive `GITHUB_TOKEN`/`GH_TOKEN`/`GH_ENTERPRISE_TOKEN`. The token is still resolved and checked at start, for `rite deliver` to push with on the host, and `rite sandbox pane` still masks it. Measured before and after with a fake token: three files inside the sandbox held it before, none after. Tests: a GitHub token is refused at the sandbox door; the CLI keeps the provisioned token on the host; three mutations (GitHub back in `WORKER_SERVICES`, the refusal removed, the CLI handing it over) each go red.
 
