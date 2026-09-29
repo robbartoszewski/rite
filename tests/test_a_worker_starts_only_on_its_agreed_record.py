@@ -207,3 +207,24 @@ def test_ticket_md_and_the_ticket_command_send_a_worker_to_the_record():
     text = delivery_text(render_ticket(TICKET), "2026-09-29T00:00:00Z", "GitHub")
     assert "stop rather than guessing" not in text
     assert "Work to the agreed definition of done" in text
+
+
+def test_refine_records_with_accept_after_a_yes_and_never_rewrites_the_ticket():
+    """TR3: `/refine` is the refinement protocol with a person present. It ends
+    at `rite refine accept`, only after an explicit yes, and leaves the
+    person's own text alone (TR8's G2: an agent does not replace their words)."""
+    root = Path(__file__).resolve().parent.parent
+    text = (root / "templates" / "commands" / "refine.md").read_text()
+    assert "rite refine accept <ID> --item" in text
+    assert "Nothing is recorded until they say\n   yes." in text
+    assert "Do not edit the ticket's title or description." in text
+    assert "Write the ticket body to full quality" not in text
+
+
+def test_the_queue_rule_says_only_refined_is_ready():
+    """Now true, and enforced by TR4: no Worker starts without a record."""
+    from rite_ai.cli.init.claude_gen import _working_the_queue_section
+
+    section = _working_the_queue_section()
+    assert "A ticket rite does not report REFINED is not ready" in section
+    assert "no Worker starts without one" in section

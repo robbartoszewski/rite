@@ -33,6 +33,11 @@ and a person's session to `rite refine status`; nothing asks an agent to judge
 whether a ticket is "complete enough" any more. Run `rite update --files-only`
 to carry the new `/ticket` into an existing project.
 
+`/refine` now ends by recording what you agreed with `rite refine accept`,
+after an explicit yes from you, instead of rewriting the ticket's
+description. It asks at most three questions at a time, and marks which
+items are its own proposal rather than your words or the ticket's.
+
 ### `rite start` sees a ticket rite has just filed
 
 A board's list lags new writes by seconds, on GitHub (measured, up to 6.5 s)
