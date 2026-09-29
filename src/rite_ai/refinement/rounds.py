@@ -301,6 +301,17 @@ def events_since(
     return Events(first_look=last is None, replies=replies, deadlines=deadlines)
 
 
+def all_questions(root: Path, owner: str) -> set[str]:
+    """Every question id a round was ever sent as: how the relay tells a
+    refinement round from any other question it posts."""
+    return {
+        r.where
+        for attempt in all_attempts(root, owner).values()
+        for r in attempt.rounds
+        if r.where
+    }
+
+
 def open_questions(root: Path, owner: str) -> dict[str, float]:
     """Every round still waiting for an answer, by its question id, with its
     deadline. The Slack relay keeps these threads read, past the 24-hour

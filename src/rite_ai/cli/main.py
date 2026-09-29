@@ -7493,6 +7493,13 @@ def _slack_listener(root: Path, manager: str):
         owner=config.slack.owner_user,
         broadcast=config.slack.broadcast,
         project=root,
+        # TR2 (TRQ8): refinement rounds to a private channel, when configured
+        # and when rite can both post and read there; the DM otherwise.
+        refinement_channel=(
+            config.refinement.channel
+            if config.refinement.questions_to == "channel"
+            else ""
+        ),
     )
     for line in listener.open():
         click.echo(line)
