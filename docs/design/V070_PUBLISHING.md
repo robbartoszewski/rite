@@ -352,6 +352,17 @@ mutation controls each turned their targeted tests red:
 - stale checks filtered instead of refused
 - the gate not required
 
+**Through the whole auto-merge path (piece 5), same scratch repository.**
+This used `merging.tick` with the real `read_facts` and the real
+`gh pr merge`, on PR #2, which piece 4's live run opened, with
+`auto_merge: true` both at start and now:
+1. GitHub was still computing mergeability after `main` moved. rite
+   refused "not computed, not an answer". Over two ticks the Manager was
+   told once.
+2. Then GitHub said `mergeable_state: clean`. rite refused: "head 3ce3a09
+   does not contain main's tip 48d7dd7 (1 behind) … stale-green shape 4".
+   PR #2 stayed open and unmerged.
+
 ### 4.2 Not proven, and why
 
 **The strict-branch half, and GitHub's own `mergeStateStatus` under branch
