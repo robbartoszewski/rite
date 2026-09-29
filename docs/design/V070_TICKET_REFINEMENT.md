@@ -613,7 +613,21 @@ should be passed to workers." The rule and its enforcement:
 The two disagree today because each makes its own judgement of "complete
 enough". Both are rewritten to use the predicate:
 
-- **`/ticket` step 1** becomes (*not built*):
+- **`/ticket` step 1** becomes (*not built*). ⚠ **Amended 2026-09-29, by
+  the coordinator's ruling:** a sandboxed Worker cannot run `rite refine
+  status`. It holds no refinement key, by design (part 3.6), and no board
+  credential since #97. So as first written, this step would have stopped
+  every Worker on every refined ticket. **Which check applies depends on
+  where `/ticket` runs:**
+  - **In a sandboxed Worker:** the check already happened, on the host.
+    `rite sandbox start` calls `refinement.status.of()` and refuses to start
+    unless the ticket is REFINED. It then writes the record into
+    `TICKET.md`'s "Agreed definition of done" section (TR4, #106). The Worker
+    works from that section, cites the record id, and stops if the section
+    is missing. It never runs `rite refine status`. This is the text of the
+    Worker's instructions on `main` (`workspace/manage.py`, "Your ticket").
+  - **Where a person's own session runs `/ticket`** (Dispatch, the Code
+    tab), which can read the key and the board, it runs the check itself:
 
   > "**Check the ticket is refined:** `rite refine status <ID>`. REFINED:
   > its record is this ticket's definition of done — scope, checklist,
@@ -628,10 +642,12 @@ enough". Both are rewritten to use the predicate:
   items that contradict) is reported with exactly that, and it goes back
   to refinement by `rite refine reopen <ID> --reason`. This is not
   "incomplete", and it is never a reason to invent the missing piece.
-- **The Worker's "Your ticket"** (`workspace/manage.py:770`) becomes: it is
-  started with the ticket id **and its record** (part 3.7). No record means
-  stop and say so. It never refines, because it has no way to reach the
-  User.
+- **The Worker's "Your ticket"** (`workspace/manage.py`): **built, TR4
+  (#106).** It is started with the ticket id and the record's id, and
+  `TICKET.md` holds the ticket's text and its agreed definition of done,
+  checked on the host just before the session started. No `TICKET.md`, or
+  no "Agreed definition of done" section, means stop and say so. It never
+  refines, because it has no way to reach the User.
 - **`/refine`** is now the same protocol with a person present: it asks
   the person in the session, drafts the record with the same tags and the
   same quote rule, and **ends at `rite refine accept`** (part 3.6). Its
