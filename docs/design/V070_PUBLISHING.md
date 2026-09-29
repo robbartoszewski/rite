@@ -298,9 +298,78 @@ every step, and each step names the stale-green shape it rules out.
 6. Auto-merge also needs **the snapshot AND the current config** to allow it
    (§3.2).
 
-**Observation (the plan's "done when")**: on a scratch repository, each of the
-four shapes is produced and seen REFUSED, then a clean green is seen merged,
-with the head SHA matched in `jq` in the record.
+**Base tip is read from the base BRANCH's ref, never the PR's `base.sha`.**
+`base.sha` is the base as of the PR's last update. On rite#122 it was
+`1527503` while `main` was `6c97075`; on the scratch PR below it stayed
+`390717f` after `main` moved to `91d9048`. It is the proxy.
+
+**The target branch must be strict, and that is a refusal, not advice.**
+`--match-head-commit` pins the head, and nothing in the merge call pins the
+base. Only the branch's own "require branches to be up to date"
+(`strict_required_status_checks_policy`) makes GitHub refuse a behind head
+AT merge time. So `auto_merge` refuses unless the base branch's effective
+rules (`rules/branches/<b>`) say strict is on. An unreadable setting refuses
+too. This closes the check-then-merge race on the base side instead of
+tolerating it.
+
+**Read on 2026-09-29, from `rules/branches/main`, not inferred:** rite's own
+`main` has one ruleset (24114301) with required checks `lint-and-test`
+(3.11/3.12/3.13), `publish-gate` and `boundary-and-credentials-on-macos`,
+and `strict_required_status_checks_policy: false`. There is no classic
+protection. GitHub itself will merge a green PR whose head is behind `main`.
+Until strict is on, rite's `auto_merge` refuses on rite's own `main` by the
+rule above.
+
+**Today's exposure, independent of PB1:** until PR2 lands, Workers merge
+their own PRs with `gh`, by instruction (`workspace/manage.py`, step 8), and
+nothing checks the head against `main`'s tip. With strict off, shape 4 is
+mergeable in rite-driven work now.
+
+### 4.1 Observed on a scratch repository (2026-09-29)
+
+`robbartoszewski/rite-publish-scratch` (private, disposable) has two
+workflows: a `tests` job and a separately named `publish-gate` job. PR #1
+comes from branch `KAN-1`. Each result below is `merge_gate.read_facts`
+against GitHub, then `refusal`, and each check-run conclusion was matched to
+its head SHA with `jq`.
+
+| step | head | `main` tip | GitHub says | rite says |
+|---|---|---|---|---|
+| PR green | `a7fcb87` | `390717f` | mergeable, clean, 2/2 checks success on head | past shape 4 (`behind_by 0`); refused only on strictness (unreadable, see below) |
+| `main` moves | `a7fcb87` | `91d9048` | first `mergeable: null`, then **mergeable, clean**, checks still success on head, `base.sha` still `390717f` | first "not computed, not an answer"; then **refused, shape 4: head does not contain main's tip 91d9048 (1 behind)** |
+| control: proxy | `a7fcb87` | read as `base.sha` | — | `behind_by 0`, and shape 4 is **not** caught. The live case detects exactly the proxy defect |
+| control: branch updated | `5ac5b3c` (merge of `main`) | `91d9048` | mergeable, clean, 2/2 success on new head | shape 4 **clears**; refused only on strictness |
+| head moved under rite | `5ac5b3c` vs published `a7fcb87` | — | — | refused: "head is 5ac5b3c, not a7fcb87 which rite published" |
+
+Unit tests (`tests/test_merge_gate.py`, 21) cover every shape. Eight
+mutation controls each turned their targeted tests red:
+- shape 4 removed
+- the base read from `base.sha`
+- the oldest re-run counted
+- an unreadable compare read as 0
+- unreadable rules read as strict
+- zero tests counted as green
+- stale checks filtered instead of refused
+- the gate not required
+
+### 4.2 Not proven, and why
+
+**The strict-branch half, and GitHub's own `mergeStateStatus` under branch
+protection, are unproven against GitHub.** GitHub refuses rulesets and
+branch-rules reads on a private repository on this account's plan ("Upgrade
+to GitHub Pro or make this repository public"). Robert declined making a
+repository public to get them. So three things were never observed:
+- rite allowing a merge (every live run ended at the strictness refusal)
+- `mergeable_state` reflecting a required check
+- `strict: true` being read as true
+
+What was observed:
+- **Unreadable rules:** the scratch repo's `rules/branches/main` returns 403,
+  which rite reads as `None` and refuses on.
+- **Rules set to off:** rite's `main` returns `false`, which rite refuses on.
+
+The allow path is covered by unit tests only. It must be observed on a repo
+whose branch is strict before `auto_merge` is called done.
 
 ## 5. Where it meets other tracks
 
