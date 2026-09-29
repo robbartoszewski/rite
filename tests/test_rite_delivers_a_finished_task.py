@@ -388,11 +388,15 @@ def test_claims_are_released_when_the_work_has_landed_under_commit(tmp_path):
 
 
 def test_claims_stay_held_until_the_merge_under_a_pull_request(tmp_path):
+    from rite_ai.publishing.deliver import Outcome
+
     p = Project(tmp_path, "pull_request")
     p.start()
     p.work()
     _claim(p)
-    assert p.deliver().ok
+    opened = Outcome("svc", TICKET, True, "pushed; PR https://x/pull/1")
+    with patch("rite_ai.publishing.deliver._publish", return_value=opened):
+        assert p.deliver().ok
     assert _held(p) == 1
 
 
