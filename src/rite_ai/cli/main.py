@@ -6821,16 +6821,24 @@ class LoopAnswer(str):
     is not in it, because a Worker finishing moves the claims ledger, which
     `progress.footprint` reads."""
 
-    basis: tuple = ()
+    basis: tuple | None = ()
+    detail: str = ""
 
     @classmethod
     def of(cls, cycle) -> "LoopAnswer":
         answer = cls(str(getattr(cycle, "verdict", "unknown") or "unknown"))
+        answer.detail = str(getattr(cycle, "detail", "") or "")
         answer.basis = (
             str(answer),
             tuple(sorted(getattr(cycle, "ready", []) or [])),
             tuple(sorted((getattr(cycle, "blocked", {}) or {}).items())),
         )
+        if str(answer) == "refining":
+            # ⚠ No basis for F22's guard to compare (TR2). `refining` is
+            # given only when the User answered or a deadline passed since
+            # the last refinement session, so two in a row are two events,
+            # not one session repeated; the pacing is the guard here.
+            answer.basis = None
         return answer
 
 
@@ -6896,7 +6904,7 @@ def _worker_question_watch(root: Path, manager: str):
     return watch
 
 
-def _loop_verdict(root: Path, board=None) -> str:
+def _loop_verdict(root: Path, board=None, manager: str | None = None) -> str:
     """The loop's own answer to "should this continue" (§9.14.4).
 
     `unknown` when it cannot be established, which is a STOP — the loop's
@@ -6915,7 +6923,12 @@ def _loop_verdict(root: Path, board=None) -> str:
         from rite_ai.loop import plan_cycle
         from rite_ai.sandbox import worker_sandbox_status
 
-        cycle = plan_cycle(root, board=board, sandbox_status=worker_sandbox_status)
+        cycle = plan_cycle(
+            root,
+            board=board,
+            sandbox_status=worker_sandbox_status,
+            refiner=manager,
+        )
         return LoopAnswer.of(cycle)
     except Exception:  # noqa: BLE001 - an unreadable project is `unknown`
         return "unknown"
@@ -7624,7 +7637,7 @@ def _start_a_manager(
                 else (lambda _r: "ready")
             )
             if setting_up
-            else (lambda r: _loop_verdict(r, board)),
+            else (lambda r: _loop_verdict(r, board, role.name)),
             note=lambda m: click.echo(m, err=True),
             watch=_worker_question_watch(root, role.name),
         )

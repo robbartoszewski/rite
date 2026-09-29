@@ -80,6 +80,25 @@ after an explicit yes from you, instead of rewriting the ticket's
 description. It asks at most three questions at a time, and marks which
 items are its own proposal rather than your words or the ticket's.
 
+**A board of unrefined tickets is work, not an empty board.** `rite loop`
+and the Owner's supervisor count only REFINED tickets as ready for Workers,
+and have two new verdicts for the rest. `refining`: nothing is refined yet
+and the Owner may start refining now, so a session starts. `waiting-on-user`:
+nothing can start until you answer, so the Owner waits and starts no
+session until you reply or a question's deadline passes. `idle` now means
+nothing is scheduled at all. A secondary Manager never refines; that is the
+Owner's.
+
+Refinement is bounded so a backlog of unrefined tickets cannot flood you or
+spend sessions: oldest first, at most 5 open at once, at most 3 started per
+session, and new ones only after you have replied (or a deadline passed)
+since the last refinement session. Twenty unrefined tickets mean three
+questions, not twenty. The limits, and the words that accept a proposal
+(`ok`, `yes`, `accept`, `lgtm`, `proceed`), are configurable under a new
+`refinement:` section in `.rite/config.yaml`; a value out of range, or an
+accept word people type to refuse ("no", "stop", …), is refused rather than
+corrected. Whether refinement is enforced is not configurable.
+
 ### `rite start` sees a ticket rite has just filed
 
 A board's list lags new writes by seconds, on GitHub (measured, up to 6.5 s)

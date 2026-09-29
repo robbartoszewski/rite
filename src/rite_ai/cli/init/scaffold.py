@@ -189,6 +189,10 @@ def config_to_yaml(config: ProjectConfig) -> str:
             "installation_id": config.github_app.installation_id,
             "repository": config.github_app.repository,
         },
+        # ⚠ APPENDED last, for `checkins`' reason: nothing existing moves.
+        # Written in full, defaults included, so the limits a project runs
+        # under are on the page (TR2; the note's part 3.11).
+        "refinement": asdict(config.refinement),
     }
     return yaml.safe_dump(
         data, sort_keys=False, default_flow_style=False, allow_unicode=True

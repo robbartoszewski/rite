@@ -73,6 +73,10 @@ _VALID_ALTERNATES = {
     "github_app.app_id": "123456",
     "github_app.installation_id": "7890123",
     "github_app.repository": "org/board",
+    # TR2: a closed vocabulary, and `channel` is required with it and
+    # schema-validated.
+    "refinement.questions_to": "channel",
+    "refinement.channel": "G012AB3CD",
 }
 
 
