@@ -271,7 +271,12 @@ def _remote_environment(root: Path, worker: str, module: Module, config):
         return env  # a non-GitHub origin: the operator's own git config
     token, _tier = resolve_worker_token(worker, config.credentials)
     if not token:
-        return f"no GitHub token for {worker} (`rite credential set github_token`)"
+        from rite_ai.credentials.services import how_to_set
+
+        return (
+            f"no GitHub token for {worker} "
+            f"(`rite credential set {how_to_set('github_token')}`)"
+        )
     gh = shutil.which("gh")
     env.update(sandbox_git_environment(gh))
     env["GITHUB_TOKEN"] = token

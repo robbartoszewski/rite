@@ -85,7 +85,7 @@ def test_no_token_is_refused_and_names_the_command():
     assert refusal is not None
     assert "no GitHub token" in refusal
     assert "acme/app" in refusal
-    assert "rite credential set github_token" in refusal
+    assert "rite credential set github`" in refusal
     assert "\n" not in refusal, "the supervisor relays one line"
 
 

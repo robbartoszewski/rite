@@ -335,7 +335,7 @@ class TestAMissingCredentialSaysEnoughToAct:
         assert "acme-7f3a9c21/jira_token" in message
         assert "machine-global" in message
         # The exact command, not a description of one.
-        assert "rite credential set jira_token" in message
+        assert "rite credential set jira\n" in message
         assert "rite credential list" in message
         assert "RITE_JIRA_TOKEN" in message
 

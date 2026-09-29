@@ -269,3 +269,20 @@ def describe_services() -> list[str]:
         fields = ", ".join(f.name for f in svc.fields)
         lines.append(f"  {svc.name:<10} {svc.label}  [{fields}]")
     return lines
+
+
+def how_to_set(key: str) -> str:
+    """The argument to `rite credential set` that sets `key`: its service when
+    one owns it and a prompt can take it, otherwise the key itself.
+
+    ⚠ **The one answer, for every hint rite prints.** Hints named the key
+    (`set github_token`) while the listing named the service (`set github`),
+    so one `rite doctor` report told a person two different commands for one
+    gap (v0.7.0 dogfood). A multi-line field stays the key: `set <service>`
+    refuses it and sends the person to `set <key> --stdin`. A per-Worker
+    sandbox token is not a service and never will be."""
+    for svc in SERVICES.values():
+        for f in svc.fields:
+            if service_key(svc.name, f.name) == key:
+                return key if f.multiline else svc.name
+    return key

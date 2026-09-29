@@ -166,11 +166,13 @@ def prepare(root: Path, manager: str, token: str | None, say=None) -> str:
             "stopped), rather than one that ended. Nothing was using it."
         )
     if not token:
+        from rite_ai.credentials.services import how_to_set
+
         return (
             "a Claude Manager runs inside a sandbox, which cannot use the "
             "login your own `claude` uses, so it needs a token of its own. Run "
-            "`claude setup-token`, then `rite credential set claude_token` "
-            "and paste what it printed"
+            "`claude setup-token`, then `rite credential set "
+            f"{how_to_set('claude_token')}` and paste what it printed"
         )
     _write_login(root, manager, token)
     return ""
