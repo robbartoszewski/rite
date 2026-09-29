@@ -30,6 +30,7 @@ from rite_ai.managers import MANAGER_ENV, routing, stdin_text
 from rite_ai.managers.mailbox import INBOX, OUTBOX, how_to_reply, read
 from rite_ai.managers.supervise import _substitutes
 from rite_ai.tickets.interface import Ticket
+from tests.refined_board import refined
 
 CONFIG = (
     "ticket_backend:\n  type: none\ncoordination:\n  managers:\n    - lead\n"
@@ -118,11 +119,16 @@ def test_a_tickets_text_routed_as_taught_arrives_verbatim_and_runs_nothing(
         ["lead", "helper"],
         lambda _m: None,
         read_ticket=lambda i: ticket,
+        refinement=refined,
     )
 
     assert canaries(canary) == []
     (got,) = read(project, "helper", INBOX)
-    assert got.text.split("\n", 1)[1] == routing._quoted(ticket.description)
+    # The Owner's text verbatim, then the agreed definition of done rite
+    # checked (TR5), both quoted.
+    assert got.text.split("\n", 1)[1].startswith(
+        routing._quoted(ticket.description) + "\n> Agreed definition of done for RT-7"
+    )
 
 
 @pytest.mark.parametrize("shell", SHELLS)
