@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.54 · **Date:** 2026-09-29
+**Version:** 0.24.55 · **Date:** 2026-09-29
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -1403,6 +1403,19 @@ and a checked-out branch), and, when `publish.squash` is on, `commit-tree`
 plus `branch <ticket> <sha>` on a branch that does not exist yet. It adds
 refs; it never changes a working tree, never moves an existing branch other
 than by fast-forward, and never deletes one.
+
+**Every commit a Worker's work leaves in credits rite and Claude (0.24.55,
+Robert, 2026-09-29):** the body line `🤖 Generated with rite
+(https://github.com/robbartoszewski/rite)` and the trailer `Co-Authored-By:
+Claude <noreply@anthropic.com>`, with no model version (security-flagged work
+can run on a downgraded model, so a version would sometimes be false in
+permanent public history) and no rite trailer or email. Added by rite
+(`publishing/attribution.py`), never remembered by a Worker: a
+`prepare-commit-msg` hook rite installs in every clone before the sandbox
+starts (it runs under `--no-verify` too; a Worker whose hook cannot be written
+is not started), and `credit` on the squash commit `rite deliver` builds. The
+body line goes before the trailer block and nothing is repeated, since Claude
+Code adds the same trailer itself. Measured inside a real seatbelt sandbox.
 
 **And `rite deliver` writes to a remote, in the same file only, under a
 strategy that permits it.** Under `publish.strategy: push` it pushes the
@@ -7383,6 +7396,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.55 — every Worker commit credits rite and Claude (Robert, 2026-09-29).** §5.1.1 gains the paragraph. `publishing/attribution.py`: `credit`, and the hook `install_hooks` puts in each clone from `start_worker`; `_squash_message` credits the commit rite builds. Tests with real git (plain, `--no-verify`, a Claude-Code-style trailer, another trailer, amend, a pre-existing hook, the squash end to end, hook and `credit` agreeing byte for byte) and a control without the hook; five mutations each go red (install skipped, squash uncredited, no trailer, no body line, body line after the trailers).
 
 **Changes in 0.24.54 — rite opens a pull request only as a draft, on a repository the operator owns, against its default branch (Robert, 2026-09-29).** §5.1.1: `_pull_request_target_refusal` runs before the push under `pull_request`; `gh pr create` gains `--draft`. Tests: the operator's own fork allowed; someone else's origin, PR target, or both refused; an unreadable token owner or default branch refused; a non-default base refused; end to end, a refused target leaves origin without the branch. Mutations (the check removed from `_publish`, the ownership comparison disabled, `--draft` removed, an unreadable owner allowed) each go red.
 
