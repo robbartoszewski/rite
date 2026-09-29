@@ -26,6 +26,7 @@ from .models import (
     ProjectConfig,
     PublishGateConfig,
     RecordedCommands,
+    RefinementConfig,
     RiteProject,
     SandboxConfig,
     ScanPattern,
@@ -170,6 +171,7 @@ _CONFIG_SECTIONS = {
     "budget": _fields(BudgetConfig),
     "schedule": _fields(ScheduleConfig),
     "checkins": _fields(CheckinsConfig),
+    "refinement": _fields(RefinementConfig),
     "spec": _fields(SpecConfig),
     "coordination": _fields(CoordinationConfig),
 }
@@ -391,6 +393,10 @@ def parse_config(path: Path) -> ProjectConfig | ParseError:
     if app_problem:
         return ParseError(str(path), app_problem)
 
+    refinement_problem = _refinement_problem(raw.get("refinement"))
+    if refinement_problem:
+        return ParseError(str(path), refinement_problem)
+
     unknown = _unknown_config_key(raw)
     if unknown:
         return ParseError(str(path), unknown)
@@ -607,6 +613,7 @@ def parse_config(path: Path) -> ProjectConfig | ParseError:
                 CheckinWindow(hours=str(hours), days=str(w.get("days", "") or ""))
             )
     checkins = CheckinsConfig(windows=checkin_windows)
+    refinement = _refinement_of(raw.get("refinement"))
 
     return ProjectConfig(
         ticket_backend=ticket_backend,
@@ -628,6 +635,7 @@ def parse_config(path: Path) -> ProjectConfig | ParseError:
         budget=budget,
         schedule=schedule,
         checkins=checkins,
+        refinement=refinement,
         spec=spec,
     )
 
@@ -659,6 +667,98 @@ def _github_app_problem(raw: object) -> str:
         )
     if repo and (repo.count("/") != 1 or not all(repo.split("/"))):
         return f"github_app.repository {repo!r} is not owner/name"
+    return ""
+
+
+def _refinement_of(raw: object) -> RefinementConfig:
+    """`refinement:` as the config, after `_refinement_problem` passed it."""
+    if not isinstance(raw, dict):
+        return RefinementConfig()
+    default = RefinementConfig()
+    words = raw.get("accept_words")
+    return RefinementConfig(
+        rounds=raw.get("rounds", default.rounds),
+        deadline_hours=raw.get("deadline_hours", default.deadline_hours),
+        open_max=raw.get("open_max", default.open_max),
+        start_per_session=raw.get("start_per_session", default.start_per_session),
+        accept_words=(
+            [str(w).casefold() for w in words]
+            if words is not None
+            else default.accept_words
+        ),
+        chore_after_minutes=raw.get("chore_after_minutes", default.chore_after_minutes),
+        questions_to=raw.get("questions_to", default.questions_to),
+        channel=str(raw.get("channel", "") or ""),
+    )
+
+
+def _whole(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _refinement_problem(raw: object) -> str:
+    """What is wrong with `refinement:`, or "" (TR2; the note's part 3.11).
+
+    **Refused, never clamped.** A limit rite quietly changed is one the User
+    believes they set, and the accept words are the one list where a typo
+    turns a refusal into consent.
+    """
+    from rite_ai.config.models import NEVER_ACCEPT
+
+    if raw is None:
+        return ""
+    if not isinstance(raw, dict):
+        return "'refinement' must be a mapping"
+    config = _refinement_of(raw)
+    for key in ("rounds", "open_max", "start_per_session", "chore_after_minutes"):
+        value = raw.get(key)
+        if value is not None and (not _whole(value) or value < 1):
+            return f"refinement.{key} is {value!r}: it must be a whole number above 0"
+    if config.start_per_session > config.open_max:
+        return (
+            f"refinement.start_per_session ({config.start_per_session}) is more "
+            f"than refinement.open_max ({config.open_max}): no session could "
+            "start that many without passing the cap on open refinements"
+        )
+    hours = raw.get("deadline_hours")
+    if hours is not None and (
+        isinstance(hours, bool) or not isinstance(hours, int | float) or hours <= 0
+    ):
+        return f"refinement.deadline_hours is {hours!r}: it must be a number above 0"
+    words = raw.get("accept_words")
+    if words is not None:
+        if not isinstance(words, list) or not words:
+            return "refinement.accept_words must be a list of at least one word"
+        for word in words:
+            if not isinstance(word, str) or not word.strip():
+                return f"refinement.accept_words has an empty entry ({word!r})"
+            if any(c.isspace() for c in word):
+                return (
+                    f"refinement.accept_words entry {word!r} has a space in it: "
+                    "each entry is one word, matched exactly"
+                )
+            if word.casefold() in NEVER_ACCEPT:
+                return (
+                    f"refinement.accept_words may not contain {word!r}: it is "
+                    "a word people type to refuse, and this list turns a reply "
+                    "into consent"
+                )
+    if config.questions_to not in ("dm", "channel"):
+        return (
+            f"refinement.questions_to is {config.questions_to!r}: it is `dm` "
+            "(the default) or `channel`"
+        )
+    if config.questions_to == "channel":
+        if not config.channel:
+            return (
+                "refinement.questions_to is `channel` and refinement.channel is "
+                "empty: name the private channel rite is invited to, by its id"
+            )
+        if not _SLACK_CHANNEL.match(config.channel):
+            return (
+                f"refinement.channel {config.channel!r} is not a Slack channel "
+                "id (C… or G…) or #name"
+            )
     return ""
 
 
