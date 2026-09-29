@@ -233,19 +233,46 @@ class TestTheEscapesThatWereFoundAfterItShipped:
     server runs outside the sandbox.
     """
 
-    def _server(self, tmp_path):
-        """A tmux server of our own, so nothing here touches the
-        operator's."""
-        sockets = tmp_path / "sock"
-        sockets.mkdir()
-        env = dict(os.environ, TMUX_TMPDIR=str(sockets))
+    def _server(self):
+        """A tmux server of our own, on a SHORT socket path, named with `-S`
+        on every call.
+
+        ⚠ **WRITEUP #36 / DF17: this test used to measure nothing.** Its
+        socket was under pytest's `tmp_path`, past macOS's 104-byte limit for
+        a Unix socket path, so tmux never started, the command inside failed
+        for that reason, and "no file appeared" held with every deny removed.
+        So: a short directory under `/tmp`, `-S` on every tmux call (a
+        `TMUX_TMPDIR` that does not exist silently means the operator's
+        default server — never trust it for isolation), and the server is
+        asserted UP before anything is measured. The socket is laid out as
+        `<dir>/tmux-<uid>/default`, the profile's own socket-directory rule's
+        shape, so both that rule and the broad ones are in play."""
+        root = tempfile.mkdtemp(prefix="rt", dir="/tmp")
+        sock = f"{root}/tmux-{os.getuid()}/default"
+        os.makedirs(os.path.dirname(sock), mode=0o700)
         subprocess.run(
-            ["tmux", "new-session", "-d", "-s", "victim", "sleep 300"],
-            env=env,
+            ["tmux", "-S", sock, "new-session", "-d", "-s", "victim", "sleep 300"],
             timeout=60,
             capture_output=True,
         )
-        return env
+        up = subprocess.run(
+            ["tmux", "-S", sock, "has-session", "-t", "victim"],
+            timeout=30,
+            capture_output=True,
+        )
+        if up.returncode != 0:
+            self._stop(root, sock)
+        assert up.returncode == 0, (
+            f"the outside tmux server on {sock} did not start, so nothing here "
+            "could measure an escape — fix the test's setup, do not skip it"
+        )
+        return root, sock
+
+    def _stop(self, root, sock):
+        subprocess.run(
+            ["tmux", "-S", sock, "kill-server"], timeout=30, capture_output=True
+        )
+        shutil.rmtree(root, ignore_errors=True)
 
     def _under(self, profile, command, env):
         return subprocess.run(
@@ -256,27 +283,80 @@ class TestTheEscapesThatWereFoundAfterItShipped:
             env=env,
         ).returncode
 
+    def _attempt(self, tmp_path, profile_for):
+        """Run the escape under `profile_for(<the server's socket root>)`:
+        returns (direct write landed, the write handed to the outside tmux
+        server landed). The target is in a directory under the home, which
+        the profile does not grant, so the direct write is the control that
+        the boundary is real there."""
+        root, sock = self._server()
+        target = Path(tempfile.mkdtemp(prefix=".rite-escape-probe-", dir=Path.home()))
+        profile = tmp_path / "probe.sb"
+        try:
+            profile.write_text(profile_for(root))
+            self._under(profile, f"touch {target}/direct", dict(os.environ))
+            self._under(
+                profile,
+                f"tmux -S {sock} new-window 'touch {target}/via-tmux'",
+                dict(os.environ),
+            )
+            for _ in range(30):
+                if (target / "via-tmux").exists():
+                    break
+                time.sleep(0.1)
+            return (target / "direct").exists(), (target / "via-tmux").exists()
+        finally:
+            self._stop(root, sock)
+            shutil.rmtree(target, ignore_errors=True)
+
     def test_a_write_cannot_be_smuggled_through_the_tmux_server(
-        self, project, tmp_path, monkeypatch
+        self, project, tmp_path
     ):
         """⚠ **Measured before the fix: this SUCCEEDED.** The file appeared
         outside the boundary, written by the tmux server on the Manager's
-        behalf."""
-        env = self._server(tmp_path)
-        monkeypatch.setenv("TMUX_TMPDIR", env["TMUX_TMPDIR"])
-        profile = write_profile(project, "lead")
-        target = tmp_path / "escaped.txt"
-        try:
-            self._under(profile, f"tmux new-session -d 'touch {target}'", env)
-            time.sleep(2)
-            assert not target.exists(), (
-                "the tmux server wrote a file on the sandbox's behalf — the "
-                "escape is open again"
+        behalf. Proven able to fail by the control below."""
+        direct, via_tmux = self._attempt(
+            tmp_path, lambda root: compose(project, "lead", tmux_tmpdir=root)
+        )
+        assert not direct, (
+            "the target is not outside the boundary: this measures nothing"
+        )
+        assert not via_tmux, (
+            "the tmux server wrote a file on the sandbox's behalf — the escape "
+            "is open again"
+        )
+
+    def test_control_with_the_network_denies_stripped_the_escape_SUCCEEDS(
+        self, project, tmp_path
+    ):
+        """⚠ **The mutation control, and the reason the test above can be
+        trusted (WRITEUP #36).** Every `(deny network-outbound …)` rule is
+        stripped and the filesystem socket-directory deny is left in: the
+        escape must then SUCCEED. If it does not, the apparatus cannot see an
+        escape and the test above is green for nothing. It also pins what was
+        measured on 2026-09-29: seatbelt gates `connect()` on a Unix socket
+        under NETWORK policy, so a filesystem deny alone does not close it."""
+
+        def stripped(root):
+            text = compose(project, "lead", tmux_tmpdir=root)
+            kept = "\n".join(
+                line
+                for line in text.splitlines()
+                if not line.startswith("(deny network-outbound")
             )
-        finally:
-            subprocess.run(
-                ["tmux", "kill-server"], env=env, timeout=30, capture_output=True
-            )
+            assert "(deny network-outbound" not in kept
+            assert f'(deny file-read* file-write* (subpath "{root}/tmux-' in kept
+            return kept
+
+        direct, via_tmux = self._attempt(tmp_path, stripped)
+        assert not direct, (
+            "the target is not outside the boundary: this measures nothing"
+        )
+        assert via_tmux, (
+            "with every network-layer socket deny stripped, the escape did NOT "
+            "succeed — so this apparatus cannot see an escape, and the test "
+            "that asserts it is refused measures nothing"
+        )
 
     def test_a_process_outside_the_sandbox_cannot_be_signalled(self, project):
         """⚠ **Measured before the fix: the sandbox killed a process it had
