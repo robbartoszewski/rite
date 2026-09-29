@@ -32,6 +32,10 @@ KNOWN = {
     ("coordination/distribution.py", "distribute", "list_tickets"): (
         "reads this Manager's own tickets; the handout below is gated"
     ),
+    ("refinement/instructions.py", "brief", "list_tickets"): (
+        "the Owner's refinement brief (TR2): lists unrefined tickets to "
+        "REFINE, never to work; gives nothing to anyone"
+    ),
     ("reporting/status.py", "collect_board_state", "list_tickets"): (
         "reporting only: gives nothing to anyone"
     ),
