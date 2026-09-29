@@ -213,6 +213,17 @@ def send(
                 + "\n".join(f"- {p}" for p in checked.problems),
             )
         same, since = _unchanged_for(attempt, checked.ask)
+        if same >= rounds.ESCALATE_AT:
+            # Robert: if the Owner loops without converging, "it says so
+            # loudly and escalates it as a blocker on the board and in the
+            # checkpoint status updates". The round is not sent.
+            # Under the ticket's lock, like every other write to it: saved
+            # first, so a crash mid-escalation leaves it parked, never asking.
+            blocker = _blocker_text(ticket_id, owner, attempt, checked.ask, since)
+            attempt.parked = rounds.NO_PROGRESS
+            attempt.blocker = blocker
+            save(attempt)
+            return _escalate(root, owner, board, ticket_id, blocker, on_board)
         body = ask.render(
             checked.ask,
             ticket=ticket_id,
@@ -246,6 +257,7 @@ def send(
                 proposal=bool(checked.ask.proposal),
                 where=raised.id,
                 items=[item.text for item in checked.ask.proposal],
+                questions=list(checked.ask.questions),
                 body=body,
             )
         )
@@ -282,6 +294,97 @@ def _unchanged_for(attempt, current) -> tuple[int, int]:
             break
         same, since = same + 1, r.k
     return same, since
+
+
+def _blocker_text(ticket_id: str, owner: str, attempt, current, since: int) -> str:
+    """The blocker he reads to DECIDE, not to be informed (the coordinator):
+    what was proposed, what he said, what is still open, as rite recorded
+    them. rite does not judge what is unclear; two agents failing to agree
+    with him usually means the ticket is, and the record says why."""
+    first = next((r for r in attempt.rounds if r.k == since), None)
+    said_since = [
+        a for a in attempt.answers if first is None or a.get("at", 0) >= first.sent_at
+    ]
+    asked = next((r.questions for r in reversed(attempt.rounds) if r.questions), [])
+    lines = [
+        f"{ticket_id} is BLOCKED: no definition of done agreed. The Owner "
+        f"({owner}) proposed the same thing in round {since} and every round "
+        "since, and rite has stopped the rounds rather than ask again.",
+        "",
+        "What was proposed:",
+        *[f"{n}. {item.text}" for n, item in enumerate(current.proposal, 1)],
+        "",
+        "What you said since it was first proposed:",
+        *(
+            [f"> {line}" for a in said_since for line in str(a["words"]).splitlines()]
+            or ["(nothing)"]
+        ),
+    ]
+    if asked:
+        lines += ["", "Still open, as the Owner last asked it:"]
+        lines += [f"{n}. {q}" for n, q in enumerate(asked, 1)]
+    lines += [
+        "",
+        f"To decide: reply starting with `{ticket_id}` and say what done means, "
+        "or reply `ok` in the last round's thread to accept the proposal as it "
+        "is, or edit the ticket. Any of these unblocks it.",
+    ]
+    return "\n".join(lines)
+
+
+def _escalate(root: Path, owner: str, board, ticket_id: str, blocker: str, on_board):
+    """Loudly: to him, as something that needs him (so it comes back at every
+    check-in until he answers); on the ticket, labelled `blocked` with the
+    blocker as a comment; and to the Owner. Every step that fails is said."""
+    from rite_ai.managers.mailbox import OUTBOX, QUESTION
+    from rite_ai.managers.mailbox import send as send_mail
+
+    said = []
+    send_mail(root, owner, OUTBOX, blocker, kind=QUESTION)
+    if on_board and board is not None:
+        labelled = board.label(ticket_id, [BLOCKED_LABEL])
+        if labelled is not None:
+            said.append(
+                f"the board refused the `{BLOCKED_LABEL}` label: {labelled.message}"
+            )
+        posted = board.comment(ticket_id, blocker)
+        if posted is not None:
+            said.append(f"the blocker could not be posted: {posted.message}")
+    return Sent(
+        False,
+        f"{ticket_id} ESCALATED AS A BLOCKER: your proposal was the same for "
+        f"{rounds.ESCALATE_AT} rounds, so this round was not sent. The User "
+        "has the blocker (proposal, his words, what is open) and it is on the "
+        "ticket; do not ask him about it again until he replies."
+        + (" " + "; ".join(said) + "." if said else ""),
+    )
+
+
+BLOCKED_LABEL = "blocked"
+"""On the ticket while it is escalated (Robert's standing rule: a blocked
+ticket is visibly blocked), removed when his reply unblocks it."""
+
+
+def checkin_lines(root: Path, owner: str) -> list[str]:
+    """Blockers for the checkpoint status update (Robert: escalated "in the
+    checkpoint status updates"). One line each; the full text is on the
+    ticket and in his DM."""
+    blocked = [
+        (ticket, attempt)
+        for ticket, attempt in rounds.all_attempts(root, owner).items()
+        if attempt.parked == rounds.NO_PROGRESS
+    ]
+    if not blocked:
+        return []
+    lines = ["", "BLOCKED, needs your decision:"]
+    for ticket, attempt in blocked:
+        latest = attempt.latest
+        lines.append(
+            f"- {ticket}: no agreed definition of done; the same proposal "
+            f"round after round (last round {latest.k if latest else '?'}). "
+            "The blocker, with the proposal and your words, is on the ticket."
+        )
+    return lines
 
 
 def _when(at: float) -> str:
@@ -395,7 +498,15 @@ def handle(root: Path, owner: str, board, reply: Reply, *, limits) -> list[str]:
                 f"{reply.ticket} was PARKED ({attempt.parked}); the User's reply "
                 "restarts it"
             )
+            if attempt.parked == rounds.NO_PROGRESS and board is not None:
+                unlabelled = board.label(reply.ticket, [], remove=[BLOCKED_LABEL])
+                if unlabelled is not None:
+                    notes.append(
+                        f"the `{BLOCKED_LABEL}` label could not be removed from "
+                        f"{reply.ticket}: {unlabelled.message}"
+                    )
             attempt.parked = ""
+            attempt.blocker = ""
             attempt.misses = 0
         attempt.answers.append(
             {"id": reply.message, "words": reply.words, "at": reply.sent_at}

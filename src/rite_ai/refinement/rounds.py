@@ -69,7 +69,16 @@ NOT_ANSWERED = "not answered after N messages"
 on a discussion he is taking part in."""
 THREAD_UNREADABLE = "thread unreadable"
 NOT_STARTED = "not started by the Manager"
-PARK_REASONS = (NOT_ANSWERED, THREAD_UNREADABLE, NOT_STARTED)
+NO_PROGRESS = "blocked: the same proposal round after round"
+"""Robert, 2026-09-29: if the Owner loops without converging, "it says so
+loudly and escalates it as a blocker on the board and in the checkpoint
+status updates". Detected by the proposal not changing, never by a count
+of rounds."""
+PARK_REASONS = (NOT_ANSWERED, THREAD_UNREADABLE, NOT_STARTED, NO_PROGRESS)
+ESCALATE_AT = 3
+"""The round that would carry the same proposal a third time in a row is
+not sent: the ticket is escalated instead (the second says so in the
+message, `ask.unchanged_line`)."""
 
 MISSES_TO_PARK = 2
 """Consecutive sessions a ticket was handed to the Owner without a round
@@ -102,6 +111,9 @@ class Round:
     items: list[str] = field(default_factory=list)
     """The proposal's items as the User was shown them: what an accept word
     makes the definition of done, and nothing else."""
+    questions: list[str] = field(default_factory=list)
+    """The numbered questions it asked: what is still open, as asked, for a
+    blocker that has to say so."""
     body: str = ""
     """The message as the User was shown it, so it can be put in front of
     him again, unchanged, when he is back."""
@@ -122,6 +134,9 @@ class Attempt:
     rounds: list[Round] = field(default_factory=list)
     parked: str = ""
     misses: int = 0
+    blocker: str = ""
+    """What rite wrote when it escalated this ticket (NO_PROGRESS): the
+    proposal, what he said, what is still open. Kept for the check-in."""
     unanswered: int = 0
     """Consecutive messages about this ticket that reached their deadline
     with no reply. Any reply resets it; `refinement.unanswered` of them
@@ -227,6 +242,7 @@ def _from(data: dict) -> Attempt | None:
             parked=data.get("parked", ""),
             misses=int(data.get("misses", 0)),
             unanswered=int(data.get("unanswered", 0)),
+            blocker=str(data.get("blocker", "")),
             answers=list(data.get("answers", [])),
             accepted=dict(data.get("accepted", {})),
             filing=float(data.get("filing", 0.0)),
