@@ -208,5 +208,8 @@ def test_a_round_still_inside_its_deadline_is_not_repeated(tmp_path):
 
     root, clock = _project(tmp_path), Clock(1000.0)
     _open_round(root, clock, deadline_in=DAY)
+    with rounds.locked(root, "lead", "KAN-7") as (a, save):
+        a.latest.body = "Refinement of KAN-7, round 1 of 3\n\n1. Which?"
+        save(a)
     protocol.step(root, "lead", None, lambda _m: None, messages=_from_him(root, "hi"))
     assert len(_questions(root)) == 1
