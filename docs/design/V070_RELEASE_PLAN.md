@@ -600,7 +600,9 @@ requires):
 
 **Sequencing (coordinator, 2026-09-28):** the v0.6.0 dogfood winds down, its
 findings are fixed, and a fresh dogfood runs from scratch against a v0.7.0
-release candidate, **as a tag blocker**. **MM8 lands BEFORE that RC run**: it
+release candidate, **as a tag blocker**. Its setup, the bar it must meet (fixed before it
+starts) and what it cannot cover are in
+[`V070_RC_DOGFOOD.md`](V070_RC_DOGFOOD.md). **MM8 lands BEFORE that RC run**: it
 moves where every Manager's live state lives, and an RC dogfood of the old
 layout would test something about to be replaced. MM8 lands in pieces, not
 one merge.
