@@ -3995,6 +3995,116 @@ def _load_config_for_write():
 
 
 @cli.group()
+def refine() -> None:
+    """Ticket refinement: whether a ticket has an agreed definition of done.
+
+    A ticket is refined only by a record rite signed on the board, which
+    matches the ticket's current title and description. Nothing else counts:
+    not a label, and not a model saying so
+    (docs/design/V070_TICKET_REFINEMENT.md).
+    """
+
+
+@refine.command("status")
+@click.argument("ticket_id")
+@click.option("--role", default="workers", help="board | workers | testing")
+def refine_status(ticket_id: str, role: str) -> None:
+    """Say whether TICKET_ID has an agreed definition of done, and why.
+
+    One read of the ticket and its comments, and no writes. Exits 0 only
+    when the ticket is REFINED, so a script can gate on it. Every other state
+    exits 1 and names itself: NOT REFINED, STALE, CONFLICT or UNREADABLE,
+    each needing something different.
+
+    Examples:
+      rite refine status KAN-7
+      rite refine status 42
+    """
+    from rite_ai.refinement import status as refinement_status
+
+    result = refinement_status.of(_find_project_root(), None, ticket_id, role=role)
+    click.echo(f"{ticket_id}: {result.state} — {result.detail}")
+    if result.record is not None and result.state == refinement_status.REFINED:
+        click.echo(_provenance_line(result.record.provenance))
+        click.echo(refinement_status.render_for_worker(result.record))
+    raise SystemExit(0 if result.refined else 1)
+
+
+def _provenance_line(provenance: dict) -> str:
+    """How the definition of done was agreed, said so that an attested one is
+    never shown looking like one the User confirmed (TRQ10)."""
+    from rite_ai.refinement import record as refinement_record
+
+    if provenance.get("kind") == refinement_record.ACCEPTED:
+        return "agreed: accepted by the User in their channel"
+    return (
+        f"agreed: {refinement_record.ATTESTED_TOKEN} — attested by a session "
+        f"running as the person at {provenance.get('at', '?')}; not confirmed "
+        "through the User's channel"
+    )
+
+
+@refine.command("accept")
+@click.argument("ticket_id")
+@click.option(
+    "--item", "items", multiple=True, help="A definition-of-done item (repeatable)"
+)
+@click.option(
+    "--as-written",
+    "use_ticket_text",
+    is_flag=True,
+    help="Accept the items under the ticket's own 'Definition of done' heading",
+)
+@click.option(
+    "--verify", "verify", multiple=True, help="A command that proves it (repeatable)"
+)
+@click.option("--in-scope", "scope_in", multiple=True, help="In scope (repeatable)")
+@click.option("--out-of-scope", "scope_out", multiple=True, help="Out of scope")
+@click.option("--role", default="workers", help="board | workers | testing")
+def refine_accept(
+    ticket_id: str,
+    items: tuple[str, ...],
+    use_ticket_text: bool,
+    verify: tuple[str, ...],
+    scope_in: tuple[str, ...],
+    scope_out: tuple[str, ...],
+    role: str,
+) -> None:
+    """Attest a definition of done for TICKET_ID, as the person, at this host.
+
+    Writes a record signed with rite's refinement key as a comment on the
+    ticket, then reads the ticket back and reports REFINED only if the read
+    agrees. The record says it was ATTESTED by a session running as you, not
+    confirmed through your channel: rite cannot tell you from a model running
+    as you, and does not pretend to. It cannot be run from inside a Manager's
+    or Worker's sandbox, which cannot read the key.
+
+    With no --verify, the record says "none agreed", and a Worker is told to
+    report how it checked each item.
+
+    Examples:
+      rite refine accept KAN-7 --item "the HTTP timeout in main.py is a flag" \\
+        --item "with no flag, the timeout is unchanged"
+      rite refine accept 42 --as-written
+    """
+    from rite_ai.refinement import accept as refinement_accept
+
+    outcome = refinement_accept.accept(
+        _find_project_root(),
+        None,
+        ticket_id,
+        items=list(items),
+        verify=list(verify),
+        scope_in=list(scope_in),
+        scope_out=list(scope_out),
+        use_ticket_text=use_ticket_text,
+        role=role,
+    )
+    click.echo(outcome.message, err=not outcome.ok)
+    raise SystemExit(0 if outcome.ok else 1)
+
+
+@cli.group()
 def schedule() -> None:
     """This project's worker schedule (SPEC §2.7)."""
 

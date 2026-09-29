@@ -28,6 +28,8 @@ import httpx
 from .interface import (
     PAGE_LIMIT,
     BackendError,
+    Comment,
+    Thread,
     Ticket,
     TicketBackend,
     TicketFilter,
@@ -73,6 +75,21 @@ def adf_to_text(node: object) -> str:
     if kind in ("paragraph", "heading", "codeBlock", "blockquote"):
         return inner + "\n"
     return inner
+
+
+_THREAD_PAGES_MAX = 50
+"""5000 comments. A ticket beyond that is not complete, and says so, rather
+than being read for ever."""
+
+
+def _comment(data: dict) -> Comment:
+    author = data.get("author") or {}
+    return Comment(
+        id=str(data.get("id", "")),
+        body=adf_to_text(data.get("body")),
+        author=author.get("displayName") or author.get("accountId") or "",
+        created_at=_parse_jira_datetime(data.get("created")),
+    )
 
 
 def _issue_to_ticket(data: dict) -> Ticket:
@@ -344,6 +361,73 @@ class JiraBackend(TicketBackend):
         ticket = _issue_to_ticket(result)
         ticket.url = self._browse_url(ticket_id)
         return ticket
+
+    def read_thread(self, ticket_id: str) -> Thread | BackendError:
+        """The issue and every comment, with Jira's own count checked.
+
+        ⚠ **Not observed against a real site.** No Jira credential was
+        available when this was written (TR0), so the shape below follows
+        Jira's documented v3 responses: an issue GET with `fields=comment`
+        embeds `comments` with `total`, and `/issue/{id}/comment` pages from
+        `startAt`. The thread is complete only when the comments read equal
+        the latest `total` Jira reported, so a guess about the shape that is
+        wrong fails closed (not complete) rather than reading as "no record".
+
+        A comment body is ADF, flattened by `adf_to_text` exactly as a
+        description is. Whether a record's JSON survives that round trip is
+        the other half of the unmeasured TR0 item.
+        """
+        issue = self._request(
+            "GET",
+            f"/issue/{ticket_id}",
+            params={
+                "fields": "summary,description,status,labels,assignee,"
+                "created,updated,comment"
+            },
+        )
+        if isinstance(issue, BackendError):
+            if "→ 404" in issue.message and self._auth_failed():
+                return BackendError(f"{ticket_id}: {self._CREDENTIALS_REJECTED}")
+            return issue
+        if not isinstance(issue, dict):
+            return BackendError(f"unexpected response for {ticket_id}")
+        ticket = _issue_to_ticket(issue)
+        ticket.url = self._browse_url(ticket_id)
+        embedded = (issue.get("fields") or {}).get("comment") or {}
+        raw = list(embedded.get("comments") or [])
+        total = embedded.get("total")
+        pages = 0
+        while isinstance(total, int) and len(raw) < total:
+            pages += 1
+            if pages > _THREAD_PAGES_MAX:
+                return Thread(
+                    ticket,
+                    [_comment(c) for c in raw],
+                    False,
+                    f"stopped after {_THREAD_PAGES_MAX} pages of comments",
+                )
+            page = self._request(
+                "GET",
+                f"/issue/{ticket_id}/comment",
+                params={"startAt": len(raw), "maxResults": 100, "orderBy": "created"},
+            )
+            if isinstance(page, BackendError):
+                return page
+            if not isinstance(page, dict):
+                return BackendError(f"unexpected comment page for {ticket_id}")
+            more = page.get("comments") or []
+            total = page.get("total")
+            if not more:
+                break
+            raw.extend(more)
+        comments = [_comment(c) for c in raw]
+        complete = isinstance(total, int) and total == len(comments)
+        note = (
+            ""
+            if complete
+            else f"Jira counted {total!r} comments and {len(comments)} were read"
+        )
+        return Thread(ticket, comments, complete, note)
 
     def update(self, ticket_id: str, **fields: str) -> None | BackendError:
         jira_fields: dict = {}

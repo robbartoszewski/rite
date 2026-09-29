@@ -9,6 +9,8 @@ from .github import GitHubBackend
 from .interface import (
     PAGE_LIMIT,
     BackendError,
+    Comment,
+    Thread,
     Ticket,
     TicketBackend,
     TicketFilter,
@@ -23,6 +25,7 @@ if TYPE_CHECKING:
 __all__ = [
     "PAGE_LIMIT",
     "BackendError",
+    "Comment",
     "GitHubBackend",
     "JiraBackend",
     "JiraConfig",
@@ -30,6 +33,7 @@ __all__ = [
     "TicketBackend",
     "TicketFilter",
     "TicketPage",
+    "Thread",
     "create_backend",
     "create_backend_from_config",
     "paginate",
