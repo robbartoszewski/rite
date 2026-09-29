@@ -95,14 +95,6 @@ def accept(
             )
     if not items:
         return Outcome(False, "no definition of done: pass --item, or --as-written")
-    try:
-        key = refinement_key.ensure()
-    except OSError as e:
-        return Outcome(
-            False,
-            f"cannot sign here: {e}. A record can only be written outside every "
-            "sandbox, where rite's refinement key is readable",
-        )
     when = (now or datetime.now(UTC)).isoformat(timespec="seconds")
     # ⚠ No hostname, and nothing else about this machine. The record is
     # posted to the board, which may be public; a machine's name is the same
@@ -114,6 +106,58 @@ def accept(
         "at": when,
         "as_written": use_ticket_text,
     }
+    outcome = write(
+        board,
+        before,
+        ticket_id,
+        items=items,
+        verify=verify,
+        provenance=provenance,
+        scope_in=scope_in,
+        scope_out=scope_out,
+    )
+    if not outcome.ok:
+        return outcome
+    return Outcome(
+        True,
+        f"{ticket_id}: REFINED — record {outcome.record.record_id}, attested by a "
+        "session running as you (not confirmed through your channel)",
+        outcome.record,
+    )
+
+
+def write(
+    board,
+    before: st.Status,
+    ticket_id: str,
+    *,
+    items: list[str],
+    verify: list[str] | str,
+    provenance: dict,
+    scope_in: list[str] | None = None,
+    scope_out: list[str] | None = None,
+) -> Outcome:
+    """Sign a record against `before`'s ticket, post it, read it back.
+
+    The one writer of records, for a person's attestation (`accept`) and for
+    the User's accept word in his channel (TR2, `protocol`). `before` is the
+    single read the caller decided from: the record is signed against its
+    title and description, and supersedes its head, so an edit or another
+    record landing after that read makes the result STALE or CONFLICT, and
+    is said, never hidden (the note's part 4, races 1 and 3).
+
+    Deterministic for the same inputs: a retry after a write whose response
+    was lost produces the same record id, so a second copy is one record, not
+    a second head (race 10).
+    """
+    try:
+        key = refinement_key.ensure()
+    except OSError as e:
+        return Outcome(
+            False,
+            f"cannot sign here: {e}. A record can only be written outside every "
+            "sandbox, where rite's refinement key is readable",
+        )
     try:
         record = rec.build(
             ticket=ticket_id,
@@ -151,9 +195,4 @@ def accept(
             "refined, but not by this acceptance: check the ticket",
             after.record,
         )
-    return Outcome(
-        True,
-        f"{ticket_id}: REFINED — record {record.record_id}, attested by a session "
-        "running as you (not confirmed through your channel)",
-        record,
-    )
+    return Outcome(True, f"{ticket_id}: REFINED — record {record.record_id}", record)
