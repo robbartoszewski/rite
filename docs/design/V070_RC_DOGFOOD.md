@@ -256,8 +256,11 @@ can do: his keychain, rite's credential store, `~/.ssh`, every project,
 other sandboxes, host-side `rite`, and `gh` with his own token — which also
 defeats rite's check that a Worker's token cannot open a pull request
 upstream (that check is a constraint only once this is closed). The fix is
-in yoloAI's Worker profile; the patch is written, and nothing has been
-built or proven. **The run does not start until the #35 probe passes
+in yoloAI's Worker profile, **at the network layer**: seatbelt treats
+connecting to a Unix socket as network, so denying the socket directory on
+the filesystem does not close it (measured); a path-scoped network deny of
+that directory, as rite's own Manager profile has (`9862b59`), does. The
+patch is written, and nothing has been built or proven. **The run does not start until the #35 probe passes
 against a yoloAI binary with the fix, on this machine.** A run started
 before that is void, whatever it produces.
 
