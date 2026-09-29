@@ -188,3 +188,22 @@ def test_a_managers_refused_request_tells_it_the_state_and_the_remedy(
     (note,) = read(tmp_path, "lead", INBOX)
     assert "NOT started: NOT REFINED" in note.text
     assert 'rite refine accept 7 --item "…"' in note.text
+
+
+def test_ticket_md_and_the_ticket_command_send_a_worker_to_the_record():
+    """TR3: a Worker works to rite's record, and judges no ticket "complete
+    enough" itself. Neither text still says "stop rather than guessing", and
+    `/ticket` does not send a sandboxed Worker to a command it cannot run."""
+    from rite_ai.sandbox.delivery import delivery_text, render_ticket
+
+    root = Path(__file__).resolve().parent.parent
+    command = (root / "templates" / "commands" / "ticket.md").read_text()
+    step_one = command.split("\n2. ", 1)[0]
+    assert "stop rather than guessing" not in command
+    assert '"Agreed definition of done"' in step_one
+    assert "do not try `rite board\n     show` or `rite refine status`" in step_one
+    assert "UNREADABLE means rite could not check" in step_one
+
+    text = delivery_text(render_ticket(TICKET), "2026-09-29T00:00:00Z", "GitHub")
+    assert "stop rather than guessing" not in text
+    assert "Work to the agreed definition of done" in text
