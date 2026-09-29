@@ -1,8 +1,9 @@
 # The scenario gate (§7.3, D-81): the design pass, and a size
 
 **Status: DESIGN, 2026-09-29, against `main` `6c97075`. Nothing here is
-built.** SGQ0 to SGQ3 were decided the same day (part 7); SGQ4 and SGQ5 are
-Robert's. This note is the pass the v0.7.0 plan requires before the gate can
+built.** Every question in part 7 was decided the same day: SGQ0 to SGQ3 by
+the v0.7.0 coordinator, SGQ4 and SGQ5 by Robert. The build waits until after
+the release candidate (SGQ0). This note is the pass the v0.7.0 plan requires before the gate can
 be sized ("needs its own design pass before a size"). It answers four
 questions: §9.15.3a's recorded gap, how the gate composes with refinement,
 what the gate is worth, and how it relates to the release-candidate dogfood.
@@ -269,12 +270,13 @@ hostile-input requirement D-81 already says has to be written down.
 
 | defect | caught? | why |
 |---|---|---|
-| **The Owner's refinement check for assignment, disconnected, with all 241 related tests green** (#116) | **Yes, if the agreed command drives the Owner's tick** and not the function. "File an unrefined ticket, run the Owner's assignment, the ticket stays unassigned" fails when the wire is cut. | This is D-81's written-tested-called-by-nothing class, and the gate's strongest case: a scenario exercises the path, so an unconnected check presents as missing behaviour. **Caveat:** it was in fact caught before merge, by the implementer's mutation test. The gate would have been a second catch, not the first. And it applies to rite's own development only if rite runs this gate on itself, which is a separate choice from shipping it. |
+| **The Owner's refinement check for assignment, disconnected, with all 241 related tests green** (#116) | **Yes, if the agreed command drives the Owner's tick** and not the function. "File an unrefined ticket, run the Owner's assignment, the ticket stays unassigned" fails when the wire is cut. | This is D-81's written-tested-called-by-nothing class, and the gate's strongest case: a scenario exercises the path, so an unconnected check presents as missing behaviour. **Caveat:** it was in fact caught before merge, by the implementer's mutation test. The gate would have been a second catch, not the first. **rite runs this gate on its own development (SGQ4, Robert, 2026-09-29), so this row is a catch here, in the codebase the gate is built in, and not only in principle.** |
 | **The macOS CI job running six files of 323 while reporting green** (tag readiness D12) | **No.** | This is infrastructure, and it is the gate's own defect class. An agreed `pytest` that collects six files exits 0, and the gate records a signed, SHA-matched pass of it. The signature proves rite ran the command. It says nothing about how much the command covered. Nothing in this design detects a command that measures less than its name suggests, and the gate should not be sold as if it did. |
 | **Bentora's editor rewriting documents it did not author** (BEN-270, in Bentora, not rite: for one sample it printed raw markup into a filed court document) | **Only if the definition of done named the content that triggered it.** | "Silently" means exit code 0, so an exit-code gate sees a pass. A command that opens a document the editor did not author, saves it, and diffs it against the original catches it, but only for documents the command uses. That is the path-escape case again: caught where someone thought to require it, here by requiring that "a document the editor did not write comes back byte-identical". *Corrected 2026-09-29: the first draft of this row could not find the defect because it searched rite's history; it is Bentora's.* |
 
 **So, honestly: one of three, and that one had already been caught another
-way.** The pattern is the one D-81 predicted. The gate catches missing
+way.** Since SGQ4, that one is a defect **this project** would have caught,
+not one a project using rite might. The pattern is the one D-81 predicted. The gate catches missing
 behaviour on a path someone agreed to exercise. It does not catch a check
 that measures less than it claims, and that has been this codebase's most
 frequent defect since D-81 was written. **The gate adds one more place where
@@ -326,12 +328,48 @@ already schedules), not adding scope ahead of a blocker.
 keying come out (2.3, 2.4), and the Worker-run log is replaced rather than
 built (3.1). What remains is two commands and a signed comment.
 
-**One costless thing for the RC, if Robert wants it (his word, because the
-bar is pre-registered):** in the results, record for each refined ticket
-whether `verify` was agreed, and whether those commands, run by hand at
-step 9 against the PR's head, passed. That is the gate run manually once,
-and its answers settle SGQ1 and SGQ2. It is a results note, not a pass
-condition.
+**One costless thing for the RC, ruled in by Robert (SGQ5):** in the
+results, record for each refined ticket whether `verify` was agreed, and
+whether those commands, run by hand at step 9 against the PR's head, passed.
+That is the gate run by hand once. Its answers are the data SGQ2 waits for,
+and they check SGQ1's warning line against real records. It is a results
+note, not a pass condition. **This note does not edit `V070_RC_DOGFOOD.md`,**
+because another session owns it. The exact wording offered for that
+document is in part 8.
+
+## 5a. rite gates its own development: what that commits the project to
+
+SGQ4 is a change to how this project works, not a setting, and its
+consequences are stated here rather than left implied.
+
+- **Every piece of rite's own work needs a ticket with an agreed definition
+  of done, and verify commands wherever they can be written.** The gate is
+  keyed by ticket and reads the REFINED record (3.2). rite's work today is
+  driven by plan rows (DF, TR, PB…) and PRs, not by board tickets with
+  records. Refinement applied to rite itself means filing each row as a
+  ticket on a board and agreeing it (`rite refine accept`, or TR2's rounds
+  once built) before work on it starts. Plan rows already carry "fixed when"
+  and "observed" columns. Those are close to a definition of done, and they
+  become verify commands only where someone writes them as commands.
+- **rite's own repository needs a board and a refinement key.** That means
+  a rite-managed project whose board is rite's issues, or a separate one,
+  with the key on the machine that signs. Where that project's root lives,
+  and whether it is the separate-root layout the RC uses, is a setup
+  decision SG1 must make, not assume.
+- ⚠ **Independence by construction does not carry over as it stands.** 2.1's
+  strongest claim is that the record predates the Worker because TR4 refuses
+  to start a Worker without one. rite's own development is done by sessions
+  the coordinator starts, not by `rite sandbox start`, so nothing refuses to
+  start work before the record exists. The gate can still compare the
+  record's signed `provenance.at` with the branch's first commit. But commit
+  dates are written by the committer, so that is the proxy 2.1 rejected. On
+  rite's own work the order holds **by practice** (record first, then
+  dispatch) unless the dispatch goes through something that checks. The
+  gate's evidence names which of the two applied.
+- **"None agreed" will be common at first,** because a lot of rite's work is
+  design and documentation that no command checks. That is SGQ1's warning
+  line, and it is expected. The share of rite's own tickets that carry
+  commands is worth recording alongside the RC's (SGQ5).
 
 ## 6. Size
 
@@ -351,9 +389,10 @@ measure.
 
 ## 7. Decisions
 
-SGQ0 to SGQ3 were decided by the v0.7.0 coordinator on 2026-09-29, taking the
-recommendations. SGQ4 and SGQ5 are Robert's: SGQ4 is a decision about his own
-process rather than about the feature, and SGQ5 changes a pre-registered bar.
+All decided on 2026-09-29. SGQ0 to SGQ3 were decided by the v0.7.0
+coordinator, taking the recommendations. SGQ4 and SGQ5 are Robert's rulings,
+relayed by the coordinator. Each is his answer "yes" as relayed; no longer
+quotation came with them, and none is invented here.
 
 | id | question | recommendation |
 |---|---|---|
@@ -361,5 +400,31 @@ process rather than about the feature, and SGQ5 changes a pre-registered bar.
 | **SGQ1** | May a ticket be merged through the gate with `verify: "none agreed"`? | ✅ **DECIDED: yes, with a visible warning line.** This keeps TRQ9 (verify commands optional but explicit). A gate that refused would quietly make them mandatory |
 | **SGQ2** | Link each agreed command to the item it checks (a record v2, inside TR2's proposal format)? | ✅ **DECIDED: after the RC,** on real records. It is the difference between "every command passed" and "every item was checked", and whether it is worth another question to the User per ticket is an RC observation |
 | **SGQ3** | Post the result as a GitHub commit status, so a repository can make it required? | ✅ **DECIDED: not in v0.7.0.** The fork-scoped token cannot post a commit status, and that is a hard constraint. It needs a token permission the RC's scoped token does not have. After PB1, the merge is rite's own and the status adds nothing |
-| **SGQ4** | Does rite run this gate on its own development? | ⏳ **Robert's.** It is a decision about his process, not the feature. The #116 catch only counts if it does |
-| **SGQ5** | The RC results note in section 5 | ⏳ **Robert's**, because it changes a pre-registered bar |
+| **SGQ4** | Does rite run this gate on its own development? | ✅ **RULED by Robert: yes.** rite runs the scenario gate on its own development. That makes the #116 row a catch in this codebase (part 4.2), and it commits the project to refinement of its own tickets (part 5a) |
+| **SGQ5** | The RC results note in section 5 | ✅ **RULED by Robert: yes.** The line goes into the RC's results. The wording offered is in part 8; `V070_RC_DOGFOOD.md` is changed by the session that owns it, not by this note |
+
+## 8. The wording offered for `V070_RC_DOGFOOD.md` (SGQ5)
+
+A new subsection at the end of part 2, placed after 2.9 so that no existing
+number changes. Its dated line follows the document's own rule for changing
+the bar ("Robert's word and a dated note beside the change"):
+
+> ### 2.10 Agreed verify commands, run by hand at step 9 (recorded, not a pass condition)
+>
+> *Added 2026-09-29 on Robert's word (SGQ5 in `V070_SCENARIO_GATE.md`).
+> Recorded for the scenario gate's design; it does not change what passes.*
+>
+> - Exercised: **yes**, for every ticket that reaches step 9.
+> - For each ticket, record:
+>   1. the refinement record id, and whether it was `accepted` or `attested`;
+>   2. whether `verify` was agreed: the commands, verbatim from the record, or
+>      `none agreed`;
+>   3. if commands were agreed: each one run by hand at step 9 against the
+>      pull request's head commit (recorded by SHA), with its exit code, and
+>      whether its argv names a file that the Worker's branch added or
+>      changed.
+> - Not a pass condition: a ticket with `none agreed`, or with a failing
+>   command, does not fail the run by this line. A failing agreed command on
+>   a diff that went on to the maintainer is recorded as a finding under
+>   step 11.
+
