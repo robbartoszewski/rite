@@ -96,7 +96,7 @@ def take(root: Path, manager: str) -> list[str]:
     return found
 
 
-def honour(root: Path, manager: str, say) -> None:
+def honour_deliveries(root: Path, manager: str, say) -> None:
     """Deliver every request `manager` wrote, and tell it what happened."""
     from rite_ai.managers.telling import tell_manager
     from rite_ai.publishing.deliver import Refused, deliver
