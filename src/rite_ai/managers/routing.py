@@ -210,6 +210,22 @@ def _quoted(text: str) -> str:
     return "\n".join(f"> {line}" for line in text.strip().splitlines())
 
 
+RECORD_FOLLOWS = (
+    "rite: the quoted lines above are the Owner's; the quoted lines below are "
+    "the definition of done the User agreed for this ticket. Work to the one "
+    "below."
+)
+"""The one UNQUOTED line between the Owner's text and rite's record.
+
+⚠ **Unforgeable because every line of the Owner's text is quoted**
+(`_quoted`): nothing the Owner writes can produce an unquoted line, so the
+only unquoted line after the header is rite's. Without it, the Owner's text
+and the record are one continuous quoted block, and an Owner who wrote its
+own "Agreed definition of done for RT-1 …" would be indistinguishable from
+rite's, which is exactly the summary the record exists to replace. The
+record stays quoted too, so a board's words cannot pose as a rite header."""
+
+
 def _routed_message(
     owner: str,
     text: str,
@@ -219,14 +235,15 @@ def _routed_message(
 ) -> str:
     """What the secondary receives: rite's header, naming the ticket rite
     checked, then the Owner's text, then the agreed definition of done rite
-    checked it against (TR5). Both quoted: neither may forge a header."""
+    checked it against (TR5). Both quoted: neither may forge a header. Between
+    them, `RECORD_FOLLOWS`, unquoted, which only rite can write."""
     when = (now or datetime.now()).strftime("%a %H:%M")
     message = (
         f"[routed by the Owner Manager {owner!r} · ticket {ticket} · sent {when} "
         f"· INSTRUCTION]\n{_quoted(text)}"
     )
     if agreed:
-        message += "\n" + _quoted(agreed)
+        message += "\n" + RECORD_FOLLOWS + "\n" + _quoted(agreed)
     return message
 
 
@@ -387,6 +404,7 @@ def collect_reports(
     be. Dedup does nothing about a false report; only verification does.
     """
     from rite_ai.managers import checkins
+    from rite_ai.managers.verifier import event_fields
 
     _mark_seen_running(root, owner, managers)
     brought = 0
@@ -444,6 +462,7 @@ def collect_reports(
                     "at": time.time(),
                     "from": sender,
                     "verdict": verdict.kind,
+                    **event_fields(verdict),
                 },
             )
             brought += 1
@@ -1244,19 +1263,24 @@ def verification_summary(root: Path, owner: str, since: float) -> str:
     verification is rite's own session, not an Owner session, and a single
     number mixing the two is how the cap was once mis-sized."""
     from rite_ai.managers import checkins
+    from rite_ai.managers.verifier import guard_counts
 
     counts: dict[str, int] = {}
+    events = []
     for e in checkins.ledger(root, owner):
         if e.get("event") == "verification" and float(e.get("at") or 0) >= since:
             kind = str(e.get("verdict"))
             counts[kind] = counts.get(kind, 0) + 1
+            events.append(e)
     if not counts:
         return ""
     total = sum(counts.values())
     parts = ", ".join(f"{n} {k.replace('_', ' ')}" for k, n in sorted(counts.items()))
+    guards = guard_counts(events)
     return (
         f"rite ran {total} verification(s) of replies ({parts}); they are "
         "rite's own sessions, not the Owner's, and not counted against its cap"
+        + (f"; {guards}" if guards else "")
     )
 
 

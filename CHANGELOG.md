@@ -2,6 +2,18 @@
 
 ## Unreleased: 0.7.0 (notes in progress, completed at release)
 
+### The verifier no longer contradicts a claim about ground it could not open
+
+#102 stopped the verifier contradicting a reply that names a file it cannot
+read. A reply that says "I journaled the observation" without a path was
+still exposed: the verifier runs as the Owner, and cannot open another
+Manager's state. The verifier now has to say what its answer rested on, and
+rite checks, from inside the verifier's own boundary, whether it could open
+that. When it could not, the Owner reads that rite could not establish the
+claim either way, not that it looks false. rite never reads a Manager's
+journal to decide this. How often a contradiction names nothing it rested
+on is counted in the verification summary and the standup.
+
 ### ⚠ A Manager's text goes on stdin: `rite reply`, `rite ask` and `rite route` take `-`
 
 **Text given to these commands as an argument is now refused.** In the

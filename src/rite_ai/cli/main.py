@@ -7232,7 +7232,7 @@ def _router_for(root: Path, manager: str, board=None):
                 owner,
                 names,
                 say,
-                verify=lambda _sender, text: verify(root, owner, text),
+                verify=lambda sender, text: verify(root, owner, text, claimant=sender),
                 sweep_seconds=60.0 * sweep_minutes,
             )
 
