@@ -1170,7 +1170,17 @@ def start_worker(
                 f'("max_sandboxes") or unset it for no bound.',
             )
 
-    args = [binary, "new", "--backend", config.backend, "--agent", "claude"]
+    # ⚠ The operator's own Claude settings stay out (dogfood #27). yoloAI's
+    # claude agent copies `~/.claude/settings.json` from the home of the
+    # process running it into every sandbox, on every create, start and
+    # restart (`envsetup.CopySeedFiles`, not `agent_files`, and no option
+    # turns it off). So `yoloai new` runs with a home rite owns, and
+    # `--data-dir` keeps yoloAI's own state where it always is.
+    clean_home = config.backend == "seatbelt"
+    args = [binary]
+    if clean_home:
+        args += ["--data-dir", str(Path.home() / ".yoloai")]
+    args += ["new", "--backend", config.backend, "--agent", "claude"]
     if allow_dirty:
         # yoloAI refuses a workdir with uncommitted changes unless told
         # otherwise, and a Worker part-way through a task is exactly that.
@@ -1197,6 +1207,8 @@ def start_worker(
     # would compete with the one passed below. Both start GIT_CONFIG_.
     for inherited in [k for k in yoloai_env if k.startswith("GIT_CONFIG_")]:
         del yoloai_env[inherited]
+    if clean_home:
+        yoloai_env["HOME"] = str(worker_home())
     claude_login = delivered.pop(CLAUDE_TOKEN_ENV_VAR, None)
     if claude_login:
         yoloai_env[CLAUDE_TOKEN_ENV_VAR] = claude_login
@@ -1341,6 +1353,65 @@ def start_worker(
             "which ticket to work, or destroy it and start again with --ticket"
         )
     return SandboxResult(True, "\n".join(lines))
+
+
+def worker_home(home: Path | None = None) -> Path:
+    """The home `yoloai new` runs with: rite's, holding only an empty
+    `.claude/settings.json` (dogfood #27).
+
+    ⚠ **Measured on yoloAI 0.11.0, seatbelt, 2026-09-29.** With the
+    operator's home, a Worker's settings were theirs: their hooks (here, a
+    coordination system of their own, run on every session start and stop),
+    their `env`, merged with yoloAI's. With this home, only yoloAI's own
+    hooks. yoloAI copies the file rather than linking it, so the directory
+    is only needed while `yoloai new` runs, and it is rewritten each time.
+
+    Under the credential root's parent, which no Manager's profile grants.
+    Nothing in it is secret; that is just where rite keeps its own files.
+
+    ⚠ **The home also decides what the sandbox may READ.** yoloAI's seatbelt
+    profile grants `<home>/.local` and a few Swift/Xcode paths, resolving
+    symlinks (`runtime/seatbelt/profile.go`, `writeProfileHomeDir`).
+    Measured with an empty home: `rite` inside the Worker was found but its
+    Python could not load (`Library not loaded: @rpath/libpython3.13.dylib`,
+    under `~/.local/share/uv/python`), so nothing rite does inside a Worker
+    worked. Those paths are linked to the operator's own, which gives the
+    grants yoloAI gives today. That includes `.gitconfig` and `.config/git`:
+    a Worker commits as the operator, exactly as before (Robert, 2026-09-29).
+    rite's `GIT_CONFIG_*` still override the parts of that config that cannot
+    work inside (credential helper, signing, hooks path).
+    """
+    from rite_ai.managers import github_access
+
+    real = Path.home()
+    path = github_access._credential_root(home).parent / "worker-home"  # noqa: SLF001
+    (path / ".claude").mkdir(parents=True, exist_ok=True)
+    (path / ".claude" / "settings.json").write_text("{}\n")
+    for granted in _HOME_GRANTS:
+        link, target = path / granted, real / granted
+        if link.is_symlink():
+            if link.readlink() == target:
+                continue
+            link.unlink()
+        elif link.exists():
+            continue  # not rite's link; leave it rather than delete it
+        if target.exists():
+            link.parent.mkdir(parents=True, exist_ok=True)
+            link.symlink_to(target)
+    return path
+
+
+_HOME_GRANTS = (
+    ".local",
+    ".gitconfig",
+    ".config/git",
+    "Library/Caches/org.swift.swiftpm",
+    "Library/Developer/Xcode",
+    "Library/Caches/swift-build",
+    "Library/org.swift.swiftpm",
+)
+"""What yoloAI 0.11.0's seatbelt profile grants under the home
+(`writeProfileHomeDir`). Linked from `worker_home` to the real ones."""
 
 
 def sandbox_git_environment(gh: str | None) -> dict[str, str]:

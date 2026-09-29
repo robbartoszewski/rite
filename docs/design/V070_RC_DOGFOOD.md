@@ -269,6 +269,20 @@ A pass is a pass for **this** configuration. It says nothing about:
   reading a host-written `answer.json` has not been measured by anyone.
 - **Unattended operation.** Robert drives and watches. Anything that only
   fails with nobody there is not tested.
+- **A Worker as a stranger's machine would run it, only partly.** yoloAI
+  copies the operator's `~/.claude/settings.json` into every Worker sandbox
+  on every create, start and restart, and nothing turns that off (dogfood
+  #27). Without rite's workaround the run's Workers would carry Robert's
+  Claude hooks and `env`, and a pass would be conditional on his personal
+  configuration. With it (SPEC 0.24.52), rite starts each Worker under a
+  home of its own, so the Worker's settings are yoloAI's alone; his git
+  config is linked in, so Worker commits are his, as before. It does
+  **not** cover a sandbox Robert himself starts, restarts or resumes with
+  `yoloai start`, `restart` or `attach --resume` (that copies his settings
+  back in), a sandbox created before the RC, or anything yoloAI takes from
+  his machine other than his Claude settings and his git config. The
+  plugin marketplace seen in the v0.6.0 Worker was Claude Code's own
+  default, fetched by Claude Code, not his configuration.
 - **Whether a Worker's pull request says what is true.** Nothing in rite
   checks the claims in a Worker's PR description or commit messages: the
   verifier reads only replies from secondary Managers. A confidently wrong

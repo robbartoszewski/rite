@@ -626,7 +626,9 @@ class TestStartWorkerCapEnforcement:
                 tmp_path, "alpha", SandboxConfig(max_concurrent_workers=5)
             )
         assert result.ok
-        mock_run.assert_called_once()
+        # One `yoloai` call. The others read the host's git identity (#27).
+        yoloai = [c for c in mock_run.call_args_list if c[0][0][0].endswith("yoloai")]
+        assert len(yoloai) == 1
 
 
 class TestStopAndDestroy:
