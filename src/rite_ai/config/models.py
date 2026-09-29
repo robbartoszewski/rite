@@ -33,6 +33,9 @@ class Module:
     description: str = ""
     # A lambda so `RecordedCommands` can be defined after this class.
     commands: RecordedCommands = field(default_factory=lambda: RecordedCommands())
+    # This module's override of the project's `publish:` block, key by key
+    # (PB1). Every key None means "no override".
+    publish: ModulePublish = field(default_factory=lambda: ModulePublish())
 
 
 @dataclass
@@ -52,6 +55,38 @@ class RecordedCommands:
     test: str | None = None
     lint: str | None = None
     format: str | None = None
+
+
+STRATEGIES = ("commit", "push", "pull_request", "push_to_shared")
+"""What rite does with a finished task's commits (PB1). Named verbs, never
+numbers. `push_to_shared` parses and is refused at start until v0.8.0 (PB2)."""
+
+
+@dataclass
+class PublishConfig:
+    """The project's `publish:` block (PB1, `V070_RELEASE_PLAN.md` Track PB).
+
+    `pull_request` is the default by Robert's decision: with `auto_merge` off
+    it is strictly safer than `push`, and the team that inspects every line is
+    the team that will not have changed it."""
+
+    strategy: str = "pull_request"
+    squash: bool = False
+    auto_merge: bool = False
+
+
+@dataclass
+class ModulePublish:
+    """A module's `publish:` override. `None` means "not overridden", never
+    "off": resolution falls back to the project's value for that key only,
+    the way `RecordedCommands` does."""
+
+    strategy: str | None = None
+    squash: bool | None = None
+    auto_merge: bool | None = None
+    # PB2 (v0.8.0). Parsed so a config written for it is refused at start by
+    # name rather than as an unknown key; nothing reads it for publishing.
+    shared_repo: str | None = None
 
 
 @dataclass
@@ -476,6 +511,7 @@ class ProjectConfig:
     coordination: CoordinationConfig = field(default_factory=CoordinationConfig)
     slack: SlackConfig = field(default_factory=SlackConfig)
     github_app: GithubAppConfig = field(default_factory=GithubAppConfig)
+    publish: PublishConfig = field(default_factory=PublishConfig)
 
 
 @dataclass

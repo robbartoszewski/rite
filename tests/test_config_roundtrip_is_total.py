@@ -34,6 +34,7 @@ from rite_ai.config.models import (
     CoordinationConfig,
     ExpertiseEntry,
     ProjectConfig,
+    PublishConfig,
     PublishGateConfig,
     ScanPattern,
     ScheduleConfig,
@@ -77,6 +78,10 @@ _VALID_ALTERNATES = {
     # schema-validated.
     "refinement.questions_to": "channel",
     "refinement.channel": "G012AB3CD",
+    # A closed vocabulary, and `auto_merge` (flipped to true) is refused beside
+    # any strategy but a pull request. `_populated` starts from `commit`, so
+    # this alternate is both distinct and valid with auto_merge on.
+    "publish.strategy": "pull_request",
 }
 
 
@@ -142,6 +147,7 @@ def _populated() -> ProjectConfig:
             windows=[ScheduleWindow(hours="09:00-17:00", workers=3)],
         ),
         budget=BudgetConfig(weekly_token_budget=12_000_000),
+        publish=PublishConfig(strategy="commit"),
         checkins=CheckinsConfig(
             windows=[CheckinWindow(hours="09:00-10:00", days="Mon-Fri")]
         ),

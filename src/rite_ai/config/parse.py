@@ -12,6 +12,7 @@ import yaml
 
 from .managers import parse_managers
 from .models import (
+    STRATEGIES,
     BudgetConfig,
     CheckinsConfig,
     CheckinWindow,
@@ -21,9 +22,11 @@ from .models import (
     GithubAppConfig,
     HeartbeatConfig,
     Module,
+    ModulePublish,
     PoolConfig,
     ProjectBrief,
     ProjectConfig,
+    PublishConfig,
     PublishGateConfig,
     RecordedCommands,
     RefinementConfig,
@@ -174,6 +177,7 @@ _CONFIG_SECTIONS = {
     "refinement": _fields(RefinementConfig),
     "spec": _fields(SpecConfig),
     "coordination": _fields(CoordinationConfig),
+    "publish": _fields(PublishConfig),
 }
 _CONFIG_KEYS = _fields(ProjectConfig)
 _EXPERTISE_KEYS = _fields(ExpertiseEntry, without=frozenset({"name"}))
@@ -250,6 +254,72 @@ def _parse_recorded_commands(raw: object) -> RecordedCommands | str:
     return RecordedCommands(**{key: value.strip() for key, value in raw.items()})
 
 
+_MODULE_PUBLISH_KEYS = _fields(ModulePublish)
+
+
+def _parse_publish(raw: object, *, module: bool) -> PublishConfig | ModulePublish | str:
+    """A `publish:` block, the project's or a module's, or what is wrong
+    with it (PB1).
+
+    ⚠ **Refused, never narrowed to the default.** A misspelt strategy read as
+    `pull_request` would open PRs for a project that asked for `commit`, and
+    `commit` is the setting a team chooses precisely so nothing leaves the
+    machine unreviewed. That outweighs the reason other blocks narrow (a
+    refused config.yaml stops every command): the fix is one line in a file,
+    and the refusal names it.
+
+    A module's keys are all optional; a project's absent keys take the
+    defaults. `auto_merge: true` beside a `strategy` other than
+    `pull_request` IN THE SAME BLOCK is refused: that pair was written
+    together and cannot mean anything. One inherited from the project is
+    not refused; `rite doctor` shows it as not applying to that module.
+    """
+    where = "publish"
+    if raw is None:
+        return ModulePublish() if module else PublishConfig()
+    if not isinstance(raw, dict):
+        return f"'{where}' must be a mapping of strategy, squash and auto_merge"
+    known = _MODULE_PUBLISH_KEYS if module else _fields(PublishConfig)
+    unknown = _unknown_key(raw, known)
+    if unknown:
+        return f"{where}: {unknown}"
+    strategy = raw.get("strategy")
+    if strategy is not None and strategy not in STRATEGIES:
+        close = difflib.get_close_matches(str(strategy), STRATEGIES, n=1)
+        hint = f" — did you mean '{close[0]}'?" if close else ""
+        return (
+            f"{where}.strategy {strategy!r} is not one of {', '.join(STRATEGIES)}{hint}"
+        )
+    for key in ("squash", "auto_merge"):
+        value = raw.get(key)
+        # `is not True/False`, not truthiness: YAML reads `squash: "no"` as a
+        # string, which is truthy, and would squash a project that said no.
+        if value is not None and not isinstance(value, bool):
+            return f"{where}.{key} must be true or false, not {value!r}"
+    if raw.get("auto_merge") is True and strategy not in (None, "pull_request"):
+        return (
+            f"{where}.auto_merge is true beside strategy {strategy!r}: only a "
+            "pull request is ever merged by rite. Remove auto_merge, or use "
+            "strategy: pull_request"
+        )
+    shared = raw.get("shared_repo")
+    if shared is not None and (not isinstance(shared, str) or not shared.strip()):
+        return f"{where}.shared_repo must be a remote URL or name"
+    if module:
+        return ModulePublish(
+            strategy=strategy,
+            squash=raw.get("squash"),
+            auto_merge=raw.get("auto_merge"),
+            shared_repo=shared.strip() if isinstance(shared, str) else None,
+        )
+    defaults = PublishConfig()
+    return PublishConfig(
+        strategy=strategy if strategy is not None else defaults.strategy,
+        squash=raw.get("squash", defaults.squash),
+        auto_merge=raw.get("auto_merge", defaults.auto_merge),
+    )
+
+
 def home_relative(url: str | None) -> str | None:
     """A module URL as it is written into a committed file.
 
@@ -312,6 +382,10 @@ def parse_modules(path: Path) -> list[Module] | ParseError:
         if isinstance(commands, str):
             return ParseError(str(path), f"module '{name}': {commands}")
 
+        publish = _parse_publish(entry.get("publish"), module=True)
+        if isinstance(publish, str):
+            return ParseError(str(path), f"module '{name}': {publish}")
+
         modules.append(
             Module(
                 name=name,
@@ -320,6 +394,7 @@ def parse_modules(path: Path) -> list[Module] | ParseError:
                 branch=entry.get("branch", "main"),
                 description=entry.get("description", ""),
                 commands=commands,
+                publish=publish,
             )
         )
     return modules
@@ -400,6 +475,10 @@ def parse_config(path: Path) -> ProjectConfig | ParseError:
     unknown = _unknown_config_key(raw)
     if unknown:
         return ParseError(str(path), unknown)
+
+    publish = _parse_publish(raw.get("publish"), module=False)
+    if isinstance(publish, str):
+        return ParseError(str(path), publish)
 
     tb_raw = raw.get("ticket_backend", {})
     ticket_backend = (
@@ -637,6 +716,7 @@ def parse_config(path: Path) -> ProjectConfig | ParseError:
         checkins=checkins,
         refinement=refinement,
         spec=spec,
+        publish=publish,
     )
 
 
