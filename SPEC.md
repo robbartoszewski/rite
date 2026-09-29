@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.57 · **Date:** 2026-09-29
+**Version:** 0.24.58 · **Date:** 2026-09-30
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -4452,6 +4452,15 @@ Two distinct questions:
   that was hand-edited into `config.yaml` directly. The view someone reads when
   something is broken.
 
+  **It also says when a refinement round cannot reach the person (0.24.58).**
+  Refinement runs on every project with a board, and no Worker starts on a
+  ticket until it is refined, so a project with a board whose refinement
+  target is unreachable is a problem, not a feature nobody turned on: with
+  `refinement.questions_to: dm` (the default), an empty `slack.owner_user` or
+  no Slack bot token; with `channel`, no token. It names what is missing and
+  what to set. A project with no board refines nothing and is not checked, and
+  an unreadable credential store is "cannot check", never "missing".
+
 ### 9.9. `rite update`
 
 Updates rite itself (via pip/uv) **and migrates `.rite/` config files across
@@ -7412,6 +7421,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.58 — `rite doctor` says when a refinement round cannot reach you in Slack (v0.7.0 dogfood).** §9.8 gains the paragraph. `_doctor_refinement_reaches_you`, beside `_doctor_slack` (which stays silent for a project without Slack): a counted problem when a project with a board sends questions to a DM with no `slack.owner_user`, or to Slack with no bot token. Measured before the alpha run: `questions_to: dm`, no owner, no token, and doctor said nothing. Tests: the dogfood's config (both gaps named, with the commands); each gap alone; a channel needing the token and not the owner; controls for a complete setup, a project with no board and an unreadable store; the full `rite doctor` reporting and counting it. Six mutations (not wired in, owner not checked, token not checked, no-board projects checked, unreadable store read as missing, printed but not counted) each go red.
 
 **Changes in 0.24.57 — every missing-credential hint names the command `rite credential list` names (v0.7.0 dogfood).** §10.5 gains the paragraph. `credentials.services.how_to_set` is the one answer (the CLI's `_how_to_set` delegates to it; a multi-line key stays a key, where it used to suggest `set github_app`, which refuses it). Seven hints named a key where the service works: doctor's Worker-token line, the sandbox's no-token and cannot-push refusals (the second now also names `sandbox_token_<worker>`), `rite deliver`, a Claude Manager's missing login, the board's missing-credential message and `rite credential check`; and four doc lines. Tests: `how_to_set` for every promptable key and the keys that stay keys; a scan of every source file with split string literals joined (and a control that it sees a split one); each hint as a person reads it. Six mutations (each site back to the key, and `how_to_set` suggesting a service for a multi-line key) each go red. One existing assertion was vacuous — `set jira_token` was never printed, so "not printed" could not fail — and now asserts on the table's rows.
 

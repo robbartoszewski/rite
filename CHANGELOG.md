@@ -18,6 +18,14 @@ credential set github`. Both work; now every hint names the service
 form cannot take it (a key read from a file with `--stdin`, or a Worker's own
 `sandbox_token_<worker>`).
 
+### `rite doctor` says when refinement cannot reach you in Slack
+
+No Worker starts on a ticket until you have agreed its definition of done,
+and rite asks you in Slack. A project with a board but no `slack.owner_user`
+or no Slack bot token got no word about it from `rite doctor`: the questions
+would have reached you only through `rite replies`. `rite doctor` now reports
+it as a problem and says what to set.
+
 ## 0.7.0a1 (2026-09-29) — alpha: ticket refinement and Worker safety, a preview
 
 ⚠ **An alpha, not a release candidate.** It is cut to run one dogfood — a
