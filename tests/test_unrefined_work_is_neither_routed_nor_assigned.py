@@ -158,8 +158,14 @@ class TestARouteNeedsARefinedTicket:
         first, *rest = msg.text.splitlines()
         assert first.startswith("[routed by the Owner Manager 'lead' · ticket RT-1")
         # Quoted like the Owner's text, so a board's words cannot forge a
-        # header, and from the one read that answered REFINED.
-        assert all(line.startswith(">") for line in rest), rest
+        # header, and from the one read that answered REFINED. The one line
+        # that is not quoted is rite's separator, between the two.
+        from rite_ai.managers.routing import RECORD_FOLLOWS
+
+        unquoted = [line for line in rest if not line.startswith(">")]
+        assert unquoted == [RECORD_FOLLOWS], rest
+        at = rest.index(RECORD_FOLLOWS)
+        assert rest[at + 1].startswith("> Agreed definition of done for RT-1")
         assert "> Agreed definition of done for RT-1" in msg.text
         assert "> - [ ] with no flag, the timeout is unchanged" in msg.text
         assert board.reads == ["RT-1"]
