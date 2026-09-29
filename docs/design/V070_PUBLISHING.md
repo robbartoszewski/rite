@@ -334,6 +334,46 @@ Each value is **observed** on a real project before its piece is called done,
 as the plan requires. For 4 and 5, that needs a GitHub repository that rite
 may push to (Q4).
 
+## 6.1 Piece 2 as built: where it departs from §2, and why
+
+- **Workers are told per start, in TICKET.md, not in CLAUDE.md.** CLAUDE.md
+  is written once, when a Worker is added; a strategy can change between
+  tickets. `rite sandbox start` writes a **Publishing** section per module
+  from the same parse that writes the start record, so what the Worker was
+  told and what `rite deliver` compares against are one read.
+- **Keeping `main` coherent between pieces.** If piece 2 told every Worker
+  "never push" before piece 4 teaches rite to push, `main` would silently
+  stop producing PRs in between. So until piece 4:
+  - under `commit` the Worker never pushes;
+  - under `push` and `pull_request` it still pushes its ticket branch and
+    opens the PR;
+  - under **every** strategy it never merges.
+
+  The last rule closes today's exposure (§4): with `main`'s strict setting
+  off, a Worker's self-merge accepts a stale green. Piece 4 changes the push
+  strategies to "never push" as well.
+- **`rite deliver` never forces a destroy.** `--force` would also skip the
+  check for a Worker's unanswered question. Instead the destroy guard
+  counts a commit as saved when it is on a remote OR reachable (not merely
+  present) in the project's checkout of that module (`_not_collected`). An
+  unreadable `modules.yaml` drops nothing. The copy is destroyed only when
+  every module was delivered. A divergence keeps it, so the User's
+  `rite deliver` has something to deliver from.
+- **Claims (D-41: held until the work lands).** Under `commit`, the work has
+  landed once it is collected, so `rite deliver` releases the Worker's
+  claims. Under the push strategies it lands at the merge, so claims stay
+  held. Releasing them on an observed merge belongs to the tick that
+  observes PRs (piece 5). **Until then, claims under `push` and
+  `pull_request` are released by a person or by claim expiry**, and the
+  Worker's instructions say only that they are released "after the merge",
+  not that rite does it, because rite does not do it yet.
+- **Every git call is a literal `["git", ...]` list.** A `["git", *args]`
+  wrapper would have hidden every verb from `test_blast_radius`, which
+  finds them by enumerating those lists.
+- **The pre-start push-access check is strategy-aware.** Modules under
+  `commit` are not asked for remote access, so an on-premise project with
+  no reachable remote and no token can run.
+
 ## 7. The SPEC amendment (§5.1.1)
 
 The current wording, "rite never writes to a remote", "`gh` never `pr`", and

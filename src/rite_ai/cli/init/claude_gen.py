@@ -509,9 +509,12 @@ def _ticket_workflow_section() -> str:
 ## Ticket workflow
 
 Claim → work → run the module's tests and lint → verify your own fix →
-review → PR → merge → release. See `/ticket` for the full sequence. A Worker
-behaves like a real developer: pulls before committing, opens PRs, merges
-reviewed work — it does not push straight to the root branch.
+review → commit → publish as the project says → release. See `/ticket` for
+the full sequence. A Worker pulls before committing and never pushes straight
+to the root branch. Whether it pushes at all is the project's `publish:`
+strategy, per module (`rite doctor` prints each): under `commit` nothing is
+pushed. **A Worker never merges a pull request**: that is the User's, or
+rite's own step that checks the green is on exactly the commit merged.
 
 The test and lint commands are the `Test:` and `Lint:` lines in the module
 map above, read out of each module's own manifest by `rite init`. Run them as

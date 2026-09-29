@@ -1686,7 +1686,7 @@ def _destroy_when_only_pushed_work_is_unapplied(
         return None, f"{kept}\n  not a pushed clone: {', '.join(other or paths)}"
     from rite_ai.workspace import unsaved_work
 
-    items = unsaved_work(copy)
+    items = _not_collected(unsaved_work(copy), copy, root)
     if items:
         return None, f"{kept}\n  " + "\n  ".join(i.describe() for i in items)
     try:
@@ -1705,6 +1705,33 @@ def _destroy_when_only_pushed_work_is_unapplied(
         "the sandbox and found every commit there on a remote and nothing "
         "uncommitted"
     )
+
+
+def _not_collected(items: list, copy: Path, root: str | os.PathLike[str]) -> list:
+    """`items` without the modules whose commits `rite deliver` collected.
+
+    A commit is saved when it is on a remote OR reachable in the project's
+    own checkout of that module (PB1): under `strategy: commit` nothing is
+    pushed by design, so "on no remote" stopped meaning "only here".
+    Uncommitted files, and a checkout that could not be read, are never
+    dropped. An unreadable modules.yaml drops nothing: "could not check" is
+    not "collected".
+    """
+    from rite_ai.config.parse import ParseError, parse_modules
+    from rite_ai.publishing.deliver import collected
+
+    modules = parse_modules(Path(root) / ".rite" / "modules.yaml")
+    if isinstance(modules, ParseError):
+        return items
+    where = {m.name: Path(root) / m.path for m in modules}
+    return [
+        i
+        for i in items
+        if i.uncommitted
+        or i.unreadable
+        or i.module not in where
+        or not collected(copy / i.module, where[i.module])
+    ]
 
 
 def _sandbox_copy(name: str, workdir: Path) -> Path | None:
@@ -1772,7 +1799,7 @@ def _work_only_in_sandbox(
         )
     from rite_ai.workspace import unsaved_work
 
-    items = unsaved_work(copy)
+    items = _not_collected(unsaved_work(copy), copy, root)
     if not items:
         return ""
     lines = [
