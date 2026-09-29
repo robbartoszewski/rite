@@ -1,7 +1,8 @@
 # The scenario gate (§7.3, D-81): the design pass, and a size
 
 **Status: DESIGN, 2026-09-29, against `main` `6c97075`. Nothing here is
-built.** This note is the pass the v0.7.0 plan requires before the gate can
+built.** SGQ0 to SGQ3 were decided the same day (part 7); SGQ4 and SGQ5 are
+Robert's. This note is the pass the v0.7.0 plan requires before the gate can
 be sized ("needs its own design pass before a size"). It answers four
 questions: §9.15.3a's recorded gap, how the gate composes with refinement,
 what the gate is worth, and how it relates to the release-candidate dogfood.
@@ -28,7 +29,7 @@ It ends with a size and a recommendation on when to build.
   transcript is.
 - **It would have caught one of the three recent defects** (the 241-test
   disconnection), **not the CI job that ran six files**, and the editor
-  corruption only if the agreed definition of done had named the content
+  corruption (Bentora's BEN-270) only if the agreed definition of done had named the content
   that triggered it.
 - **It complements the release-candidate run. It does not duplicate it, and
   it needs the run's findings first.** Build it after the release candidate:
@@ -264,13 +265,13 @@ publish gate blocking every push, only if the definition of done said
 "unrelated push with a pre-existing finding succeeds", which is the kind of
 hostile-input requirement D-81 already says has to be written down.
 
-### 4.2 Against the three defects since
+### 4.2 Against three defects since: two in rite, one in Bentora
 
 | defect | caught? | why |
 |---|---|---|
 | **The Owner's refinement check for assignment, disconnected, with all 241 related tests green** (#116) | **Yes, if the agreed command drives the Owner's tick** and not the function. "File an unrefined ticket, run the Owner's assignment, the ticket stays unassigned" fails when the wire is cut. | This is D-81's written-tested-called-by-nothing class, and the gate's strongest case: a scenario exercises the path, so an unconnected check presents as missing behaviour. **Caveat:** it was in fact caught before merge, by the implementer's mutation test. The gate would have been a second catch, not the first. And it applies to rite's own development only if rite runs this gate on itself, which is a separate choice from shipping it. |
 | **The macOS CI job running six files of 323 while reporting green** (tag readiness D12) | **No.** | This is infrastructure, and it is the gate's own defect class. An agreed `pytest` that collects six files exits 0, and the gate records a signed, SHA-matched pass of it. The signature proves rite ran the command. It says nothing about how much the command covered. Nothing in this design detects a command that measures less than its name suggests, and the gate should not be sold as if it did. |
-| **An editor that silently corrupted documents** | **Only if the definition of done named the content that triggered it.** | "Silently" means exit code 0, so an exit-code gate sees a pass. A command that edits a document and then diffs it catches it, but only for the content the command uses. That is the path-escape case again: caught where someone thought to require it. ⚠ **I could not find this defect in this repository's history** (issues, PRs or `git log`), so this row is classified from its description alone. Pointing me at it would let me check whether it was behavioural in a way a round-trip command would have seen. |
+| **Bentora's editor rewriting documents it did not author** (BEN-270, in Bentora, not rite: for one sample it printed raw markup into a filed court document) | **Only if the definition of done named the content that triggered it.** | "Silently" means exit code 0, so an exit-code gate sees a pass. A command that opens a document the editor did not author, saves it, and diffs it against the original catches it, but only for documents the command uses. That is the path-escape case again: caught where someone thought to require it, here by requiring that "a document the editor did not write comes back byte-identical". *Corrected 2026-09-29: the first draft of this row could not find the defect because it searched rite's history; it is Bentora's.* |
 
 **So, honestly: one of three, and that one had already been caught another
 way.** The pattern is the one D-81 predicted. The gate catches missing
@@ -348,13 +349,17 @@ at a given SHA has not been built or measured. If yoloAI's exec path needs
 work, SG1 becomes 2 sittings, and that is the first thing SG1 should
 measure.
 
-## 7. Decisions for Robert
+## 7. Decisions
+
+SGQ0 to SGQ3 were decided by the v0.7.0 coordinator on 2026-09-29, taking the
+recommendations. SGQ4 and SGQ5 are Robert's: SGQ4 is a decision about his own
+process rather than about the feature, and SGQ5 changes a pre-registered bar.
 
 | id | question | recommendation |
 |---|---|---|
-| **SGQ0** | Sequence after the RC, as sized above? | **Yes**, for section 5's three reasons |
-| **SGQ1** | May a ticket be merged through the gate with `verify: "none agreed"`? | **Yes, with a visible degraded line** (TRQ9 stands). Revisit with the RC's data |
-| **SGQ2** | Link each agreed command to the item it checks (a record v2, inside TR2's proposal format)? | **Decide after the RC.** It is the difference between "every command passed" and "every item was checked", and whether it is worth another question to the User per ticket is an RC observation |
-| **SGQ3** | Post the result as a GitHub commit status, so a repository can make it required? | **Not in v0.7.0.** It needs a token permission the RC's scoped token does not have. After PB1, the merge is rite's own and the status adds nothing |
-| **SGQ4** | Does rite run this gate on its own development? | **Robert's call, separate from shipping it.** The #116 catch only counts if it does |
-| **SGQ5** | The RC results note in section 5 | Robert's word, because the bar is pre-registered |
+| **SGQ0** | Sequence after the RC, as sized above? | ✅ **DECIDED: yes, after the RC.** The third reason is the deciding one: building it now competes with TR2, which blocks the tag |
+| **SGQ1** | May a ticket be merged through the gate with `verify: "none agreed"`? | ✅ **DECIDED: yes, with a visible warning line.** This keeps TRQ9 (verify commands optional but explicit). A gate that refused would quietly make them mandatory |
+| **SGQ2** | Link each agreed command to the item it checks (a record v2, inside TR2's proposal format)? | ✅ **DECIDED: after the RC,** on real records. It is the difference between "every command passed" and "every item was checked", and whether it is worth another question to the User per ticket is an RC observation |
+| **SGQ3** | Post the result as a GitHub commit status, so a repository can make it required? | ✅ **DECIDED: not in v0.7.0.** The fork-scoped token cannot post a commit status, and that is a hard constraint. It needs a token permission the RC's scoped token does not have. After PB1, the merge is rite's own and the status adds nothing |
+| **SGQ4** | Does rite run this gate on its own development? | ⏳ **Robert's.** It is a decision about his process, not the feature. The #116 catch only counts if it does |
+| **SGQ5** | The RC results note in section 5 | ⏳ **Robert's**, because it changes a pre-registered bar |
