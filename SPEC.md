@@ -6420,8 +6420,8 @@ else." The DM is where rite asks the person things, and a lifecycle line there
 makes a real question easy to miss. The status channel is **output only**: rite
 never reads it, so nothing typed there reaches a Manager, and the parser
 refuses the broadcast channel as the status channel, because that one is read
-as context. Each line names its project, since several projects may share one
-status channel. A status channel rite cannot post to leaves the line on the
+as context. **One status channel is shared by all projects** (D-114), so
+every line names its project. A status channel rite cannot post to leaves the line on the
 terminal and says so; it never falls back to the DM or the broadcast channel.
 The one stop line that stays in the DM is a message rite took from Slack and
 never delivered: that needs the person, where they typed it.
@@ -7314,6 +7314,7 @@ happened once already and left no trace until this review found it.
 | D-111 | May a session running as the person attest a definition of done? | **Yes, marked `attested` and findable** | Robert, TRQ10: "Allow it." rite cannot tell the person from a model running as them, and says so in the record; the Slack DM stays the stronger path. `/dev/tty` confirmation was measured not to be a barrier and is not used. Built (`rite refine accept`). |
 | D-112 | Should agents write to the board under their own identity? | **rite builds no identity management** | Robert, TRQ12: "Can't the User control it by choosing if they give rite their token or create a separate account for them?" rite works under either choice, says which is in use, and enforces the guardrail where the choice allows it. The same principle covers commit authorship. |
 | D-113 | May an executor Manager do routed work itself? | **Only a chore or a trivial ticket, only REFINED, only on a ticket-named branch through a PR** | Robert, Q4: "Yes, close the bypass. However, instruct that it's meant for chores and trivial tickets. Any serious work should be passed to workers." Instructed (TR3); enforced only once PB1's publish step can refuse (TR10). |
+| D-114 | One status channel, or one per project? | **One shared channel for all projects (`#rite-status` by default), every line naming its project** | Robert, 2026-09-29, chose shared over per-project. He runs several projects and wants one place to see what is running; lifecycle lines are reading material, not action. A line that does not name its project is unattributable once two projects post there, so every post names it (a test pins every post, not each line). D-101 means an app per project, so each project's app is invited to the one channel; `rite doctor` says when it is not. §9.16.2. |
 
 ---
 

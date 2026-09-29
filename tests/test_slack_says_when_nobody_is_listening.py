@@ -258,3 +258,28 @@ class TestALongGapIsReadWhole:
 
         got = _hear("D1", "t", since="1.0", call=call)
         assert got.skipped and len(got.messages) == HISTORY_PAGES
+
+
+def test_every_line_in_the_shared_status_channel_names_its_project(tmp_path):
+    """Robert, 2026-09-29: ONE status channel shared by all his projects. A
+    line that does not name its project is unattributable the moment two post
+    there, so every post to the status channel, whatever produced it, names
+    it. Pinned over everything the relay posts there, not line by line."""
+    (tmp_path / ".rite").mkdir()
+    slack = Slack()
+    for _ in range(2):
+        listener = Listener(
+            token="t",
+            manager="lead",
+            owner=OWNER,
+            broadcast="#all-rite",
+            project=tmp_path,
+            clock=lambda: 600.0,
+            status="#rite-status",
+            project_name="acme",
+        )
+        listener.open(call=slack)
+        listener.close(call=slack, undelivered="1 message was not delivered")
+    status = [p["text"] for p in slack.posts if p["channel"] == "#rite-status"]
+    assert len(status) == 4
+    assert all(text.startswith("rite · `acme`: ") for text in status), status
