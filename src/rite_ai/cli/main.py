@@ -1395,7 +1395,56 @@ def _doctor_report(problems: list[str]) -> None:
         with _doctor_check("slack", problems):
             _doctor_slack(root, problems)
 
+        with _doctor_check("refinement", problems):
+            _doctor_refinement_reaches_you(root, problems)
+
     return
+
+
+def _doctor_refinement_reaches_you(root: Path, problems: list[str]) -> None:
+    """Can a refinement round reach the person where the config says it goes?
+
+    ⚠ **Not "a feature nobody turned on".** `_doctor_slack` stays silent for a
+    project without Slack, and that was right for Slack; but refinement is on
+    for every project with a board, `refinement.questions_to` defaults to
+    `dm`, and no Worker starts on a ticket until it is refined. Measured in
+    the v0.7.0 dogfood: `questions_to: dm`, no `slack.owner_user`, no Slack
+    token, and `rite doctor` said nothing about it — the round would have
+    reached Robert only through `rite replies`, and an answer only through
+    `rite refine accept` at the host.
+
+    A project with no board refines nothing, so it is not checked; the board
+    line says what that project is missing."""
+    from rite_ai.config.parse import ParseError, parse_config
+    from rite_ai.credentials.store import get_scoped, store_is_readable
+
+    parsed = parse_config(root / ".rite" / "config.yaml")
+    if isinstance(parsed, ParseError) or parsed.ticket_backend.type == "none":
+        return
+    missing = []
+    to_dm = parsed.refinement.questions_to == "dm"
+    if to_dm and not parsed.slack.owner_user:
+        missing.append("slack.owner_user is empty")
+    if not store_is_readable():
+        pass  # "cannot check" is not "missing"; the store line says why
+    elif not get_scoped("slack_bot_token", parsed.credentials):
+        missing.append("no Slack bot token is stored for this project")
+    if not missing:
+        return
+    where = (
+        "your Slack DM (`refinement.questions_to: dm`)"
+        if to_dm
+        else f"Slack channel {parsed.refinement.channel}"
+    )
+    click.echo(
+        f"refinement: questions go to {where}, but {' and '.join(missing)}. No "
+        "Worker starts on a ticket until it is refined, so a round would reach "
+        "you only through `rite replies`, and you could agree it only with "
+        "`rite refine accept` at the host. Make a Slack app for this project "
+        "only, then `rite credential set slack`"
+        + (" and set slack.owner_user to your Slack user id (U…)" if to_dm else "")
+    )
+    problems.append(f"refinement cannot reach you in Slack: {'; '.join(missing)}")
 
 
 def _doctor_board_can_create(root: Path, problems: list[str]) -> None:
