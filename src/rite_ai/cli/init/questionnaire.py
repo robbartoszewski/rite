@@ -843,6 +843,32 @@ def _module_label(m: Module) -> str:
     return f"{where}  {m.url or 'local only'}"
 
 
+def doubling_as_root(m: Module) -> str:
+    """The warning for a repository that is about to be its own project root.
+
+    ⚠ **Said before the answer, while nothing is written.** Measured in the
+    v0.7.0 dogfood: `rite init` inside a clone of someone else's project (a
+    fork contributed from) registered it as its own module, `path: ./`, and
+    then rewrote its CLAUDE.md and `.gitignore` and added `.rite/`, `.claude/`
+    and a CI workflow, all as uncommitted changes in the repository the
+    contribution goes out from. Nothing said that the repository was doubling
+    as the project root. Only an empty `.rite/` exists when this is asked
+    (`run_init` writes the rest after the questions), so stopping here is
+    still clean."""
+    return (
+        "this repository is also becoming the project root. rite writes its own "
+        "files into it: CLAUDE.md (an existing one is moved aside), .gitignore, "
+        ".rite/, .claude/ and .github/workflows/publish-gate.yml, as uncommitted "
+        "changes in the same working tree Workers' work is delivered from, and "
+        "Workers share its claims. That is fine for a repository of yours that "
+        "should carry rite. For someone else's project, or a fork you "
+        "contribute from, stop now (Ctrl-C: only an empty .rite/ has been made) "
+        f"and use a separate root: `mkdir ../{m.name}-rite && cd "
+        f"../{m.name}-rite && rite init`, then `rite add module {m.name} "
+        f"{m.url or '<url>'}`."
+    )
+
+
 def offer_modules(
     candidates: list[Module], interactive: bool, root: Path | None = None
 ) -> list[Module]:
@@ -874,6 +900,8 @@ def offer_modules(
     chosen: list[Module] = []
     for m in candidates:
         where = "this directory (./)" if m.path == ROOT_MODULE_PATH else m.path
+        if m.path == ROOT_MODULE_PATH:
+            ui.warn(doubling_as_root(m))
         if interactive:
             if ui.confirm(f"Add {where} as module '{m.name}'?", default=True):
                 chosen.append(m)

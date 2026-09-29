@@ -26,6 +26,14 @@ or no Slack bot token got no word about it from `rite doctor`: the questions
 would have reached you only through `rite replies`. `rite doctor` now reports
 it as a problem and says what to set.
 
+### `rite init` warns when your repository is becoming the project root
+
+Run inside a repository, `rite init` registers it as its own module and writes
+its files (CLAUDE.md, `.gitignore`, `.rite/`, `.claude/`, a CI workflow) into
+that repository. It now says so before asking, and for someone else's project
+or a fork you contribute from, gives the commands for a separate project root
+instead.
+
 ## 0.7.0a1 (2026-09-29) — alpha: ticket refinement and Worker safety, a preview
 
 ⚠ **An alpha, not a release candidate.** It is cut to run one dogfood — a
