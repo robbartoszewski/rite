@@ -282,14 +282,14 @@ def create_for_prompt(board, worker: str, text: str) -> tuple[str, str]:
 
     Returns `(ticket id, "")`, or `("", why not)`. Typed at this machine by
     the person, so the text is theirs, as a header-less message is
-    (`delivered.classify`). Labelled `chore` and the Worker's own label, the
-    way assignment labels a ticket (`coordination.distribution`), and NOT
-    `scheduled`: the person has already given it to this Worker, and
-    `scheduled` would put it in the queue for another one too.
+    (`delivered.classify`). Labelled `chore` and `scheduled`, like a chore
+    from chat: TRQ11 (Robert, 2026-09-29) makes it explicitly unrefined and
+    refined later, and nothing starts on it until it is refined (TR4). NOT
+    the Worker's label: a ticket carrying a Worker's label reads as that
+    Worker's work in progress (`coordination.distribution`), and none is.
 
-    ⚠ **No board, or a refused create, refuses the start.** Nothing runs
-    untracked (TRQ5); a Worker started on work with no ticket is the hole
-    this closes.
+    ⚠ **No board, or a refused create, files nothing.** Nothing runs
+    untracked (TRQ5).
     """
     from rite_ai.tickets.interface import BackendError
 
@@ -306,7 +306,7 @@ def create_for_prompt(board, worker: str, text: str) -> tuple[str, str]:
         "theirs, as typed.\n"
     )
     try:
-        made = board.create(_title_of(text), description, labels=[CHORE_LABEL, worker])
+        made = board.create(_title_of(text), description, labels=list(LABELS))
     except Exception as e:  # noqa: BLE001 - said, never raised
         made = BackendError(str(e))
     if isinstance(made, BackendError) or not getattr(made, "id", ""):

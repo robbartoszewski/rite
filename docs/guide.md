@@ -571,12 +571,15 @@ rite sandbox start alpha --ticket 42        # a GitHub issue, by its number
 rite sandbox start alpha --prompt "Add a CSV export to the invoices page."
 ```
 
-`--ticket` is for work on your board, by its key there. `--prompt` is for work
-that is not a ticket yet: every piece of Worker work carries one, so rite first
-files your text, exactly as typed, as a chore ticket labelled `chore` and the
-Worker's name, and starts the Worker on that ticket. With no board, or a board
-that refuses the ticket, nothing starts. With neither flag, the session starts
-idle until someone attaches.
+`--ticket` is for work on your board, by its key there, and it starts only on a
+ticket rite reports REFINED (`rite refine status <ID>`): the Worker is handed
+the agreed definition of done in `TICKET.md`, from the same read as the
+ticket's text. Any other state refuses and says which. `--prompt` is for work
+that is not a ticket yet: rite files your text, exactly as typed, as a chore
+labelled `chore` and `scheduled`, and starts nothing, because the chore has no
+agreed definition of done yet. It prints the `rite refine accept` and
+`rite sandbox start --ticket` to run next. With neither flag, the session
+starts idle until someone attaches.
 After the prepare summary, start prints:
 
 ```text

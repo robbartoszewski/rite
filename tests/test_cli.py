@@ -1,4 +1,5 @@
 import subprocess
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -715,10 +716,20 @@ class _ReadableBoard:
         return Ticket(id=ticket_id, title="the ticket", description="do the thing")
 
 
+@contextmanager
 def _with_a_board():
-    return patch(
-        "rite_ai.cli.main._ticket_backend", return_value=(_ReadableBoard(), None)
-    )
+    """A board whose every ticket is REFINED (TR4 starts a Worker only on
+    one), through the real predicate; tests that use it are about something
+    else."""
+    from tests.refined_board import any_ticket_refined
+
+    with (
+        patch(
+            "rite_ai.cli.main._ticket_backend", return_value=(_ReadableBoard(), None)
+        ),
+        any_ticket_refined(),
+    ):
+        yield
 
 
 def _sandbox_project(tmp_path, monkeypatch):
@@ -765,9 +776,13 @@ def test_sandbox_start_ticket_becomes_the_opening_prompt(tmp_path, monkeypatch):
             cli, ["sandbox", "start", "alpha", "--ticket", "ABC-12"]
         )
     assert result.exit_code == 0, result.output
-    assert seen["prompt"].startswith("Work ticket ABC-12. Its text, as rite read")
+    assert seen["prompt"].startswith(
+        "Work ticket ABC-12 to its agreed definition of done, refinement record "
+    )
     delivered = (tmp_path / "workers" / "alpha" / "TICKET.md").read_text()
-    assert "ABC-12" in delivered and "do the thing" in delivered
+    # The ticket text is the refinement read's (TR4), not a second read.
+    assert "ABC-12" in delivered and "its text" in delivered
+    assert "## Agreed definition of done" in delivered
     assert "yoloai attach rite-" in result.output
 
 

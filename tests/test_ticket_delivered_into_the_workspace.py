@@ -23,6 +23,7 @@ from rite_ai.sandbox.delivery import (
 )
 from rite_ai.tickets import BackendError
 from rite_ai.tickets.interface import Ticket
+from tests.refined_board import board_with
 
 TICKET = Ticket(
     id="KAN-7",
@@ -89,11 +90,13 @@ def _start(board, *extra: str):
     return result, seen
 
 
+SITE = "example.atlassian.net"
+
+
 def test_the_worker_gets_what_the_host_read_with_when_and_where(tmp_path, monkeypatch):
     worker = _project(tmp_path, monkeypatch)
-    board = _Board()
-
-    result, seen = _start(board, "--ticket", "KAN-7")
+    with board_with(tmp_path, monkeypatch, TICKET, jira_site=SITE) as (board, _):
+        result, seen = _start(_Board(), "--ticket", "KAN-7")
 
     assert result.exit_code == 0, result.output
     assert board.reads == ["KAN-7"]
@@ -109,7 +112,8 @@ def test_the_worker_gets_what_the_host_read_with_when_and_where(tmp_path, monkey
 def test_the_ticket_block_is_exactly_what_board_show_prints(tmp_path, monkeypatch):
     """One rendering, so the file and `rite board show` cannot drift."""
     worker = _project(tmp_path, monkeypatch)
-    _start(_Board(), "--ticket", "KAN-7")
+    with board_with(tmp_path, monkeypatch, TICKET, jira_site=SITE):
+        _start(_Board(), "--ticket", "KAN-7")
     with patch("rite_ai.cli.main._ticket_backend", return_value=(_Board(), None)):
         shown = CliRunner().invoke(cli, ["board", "show", "KAN-7"]).output
 
@@ -120,7 +124,8 @@ def test_hidden_text_is_made_visible_in_the_delivery(tmp_path, monkeypatch):
     """N1: the Worker reads what a reviewer sees in the tracker."""
     worker = _project(tmp_path, monkeypatch)
     hidden = Ticket(id="KAN-7", title="ok", description="do this\u200b quietly")
-    _start(_Board(hidden), "--ticket", "KAN-7")
+    with board_with(tmp_path, monkeypatch, hidden, jira_site=SITE):
+        _start(_Board(hidden), "--ticket", "KAN-7")
 
     text = (worker / DELIVERY_FILE).read_text()
     assert "\u200b" not in text
@@ -129,14 +134,17 @@ def test_hidden_text_is_made_visible_in_the_delivery(tmp_path, monkeypatch):
 
 def test_a_ticket_that_cannot_be_read_refuses_the_start(tmp_path, monkeypatch):
     worker = _project(tmp_path, monkeypatch)
-    board = _Board(BackendError("JIRA rejected the credentials"))
-
-    result, seen = _start(board, "--ticket", "KAN-7")
+    (worker / DELIVERY_FILE).write_text("# Ticket KAN-6, an old one\n")
+    failed = BackendError("JIRA rejected the credentials")
+    with board_with(tmp_path, monkeypatch, TICKET, jira_site=SITE, error=failed):
+        result, seen = _start(_Board(), "--ticket", "KAN-7")
 
     assert result.exit_code == 1
-    last = result.output.strip().splitlines()[-1]
-    assert "could not read ticket KAN-7" in last
-    assert "JIRA rejected the credentials" in last
+    *_, detail, last = result.output.strip().splitlines()
+    # UNREADABLE, said as rite could not check: never as "no definition of done".
+    assert "ticket KAN-7: UNREADABLE" in detail
+    assert "JIRA rejected the credentials" in detail
+    assert last.startswith("UNREADABLE: rite could not confirm")
     assert "new" not in seen, "no sandbox was created"
     assert not (worker / DELIVERY_FILE).exists()
 
@@ -173,3 +181,6 @@ def test_the_workers_instructions_point_at_the_file_not_the_board():
     assert DELIVERY_FILE in section
     assert "`rite board show` will not work here" in section
     assert "not the live ticket" in section
+    # TR4: the Worker works to the record rite delivered, never to the title.
+    assert '"Agreed definition of done"' in section
+    assert "Cite the record id" in section
