@@ -1,4 +1,4 @@
-"""A worker that has just been added reads as not started, not STALLED.
+"""A worker that has just been added reads as not yet heard from, not STALLED.
 
 Measured before the fix: `rite add worker w1`, then `rite status` showed
 `w1 … — STALLED` and `rite watchdog` exited 1 with "stalled — no heartbeat ever
@@ -52,7 +52,9 @@ def test_status_and_watchdog_on_a_worker_just_added(tmp_path, monkeypatch):
     runner = CliRunner()
 
     status = runner.invoke(cli, ["status", "--no-board"])
-    assert "w1: modules=[api] — not started" in status.output
+    # What was observed, not "not started", which rite cannot know (dogfood
+    # S1): the rest of the line is the sandbox, which differs by machine.
+    assert "w1: modules=[api] — no heartbeat or claims yet; " in status.output
     assert "STALLED" not in status.output
 
     watchdog = runner.invoke(cli, ["watchdog"])

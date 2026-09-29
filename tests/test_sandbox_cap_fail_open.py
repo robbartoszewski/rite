@@ -232,7 +232,8 @@ class TestStatusDistinguishesAbsentFromUncheckable:
             result = CliRunner().invoke(cli, ["sandbox", "status", "alpha"])
 
         assert result.exit_code == 0
-        assert "not found" in result.output
+        # The sentence every status view prints for it (dogfood S1).
+        assert result.output.strip() == "no sandbox"
 
 
 class TestSandboxEnabledDocstringDescribesWhatItGoverns:
