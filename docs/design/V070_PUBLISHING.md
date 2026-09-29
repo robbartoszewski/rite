@@ -363,8 +363,10 @@ may push to (Q4).
   landed once it is collected, so `rite deliver` releases the Worker's
   claims. Under the push strategies it lands at the merge, so claims stay
   held. Releasing them on an observed merge belongs to the tick that
-  observes PRs (piece 3/5). **Until then, claims under `push` and
-  `pull_request` are released by a person or by claim expiry.**
+  observes PRs (piece 5). **Until then, claims under `push` and
+  `pull_request` are released by a person or by claim expiry**, and the
+  Worker's instructions say only that they are released "after the merge",
+  not that rite does it, because rite does not do it yet.
 - **Every git call is a literal `["git", ...]` list.** A `["git", *args]`
   wrapper would have hidden every verb from `test_blast_radius`, which
   finds them by enumerating those lists.

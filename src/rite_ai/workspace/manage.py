@@ -834,9 +834,10 @@ exactly that and stop: never invent the missing piece.
    **Never merge a pull request yourself.** Merging after checks is the
    User's decision, or rite's own step that checks the green is on exactly
    the commit being merged.
-9. Leave your claim held. rite releases it when your work is delivered, or
-   when the pull request merges: holding it until then is what stops
-   another Worker changing the same paths first.
+9. Leave your claim held, and do not release it yourself: it is released
+   when your work lands, which is when it is delivered under `commit`, and
+   after the merge otherwise. Holding it until then is what stops another
+   Worker changing the same paths first.
 
 ## When this ticket is done
 
