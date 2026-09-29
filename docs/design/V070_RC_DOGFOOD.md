@@ -113,13 +113,16 @@ throwaway-app run or listed in part 3.
 Robert, verbatim: "I expect rite to refine the lazy tickets before proceeding
 - ask user questions, define a definition of done etc."
 
-- ⚠ **Precondition, not yet met:** the refinement protocol (the record and
-  predicate, TR1; the round protocol, TR2; the delivery of a checked record,
-  TR4) is designed in #43 and **not merged** as of `f57f645`. TR3 (the Owner
-  told to ask before routing, #73) and TR9 (every route names its ticket;
-  chores) are merged. **Run before TR1/TR2 land and this criterion fails by
-  construction**, so the run waits for them or is recorded as run without
-  them.
+- ⚠ **Precondition, not yet met: TR2.** Corrected 2026-09-29: the
+  refinement design (#43, `70564ba`), the record and predicate (TR1, #83,
+  `cb1fdbc`) and the delivery of a checked record to a Worker (TR4, #106,
+  `999aff4`) are merged. What is left for this criterion is **TR2, the round
+  protocol** (the supervisor asking the questions and holding the ticket
+  until they are answered). TR3a (the Owner told to ask before routing,
+  #73) and TR9 (every route names its ticket; chores, #81/#84) are merged;
+  TR3b (#108, working to the agreed definition of done) is open. **Run before TR2
+  lands and this criterion fails by construction**, so the run waits for it
+  or is recorded as run without it.
 - For each ticket Robert files in the dogfood's register (one line, no
   acceptance criteria):
   - Before any routing, Worker request or code, a question about **what the
@@ -254,8 +257,8 @@ A pass is a pass for **this** configuration. It says nothing about:
 
 ## 4. What Robert does himself, in order
 
-1. **Confirm the preconditions:** TR1/TR2 merged (or decide to run without
-   them and record that 2.1 cannot pass); the release candidate tagged; the
+1. **Confirm the preconditions:** TR2 merged (or decide to run without it
+   and record that 2.1 cannot pass); the release candidate tagged; the
    board chosen (1.4).
 2. **Tell the other sessions** that `~/.local/bin/rite` is about to become the
    candidate, then install it with the released `install.sh` and
