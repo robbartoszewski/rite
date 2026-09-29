@@ -10,10 +10,12 @@ Work ticket `$ARGUMENTS` end to end.
    - **A Worker started by rite:** the ticket and its agreed definition of
      done are in `TICKET.md` in your working directory. Work to its section
      "Agreed definition of done" (checklist, scope, Verify), not to the
-     title, and cite its record id in your pull request. You hold no board
-     credential and cannot read the refinement key, so do not try `rite board
-     show` or `rite refine status` from inside the sandbox. No `TICKET.md`,
-     or no such section: say so, and stop.
+     title, and cite its record id in your pull request. There is nothing
+     for you to check: rite checked that record on the host, in the same
+     read that produced the ticket text, before this sandbox existed. You
+     hold no board credential and cannot read the refinement key, so do not
+     try `rite board show` or `rite refine status` from inside the sandbox.
+     No `TICKET.md`, or no such section: say so, and stop.
    - **A person's session, outside any sandbox:** `rite refine status <ID>`.
      REFINED prints the definition of done: work to it. Anything else: do not
      start. If the person is here, agree one with them and record it with
