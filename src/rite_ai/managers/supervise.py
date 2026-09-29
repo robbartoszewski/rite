@@ -1291,7 +1291,7 @@ def _supervise(
                         delivering |= names
                         cause = "mail"
                         say(
-                            f"the board has nothing ready, and {len(names)} "
+                            f"the board listed nothing ready, and {len(names)} "
                             f"message(s) are waiting for {manager!r}: a session "
                             "starts to deliver them"
                         )
@@ -2264,7 +2264,13 @@ def _why(answer: str, started: int) -> str:
     identically for all of them tells a human "finished" when it means
     "jammed" (§9.14.4)."""
     if answer == "idle":
-        return f"done: the board has nothing ready ({started} session(s))"
+        # "listed": the board's list lags any write rite did not make itself
+        # (DF4), so this is what it listed, not what it holds.
+        return (
+            f"done: the board listed nothing ready ({started} session(s)); a "
+            "ticket created outside rite in the last few seconds may not have "
+            "been listed yet"
+        )
     if answer == "closed":
         return (
             f"stopped: the schedule authorises no Workers in this window "
