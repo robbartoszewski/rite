@@ -411,7 +411,16 @@ def test_the_record_is_outside_every_managers_grant(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "text", ["not json", '{"version": 99}', '{"version": 1, "modules": {}}']
+    "text",
+    [
+        "not json",
+        '{"version": 99}',
+        '{"version": 1, "modules": {}}',
+        # Well formed in every field but the version: only the version check
+        # can refuse it, so this case is what proves that check is connected.
+        '{"version": 99, "worker": "alpha", "ticket": "KAN-8", '
+        '"started_at": "x", "modules": {}}',
+    ],
 )
 def test_a_damaged_record_is_unreadable_not_absent(tmp_path, text):
     p = Project(tmp_path, "commit")
