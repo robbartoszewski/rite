@@ -221,6 +221,7 @@ def send(
                 proposal=bool(checked.ask.proposal),
                 where=raised.id,
                 items=[item.text for item in checked.ask.proposal],
+                body=body,
             )
         )
         attempt.misses = 0
@@ -452,6 +453,54 @@ def _park_notice(root: Path, owner: str, board, ticket: str, limits) -> None:
     board.comment(ticket, text)
 
 
+# --- he is back -----------------------------------------------------------------
+
+
+def present_again(root: Path, owner: str, *, at: float) -> list[str]:
+    """He is back: every round waiting for him goes in front of him again,
+    once, unchanged, in the same round (part 3.4 step 7). "Back" is an
+    event rite observed (a message from him was delivered), never a model's
+    guess. It spends no round, and it is not a reminder: a round he has not
+    been away from is not repeated. Returns lines for the Owner."""
+    from rite_ai.managers import asking
+
+    lines: list[str] = []
+    for ticket, attempt in rounds.all_attempts(root, owner).items():
+        latest = attempt.latest
+        if (
+            attempt.parked
+            or latest is None
+            or latest.answered
+            or not latest.read_past_deadline
+            or latest.presented_again_at
+            or not latest.body
+        ):
+            continue
+        with rounds.locked(root, owner, ticket) as (current, save):
+            r = current.latest if current is not None else None
+            if r is None or r.where != latest.where or r.presented_again_at:
+                continue
+            # Settled first: `asking` raises a question once, and this is the
+            # same question, deliberately raised again.
+            asking.settle(root, owner, r.where)
+            raised = asking.raise_to_person(
+                root,
+                owner,
+                subject=ticket,
+                raiser=f"manager:{owner}",
+                text=r.body,
+            )
+            r.where = raised.id
+            r.presented_again_at = at
+            save(current)
+        lines.append(
+            f"{ticket}: round {latest.k} was waiting for the User since its "
+            "deadline; he is back, so rite put the same question in front of "
+            "him again. Nothing new was asked"
+        )
+    return lines
+
+
 # --- one pass, from the supervisor ---------------------------------------------
 
 
@@ -538,6 +587,9 @@ def step(root: Path, manager: str, board, say, *, messages=(), now=None) -> list
             )
             continue
         lines.extend(handle(root, owner, board, reply, limits=config.refinement))
+    # After attributing: his message may itself have answered a waiting round.
+    if any(delivered.classify(m.text).users for m in messages):
+        lines.extend(present_again(root, owner, at=now))
     for line in lines:
         say(f"refinement: {line}")
     return lines

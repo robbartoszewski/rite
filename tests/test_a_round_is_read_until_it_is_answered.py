@@ -143,3 +143,70 @@ def test_the_ledger_itself_refuses_to_call_silence_before_the_deadline(tmp_path)
     assert not rounds.read_past_deadline(root, "lead", question, at=clock.now + 599)
     assert rounds.read_past_deadline(root, "lead", question, at=clock.now + 600)
     assert not rounds.read_past_deadline(root, "lead", "q0000", at=clock.now + 900)
+
+
+# --- he is back ----------------------------------------------------------------
+
+
+def _waiting_round(root, clock, body="Refinement of KAN-7, round 1 of 3\n\n1. Which?"):
+    question = _open_round(root, clock, deadline_in=600)
+    with rounds.locked(root, "lead", "KAN-7") as (a, save):
+        a.latest.body = body
+        save(a)
+    assert rounds.read_past_deadline(root, "lead", question, at=clock.now + 700)
+    return question
+
+
+def _from_him(root, text):
+    from rite_ai.managers import mailbox
+
+    mailbox.send(root, "lead", mailbox.INBOX, text)
+    return mailbox.take(root, "lead", mailbox.INBOX)
+
+
+def _questions(root):
+    from rite_ai.managers import mailbox
+
+    return [
+        m for m in mailbox.read(root, "lead", mailbox.OUTBOX) if m.kind == "question"
+    ]
+
+
+def test_when_he_is_back_the_waiting_question_comes_back_once(tmp_path):
+    from rite_ai.refinement import protocol
+
+    root, clock = _project(tmp_path), Clock(1000.0)
+    _waiting_round(root, clock)
+    assert len(_questions(root)) == 1
+    lines = protocol.step(
+        root, "lead", None, lambda _m: None, messages=_from_him(root, "morning")
+    )
+    assert any("put the same question in front of him again" in x for x in lines)
+    again = _questions(root)
+    assert len(again) == 2 and again[1].text.split("\n", 1)[1] == (
+        "Refinement of KAN-7, round 1 of 3\n\n1. Which?"
+    ), "unchanged, and the same round"
+    protocol.step(
+        root, "lead", None, lambda _m: None, messages=_from_him(root, "still here")
+    )
+    assert len(_questions(root)) == 2, "once, not a reminder"
+    assert rounds.load(root, "lead", "KAN-7").latest.k == 1, "no round spent"
+
+
+def test_a_message_that_is_not_his_is_not_him_being_back(tmp_path):
+    from rite_ai.refinement import protocol
+
+    root, clock = _project(tmp_path), Clock(1000.0)
+    _waiting_round(root, clock)
+    note = "[from rite · about something · sent Tue 10:00]\nnothing from him"
+    protocol.step(root, "lead", None, lambda _m: None, messages=_from_him(root, note))
+    assert len(_questions(root)) == 1
+
+
+def test_a_round_still_inside_its_deadline_is_not_repeated(tmp_path):
+    from rite_ai.refinement import protocol
+
+    root, clock = _project(tmp_path), Clock(1000.0)
+    _open_round(root, clock, deadline_in=DAY)
+    protocol.step(root, "lead", None, lambda _m: None, messages=_from_him(root, "hi"))
+    assert len(_questions(root)) == 1

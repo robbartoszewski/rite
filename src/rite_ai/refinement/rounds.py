@@ -94,6 +94,9 @@ class Round:
     items: list[str] = field(default_factory=list)
     """The proposal's items as the User was shown them: what an accept word
     makes the definition of done, and nothing else."""
+    body: str = ""
+    """The message as the User was shown it, so it can be put in front of
+    him again, unchanged, when he is back."""
 
     @property
     def answered(self) -> bool:
