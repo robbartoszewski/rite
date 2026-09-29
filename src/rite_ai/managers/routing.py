@@ -210,6 +210,22 @@ def _quoted(text: str) -> str:
     return "\n".join(f"> {line}" for line in text.strip().splitlines())
 
 
+RECORD_FOLLOWS = (
+    "rite: the quoted lines above are the Owner's; the quoted lines below are "
+    "the definition of done the User agreed for this ticket. Work to the one "
+    "below."
+)
+"""The one UNQUOTED line between the Owner's text and rite's record.
+
+⚠ **Unforgeable because every line of the Owner's text is quoted**
+(`_quoted`): nothing the Owner writes can produce an unquoted line, so the
+only unquoted line after the header is rite's. Without it, the Owner's text
+and the record are one continuous quoted block, and an Owner who wrote its
+own "Agreed definition of done for RT-1 …" would be indistinguishable from
+rite's, which is exactly the summary the record exists to replace. The
+record stays quoted too, so a board's words cannot pose as a rite header."""
+
+
 def _routed_message(
     owner: str,
     text: str,
@@ -219,14 +235,15 @@ def _routed_message(
 ) -> str:
     """What the secondary receives: rite's header, naming the ticket rite
     checked, then the Owner's text, then the agreed definition of done rite
-    checked it against (TR5). Both quoted: neither may forge a header."""
+    checked it against (TR5). Both quoted: neither may forge a header. Between
+    them, `RECORD_FOLLOWS`, unquoted, which only rite can write."""
     when = (now or datetime.now()).strftime("%a %H:%M")
     message = (
         f"[routed by the Owner Manager {owner!r} · ticket {ticket} · sent {when} "
         f"· INSTRUCTION]\n{_quoted(text)}"
     )
     if agreed:
-        message += "\n" + _quoted(agreed)
+        message += "\n" + RECORD_FOLLOWS + "\n" + _quoted(agreed)
     return message
 
 

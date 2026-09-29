@@ -124,10 +124,13 @@ def test_a_tickets_text_routed_as_taught_arrives_verbatim_and_runs_nothing(
 
     assert canaries(canary) == []
     (got,) = read(project, "helper", INBOX)
-    # The Owner's text verbatim, then the agreed definition of done rite
-    # checked (TR5), both quoted.
+    # The Owner's text verbatim, then rite's one unquoted separator, then the
+    # agreed definition of done rite checked (TR5), both quoted.
     assert got.text.split("\n", 1)[1].startswith(
-        routing._quoted(ticket.description) + "\n> Agreed definition of done for RT-7"
+        routing._quoted(ticket.description)
+        + "\n"
+        + routing.RECORD_FOLLOWS
+        + "\n> Agreed definition of done for RT-7"
     )
 
 
