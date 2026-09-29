@@ -525,6 +525,7 @@ def _ready(
             first_look=events.first_look,
             replies=events.replies,
             deadlines=events.deadlines,
+            owed=events.owed,
         )
     return work.ready
 
