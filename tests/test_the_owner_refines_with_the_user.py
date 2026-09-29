@@ -74,6 +74,9 @@ class Board(GitHubBackend):
         self.comments[ticket_id].append(text)
         return None
 
+    def list_tickets(self, _filter=None):
+        return list(self.tickets.values())
+
     def create(self, title, description="", labels=None):
         """A new issue, kept as a board keeps it: with its trailing
         whitespace trimmed, as GitHub does."""

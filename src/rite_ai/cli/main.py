@@ -7142,6 +7142,19 @@ def _ticket_work_rule(root: Path, manager: str) -> str:
     return ticket_work(manager, owner, one_root=one_root)
 
 
+def _refinement_briefing(root: Path, manager: str, board) -> str:
+    """`refinement.instructions` then `refinement.brief`, for `manager`."""
+    from rite_ai.config.parse import ParseError, parse_config
+    from rite_ai.refinement import instructions as refinement_instructions
+
+    config = parse_config(root / ".rite" / "config.yaml")
+    if isinstance(config, ParseError):
+        return ""
+    return refinement_instructions.instructions(
+        root, manager, config
+    ) + refinement_instructions.brief(root, manager, board, config)
+
+
 def _with_refinement(router, refine):
     """`router`, then `refine`, as one step. Either may be None."""
     if router is None and refine is None:
@@ -7787,6 +7800,10 @@ def _start_a_manager(
             refine=lambda say, messages=(): refinement_step(
                 root, role.name, board, say, messages=messages
             ),
+            # TR2/TR3: how the Owner refines, and this cycle's refinement
+            # work, from one read of each scheduled ticket; "" for a Manager
+            # that does not refine.
+            refinement_brief=lambda say: _refinement_briefing(root, role.name, board),
             # TR2: refinement runs wherever routing runs (before, during and
             # after a cycle, and in every wait), so a round the Owner asks
             # for goes out in seconds and a chat instruction he left
