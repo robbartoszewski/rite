@@ -427,3 +427,116 @@ def test_a_damaged_record_is_unreadable_not_absent(tmp_path, text):
     p.start()
     (record.records_dir(p.root) / "alpha.json").write_text(text)
     assert isinstance(record.read(p.root, "alpha"), record.Unreadable)
+
+
+# --- the entry points ---------------------------------------------------------------
+
+
+def test_sandbox_start_records_and_tells_the_worker_from_one_parse(
+    tmp_path, monkeypatch
+):
+    """What the Worker is told (TICKET.md, Publishing) and what `rite deliver`
+    compares against (the record) come from the same start."""
+    from unittest.mock import MagicMock
+
+    from click.testing import CliRunner
+
+    from rite_ai.cli.main import cli
+    from tests.test_cli import _sandbox_project, _with_a_board
+
+    _sandbox_project(tmp_path, monkeypatch)
+    config = tmp_path / ".rite" / "config.yaml"
+    config.write_text(config.read_text() + "publish:\n  strategy: commit\n")
+
+    def _run(args, *a, **kw):
+        stdout = '{"sandboxes": []}' if "ls" in args else ""
+        return MagicMock(returncode=0, stdout=stdout, stderr="")
+
+    with (
+        _with_a_board(),
+        patch("keyring.get_password", return_value=None),
+        patch("rite_ai.sandbox.shutil.which", return_value="/usr/local/bin/yoloai"),
+        patch("rite_ai.sandbox.subprocess.run", side_effect=_run),
+    ):
+        result = CliRunner().invoke(
+            cli, ["sandbox", "start", "alpha", "--ticket", "ABC-12"]
+        )
+    assert result.exit_code == 0, result.output
+    told = (tmp_path / "workers" / "alpha" / "TICKET.md").read_text()
+    publishing = told.split("## Publishing", 1)[1]
+    assert "`app` (commit)" in publishing
+    assert "Do not push, open a pull request or merge" in publishing
+    started = record.read(tmp_path, "alpha")
+    assert isinstance(started, record.Record) and started.ticket == "ABC-12"
+    assert started.modules["app"]["strategy"] == "commit"
+
+
+def test_a_commit_only_module_needs_no_push_access(tmp_path):
+    """An on-premise project with no reachable remote and no token must be
+    able to run `commit`: nothing is pushed."""
+    from rite_ai.cli.main import _worker_cannot_deliver
+    from rite_ai.config.models import Module, ProjectConfig, PublishConfig
+
+    clone = tmp_path / "workers" / "alpha" / "app"
+    clone.mkdir(parents=True)
+    _git(clone, "init", "-q")
+    _commit(clone, "a", "a\n", "a")
+    _git(clone, "remote", "add", "origin", "https://github.com/acme/app.git")
+    modules = [Module(name="app", path="app/")]
+    worker = tmp_path / "workers" / "alpha"
+
+    pushing = ProjectConfig(publish=PublishConfig(strategy="pull_request"))
+    refused = _worker_cannot_deliver("alpha", worker, modules, None, pushing)
+    assert refused and "token" in refused.lower()
+
+    local = ProjectConfig(publish=PublishConfig(strategy="commit"))
+    assert _worker_cannot_deliver("alpha", worker, modules, None, local) is None
+
+
+def test_rite_deliver_prints_each_module_and_exits_by_the_outcome(
+    tmp_path, monkeypatch
+):
+    from click.testing import CliRunner
+
+    from rite_ai.cli.main import cli
+    from rite_ai.publishing.deliver import Outcome
+
+    monkeypatch.chdir(Project(tmp_path).root)
+    ok = Delivered([Outcome("svc", TICKET, True, "committed")], "sandbox removed")
+    with patch("rite_ai.publishing.deliver.deliver", return_value=ok) as called:
+        result = CliRunner().invoke(cli, ["deliver", "alpha"])
+    assert result.exit_code == 0, result.output
+    assert called.call_args.kwargs == {"by_user": True}
+    assert f"Delivered svc/{TICKET}: committed." in result.output
+
+    bad = Delivered([Outcome("svc", TICKET, False, "no", "Fix it")], "kept")
+    with patch("rite_ai.publishing.deliver.deliver", return_value=bad):
+        assert CliRunner().invoke(cli, ["deliver", "alpha"]).exit_code == 1
+    with patch("rite_ai.publishing.deliver.deliver", return_value=Refused("why")):
+        result = CliRunner().invoke(cli, ["deliver", "alpha"])
+    assert result.exit_code == 1 and "not delivered: why" in result.output
+
+
+def test_no_worker_instruction_says_to_merge_or_to_push_regardless():
+    """The instruction text is where a Worker's merge came from; with `main`'s
+    "require branches to be up to date" off, a self-merge accepts a stale
+    green."""
+    from pathlib import Path as P
+
+    import rite_ai
+
+    src = P(rite_ai.__file__).parent
+    texts = {
+        "workspace/manage.py": (src / "workspace" / "manage.py").read_text(),
+        "cli/init/claude_gen.py": (src / "cli" / "init" / "claude_gen.py").read_text(),
+        "templates/commands/ticket.md": (
+            src.parent.parent / "templates" / "commands" / "ticket.md"
+        ).read_text(),
+    }
+    for where, text in texts.items():
+        flat = " ".join(text.split())
+        assert "get it reviewed, and merge" not in flat, where
+        assert "Merge once reviewed" not in flat, where
+        assert "merges reviewed work" not in flat, where
+        assert "Push that branch after every commit" not in flat, where
+        assert "never merge" in flat.lower() or "never merges" in flat.lower(), where
