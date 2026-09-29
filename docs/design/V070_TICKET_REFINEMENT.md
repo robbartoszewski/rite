@@ -1073,7 +1073,7 @@ built.*
   treated as the User's words, unless the User explicitly permits it.
 - **G2.** rite itself never edits a title or description, except to
   restore the User's own text when the User asks (below). Today nothing in
-  `src/` calls the backends' `update()`, and a test pins that it stays that
+  `src/` calls the backends' `update()`, and `tests/test_rite_never_edits_a_tickets_text.py` pins that it stays that
   way.
 
 **What the boards record: measured 2026-09-28, read-only.**
@@ -1102,7 +1102,7 @@ under an identity of their own. Where they stand today:
 
 ⚠ **Since #97 (2026-09-29), no agent holds a Jira credential at all.**
 Workers lost theirs, Managers never had one (F11), and rite's own host-side
-writes never edit a description (G2, pinned by a test). So on Jira today,
+writes never edit a description (G2, pinned by `tests/test_rite_never_edits_a_tickets_text.py`). So on Jira today,
 **every edit to a ticket's description is a person's**, whichever account
 rite is configured with. That makes G1 and TRQ6's "no 'ok' for a definition
 of done you wrote yourself" safe on Jira now, without any identity check.
@@ -1173,7 +1173,7 @@ every question of "who did this":
     one "ok" stays: rite fails closed and says why.
 - **G2 in every case:** rite itself never edits a title or description,
   except the restore above. Nothing in `src/` calls the backends'
-  `update()` today, and a test pins that.
+  `update()` today, and `tests/test_rite_never_edits_a_tickets_text.py` pins that (added 2026-09-29: the note had claimed this test before it existed).
 
 **Commit authorship: documented, not built** (decided 2026-09-29, same
 principle). A Worker's commits carry whatever git identity its sandbox is
