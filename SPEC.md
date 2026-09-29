@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.58 · **Date:** 2026-09-30
+**Version:** 0.24.59 · **Date:** 2026-09-30
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -4146,6 +4146,15 @@ so a session in one would resolve to the clone; `rite sandbox start` gives
 each sandboxed Worker `RITE_PROJECT_ROOT`, which wins, and `rite doctor`
 reports the root module as a problem only when Workers are not sandboxed.
 
+**Before the root is offered as a module, init says it is becoming the project
+root too (0.24.59).** rite writes its own files into that repository —
+CLAUDE.md (an existing one moved aside), `.gitignore`, `.rite/`, `.claude/`,
+the gate workflow — as uncommitted changes in the working tree Workers' work is
+delivered from. Measured in the v0.7.0 dogfood: `rite init` in a clone of a
+fork contributed from did exactly that, and nothing said so. The warning comes
+before the question, and under `--yes`, while only an empty `.rite/` exists, and
+names the separate-root commands for this repository.
+
 If no repos found:
 
 ```
@@ -7421,6 +7430,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.59 — `rite init` warns when the repository is becoming its own project root (v0.7.0 dogfood).** §9.3 gains the paragraph. `questionnaire.doubling_as_root`, shown by `offer_modules` for the `./` candidate before it is asked about (and under `--yes`). Tests through the real CLI: interactive and `--yes` both warn before the answer, with this repository's name and URL in the separate-root commands; a workspace holding a repository is not warned about. Mutations (no warning, warned after the question, warned for every module) each go red.
 
 **Changes in 0.24.58 — `rite doctor` says when a refinement round cannot reach you in Slack (v0.7.0 dogfood).** §9.8 gains the paragraph. `_doctor_refinement_reaches_you`, beside `_doctor_slack` (which stays silent for a project without Slack): a counted problem when a project with a board sends questions to a DM with no `slack.owner_user`, or to Slack with no bot token. Measured before the alpha run: `questions_to: dm`, no owner, no token, and doctor said nothing. Tests: the dogfood's config (both gaps named, with the commands); each gap alone; a channel needing the token and not the owner; controls for a complete setup, a project with no board and an unreadable store; the full `rite doctor` reporting and counting it. Six mutations (not wired in, owner not checked, token not checked, no-board projects checked, unreadable store read as missing, printed but not counted) each go red.
 
