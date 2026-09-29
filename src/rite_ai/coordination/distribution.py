@@ -18,7 +18,7 @@ a second definition here would give two answers to one question the first time
 they disagreed.
 
 **WHICH Worker does not matter, and saying so is the point.** Workers are
-fungible (§5.3.4) — every one gets every project credential and there is
+fungible (§5.3.4) — every one gets the same credentials and there is
 nothing to match against a ticket — so the free Workers are taken in
 configured order. A pick that LOOKED clever here would be inventing a routing
 rule the spec does not have.

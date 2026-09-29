@@ -941,7 +941,8 @@ from that run's start line, and replies already in the mailbox stay in
 ## What rite does to ticket text, and what it does not
 
 When an agent reads a ticket through rite (`rite board show`, `list`,
-`query`), or a Slack message through the relay, rite does two things.
+`query`, or the `TICKET.md` a sandboxed worker is given), or a Slack message
+through the relay, rite does two things.
 
 **It shows what the tracker hides.** Invisible characters are removed. Tag
 characters, which spell text that renders as nothing, are decoded in place.

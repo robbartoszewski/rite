@@ -463,35 +463,43 @@ def warn_if_global(key: str, credentials: object | None = None) -> str | None:
     return message
 
 
+# The services whose credentials a Worker receives: GitHub, to clone, push
+# and open a pull request, and Claude, the engine every Worker runs
+# (`start_worker` passes `--agent claude`). Nothing else.
+WORKER_SERVICES: tuple[str, ...] = ("github", "claude")
+
+
 def worker_environment(
     credentials: object | None = None, worker_token: str | None = None
 ) -> dict[str, str]:
-    """Every credential a Worker receives, as env var -> value (§5.3.4).
+    """The credentials a Worker receives, as env var -> value (§5.3.4).
 
-    **Every Worker gets every credential the project holds.** Not a
-    subset: Workers are fungible, and a Worker that lacked a credential
-    another had would differ in capability, which forces whatever assigns
-    tickets to reason about which Worker CAN do a job rather than which
-    is free.
+    ⚠ **Only `WORKER_SERVICES`, never "every credential the project holds".**
+    That was the rule until 2026-09-29, when Robert reversed it ("Narrow it
+    down") on this evidence: the pingr Worker proof's launch line carried
+    `SLACK_BOT_TOKEN`, `JIRA_API_TOKEN` and `JIRA_EMAIL`, none of which a
+    Worker uses, and SB12 measured that a sandbox's environment is readable
+    from other sandboxes on the same machine. Each credential here is also
+    written by yoloAI into files inside the sandbox until `destroy`. So a
+    service is added to `WORKER_SERVICES` only when a Worker is shown to
+    need it — do not restore the old rule as a fix for a Worker that lacks
+    something.
+
+    Workers stay fungible: every Worker gets the same set, so assignment
+    still never asks which Worker CAN do a job.
 
     Each env var name comes from the service field's own `env`, so rite
-    delivers `JIRA_API_TOKEN` rather than a name of its own invention —
-    the §10.5 boundary: rite stores and injects, and does not interpret.
+    delivers `GITHUB_TOKEN` rather than a name of its own invention — the
+    §10.5 boundary: rite stores and injects, and does not interpret.
 
-    `worker_token` is that Worker's own git token and takes precedence
-    for `GITHUB_TOKEN`. It is still one credential per Worker (§5.3.3);
-    what the fungibility decision changed is the scope they share, not
-    the count.
-
-    ⚠ Every entry here is a secret yoloAI 0.11.0 writes into four files
-    inside the sandbox, surviving `stop` and cleared only by `destroy`
-    (measured; §5.3.4). This function returning more is a real increase
-    in blast radius, which is the cost the decision accepted.
+    `worker_token` is that Worker's own git token and takes precedence for
+    `GITHUB_TOKEN` (§5.3.3).
     """
     from rite_ai.credentials.services import SERVICES, service_key
 
     env: dict[str, str] = {}
-    for svc in SERVICES.values():
+    for name in WORKER_SERVICES:
+        svc = SERVICES[name]
         for field in svc.secrets:
             if not field.env:
                 continue

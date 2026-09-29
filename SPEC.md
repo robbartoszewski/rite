@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.44 · **Date:** 2026-09-29
+**Version:** 0.24.45 · **Date:** 2026-09-29
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -1737,11 +1737,48 @@ allowlist at all.
 
 #### 5.3.4. Workers are fungible, so they all get the same credentials
 
-**Every Worker on a project receives every credential the project holds.** Not
-a per-Worker subset. This section previously specified narrow per-Worker
-scoping and presented it as least privilege; that is no longer what the design
-does, and leaving the claim in place would be overclaiming a security property
-the tool does not have.
+**Every Worker on a project receives the same credentials: GitHub and the
+engine's own (Claude), and nothing else** (`credentials.store.WORKER_SERVICES`).
+Not a per-Worker subset — that is what "fungible" below still means — and no
+longer "every credential the project holds".
+
+⚠ **Reversed 2026-09-29 — do not restore "every credential" as a fix.** From
+the fungibility decision until then, every Worker received every credential
+the project held: Jira, Slack and whatever else was stored. Robert reversed it
+("Narrow it down") on evidence rather than argument: the pingr Worker proof's
+launch line carried `SLACK_BOT_TOKEN`, `JIRA_API_TOKEN` and `JIRA_EMAIL`, none
+of which the Worker used for its work, and SB12 measured that a sandbox's
+environment is readable from other sandboxes on the same machine. Fewer
+credentials in a Worker's environment is less for another sandbox to read —
+the only SB12 mitigation available before v0.8.0 — and less for yoloAI to
+write into the sandbox's files (below). What was checked before narrowing,
+from the code rather than from one Worker: no Worker instruction or installed
+command uses Slack; the one Worker use of Jira is reading its own ticket with
+`rite board show` (see "Reading the ticket" below). A service joins
+`WORKER_SERVICES` only when a Worker is shown to need it.
+
+Fungibility is unaffected by the narrowing: every Worker still holds the same
+set, so assignment still never asks which Worker *can* do a job.
+
+**Reading the ticket.** A Worker cannot read the board: it holds no board
+credential. So its ticket is read where every other board read and write
+already happens, outside the sandbox. `rite sandbox start` reads the ticket
+on the host — every start with a ticket, which since TR9 is all Worker work,
+chores included — renders it exactly as `rite board show` does (one
+function, `sandbox.delivery.render_ticket`, normalised and phrase-scanned),
+and writes it to `workers/<worker>/TICKET.md` before yoloAI copies the
+directory in. The file names the board and the UTC time of the read and says
+it is **a copy taken at that moment, not the live ticket**: if the ticket
+changes afterwards, the Worker works from the copy, and the record shows what
+it worked from. A ticket that cannot be read refuses the start; a start with
+no ticket removes a previous copy. Further host-read content for a Worker —
+the agreed refinement record (TR4) is the first expected — is a section of
+the same file (`write_delivery(..., sections=...)`), so board content reaches
+a Worker by one path. Measured 2026-09-29 through the real CLI against
+ritetest Jira and GitHub, with a stand-in `yoloai` that recorded only the
+names of the variables passed: main passed `JIRA_API_TOKEN`, `JIRA_EMAIL`
+and `SLACK_BOT_TOKEN` to a Worker; after this change none of them, and
+`TICKET.md` held KAN-10 as read at `2026-09-29T00:40:37Z`.
 
 **Why, and it is an engineering trade rather than a security argument.** A
 Worker is an abstract entity that maps to a workspace and, at any one moment,
@@ -1769,8 +1806,8 @@ narrower limit *between* Workers of the same project.
   inside the sandbox — `ro/secrets/<NAME>`, the shell history, the agent log
   and `sandbox.jsonl` — all of which survive `yoloai stop` and are removed only
   by `destroy` (measured 2026-09-12; this settles the report §5.3.3 previously
-  carried as unverified). Injecting a project's whole credential set rather than
-  one token multiplies that surface by the number of credentials. **`destroy`,
+  carried as unverified). That surface grows with every credential injected,
+  which is one reason the set is now two. **`destroy`,
   not `stop`, is therefore load-bearing** and is what the daily loop should use.
 - Least privilege now rests entirely on the permission bound (contents and pull
   requests) rather than on the repo bound.
@@ -2059,8 +2096,8 @@ making and neither delivers §5.4.1 on its own.
 #### 5.4.4. Credentials are scoped to what the Manager needs
 
 A Manager running a local engine holding the Claude token is an exposure with
-no purpose. §5.3.4 argues that *Workers* are fungible and so all get every
-credential; **Managers are not fungible** — they differ by engine, by duty and
+no purpose. §5.3.4 argues that *Workers* are fungible and so all get the same
+credentials; **Managers are not fungible** — they differ by engine, by duty and
 by which services their work touches — so the argument does not carry across
 and should not be assumed to.
 
@@ -2588,7 +2625,8 @@ and N2 both landed and were observed (the v0.6.0 plan's § N). It was
 planned for 0.6.0, sequenced last and droppable, and was not dropped.
 
 **What rite does TODAY.** On rite's read paths (`rite board show`, `list`
-and `query`, and the Slack relay), ticket and Slack text is **NORMALISED**
+and `query`, the ticket copy `rite sandbox start` delivers to a Worker, and
+the Slack relay), ticket and Slack text is **NORMALISED**
 (§6.6.1, N1) and **PHRASE-SCANNED, with matches REPORTED at the next
 check-in** (§6.6.2, N2). Nothing is ever withheld. Two limits hold whatever
 else ships:
@@ -7130,6 +7168,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.45 — Workers receive GitHub and Claude credentials only; their ticket is delivered by the host (Robert, 2026-09-29: "Narrow it down").** §5.3.4 reversed: `worker_environment` delivers `WORKER_SERVICES` (github, claude) instead of every credential the project holds. The evidence: the pingr Worker proof's launch line carried `SLACK_BOT_TOKEN`, `JIRA_API_TOKEN` and `JIRA_EMAIL`, and SB12 measured a sandbox's environment readable from other sandboxes. Checked from the code first: no Worker uses Slack; the one Worker use of Jira was reading its ticket with `rite board show`, so the ticket is now read on the host and delivered as `TICKET.md` ("Reading the ticket"). Before/after through the real CLI with a stand-in `yoloai`: main passed the three to the Worker, this passes none. Tests: restoring the old set fails 3; skipping delivery, normalisation, the snapshot warning, the refusal of an unreadable ticket, or removing a stale copy each fail the delivery tests.
 
 **Changes in 0.24.44 — §2.4.1a says what v0.6.0 got wrong, and what the Owner lease really rests on.** The section as shipped in v0.6.0 stated a load limit on the Owner-lease guarantee; that claim is now marked unsupported, with how it was established (the lease code v0.6.0 shipped differs from the code measured clean only by the additive `released_at`). And the real residual is stated beside it: the guarantee rests on clocks agreeing within `skew_tolerance_seconds`, which one machine and the election tests cannot exercise, filed for v0.8.0 as LS3 (fencing or a shared clock).
 
