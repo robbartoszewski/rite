@@ -81,7 +81,7 @@ class TestTheSupervisorSendsAndReads:
         (question,) = mailbox.read(project, "lead", mailbox.OUTBOX)
         assert question.kind == mailbox.QUESTION
         (note,) = mailbox.read(project, "lead", mailbox.INBOX)
-        assert "round 1 of 3 is in front of the User" in note.text
+        assert "round 1 is in front of the User" in note.text
         assert any("refinement:" in line for line in said)
 
     def test_a_refused_round_is_said_to_the_owner(self, project, key):
@@ -220,14 +220,14 @@ class TestAPersonReopens:
                     rounds=[
                         rounds.Round(k=1, sent_at=1.0, deadline=2.0, proposal=False)
                     ],
-                    parked=rounds.NOT_AGREED,
+                    parked=rounds.NOT_ANSWERED,
                     misses=1,
                     answers=[{"id": "m1", "words": "the http one", "at": 1.5}],
                 )
             )
         got = self._reopen(monkeypatch, "KAN-7")
         assert got.exit_code == 0, got.output
-        assert "reopened (it was not agreed after N rounds)" in got.output
+        assert "reopened (it was not answered after N messages)" in got.output
         attempt = rounds.load(project, "lead", "KAN-7")
         assert (attempt.parked, attempt.misses, attempt.rounds) == ("", 0, [])
         assert attempt.answers[0]["words"] == "the http one"

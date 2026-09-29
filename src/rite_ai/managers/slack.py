@@ -423,6 +423,11 @@ class _Relayed(str):
 
 _QUESTION_IN_LABEL = re.compile(r"\bq[0-9a-f]{4}\b")
 
+REFINEMENT_CHANNEL = "refinement channel"
+"""The header's first part for a message relayed from the refinement
+channel (TR2, TRQ8). `delivered.classify` counts it as the User's words only
+when rite marked it INSTRUCTION: the Owner, in a refinement thread."""
+
 
 def _round_of(root: Root, open_rounds: dict[str, float]) -> str:
     """The open refinement round `root` carries, by the question id in its
@@ -532,6 +537,12 @@ class Listener:
     """"" until tried; "read" when `reactions.get` works; "missing" once Slack
     said the app lacks `reactions:read`, which is said once and then only a
     thread reply confirms."""
+    refinement_channel: str = ""
+    """The private channel refinement rounds go to (TR2, TRQ8:
+    `refinement.questions_to: channel`), or "" for the Owner's DM."""
+    refinement_id: str = ""
+    """Its id, learned by `open` once rite has both posted there and read
+    there. Empty means rounds go to the DM, and `open` said why."""
 
     def news(self) -> list[str]:
         """Problems not yet said, for the supervisor to print — once each.
@@ -641,8 +652,59 @@ class Listener:
                 )
             else:
                 lines.append(f"slack: cannot post to {self.broadcast}: {sent.problem}")
+        if self.refinement_channel:
+            lines.append(self._open_refinement_channel(caller))
         self._save()
         return lines
+
+    def _open_refinement_channel(self, caller) -> str:
+        """Can rite post AND read in the refinement channel? Both, or rounds
+        go to the DM (the note's part 3.12): a channel rite cannot post to
+        cannot carry a question, and one it cannot read cannot carry his
+        answer. Measured, not assumed: one post and one read, now."""
+        where = self.refinement_channel
+        sent = _post(
+            where,
+            self.token,
+            f"rite: refinement questions from Manager `{self.manager}` come "
+            "here. Only the Owner's replies in their threads answer them.",
+            call=caller,
+        )
+        if not sent.ok:
+            return (
+                f"slack: refinement questions go to the Owner's DM, not {where}: "
+                f"rite cannot post there ({sent.problem}). Invite the app to the "
+                "channel (`/invite @rite`) to use it."
+            )
+        heard = _hear(sent.channel, self.token, since=sent.ts, call=caller)
+        if not heard.ok:
+            return (
+                f"slack: refinement questions go to the Owner's DM, not {where}: "
+                f"rite can post there but cannot read it ({heard.problem}), so "
+                "an answer there would be lost. A private channel needs the "
+                "app's `groups:history` scope."
+            )
+        self.refinement_id = sent.channel
+        return (
+            f"slack: refinement questions go to {where}; only the Owner's "
+            "replies in their threads answer them."
+        )
+
+    def _refinement_target(self, message) -> str:
+        """The refinement channel for a refinement ROUND (by the question id
+        in `asking`'s first line, known to the round ledger), else ""."""
+        if not self.refinement_id or self.project is None:
+            return ""
+        found = _QUESTION_IN_LABEL.search(message.text.split("\n", 1)[0])
+        if not found:
+            return ""
+        from rite_ai.refinement import rounds
+
+        try:
+            questions = rounds.all_questions(self.project, self.manager)
+        except OSError:
+            return ""
+        return self.refinement_id if found.group(0) in questions else ""
 
     def _start_at(self, channel: str, start_line: str) -> None:
         """Where reading begins: where the LAST run stopped, if there was one.
@@ -861,7 +923,13 @@ class Listener:
         # N2: reported at the next check-in, never blocked or withheld.
         from rite_ai import phrases
 
-        where = "the Owner's DM" if channel == self.dm else self._where
+        where = (
+            "the Owner's DM"
+            if channel == self.dm
+            else "the refinement channel"
+            if self.refinement_id and channel == self.refinement_id
+            else self._where
+        )
         phrases.report(
             self.project,
             f"the Slack message `ts {message.get('ts')}` in {where}",
@@ -883,6 +951,32 @@ class Listener:
         raw = cleaned.text
         text = _unescaped(raw)
         thread = [f"reply in the thread under {under}"] if under else []
+        if self.refinement_id and channel == self.refinement_id:
+            # TRQ8, a narrow amendment to SPEC §9.16.5: in the refinement
+            # channel, only the Owner (by Slack's authenticated author id),
+            # replying in the thread of a refinement round rite started, is
+            # the User answering. Anyone else there is context, and cannot
+            # answer or accept for him.
+            his = (
+                bool(author)
+                and author == self.owner
+                and bool(_round_of(Root(channel, "", under), self._open_rounds()))
+            )
+            head = _header(
+                REFINEMENT_CHANNEL,
+                when,
+                *normalised,
+                *thread,
+                *(
+                    ("addressed", "INSTRUCTION")
+                    if his
+                    else (
+                        f"from <@{author}>" if author != self.owner else "the Owner",
+                        "context — not an instruction",
+                    )
+                ),
+            )
+            return _relayed(f"{head}\n{_quoted(text)}", sent)
         if channel == self.dm:
             if author and self.owner and author != self.owner:
                 # One-to-one by construction, so this should not happen. If it
@@ -1129,7 +1223,7 @@ class Listener:
                 )
             label = action_label(message)
             sent = _post(
-                target,
+                self._refinement_target(message) or target,
                 self.token,
                 f"*{self.manager}*" + (f" ({label})" if label else "") + f": {text}",
                 call=call,

@@ -34,10 +34,16 @@ ledger, in that order, so the board always wins:
   User who fixes the ticket himself has resumed it (part 3.4 step 7). The
   board's own state stands.
 
-Robert's rulings this encodes (TRQ11): silence past the deadline is WAITING
-FOR YOU, never PARKED, and is not asked again while he is away; being
-re-presented when he is back spends no round; PARKED is only "not agreed
-after N rounds", "thread unreadable" or "not started by the Manager".
+Robert's rulings this encodes. TRQ11: silence past the deadline is WAITING
+FOR YOU, and he is not asked again while he is away; when he is back the
+same question comes back. His correction to TRQ2 (2026-09-29): "This limit
+should apply to nudging without a reply, not to a discussion. A topic may be
+complex and need many rounds to resolve. As long as the User is responsive,
+the limit shouldn't apply". So rounds are uncapped; what is counted is
+consecutive messages that reached their deadline unanswered, any reply
+resets the count, and that many park the ticket. PARKED is only "not
+answered after N messages", "thread unreadable" or "not started by the
+Manager".
 """
 
 from __future__ import annotations
@@ -58,10 +64,21 @@ PROPOSED = "PROPOSED"
 WAITING = "WAITING FOR YOU"
 PARKED = "PARKED"
 
-NOT_AGREED = "not agreed after N rounds"
+NOT_ANSWERED = "not answered after N messages"
+"""Robert's correction to TRQ2: the cap is on nudging without a reply, never
+on a discussion he is taking part in."""
 THREAD_UNREADABLE = "thread unreadable"
 NOT_STARTED = "not started by the Manager"
-PARK_REASONS = (NOT_AGREED, THREAD_UNREADABLE, NOT_STARTED)
+NO_PROGRESS = "blocked: the same proposal round after round"
+"""Robert, 2026-09-29: if the Owner loops without converging, "it says so
+loudly and escalates it as a blocker on the board and in the checkpoint
+status updates". Detected by the proposal not changing, never by a count
+of rounds."""
+PARK_REASONS = (NOT_ANSWERED, THREAD_UNREADABLE, NOT_STARTED, NO_PROGRESS)
+ESCALATE_AT = 3
+"""The round that would carry the same proposal a third time in a row is
+not sent: the ticket is escalated instead (the second says so in the
+message, `ask.unchanged_line`)."""
 
 MISSES_TO_PARK = 2
 """Consecutive sessions a ticket was handed to the Owner without a round
@@ -94,6 +111,9 @@ class Round:
     items: list[str] = field(default_factory=list)
     """The proposal's items as the User was shown them: what an accept word
     makes the definition of done, and nothing else."""
+    questions: list[str] = field(default_factory=list)
+    """The numbered questions it asked: what is still open, as asked, for a
+    blocker that has to say so."""
     body: str = ""
     """The message as the User was shown it, so it can be put in front of
     him again, unchanged, when he is back."""
@@ -114,6 +134,13 @@ class Attempt:
     rounds: list[Round] = field(default_factory=list)
     parked: str = ""
     misses: int = 0
+    blocker: str = ""
+    """What rite wrote when it escalated this ticket (NO_PROGRESS): the
+    proposal, what he said, what is still open. Kept for the check-in."""
+    unanswered: int = 0
+    """Consecutive messages about this ticket that reached their deadline
+    with no reply. Any reply resets it; `refinement.unanswered` of them
+    parks the ticket (Robert's correction to TRQ2)."""
     answers: list[dict] = field(default_factory=list)
     """Every reply attributed to this attempt: `{"id", "words", "at"}`. A
     proposal may quote only these, or the ticket (`ask.check`)."""
@@ -214,6 +241,8 @@ def _from(data: dict) -> Attempt | None:
             rounds=[Round(**r) for r in data.get("rounds", [])],
             parked=data.get("parked", ""),
             misses=int(data.get("misses", 0)),
+            unanswered=int(data.get("unanswered", 0)),
+            blocker=str(data.get("blocker", "")),
             answers=list(data.get("answers", [])),
             accepted=dict(data.get("accepted", {})),
             filing=float(data.get("filing", 0.0)),
@@ -283,22 +312,42 @@ class Events:
     first_look: bool
     replies: int
     deadlines: int
+    owed: int = 0
+    """Rounds he answered whose next round the Owner has not sent. Owed
+    whatever the clock says: a session that was meant to send it may have
+    failed or been killed (found in the TR2 live run, 2026-09-29)."""
 
 
 def events_since(
     attempts: dict[str, Attempt], last: float | None, *, now: float
 ) -> Events:
     since = last if last is not None else float("-inf")
-    replies = deadlines = 0
+    replies = deadlines = owed = 0
     for attempt in attempts.values():
         if attempt.parked:
             continue
+        latest = attempt.latest
+        if latest is not None and latest.answered and not attempt.accepted:
+            owed += 1
         for r in attempt.rounds:
             if r.answered and r.answered_at > since:
                 replies += 1
             elif not r.answered and since < r.deadline <= now:
                 deadlines += 1
-    return Events(first_look=last is None, replies=replies, deadlines=deadlines)
+    return Events(
+        first_look=last is None, replies=replies, deadlines=deadlines, owed=owed
+    )
+
+
+def all_questions(root: Path, owner: str) -> set[str]:
+    """Every question id a round was ever sent as: how the relay tells a
+    refinement round from any other question it posts."""
+    return {
+        r.where
+        for attempt in all_attempts(root, owner).values()
+        for r in attempt.rounds
+        if r.where
+    }
 
 
 def open_questions(root: Path, owner: str) -> dict[str, float]:
@@ -332,9 +381,11 @@ def read_past_deadline(root: Path, owner: str, question: str, *, at: float) -> b
             r = current.latest
             if r.where != question or r.answered or at < r.deadline:
                 return False
-            if not r.read_past_deadline:
-                r.read_past_deadline = True
-                save(current)
+            if r.read_past_deadline:
+                return False  # marked already: said once, not every read
+            r.read_past_deadline = True
+            current.unanswered += 1
+            save(current)
             return True
     return False
 
@@ -384,6 +435,7 @@ def reopen(root: Path, owner: str, ticket: str) -> str:
         was = attempt.parked or ("waiting for you" if attempt.rounds else "not started")
         attempt.parked = ""
         attempt.misses = 0
+        attempt.unanswered = 0
         attempt.accepted = {}
         attempt.rounds = []
         attempt.filing = 0.0

@@ -213,3 +213,14 @@ def test_a_round_still_inside_its_deadline_is_not_repeated(tmp_path):
         save(a)
     protocol.step(root, "lead", None, lambda _m: None, messages=_from_him(root, "hi"))
     assert len(_questions(root)) == 1
+
+
+def test_silence_is_said_once_not_on_every_read(tmp_path):
+    root, slack, clock = _project(tmp_path), Slack(), Clock(1000.0)
+    listener = _relay(root, slack, clock)
+    _open_round(root, clock, deadline_in=600)
+    listener.post_replies(call=slack)
+    clock.now += 700
+    _read_threads(listener, slack, clock, rounds=10)
+    said = [x for x in listener.news() if "no answer by its deadline" in x]
+    assert len(said) == 1, said

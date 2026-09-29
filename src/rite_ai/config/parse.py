@@ -677,7 +677,7 @@ def _refinement_of(raw: object) -> RefinementConfig:
     default = RefinementConfig()
     words = raw.get("accept_words")
     return RefinementConfig(
-        rounds=raw.get("rounds", default.rounds),
+        unanswered=raw.get("unanswered", default.unanswered),
         deadline_hours=raw.get("deadline_hours", default.deadline_hours),
         open_max=raw.get("open_max", default.open_max),
         start_per_session=raw.get("start_per_session", default.start_per_session),
@@ -710,7 +710,7 @@ def _refinement_problem(raw: object) -> str:
     if not isinstance(raw, dict):
         return "'refinement' must be a mapping"
     config = _refinement_of(raw)
-    for key in ("rounds", "open_max", "start_per_session", "chore_after_minutes"):
+    for key in ("unanswered", "open_max", "start_per_session", "chore_after_minutes"):
         value = raw.get(key)
         if value is not None and (not _whole(value) or value < 1):
             return f"refinement.{key} is {value!r}: it must be a whole number above 0"

@@ -32,6 +32,10 @@ KNOWN = {
     ("coordination/distribution.py", "distribute", "list_tickets"): (
         "reads this Manager's own tickets; the handout below is gated"
     ),
+    ("refinement/instructions.py", "brief", "list_tickets"): (
+        "the Owner's refinement brief (TR2): lists unrefined tickets to "
+        "REFINE, never to work; gives nothing to anyone"
+    ),
     ("reporting/status.py", "collect_board_state", "list_tickets"): (
         "reporting only: gives nothing to anyone"
     ),
@@ -61,6 +65,12 @@ KNOWN = {
     ),
     ("lifecycle/commands.py", "_deliver", "label"): (
         "the function `_deliver_via_backend` is nested in: the same calls"
+    ),
+    ("refinement/protocol.py", "_escalate", "label"): (
+        "adds `blocked` to a ticket escalated as a blocker (TR2); gives it to nobody"
+    ),
+    ("refinement/protocol.py", "handle", "label"): (
+        "removes `blocked` when his reply unblocks it (TR2); gives it to nobody"
     ),
     ("cli/main.py", "board_label", "label"): (
         "`rite board label`: a hand write; nothing starts from a label, and "
