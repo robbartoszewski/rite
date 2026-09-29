@@ -283,7 +283,10 @@ def test_start_proceeds_when_the_token_can_push(tmp_path, monkeypatch):
 
     _project(tmp_path, monkeypatch, modules=True, origin="git@github.com:acme/app.git")
     monkeypatch.setenv("RITE_GITHUB_TOKEN", "tok")
+    from tests.test_cli import _with_a_board
+
     with (
+        _with_a_board(),
         patch("rite_ai.sandbox.push_access_refusal", return_value=None),
         patch(
             "rite_ai.sandbox.start_worker",

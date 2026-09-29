@@ -3819,31 +3819,16 @@ def board_show(ticket_id: str, role: str) -> None:
     if isinstance(ticket, BackendError):
         click.echo(ticket.message, err=True)
         raise SystemExit(1)
-    from rite_ai.normalise import normalise
+    from rite_ai import phrases
+    from rite_ai.sandbox.delivery import render_ticket
 
-    # N1, SPEC §6.6.1: what an agent reads here is what the tracker's own UI
-    # shows a reviewer. Every change is said, in a line rite writes, and none
-    # of it is a safety check (§6.6.3).
-    title = normalise(ticket.title)
-    body = normalise(ticket.description.strip())
+    # The one rendering, shared with what `rite sandbox start` delivers into
+    # a Worker's workspace, so the two cannot drift apart.
+    rendered = render_ticket(ticket)
     # N2: phrases are REPORTED at the next check-in, never blocked. The text
     # below is printed whole whatever the scan finds.
-    from rite_ai import phrases
-
-    phrases.report(
-        _find_project_root(), f"ticket {ticket.id}", f"{title.text}\n{body.text}"
-    )
-    click.echo(f"{ticket.id}  [{ticket.status}]  {title.text}")
-    if ticket.labels:
-        click.echo(f"labels: {', '.join(ticket.labels)}")
-    if ticket.url:
-        click.echo(ticket.url)
-    click.echo("")
-    click.echo(body.text or "(no description)")
-    for part, what in ((title, "this title"), (body, "this description")):
-        if part.changed:
-            click.echo("")
-            click.echo(part.note(what))
+    phrases.report(_find_project_root(), f"ticket {ticket.id}", rendered.scanned)
+    click.echo(rendered.text)
 
 
 @board.command("label")
@@ -6016,7 +6001,17 @@ def sandbox_start(
             raise SystemExit(1)
         click.echo(f"filed chore {made} from the prompt, labelled chore and {worker}")
         ticket = made
-    prompt = f"Work ticket {ticket}." if ticket is not None else None
+    from rite_ai.sandbox.delivery import DELIVERY_FILE, clear_delivery
+
+    if ticket is None:
+        clear_delivery(worker_dir)
+        prompt = None
+    else:
+        read_at = _deliver_ticket(worker, worker_dir, ticket, root, config)
+        prompt = (
+            f"Work ticket {ticket}. Its text, as rite read it from the board at "
+            f"{read_at} UTC, is in {DELIVERY_FILE} in your working directory."
+        )
     result = start_worker(
         root,
         worker,
@@ -6063,6 +6058,47 @@ def _how_to_register(root: Path) -> str:
             f"{r.branch}}}`"
         )
     return "Register the repository with `rite add module <name> <url>`"
+
+
+def _board_source(config, role: str = "workers") -> str:
+    """Which board a ticket was read from, in words for the delivery header."""
+    tb = config.ticket_backend
+    if tb.type == "jira":
+        key = (tb.projects or {}).get(role) or ""
+        return f"Jira {tb.site}" + (f", project {key}" if key else "")
+    if tb.type == "github":
+        return f"GitHub Issues {tb.repo}"
+    return tb.type
+
+
+def _deliver_ticket(worker: str, worker_dir: Path, ticket: str, root, config) -> str:
+    """Read TICKET on the host and write it into the Worker's workspace, or
+    exit. Returns the UTC time of the read.
+
+    A sandboxed Worker holds no board credential (§5.3.4), so this read is
+    the only way it learns what its ticket says. A ticket that cannot be
+    read refuses the start: a Worker that cannot see its ticket would stop
+    at once, or guess."""
+    from rite_ai import phrases
+    from rite_ai.sandbox.delivery import read_at_now, render_ticket, write_delivery
+    from rite_ai.tickets import BackendError
+
+    backend, problem = _ticket_backend("workers", root=root, config=config)
+    ticket_read = backend.read(ticket) if not problem else None
+    if problem or isinstance(ticket_read, BackendError) or ticket_read is None:
+        why = problem or getattr(ticket_read, "message", "nothing came back")
+        click.echo(
+            f"not starting '{worker}': could not read ticket {ticket} from the "
+            f"board ({why}), and a Worker cannot read the board itself",
+            err=True,
+        )
+        raise SystemExit(1)
+    read_at = read_at_now()
+    rendered = render_ticket(ticket_read)
+    phrases.report(root, f"ticket {ticket_read.id}", rendered.scanned)
+    path = write_delivery(worker_dir, rendered, read_at, _board_source(config))
+    click.echo(f"delivered ticket {ticket} as read at {read_at} UTC to {path}")
+    return read_at
 
 
 def _worker_cannot_deliver(

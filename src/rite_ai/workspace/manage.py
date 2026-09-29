@@ -767,12 +767,13 @@ went to the wrong Worker.
 {module_commands}
 ## Your ticket
 
-You are usually started with a ticket ID ("Work ticket ABC-12."). Read that
-ticket with `rite board show <ticket-id>`, which prints its title, status and
-description from the board this project uses, JIRA or GitHub Issues. If it is
-not complete enough to start cold — no
-definition of done, no clear scope — or you cannot read it at all, say so
-and stop rather than guessing.
+You are started with a ticket ID ("Work ticket ABC-12."). Its text is in
+`TICKET.md` in your working directory: rite read it from the board on the
+host just before this session started, and the file says when. You hold no
+board credential, so `rite board show` will not work here; the file is your
+ticket. It is a copy taken at that time, not the live ticket. If it is not
+complete enough to start cold — no definition of done, no clear scope — or
+there is no `TICKET.md`, say so and stop rather than guessing.
 
 ## Workflow
 

@@ -160,24 +160,17 @@ SERVICES: dict[str, Service] = {
             ),
         ),
         note=(
-            # ⚠ Named rather than discovered later. §5.3.4 decided every
-            # Worker gets every credential the project holds, and
-            # `worker_environment`'s own docstring records that a larger
-            # return is "a real increase in blast radius, which is the cost
-            # the decision accepted". Slack is the first credential in that
-            # set a Worker has no use for — the relay runs in the
-            # supervisor, on the host — so it is the first case where the
-            # accepted cost buys nothing.
-            "Read by the relay inside `rite start`, on the host. Workers "
-            "receive it too, because every Worker receives every credential "
-            "(§5.3.4) — they have no use for it, which makes this the first "
-            "credential where that rule costs without buying."
+            # Read by the relay inside `rite start`, on the host. Workers do
+            # not receive it (§5.3.4, `WORKER_SERVICES`): until 2026-09-29
+            # they did, because every Worker got every credential, and this
+            # was the first credential where that rule cost without buying.
+            "Read by the relay inside `rite start`, on the host. Workers do "
+            "not receive it (§5.3.4)."
         ),
     ),
     # ⚠ C6/C26: a credential that exists ONLY outside a Manager's sandbox.
-    # No `env`, deliberately: `worker_environment` skips a field without one,
-    # so it is never handed to a Worker (§5.3.4 would otherwise give every
-    # Worker every credential the project holds). See
+    # No `env`, deliberately, and not in `WORKER_SERVICES`: it is never
+    # handed to a Worker. See
     # `managers/github_access.py` for the path each takes.
     "github_app": Service(
         name="github_app",

@@ -705,6 +705,22 @@ def test_sandbox_start_passes_provisioned_token_through(tmp_path, monkeypatch):
     assert "GITHUB_TOKEN=the-stored-token" in env_values
 
 
+class _ReadableBoard:
+    """A board the host can read a ticket from: `rite sandbox start` reads
+    the ticket and delivers it into the Worker's workspace (§5.3.4)."""
+
+    def read(self, ticket_id):
+        from rite_ai.tickets.interface import Ticket
+
+        return Ticket(id=ticket_id, title="the ticket", description="do the thing")
+
+
+def _with_a_board():
+    return patch(
+        "rite_ai.cli.main._ticket_backend", return_value=(_ReadableBoard(), None)
+    )
+
+
 def _sandbox_project(tmp_path, monkeypatch):
     rite_dir = tmp_path / ".rite"
     rite_dir.mkdir()
@@ -740,6 +756,7 @@ def test_sandbox_start_ticket_becomes_the_opening_prompt(tmp_path, monkeypatch):
         return MagicMock(returncode=0, stdout=stdout, stderr="")
 
     with (
+        _with_a_board(),
         patch("keyring.get_password", return_value=None),
         patch("rite_ai.sandbox.shutil.which", return_value="/usr/local/bin/yoloai"),
         patch("rite_ai.sandbox.subprocess.run", side_effect=_run),
@@ -748,7 +765,9 @@ def test_sandbox_start_ticket_becomes_the_opening_prompt(tmp_path, monkeypatch):
             cli, ["sandbox", "start", "alpha", "--ticket", "ABC-12"]
         )
     assert result.exit_code == 0, result.output
-    assert seen["prompt"] == "Work ticket ABC-12.\n"
+    assert seen["prompt"].startswith("Work ticket ABC-12. Its text, as rite read")
+    delivered = (tmp_path / "workers" / "alpha" / "TICKET.md").read_text()
+    assert "ABC-12" in delivered and "do the thing" in delivered
     assert "yoloai attach rite-" in result.output
 
 
@@ -817,6 +836,7 @@ def test_sandbox_start_prepares_before_it_starts(tmp_path, monkeypatch):
         return MagicMock(returncode=0, stdout=stdout, stderr="")
 
     with (
+        _with_a_board(),
         patch("keyring.get_password", return_value=None),
         patch("rite_ai.workspace.prepare_workspace", side_effect=prep),
         patch("rite_ai.sandbox.shutil.which", return_value="/usr/local/bin/yoloai"),
@@ -837,6 +857,7 @@ def test_sandbox_start_allow_dirty_skips_prepare_and_says_so(tmp_path, monkeypat
         return MagicMock(returncode=0, stdout=stdout, stderr="")
 
     with (
+        _with_a_board(),
         patch("keyring.get_password", return_value=None),
         patch("rite_ai.workspace.prepare_workspace") as mock_prep,
         patch("rite_ai.sandbox.shutil.which", return_value="/usr/local/bin/yoloai"),
