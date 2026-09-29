@@ -283,22 +283,31 @@ class Events:
     first_look: bool
     replies: int
     deadlines: int
+    owed: int = 0
+    """Rounds he answered whose next round the Owner has not sent. Owed
+    whatever the clock says: a session that was meant to send it may have
+    failed or been killed (found in the TR2 live run, 2026-09-29)."""
 
 
 def events_since(
     attempts: dict[str, Attempt], last: float | None, *, now: float
 ) -> Events:
     since = last if last is not None else float("-inf")
-    replies = deadlines = 0
+    replies = deadlines = owed = 0
     for attempt in attempts.values():
         if attempt.parked:
             continue
+        latest = attempt.latest
+        if latest is not None and latest.answered and not attempt.accepted:
+            owed += 1
         for r in attempt.rounds:
             if r.answered and r.answered_at > since:
                 replies += 1
             elif not r.answered and since < r.deadline <= now:
                 deadlines += 1
-    return Events(first_look=last is None, replies=replies, deadlines=deadlines)
+    return Events(
+        first_look=last is None, replies=replies, deadlines=deadlines, owed=owed
+    )
 
 
 def all_questions(root: Path, owner: str) -> set[str]:
@@ -343,9 +352,10 @@ def read_past_deadline(root: Path, owner: str, question: str, *, at: float) -> b
             r = current.latest
             if r.where != question or r.answered or at < r.deadline:
                 return False
-            if not r.read_past_deadline:
-                r.read_past_deadline = True
-                save(current)
+            if r.read_past_deadline:
+                return False  # marked already: said once, not every read
+            r.read_past_deadline = True
+            save(current)
             return True
     return False
 
