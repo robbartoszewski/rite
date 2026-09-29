@@ -9,13 +9,19 @@ project's checkout of that module. It adds refs and nothing else: no working
 tree changes, no `--force`, no rebase. git itself refuses a non-fast-forward
 or a branch that is checked out, and that refusal is passed on with its fix.
 
-**What each strategy does after collecting** (this piece):
+**What each strategy does after collecting:**
 - `commit`: nothing more. The branch is local, rebaseable, and nothing
   reached any remote.
-- `push`, `pull_request`: rite's own push lands in PB1 piece 4. Until then
-  the Worker pushes its branch and opens the PR itself (TICKET.md says so
-  per start) and never merges; collecting still keeps a local copy.
+- `push`: after rite's publish gate passes on exactly `<branch>..<ticket>`,
+  push the ticket branch onto the module's branch on origin. No force: a
+  branch that moved is refused by the remote, and rite never rebases.
+- `pull_request`: after the gate, push the ticket branch and open a pull
+  request against the module's branch, or report the one already open.
+  Nothing here merges it (`auto_merge`, piece 5, is rite's gated step).
 - `push_to_shared`: refused here too, not only at start (v0.8.0).
+
+A refusal after collecting loses nothing: the work is already on the
+project's branch, and the note says so.
 
 **Read once** (`record`, design §3.1): the settings the Worker was started
 under are compared with the config read now. If they differ in any key, or
@@ -40,8 +46,8 @@ from rite_ai.config.models import Module
 from rite_ai.publishing import record as publish_record
 from rite_ai.publishing.settings import _unavailable, effective
 
-LATER = {"push", "pull_request"}
-"""Strategies whose push rite does not do yet (PB1 piece 4)."""
+PUSHES = {"push", "pull_request"}
+"""Strategies under which rite sends the work to the module's origin."""
 
 
 @dataclass(frozen=True)
@@ -83,7 +89,10 @@ class Refused:
 
 
 def _run(
-    args: list[str], cwd: Path, stdin: str | None = None
+    args: list[str],
+    cwd: Path,
+    stdin: str | None = None,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run one git command.
 
@@ -95,6 +104,7 @@ def _run(
         args,
         cwd=cwd,
         input=stdin,
+        env=env,
         capture_output=True,
         text=True,
         errors="replace",
@@ -230,6 +240,191 @@ def _collect(
         if created.returncode != 0:
             return no(f"could not create {ticket}: {_said(created)}")
     return ticket
+
+
+def _remote_environment(root: Path, worker: str, module: Module, config):
+    """The environment rite pushes in: the Worker's resolved GitHub token and
+    the same git settings a sandboxed push uses (`sandbox_git_environment`:
+    the credential helper reset to `gh`, SSH origins rewritten, the
+    repository's own hooks, so rite's pre-push gate still runs). A dict, or
+    why it cannot be built."""
+    import os
+    import shutil
+
+    from rite_ai.sandbox import (
+        owner_repo_from_url,
+        resolve_worker_token,
+        sandbox_git_environment,
+    )
+
+    env = dict(os.environ)
+    if not (module.url and owner_repo_from_url(module.url)):
+        return env  # a non-GitHub origin: the operator's own git config
+    token, _tier = resolve_worker_token(worker, config.credentials)
+    if not token:
+        return f"no GitHub token for {worker} (`rite credential set github_token`)"
+    gh = shutil.which("gh")
+    env.update(sandbox_git_environment(gh))
+    env["GITHUB_TOKEN"] = token
+    env["GH_TOKEN"] = token
+    return env
+
+
+def _publish(
+    root: Path,
+    worker: str,
+    module: Module,
+    ticket: str,
+    branch: str,
+    strategy: str,
+    config,
+) -> Outcome:
+    """Push, or push and open a pull request, after the gate passes (PB1
+    piece 4). Called only with the work already collected, so a refusal here
+    loses nothing: it is on `branch` in the project's checkout."""
+    from rite_ai.gate.gate import EXIT_CLEAN, run_gate
+
+    project = root / module.path
+    home = f"committed locally on {branch} in {module.path}"
+
+    def no(why: str, fix: str) -> Outcome:
+        return Outcome(module.name, ticket, False, f"{why}; {home}, not pushed", fix)
+
+    # 🔴 The floor the model cannot talk past: nothing leaves unless rite's
+    # publish gate passed on exactly the commits being sent. "Could not
+    # check" (EXIT_ERROR: a scanner missing) is not a pass.
+    report = run_gate(project, rev_range=f"{module.branch}..{branch}")
+    if report.exit_code != EXIT_CLEAN:
+        return no(
+            f"the publish gate did not pass (exit {report.exit_code})",
+            f"Run `rite publish check --rev-range {module.branch}..{branch}` in "
+            f"{module.path} and fix what it names",
+        )
+    env = _remote_environment(root, worker, module, config)
+    if isinstance(env, str):
+        return no(env, "Set it, then ask for the delivery again")
+
+    if strategy == "push":
+        # No force: a moved branch is rejected by the remote, and rite never
+        # rebases, because a rebased tree is not the one that was verified.
+        pushed = _run(
+            ["git", "push", "--porcelain", "origin", f"{branch}:{module.branch}"],
+            project,
+            env=env,
+        )
+        if pushed.returncode != 0:
+            return no(
+                f"origin refused the push to {module.branch}: {_said(pushed)}",
+                f"If {module.branch} moved, ask a Worker to update {branch} from "
+                "it, then deliver again",
+            )
+        return Outcome(module.name, ticket, True, f"{home}; pushed to {module.branch}")
+
+    pushed = _run(
+        ["git", "push", "--porcelain", "origin", f"{branch}:{branch}"],
+        project,
+        env=env,
+    )
+    if pushed.returncode != 0:
+        return no(
+            f"origin refused branch {branch}: {_said(pushed)}",
+            f"Rename or remove {branch} on origin, then deliver again",
+        )
+    return _open_pull_request(project, module, ticket, branch, env, home)
+
+
+def _open_pull_request(
+    project: Path, module: Module, ticket: str, branch: str, env: dict, home: str
+) -> Outcome:
+    """`gh pr create`, or the pull request already open for `branch`."""
+    import json
+    import tempfile
+
+    from rite_ai.sandbox import owner_repo_from_url
+
+    def no(why: str, fix: str) -> Outcome:
+        return Outcome(module.name, ticket, False, f"{why}; {home}, pushed", fix)
+
+    repo = owner_repo_from_url(module.url or "")
+    if repo is None:
+        return no(
+            f"{module.name}'s origin is not on GitHub, so rite cannot open a pull "
+            "request there",
+            "Open it by hand, or set this module's strategy to push or commit",
+        )
+    slug = "/".join(repo)
+    existing = _run(
+        [
+            "gh",
+            "pr",
+            "list",
+            "--repo",
+            slug,
+            "--head",
+            branch,
+            "--state",
+            "open",
+            "--json",
+            "number,url",
+        ],
+        project,
+        env=env,
+    )
+    try:
+        found = json.loads(existing.stdout) if existing.returncode == 0 else None
+    except ValueError:
+        found = None
+    if found is None:
+        return no(
+            f"could not ask GitHub for an open PR from {branch}: {_said(existing)}",
+            "Check the token's pull_requests permission, then deliver again",
+        )
+    if found:
+        return Outcome(
+            module.name, ticket, True, f"{home}; pushed; PR {found[0]['url']}"
+        )
+    log = _run(
+        ["git", "log", "--reverse", "--format=- %s", f"{module.branch}..{branch}"],
+        project,
+    )
+    body = (
+        f"Delivered by rite for {ticket} (`rite deliver`).\n\n"
+        f"Commits:\n{log.stdout}\n"
+        "Nothing merges this PR but the User, or rite's own gate when "
+        "`publish.auto_merge` is on.\n"
+    )
+    with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as f:
+        f.write(body)
+        body_file = f.name
+    try:
+        made = _run(
+            [
+                "gh",
+                "pr",
+                "create",
+                "--repo",
+                slug,
+                "--base",
+                module.branch,
+                "--head",
+                branch,
+                "--title",
+                f"{ticket}",
+                "--body-file",
+                body_file,
+            ],
+            project,
+            env=env,
+        )
+    finally:
+        Path(body_file).unlink(missing_ok=True)
+    if made.returncode != 0:
+        return no(
+            f"gh could not open the pull request: {_said(made)}",
+            "Open it by hand from the pushed branch, or deliver again",
+        )
+    url = (made.stdout.strip().splitlines() or [""])[-1]
+    return Outcome(module.name, ticket, True, f"{home}; pushed; PR {url}")
 
 
 def _changed_key(then: dict, now: dict) -> tuple[str, str]:
@@ -411,15 +606,9 @@ def deliver(
                     f"Ask the User to run: rite deliver {worker}",
                 )
             )
-        elif strategy in LATER:
+        elif strategy in PUSHES:
             outcomes.append(
-                Outcome(
-                    module.name,
-                    ticket,
-                    True,
-                    f"{where}; under {strategy} the Worker's own PR is the "
-                    "published copy",
-                )
+                _publish(root, worker, module, ticket, got, strategy, config)
             )
         else:
             outcomes.append(

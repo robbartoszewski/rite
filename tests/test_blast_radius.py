@@ -25,10 +25,21 @@ from rite_ai.state import CorruptStateError, read_json_state, write_atomic
 SRC = Path(__file__).resolve().parent.parent / "src" / "rite_ai"
 
 
+PUBLISHING = SRC / "publishing" / "deliver.py"
+ALLOWED_GIT = {("push", PUBLISHING)}
+"""`git push` in exactly one file: PB1's publish step, under a strategy that
+permits it, after the publish gate (SPEC §5.1.1). Never with `--force`: that
+verb stays forbidden everywhere, this file included."""
+ALLOWED_GH_PR = {PUBLISHING}
+"""`gh pr` (list, create) in the same file, never `merge` (§5.1.1)."""
+
+
 class TestRiteCannotWriteToARemoteOrRewriteHistory:
-    """The owner approves merges and pushes by hand, and never force-pushes
-    `main`, so the blast area stays "new changes" rather than "project
-    history". That holds only while rite itself has no path to a remote."""
+    """Nothing rite does rewrites history or force-pushes, so the blast area
+    stays "new changes" rather than "project history". rite reaches a remote
+    in exactly one file, PB1's publish step (`ALLOWED_GIT`, `ALLOWED_GH_PR`),
+    under a configured strategy and after the publish gate; merging stays
+    out of reach everywhere."""
 
     def _all_source(self) -> str:
         return "\n".join(p.read_text() for p in sorted(SRC.rglob("*.py")))
@@ -57,7 +68,7 @@ class TestRiteCannotWriteToARemoteOrRewriteHistory:
         for path in sorted(SRC.rglob("*.py")):
             for match in re.finditer(r'\[\s*"git"\s*,([^\]]*)\]', path.read_text()):
                 args = match.group(1)
-                if f'"{verb}"' in args:
+                if f'"{verb}"' in args and (verb, path) not in ALLOWED_GIT:
                     offenders.append(f"{path.name}: git {args.strip()}")
         assert not offenders, (
             f"git {verb!r} is reachable from rite: {offenders}. rite must never "
@@ -71,10 +82,30 @@ class TestRiteCannotWriteToARemoteOrRewriteHistory:
 
     def test_gh_cli_is_only_used_for_issues_and_read_only_api(self):
         """`gh` can merge pull requests and write to repositories. rite's
-        use of it must stay on the ticket board."""
-        source = self._all_source()
-        for forbidden in ('"pr"', '"repo"', '"release"', '"workflow"'):
-            assert forbidden not in source or "issue" in source
+        use of it stays on the ticket board, except `gh pr` in the one module
+        that publishes (PB1), and nothing merges.
+
+        ⚠ Enumerates every `["gh", ...]` argument list, like the git test
+        above. It used to assert `'"pr"' not in source or "issue" in
+        source`, which passed whenever the word "issue" appeared anywhere
+        in the package: it had been measuring nothing."""
+        offenders = []
+        for path in sorted(SRC.rglob("*.py")):
+            for match in re.finditer(r'\[\s*"gh"\s*,([^\]]*)\]', path.read_text()):
+                args = match.group(1)
+                for sub in ('"repo"', '"release"', '"workflow"', '"merge"'):
+                    if sub in args:
+                        offenders.append(f"{path.name}: gh {args.strip()}")
+                if '"pr"' in args and path not in ALLOWED_GH_PR:
+                    offenders.append(f"{path.name}: gh {args.strip()}")
+        assert not offenders, offenders
+
+    def test_the_gh_check_sees_a_gh_list(self):
+        """The control for the test above: its pattern must match the lists
+        rite actually writes, multi-line ones included."""
+        text = (SRC / "publishing" / "deliver.py").read_text()
+        found = re.findall(r'\[\s*"gh"\s*,([^\]]*)\]', text)
+        assert any('"create"' in args for args in found), found
 
 
 class TestCorruptStateIsNeverReadAsEmpty:

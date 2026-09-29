@@ -374,6 +374,53 @@ may push to (Q4).
   `commit` are not asked for remote access, so an on-premise project with
   no reachable remote and no token can run.
 
+## 6.2 Piece 4 as built
+
+- **No Worker pushes, under any strategy.** TICKET.md's Publishing section
+  says "commit on `<ticket>`; do not push, open a pull request or merge" for
+  every strategy, and names what rite will do on delivery. This ends
+  piece 2's interim, where the Worker still pushed under the push
+  strategies.
+- **The floor: rite's publish gate on exactly `<branch>..<ticket>`**, in the
+  module's checkout, before anything leaves. Only `EXIT_CLEAN` passes.
+  `EXIT_ERROR` (a scanner missing) is "could not check" and refuses. This is
+  observed with the real gitleaks: a planted token stops the push, and clean
+  work passes.
+- **Credentials**: the Worker's resolved token, and the same git settings a
+  sandboxed push uses (`sandbox_git_environment`). The repository's own
+  hooks run, so rite's pre-push gate runs a second time. A module whose
+  origin is not on GitHub pushes with the operator's own git config, and
+  refuses a pull request (rite opens PRs only on GitHub).
+- **`push` never forces and never rebases.** A module branch that moved is
+  refused by the remote and reported, with the work still on the project's
+  branch.
+- **`pull_request` reports an open PR for the branch instead of opening a
+  second one.** Nothing merges it. `gh pr merge` appears nowhere, and
+  `test_blast_radius` now enumerates every `["gh", ...]` list. Its old
+  check passed whenever the word "issue" appeared anywhere in the package,
+  so it had been measuring nothing.
+
+### 6.2.1 Observed against GitHub (scratch repository, 2026-09-29)
+
+These runs go through `deliver()` in process, with the real collect step,
+the real gitleaks gate, a real `git push` and a real `gh`. Two things are
+stubbed:
+- yoloAI (the copy is a real clone);
+- `_remote_environment`, which returns the host's own environment so `gh`
+  uses its keyring login. rite never handled a token value.
+
+| strategy | Worker tip | result on GitHub | note to the Manager |
+|---|---|---|---|
+| `pull_request` | `3ce3a09` | PR #2 opened, head `3ce3a09` | "pushed; PR …/pull/2" |
+| `pull_request`, delivered again | `3ce3a09` | no second PR | the same PR #2 reported |
+| `push` | `48d7dd7` | `main` `91d9048` → `48d7dd7` | "pushed to main" |
+| `push`, a GitHub token planted | `7f7e196` | `main` unchanged, no branch pushed | "the publish gate did not pass (exit 2) … not pushed. Run `rite publish check …`" |
+
+**Not observed:** the Worker-token path (`resolve_worker_token` +
+`sandbox_git_environment` on the host). It is covered by unit tests only,
+because observing it needs a Worker token in rite's credential store, and
+putting one there is the User's to do.
+
 ## 7. The SPEC amendment (§5.1.1)
 
 The current wording, "rite never writes to a remote", "`gh` never `pr`", and
