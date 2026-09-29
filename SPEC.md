@@ -1389,8 +1389,8 @@ properties, not features, and `tests/test_blast_radius.py` asserts them.
 repository-mutating verbs are `clone`, `fetch --prune`, `checkout`,
 `checkout -b` and `merge --ff-only`, and every one of them runs against a
 worker's own clone under `workers/<name>/` — with one exception, below.
-`gh` is confined to the issue board — never `pr`, never `repo`. Merging and
-pushing stay a human action, so the blast area is new changes rather than
+`gh` is confined to the issue board — never `repo`, and `pr` only as below.
+Merging stays a human action, so the blast area is new changes rather than
 project history.
 
 **The exception: `rite deliver` adds branches to the project's checkout
@@ -1402,9 +1402,18 @@ only, with `fetch <copy> <ticket>:<ticket>` (git refuses a non-fast-forward
 and a checked-out branch), and, when `publish.squash` is on, `commit-tree`
 plus `branch <ticket> <sha>` on a branch that does not exist yet. It adds
 refs; it never changes a working tree, never moves an existing branch other
-than by fast-forward, and never deletes one. Pushing and opening a pull
-request under `publish.strategy` are PB1's piece 4 and amend this section
-again when they land. A test enumerates every `["git", ...]` argument
+than by fast-forward, and never deletes one.
+
+**And `rite deliver` writes to a remote, in the same file only, under a
+strategy that permits it.** Under `publish.strategy: push` it pushes the
+collected ticket branch onto the module's branch; under `pull_request` it
+pushes the ticket branch and opens a pull request with `gh pr create`. Both
+run only after rite's publish gate passed on exactly the commits being sent
+(a gate that could not run is not a pass), with the Worker's own token, and
+never with `--force`: a branch that moved is refused by the remote and
+reported, never rebased. `rite deliver` never merges; `gh pr merge` appears
+nowhere in the package. `tests/test_blast_radius.py` allows `git push` and
+`gh pr` in `rite_ai/publishing/deliver.py` and nowhere else. A test enumerates every `["git", ...]` argument
 list rather than grepping file text, because docstrings legitimately discuss
 pushing.
 

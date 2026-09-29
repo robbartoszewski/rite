@@ -372,6 +372,32 @@ may push to (Q4).
   `commit` are not asked for remote access, so an on-premise project with
   no reachable remote and no token can run.
 
+## 6.2 Piece 4 as built
+
+- **No Worker pushes, under any strategy.** TICKET.md's Publishing section
+  says "commit on `<ticket>`; do not push, open a pull request or merge" for
+  every strategy, and names what rite will do on delivery. This ends
+  piece 2's interim, where the Worker still pushed under the push
+  strategies.
+- **The floor: rite's publish gate on exactly `<branch>..<ticket>`**, in the
+  module's checkout, before anything leaves. Only `EXIT_CLEAN` passes.
+  `EXIT_ERROR` (a scanner missing) is "could not check" and refuses. This is
+  observed with the real gitleaks: a planted token stops the push, and clean
+  work passes.
+- **Credentials**: the Worker's resolved token, and the same git settings a
+  sandboxed push uses (`sandbox_git_environment`). The repository's own
+  hooks run, so rite's pre-push gate runs a second time. A module whose
+  origin is not on GitHub pushes with the operator's own git config, and
+  refuses a pull request (rite opens PRs only on GitHub).
+- **`push` never forces and never rebases.** A module branch that moved is
+  refused by the remote and reported, with the work still on the project's
+  branch.
+- **`pull_request` reports an open PR for the branch instead of opening a
+  second one.** Nothing merges it. `gh pr merge` appears nowhere, and
+  `test_blast_radius` now enumerates every `["gh", ...]` list. Its old
+  check passed whenever the word "issue" appeared anywhere in the package,
+  so it had been measuring nothing.
+
 ## 7. The SPEC amendment (§5.1.1)
 
 The current wording, "rite never writes to a remote", "`gh` never `pr`", and
