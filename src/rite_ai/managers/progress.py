@@ -62,12 +62,22 @@ class Footprint:
     requests: tuple[str, ...] = ()
     """Worker requests not yet honoured. Read before the supervisor takes
     them at the cycle's end (`supervise._honour_worker_requests`)."""
+    deliveries: tuple[str, ...] = ()
+    """Delivery requests not yet honoured (PB1), read at the same moment and
+    for the same reason: asking for a delivery is progress."""
 
     def differs_from(self, other: Footprint) -> list[str]:
         """The names of the parts that changed, in a fixed order."""
         return [
             name
-            for name in ("project", "claims", "outbox", "routes", "requests")
+            for name in (
+                "project",
+                "claims",
+                "outbox",
+                "routes",
+                "requests",
+                "deliveries",
+            )
             if getattr(self, name) != getattr(other, name)
         ]
 
@@ -126,6 +136,7 @@ def footprint(root: Path, manager: str) -> Footprint:
     from rite_ai.managers.broker import requests_dir
     from rite_ai.managers.mailbox import OUTBOX, mailbox_dir
     from rite_ai.managers.routing import routed_log
+    from rite_ai.publishing.requests import requests_dir as deliveries_dir
 
     root = Path(root)
     return Footprint(
@@ -134,4 +145,5 @@ def footprint(root: Path, manager: str) -> Footprint:
         outbox=_names(mailbox_dir(root, manager, OUTBOX)),
         routes=_bytes(routed_log(root, manager)),
         requests=_names(requests_dir(root, manager)),
+        deliveries=_names(deliveries_dir(root, manager)),
     )
