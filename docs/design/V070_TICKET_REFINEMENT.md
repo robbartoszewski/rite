@@ -1081,8 +1081,18 @@ under an identity of their own. Where they stand today:
 |---|---|---|
 | the person | the person | the person |
 | a Manager | **its own**: a GitHub App installation token (`managers/github_access.py`), so it should appear as the App's bot. Not yet observed: no bot activity exists in Robert's repositories | **nothing**: a Manager holds no Jira credential (F11) |
-| a Worker | **the person**: `github_token` or `sandbox_token_<worker>` are personal access tokens (`credentials/store.py:75`, `sandbox/__init__.py` `resolve_worker_token`) | **the person**: a Worker's launch carries the Jira token (`sandbox/__init__.py`, `redact_secrets`) |
+| a Worker | **the person**: `github_token` or `sandbox_token_<worker>` are personal access tokens (`credentials/store.py:75`, `sandbox/__init__.py` `resolve_worker_token`) | **nothing, since #97** (2026-09-29): Workers are given GitHub and Claude credentials only (`WORKER_SERVICES`), and their ticket is delivered from the host as `TICKET.md`. It was the person's Jira token before |
 | rite on the host (records, labels, comments) | the person's `gh` login: all 132 actors across 98 issues and pull requests in Robert's repositories were `User` accounts | the person's token |
+
+⚠ **Since #97 (2026-09-29), no agent holds a Jira credential at all.**
+Workers lost theirs, Managers never had one (F11), and rite's own host-side
+writes never edit a description (G2, pinned by a test). So on Jira today,
+**every edit to a ticket's description is a person's**, whichever account
+rite is configured with. That makes G1 and TRQ6's "no 'ok' for a definition
+of done you wrote yourself" safe on Jira now, without any identity check.
+It does not cover a person's own unsandboxed session driving Jira's API with
+the configured token directly (TRQ10's class). GitHub is unchanged: Workers
+still push with a token that may be the person's.
 
 ⚠ **This corrects the premise the question arrived with.** Managers do
 *not* use Robert's GitHub credential; they use the App. The identity
@@ -1418,13 +1428,44 @@ it. What is actually true:
   `pty.fork()` and answer a `/dev/tty` prompt (part 3.6). The prompt is
   dropped. Goose and Cursor need no separate measurement: the same tools
   are available to any engine with a shell.
-- **Whether GitHub comments are read completely**, on an issue with more
-  than 100 comments, and the fallback to `totalCount`.
-- **Whether the record survives a Jira round-trip** through a single ADF
-  text node and `adf_to_text`; and whether Jira's embedded comment list
-  pages.
-- **Whether the key is unreadable** from inside a Manager (seatbelt,
-  Landlock) and a Worker (yoloAI), under an ungranted root with a control;
+- ~~Whether GitHub comments are read completely~~: **measured 2026-09-28.**
+  `gh issue view --json comments` returned 148 of 148 on cli/cli#13840
+  (gh 2.98.0). rite does not rely on that: TR1's `read_thread` pages
+  through GraphQL itself and counts the thread complete only when the
+  comments read equal `totalCount`. Observed on the same issue: 148 over
+  two pages, complete. On `main` since #83.
+- ~~Whether the record survives a round trip~~: **measured 2026-09-29, on
+  both boards, with `rite refine accept` (#83) against real issues.**
+  - **GitHub** (`rite-dogfood-board` #44 and #45): **byte-identical.** 1564
+    bytes sent and stored, same SHA-256, no CRLF rewriting, and backticks,
+    a pipe, an apostrophe, a backslash and `zażółć` all survived. The
+    payload parsed from what was stored equals the signed one, the MAC
+    verifies against it, `rite refine status` said REFINED, an edit to the
+    issue body turned it STALE, and `"rite-attested" in:comments` found it.
+  - **Jira** (`ritetest` KAN-11): stored as **one paragraph holding one text
+    node**, which is what `JiraBackend.comment` sends. Flattened by
+    `adf_to_text`, it comes back as the sent text **plus one trailing
+    newline** (1283 bytes sent, 1284 read). The payload is identical and
+    the MAC verifies, **because the MAC is over the parsed payload, not the
+    bytes** (part 3.2). Signing the bytes would have failed here. `rite
+    refine status KAN-11` said REFINED.
+  - **Cosmetic, found on Jira:** Jira renders the comment as its own markup,
+    so the Markdown `**bold**` heading shows with stray asterisks. The data
+    is unaffected. It is a small follow-up to render Jira comments in
+    Jira's markup.
+  - **A privacy defect, found on the first GitHub probe and fixed before
+    #83 merged:** the attested provenance carried the machine's hostname,
+    which was then posted to the board. Provenance now carries the kind,
+    the time and `as_written` only, and a test fails if it names the
+    machine. The word was edited out of #44's comment, which leaves that
+    probe record correctly UNREADABLE.
+  - **Not yet measured:** whether Jira's embedded comment list pages as
+    documented. The code fails closed if it does not.
+- **Whether the key is unreadable**: from inside a **macOS Manager,
+  measured 2026-09-28 and pinned** (`test_no_manager_reads_the_refinement_key.py`,
+  run in the macOS CI job): read, list and plant are all refused, with
+  controls. **Still owed:** a Linux Manager (Landlock) and a yoloAI Worker,
+  each under an ungranted root with a control;
   and whether it is absent from the argv and environment of every rite
   process that holds it, read with CU1b section 4's `KERN_PROCARGS2`
   reader.
@@ -1434,9 +1475,13 @@ it. What is actually true:
 - ~~Whether the Jira filter for "needs refinement" works~~: **measured
   2026-09-28** on `bentora` (an exact 5 + 142 = 147 split), and the GitHub
   filter on `cli/cli`. Not yet run on `ritetest` (part 3.10).
-- **Whether a sandboxed Worker's handover or reply reaches the host**
-  (TR4). The dogfood suggests not, because its question stayed in the
-  sandbox. That is one observation, not a measurement.
+- ~~Whether anything a Worker writes reaches the host~~: **it does,
+  observed by the dogfood session** (its `TO_REFINEMENT_SESSION.md`, one
+  macOS observation with no control). yoloAI 0.11.0 tells a Worker to write
+  its question to `files/question.json`. That directory is a host path
+  (`yoloai files <name> path`), and the KAN-7 Worker's question was read
+  from outside the sandbox. It reached the host, and nothing read it. The
+  Worker-question path (DF10, #68) now reads it. Linux is untested.
 - **Whether a proposal gets rubber-stamped.** This is not measurable before
   the acceptance run (TR6). It is recorded there as observed behaviour, and
   it is not a gate.
