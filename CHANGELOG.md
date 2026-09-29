@@ -2,6 +2,25 @@
 
 ## Unreleased: 0.7.0 (notes in progress, completed at release)
 
+### ⚠ A Manager's text goes on stdin: `rite reply`, `rite ask` and `rite route` take `-`
+
+**Text given to these commands as an argument is now refused.** In the
+v0.6.0 dogfood, a Manager's `rite reply "… \`rite update --files-only\` …"`
+ran that command, because the shell runs backticks inside double quotes, and
+the output was sent to the person. A Manager's text often quotes a ticket
+someone else wrote, so this let the ticket's author run commands. Each
+command now takes `-` and reads the text from stdin, and the Managers'
+instructions show a quoted heredoc:
+
+    rite reply --manager lead - <<'RITE_TEXT_1f2e3d'
+    tickets 12 and 13 merged; `make test` green
+    RITE_TEXT_1f2e3d
+
+A Manager started on an earlier release is given the new form in its next
+instruction. If you script these commands, pipe the text in. A refused
+command with backticks or `$( )` in it is now reported as that, not as a
+broken settings file.
+
 ### ⚠ Workers now start only on a ticket with an agreed definition of done
 
 **Read this before upgrading: Workers stop starting on tickets you have not

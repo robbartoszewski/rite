@@ -57,7 +57,7 @@ def test_the_owner_is_told_it_routes_and_to_whom(tmp_path, monkeypatch, board):
     said = _start(tmp_path, monkeypatch, TWO, "lead", board=board)
     assert "You are the OWNER" in said
     assert "- 'helper': engine claude; duties execute" in said
-    assert ' route --ticket <ID> <manager> "' in said
+    assert " route --ticket <ID> <manager> - <<'RITE_TEXT_" in said
     assert " chore <message-id>" in said
     assert "no authority over you" in said
     # A6: a reply is verified before a person is told it happened.
@@ -109,7 +109,7 @@ def test_the_owner_is_told_to_ask_the_user_before_routing(tmp_path, monkeypatch,
     # kept beside the new one.
     assert "asking you back" not in said
     assert "ask the User before you" in said
-    assert ' ask "<question>"' in said
+    assert " ask -`, as above" in said
     assert "Never route a guess" in said
 
 

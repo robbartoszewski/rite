@@ -588,7 +588,20 @@ def _say_refusals(
     base = claude_login.projects_dir(root, manager) if manager else None
     refused = list(dict.fromkeys(refused_commands(root, since, base=base)))
     for command in refused:
-        if allowed(command):
+        if _substitutes(command):
+            # ⚠ W9 (v0.6.0 readiness). This used to fall to the branch below
+            # and blame the settings file. Claude Code asks approval for a
+            # substitution whose inner command is not on the allowlist, and
+            # runs it when it is (F14) — either way the text was being read
+            # as shell.
+            say(
+                f"refused: {command.strip()!r} — it runs a command inside "
+                "backticks or $( ), which the engine asks approval for. When "
+                "that is text for `rite reply`, `rite ask` or `rite route`, "
+                "the text goes on stdin through a quoted heredoc, as the "
+                "Manager's instructions show, never in double quotes."
+            )
+        elif allowed(command):
             # ⚠ TWO CAUSES, and the transcript does not say which (SB11,
             # observed on Linux 2026-09-28): `printf … > notes/x.txt` was
             # refused while `echo`, `git status` and `ls` ran under the same
@@ -618,6 +631,26 @@ def _say_refusals(
         else:
             say(refusal(command, root))
     return [c.strip() for c in refused]
+
+
+def _substitutes(command: str) -> bool:
+    """A backtick or `$(` outside single quotes, in the command's own line.
+    The body of a quoted heredoc (`<<'X'`) is text, not shell, so only what
+    comes before its first newline counts."""
+    head = command.split("\n", 1)[0] if "<<'" in command else command
+    # An apostrophe inside double quotes ("don't") opens nothing: prose is
+    # exactly where F14's backticks were.
+    quote, escaped = "", False
+    for i, char in enumerate(head):
+        if escaped:
+            escaped = False
+        elif char == "\\" and quote != "'":
+            escaped = True
+        elif quote != "'" and (char == "`" or head.startswith("$(", i)):
+            return True
+        elif char in "'\"" and quote in ("", char):
+            quote = "" if quote else char
+    return False
 
 
 def _writes_through_a_redirection(command: str) -> bool:

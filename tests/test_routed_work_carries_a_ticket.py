@@ -112,6 +112,6 @@ def test_the_command_refuses_a_route_without_a_ticket(tmp_path, monkeypatch):
     )
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv(MANAGER_ENV, "lead")
-    got = CliRunner().invoke(cli, ["route", "helper", "run the suite"])
+    got = CliRunner().invoke(cli, ["route", "helper", "-"], input="run the suite")
     assert got.exit_code == 1 and "rite chore" in got.output
     assert not list(routing._routes_dir(tmp_path.resolve(), "lead").glob("*.json"))

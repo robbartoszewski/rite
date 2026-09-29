@@ -151,7 +151,8 @@ def _route(monkeypatch, as_manager, *args):
         monkeypatch.setenv(MANAGER_ENV, as_manager)
     else:
         monkeypatch.delenv(MANAGER_ENV, raising=False)
-    return CliRunner().invoke(cli, ["route", *args])
+    # F14: the text, always the last argument here, goes on stdin.
+    return CliRunner().invoke(cli, ["route", *args[:-1], "-"], input=args[-1])
 
 
 class TestTheCommand:

@@ -135,20 +135,22 @@ def test_some_statements_are_refused_on_purpose(text):
 
 @pytest.mark.parametrize("text", ASKS)
 def test_rite_reply_refuses_it_writes_nothing_and_names_ask(project, text):
-    result = CliRunner().invoke(cli, ["reply", "--manager", "lead", text])
+    result = CliRunner().invoke(cli, ["reply", "--manager", "lead", "-"], input=text)
     assert result.exit_code == 1, result.output
-    assert 'rite ask --manager lead "<the same text>"' in result.output
+    assert "rite ask --manager lead - <<'RITE_TEXT_" in result.output
     assert read(project, "lead", OUTBOX) == []
 
 
 def test_rite_ask_takes_the_same_text_as_a_question(project):
-    result = CliRunner().invoke(cli, ["ask", "--manager", "lead", ASKS[0]])
+    result = CliRunner().invoke(cli, ["ask", "--manager", "lead", "-"], input=ASKS[0])
     assert result.exit_code == 0, result.output
     assert _kinds(project) == [QUESTION]
 
 
 def test_rite_reply_files_a_statement_as_reading(project):
-    result = CliRunner().invoke(cli, ["reply", "--manager", "lead", STATEMENTS[0]])
+    result = CliRunner().invoke(
+        cli, ["reply", "--manager", "lead", "-"], input=STATEMENTS[0]
+    )
     assert result.exit_code == 0, result.output
     [message] = read(project, "lead", OUTBOX)
     assert message.kind == REPLY and not _needs_action(message)
@@ -214,7 +216,8 @@ def test_rite_replies_marks_a_question_and_not_a_reply(project):
 
 def test_the_manager_is_told_to_ask_with_ask(project):
     said = how_to_reply(project, "lead") + checkins.instructions(project, "lead")
-    assert ' ask --manager lead "<your question>"' in said
-    assert "To ask now: `" in said and ' ask --manager lead "<question>"`' in said
+    assert " ask --manager lead - <<'RITE_TEXT_" in said
+    assert "<your question>" in said
+    assert "To ask now:\n" in said and "\n<question>\n" in said
     assert "To ask the User something or tell them something" not in said
     assert ' reply --manager lead "<question>"' not in said

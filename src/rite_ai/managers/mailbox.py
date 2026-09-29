@@ -984,16 +984,19 @@ def how_to_reply(root: Path, manager: str) -> str:
     question-in-the-reading-pile RP1 removes.
     """
     from rite_ai import own_command
+    from rite_ai.managers import stdin_text
 
     rite = own_command()
     return (
         "\n\n## Talking to the User\n\n"
         "To TELL the User something (progress, results, what you found), "
         "run:\n"
-        f'  {rite} reply --manager {manager} "<your message>"\n'
+        + stdin_text.heredoc(f"{rite} reply --manager {manager} -", "<your message>")
+        + "\n"
         "That is filed for them to read, not to act on. To ASK them anything, "
         "or to say you are blocked or need a decision, run:\n"
-        f'  {rite} ask --manager {manager} "<your question>"\n'
+        + stdin_text.heredoc(f"{rite} ask --manager {manager} -", "<your question>")
+        + f"\n{stdin_text.RULE}\n"
         "A reply that reads like a question is refused, and you are told to "
         "ask it instead. When unsure, ask.\n"
         f"Do not write files into the mailbox yourself. They read your replies "

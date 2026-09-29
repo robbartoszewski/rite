@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.47 · **Date:** 2026-09-29
+**Version:** 0.24.48 · **Date:** 2026-09-29
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -6261,6 +6261,22 @@ and 0.6.0. The Slack relay and the check-ins that use it are planned in
 `docs/design/V060_CHECKINS.md`. *Both are built and observed in 0.6.0
 (`docs/design/V060_TAG_READINESS.md`, D7 and D8).*
 
+**A Manager's text reaches rite on stdin, never on the command line (0.24.48,
+F14).** `rite reply`, `rite ask` and `rite route` take `-` where the text was,
+read the text from stdin, and refuse text given as an argument. A Manager's
+instructions show each as a quoted heredoc (`<<'…'`), in which the shell
+expands nothing, ending on a delimiter rite draws fresh for each set of
+instructions, so text quoted from a ticket cannot end it early. The reason is
+command injection, observed: in the v0.6.0 dogfood a Claude Owner's
+`rite reply "… \`rite update --files-only\` …"` ran that command — Claude Code
+allows a substitution whose inner command is on the allowlist — and the
+output reached the person. A Manager's text often quotes a ticket, an issue or
+another Manager, so double quotes let whoever wrote that text run commands.
+**Not covered:** rite cannot stop a model putting a substitution into some
+other command (`gh issue comment --body "…"`); the refusal cannot un-run a
+substitution the shell already ran, only keep its output from being sent; and
+`--while` on `rite ask --defer` is still an argument.
+
 #### 9.16.1. Two separate questions, and neither answers the other
 
 Every message that reaches a Manager is asked two things, and they are
@@ -6504,7 +6520,7 @@ such a project behaves as before.
 
 **The Owner routes, and cannot do it by writing an inbox (built).** No
 Manager may write a Manager's inbox (§5.4.8, P1), so the Owner ASKS, as it
-does for a Worker. `rite route --ticket <ID> <manager> "…"` writes a request
+does for a Worker. `rite route --ticket <ID> <manager> -`, the text on stdin (§9.16), writes a request
 into the Owner's own directory. **Every route names its ticket (TR9):** the
 supervisor refuses a request with none, or one whose ticket a single-issue
 read of the board does not return (a board that cannot be read refuses too),
@@ -7180,6 +7196,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.48 — a Manager's text is read from stdin, never the command line (F14, W9).** §9.16 gains the paragraph, and the routing paragraph ("The Owner routes") shows the new form. Found in the v0.6.0 dogfood: a Claude Owner's double-quoted `rite reply` ran `rite update --files-only` and `rite doctor` through backticks and sent their output to the person. `rite reply`, `rite ask` and `rite route` now take `-` and read stdin, refuse text as an argument, and are taught as quoted heredocs with a fresh unguessable delimiter. W9 (v0.6.0 readiness): a refused command containing backticks or `$( )` is now reported as a substitution, not as a settings file the engine failed to apply. Tested with a ticket's text run through the Owner's instructions by real bash and zsh, with a control showing the old form runs the canary (`tests/test_a_managers_text_never_becomes_shell.py`).
 
 **Changes in 0.24.47 — a Worker starts only on an agreed definition of done, and is handed that record (TR4).** §5.3.4 "Reading the ticket": `rite sandbox start` now reads the ticket through `refinement.status.of`, one read that returns the state, the signed record and the ticket text. Only REFINED starts a Worker; `TICKET.md` carries that read's text and, as "Agreed definition of done", that read's record, and the prompt names the record id. Every other state refuses, names itself and removes an earlier copy. `--prompt` files an unrefined chore labelled `chore` and `scheduled` and starts nothing (TRQ11, Robert, 2026-09-29), no longer the Worker's label, since nothing runs on it. Tests go through the real predicate with a real key and a signed record; only the network is faked. Mutations each turn tests red: an unrefined ticket allowed, a second board read for the text, the record not delivered, the record id not in the prompt, a stale copy left on refusal.
 

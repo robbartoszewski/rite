@@ -274,7 +274,14 @@ the question's own thread: a message elsewhere cannot be matched to it.
 A Manager can also **defer** a question to your next check-in, but only by
 naming what it will do meanwhile:
 
-    rite ask --defer "rename --out to --output?" --while "tickets 8 and 9, which do not touch the CLI"
+    rite ask --defer --while "tickets 8 and 9, which do not touch the CLI" - <<'RITE_TEXT_1f2e3d'
+    rename --out to --output?
+    RITE_TEXT_1f2e3d
+
+A Manager's text always goes on stdin like this, never in double quotes on
+the command line: there the shell runs anything in backticks or `$( )`, and
+the text often quotes a ticket someone else wrote. rite refuses text given as
+an argument.
 
 ⚠ **The rule every Manager is given, in these words: ask now unless the
 question is clearly deferrable; if you are unsure whether it blocks you, it
@@ -705,7 +712,7 @@ rite start lead --sessions 3 --minutes 90
 rite start helper --sessions 3 --minutes 90
 ```
 
-The Owner hands work down with `rite route --ticket RT-12 helper "…"`, and
+The Owner hands work down with `rite route --ticket RT-12 helper -` (the text on stdin), and
 `helper` answers with `rite reply`. Every route names the ticket the work is
 for, and rite refuses one whose ticket it cannot read on the board; work you
 asked for in a message becomes a chore ticket first (`rite chore`). The Owner cannot wait inside a session, so its
