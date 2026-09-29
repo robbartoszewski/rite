@@ -21,6 +21,7 @@ from rite_ai.managers.routing import (
     deliver_routes,
     request,
 )
+from tests.refined_board import refined
 
 MANAGERS = ["lead", "helper"]
 
@@ -67,7 +68,13 @@ class TestDeliverRoutes:
         said: list[str] = []
         assert (
             deliver_routes(
-                tmp_path, "lead", "lead", MANAGERS, said.append, read_ticket=_on_board
+                tmp_path,
+                "lead",
+                "lead",
+                MANAGERS,
+                said.append,
+                read_ticket=_on_board,
+                refinement=refined,
             )
             == 1
         )
@@ -84,7 +91,13 @@ class TestDeliverRoutes:
         said: list[str] = []
         assert (
             deliver_routes(
-                tmp_path, "helper", "lead", MANAGERS, said.append, read_ticket=_on_board
+                tmp_path,
+                "helper",
+                "lead",
+                MANAGERS,
+                said.append,
+                read_ticket=_on_board,
+                refinement=refined,
             )
             == 0
         )
@@ -97,7 +110,13 @@ class TestDeliverRoutes:
         said: list[str] = []
         assert (
             deliver_routes(
-                tmp_path, "lead", "", MANAGERS, said.append, read_ticket=_on_board
+                tmp_path,
+                "lead",
+                "",
+                MANAGERS,
+                said.append,
+                read_ticket=_on_board,
+                refinement=refined,
             )
             == 0
         )
@@ -182,13 +201,17 @@ def test_supervise_routes_while_the_owners_cycle_runs(project):
     """Wired, not merely available: the router is called from the wait loop,
     and the delivery lands in the secondary's inbox during the Owner's cycle."""
     from rite_ai.cli.main import _router_for
+    from tests.refined_board import any_ticket_refined
 
-    board = type("Board", (), {"read": staticmethod(_on_board)})()
-    router = _router_for(project, "lead", board)
-    request(project, "lead", "helper", "pick up ticket 7", "RT-1")
-    router(lambda _m: None)
+    with any_ticket_refined() as board:
+        board.read = _on_board
+        router = _router_for(project, "lead", board)
+        request(project, "lead", "helper", "pick up ticket 7", "RT-1")
+        router(lambda _m: None)
     (msg,) = read(project, "helper", INBOX)
     assert "> pick up ticket 7" in msg.text
+    # TR5: the agreed definition of done rite checked, from that same read.
+    assert "> Agreed definition of done for RT-1" in msg.text
 
 
 class TestReportsComeUpAsContext:

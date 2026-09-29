@@ -33,6 +33,7 @@ import pytest
 import rite_ai.managers.supervise as sup
 from rite_ai.managers import mailbox, routing
 from rite_ai.managers.supervise import StartResult, supervise
+from tests.refined_board import refined
 
 OWNER, SECONDARY = "lead", "small"
 NAMES = [OWNER, SECONDARY]
@@ -83,7 +84,9 @@ def _router(root: Path, manager: str):
     """The real routing step `rite start` builds (`main._router_for`)."""
 
     def step(say):
-        routing.deliver_routes(root, manager, OWNER, NAMES, say, read_ticket=_on_board)
+        routing.deliver_routes(
+            root, manager, OWNER, NAMES, say, read_ticket=_on_board, refinement=refined
+        )
         if manager == OWNER:
             routing.collect_reports(root, OWNER, NAMES, say)
 
@@ -405,7 +408,13 @@ class TestTheSecondarySide:
                     root, OWNER, SECONDARY, f"{TASK} #{len(starts)}", "RT-1"
                 )
                 routing.deliver_routes(
-                    root, OWNER, OWNER, NAMES, lambda _m: None, read_ticket=_on_board
+                    root,
+                    OWNER,
+                    OWNER,
+                    NAMES,
+                    lambda _m: None,
+                    read_ticket=_on_board,
+                    refinement=refined,
                 )
 
         world["between"].append(owner_routes)
@@ -610,7 +619,13 @@ class TestTheLedgerIsTheSupervisorsNotTheModels:
     ):
         routing.request(tmp_path, OWNER, SECONDARY, TASK, "RT-1")
         routing.deliver_routes(
-            tmp_path, OWNER, OWNER, NAMES, lambda _m: None, read_ticket=_on_board
+            tmp_path,
+            OWNER,
+            OWNER,
+            NAMES,
+            lambda _m: None,
+            read_ticket=_on_board,
+            refinement=refined,
         )
         (name,) = routing._outstanding(tmp_path, OWNER)[SECONDARY]
         # A reply alone does not clear it: only the end of the cycle does.

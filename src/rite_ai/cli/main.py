@@ -6198,36 +6198,12 @@ def _board_source(config, role: str = "workers") -> str:
 
 
 def refused_for_refinement(state: str, ticket: str) -> str:
-    """The one line a refused start ends with: the state, and what to do.
-
-    What a Manager's next instruction carries when its Worker request is
-    refused for refinement, so it names the remedy, not only the state: a
-    refusal that names no way forward is how a person learns to look for a
-    way round. At most 200 characters for any ticket id rite accepts (64),
-    because that is all `broker.honour` keeps.
-    """
+    """The one line a refused start ends with. It lives beside the check in
+    `refinement.status.refusal`, so a refused route (TR5) says exactly what a
+    refused Worker start says."""
     from rite_ai.refinement import status as st
 
-    if state == st.NOT_REFINED:
-        return (
-            "NOT REFINED: this ticket has no agreed definition of done. A person "
-            f'agrees one on the host: `rite refine accept {ticket} --item "…"`.'
-        )
-    if state == st.STALE:
-        return (
-            "STALE: the ticket changed after its definition of done was agreed. "
-            "A person re-agrees it on the host: "
-            f'`rite refine accept {ticket} --item "…"`.'
-        )
-    if state == st.CONFLICT:
-        return (
-            "CONFLICT: two records each claim to be current. A person decides "
-            f"which stands; `rite refine status {ticket}` on the host names them."
-        )
-    return (
-        f"{state}: rite could not confirm a definition of done; nothing was "
-        f"assumed. `rite refine status {ticket}` on the host says why."
-    )
+    return st.refusal(state, ticket)
 
 
 def _deliver_ticket(
@@ -7024,9 +7000,25 @@ def _router_for(root: Path, manager: str, board=None):
     # ⚠ TR9: a route's ticket is checked with ONE single-issue read of the
     # board the broker is given. None (no board) refuses every route.
     read_ticket = getattr(board, "read", None)
+    # ⚠ TR5: and it must be REFINED, checked on that same board. None (no
+    # board) refuses every route, as it does above.
+    refinement = None
+    if board is not None:
+        from rite_ai.refinement import status as refinement_status
+
+        def refinement(ticket: str):
+            return refinement_status.status(board, ticket)
 
     def step(say) -> None:
-        deliver_routes(root, manager, owner, names, say, read_ticket=read_ticket)
+        deliver_routes(
+            root,
+            manager,
+            owner,
+            names,
+            say,
+            read_ticket=read_ticket,
+            refinement=refinement,
+        )
         if owner and manager == owner:
             # ⚠ Every reply is checked by rite before the Owner reads it, in a
             # fresh session given only the reply and the workspace (A6
@@ -7861,7 +7853,8 @@ def replies(manager_name: str, reader: str, peek: bool) -> None:
     default="",
     help="The ticket this work is for. Required: every piece of routed work "
     "carries a ticket, and rite refuses the route if the board does not "
-    "return it. For work the User asked for in a message, make the ticket "
+    "return it or it is not REFINED (you are told why in your next "
+    "instruction). For work the User asked for in a message, make the ticket "
     "first with `rite chore <message-id>`.",
 )
 @click.argument("manager_name")

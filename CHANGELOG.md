@@ -44,7 +44,15 @@ and what to do:
   no definition of done.
 
 A Manager whose Worker request is refused is told the same in its next
-instruction. Until the Owner can refine tickets with you over Slack (later in
+instruction.
+
+The same check now comes earlier, so an unrefined ticket does not reach a
+Manager at all. **The Owner's routes** (`rite route --ticket <ID>`) are
+delivered only for a REFINED ticket, with its agreed definition of done
+quoted beneath the Owner's text; any other state is refused and the Owner is
+told which, in the same words. **Unattended assignment** (with board writes
+turned on) labels only REFINED `scheduled` tickets with a Manager's name, and
+the tick's report names each ticket it left and its state. Until the Owner can refine tickets with you over Slack (later in
 0.7.0), `rite refine accept` is how a ticket gets refined.
 
 `/ticket` now sends a Worker to the agreed definition of done in `TICKET.md`,

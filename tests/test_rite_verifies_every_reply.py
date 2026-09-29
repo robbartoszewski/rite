@@ -18,6 +18,7 @@ import subprocess
 from pathlib import Path
 
 from rite_ai.managers import mailbox, routing, verifier
+from tests.refined_board import refined
 
 OWNER, SECONDARY = "lead", "small"
 NAMES = [OWNER, SECONDARY]
@@ -208,7 +209,13 @@ class TestTheVerifierIsGivenTheClaimAndNothingElse:
 def _route(root):
     routing.request(root, OWNER, SECONDARY, "write notes/HELLO.txt", "RT-1")
     routing.deliver_routes(
-        root, OWNER, OWNER, NAMES, lambda _m: None, read_ticket=_on_board
+        root,
+        OWNER,
+        OWNER,
+        NAMES,
+        lambda _m: None,
+        read_ticket=_on_board,
+        refinement=refined,
     )
 
 

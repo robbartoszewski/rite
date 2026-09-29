@@ -16,6 +16,7 @@ import pytest
 from rite_ai.managers import routing
 from rite_ai.managers.mailbox import INBOX, read
 from rite_ai.tickets.interface import BackendError, Ticket
+from tests.refined_board import refined
 
 NAMES = ["lead", "helper"]
 
@@ -69,7 +70,13 @@ def test_the_check_is_one_read_of_that_ticket():
 def test_the_secondary_is_told_which_ticket_rite_checked(tmp_path):
     routing.request(tmp_path, "lead", "helper", "run the suite", "RT-9")
     routing.deliver_routes(
-        tmp_path, "lead", "lead", NAMES, lambda _m: None, read_ticket=_found
+        tmp_path,
+        "lead",
+        "lead",
+        NAMES,
+        lambda _m: None,
+        read_ticket=_found,
+        refinement=refined,
     )
     (got,) = read(tmp_path, "helper", INBOX)
     assert got.text.startswith("[routed by the Owner Manager 'lead' · ticket RT-9 ·")
@@ -84,7 +91,13 @@ def test_a_refusal_reaches_the_owners_next_instruction(tmp_path):
     said: list[str] = []
     assert (
         routing.deliver_routes(
-            tmp_path, "lead", "lead", NAMES, said.append, read_ticket=_found
+            tmp_path,
+            "lead",
+            "lead",
+            NAMES,
+            said.append,
+            read_ticket=_found,
+            refinement=refined,
         )
         == 0
     )

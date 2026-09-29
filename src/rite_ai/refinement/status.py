@@ -126,6 +126,37 @@ def of(root, config, ticket_id: str, *, role: str = "workers") -> Status:
     return status(board, ticket_id)
 
 
+def refusal(state: str, ticket: str) -> str:
+    """The one line a refused start ends with: the state, and what to do.
+
+    What a Manager's next instruction carries when its Worker request or its
+    route is refused for refinement, so it names the remedy, not only the state: a
+    refusal that names no way forward is how a person learns to look for a
+    way round. At most 200 characters for any ticket id rite accepts (64),
+    because that is all `broker.honour` keeps.
+    """
+    if state == NOT_REFINED:
+        return (
+            "NOT REFINED: this ticket has no agreed definition of done. A person "
+            f'agrees one on the host: `rite refine accept {ticket} --item "…"`.'
+        )
+    if state == STALE:
+        return (
+            "STALE: the ticket changed after its definition of done was agreed. "
+            "A person re-agrees it on the host: "
+            f'`rite refine accept {ticket} --item "…"`.'
+        )
+    if state == CONFLICT:
+        return (
+            "CONFLICT: two records each claim to be current. A person decides "
+            f"which stands; `rite refine status {ticket}` on the host names them."
+        )
+    return (
+        f"{state}: rite could not confirm a definition of done; nothing was "
+        f"assumed. `rite refine status {ticket}` on the host says why."
+    )
+
+
 def render_for_worker(record: rec.Record) -> str:
     """The agreed definition of done as a Worker's start prompt carries it.
     One implementation, in `record`; re-exported here so a caller of `of`
