@@ -138,8 +138,8 @@ rite credential set claude    # paste it: a sandbox cannot use your keychain log
 rite credential set github    # a token with Contents and Pull requests read/write
 ```
 
-and install GitHub's `gh` CLI, which git inside the sandbox is set to
-authenticate through, using that token; `gh` needs no login of its own. A commit pushed from inside a sandbox this way has been
+and install GitHub's `gh` CLI: rite pushes and opens the pull request with
+that token on your machine (`rite deliver`), and the worker never holds it. A commit pushed from inside a sandbox this way has been
 measured reaching GitHub. Sandboxed pushes run the repository's own hooks,
 never your global ones, so a global pre-push hook such as a secret scan does
 not run there. `rite doctor`

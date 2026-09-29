@@ -537,14 +537,14 @@ doctor` names the typo and says the window was dropped.
    Homebrew and system locations. A `rite` in a virtualenv anywhere else fails
    inside the sandbox with a permission error (measured with a virtualenv
    under the home directory).
-3. **Give it a way to push.** A worker's work leaves the sandbox by being pushed
-   (below), so store a GitHub credential for the project with
-   `rite credential set github` — a token with Contents and Pull requests
-   read/write on the module repositories — and install GitHub's `gh` CLI. rite
-   passes the credential in as `GITHUB_TOKEN` and tells git inside the sandbox
-   to authenticate github.com through `gh auth git-credential`, which reads
-   that variable, so `gh` needs no login of its own; the keychain helper git
-   would otherwise use is unreadable there. Commits made in a sandbox are not
+3. **Give rite a way to push.** A worker's work leaves the sandbox through
+   `rite deliver`, which collects its commits and pushes and opens the pull
+   request **on your machine, not in the sandbox**. So store a GitHub
+   credential for the project with `rite credential set github` — a token
+   with Contents and Pull requests read/write on the module repositories —
+   and install GitHub's `gh` CLI. **The worker never receives that token**
+   (since 0.7.0): rite keeps it on the host, and refuses to start a sandbox
+   that would receive one. Commits made in a sandbox are not
    signed: rite turns signing off inside it, because they are the agent's
    commits, not yours. A module whose origin is a local directory cannot be
    pushed from a sandbox; start names each one. `rite sandbox start` refuses,
@@ -600,7 +600,8 @@ can watch it or type to it; yoloAI's own hint for leaving it running is
 
 **Its first screen shows your credentials in plain text.** On macOS, yoloAI
 launches the agent by typing a command into the session's shell, and that
-command carries every credential rite passed in (`export GITHUB_TOKEN='…'`).
+command carries every credential rite passed in (`export …='…'`: the Claude
+login; a sandbox started by rite before 0.7.0 also carried `GITHUB_TOKEN`).
 Don't share, record or screenshot a terminal attached with `yoloai attach`.
 `rite sandbox pane` prints the same screen with those values replaced by
 `[redacted]`, so a Claude session reading it never receives them.

@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.52 · **Date:** 2026-09-29
+**Version:** 0.24.53 · **Date:** 2026-09-29
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -1791,8 +1791,24 @@ allowlist at all.
 
 #### 5.3.4. Workers are fungible, so they all get the same credentials
 
-**Every Worker on a project receives the same credentials: GitHub and the
-engine's own (Claude), and nothing else** (`credentials.store.WORKER_SERVICES`).
+**Every Worker on a project receives the same credentials: the engine's own
+(Claude), and nothing else** (`credentials.store.WORKER_SERVICES`).
+
+⚠ **No GitHub credential, since 0.24.53 (Robert, 2026-09-29: "push and PR are
+the deterministic code's job").** rite clones and fetches on the host before a
+sandbox starts (`rite prepare`), and `rite deliver` collects a Worker's
+commits and pushes and opens the pull request on the host, with the token it
+resolves there (`publishing/deliver.py`). Nothing a Worker is told to do
+needs GitHub, and in the Worker transcripts on this machine no Worker ran
+`git fetch`/`pull`/`push`/`clone`/`remote` or `gh`. A token in the sandbox
+could only let a Worker push, open a pull request (upstream too) or merge,
+forbidden only by its instructions. `start_worker` refuses to start a sandbox
+that would receive `GITHUB_TOKEN`, `GH_TOKEN` or `GH_ENTERPRISE_TOKEN`,
+whatever the caller passed. Measured through `start_worker` with a token
+available to rite: before, the value was in three files inside the sandbox
+(`ro/secrets/GITHUB_TOKEN`, the shell history, the agent log); after, in none.
+(yoloAI does not forward the host's own environment to the agent: measured,
+a `GITHUB_TOKEN` in `yoloai new`'s environment did not reach it.)
 Not a per-Worker subset — that is what "fungible" below still means — and no
 longer "every credential the project holds".
 
@@ -7360,6 +7376,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.53 — Workers hold no GitHub credential (Robert, 2026-09-29).** §5.3.4: `WORKER_SERVICES` is Claude only; `worker_environment` no longer takes a Worker token; `start_worker` no longer takes one and refuses a sandbox that would receive `GITHUB_TOKEN`/`GH_TOKEN`/`GH_ENTERPRISE_TOKEN`. The token is still resolved and checked at start, for `rite deliver` to push with on the host, and `rite sandbox pane` still masks it. Measured before and after with a fake token: three files inside the sandbox held it before, none after. Tests: a GitHub token is refused at the sandbox door; the CLI keeps the provisioned token on the host; three mutations (GitHub back in `WORKER_SERVICES`, the refusal removed, the CLI handing it over) each go red.
 
 **Changes in 0.24.52 — a Worker does not get the operator's Claude settings (dogfood #27).** §5.3.2 gains the paragraph, and `start_worker`'s argument list says what it now passes. yoloAI's claude agent copies the host's `~/.claude/settings.json` into every sandbox at every create, start and restart, with no switch; on seatbelt rite runs `yoloai new` with its own `HOME` (an empty settings file) and `--data-dir ~/.yoloai`, and passes the operator's `user.name`/`user.email` through `GIT_CONFIG_*`, because that home has no `.gitconfig`. Measured before building, with controls: the settings seed follows `HOME`, `start` re-seeds from whichever home it runs under, and without an identity git invents one from the host name. `tests/test_a_worker_does_not_carry_the_operators_claude_settings.py`, with a live opt-in test (`RITE_LIVE_YOLOAI=1`) that fails on the operator's hooks when the clean home is switched off.
 

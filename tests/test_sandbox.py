@@ -5,6 +5,8 @@ import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from rite_ai.config.models import Module, SandboxConfig
 from rite_ai.sandbox import (
     CountUnavailable,
@@ -133,21 +135,24 @@ class TestStartWorker:
         assert "sandbox-exec" not in args
 
     @patch("rite_ai.sandbox.shutil.which", return_value="/usr/local/bin/yoloai")
-    def test_token_delivered_via_env_flag_never_argv_or_file(
-        self, mock_which, tmp_path: Path
+    @pytest.mark.parametrize(
+        "name", ["GITHUB_TOKEN", "GH_TOKEN", "GH_ENTERPRISE_TOKEN"]
+    )
+    def test_a_github_token_is_refused_at_the_sandbox_door(
+        self, mock_which, tmp_path: Path, name
     ):
+        """Workers hold no GitHub credential (Robert, 2026-09-29): rite
+        pushes and opens the pull request on the host. Whatever a caller
+        passes, a GitHub token never reaches `yoloai new`."""
         (tmp_path / "workers" / "alpha").mkdir(parents=True)
         with patch("rite_ai.sandbox.subprocess.run") as mock_run:
             mock_run.side_effect = _yoloai_calls()
-            start_worker(
-                tmp_path, "alpha", SandboxConfig(), token="ghp_supersecrettoken"
+            result = start_worker(
+                tmp_path, "alpha", SandboxConfig(), env={name: "ghp_supersecret"}
             )
-        args = mock_run.call_args[0][0]
-        env_values = [args[i + 1] for i, a in enumerate(args) if a == "--env"]
-        assert "GITHUB_TOKEN=ghp_supersecrettoken" in env_values
-        # The token must appear only as the --env value, never as a bare
-        # standalone argument (which `ps` would show).
-        assert args.count("ghp_supersecrettoken") == 0
+        assert not result.ok
+        assert name in result.message and "hold none" in result.message
+        assert not [c for c in mock_run.call_args_list if "new" in c[0][0]]
 
     @patch("rite_ai.sandbox.shutil.which", return_value="/usr/local/bin/yoloai")
     def test_yoloai_failure_surfaces_stderr(self, mock_which, tmp_path: Path):

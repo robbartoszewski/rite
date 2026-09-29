@@ -2,6 +2,15 @@
 
 ## Unreleased: 0.7.0 (notes in progress, completed at release)
 
+### Workers no longer receive a GitHub token
+
+rite pushes a worker's branch and opens its pull request itself, on your
+machine (`rite deliver`), so the worker's sandbox no longer gets
+`GITHUB_TOKEN`. A token there could only have let the worker push, open a
+pull request anywhere, or merge. rite still needs the project's
+`github_token` for its own push, and still checks at start that it can push;
+it refuses to start a sandbox that would receive one.
+
 ### A Worker no longer runs with your personal Claude settings
 
 yoloAI copies `~/.claude/settings.json` from your home into every Worker

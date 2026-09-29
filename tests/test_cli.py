@@ -655,7 +655,9 @@ def test_add_worker_sandbox_disabled_skips_token_provisioning(tmp_path, monkeypa
     assert "sandbox" not in result.output.lower()
 
 
-def test_sandbox_start_passes_provisioned_token_through(tmp_path, monkeypatch):
+def test_sandbox_start_keeps_the_provisioned_token_on_the_host(tmp_path, monkeypatch):
+    """The token is provisioned and resolved (rite pushes with it on the
+    host), and never handed to the Worker (Robert, 2026-09-29)."""
     rite_dir = tmp_path / ".rite"
     rite_dir.mkdir()
     # Declares a PROJECT, not just a `.rite/`. `_find_project_root` keys on
@@ -703,7 +705,8 @@ def test_sandbox_start_passes_provisioned_token_through(tmp_path, monkeypatch):
     assert "--backend" in args
     assert args[args.index("--backend") + 1] == "seatbelt"
     env_values = [args[i + 1] for i, a in enumerate(args) if a == "--env"]
-    assert "GITHUB_TOKEN=the-stored-token" in env_values
+    assert not [v for v in env_values if v.startswith(("GITHUB_TOKEN=", "GH_TOKEN="))]
+    assert not [a for a in args if "the-stored-token" in a]
 
 
 class _ReadableBoard:
