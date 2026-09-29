@@ -3,7 +3,7 @@
 The property: **the settings rite will publish under are the ones printed**,
 per module, with where each came from. `push_to_shared` is accepted in
 config and refused at every start. It is also refused again at the publish
-step, which PB1's next piece builds; `unavailable` is the one text both use.
+step, which PB1's next piece builds; `_unavailable` is the one text both use.
 
 What is real here: the parser, the writers, and the CLI entry points run
 through Click. Nothing reaches a sandbox or a network.
@@ -24,9 +24,9 @@ from rite_ai.config.parse import ParseError, parse_config, parse_modules
 from rite_ai.publishing.settings import (
     MODULE,
     PROJECT,
+    _unavailable,
     effective,
     refusals,
-    unavailable,
 )
 
 
@@ -182,11 +182,11 @@ def test_an_override_false_is_not_an_absent_override():
 
 
 def test_push_to_shared_is_refused_with_the_release_that_brings_it():
-    text = unavailable("push_to_shared")
+    text = _unavailable("push_to_shared")
     assert "not available until rite v0.8.0" in text
     assert "commit, push or pull_request" in text  # the remedy is in it
     for strategy in ("commit", "push", "pull_request"):
-        assert unavailable(strategy) == ""
+        assert _unavailable(strategy) == ""
 
 
 def test_refusals_name_the_project_and_each_overriding_module():
@@ -205,7 +205,7 @@ def test_refusals_name_the_project_and_each_overriding_module():
         Module(name="svc", path="s/", publish=ModulePublish(strategy="push_to_shared"))
     ]
     found = refusals(config, modules)
-    assert found == [f"module 'svc': {unavailable('push_to_shared')}"]
+    assert found == [f"module 'svc': {_unavailable('push_to_shared')}"]
 
 
 def test_shared_repo_is_refused_under_every_strategy_until_it_exists():

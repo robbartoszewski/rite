@@ -78,11 +78,12 @@ def effective(project: PublishConfig, module: Module) -> Effective:
     )
 
 
-def unavailable(strategy: str) -> str:
+def _unavailable(strategy: str) -> str:
     """The refusal for a strategy this rite does not publish, or "".
 
-    Called at start and again by the publish step, so the refusal text is the
-    same wherever it is met."""
+    Private until the publish step (PB1's next piece) calls it too, so the
+    refusal text is the same wherever it is met; `test_no_dead_wiring`
+    would rightly flag a public function with no caller outside this file."""
     if strategy == "push_to_shared":
         return (
             f"publish strategy push_to_shared is not available until rite "
@@ -100,12 +101,12 @@ def refusals(config: ProjectConfig, modules: list[Module]) -> list[str]:
     sandbox start`, `rite doctor`).
     """
     found: list[str] = []
-    project_refusal = unavailable(config.publish.strategy)
+    project_refusal = _unavailable(config.publish.strategy)
     if project_refusal:
         found.append(f"config.yaml: {project_refusal}")
     for module in modules:
         resolved = effective(config.publish, module)
-        refusal = unavailable(resolved.strategy)
+        refusal = _unavailable(resolved.strategy)
         if refusal and resolved.source["strategy"] == MODULE:
             found.append(f"module {module.name!r}: {refusal}")
         if module.publish.shared_repo is not None:
