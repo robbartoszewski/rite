@@ -626,6 +626,14 @@ enough". Both are rewritten to use the predicate:
     works from that section, cites the record id, and stops if the section
     is missing. It never runs `rite refine status`. This is the text of the
     Worker's instructions on `main` (`workspace/manage.py`, "Your ticket").
+    ⚠ **Why the Worker does not check, so nobody adds a check back:** the
+    host checked this exact record with `of()`, in the **same board read
+    that produced the ticket text** in `TICKET.md`, before the sandbox
+    existed (part 4, race 4). There is nothing left for the Worker to
+    verify. A check inside the sandbox could only answer UNREADABLE for a
+    refined ticket, and making the delivered file an input to the
+    predicate would let a file the Worker can edit decide refinement.
+    Both were considered and refused (coordinator's ruling, 2026-09-29).
   - **Where a person's own session runs `/ticket`** (Dispatch, the Code
     tab), which can read the key and the board, it runs the check itself:
 
