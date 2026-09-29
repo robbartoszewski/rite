@@ -7271,12 +7271,19 @@ def _slack_listener(root: Path, manager: str):
             err=True,
         )
         return None
+    from rite_ai.config.parse import parse_brief
+
+    brief = parse_brief(root / ".rite" / "brief.yaml")
     listener = Listener(
         token=token,
         manager=manager,
         owner=config.slack.owner_user,
         broadcast=config.slack.broadcast,
         project=root,
+        # Starts and stops are said here and never in the DM (Robert,
+        # 2026-09-29), naming the project, since several may share it.
+        status=config.slack.status,
+        project_name=getattr(brief, "name", "") or root.name,
     )
     for line in listener.open():
         click.echo(line)

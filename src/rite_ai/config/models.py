@@ -94,6 +94,7 @@ class WatchdogConfig:
 
 
 DEFAULT_BROADCAST = "#all-rite"
+DEFAULT_STATUS = "#rite-status"
 
 
 @dataclass
@@ -131,6 +132,15 @@ class SlackConfig:
     """A channel name (`#all-rite`) or id (`C…`). Empty means the default,
     `#all-rite`, once Slack is set up at all — see `broadcast`."""
 
+    status_channel: str = ""
+    """Where rite says that a Manager started or stopped, and other lifecycle
+    lines: a channel name or id. Empty means the default, `#rite-status`, once
+    Slack is set up. **Output only**: rite never reads it, so nothing typed
+    there reaches a Manager, not even as context. Robert, 2026-09-29: those
+    lines "must go to a separate #rite-status channel or something. It's a
+    spam anywhere else" — so they never go to the DM, which is for what needs
+    the person."""
+
     @property
     def enabled(self) -> bool:
         """Is Slack set up? Either key turns it on; neither leaves it off."""
@@ -142,6 +152,13 @@ class SlackConfig:
         if not self.enabled:
             return ""
         return self.broadcast_channel or DEFAULT_BROADCAST
+
+    @property
+    def status(self) -> str:
+        """The status channel in effect, or "" when Slack is off."""
+        if not self.enabled:
+            return ""
+        return self.status_channel or DEFAULT_STATUS
 
 
 @dataclass

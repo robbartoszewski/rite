@@ -6407,11 +6407,27 @@ whoever types them and whatever they say.**
 ⚠ **This adds one Slack scope — measured 2026-09-25 (plan § A6).** A3a
 established that `channels:history` and `chat:write` suffice for a public
 channel. **Reading the Owner's DM needs `im:history`.** Posting to it needs
-nothing more: a post to the Owner's user id returns the DM's id, which is how
-rite learns it (`conversations.open` would need `im:write`, and is not used).
+nothing more: a post to the Owner's user id returns the DM's id. rite learns
+the id once and remembers it (the relay's state, per project and per Owner):
+with `im:write` granted it opens the DM without posting (`conversations.open`),
+and without it it posts ONE line, the first time only, saying what the DM is
+for. A later run posts nothing to learn it.
 
-**Configured per project** as `slack.owner_user` (the Owner's user id) and
-`slack.broadcast_channel`. There is **no configurable command channel**: a
+**Starts and stops are said in the status channel, never in the DM**
+(`slack.status_channel`, default `#rite-status`). Robert, 2026-09-29: "it must
+go to a separate #rite-status channel or something. It's a spam anywhere
+else." The DM is where rite asks the person things, and a lifecycle line there
+makes a real question easy to miss. The status channel is **output only**: rite
+never reads it, so nothing typed there reaches a Manager, and the parser
+refuses the broadcast channel as the status channel, because that one is read
+as context. Each line names its project, since several projects may share one
+status channel. A status channel rite cannot post to leaves the line on the
+terminal and says so; it never falls back to the DM or the broadcast channel.
+The one stop line that stays in the DM is a message rite took from Slack and
+never delivered: that needs the person, where they typed it.
+
+**Configured per project** as `slack.owner_user` (the Owner's user id),
+`slack.broadcast_channel` and `slack.status_channel`. There is **no configurable command channel**: a
 `slack.command_channel` key is refused by the parser, because configuring
 authority as a channel is what lets it be pointed at one others can post in.
 

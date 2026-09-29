@@ -175,6 +175,7 @@ def config_to_yaml(config: ProjectConfig) -> str:
         "slack": {
             "owner_user": config.slack.owner_user,
             "broadcast_channel": config.slack.broadcast_channel,
+            "status_channel": config.slack.status_channel,
         },
         # ⚠ APPENDED after `slack`, not beside `schedule`: a section inserted
         # mid-file reorders every existing config.yaml the next time anything

@@ -2,6 +2,21 @@
 
 ## Unreleased: 0.7.0 (notes in progress, completed at release)
 
+### Starts and stops are no longer said in your DM
+
+Your DM with rite is where a Manager asks you things. It used to fill up with
+"Manager `lead` is running" and "has stopped" on every start and stop, which
+made a real question easy to miss. Those lines now go to a status channel,
+`#rite-status` unless you set `slack.status_channel`, and each names its
+project, so one channel can serve several projects: `/invite @rite` into it
+from each project's app. rite only writes there; nothing typed there reaches a
+Manager. The broadcast channel stops getting them too.
+
+rite now remembers your DM's id, so it posts in your DM once, the first time
+a project uses it, to say what it is for (not at all if the app has
+`im:write`). A message rite took from Slack but never delivered is still said
+in your DM, because that one needs you.
+
 ### The verifier no longer contradicts a claim about ground it could not open
 
 #102 stopped the verifier contradicting a reply that names a file it cannot

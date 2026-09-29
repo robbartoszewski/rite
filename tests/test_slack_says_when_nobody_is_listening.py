@@ -106,15 +106,106 @@ class TestAMessageSentWhileStoppedIsDeliveredAtTheNextStart:
 
 
 class TestTheStopIsSaidWhereThePersonIs:
-    def test_both_conversations_are_told(self, tmp_path):
+    """Robert, 2026-09-29: "Manager lead is running …" in the DM "must go to a
+    separate #rite-status channel or something. It's a spam anywhere else".
+    So starts and stops are said in the status channel, and the DM and the
+    broadcast channel hear nothing about them, except a message rite took and
+    never delivered, which needs the person and stays where they typed it."""
+
+    STATUS = "#rite-status"
+
+    def _run(self, tmp_path, slack, **kw):
+        listener = Listener(
+            token="t",
+            manager="lead",
+            owner=OWNER,
+            broadcast="#all-rite",
+            project=tmp_path,
+            clock=lambda: 600.0,
+            status=self.STATUS,
+            project_name="acme",
+            **kw,
+        )
+        lines = listener.open(call=slack)
+        return listener, lines
+
+    def _targets(self, slack, needle):
+        return [p["channel"] for p in slack.posts if needle in p["text"]]
+
+    def test_start_and_stop_are_said_in_the_status_channel_and_nowhere_else(
+        self, tmp_path
+    ):
         (tmp_path / ".rite").mkdir()
         slack = Slack()
-        listener = _run(tmp_path, slack)
+        listener, _ = self._run(tmp_path, slack)
         lines = listener.close(call=slack)
-        stops = [p for p in slack.posts if "has stopped" in p["text"]]
-        assert {p["channel"] for p in stops} == {"D1", "C1"}
-        assert "rite start lead" in stops[0]["text"]
-        assert any("delivered when it next starts" in line for line in lines)
+        assert self._targets(slack, "is running") == [self.STATUS]
+        assert self._targets(slack, "has stopped") == [self.STATUS]
+        stop = next(p for p in slack.posts if "has stopped" in p["text"])
+        assert stop["text"].startswith("rite · `acme`: ")
+        assert "rite start lead" in stop["text"]
+        assert lines == []
+
+    def test_a_second_start_posts_nothing_to_the_dm_or_the_broadcast_channel(
+        self, tmp_path
+    ):
+        """The first run ever learns each conversation's id by posting once;
+        every later run remembers it, so a start is not news in either."""
+        (tmp_path / ".rite").mkdir()
+        slack = Slack()
+        first, _ = self._run(tmp_path, slack)
+        first.close(call=slack)
+        before = len(slack.posts)
+        again, _ = self._run(tmp_path, slack)
+        again.close(call=slack)
+        later = [p["channel"] for p in slack.posts[before:]]
+        assert later == [self.STATUS, self.STATUS], later
+        assert (again.dm, again.broadcast_id) == ("D1", "C1")
+
+    def test_with_im_write_the_dm_is_never_posted_to_at_start(self, tmp_path):
+        (tmp_path / ".rite").mkdir()
+
+        class Opens(Slack):
+            def __call__(self, method, token, params=None, payload=None):
+                if method == "conversations.open":
+                    return {"ok": True, "channel": {"id": "D1"}}
+                return super().__call__(method, token, params, payload)
+
+        slack = Opens()
+        listener, _ = self._run(tmp_path, slack)
+        assert listener.dm == "D1"
+        assert not [p for p in slack.posts if p["channel"] in (OWNER, "D1")]
+
+    def test_an_undelivered_message_is_still_said_in_the_dm(self, tmp_path):
+        (tmp_path / ".rite").mkdir()
+        slack = Slack()
+        listener, _ = self._run(tmp_path, slack)
+        listener.close(call=slack, undelivered="1 message was not delivered")
+        dm = [p for p in slack.posts if p["channel"] == "D1"]
+        assert len(dm) == 1 and "1 message was not delivered" in dm[0]["text"]
+
+    def test_a_status_channel_rite_cannot_post_to_never_falls_back_to_the_dm(
+        self, tmp_path
+    ):
+        (tmp_path / ".rite").mkdir()
+
+        class NotInvited(Slack):
+            def __call__(self, method, token, params=None, payload=None):
+                args = payload or params or {}
+                if (
+                    method == "chat.postMessage"
+                    and args.get("channel") == "#rite-status"
+                ):
+                    return {"ok": False, "error": "not_in_channel"}
+                return super().__call__(method, token, params, payload)
+
+        slack = NotInvited()
+        listener, lines = self._run(tmp_path, slack)
+        lines += listener.close(call=slack)
+        assert not self._targets(slack, "is running")
+        assert not self._targets(slack, "has stopped")
+        said = [line for line in lines if "cannot post to the status channel" in line]
+        assert len(said) == 2 and "rite doctor" in said[0]
 
     def test_rite_start_closes_the_relay_even_on_ctrl_c(self):
         """In a `finally`, so an interrupted run still says it stopped."""

@@ -205,8 +205,10 @@ class TestTheLastReplyOfARunIsPosted:
         listener.close(call=slack)
         texts = [p["text"] for p in slack.posts]
         assert "*lead*: signing off" in texts
-        # Before the stop line, so the last thing said is that it stopped.
-        assert "has stopped" in texts[-1]
+        # The stop itself is NOT said in the DM (Robert, 2026-09-29: lifecycle
+        # lines are "a spam anywhere else" than a status channel), so the last
+        # thing in the conversation is the Manager's own last word.
+        assert not any("has stopped" in t for t in texts)
 
     def test_the_supervisor_posts_while_the_manager_works(self):
         import inspect
