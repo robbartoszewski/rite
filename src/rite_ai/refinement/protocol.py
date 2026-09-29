@@ -450,3 +450,94 @@ def _park_notice(root: Path, owner: str, board, ticket: str, limits) -> None:
     )
     send(root, owner, OUTBOX, text, kind=QUESTION)
     board.comment(ticket, text)
+
+
+# --- one pass, from the supervisor ---------------------------------------------
+
+
+def step(root: Path, manager: str, board, say, *, messages=(), now=None) -> list[str]:
+    """One pass of refinement for `manager`'s supervisor.
+
+    Sends the rounds it asked for, retries accepts whose record is not yet
+    written, and attributes `messages` (just delivered to it) to rounds.
+    Returns lines for THIS cycle's instruction: what his replies did. What
+    happened to a round sent is a note in its NEXT instruction, since the
+    turn that asked has usually ended by then.
+
+    Only the Manager that refines does any of this (TRQ7): the one holding
+    `route`, or a lone Manager. Another's requests are discarded, and said.
+    """
+    from rite_ai.config.managers import routing_owner
+    from rite_ai.config.parse import ParseError, parse_config
+    from rite_ai.managers import delivered
+    from rite_ai.managers.telling import tell_manager
+
+    config = parse_config(Path(root) / ".rite" / "config.yaml")
+    if isinstance(config, ParseError):
+        say(f"refinement: config.yaml did not parse ({config.message})")
+        return []
+    roles = list(config.coordination.manager_roles)
+    owner = routing_owner(roles) if roles else manager
+    asks = take(root, manager)
+    if manager != owner:
+        if asks:
+            say(
+                f"{manager!r} asked for {len(asks)} refinement round(s) and does "
+                "not refine (the Owner does); discarded, nothing was sent"
+            )
+        return []
+
+    def tell(text: str) -> None:
+        say(f"refinement: {text}")
+        try:
+            tell_manager(root, owner, "refinement", text)
+        except OSError as e:
+            say(f"could not tell {owner!r} about refinement: {e}")
+
+    now = time.time() if now is None else now
+    for ask_ in asks:
+        if "problem" in ask_:
+            tell(ask_["problem"])
+            continue
+        if board is None:
+            tell(
+                f"round for {ask_['ticket']} not sent: this supervisor has no "
+                "board to check the ticket on"
+            )
+            continue
+        sent = send(
+            root,
+            owner,
+            board,
+            ticket_id=ask_["ticket"],
+            text=ask_["text"],
+            limits=config.refinement,
+            now=now,
+            checkins=config.checkins,
+            zone=config.schedule.timezone,
+        )
+        tell(sent.message)
+    if board is not None:
+        for line in retry_accepted(root, owner, board):
+            tell(line)
+    lines: list[str] = []
+    for message in messages:
+        reply = attribute(
+            root,
+            owner,
+            message.text,
+            message=delivered.message_id(message.path),
+            sent_at=message.timestamp,
+        )
+        if reply is None:
+            continue
+        if board is None:
+            lines.append(
+                f"{reply.ticket}: a reply to round {reply.k} arrived, and this "
+                "supervisor has no board to record it on"
+            )
+            continue
+        lines.extend(handle(root, owner, board, reply, limits=config.refinement))
+    for line in lines:
+        say(f"refinement: {line}")
+    return lines

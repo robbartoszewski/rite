@@ -4044,6 +4044,98 @@ def _provenance_line(provenance: dict) -> str:
     )
 
 
+@refine.command("ask")
+@click.argument("ticket_id")
+@click.argument("text")
+def refine_ask(ticket_id: str, text: str) -> None:
+    """Ask the User about a ticket — the Owner Manager only (TR2).
+
+    One round: at most three numbered questions under `Questions:`, and from
+    round 2 a proposal under `Proposal:` he can accept in one word, each item
+    ending `[ticket: "…"]`, `[answer: "…"]` (exact quotes) or `[proposed]`.
+    rite checks it against the ticket and his answers, puts it in front of
+    him, and posts it on the ticket. His reply comes to you as a message;
+    an accept word writes the agreed definition of done, and you never write
+    it yourself.
+
+    ⚠ This only ASKS. The round is checked and sent by your supervisor,
+    outside your sandbox; whether it went, or why not, is in your next
+    instruction. **The text is `-`, on stdin (F14).**
+
+    Examples:
+      rite refine ask KAN-7 - <<'RITE_TEXT_1f2e3d'
+      Questions:
+      1. Which timeout: a file's, or the HTTP call's?
+      2. A flag, an environment variable, or a config key?
+      RITE_TEXT_1f2e3d
+    """
+    from rite_ai.config.managers import routing_owner
+    from rite_ai.managers import current_manager, stdin_text
+    from rite_ai.managers.routing import ticket_problem
+    from rite_ai.refinement import ask as refinement_ask
+    from rite_ai.refinement import protocol
+
+    root = _require_project_root()
+    speaking = current_manager()
+    if not speaking:
+        click.echo(
+            "refusing: `rite refine ask` is how the Owner Manager asks the User "
+            "about a ticket. From your own shell, agree it yourself with `rite "
+            f'refine accept {ticket_id} --item "…"`, or `/refine {ticket_id}`.',
+            err=True,
+        )
+        raise SystemExit(1)
+    roles, problems = _manager_roles(root)
+    if problems:
+        click.echo("cannot read this project's Managers:", err=True)
+        for problem in problems[:3]:
+            click.echo(f"  {problem}", err=True)
+        raise SystemExit(1)
+    owner = routing_owner(list(roles)) if roles else speaking
+    if speaking != owner:
+        click.echo(
+            f"refusing: refinement is the Owner's, and {speaking!r} is not it"
+            + (f" ({owner!r} is)" if owner else "")
+            + ". If a ticket you were given needs the User, say so to the "
+            "Owner with `rite reply`.",
+            err=True,
+        )
+        raise SystemExit(1)
+    try:
+        text = stdin_text.read(text)
+    except stdin_text.OnTheCommandLine:
+        click.echo(
+            stdin_text.refusal(f"rite refine ask {ticket_id}", "<your round>"),
+            err=True,
+        )
+        raise SystemExit(1)
+    problem = ticket_problem(ticket_id)
+    if problem:
+        click.echo(f"refusing: {problem}.", err=True)
+        raise SystemExit(1)
+    if not text.strip():
+        click.echo("refusing to send an empty round.", err=True)
+        raise SystemExit(1)
+    # The shape, checked here so a mistake costs no turn. The quotes and the
+    # round number are checked by the supervisor, against the ticket and his
+    # answers, which this side of the boundary cannot be trusted to hold.
+    checked = refinement_ask.check(
+        text, k=1, rounds=refinement_ask.MAX_QUESTIONS, ticket_text="", answers=[]
+    )
+    shape = [p for p in checked.problems if "Quote exactly" not in p]
+    if shape:
+        click.echo("refusing: the round is not in the shape rite sends:", err=True)
+        for p in shape:
+            click.echo(f"  - {p}", err=True)
+        raise SystemExit(1)
+    protocol.request(root, speaking, ticket_id.strip(), text)
+    click.echo(
+        f"round queued for {ticket_id.strip()}: rite checks it against the "
+        "ticket and the User's answers, then puts it in front of him and on "
+        "the ticket. Whether it went, or why not, is in your next instruction."
+    )
+
+
 @refine.command("accept")
 @click.argument("ticket_id")
 @click.option(
@@ -7448,6 +7540,7 @@ def _start_a_manager(
     from rite_ai.managers.broker import for_project
     from rite_ai.managers.chores import create_asked_for
     from rite_ai.managers.chores import instructions as chore_instructions
+    from rite_ai.refinement.protocol import step as refinement_step
 
     board, board_state, board_problem, composed_under = _board_for_manager(root)
     if board_state == "unreachable":
@@ -7590,6 +7683,12 @@ def _start_a_manager(
             # TR9: a User's instruction becomes a chore, written by rite
             # outside the boundary, on the same board the broker checks.
             chores=lambda say: create_asked_for(root, role.name, board, say),
+            # TR2: the rounds this Manager asks for, and what the User's
+            # replies to them do, decided outside the boundary on this board.
+            # Only the Manager that refines does anything (TRQ7).
+            refine=lambda say, messages=(): refinement_step(
+                root, role.name, board, say, messages=messages
+            ),
             router=_router_for(root, role.name, board),
             # ⚠ DF2: a cycle can be CAUSED by mail. None for a lone Manager,
             # whose runs are exactly what they were.
