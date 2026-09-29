@@ -1073,7 +1073,7 @@ built.*
   treated as the User's words, unless the User explicitly permits it.
 - **G2.** rite itself never edits a title or description, except to
   restore the User's own text when the User asks (below). Today nothing in
-  `src/` calls the backends' `update()`, and a test pins that it stays that
+  `src/` calls the backends' `update()`, and `tests/test_rite_never_edits_a_tickets_text.py` pins that it stays that
   way.
 
 **What the boards record: measured 2026-09-28, read-only.**
@@ -1102,7 +1102,7 @@ under an identity of their own. Where they stand today:
 
 ⚠ **Since #97 (2026-09-29), no agent holds a Jira credential at all.**
 Workers lost theirs, Managers never had one (F11), and rite's own host-side
-writes never edit a description (G2, pinned by a test). So on Jira today,
+writes never edit a description (G2, pinned by `tests/test_rite_never_edits_a_tickets_text.py`). So on Jira today,
 **every edit to a ticket's description is a person's**, whichever account
 rite is configured with. That makes G1 and TRQ6's "no 'ok' for a definition
 of done you wrote yourself" safe on Jira now, without any identity check.
@@ -1173,7 +1173,7 @@ every question of "who did this":
     one "ok" stays: rite fails closed and says why.
 - **G2 in every case:** rite itself never edits a title or description,
   except the restore above. Nothing in `src/` calls the backends'
-  `update()` today, and a test pins that.
+  `update()` today, and `tests/test_rite_never_edits_a_tickets_text.py` pins that (added 2026-09-29: the note had claimed this test before it existed).
 
 **Commit authorship: documented, not built** (decided 2026-09-29, same
 principle). A Worker's commits carry whatever git identity its sandbox is
@@ -1475,22 +1475,48 @@ it. What is actually true:
     the time and `as_written` only, and a test fails if it names the
     machine. The word was edited out of #44's comment, which leaves that
     probe record correctly UNREADABLE.
-  - **Not yet measured:** whether Jira's embedded comment list pages as
-    documented. The code fails closed if it does not.
-- **Whether the key is unreadable**: from inside a **macOS Manager,
-  measured 2026-09-28 and pinned** (`test_no_manager_reads_the_refinement_key.py`,
-  run in the macOS CI job): read, list and plant are all refused, with
-  controls. **Still owed:** a Linux Manager (Landlock) and a yoloAI Worker,
-  each under an ungranted root with a control;
-  and whether it is absent from the argv and environment of every rite
-  process that holds it, read with CU1b section 4's `KERN_PROCARGS2`
-  reader.
+  - **Jira comment paging: the endpoint's shape is confirmed live, and the
+    paging branch is unmeasured at scale.** On `ritetest` KAN-11,
+    2026-09-29: `/issue/{id}/comment` with `startAt`/`maxResults` returned
+    `total`, `startAt` and consecutive comments, exactly what `read_thread`
+    expects. But at small counts Jira's issue read embeds every comment
+    (`maxResults` followed `total`: 1, then 3), so the real board never
+    took `read_thread`'s paging branch. Only unit tests cover it. **That
+    is a real limit:** a record that falls off the first embedded page is
+    the case a busy ticket would hit, and it has not been seen happening.
+    What bounds the damage: the thread counts as complete only when the
+    comments read equal Jira's own `total`. So a paging branch that fails
+    gives UNREADABLE, a visible stop, and never a ticket read as having no
+    record or an older one.
+- **Whether the key is unreadable from inside a boundary: denied in three
+  of the four places, each measured with SB12's method** (a fake key where
+  production puts it, the boundary shown active, and a control proving the
+  probe would have found a readable key):
+
+  | where | how | result |
+  |---|---|---|
+  | macOS Manager (seatbelt) | pinned: `test_no_manager_reads_the_refinement_key.py`, in the macOS CI job | read, list and plant refused |
+  | macOS yoloAI Worker (seatbelt, `idle` agent) | by hand, 2026-09-29: a real sandbox; a write outside it refused; a control file in a granted directory read | read, list and plant refused. **Metadata is visible:** `stat` returned the key's size and mode (32 bytes, `-rw-------`). Seatbelt denies file contents, not file metadata. That is harmless for an HMAC key, since knowing its length signs nothing, and it is recorded so that nobody later assumes nothing at all is observable |
+  | Linux Manager (Landlock) | pinned: 4 tests in `test_landlock_really_confines.py`, which CI's "Landlock probes" step runs with `-rs` on a real kernel (#109) | read, list and plant refused; 26 passed where there had been 22, none skipped |
+  | Linux yoloAI Worker | **not measured**: the Linux VM is suspended | **owed**, and on the release-candidate run's checklist. It blocks no code |
+
+  Separately, the key never goes on any command line or into any
+  environment variable (part 3.8, `key.py`). That is a code property; it
+  has not been checked with CU1b's `KERN_PROCARGS2` reader, because no
+  long-running process holds the key yet: `accept` reads it and exits.
 - ~~Whether a person's edit to a ticket description can be told from
   rite's~~: **measured 2026-09-28**: not on GitHub today, because Workers
   write with the person's own token, and not on Jira (part 3.6).
 - ~~Whether the Jira filter for "needs refinement" works~~: **measured
   2026-09-28** on `bentora` (an exact 5 + 142 = 147 split), and the GitHub
-  filter on `cli/cli`. Not yet run on `ritetest` (part 3.10).
+  filter on `cli/cli`. **Run on `ritetest` 2026-09-29:**
+  - Two stand-in labels on probe issue KAN-11, so nothing was labelled
+    `scheduled`. `labels = A AND labels not in (B)` returned 0 with both
+    labels and 1 with B removed. The unquoted hyphenated `ready-to-work`
+    parses.
+  - Robert's own filter, `labels = scheduled AND labels not in
+    (ready-to-work)`, returned all 4 `scheduled` KAN tickets, since none
+    carries `ready-to-work` yet.
 - ~~Whether anything a Worker writes reaches the host~~: **it does,
   observed by the dogfood session** (its `TO_REFINEMENT_SESSION.md`, one
   macOS observation with no control). yoloAI 0.11.0 tells a Worker to write
