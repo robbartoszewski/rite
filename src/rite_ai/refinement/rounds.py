@@ -292,6 +292,44 @@ def events_since(
     return Events(first_look=last is None, replies=replies, deadlines=deadlines)
 
 
+def open_questions(root: Path, owner: str) -> dict[str, float]:
+    """Every round still waiting for an answer, by its question id, with its
+    deadline. The Slack relay keeps these threads read, past the 24-hour
+    horizon and outside its ten-thread limit, until they are answered (race
+    7): a reaction confirms a question was SEEN (RP1), not that it was
+    answered, so RP1's pin alone is not enough here."""
+    found: dict[str, float] = {}
+    for attempt in all_attempts(root, owner).values():
+        if attempt.parked:
+            continue
+        latest = attempt.latest
+        if latest is not None and latest.where and not latest.answered:
+            found[latest.where] = latest.deadline
+    return found
+
+
+def read_past_deadline(root: Path, owner: str, question: str, *, at: float) -> bool:
+    """The relay read `question`'s thread at `at`, after its deadline, and
+    found nothing new in it. Only then is silence WAITING FOR YOU (race 6):
+    a reply sent a minute before the deadline and read after it is found by
+    this same read, and answers the round. True if a round was marked."""
+    for ticket, attempt in all_attempts(root, owner).items():
+        latest = attempt.latest
+        if latest is None or latest.where != question:
+            continue
+        with locked(root, owner, ticket) as (current, save):
+            if current is None or current.latest is None:
+                return False
+            r = current.latest
+            if r.where != question or r.answered or at < r.deadline:
+                return False
+            if not r.read_past_deadline:
+                r.read_past_deadline = True
+                save(current)
+            return True
+    return False
+
+
 def all_attempts(root: Path, owner: str) -> dict[str, Attempt]:
     """Every attempt this Owner holds, by ticket."""
     found: dict[str, Attempt] = {}
