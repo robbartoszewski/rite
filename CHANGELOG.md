@@ -2,6 +2,14 @@
 
 ## Unreleased: 0.7.0 (notes in progress, completed at release)
 
+### Every commit a worker makes credits rite and Claude
+
+rite adds `🤖 Generated with rite (https://github.com/robbartoszewski/rite)`
+and `Co-Authored-By: Claude <noreply@anthropic.com>` to every commit a
+worker makes, and to the squash commit `rite deliver` builds. It does this
+with a git hook it installs before the sandbox starts, not by asking the
+worker. No model version is named.
+
 ### rite opens a pull request only as a draft, on your own repository
 
 Under `publish.strategy: pull_request`, rite now opens the pull request as a

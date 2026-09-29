@@ -1091,6 +1091,18 @@ def start_worker(
     workdir = root / "workers" / worker
     if not workdir.is_dir():
         return SandboxResult(False, f"no such worker workspace: {workdir}")
+    # Every commit the Worker makes credits rite and Claude, added by a hook
+    # rite installs now, before the sandbox copies the workspace — never a
+    # convention the Worker is asked to remember (`publishing.attribution`).
+    from rite_ai.publishing import attribution
+
+    uncredited = attribution.install_hooks(workdir)
+    if uncredited:
+        return SandboxResult(
+            False,
+            "not started: its commits could not be made to credit rite and "
+            "Claude (" + "; ".join(uncredited) + ")",
+        )
 
     from rite_ai.schedule import check_worker_cap
 

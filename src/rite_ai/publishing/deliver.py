@@ -171,7 +171,10 @@ def _squash_message(project: Path, base_sha: str, full: str, ticket: str) -> str
     )
     subjects = [s for s in done.stdout.splitlines() if s.strip()]
     body = "\n".join(f"- {s}" for s in subjects)
-    return f"{ticket}: {len(subjects)} commit(s), squashed by rite\n\n{body}\n"
+    # rite builds this commit itself, so no hook sees it: credited here.
+    from rite_ai.publishing.attribution import credit
+
+    return credit(f"{ticket}: {len(subjects)} commit(s), squashed by rite\n\n{body}\n")
 
 
 def _collect(
