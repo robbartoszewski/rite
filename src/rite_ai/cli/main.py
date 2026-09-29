@@ -4024,8 +4024,8 @@ def _provenance_line(provenance: dict) -> str:
         return "agreed: accepted by the User in their channel"
     return (
         f"agreed: {refinement_record.ATTESTED_TOKEN} — attested by a session "
-        f"running as the person on {provenance.get('host', '?')} at "
-        f"{provenance.get('at', '?')}; not confirmed through the User's channel"
+        f"running as the person at {provenance.get('at', '?')}; not confirmed "
+        "through the User's channel"
     )
 
 

@@ -21,7 +21,6 @@ failure, never as success.
 from __future__ import annotations
 
 import re
-import socket
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -105,10 +104,14 @@ def accept(
             "sandbox, where rite's refinement key is readable",
         )
     when = (now or datetime.now(UTC)).isoformat(timespec="seconds")
+    # ⚠ No hostname, and nothing else about this machine. The record is
+    # posted to the board, which may be public; a machine's name is the same
+    # kind of leak the publish gate refuses a home path for. Found when the
+    # first real round trip (dogfood board issue #44) posted `mac.home`. The
+    # time is enough to find an attested approval later (TRQ10).
     provenance = {
         "kind": rec.ATTESTED,
         "at": when,
-        "host": socket.gethostname(),
         "as_written": use_ticket_text,
     }
     try:

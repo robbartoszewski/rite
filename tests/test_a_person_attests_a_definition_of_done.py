@@ -130,6 +130,24 @@ def test_a_post_that_fails_is_reported(board):
 def test_the_status_line_never_shows_attested_as_confirmed():
     from rite_ai.cli.main import _provenance_line
 
-    line = _provenance_line({"kind": rec.ATTESTED, "host": "mac", "at": "t"})
+    line = _provenance_line({"kind": rec.ATTESTED, "at": "t"})
     assert rec.ATTESTED_TOKEN in line and "not confirmed" in line
     assert "accepted by the User" in _provenance_line({"kind": rec.ACCEPTED})
+
+
+def test_the_record_publishes_nothing_about_this_machine(board):
+    """The record is posted to a board that may be public. The first real
+    round trip posted the machine's hostname; nothing identifying the machine
+    may be in it."""
+    import getpass
+    import socket
+
+    out = _accept()
+    names = {socket.gethostname(), socket.gethostname().split(".")[0]}
+    # Short names ("mac") are ordinary words, so the provenance's VALUES are
+    # checked for them; the body is checked for the full name and the user.
+    for value in out.record.provenance.values():
+        assert str(value) not in names, f"the provenance names this machine: {value}"
+    body = board.comments[-1].body
+    assert socket.gethostname() not in body
+    assert getpass.getuser() not in body
