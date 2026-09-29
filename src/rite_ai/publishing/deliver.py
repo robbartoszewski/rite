@@ -326,6 +326,11 @@ def _publish(
             )
         return Outcome(module.name, ticket, True, f"{home}; pushed to {module.branch}")
 
+    # Checked BEFORE the push: a branch pushed to someone else's repository
+    # has already gone upstream, whatever happens to the pull request.
+    refusal = _pull_request_target_refusal(project, module, env)
+    if refusal:
+        return no(*refusal)
     pushed = _run(
         ["git", "push", "--porcelain", "origin", f"{branch}:{branch}"],
         project,
@@ -339,10 +344,76 @@ def _publish(
     return _open_pull_request(project, module, ticket, branch, env, home)
 
 
+def _pull_request_target_refusal(
+    project: Path, module: Module, env: dict
+) -> tuple[str, str] | None:
+    """Why rite must not push a branch and open a pull request for this
+    module, as (why, fix), or None.
+
+    ⚠ **rite opens a pull request only as a DRAFT, on a repository the
+    operator owns, against its default branch** (Robert, 2026-09-29: rite
+    opens PRs on his fork; he takes them upstream himself). A property of this
+    code, not an instruction: the owner of the token rite pushes with must
+    own both the repository the branch is pushed to (`origin`) and the one
+    the pull request is opened on (the module's URL), and the base must be
+    that repository's default branch. Anything rite cannot establish — the
+    token's owner, the default branch — refuses: "could not check" is not
+    "allowed"."""
+    from rite_ai.sandbox import owner_repo_from_url
+
+    target = owner_repo_from_url(module.url or "")
+    if target is None:
+        return None  # `_open_pull_request` refuses it, after nothing is pushed
+    origin = _run(["git", "remote", "get-url", "origin"], project, env=env)
+    pushed_to = (
+        owner_repo_from_url(origin.stdout.strip()) if origin.returncode == 0 else None
+    )
+    if pushed_to is None:
+        return (
+            f"could not read which GitHub repository {module.name}'s origin is "
+            f"({_said(origin)}), so could not check it is yours",
+            "Point origin at your fork, then deliver again",
+        )
+    me = _run(["gh", "api", "user", "--jq", ".login"], project, env=env)
+    login = me.stdout.strip() if me.returncode == 0 else ""
+    if not login:
+        return (
+            f"could not establish whose GitHub token rite pushes with "
+            f"({_said(me)}), so could not check the repository is theirs",
+            "Check the project's github_token, then deliver again",
+        )
+    for owner, repo in dict.fromkeys([pushed_to, target]):
+        if owner.lower() != login.lower():
+            return (
+                f"{owner}/{repo} is not {login}'s, and rite pushes branches and "
+                "opens pull requests only on a repository the operator owns",
+                "Point this module (its origin and its url) at your fork; you "
+                "open the pull request to the upstream yourself",
+            )
+    slug = "/".join(target)
+    default = _run(
+        ["gh", "api", f"repos/{slug}", "--jq", ".default_branch"], project, env=env
+    )
+    base = default.stdout.strip() if default.returncode == 0 else ""
+    if not base:
+        return (
+            f"could not read {slug}'s default branch ({_said(default)})",
+            "Check the token can read the repository, then deliver again",
+        )
+    if module.branch != base:
+        return (
+            f"{module.name}'s branch is {module.branch}, not {slug}'s default "
+            f"branch {base}, and rite opens pull requests only against that",
+            f"Set {module.name}'s branch to {base}, or open this one yourself",
+        )
+    return None
+
+
 def _open_pull_request(
     project: Path, module: Module, ticket: str, branch: str, env: dict, home: str
 ) -> Outcome:
-    """`gh pr create`, or the pull request already open for `branch`."""
+    """`gh pr create --draft`, or the pull request already open for `branch`.
+    Only after `_pull_request_target_refusal` passed."""
     import json
     import tempfile
 
@@ -421,6 +492,7 @@ def _open_pull_request(
                 module.branch,
                 "--head",
                 branch,
+                "--draft",
                 "--title",
                 f"{ticket}",
                 "--body-file",
