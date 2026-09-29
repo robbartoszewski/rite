@@ -4,9 +4,27 @@ description: Work a ticket end to end — claim, implement, review, open a PR, r
 
 Work ticket `$ARGUMENTS` end to end.
 
-1. **Read the ticket.** Pull it from the configured ticket backend (see
-   `.rite/config.yaml`). If it isn't complete enough to start cold — no
-   definition of done, no clear scope — say so and stop rather than guessing.
+1. **Work to the ticket's agreed definition of done, and only that.** You do
+   not judge whether a ticket is complete enough; rite's record does.
+
+   - **A Worker started by rite:** the ticket and its agreed definition of
+     done are in `TICKET.md` in your working directory. Work to its section
+     "Agreed definition of done" (checklist, scope, Verify), not to the
+     title, and cite its record id in your pull request. You hold no board
+     credential and cannot read the refinement key, so do not try `rite board
+     show` or `rite refine status` from inside the sandbox. No `TICKET.md`,
+     or no such section: say so, and stop.
+   - **A person's session, outside any sandbox:** `rite refine status <ID>`.
+     REFINED prints the definition of done: work to it. Anything else: do not
+     start. If the person is here, agree one with them and record it with
+     `rite refine accept <ID> --item "…"`; otherwise say which state rite
+     reported, and stop. UNREADABLE means rite could not check, not that
+     there is no definition of done: it says why.
+
+   **One exit, and it is not "incomplete":** a definition of done that cannot
+   be met as written (a path it names does not exist, two items contradict)
+   is reported with exactly that, and you stop. Never invent the missing
+   piece.
 
    If it cites the project spec (`§5.3`, `D-31`), read those parts rather than
    the whole document:

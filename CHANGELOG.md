@@ -28,6 +28,11 @@ A Manager whose Worker request is refused is told the same in its next
 instruction. Until the Owner can refine tickets with you over Slack (later in
 0.7.0), `rite refine accept` is how a ticket gets refined.
 
+`/ticket` now sends a Worker to the agreed definition of done in `TICKET.md`,
+and a person's session to `rite refine status`; nothing asks an agent to judge
+whether a ticket is "complete enough" any more. Run `rite update --files-only`
+to carry the new `/ticket` into an existing project.
+
 ### `rite start` sees a ticket rite has just filed
 
 A board's list lags new writes by seconds, on GitHub (measured, up to 6.5 s)
@@ -212,6 +217,11 @@ instead of filling the gap. The Owner, and a lone Manager, are also told not
 to change code and commit it themselves: a ticket is worked by a Worker or
 routed, so that it gets a claim, a review and a pull request. This is an
 instruction, not yet enforced.
+
+A secondary Manager doing routed work is now told it may do only a chore or
+a trivial ticket itself, and then only on a branch named for the ticket and
+through a pull request, never a commit to a default branch; anything more
+goes to a Worker.
 
 ### A request in chat becomes a chore ticket, written by rite
 
