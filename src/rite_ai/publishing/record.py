@@ -47,7 +47,7 @@ class Unreadable:
     reason: str
 
 
-def records_dir(root: Path) -> Path:
+def _records_dir(root: Path) -> Path:
     """`<mail home>/../publish/<checkout>/`: outside every Manager's grant."""
     from rite_ai.managers.mailbox import _checkout_key, _mail_home  # noqa: PLC2701
 
@@ -60,7 +60,7 @@ def _path(root: Path, worker: str) -> Path:
     problem = name_problem(worker, kind="worker name")
     if problem:
         raise ValueError(f"refusing to build a publish record path: {problem}")
-    return records_dir(root) / f"{worker}.json"
+    return _records_dir(root) / f"{worker}.json"
 
 
 def settings(e: Effective) -> dict:
