@@ -1742,6 +1742,12 @@ def _supervise(
             refused = _say_refusals(
                 root, cycle.started_at, say, engine, agent, live_pane, manager
             )
+            # ⚠ Deliveries BEFORE Worker requests: "deliver alpha, then start
+            # alpha on its next ticket" in one cycle needs alpha's sandbox gone
+            # first, and a delivery removes it (PB1).
+            from rite_ai.publishing.requests import honour as honour_deliveries
+
+            honour_deliveries(root, manager, say)
             _honour_worker_requests(root, manager, broker, say)
             if callable(chores):
                 # TR9: at the boundary with the Worker requests, and for the

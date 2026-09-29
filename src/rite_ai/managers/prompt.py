@@ -111,7 +111,9 @@ def for_manager(manager: str, *, root: Path, extra: str = "") -> str:
         "authentication error, every time. If a request is refused, report "
         "the refusal and stop — do not work around it.\n"
     )
-    return base + extra
+    from rite_ai.publishing.requests import instructions as delivering
+
+    return base + delivering(root, manager) + extra
 
 
 TICKET_WORK = (
