@@ -30,16 +30,18 @@ ALLOWED_GIT = {("push", PUBLISHING)}
 """`git push` in exactly one file: PB1's publish step, under a strategy that
 permits it, after the publish gate (SPEC §5.1.1). Never with `--force`: that
 verb stays forbidden everywhere, this file included."""
-ALLOWED_GH_PR = {PUBLISHING}
-"""`gh pr` (list, create) in the same file, never `merge` (§5.1.1)."""
+MERGING = SRC / "publishing" / "merging.py"
+ALLOWED_GH_PR = {PUBLISHING, MERGING}
+"""`gh pr list`/`create` in the publish step; `gh pr merge` only in
+`merging.py`, behind `merge_gate` and `--match-head-commit` (§5.1.1)."""
 
 
 class TestRiteCannotWriteToARemoteOrRewriteHistory:
     """Nothing rite does rewrites history or force-pushes, so the blast area
     stays "new changes" rather than "project history". rite reaches a remote
     in exactly one file, PB1's publish step (`ALLOWED_GIT`, `ALLOWED_GH_PR`),
-    under a configured strategy and after the publish gate; merging stays
-    out of reach everywhere."""
+    under a configured strategy and after the publish gate. It merges in
+    exactly one other, `merging.py`, only pinned to the head it pushed."""
 
     def _all_source(self) -> str:
         return "\n".join(p.read_text() for p in sorted(SRC.rglob("*.py")))
@@ -93,9 +95,13 @@ class TestRiteCannotWriteToARemoteOrRewriteHistory:
         for path in sorted(SRC.rglob("*.py")):
             for match in re.finditer(r'\[\s*"gh"\s*,([^\]]*)\]', path.read_text()):
                 args = match.group(1)
-                for sub in ('"repo"', '"release"', '"workflow"', '"merge"'):
+                for sub in ('"repo"', '"release"', '"workflow"'):
                     if sub in args:
                         offenders.append(f"{path.name}: gh {args.strip()}")
+                if '"merge"' in args and (
+                    path != MERGING or '"--match-head-commit"' not in args
+                ):
+                    offenders.append(f"{path.name}: gh {args.strip()}")
                 if '"pr"' in args and path not in ALLOWED_GH_PR:
                     offenders.append(f"{path.name}: gh {args.strip()}")
         assert not offenders, offenders

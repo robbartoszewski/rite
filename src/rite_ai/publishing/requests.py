@@ -114,7 +114,7 @@ def honour_deliveries(root: Path, manager: str, say) -> None:
             say(f"{manager!r}: {said}")
             tell(said)
             continue
-        result = deliver(root, request.worker, request.ticket)
+        result = deliver(root, request.worker, request.ticket, manager=manager)
         if isinstance(result, Refused):
             said = f"NOT delivered {request.worker}/{request.ticket}: {result.why}"
             say(f"{manager!r}: {said}")
