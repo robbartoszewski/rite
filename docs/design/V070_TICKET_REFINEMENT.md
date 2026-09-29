@@ -999,8 +999,8 @@ good. I think I will add "proceed"". *Not built.*
 ```yaml
 # .rite/config.yaml
 refinement:
-  rounds: 3              # N: rounds with an answering User before PARKED
-  deadline_hours: 24     # how long one round waits
+  unanswered: 3          # N: messages in a row with no reply before PARKED (TRQ2, corrected)
+  deadline_hours: 24     # how long one message waits for a reply
   open_max: 5            # K: refinements open at once per Manager
   start_per_session: 3   # S: new refinements started per Owner session
   accept_words: [ok, yes, accept, lgtm, proceed]
@@ -1013,7 +1013,7 @@ Every key is optional, and the defaults are the values shown. **What is not
 configurable is whether refinement is enforced (TRQ1).** The parser
 refuses, rather than clamps:
 
-- `rounds`, `open_max` and `start_per_session` below 1, and
+- `unanswered`, `open_max` and `start_per_session` below 1, and
   `start_per_session` above `open_max`;
 - `deadline_hours` of zero or less. Above 24 is allowed: open round roots
   are pinned and read past Slack's 24-hour thread horizon (part 4, race 7),
@@ -1431,7 +1431,7 @@ it. What is actually true:
 | id | question | options | recommendation, and why |
 |---|---|---|---|
 | ✅ **TRQ1**: **DECIDED 2026-09-28, enforced as the standard** | Enforce refinement in code, or instruct only? | (a) enforced everywhere; (b) enforced for new projects, opt-in for existing ones; (c) opt-in everywhere; (d) any of these plus a blanket accept | **Robert chose (a):** "There aren't really any 'existing projects' so let's just implement it as a standard." No configuration key. This note had recommended (b); the ruling replaces it. (d) stays rejected. The same ruling added the `ready-to-work` label (part 3.10) |
-| ✅ **TRQ2**: **DECIDED 2026-09-28** | N rounds, the deadline, K open, S started per session | as proposed | **Robert: "the limits sound good. We can make them configurable for advanced users."** Defaults N = 3, 24 h (or the next check-in if sooner), K = 5, S = 3; configurable with validation (part 3.11). The numbers remain judgement, not measurement |
+| ✅ **TRQ2**: **DECIDED 2026-09-28, CORRECTED BY ROBERT 2026-09-29** | N rounds, the deadline, K open, S started per session | as proposed | **Robert: "the limits sound good. We can make them configurable for advanced users."** Defaults N = 3, 24 h (or the next check-in if sooner), K = 5, S = 3; configurable with validation (part 3.11). The numbers remain judgement, not measurement **Robert's correction, 2026-09-29, after the TR2 live exchange:** "This limit should apply to nudging without a reply, not to a discussion. A topic may be complex and need many rounds to resolve. As long as the User is responsive, the limit shouldn't apply". So N counts **consecutive messages about one ticket that reached their deadline with no reply** (default 3; `refinement.unanswered`), never rounds: any reply resets it to zero, a qualified accept and an answer that raises new questions included; rounds are uncapped while he is answering. The deadline still applies per message: an unanswered one counts, and he is nudged with the same question when he is next active (never while away). N of them park the ticket, and a reply with its id brings it back. **Safeguard for uncapped rounds (the coordinator's, agreed):** a proposal unchanged from the round before is said in the message ("this is the third round in a row with the same proposal"), never enforced. |
 | ✅ **TRQ3**: **DECIDED 2026-09-28** | The accept words | a fixed list, or a configurable one | **Robert: "Let's have a list of words that are also configurable. the current list looks good. I think I will add "proceed"."** Default `ok`, `yes`, `accept`, `lgtm`, `proceed`; words that read as refusals are refused in configuration (part 3.11) |
 | ✅ **TRQ4**: **DECIDED 2026-09-28** | What "you decide" means | a refusal to proceed; a recommendation for confirmation | **Robert: "Yes, let's have rite come back with a recommendation for a final confirmation."** A delegation gets a complete proposal back, in the same round, asking for one word. It spends a round (part 3.4 step 4) |
 | ✅ **TRQ5**: **DECIDED 2026-09-28** | Routed work without a ticket | (a) accept the hole; (b) require a ticket for executors; (c) `--ticket` or `--no-ticket` | **Robert: "Can we just ticket all work that Workers do? (in JIRA that would be chore tickets I guess)."** Every route carries a ticket, a chat instruction becomes a chore quoting the User's words, and `--no-ticket` is withdrawn (part 3.14). Whether a chore needs refinement is **TRQ11** |

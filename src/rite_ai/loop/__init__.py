@@ -62,6 +62,21 @@ of being wrong is two sessions on one path."""
 READY = "ready"
 """Work is ready and a Worker is free. A later layer dispatches here."""
 
+REFINING = "refining"
+"""Nothing is REFINED, and the Owner has refinement work it may start now
+(TR2; the note's part 3.4 step 0): a first look, a reply, or a deadline. A
+session starts, as for `ready`. Not `idle`: a board of unrefined tickets has
+work on it, and reading it as empty ended the run before anything could be
+refined (the defect the note's part 3.4 step 8 corrects)."""
+
+WAITING_ON_USER = "waiting-on-user"
+"""Work is on the board and none of it can start: every `scheduled` ticket
+is in refinement, waiting for the User, parked or unreadable, or queued
+behind the cap, and the User has done nothing since the last refinement
+session. Neither `idle` (there is work) nor `ready` (none of it can move).
+The supervisor waits and starts no session until he answers or a round's
+deadline passes (TR2; Robert's third verdict)."""
+
 UNKNOWN = "unknown"
 """Something could not be established. Never treated as any of the above:
 a loop's default on the unknown is to stop and say so."""
@@ -79,6 +94,13 @@ class WorkerView:
     conclusion with no evidence is the thing this module exists not to
     print."""
     held_paths: tuple[str, ...] = ()
+
+
+def as_of(moment: float | None) -> str:
+    """`HH:MM:SS` local time of a board read, for "nothing ready as of"."""
+    if moment is None:
+        return "an unrecorded time"
+    return time.strftime("%H:%M:%S", time.localtime(moment))
 
 
 @dataclass
@@ -104,6 +126,17 @@ class Cycle:
     OBSERVED refusals, never from a guess about which files a ticket needs."""
     capacity: int = 0
     problems: list[str] = field(default_factory=list)
+    scheduled: int = 0
+    """How many `scheduled` tickets the board listed, refined or not."""
+    board_read_at: float | None = None
+    """Wall-clock time the board's list came back. What "nothing ready" is
+    true AS OF: a list is a snapshot, and a ticket created outside rite just
+    before or after it is not in it (DF4). None when the board was not read."""
+    refinement: object = None
+    """The Owner's refinement work (`refinement.admit.Admission`), or None
+    when this Manager is not the one that refines (TRQ7)."""
+    refining: str = ""
+    """Why a session starts for refinement, or "" (`admit.reason_to_start`)."""
 
     @property
     def free_workers(self) -> list[str]:
@@ -129,6 +162,8 @@ def plan_cycle(
     board=None,
     sandbox_status=None,
     clock: float | None = None,
+    refiner: str | None = None,
+    refinement=None,
 ) -> Cycle:
     """Read everything, decide nothing that acts. Returns, never raises.
 
@@ -231,21 +266,35 @@ def plan_cycle(
     # lost-intent reports by now, and a leaked dispatch is something to say
     # out loud — not a reason to call the whole cycle unknown.
     before = len(cycle.problems)
-    cycle.ready = _ready(board, cycle)
+    cycle.ready = _ready(root, project, board, cycle, clock, refiner, refinement)
+    cycle.board_read_at = time.time()
     if len(cycle.problems) > before:
         cycle.verdict = UNKNOWN
         cycle.detail = "the board could not be read"
         return cycle
 
     free = cycle.free_workers
+    if not cycle.ready and cycle.refinement is not None and cycle.scheduled:
+        work = cycle.refinement
+        if cycle.refining:
+            cycle.verdict = REFINING
+            cycle.detail = (
+                f"nothing is refined yet; {cycle.refining}, so a session "
+                f"refines {len(work.open) + len(work.start)} ticket(s)"
+            )
+        else:
+            cycle.verdict = WAITING_ON_USER
+            cycle.detail = _waiting_detail(work)
+        return cycle
     if not cycle.ready:
         cycle.verdict = IDLE
         cycle.detail = (
-            # "listed", not "is": a board's list lags writes it did not get
-            # from rite (DF4). rite's own are read back in `own_writes`.
-            f"the board listed nothing waiting (a ticket created outside rite "
-            f"in the last few seconds may not be listed yet); {len(free)} of "
-            f"{len(cycle.workers)} Worker(s) free"
+            # A snapshot with its time, not "the board is empty": a list lags
+            # writes rite did not make itself (DF4); rite's own are read back
+            # in `own_writes`.
+            f"the board listed nothing waiting as of {as_of(cycle.board_read_at)} "
+            f"(a ticket created outside rite shortly before then, or since, is "
+            f"not in that read); {len(free)} of {len(cycle.workers)} Worker(s) free"
         )
         return cycle
 
@@ -434,15 +483,97 @@ def _blocked(
     return blocked, blockers
 
 
-def _ready(board, cycle: Cycle) -> list[str]:
+def _ready(
+    root: Path, project, board, cycle: Cycle, clock: float, refiner, refinement=None
+) -> list[str]:
+    """The `scheduled` tickets a Worker may start: the REFINED ones (TR2).
+
+    ⚠ **Not every `scheduled` ticket any more.** Under Robert's semantics
+    scheduled + not refined is the Owner's to refine, and scheduled + refined
+    is work. So each listed ticket is read once through the refinement
+    predicate, and the Owner's unrefined ones become `cycle.refinement`.
+    Never gated alone: without the `refining` and `waiting-on-user` verdicts
+    a board of unrefined tickets would read `idle` and end the run.
+
+    `refinement` is injectable for tests; None asks the predicate about
+    `board` itself, one read per ticket.
+    """
     from rite_ai.coordination.ticket_labels import SCHEDULED
+    from rite_ai.refinement import admit, rounds
+    from rite_ai.refinement import status as refinement_status
     from rite_ai.tickets import BackendError, TicketFilter
 
     result = board.list_tickets(TicketFilter(label=SCHEDULED))
     if isinstance(result, BackendError):
         cycle.problems.append(f"the board could not be read: {result.message}")
         return []
-    return [t.id for t in result]
+    cycle.scheduled = len(result)
+    owner = _refiner_of(project, refiner)
+    attempts = rounds.all_attempts(root, owner) if owner else {}
+    states = []
+    if refinement is None:
+
+        def refinement(ticket_id: str):
+            return refinement_status.status(board, ticket_id)
+
+    for ticket in result:
+        answer = refinement_status.checked(refinement, ticket.id)
+        if answer.ticket is None:
+            answer = refinement_status.Status(
+                answer.state, answer.record, answer.detail, ticket
+            )
+        states.append(
+            (ticket, rounds.state_of(answer, attempts.get(ticket.id), now=clock))
+        )
+    limits = project.config.refinement
+    work = admit.admit(
+        states, open_max=limits.open_max, start_per_session=limits.start_per_session
+    )
+    if refiner is None or owner == refiner:
+        cycle.refinement = work
+        last = rounds.last_session(root, owner) if owner else None
+        events = rounds.events_since(attempts, last, now=clock)
+        cycle.refining = admit.reason_to_start(
+            work,
+            first_look=events.first_look,
+            replies=events.replies,
+            deadlines=events.deadlines,
+            owed=events.owed,
+        )
+    return work.ready
+
+
+def _refiner_of(project, refiner: str | None) -> str:
+    """Who refines in this project: the Manager holding `route` (TRQ7), or a
+    lone Manager itself. "" when that cannot be named (a `rite loop` with no
+    Manager roles): then there is no ledger to read, and nothing is assumed
+    about rounds."""
+    from rite_ai.config.managers import routing_owner
+
+    roles = list(project.config.coordination.manager_roles)
+    if roles:
+        return routing_owner(roles) or ""
+    return refiner or ""
+
+
+def _waiting_detail(work) -> str:
+    """Each ticket, and what it waits for: the line the wait repeats."""
+    parts = []
+    if work.open:
+        parts.append(f"in refinement, waiting for your answer: {', '.join(work.open)}")
+    if work.waiting:
+        parts.append(f"waiting for you since the deadline: {', '.join(work.waiting)}")
+    if work.queued:
+        parts.append(f"queued for refinement: {', '.join(work.queued)}")
+    if work.start:
+        parts.append(f"ready to refine, after your next reply: {', '.join(work.start)}")
+    for ticket, why in work.needs_person.items():
+        parts.append(f"{ticket} needs a person ({why})")
+    return (
+        "nothing can start: " + "; ".join(parts)
+        if parts
+        else "nothing can start, and nothing is in refinement"
+    )
 
 
 def _look_at_worker(root: Path, name: str, clock: float, sandbox_status) -> WorkerView:

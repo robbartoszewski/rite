@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.50 · **Date:** 2026-09-29
+**Version:** 0.24.51 · **Date:** 2026-09-29
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -5171,7 +5171,7 @@ session lifecycle does not invent a second opinion:
 | `ready` | continue | work is ready and a Worker is free |
 | `saturated` | continue | a queue, not a fault |
 | `blocked` | continue | the work is real and the holder will let go — the loop's own text says stopping here is wrong |
-| `idle` | **stop** | the board LISTED nothing ready. A board's list lags writes by seconds (GitHub measured, Jira documented), so every ticket rite created, labelled, moved or assigned is read back exactly (`tickets/own_writes.py`); one a person created seconds ago may not be listed, and the stop says so |
+| `idle` | **stop** | the board LISTED nothing ready, as of the read's time, which the stop prints ("nothing ready as of 14:32:05"). A board's list can lag writes by seconds (GitHub measured, up to 6.5 s; Jira documented, not observed in 8 trials on ritetest), so every ticket rite created, labelled, moved or assigned is read back exactly (`tickets/own_writes.py`); one a person created shortly before the read, or since, is not in it. rite stops rather than reading again after a delay, which would only narrow that window |
 | `deadlocked` | **stop** | nobody is coming back, so waiting is indefinite |
 | `unknown` | **stop** | something could not be established, and a loop's default on the unknown is to stop and say so |
 
@@ -7328,6 +7328,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.51 — "nothing ready" is said as a snapshot with its read time (DF4, coordinator's ruling 2026-09-29).** The `idle` row of the lifecycle table: `rite start` still stops when the board lists nothing ready, and now says when it looked ("done: the board listed nothing ready as of HH:MM:SS"), so a person who filed a ticket seconds before can see why it was not picked up. A second read after a delay would narrow the window rather than remove it, so there is none. The loop's idle detail says the same. Jira measured on ritetest KAN, 2026-09-29 13:10 CEST: `/search/jql` reflected a create on the first read in 5 of 5, and a label removal in 3 of 3 (KAN-20 to KAN-27, closed; KAN-12 to KAN-19 were a first batch whose probe could not tell "first check" from "never seen", discarded and closed). Atlassian documents that search may lag; it was not observed here, and `own_writes` covers it if it does.
 
 **Changes in 0.24.50 — §6.7, refinement, as built and as decided (TR3).** New §6.7 states the property (no work starts on a ticket whose definition of done the User has not agreed, and none is invented), the record and the one predicate (BUILT, TR1), every path to work that asks it (the Worker start, the route and the Owner's assignment, BUILT, TR4, TR5, TR9), why a Worker never checks from inside its sandbox, and the round protocol (DECIDED, NOT BUILT, TR2). D-102 to D-113 record Robert's rulings on TRQ1 to TRQ12 and Q4, each marked built or not. §9.4.2: a Worker starts cold with its CLAUDE.md and the delivered `TICKET.md`, and works to its record. §9.10's orientation table: a backlog with nothing REFINED is its own row, not "nothing to do", and only REFINED is ready. Written only from what is on `main`; the design note keeps the races and the protocol's detail.
 

@@ -26,12 +26,15 @@ KNOWN = {
         "GATED: Rule 0 assigns only REFINED tickets and names the rest"
     ),
     ("loop/__init__.py", "_ready", "list_tickets"): (
-        "NOT YET: counts every `scheduled` ticket as ready. Gated with TR2's "
-        "`refining` verdict, never alone: alone, an all-unrefined board reads "
-        "idle and ends the run. Its Workers are still refused at start (TR4)"
+        "GATED (TR2): only REFINED tickets are ready; the Owner's unrefined "
+        "ones are `refining` or `waiting-on-user`, never `idle`"
     ),
     ("coordination/distribution.py", "distribute", "list_tickets"): (
         "reads this Manager's own tickets; the handout below is gated"
+    ),
+    ("refinement/instructions.py", "brief", "list_tickets"): (
+        "the Owner's refinement brief (TR2): lists unrefined tickets to "
+        "REFINE, never to work; gives nothing to anyone"
     ),
     ("reporting/status.py", "collect_board_state", "list_tickets"): (
         "reporting only: gives nothing to anyone"
@@ -62,6 +65,12 @@ KNOWN = {
     ),
     ("lifecycle/commands.py", "_deliver", "label"): (
         "the function `_deliver_via_backend` is nested in: the same calls"
+    ),
+    ("refinement/protocol.py", "_escalate", "label"): (
+        "adds `blocked` to a ticket escalated as a blocker (TR2); gives it to nobody"
+    ),
+    ("refinement/protocol.py", "handle", "label"): (
+        "removes `blocked` when his reply unblocks it (TR2); gives it to nobody"
     ),
     ("cli/main.py", "board_label", "label"): (
         "`rite board label`: a hand write; nothing starts from a label, and "
