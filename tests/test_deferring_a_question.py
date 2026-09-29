@@ -71,7 +71,19 @@ def project(tmp_path: Path, monkeypatch):
 
 
 def _ask(*args: str):
-    return CliRunner().invoke(cli, ["ask", "--manager", "lead", *args])
+    """`rite ask` with its question on stdin (F14): the one argument that is
+    neither an option nor an option's value."""
+    rest, question, it = [], None, iter(args)
+    for arg in it:
+        if arg == "--while":
+            rest += [arg, next(it)]
+        elif arg.startswith("--"):
+            rest.append(arg)
+        else:
+            question = arg
+    return CliRunner().invoke(
+        cli, ["ask", "--manager", "lead", *rest, "-"], input=question
+    )
 
 
 def _outbox(root: Path) -> list[str]:
@@ -83,7 +95,9 @@ def _outbox(root: Path) -> list[str]:
 
 def test_reply_is_immediate(project):
     root = project()
-    result = CliRunner().invoke(cli, ["reply", "--manager", "lead", "schema v2 chosen"])
+    result = CliRunner().invoke(
+        cli, ["reply", "--manager", "lead", "-"], input="schema v2 chosen"
+    )
     assert result.exit_code == 0, result.output
     assert _outbox(root) == ["schema v2 chosen"]
 
@@ -92,9 +106,11 @@ def test_a_question_sent_as_a_reply_is_refused_and_redirected_to_ask(project):
     """RP1: a reply is filed for reading, so a question there is asked of
     nobody. Before RP1 this was sent; now nothing is written."""
     root = project()
-    result = CliRunner().invoke(cli, ["reply", "--manager", "lead", "which schema?"])
+    result = CliRunner().invoke(
+        cli, ["reply", "--manager", "lead", "-"], input="which schema?"
+    )
     assert result.exit_code == 1
-    assert 'rite ask --manager lead "<the same text>"' in result.output
+    assert "rite ask --manager lead - <<'RITE_TEXT_" in result.output
     assert _outbox(root) == []
 
 

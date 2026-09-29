@@ -7879,11 +7879,16 @@ def route(manager_name: str, text: str, ticket: str) -> None:
     and the Owner's supervisor delivers it — and delivers only for the
     Manager holding `route`, whatever the request says.
 
+    ⚠ **TEXT IS `-`, AND THE TEXT COMES ON STDIN (F14)**, as for `rite
+    reply`. Routed work quotes tickets more than anything else does.
+
     Examples:
-      rite route --ticket RT-12 helper "run the test suite on branch fix-12 and report"
+      rite route --ticket RT-12 helper - <<'RITE_TEXT_1f2e3d'
+      run the test suite on branch fix-12 and report
+      RITE_TEXT_1f2e3d
     """
     from rite_ai.config.managers import routing_owner
-    from rite_ai.managers import current_manager
+    from rite_ai.managers import current_manager, stdin_text
     from rite_ai.managers.routing import request
 
     root = _require_project_root()
@@ -7921,6 +7926,17 @@ def route(manager_name: str, text: str, ticket: str) -> None:
             err=True,
         )
         raise SystemExit(1)
+    try:
+        text = stdin_text.read(text)
+    except stdin_text.OnTheCommandLine:
+        click.echo(
+            stdin_text.refusal(
+                f"rite route --ticket {ticket.strip() or '<ID>'} {manager_name}",
+                "<what to do>",
+            ),
+            err=True,
+        )
+        raise SystemExit(1)
     if not text.strip():
         click.echo("refusing to route an empty message.", err=True)
         raise SystemExit(1)
@@ -7930,9 +7946,9 @@ def route(manager_name: str, text: str, ticket: str) -> None:
     if problem:
         click.echo(
             f"refusing: {problem}. Every route names the ticket the work is "
-            'for: `rite route --ticket <ID> <manager> "…"`. If the User asked '
-            "for it in a message, make it a ticket first with `rite chore "
-            "<message-id>`.",
+            "for: `rite route --ticket <ID> <manager> -`, the text on stdin. "
+            "If the User asked for it in a message, make it a ticket first "
+            "with `rite chore <message-id>`.",
             err=True,
         )
         raise SystemExit(1)
@@ -8014,10 +8030,17 @@ def reply(text: str, manager: str) -> None:
     goes with `rite ask`. Anything that reads as one is refused here and
     redirected, erring toward refusing too much (`reads_as_action`).
 
+    ⚠ **TEXT IS `-`, AND THE TEXT COMES ON STDIN (F14).** Text on the
+    command line is refused: in double quotes the shell runs whatever is in
+    backticks first, and a Manager's text often quotes a ticket someone else
+    wrote (`managers/stdin_text`).
+
     Examples:
-      rite reply --manager planner "tickets 12 and 13 merged; CI green on a1b2c3d"
+      rite reply --manager planner - <<'RITE_TEXT_1f2e3d'
+      tickets 12 and 13 merged; CI green on a1b2c3d
+      RITE_TEXT_1f2e3d
     """
-    from rite_ai.managers import current_manager
+    from rite_ai.managers import current_manager, stdin_text
     from rite_ai.managers.mailbox import OUTBOX, REPLY, full_warning, prune, send
     from rite_ai.managers.reads_as_action import sign_of_action
 
@@ -8042,6 +8065,14 @@ def reply(text: str, manager: str) -> None:
         known = ", ".join(sorted(r.name for r in roles)) or "none declared"
         click.echo(f"no Manager named {speaking!r} in this project — {known}", err=True)
         raise SystemExit(1)
+    try:
+        text = stdin_text.read(text)
+    except stdin_text.OnTheCommandLine:
+        click.echo(
+            stdin_text.refusal(f"rite reply --manager {speaking}", "<your message>"),
+            err=True,
+        )
+        raise SystemExit(1)
     if not text.strip():
         # Refused for the reason `rite message` refuses: `read` skips blank
         # text, so the file would be written and never shown.
@@ -8055,7 +8086,8 @@ def reply(text: str, manager: str) -> None:
             f"refusing to send this as a reply: it contains {sign}, so it may "
             "ask the User for something, and a reply is filed for reading, "
             "where nobody is asked to answer. Ask it instead:\n"
-            f'  rite ask --manager {speaking} "<the same text>"\n'
+            + stdin_text.heredoc(f"rite ask --manager {speaking} -", "<the same text>")
+            + "\n"
             "If it asks for nothing, say it again without that. When unsure, "
             "it is a question.",
             err=True,
@@ -8117,12 +8149,18 @@ def ask(question: str, defer: bool, meanwhile: str, manager: str) -> None:
     this asks now, exactly as `rite reply` does, and every case where a
     deferral cannot be honoured safely asks now too and says why.
 
+    ⚠ **QUESTION IS `-`, AND THE QUESTION COMES ON STDIN (F14)**, as for
+    `rite reply`.
+
     Examples:
-      rite ask --manager planner "which of the two schemas should ticket 12 use?"
-      rite ask --manager planner --defer "rename the CLI flag to --out?" \\
-          --while "implementing tickets 14 and 15, which do not touch the CLI"
+      rite ask --manager planner - <<'RITE_TEXT_1f2e3d'
+      which of the two schemas should ticket 12 use?
+      RITE_TEXT_1f2e3d
+      rite ask --manager planner --defer --while "tickets 14, 15" - <<'RITE_TEXT_1f2e3d'
+      rename the CLI flag to --out?
+      RITE_TEXT_1f2e3d
     """
-    from rite_ai.managers import checkins, current_manager
+    from rite_ai.managers import checkins, current_manager, stdin_text
     from rite_ai.managers.mailbox import OUTBOX, QUESTION, full_warning, prune, send
 
     root = _require_project_root()
@@ -8146,6 +8184,14 @@ def ask(question: str, defer: bool, meanwhile: str, manager: str) -> None:
         known = ", ".join(sorted(r.name for r in roles)) or "none declared"
         click.echo(f"no Manager named {asking!r} in this project — {known}", err=True)
         raise SystemExit(1)
+    try:
+        question = stdin_text.read(question)
+    except stdin_text.OnTheCommandLine:
+        click.echo(
+            stdin_text.refusal(f"rite ask --manager {asking}", "<your question>"),
+            err=True,
+        )
+        raise SystemExit(1)
     if not question.strip():
         click.echo("refusing to send an empty question.", err=True)
         raise SystemExit(1)
@@ -8157,7 +8203,7 @@ def ask(question: str, defer: bool, meanwhile: str, manager: str) -> None:
         click.echo(
             f"refusing to defer: no --while. If you cannot say what you will "
             f"do meanwhile, {checkins.REFUSED_WITHOUT_WHILE}:\n"
-            f'  rite ask --manager {asking} "<question>"',
+            + stdin_text.heredoc(f"rite ask --manager {asking} -", "<question>"),
             err=True,
         )
         raise SystemExit(1)
@@ -8406,7 +8452,8 @@ def message(manager_name: str, text: str) -> None:
             f"refusing: this is Manager {speaking_as!r}, and a Manager does "
             f"not write a Manager's inbox — a message there is delivered as "
             f"the Owner's instruction. To answer the person, use `rite reply "
-            f'--manager {speaking_as} "…"`, or `rite ask` for a question.',
+            f"--manager {speaking_as} -` with the text on stdin, or `rite ask` "
+            "for a question.",
             err=True,
         )
         raise SystemExit(1)

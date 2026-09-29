@@ -131,11 +131,10 @@ class TestAManagerWithAnOlderRiteOnPathStillSucceeds:
         assert "Usage: rite" in (bare.stdout or "") + (bare.stderr or "")
 
         # What rite writes now, against the SAME PATH.
-        line = next(
-            line.strip()
-            for line in how_to_reply(root, "lead").splitlines()
-            if "reply --manager" in line
-        )
+        # F14: a heredoc, three lines, the text on stdin.
+        said = how_to_reply(root, "lead").splitlines()
+        at = next(i for i, line in enumerate(said) if "reply --manager" in line)
+        line = "\n".join(said[at : at + 3])
         run = subprocess.run(
             ["sh", "-c", line.replace("<your message>", message)],
             capture_output=True,
