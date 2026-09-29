@@ -1643,13 +1643,14 @@ owns (`worker_home`: an empty `.claude/settings.json` and nothing else) and
 Measured: the Worker's settings then hold yoloAI's hooks only. The home also decides
 what the sandbox may read (yoloAI's seatbelt profile grants `<home>/.local` and some
 Swift/Xcode paths): measured with an empty home, `rite` inside a Worker could not load
-its Python, so `worker_home` links those paths to the operator's own. That home has no
-`.gitconfig`, which yoloAI otherwise links into the sandbox, so the operator's global
-`user.name` and `user.email` go in as two more `GIT_CONFIG_*` pairs and nothing else
-of that file does (the authorship ruling: a Worker commits as the identity its
-sandbox is given). Measured without them: git invents `<user>@<host>.home`.
-**Not covered:** a `yoloai start` or `restart` a person runs from their own shell
-copies their settings back into that sandbox (rite runs neither); sandboxes created
+its Python, so `worker_home` links those paths to the operator's own. It links
+`.gitconfig` and `.config/git` too, which yoloAI also grants, so a Worker commits as
+the operator exactly as before (Robert, 2026-09-29); measured with neither, git
+invented `<user>@<host>.home`. rite's `GIT_CONFIG_*` still override what cannot work
+inside (credential helper, signing, hooks path).
+**Not covered:** a `yoloai start`, `restart` or `attach --resume` a person runs from
+their own shell copies their settings back into that sandbox (rite runs none of
+them); sandboxes created
 before 0.24.49 keep what they were given; container backends are unchanged
 (unmeasured: their clients read configuration from the home); and the operator's
 `~/.tmux.conf` no longer styles a Worker's session.

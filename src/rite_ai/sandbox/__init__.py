@@ -1225,8 +1225,7 @@ def start_worker(
     # `.rite/`, and inside the sandbox most of that walk is unreadable.
     delivered.setdefault("RITE_PROJECT_ROOT", str(root))
     git_notes = []
-    identity = host_git_identity() if clean_home else None
-    for key, value in sandbox_git_environment(shutil.which("gh"), identity).items():
+    for key, value in sandbox_git_environment(shutil.which("gh")).items():
         delivered.setdefault(key, value)
     if shutil.which("gh") is None:
         git_notes.append(
@@ -1377,8 +1376,10 @@ def worker_home(home: Path | None = None) -> Path:
     Python could not load (`Library not loaded: @rpath/libpython3.13.dylib`,
     under `~/.local/share/uv/python`), so nothing rite does inside a Worker
     worked. Those paths are linked to the operator's own, which gives the
-    grants yoloAI gives today; `.gitconfig` and `.config/git`, which it also
-    grants, are left out on purpose (`host_git_identity`).
+    grants yoloAI gives today. That includes `.gitconfig` and `.config/git`:
+    a Worker commits as the operator, exactly as before (Robert, 2026-09-29).
+    rite's `GIT_CONFIG_*` still override the parts of that config that cannot
+    work inside (credential helper, signing, hooks path).
     """
     from rite_ai.managers import github_access
 
@@ -1402,45 +1403,18 @@ def worker_home(home: Path | None = None) -> Path:
 
 _HOME_GRANTS = (
     ".local",
+    ".gitconfig",
+    ".config/git",
     "Library/Caches/org.swift.swiftpm",
     "Library/Developer/Xcode",
     "Library/Caches/swift-build",
     "Library/org.swift.swiftpm",
 )
-"""What yoloAI 0.11.0's seatbelt profile grants under the home, less its git
-config (`writeProfileHomeDir`). Linked from `worker_home` to the real ones."""
+"""What yoloAI 0.11.0's seatbelt profile grants under the home
+(`writeProfileHomeDir`). Linked from `worker_home` to the real ones."""
 
 
-def host_git_identity() -> tuple[str, str] | None:
-    """The operator's global `user.name` and `user.email`, or None.
-
-    ⚠ **A Worker commits as the identity its sandbox is given, and rite adds
-    no other** (the authorship ruling, `V070_TICKET_REFINEMENT.md` part 3.13).
-    Under `worker_home` the sandbox no longer links the operator's
-    `~/.gitconfig`, so the identity it gave is passed on here and nothing
-    else of that file is. Measured without it: git made one up from the
-    account and host name (`<user>@<host>.home`), and that is what a pull
-    request to someone else's repository would have carried.
-    """
-    values = []
-    for key in ("user.name", "user.email"):
-        try:
-            done = subprocess.run(
-                ["git", "config", "--global", "--get", key],
-                capture_output=True,
-                text=True,
-                errors="replace",
-                timeout=10,
-            )
-        except (OSError, subprocess.SubprocessError):
-            return None
-        values.append(done.stdout.strip())
-    return (values[0], values[1]) if all(values) else None
-
-
-def sandbox_git_environment(
-    gh: str | None, identity: tuple[str, str] | None = None
-) -> dict[str, str]:
+def sandbox_git_environment(gh: str | None) -> dict[str, str]:
     """Git settings for inside a sandbox, as environment variables.
 
     Passed with `--env`, so they apply to that sandbox's session and change
@@ -1487,10 +1461,6 @@ def sandbox_git_environment(
         ("tag.gpgsign", "false"),
         ("core.hooksPath", ".git/hooks"),
     ]
-    if identity:
-        # `host_git_identity`: the identity the operator's `~/.gitconfig`
-        # gave before `worker_home`, and nothing else from that file.
-        settings += [("user.name", identity[0]), ("user.email", identity[1])]
     env = {"GIT_CONFIG_COUNT": str(len(settings))}
     for i, (key, value) in enumerate(settings):
         env[f"GIT_CONFIG_KEY_{i}"] = key

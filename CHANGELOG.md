@@ -7,10 +7,10 @@
 yoloAI copies `~/.claude/settings.json` from your home into every Worker
 sandbox, so your own hooks and `env` ran inside Workers. rite now starts
 Workers (on seatbelt, macOS) with a home of its own holding an empty
-settings file. Your git `user.name` and `user.email` still sign the Worker's
-commits; nothing else from your `~/.gitconfig` reaches it. If you restart a
-Worker yourself with `yoloai start` or `yoloai restart`, yoloAI copies your
-settings into that sandbox again; rite runs neither.
+settings file. A Worker still commits as you: your `~/.gitconfig` is linked
+into that home, as yoloAI links it today. If you restart a Worker yourself with
+`yoloai start`, `yoloai restart` or `yoloai attach --resume`, yoloAI copies your
+settings into that sandbox again; rite runs none of those.
 
 ### ⚠ Workers no longer merge; `rite deliver` brings a finished ticket home
 

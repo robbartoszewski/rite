@@ -274,13 +274,13 @@ A pass is a pass for **this** configuration. It says nothing about:
   on every create, start and restart, and nothing turns that off (dogfood
   #27). Without rite's workaround the run's Workers would carry Robert's
   Claude hooks and `env`, and a pass would be conditional on his personal
-  configuration. With it (SPEC 0.24.49), rite starts each Worker under a
-  home of its own, so the Worker's settings are yoloAI's alone, and passes
-  on only his git `user.name` and `user.email`. It does **not** cover a
-  sandbox Robert himself starts or restarts with `yoloai start`/`restart`
-  (that copies his settings back in), a sandbox created before the RC, or
-  anything yoloAI takes from his machine other than his Claude settings
-  and his git config. The
+  configuration. With it (SPEC 0.24.52), rite starts each Worker under a
+  home of its own, so the Worker's settings are yoloAI's alone; his git
+  config is linked in, so Worker commits are his, as before. It does
+  **not** cover a sandbox Robert himself starts, restarts or resumes with
+  `yoloai start`, `restart` or `attach --resume` (that copies his settings
+  back in), a sandbox created before the RC, or anything yoloAI takes from
+  his machine other than his Claude settings and his git config. The
   plugin marketplace seen in the v0.6.0 Worker was Claude Code's own
   default, fetched by Claude Code, not his configuration.
 - **Whether a Worker's pull request says what is true.** Nothing in rite

@@ -9,9 +9,9 @@ its operator's personal hooks and env. A pass on such a run says something
 about the operator's machine, not about rite as a stranger receives it.
 
 rite runs `yoloai new` with a home it owns (`worker_home`) and keeps
-yoloAI's state where it is (`--data-dir`). That home has no `.gitconfig`,
-so the operator's commit identity is passed on through the Worker's git
-environment, and nothing else from their git config is.
+yoloAI's state where it is (`--data-dir`). That home links back what
+yoloAI's seatbelt profile grants from the home (`.local`, the git config),
+so rite and git work inside and a Worker commits as the operator, as before.
 
 The live test at the end runs a real sandbox; it is opt-in
 (`RITE_LIVE_YOLOAI=1`) because the suite runs concurrently on a shared
@@ -32,8 +32,6 @@ import pytest
 from rite_ai import sandbox as sb
 from rite_ai.config.models import SandboxConfig
 from rite_ai.sandbox import (
-    host_git_identity,
-    sandbox_git_environment,
     start_worker,
     worker_home,
 )
@@ -43,12 +41,11 @@ def _new_call(mock_run):
     return next(c for c in mock_run.call_args_list if "new" in c[0][0])
 
 
-def _start(tmp_path: Path, backend: str = "seatbelt", identity=None):
+def _start(tmp_path: Path, backend: str = "seatbelt"):
     (tmp_path / "workers" / "alpha").mkdir(parents=True)
     with (
         patch("rite_ai.sandbox.shutil.which", return_value="/usr/local/bin/yoloai"),
         patch("rite_ai.sandbox.count_active_sandboxes", return_value=0),
-        patch("rite_ai.sandbox.host_git_identity", return_value=identity),
         patch("rite_ai.sandbox.subprocess.run") as mock_run,
     ):
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
@@ -75,7 +72,7 @@ def test_a_settings_file_left_in_rites_home_is_emptied_again():
     assert json.loads((home / ".claude" / "settings.json").read_text()) == {}
 
 
-def test_rites_home_links_what_yoloai_grants_and_not_the_git_config(tmp_path):
+def test_rites_home_links_what_yoloai_grants(tmp_path):
     """The home decides what the sandbox may read (`writeProfileHomeDir`).
     Measured with an empty home: `rite` inside could not load its Python."""
     real = tmp_path / "real"
@@ -89,27 +86,8 @@ def test_rites_home_links_what_yoloai_grants_and_not_the_git_config(tmp_path):
     xcode = home / "Library" / "Developer" / "Xcode"
     assert xcode.resolve() == (real / "Library" / "Developer" / "Xcode").resolve()
     assert not (home / "Library" / "Caches" / "swift-build").exists()
-    assert not (home / ".gitconfig").exists()
-    assert not (home / ".config").exists()
-
-
-def test_the_operators_identity_is_passed_on_and_nothing_else_of_their_git_config(
-    tmp_path,
-):
-    call = _start(tmp_path, identity=("Op Name", "op@example.invalid"))
-    envs = dict(e.split("=", 1) for e in call[0][0][1:] if e.startswith("GIT_CONFIG_"))
-    pairs = {
-        envs[f"GIT_CONFIG_KEY_{i}"]: envs[f"GIT_CONFIG_VALUE_{i}"]
-        for i in range(int(envs["GIT_CONFIG_COUNT"]))
-    }
-    assert pairs["user.name"] == "Op Name"
-    assert pairs["user.email"] == "op@example.invalid"
-
-
-def test_without_an_identity_none_is_invented():
-    keys = sandbox_git_environment(None, None)
-    assert "user.name" not in keys.values()
-    assert "user.email" not in keys.values()
+    assert (home / ".gitconfig").resolve() == (real / ".gitconfig").resolve()
+    assert (home / ".config" / "git").resolve() == (real / ".config" / "git").resolve()
 
 
 def test_other_backends_are_left_as_they_were(tmp_path):
@@ -119,25 +97,6 @@ def test_other_backends_are_left_as_they_were(tmp_path):
     args, env = call[0][0], call[1]["env"]
     assert "--data-dir" not in args
     assert env.get("HOME") == os.environ.get("HOME")
-
-
-@pytest.mark.parametrize(
-    "gitconfig, expected",
-    [
-        ("[user]\n\tname = A B\n\temail = a@b.invalid\n", ("A B", "a@b.invalid")),
-        ("[user]\n\tname = A B\n", None),
-        ("", None),
-    ],
-    ids=["both", "no-email", "none"],
-)
-def test_host_git_identity_reads_the_global_config(
-    tmp_path, monkeypatch, gitconfig, expected
-):
-    (tmp_path / ".gitconfig").write_text(gitconfig)
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("GIT_CONFIG_GLOBAL", raising=False)
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
-    assert host_git_identity() == expected
 
 
 def _hook_commands(settings: dict) -> set[str]:
