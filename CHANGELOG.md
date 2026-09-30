@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Every local Manager must declare its context window, not only a Goose one
+
+`rite start` refuses, and `rite doctor` warns about, a local Manager with no
+`context_window` whatever agent it runs. Before, only Goose Managers were
+checked, so any other local agent would have run on its server's default
+window, which can be small enough to cut the Manager's instructions short
+without any error.
+
 ### In Slack, a post that needs your answer stands out
 
 Each post from a Manager now opens with what it is (❓ Needs your answer, with

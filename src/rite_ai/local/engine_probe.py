@@ -96,9 +96,9 @@ class EngineProbe:
     context_detail: str = ""
     """Why `context_window` is None, when it is."""
     window_undeclared: bool = False
-    """A Goose Manager whose role declares no `context_window`, which `rite
-    start` refuses: the served window would be the server's default, which
-    cannot be read before the model loads."""
+    """A local Manager, on any agent, whose role declares no `context_window`
+    (S33), which `rite start` refuses: the served window would be the
+    server's default, which cannot be read before the model loads."""
 
     @property
     def problems(self) -> list[str]:
@@ -122,7 +122,7 @@ class EngineProbe:
                 f"manager {self.manager}: declares no context_window, so "
                 "`rite start` refuses it — the window would be this server's "
                 "default, which cannot be read before the model loads, and "
-                "Goose would not know it. Add `context_window: <tokens>` (at "
+                "its agent would not be told it. Add `context_window: <tokens>` (at "
                 f"least {MINIMUM_CONTEXT_WINDOW}) to its role"
             )
         if self.agent_installed is False:
@@ -201,10 +201,10 @@ def probe_engine(role, *, get=None, which=None) -> EngineProbe:
     """Probe one role's engine. Returns, never raises. See `_probe`."""
     from dataclasses import replace
 
+    from rite_ai.config.managers import window_undeclared
+
     probed = _probe(role, get=get, which=which)
-    undeclared = getattr(role, "agent", "") == "goose" and not getattr(
-        role, "context_window", 0
-    )
+    undeclared = window_undeclared(role)
     return replace(probed, window_undeclared=undeclared) if undeclared else probed
 
 
