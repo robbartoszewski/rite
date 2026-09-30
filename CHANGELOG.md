@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### `rite init` asks where the code is when the path you give is empty
+
+Choosing "existing spec or code" and giving a directory with nothing in it
+used to produce an empty project that said it had read your code. Init now says
+there is nothing there, asks for the repository, and adds it as a module
+(cloned, as `rite add module` does). Skip it, and init says no module is
+registered and how to add one.
+
 ## 0.7.0a2 (2026-09-30) — alpha: the setup fixes from 0.7.0a1's dogfood
 
 ⚠ **Still an alpha, cut for the same dogfood** (a real contribution to yoloAI

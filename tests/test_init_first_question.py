@@ -84,6 +84,9 @@ def test_yes_then_enter_twice_is_four_prompts_and_done(tmp_path: Path):
 
 
 def test_the_brief_holds_the_path_and_the_answer(tmp_path: Path):
+    # A path that holds something: an empty one is now asked where the code
+    # is instead (dogfood S11, `test_init_asks_for_the_code_when_the_path_is_empty`).
+    (tmp_path / "notes.md").write_text("# the feed poller\n")
     result = CliRunner().invoke(
         _init_cmd, [str(tmp_path)], input="y\n\nThe feed poller is stale\n\n"
     )

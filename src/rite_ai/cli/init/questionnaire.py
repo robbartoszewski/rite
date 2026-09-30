@@ -84,6 +84,10 @@ class InitAnswers:
     # "detected" or "--yes default". Populated by `run_questionnaire`; used
     # to say what a non-interactive run decided on the user's behalf.
     sources: dict[str, str] = field(default_factory=dict)
+    # A repository the person named when the path they gave held nothing
+    # (`ask_for_the_code`): `(module name, URL)`, registered and cloned by
+    # `run_init` once `.rite/` exists, exactly as `rite add module` does.
+    link: tuple[str, str] | None = None
 
 
 def _resolve_spec(
@@ -794,6 +798,80 @@ def portable_source_path(root: Path, source: Path) -> str:
     return str(source)
 
 
+NO_MODULE_YET = (
+    "No module is registered, so this project has nothing to work on yet: a "
+    "Worker's workspace is its modules' clones. Add the code with `rite add "
+    "module <name> <repository URL>`."
+)
+
+
+def holds_nothing(path: Path) -> bool:
+    """No code and no spec at `path`: a directory with nothing in it but hidden
+    entries (`.git`, and rite's own `.rite/` and `.claude/`). A file is a spec,
+    so a path to one never holds nothing."""
+    if not path.is_dir():
+        return False
+    return not any(not p.name.startswith(".") for p in path.iterdir())
+
+
+def module_name_for(url: str) -> str:
+    """The module name a repository URL suggests: its last path part, without
+    `.git` (`https://github.com/o/yoloai.git` -> `yoloai`)."""
+    last = url.strip().rstrip("/").replace(":", "/").rsplit("/", 1)[-1]
+    return last.removesuffix(".git") or "code"
+
+
+def looks_like_a_repository(answer: str) -> bool:
+    """A URL (`https://…`, `ssh://…`, `file://…`), an scp-style `user@host:path`,
+    or a local path that is a git repository. Anything else is a sentence typed
+    into the wrong prompt, not a repository to clone."""
+    import re
+
+    answer = answer.strip()
+    if re.match(r"^[a-z][a-z0-9+.-]*://\S+$", answer):
+        return True
+    if re.match(r"^[\w.-]+@[\w.-]+:\S+$", answer):
+        return True
+    local = Path(answer).expanduser()
+    return local.is_dir() and ((local / ".git").exists() or (local / "HEAD").is_file())
+
+
+def ask_for_the_code(base: Path, interactive: bool) -> tuple[str, str] | None:
+    """The existing-code route found nothing at `base`: ask where the code is.
+
+    ⚠ **Not a silent empty shell** (v0.7.0 dogfood S11). Measured on 0.7.0a2:
+    `rite init` in an empty directory, "existing spec or code", path `.`,
+    printed that languages, structure and conventions "will be taken from
+    what's there", then wrote an empty brief, registered no module and said
+    "Ready". Robert's design: when the path holds no code and no spec, ask for
+    a repository and offer to add it as a module. Declining, or `--yes` with
+    nobody to ask, says what is missing and how to add it."""
+    ui.warn(
+        f"{base} has no code and no spec in it, so there is nothing to read "
+        "and nothing a Worker could work on."
+    )
+    if not interactive:
+        click.echo(f"  {NO_MODULE_YET}")
+        return None
+    while True:
+        url = ui.text(
+            "Where is the code? A repository URL to add as a module (Enter to skip)",
+            default="",
+        ).strip()
+        if not url or looks_like_a_repository(url):
+            break
+        ui.warn(
+            f"{url!r} is not a repository URL (https://…, git@host:owner/repo.git, "
+            "or a local repository's path). Enter one, or Enter to skip."
+        )
+    if url:
+        name = module_name_for(url)
+        if ui.confirm(f"Add {url} as module '{name}'?", default=True):
+            return name, url
+    click.echo(f"  {NO_MODULE_YET}")
+    return None
+
+
 def source_answers(
     root: Path, preset: Preset, source: Path, changes: str, interactive: bool = True
 ) -> InitAnswers:
@@ -810,6 +888,7 @@ def source_answers(
     """
     base = source if source.is_dir() else source.parent
     name = root.name or "my-project"
+    link = ask_for_the_code(base, interactive) if holds_nothing(source) else None
     role = _ask_role(preset, interactive)
     borrowed_config: ProjectConfig | None = None
     if role == "manager":
@@ -838,9 +917,14 @@ def source_answers(
             source_path=portable_source_path(root, source),
             source_changes=changes,
         ),
-        modules=offer_modules(_source_modules(root, base), interactive, base),
+        modules=(
+            []
+            if holds_nothing(source)
+            else offer_modules(_source_modules(root, base), interactive, base)
+        ),
         config=config,
         kb=KbAnswers(),
+        link=link,
     )
 
 
