@@ -192,7 +192,21 @@ def mail_root(root: Path, manager: str) -> Path:
     from rite_ai.managers import _checked
 
     _checked(manager)  # validates the name; the join is below
-    return _mail_home() / _checkout_key(root) / manager / "mail"
+    return checkout_root(root) / manager / "mail"
+
+
+def checkout_root(root: Path) -> Path:
+    """Every Manager's directory for THIS checkout, one level up from a
+    Manager's own: `<_mail_home()>/<checkout>/`.
+
+    Named so that `managers.managers_with_state` can enumerate Managers
+    without spelling the layout a second time. ⚠ **Granted to no Manager** —
+    each profile grants its own `<name>/` by exact path, so this parent is
+    readable from outside a boundary and from inside none of them, which is
+    what DF3 requires and what lets the supervisor read a secondary's routes
+    while the secondary cannot read the supervisor's.
+    """
+    return _mail_home() / _checkout_key(root)
 
 
 def _rite_home_mail_root(root: Path, manager: str) -> Path:
@@ -222,12 +236,25 @@ def mailbox_dir(root: Path, manager: str, box: str) -> Path:
     return mail_root(root, manager) / box
 
 
+PROJECT_MARKER = "project"
+"""The one fixed name rite keeps under `checkout_root`, beside the
+per-Manager directories (`_mark_project`).
+
+⚠ **Named, because `managers.manager_name_problem` computes a refusal from
+it.** A Manager called `project` would want `checkout_root/project` as its
+DIRECTORY, which is this FILE — the same collision C30 found when the
+instance record and the permission list shared `.rite/user/`. Any further
+fixed-name entry under `checkout_root` belongs in
+`managers._rite_owned_checkout_entries` beside it, or it is a name some
+Manager can collide with and nobody is refused for."""
+
+
 def _mark_project(root: Path, manager: str) -> None:
     """Record which project a checkout key is, for the person reading
     `_mail_home()`. Best effort: inside the boundary it is refused, and
     nothing reads it back."""
     try:
-        where = mail_root(root, manager).parent.parent / "project"
+        where = checkout_root(root) / PROJECT_MARKER
         if not where.exists():
             write_atomic(where, str(Path(root).resolve()) + "\n")
     except OSError:
@@ -711,8 +738,8 @@ def _adopt_from_rite_home(root: Path, manager: str) -> tuple[int, list[Path]]:
         except OSError:
             pass
     try:
-        if [p.name for p in checkout.iterdir()] == ["project"]:
-            (checkout / "project").unlink()
+        if [p.name for p in checkout.iterdir()] == [PROJECT_MARKER]:
+            (checkout / PROJECT_MARKER).unlink()
             checkout.rmdir()
     except OSError:
         pass
@@ -877,7 +904,7 @@ def still_under_rite_home() -> list[str]:
             continue
         if count:
             try:
-                which = (checkout / "project").read_text().strip()
+                which = (checkout / PROJECT_MARKER).read_text().strip()
             except OSError:
                 which = "a project rite cannot name"
             exposed.append(f"{count} message(s) of {which}")

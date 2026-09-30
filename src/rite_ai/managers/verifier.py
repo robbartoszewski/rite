@@ -612,10 +612,14 @@ def verify(
     boundary = boundary_for()
     try:
         profile = boundary.write_profile(root, owner)
-        # ⚠ NOT `boundary.engine_tmp`: that is under `.rite/user/`, which a
-        # secondary can write. The Owner's login directory is granted to the
-        # Owner's profile alone, on both platforms, so a scratch directory
-        # inside it is the verifier's own.
+        # ⚠ NOT `boundary.engine_tmp`. That was written when `engine_tmp`
+        # was under `.rite/user/`, which a secondary can write; MM1 moved it
+        # into `manager_dir`, so the original reason is gone. It stays
+        # separate anyway, and now for a different one: `engine_tmp` is the
+        # Manager's OWN scratch and the Manager is running in it, so a
+        # verifier sharing it would be staging its evidence where the thing
+        # it is checking can reach. The Owner's login directory is granted
+        # to the Owner's profile alone, on both platforms.
         env["TMPDIR"] = str(Path(login["CLAUDE_CONFIG_DIR"]) / "verifier-tmp")
         Path(env["TMPDIR"]).mkdir(mode=0o700, parents=True, exist_ok=True)
         look = (

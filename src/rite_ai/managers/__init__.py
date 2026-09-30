@@ -101,7 +101,23 @@ def current_manager() -> str:
 
 
 def user_dir(root: Path) -> Path:
-    """Per-user, per-machine runtime state. Never committed."""
+    """Per-user, per-machine runtime state. Never committed.
+
+    ⚠ **WRITABLE BY EVERY MANAGER, on both platforms, and that is why
+    nothing per-Manager lives here any more (MM1).** Only `.rite/managers/`
+    was ever fenced, so a directory inside the project grants itself to every
+    Manager that has the project. Three things moved out for that reason and
+    each recorded its own measurement: the seatbelt profile and the Landlock
+    policy went to the Manager's credential directory (`enclosure.profile_path`
+    — a secondary replaced the Owner's `.sb` with `(allow default)` in 19 of
+    20 runs), and MM1 moved the instance record, the designation and the
+    engine TMPDIR into `manager_dir`.
+
+    ⚠ **So a NEW per-Manager file here is a regression**, not a neutral
+    choice, and `managers.flat_manager_state` plus
+    `tests/test_per_manager_state_leaves_the_flat_rite.py` fail when one
+    appears. What is left here is rite's own, not any Manager's.
+    """
     return root / ".rite" / USER_DIRNAME
 
 
@@ -140,11 +156,44 @@ def legacy_manager_dir(root: Path, name: str) -> Path:
     return root / ".rite" / MANAGERS_DIRNAME / name
 
 
+INSTANCE_FILENAME = "instance.json"
+"""The instance record's name INSIDE the Manager's own directory.
+
+Fixed rather than `<name>.json`: the directory already says whose it is, and
+a name repeated in the path is a second place for the two to disagree. It is
+also what removes the `<name>.designated.json` / `<name>.json` glob hazard
+that `running_instances` had to skip by hand (C11)."""
+
+DESIGNATION_FILENAME = "designated.json"
+"""The designation's name inside the Manager's own directory. See
+`designation_path` for why it is a separate file from the instance record."""
+
+
 def _instance_filename(name: str) -> str:
+    """⚠ LEGACY: the flat `.rite/user/<name>.json` MM1 moved out of. Read
+    only by `relocate`, to find what an older rite left behind."""
     return f"{name}.json"
 
 
 def instance_path(root: Path, name: str) -> Path:
+    """This Manager's instance record, inside its own directory (MM1).
+
+    ⚠ **It was `.rite/user/<name>.json`, which every Manager could write.**
+    The record carries the session name and the pid `rite status` reports and
+    `session.start` refuses a duplicate against, so a Manager that rewrote a
+    sibling's — by a wrong join while tidying, the bar §5.4.1 sets — could
+    make a live Manager look stopped and let a second paid session start
+    against it. Inside `manager_dir` it is under the one path that Manager's
+    profile grants and no other's does.
+    """
+    problem = manager_name_problem(name)
+    if problem:
+        raise ValueError(problem)
+    return manager_dir(root, name) / INSTANCE_FILENAME
+
+
+def legacy_instance_path(root: Path, name: str) -> Path:
+    """Where the instance record lived before MM1. `relocate` only."""
     problem = manager_name_problem(name)
     if problem:
         raise ValueError(problem)
@@ -160,36 +209,80 @@ def _rite_owned_user_entries() -> tuple[str, ...]:
     writes all of them for a real Manager and fails on any entry that is
     neither this Manager's nor on this list. An unlisted entry is a name some
     Manager can collide with (C30: `permissions.json`)."""
-    from rite_ai.managers.enclosure import ENGINE_TMP_DIRNAME
     from rite_ai.managers.permissions import SETTINGS_FILENAME
 
-    return (SETTINGS_FILENAME, ENGINE_TMP_DIRNAME)
+    # ⚠ `ENGINE_TMP_DIRNAME` was here until MM1 moved the engine TMPDIR into
+    # `manager_dir`. It is not a `.rite/user/` name any more, so listing it
+    # would reserve a Manager name against a collision that cannot happen —
+    # and this list is what the refusal is computed from, so a stale entry
+    # refuses a name for no reason.
+    return (SETTINGS_FILENAME,)
 
 
 def _per_manager_user_entries(name: str) -> tuple[str, ...]:
-    """The entries in `.rite/user/` a Manager called `name` gets, each
-    derived from the function that builds its path, so this cannot drift
-    from where rite actually writes."""
+    """The entries in `.rite/user/` a Manager called `name` gets.
+
+    ⚠ **EMPTY SINCE MM1, and kept rather than deleted.** The instance record
+    and the designation moved into `manager_dir`, and the sandbox profile and
+    Landlock policy moved into the Manager's credential directory before
+    that, so nothing per-Manager is written here any more. The function stays
+    because `manager_name_problem` computes its refusal from it: if anything
+    per-Manager comes BACK to `.rite/user/`, listing it here restores the
+    refusal, where deleting the function would leave the next author with
+    nothing to notice.
+
+    `tests/test_a_manager_name_cannot_be_rites_own_state.py` asserts this is
+    empty by exercising every writer, so it cannot go stale in the other
+    direction either.
+    """
+    return ()
+
+
+def _rite_owned_checkout_entries() -> tuple[str, ...]:
+    """The fixed names rite keeps under `mailbox.checkout_root`, beside the
+    per-Manager directories.
+
+    ⚠ **Every fixed-name entry rite writes there must be listed here**, for
+    C30's reason in its new place: a Manager's directory IS
+    `checkout_root/<name>`, so a name matching one of these collides with
+    rite's own entry. Today that is the `project` marker.
+    """
+    from rite_ai.managers.mailbox import PROJECT_MARKER
+
+    return (PROJECT_MARKER,)
+
+
+def _per_manager_checkout_entries(name: str) -> tuple[str, ...]:
+    """What a Manager called `name` owns under `checkout_root` — its
+    directory. Derived from the function that builds the path, so it cannot
+    drift from where rite actually writes."""
+    from rite_ai.managers.mailbox import checkout_root
+
     here = Path(".")
-    # The sandbox profile is not here any more: it lives in the Manager's own
-    # credential directory, which no Manager can write (`profile_path`).
-    return (
-        _instance_filename(name),
-        designation_path(here, name).name,
-    )
+    return (manager_dir(here, name).relative_to(checkout_root(here)).parts[0],)
 
 
 def manager_name_problem(name: str) -> str:
     """Why `name` cannot be a Manager's name, or "".
 
-    ⚠ **C30. `.rite/user/` holds per-Manager files keyed by name AND rite's
-    own files, in one directory.** A Manager named `permissions` had its
-    instance record at `.rite/user/permissions.json` — the permission
-    allowlist rite passes to every Manager — so starting it overwrote the
-    list, or the list was read as its record. C11 was the same collision for
-    designations. So the CLASS is refused, not the word: any name whose own
-    entries would coincide with one of rite's (`_rite_owned_user_entries`).
-    Today that is `permissions`, found by computing, not by listing."""
+    ⚠ **C30. A directory that holds per-Manager entries keyed by name AND
+    rite's own fixed-name entries is a collision waiting to be named.** A
+    Manager called `permissions` had its instance record at
+    `.rite/user/permissions.json` — the permission allowlist rite passes to
+    every Manager — so starting it overwrote the list, or the list was read
+    as its record. C11 was the same collision for designations. So the CLASS
+    is refused, not the word: any name whose own entries would coincide with
+    one of rite's, found by computing rather than by listing.
+
+    ⚠ **MM1 MOVED THE COLLISION, it did not remove it, and that is why this
+    checks two directories.** With the instance record and the designation
+    under `manager_dir`, `.rite/user/` no longer holds anything per-Manager
+    (`_per_manager_user_entries` is empty) — so the `permissions` case is
+    gone. But a Manager's directory IS `checkout_root/<name>`, and rite keeps
+    a `project` marker file there, so a Manager called `project` is the same
+    defect in the new place. Deleting the old check on the grounds that its
+    one instance had gone would have shipped that.
+    """
     problem = name_problem(name, kind="manager name", must_be_a_tmux_target=True)
     if problem:
         return problem
@@ -197,15 +290,22 @@ def manager_name_problem(name: str) -> str:
     # `Permissions.json` IS `permissions.json` there — measured on this
     # machine. An exact comparison refused `permissions` and admitted
     # `Permissions`, which collides just the same.
-    owned = {e.casefold() for e in _rite_owned_user_entries()}
-    for entry in _per_manager_user_entries(name):
-        if entry.casefold() in owned:
-            return (
-                f"a Manager cannot be called {name!r}: its state would be "
-                f"stored as .rite/user/{entry}, which is a file rite keeps "
-                "for itself, so each would overwrite the other. Choose "
-                "another name."
-            )
+    for owned_entries, mine, where in (
+        (_rite_owned_user_entries(), _per_manager_user_entries(name), ".rite/user/"),
+        (
+            _rite_owned_checkout_entries(),
+            _per_manager_checkout_entries(name),
+            "rite's data directory, beside this project's Manager mail,",
+        ),
+    ):
+        owned = {e.casefold() for e in owned_entries}
+        for entry in mine:
+            if entry.casefold() in owned:
+                return (
+                    f"a Manager cannot be called {name!r}: its state would be "
+                    f"stored as {where}{entry}, which rite keeps for itself, "
+                    "so each would overwrite the other. Choose another name."
+                )
     return ""
 
 
@@ -279,11 +379,23 @@ def designation_path(root: Path, name: str) -> Path:
     record describes a session that IS running; the designation describes
     one to come back to. Different lifetimes, different files.
 
-    Under `user_dir()` with the instance record: per-user, per-machine,
-    never committed. A provider's session id is not portable between
+    Inside `manager_dir` with the instance record (MM1): per-user,
+    per-machine, never committed, and under the one path this Manager's
+    profile grants. A provider's session id is not portable between
     machines, and a shared `config.yaml` claiming one on somebody else's
-    laptop is worse than saying nothing.
+    laptop is worse than saying nothing. It used to be
+    `.rite/user/<name>.designated.json`, which every Manager could write —
+    and a designation is what a bare `rite start <name>` RESUMES, so a
+    sibling's wrong join there sends a Manager back into somebody else's
+    conversation.
     """
+    _checked(name)
+    return manager_dir(root, name) / DESIGNATION_FILENAME
+
+
+def legacy_designation_path(root: Path, name: str) -> Path:
+    """Where the designation lived before MM1. `relocate` only."""
+    _checked(name)
     return user_dir(root) / f"{name}{DESIGNATION_SUFFIX}"
 
 
@@ -458,28 +570,51 @@ def forget_instance(root: Path, name: str) -> None:
         pass
 
 
+def managers_with_state(root: Path) -> list[str]:
+    """Every Manager of this checkout that has a directory, in name order.
+
+    ⚠ **Reads the parent of the per-Manager directories, which no Manager's
+    profile grants** (`mailbox.checkout_root`). So this answers correctly
+    from a human's shell and from the supervisor, and from INSIDE a
+    Manager's boundary it sees only what that Manager may see — which is
+    DF3's rule, not a bug to route around.
+
+    A name that could not be a Manager's is skipped rather than raising:
+    this walks a directory, and something else's folder appearing beside
+    rite's must not turn `rite status` into a traceback.
+    """
+    from rite_ai.managers.mailbox import checkout_root
+
+    base = checkout_root(root)
+    try:
+        entries = sorted(base.iterdir())
+    except OSError:
+        return []
+    return [
+        entry.name
+        for entry in entries
+        if entry.is_dir()
+        and not entry.is_symlink()
+        and not name_problem(
+            entry.name, kind="manager name", must_be_a_tmux_target=True
+        )
+    ]
+
+
 def running_instances(root: Path) -> list[ManagerInstance]:
     """Every recorded instance. Unreadable entries are skipped, not guessed
-    at — a listing that invents a Manager is worse than a short listing."""
+    at — a listing that invents a Manager is worse than a short listing.
+
+    ⚠ **Enumerated from the per-Manager directories since MM1**, not from a
+    glob over one flat directory. The old form globbed `.rite/user/*.json`
+    and had to skip `<name>.designated.json` BY NAME (C11), because both
+    files matched one pattern; a listing built from directories cannot make
+    that mistake, and the instance record's name is now fixed
+    (`INSTANCE_FILENAME`) rather than derived from the Manager's.
+    """
     out: list[ManagerInstance] = []
-    directory = user_dir(root)
-    if not directory.is_dir():
-        return out
-    for path in sorted(directory.glob("*.json")):
-        if path.name.endswith(DESIGNATION_SUFFIX):
-            # ⚠ **SKIPPED BY NAME, ON PURPOSE (C11).** `<name>.designated.json`
-            # matches this glob. It used to stay out of the listing only by
-            # accident, twice over: `read_instance` validates the stem as a
-            # tmux target, which rejects the `.` in `planner.designated`, and
-            # it drops any file without a `name` key. Neither rule is about
-            # designations. Measured with both relaxed — a naming rule that
-            # admits dots, and a designation that records whose it is, which
-            # a membership check could reasonably add — `rite status` listed a
-            # running Manager and offered `tmux attach` to a provider session
-            # id. The two files have different lifetimes on purpose (see
-            # `designation_path`); keeping them apart is now this line's job.
-            continue
-        instance = read_instance(root, path.stem)
+    for name in managers_with_state(root):
+        instance = read_instance(root, name)
         if instance is not None:
             out.append(instance)
     return out

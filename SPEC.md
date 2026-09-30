@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.62 · **Date:** 2026-09-30
+**Version:** 0.24.65 · **Date:** 2026-09-30
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -2209,7 +2209,20 @@ here so the two are recognised as one problem rather than two.
 
 #### 5.4.5. ⚠ "The acting Manager's own directory" does not exist yet
 
-⚠ **PARTLY STALE: step 1 has landed, and so has the directory. Step 2 has
+✅ **NO LONGER STALE: steps 1, 2 and 3 have landed. Step 2 is MM1 (0.24.65).**
+The per-Manager state that was flat in `.rite/user/` — the instance record,
+the designation and the engine TMPDIR — is under `manager_dir` now, and the
+sandbox profile and Landlock policy had already moved to the Manager's
+credential directory. `managers.user_dir` holds nothing of any Manager's, and
+`tests/test_per_manager_state_leaves_the_flat_rite.py` fails when a new flat
+per-Manager path appears — by EXERCISING every writer and then looking, which
+is what §5.4.6 asks for and what a prose enumeration cannot do. The upgrade
+moves it once, under every Manager's run lock, folded into MM8's migration
+(`relocate.move_out`) rather than run beside it: two passes would take the
+locks twice, and a Manager starting between them would be caught by neither.
+The text below is the analysis as written before any of it landed.
+
+⚠ **ORIGINALLY: step 1 has landed, and so has the directory. Step 2 has
 not.** A Manager session carries `RITE_MANAGER` (`managers/__init__.py`,
 `MANAGER_ENV`), set on every session `rite start` creates. So a process can
 answer "which Manager am I". And `manager_dir()` gives each Manager
@@ -2276,6 +2289,24 @@ The enumeration must therefore split two kinds:
   (`managers/mailbox.py`, `mail_root`).*
 - **Shared by accident** — everything else in the flat `.rite/`, which is
   shared because nothing gave it an owner, and which §5.4.5's step 2 moves.
+  ✅ **Emptied of per-Manager state by MM1 (0.24.65).** What moved, and where:
+  the instance record and the designation to `manager_dir/instance.json` and
+  `/designated.json`, the engine TMPDIR to `manager_dir/enginetmp/`. The
+  sandbox profile and the Landlock policy had already gone to the Manager's
+  credential directory, which no Manager's profile grants — a boundary must
+  not be writable by what it bounds. ⚠ **`.rite/user/` still holds rite's
+  own `permissions.json`**, which is not any Manager's and stays.
+
+⚠ **MM1 MOVED ONE COLLISION RATHER THAN REMOVING IT, and this is the record
+of that.** C30 refused a Manager called `permissions`, because its instance
+record `.rite/user/permissions.json` WAS the permission allowlist. With the
+record under `manager_dir`, that name is ordinary again — but a Manager's
+directory is `mailbox.checkout_root/<name>`, and rite keeps a `project`
+marker file there, so `project` is now the same defect in the new place. The
+refusal is computed over BOTH directories
+(`managers.manager_name_problem`), and each has a test that writes everything
+rite writes there and fails on an unregistered entry. Deleting the check
+because its one known instance had gone would have shipped the new one.
 
 ⚠ **A prose enumeration is not sufficient on its own, and this codebase has
 already proved it.** `state.py` records a claim of completeness — "every
@@ -2317,8 +2348,8 @@ here.
 **Status: DECIDED (Robert, 2026-09-20: D-79, §9.14.9). Partly enforced**
 (0.24.18: this line said "Not enforced" after the state below had changed):
 P2 holds, pinned by a test on both platforms, with its tmux half open on
-Linux; P1 holds for the per-Manager directories and every inbox, not for
-flat state; P3 and P4 do not.
+Linux; P1 holds for every path rite keeps per Manager since MM1, with the
+§5.4.7 command-surface test still owed (MM2); P3 and P4 do not.
 ⚠ **Scope moved on 2026-09-26: two Managers on one machine are 0.6.0**
 (Robert). A Claude Manager as Owner, and a local secondary, in one root, is
 being built for 0.6.0. Several machines stay out of 0.6.0. **So the state
@@ -2452,13 +2483,29 @@ be tested:
   the fence holds by construction.
 
   ⚠ **`.rite/user/` is already writable across Managers, on both
-  platforms, and neither move changes that.** It holds each Manager's
+  platforms, and neither move changes that.** It held each Manager's
   instance record, designation, permission settings, profile or Landlock
   policy, and engine TMPDIR. Only `.rite/managers/` is fenced. So granting
   the project as a tree would open nothing new there, and moving the
   per-Manager directory out would fix nothing there. Do not propose the
   directory move for `.rite/user/`'s sake. What it would buy is the root
   grant on Linux (D17).
+  ✅ **Answered from the other end since MM1 (0.24.65): the STATE left, not
+  the directory.** `.rite/user/` is still writable across Managers and
+  nothing changed that — what changed is that nothing of any Manager's is in
+  it. The profile and the policy went to the credential directory, the
+  instance record, designation and engine TMPDIR to `manager_dir`. What
+  remains there is rite's own `permissions.json`. The paragraph above stays
+  because its reasoning is still correct: the directory move was never the
+  fix for this, and a tree grant still opens nothing new here.
+- **P1 holds for rite's own per-Manager state since MM1 (0.24.65), and the
+  §5.4.7 test is still owed.** Nothing per-Manager is written into the flat
+  `.rite/` any more (§5.4.6), so every path a Manager keeps is inside the one
+  directory its profile grants. What that does NOT yet give is the property
+  over rite's COMMAND SURFACE: no test runs every leaf command as Manager A
+  with hostile arguments and asserts nothing under B's is touched. That is
+  MM2, and until it exists P1 rests on the writers being right rather than on
+  being checked.
 - **P3 and P4 do not.** The shared-by-decision list has no test behind it
   (§5.4.6). And `Claim` has no Manager field (§5.4.3).
 
@@ -2469,6 +2516,11 @@ P1 row says. The rest of the tree is still granted whole, because an
 orchestrator works on the project, so the sandbox still does not separate
 the Managers' flat state. That part is enforced by rite's own writers, or
 it is not enforced.
+✅ **MM1 removed what that last sentence was about**: there is no flat
+per-Manager state left for the writers to be trusted about. The tree is
+still granted whole and always will be — a Manager works on the project —
+but what is inside it is now the project's files and rite's own shared
+state, not any Manager's.
 
 **"By accident" is the bar, and it is not "against a hostile Manager."** A
 Manager may run `rite`, and `rite` does what the operator can. What this
@@ -5871,6 +5923,17 @@ Each Manager gets its own subdirectory inside the single project root, so
 `<root>/.rite/managers/<name>/`, and everything in §5.4.6's "shared by
 accident" list moves under it.
 
+✅ **BOTH HALVES DONE, and the boundary is not that path any more.** The
+directory left the project in MM8 (`manager_dir` is
+`<data>/rite/mail/<checkout>/<name>/state/`, 0.24.29), because on Linux
+keeping one Manager out of another's in-tree directory meant enumerating the
+project root. The move of §5.4.6's list followed in MM1 (0.24.65): the
+instance record, the designation and the engine TMPDIR are under
+`manager_dir`, and `.rite/user/` holds nothing of any Manager's. ⚠ The two
+were designed together on purpose — MM1 moving state INTO a directory MM8
+was moving OUT would have moved the same files twice — and they share one
+migration for a reason stated in §5.4.5.
+
 ⚠ **`docs/design/V070_MULTI_MANAGER.md` recorded the OPPOSITE shape and is
 now marked superseded (D-79).** That document says
 "separate roots per Manager, coordinating through the shared state layer —
@@ -5899,8 +5962,11 @@ it. D-79.
 **4. Profiles are shared; instances are per-user.** A Manager's *profile* —
 its engine, duties, model — is committed config, because a team agrees on
 what a `planner` is. A Manager's *instance* — that this machine's user is
-running one, and its runtime state — lives in `.rite/user/` and is not
-committed, because it is meaningful only on the machine that wrote it. This
+running one, and its runtime state — is not committed, because it is
+meaningful only on the machine that wrote it. *It lived in `.rite/user/`
+until MM1 (0.24.65); it is under `manager_dir` now, which is per-user and
+per-machine in the same way and, unlike `.rite/user/`, is not writable by
+every other Manager.* This
 is the same line `.rite/` already draws (§8.x) applied one level down, and it
 is what keeps a shared `config.yaml` from claiming a Manager is running on
 somebody else's laptop.
@@ -7486,6 +7552,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.65 — per-Manager state leaves the flat `.rite/` (v0.7.0 MM1; SPEC §5.4.5 step 2, §9.14.9 item 3).** §5.4.5, §5.4.6, §5.4.8 and §9.14.9 items 3 and 4 updated; P1 in §5.4.8 now holds for every path rite keeps per Manager, with the §5.4.7 command-surface test still owed (MM2). `instance_path` and `designation_path` are `manager_dir/instance.json` and `/designated.json`; `enclosure.engine_tmp` is `manager_dir/enginetmp/`; `managers_with_state` and `mailbox.checkout_root` enumerate Managers from their directories, so `running_instances` no longer globs one flat directory and no longer has to skip designations BY NAME (C11 is structurally impossible). `relocate.move_out` moves the flat state in the SAME migration as MM8's directory move, under the same run locks — two passes would take the locks twice and miss a Manager that started between them — and `flat_entries` derives both sides from the path functions rather than from a list. ⚠ **MM1 MOVED C30's collision rather than removing it.** `permissions` is an ordinary Manager name again, because the instance record is no longer `.rite/user/permissions.json`; but a Manager's directory is `checkout_root/<name>` and rite keeps a `project` marker file there, so `project` is refused instead. `manager_name_problem` computes over both directories and each has a registry test that writes everything rite writes there. Tests: `test_per_manager_state_leaves_the_flat_rite.py` — the state's location, the flat directory holding nothing of a Manager's (by exercising every writer, not by reading the source), the migration with REAL run locks from a second process, a refusal naming the running Manager, and differing copies on both sides refusing rather than choosing; control: a `hold` that ignores the lock moves state under a running Manager. Six mutations each go red. `test_the_manager_profile_denies_what_it_should.py`'s control now makes `.rite/user/` itself, which used to appear as a side effect of the engine TMPDIR.
 
 **Changes in 0.24.62 — `rite init` says when the code it was pointed at is not a git repository (0.7.0a2 dogfood assessment).** §9.3 gains the paragraph. `detect.holds_files_but_no_repository`; `offer_modules` warns when there are no candidates and it holds. Tests: the existing-code route and the from-scratch route both say it and register nothing; controls: the same code in a repository is registered and not told, an empty directory is not told this, a directory inside another repository is not told it is outside one. Three mutations (silent again, said inside a repository, said for an empty directory) each go red.
 

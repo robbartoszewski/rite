@@ -193,7 +193,14 @@ class TestNoManagerCanRewriteABoundary:
         )
         assert owner.read_text() == before
         # The control: where it used to live, the secondary CAN write.
+        # ⚠ The directory is created HERE since MM1. It used to appear as a
+        # side effect of `write_profile`, which made the engine TMPDIR under
+        # `.rite/user/`; that moved into `manager_dir`, so nothing creates
+        # `.rite/user/` any more and the redirect below would fail for a
+        # missing parent rather than for a denial — a control that passes or
+        # fails on the wrong thing.
         old = _legacy_profile_path(project, "lead")
+        old.parent.mkdir(parents=True, exist_ok=True)
         assert _under(secondary, f"printf x > '{old}'") == 0, (
             "the old location is not writable here, so this test no longer "
             "shows why the profile moved"

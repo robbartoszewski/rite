@@ -121,7 +121,23 @@ def engine_tmp(root: Path, manager: str) -> Path:
 
     So the engine is given its own, inside the boundary, exactly as it is
     given its own `HOME`. The system temp root is not granted at all.
+
+    ⚠ **Inside `manager_dir` since MM1**, not `.rite/user/engine-tmp/<manager>/`.
+    "Inside the boundary" was true of the old path only in the sense that the
+    Manager could reach it — so could every SIBLING, because `.rite/user/`
+    is writable across Managers (`user_dir`). An engine's scratch is where
+    it stages what it is about to act on, and a peer writing there is the
+    same shape of defect as a peer replacing the profile
+    (`profile_path`). Now it is under the one directory this Manager's
+    profile grants and no other's.
     """
+    from rite_ai.managers import manager_dir
+
+    return manager_dir(root, manager) / ENGINE_TMP_DIRNAME
+
+
+def _legacy_engine_tmp(root: Path, manager: str) -> Path:
+    """Where the engine TMPDIR lived before MM1. `relocate` only."""
     return user_dir(root) / ENGINE_TMP_DIRNAME / manager
 
 
