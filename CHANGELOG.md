@@ -10,6 +10,13 @@ there is nothing there, asks for the repository, and adds it as a module
 (cloned, as `rite add module` does). Skip it, and init says no module is
 registered and how to add one.
 
+### `rite init` says when your code is not in a git repository
+
+Pointed at a directory with code that is not a git repository, `rite init`
+registered nothing and said "Ready". Workers work on clones of a project's
+modules, so they would have had nothing. Init now says so, and how to fix it:
+`git init` and commit, or `rite add module` with the repository's URL.
+
 ## 0.7.0a2 (2026-09-30) — alpha: the setup fixes from 0.7.0a1's dogfood
 
 ⚠ **Still an alpha, cut for the same dogfood** (a real contribution to yoloAI
