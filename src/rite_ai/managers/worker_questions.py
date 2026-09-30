@@ -254,13 +254,13 @@ def _qid_in(text: str) -> str:
     return found.group(0) if found else ""
 
 
-def _answer_text(text: str) -> str:
-    """What the person actually wrote, without rite's own first line.
-
-    The reply arrives with the quoted line rite sent, and handing that back
-    to the Worker would answer its question with its own question."""
-    lines = [ln for ln in text.splitlines() if not _qid_in(ln)]
-    return "\n".join(lines).strip() or text.strip()
+# ⚠ `_answer_text` USED TO LIVE HERE AND WAS WRONG TWICE OVER (found in
+# review of #164). It stripped any line carrying a question id and handed the
+# rest to the Worker, which (a) left the relay's `> ` quote markers in the
+# answer — the Worker received `"> 30 seconds\n> and it is fine"` — and (b)
+# said nothing about WHOSE words they were. `delivered.classify` answers both,
+# and is the same function the Manager's own instruction path is held to, so
+# the two cannot come to disagree about what counts as the User speaking.
 
 
 def relay(root: Path, manager: str, say) -> int:
@@ -283,6 +283,7 @@ def _relay(root: Path, manager: str, say) -> int:
     Owner is told what its Worker was told, and taking the message here would
     silently remove it from the Manager's next prompt."""
     from rite_ai.config.parse import load_project
+    from rite_ai.managers import delivered
     from rite_ai.managers.asking import raise_to_person, settle
     from rite_ai.managers.mailbox import INBOX, read
     from rite_ai.sandbox import existing_sandbox_name, worker_sandbox_status
@@ -312,9 +313,38 @@ def _relay(root: Path, manager: str, say) -> int:
             # Not an answer to a Worker's question. Left alone: every other
             # kind of mail is somebody else's to read.
             continue
+        # ⚠ **WHOSE WORDS, BEFORE ANYTHING IS WRITTEN (D-95).** Matching the
+        # question id is not authority: the id travels in the header of EVERY
+        # relayed reply in that thread, because the thread's label is the
+        # first 40 characters of what rite posted and the id is in them. So a
+        # reply in the BROADCAST channel — which the relay marks `context`,
+        # and which is where Worker questions go when no `slack.owner_user`
+        # is configured — matched, and was written into the Worker as its
+        # answer. Anyone in the workspace could steer a sandboxed Worker
+        # running with permissions relaxed. Found in review of #164.
+        #
+        # `delivered.classify` is the SAME gate the Manager's own instruction
+        # path uses: the Owner's DM marked INSTRUCTION, the refinement
+        # channel likewise, or this machine — and nothing else. Reused rather
+        # than restated so authority cannot mean one thing here and another
+        # there.
+        heard = delivered.classify(message.text)
+        if not heard.users:
+            done.add(name)
+            ledger[RELAYED_KEY] = sorted(done)
+            _store(path, ledger)
+            # Said, not carried, and the question stays outstanding so the
+            # person is still asked. Not raised to the person either: a
+            # bystander's comment is not a failure to report to them.
+            why = heard.why_not or "it is not the User's instruction"
+            say(
+                f"not relaying to Worker {worker_of.get(sandbox, sandbox)!r} "
+                f"({qid}): {why} [{heard.where}]"
+            )
+            continue
         worker = worker_of.get(sandbox, "")
         status = worker_sandbox_status(worker, root) if worker else None
-        outcome = deliver_answer(sandbox, _answer_text(message.text), status=status)
+        outcome = deliver_answer(sandbox, heard.words, status=status)
         done.add(name)
         ledger[RELAYED_KEY] = sorted(done)
         _store(path, ledger)
