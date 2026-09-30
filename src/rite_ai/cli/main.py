@@ -2240,6 +2240,7 @@ def _set_service(
 
     stored: list[tuple[str, str]] = []
     configured: list[tuple[str, str]] = []
+    secrets: dict[str, str] = {}
     for field in svc.fields:
         if field.config_path and not config_writable:
             # config.yaml is not in a state this command may rewrite (an
@@ -2289,6 +2290,7 @@ def _set_service(
             continue
         key = service_key(svc.name, field.name)
         stored.append((key, _store_one(key, value, global_, root, config)))
+        secrets[field.name] = value
 
     if configured and svc.board_type:
         # ⚠ **The site and the project key alone are not a board.** Measured
@@ -2331,6 +2333,31 @@ def _set_service(
         )
         for path, value in configured:
             click.echo(f"  {path:<32} {value}")
+
+    # ⚠ **Asked HERE, where the token arrives** (v0.7.0 dogfood S22a). The
+    # binding was only consulted when a listener opened, so a token belonging
+    # to another project was accepted, stored and configured, and the
+    # collision surfaced at `rite start` — after the app had been made and the
+    # project set up, with "create a new Slack app", the heaviest step in the
+    # setup, offered last. Said now, the next step is the right one.
+    #
+    # NOT a refusal: the token is stored either way. It is a real token, the
+    # person may be moving a project onto its own app in either order, and
+    # refusing to store it would leave them with no way to record the one they
+    # just made. `rite start` still refuses to OPEN a listener on it, which is
+    # where refusing belongs.
+    if svc.name == "slack" and secrets.get("bot_token") and (root / ".rite").is_dir():
+        from rite_ai.managers.slack_app import sharing
+
+        shared = sharing(secrets["bot_token"], root)
+        if shared.kind == "shared":
+            click.echo(f"\n⚠ {shared.message}", err=True)
+        elif shared.kind == "unknown":
+            click.echo(
+                f"\n  could not check whether another project already uses "
+                f"this Slack app — {shared.message}",
+                err=True,
+            )
 
     # ⚠ **An off switch is said, not left to be discovered.** Slack is on only
     # if it has a target: `SlackConfig.enabled` is `owner_user or
@@ -8455,6 +8482,20 @@ def _doctor_slack(root: Path, problems: list[str]) -> None:
         click.echo("slack: NO TOKEN — `rite credential set slack` stores one")
         problems.append("slack is configured and slack_bot_token is not set")
         return
+    # Before the targets are probed: a shared app is not a target that fails,
+    # it is two projects reading one DM, and the probe would say "ok" (S22a).
+    from rite_ai.managers.slack_app import sharing
+
+    shared = sharing(token, root)
+    if shared.kind == "shared":
+        click.echo(f"slack: SHARED APP — {shared.message}")
+        problems.append(f"slack app shared with another project: {shared.message}")
+    elif shared.kind == "unknown":
+        # Said, not counted. An unreachable Slack is a gap in this report,
+        # not a fault in the project being reported on.
+        click.echo(
+            f"slack: could not check whether the app is shared — {shared.message}"
+        )
     for checked in probe(slack.owner_user, slack.broadcast, token):
         click.echo(
             f"slack {checked.target}: {'ok' if checked.ok else 'FAILED'} — "
