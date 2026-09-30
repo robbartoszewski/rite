@@ -716,3 +716,112 @@ def list_for_rotation() -> list[RotationEntry]:
         for name, ts in registry.items()
     ]
     return sorted(entries, key=lambda e: e.name)
+
+
+# --- Which namespace belongs to which project (S18) ---
+#
+# A re-init (a reset, or `rm -rf` and a fresh clone) used to mint a fresh
+# namespace every time, orphaning every credential stored under the old one,
+# with nothing said (v0.7.0 dogfood S18). "The same project" is identified by
+# its modules' git remote URLs: the one identity that survives the project
+# directory being deleted and cloned again. The project's name does not
+# (renamed, or `my-project` twice), nor does its path (moved, re-cloned).
+#
+# `~/.rite/namespaces.json` records, for each namespace, the remotes of the
+# project that recorded it. It is written by `rite init` and `rite credential
+# set`; it holds no secret and no account name, only which namespace a
+# repository's project used. Machine-wide and advisory: init OFFERS a match,
+# and never reuses one silently.
+
+NAMESPACES_FILENAME = "namespaces.json"
+
+
+def _namespaces_path() -> Path:
+    return default_rite_home() / NAMESPACES_FILENAME
+
+
+def normalise_remote(url: str) -> str:
+    """A remote URL reduced to `host/owner/repo`, so the forms one repository
+    is cloned by compare equal: `https://github.com/O/r.git`,
+    `git@github.com:o/r`, `ssh://git@github.com/o/r/`. A local path stays a
+    path. "" for nothing."""
+    u = (url or "").strip()
+    if not u:
+        return ""
+    m = re.match(r"^[a-z][a-z0-9+.-]*://(?:[^@/]+@)?([^/:]+)(?::\d+)?/(.+)$", u, re.I)
+    if m is None:
+        m = re.match(r"^(?:[^@/]+@)?([^/:]+):(?!/)(.+)$", u)
+    if m is None:
+        return u.rstrip("/").removesuffix(".git")
+    host, path = m.group(1), m.group(2)
+    return f"{host}/{path}".rstrip("/").removesuffix(".git").lower()
+
+
+def remember_namespace(namespace: str, remotes: list[str], project: str = "") -> str:
+    """Record that `namespace` is the project whose modules are `remotes`.
+    Returns "" or why it could not be written (never raises: a record that
+    cannot be written must not fail the command writing it)."""
+    wanted = sorted({normalise_remote(r) for r in remotes if normalise_remote(r)})
+    if not namespace or not wanted:
+        return ""
+    path = _namespaces_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with locked(path):
+            try:
+                data = json.loads(path.read_text()) if path.is_file() else {}
+            except json.JSONDecodeError:
+                return f"{path} is not readable JSON; left as it is"
+            if not isinstance(data, dict):
+                return f"{path} is not a JSON object; left as it is"
+            entry = data.get(namespace) if isinstance(data.get(namespace), dict) else {}
+            known = set(entry.get("remotes") or [])
+            data[namespace] = {
+                "remotes": sorted(known | set(wanted)),
+                "project": project or entry.get("project", ""),
+                "noted_at": time.time(),
+            }
+            write_atomic(path, json.dumps(data, indent=1, sort_keys=True) + "\n")
+    except OSError as e:
+        return f"could not record the namespace in {path} ({e})"
+    return ""
+
+
+@dataclass(frozen=True)
+class NamespaceMatch:
+    namespace: str
+    project: str
+    keys: tuple[str, ...]
+    """The credentials stored under it, by key: what reusing it brings back."""
+
+
+def namespaces_for(remotes: list[str]) -> list[NamespaceMatch]:
+    """Namespaces recorded for a project sharing any of `remotes`, that still
+    hold at least one stored credential; newest first. An unreadable record
+    or registry reads as no match: this only ever feeds an offer."""
+    wanted = {normalise_remote(r) for r in remotes if normalise_remote(r)}
+    if not wanted:
+        return []
+    try:
+        data = json.loads(_namespaces_path().read_text())
+        registry = _read_registry()
+    except (OSError, json.JSONDecodeError, RegistryUnreadable):
+        return []
+    if not isinstance(data, dict):
+        return []
+    found = []
+    for ns, entry in data.items():
+        if not isinstance(entry, dict) or not is_valid_namespace(ns):
+            continue
+        if not wanted & set(entry.get("remotes") or []):
+            continue
+        prefix = f"{ns}{NAMESPACE_SEPARATOR}"
+        keys = tuple(sorted(a[len(prefix) :] for a in registry if a.startswith(prefix)))
+        if keys:
+            found.append(
+                (
+                    entry.get("noted_at", 0),
+                    NamespaceMatch(ns, str(entry.get("project", "")), keys),
+                )
+            )
+    return [m for _, m in sorted(found, key=lambda x: -float(x[0] or 0))]

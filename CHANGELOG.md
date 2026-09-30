@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### `rite init` no longer says "Ready." about a project with nothing to work on
+
+Whichever way you run it, including a bare `rite init --yes`, init now says
+when no module would be registered and, if you are there, asks for the
+repository. rite's own files (the installer the setup downloads, a previous
+init's CLAUDE.md) no longer count as your code. A fresh project's schedule
+(1 Worker, all day, in your machine's timezone) is stated rather than left
+empty, init offers to declare a Worker, and re-initialising a project whose
+repository already has credentials stored offers that credential namespace
+back instead of starting an empty one. The last line says what is still
+missing, if anything.
+
 ### An item only the host can measure is agreed as the host's
 
 Some definition-of-done items need a measurement a Worker cannot take inside

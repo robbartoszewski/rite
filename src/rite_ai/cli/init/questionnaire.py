@@ -89,6 +89,10 @@ class InitAnswers:
     # (`ask_for_the_code`): `(module name, URL)`, registered and cloned by
     # `run_init` once `.rite/` exists, exactly as `rite add module` does.
     link: tuple[str, str] | None = None
+    # Whether the person was already asked where the code is (and so
+    # declined): `run_init`'s zero-module check then says so, and does not
+    # ask a second time.
+    asked_for_code: bool = False
 
 
 def _resolve_spec(
@@ -630,6 +634,8 @@ def run_questionnaire(
         config=config,
         kb=KbAnswers(links=kb_links, files=kb_files, commit=kb_commit),
         sources=sources,
+        # The "No repositories found. Add a module?" loop asked already.
+        asked_for_code=interactive and not preset.has_modules() and not detected.repos,
     )
 
 
@@ -799,20 +805,19 @@ def portable_source_path(root: Path, source: Path) -> str:
     return str(source)
 
 
-NO_MODULE_YET = (
-    "No module is registered, so this project has nothing to work on yet: a "
-    "Worker's workspace is its modules' clones. Add the code with `rite add "
-    "module <name> <repository URL>`."
-)
-
-
 def holds_nothing(path: Path) -> bool:
-    """No code and no spec at `path`: a directory with nothing in it but hidden
-    entries (`.git`, and rite's own `.rite/` and `.claude/`). A file is a spec,
-    so a path to one never holds nothing."""
+    """No code and no spec at `path`: a directory with nothing in it but what
+    rite itself left there (`detect.content_entries`). A file is a spec, so a
+    path to one never holds nothing.
+
+    ⚠ S13 (v0.7.0 dogfood, 0.7.0a3): "no visible entries" was the old test,
+    and the setup's own `install.sh`, or a prior init's CLAUDE.md, turned the
+    repository prompt off in the directories people actually have."""
     if not path.is_dir():
         return False
-    return not any(not p.name.startswith(".") for p in path.iterdir())
+    from .detect import content_entries
+
+    return not content_entries(path)
 
 
 def module_name_for(url: str) -> str:
@@ -852,8 +857,15 @@ def ask_for_the_code(base: Path, interactive: bool) -> tuple[str, str] | None:
         "and nothing a Worker could work on."
     )
     if not interactive:
-        click.echo(f"  {NO_MODULE_YET}")
         return None
+    return ask_for_a_repository()
+
+
+def ask_for_a_repository() -> tuple[str, str] | None:
+    """Ask for the repository to add as a module: `(name, URL)`, or None when
+    the person skips. Anything that is not a repository is asked again. What a
+    skip leaves the project with is said by `run_init`'s zero-module check,
+    once, whichever route got here."""
     while True:
         url = ui.text(
             "Where is the code? A repository URL to add as a module (Enter to skip)",
@@ -869,7 +881,6 @@ def ask_for_the_code(base: Path, interactive: bool) -> tuple[str, str] | None:
         name = module_name_for(url)
         if ui.confirm(f"Add {url} as module '{name}'?", default=True):
             return name, url
-    click.echo(f"  {NO_MODULE_YET}")
     return None
 
 
@@ -889,7 +900,8 @@ def source_answers(
     """
     base = source if source.is_dir() else source.parent
     name = root.name or "my-project"
-    link = ask_for_the_code(base, interactive) if holds_nothing(source) else None
+    empty = holds_nothing(source)
+    link = ask_for_the_code(base, interactive) if empty else None
     role = _ask_role(preset, interactive)
     borrowed_config: ProjectConfig | None = None
     if role == "manager":
@@ -926,6 +938,7 @@ def source_answers(
         config=config,
         kb=KbAnswers(),
         link=link,
+        asked_for_code=empty and interactive,
     )
 
 
