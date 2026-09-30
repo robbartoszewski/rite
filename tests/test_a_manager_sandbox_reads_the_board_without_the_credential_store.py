@@ -125,6 +125,20 @@ def test_loop_run_says_the_board_could_not_be_read(tmp_path, monkeypatch, denied
     assert "the work is there" not in out
 
 
+def test_the_watching_loop_stops_cleanly_and_says_why(
+    tmp_path, monkeypatch, denied_store
+):
+    """`rite loop run --watch` is what `rite loop start` runs (S27): it must
+    stop on the unreadable board, saying so, not crash or name the wrong
+    cause."""
+    result = _run(_project(tmp_path), monkeypatch, "loop", "run", "--watch")
+    out = result.output
+    assert result.exit_code == 1
+    assert "verdict: unknown — " + CANNOT in out
+    assert "no ticket backend is configured" not in out
+    assert "loop: stopping — something could not be established" in out
+
+
 def test_the_global_fallback_check_does_not_raise(denied_store):
     from rite_ai.credentials.file_store import CredentialStoreError
     from rite_ai.credentials.store import _WARNED_GLOBAL, resolve, warn_if_global
