@@ -276,10 +276,108 @@ class Posted:
         return not self.problem
 
 
+# --- how a post is shown (S29) ---------------------------------------------
+#
+# Live run (Robert): consecutive posts of different kinds stacked under one bot
+# avatar and timestamp, so a question that needed his answer read as one more
+# status paragraph. Each post now opens with a compact type tag, carries its
+# author, and ends with a divider, so two posts never run together, even when
+# Slack groups them under one sender. What needs the person is shown loud (a
+# section); everything else muted (a context block, Slack's small grey text).
+#
+# `text` stays exactly what it was: it is what a notification and a client
+# without blocks show. The blocks are what a person reading the conversation
+# sees.
+
+NEEDS_ANSWER = "needs-answer"
+NEEDS_YOU = "needs-you"
+STATUS = "status"
+SYSTEM = "system"
+DELIVERY = "delivery"
+TAGS = {
+    NEEDS_ANSWER: "❓ *Needs your answer*",
+    NEEDS_YOU: "❗ *Needs you*",
+    STATUS: "ℹ️ *Status*",
+    SYSTEM: "⚙️ *rite*",
+    DELIVERY: "⚠️ *Delivery*",
+}
+LOUD = frozenset({NEEDS_ANSWER, NEEDS_YOU})
+"""The kinds shown as sections. Exactly the ones `pending` tracks as needing
+the person (`pending.kind_of`): a post never looks more, or less, urgent than
+what rite waits on."""
+
+SECTION_CHARS = 2900
+"""Under Slack's 3000 for a section's or a context element's text."""
+BLOCKS_MAX = 50
+"""Slack's limit per message."""
+
+_QUESTION_FIRST_LINE = re.compile(r"^(.+?) · q[0-9a-f]{4} · ")
+
+
+def ticket_in(text: str) -> str:
+    """The ticket a question names on its first line, the line
+    `asking.raise_to_person` writes (`<subject> · q1a2b · … · reply in this
+    thread`), or ""."""
+    found = _QUESTION_FIRST_LINE.match(text or "")
+    return found.group(1).strip() if found else ""
+
+
+def _chunks(text: str, size: int = SECTION_CHARS) -> list[str]:
+    """`text` in pieces Slack will take, split at line ends where it can."""
+    pieces: list[str] = []
+    rest = text.strip() or " "
+    while len(rest) > size:
+        cut = rest.rfind("\n", 0, size)
+        cut = cut if cut > 0 else size
+        pieces.append(rest[:cut])
+        rest = rest[cut:].lstrip("\n")
+    pieces.append(rest)
+    return pieces
+
+
+def present(kind: str, body: str, *, author: str = "", ticket: str = "") -> list:
+    """The blocks one post is shown as: its tag line (with the ticket and the
+    author), its body, then a divider. Loud for what needs the person, muted
+    for the rest. Never more than Slack takes: a body too long for the blocks
+    says where the rest is (the fallback `text` carries it all)."""
+    if kind not in TAGS:
+        raise ValueError(f"a post is one of {sorted(TAGS)}, not {kind!r}")
+    tag = " · ".join(
+        part for part in (TAGS[kind], f"`{ticket}`" if ticket else "", author) if part
+    )
+    loud = kind in LOUD
+
+    def block(text: str) -> dict:
+        if loud:
+            return {"type": "section", "text": {"type": "mrkdwn", "text": text}}
+        return {"type": "context", "elements": [{"type": "mrkdwn", "text": text}]}
+
+    parts = _chunks(body)
+    room = BLOCKS_MAX - 2  # the tag line, and the divider
+    if len(parts) > room:
+        parts = parts[: room - 1] + [
+            "_…the rest is too long to show here; `rite replies` has all of it._"
+        ]
+    return [block(tag), *(block(p) for p in parts), {"type": "divider"}]
+
+
 def _post(
-    channel: str, token: str, text: str, *, thread: str = "", call=None
+    channel: str,
+    token: str,
+    text: str,
+    *,
+    thread: str = "",
+    call=None,
+    kind: str = "",
+    body: str | None = None,
+    author: str = "",
+    ticket: str = "",
 ) -> Posted:
     """Post `text` to a channel, a channel name, or a user id. Never raises.
+
+    With `kind` (S29), the post is also sent as blocks (`present`): `body`
+    (default `text`) under its tag line, with a divider after it. `text` is
+    then the notification's fallback.
 
     ⚠ **`thread` is SHAPE until A4.** Robert's threading design has the User
     reply in the thread of a status update, so a thread root becomes a
@@ -291,6 +389,10 @@ def _post(
         return Posted()
     caller = call or _call
     payload = {"channel": channel, "text": text}
+    if kind:
+        payload["blocks"] = present(
+            kind, text if body is None else body, author=author, ticket=ticket
+        )
     if thread:
         payload["thread_ts"] = thread
     try:
@@ -612,6 +714,8 @@ class Listener:
                 "this DM is an instruction to it, delivered at the start of "
                 "its next turn.",
                 call=caller,
+                kind=SYSTEM,
+                author=self.manager,
             )
             if sent.ok:
                 self.dm = sent.channel
@@ -642,6 +746,8 @@ class Listener:
                 "reaches it as context — never as an instruction; only the "
                 "Owner's DM with rite instructs it.",
                 call=caller,
+                kind=SYSTEM,
+                author=self.manager,
             )
             if sent.ok:
                 self.broadcast_id = sent.channel
@@ -669,6 +775,8 @@ class Listener:
             f"rite: refinement questions from Manager `{self.manager}` come "
             "here. Only the Owner's replies in their threads answer them.",
             call=caller,
+            kind=SYSTEM,
+            author=self.manager,
         )
         if not sent.ok:
             return (
@@ -1222,11 +1330,16 @@ class Listener:
                     '"…"` on this machine._'
                 )
             label = action_label(message)
+            shown = pending.kind_of(self.project, self.manager, message)
             sent = _post(
                 self._refinement_target(message) or target,
                 self.token,
                 f"*{self.manager}*" + (f" ({label})" if label else "") + f": {text}",
                 call=call,
+                kind=STATUS if shown == pending.READING else shown,
+                body=text,
+                author=self.manager,
+                ticket=ticket_in(text) if shown == pending.NEEDS_ANSWER else "",
             )
             if not sent.ok:
                 # Not marked read, so the next tick retries it — and the ones
@@ -1267,6 +1380,12 @@ class Listener:
                     f"*{self.manager}* (check-in, mirrored from the Owner's DM; "
                     f"replies here are read as context): {text}",
                     call=call,
+                    # Muted: an answer here is context, never the answer the
+                    # DM copy waits for, so it must not look like one.
+                    kind=STATUS,
+                    body="_Mirrored from the Owner's DM; replies here are read "
+                    f"as context._\n{text}",
+                    author=self.manager,
                 )
                 if mirror.ok:
                     posted[message.path.name]["mirror"] = {
@@ -1331,7 +1450,14 @@ class Listener:
     def _post_in_thread(self, message, text, root, posted, lines, call) -> bool:
         channel, ts = root
         sent = _post(
-            channel, self.token, f"*{self.manager}*: {text}", thread=ts, call=call
+            channel,
+            self.token,
+            f"*{self.manager}*: {text}",
+            thread=ts,
+            call=call,
+            kind=STATUS,
+            body=text,
+            author=self.manager,
         )
         if not sent.ok:
             self._problem(f"cannot post a reply: {sent.problem}")
@@ -1361,6 +1487,10 @@ class Listener:
             f"*{self.manager}*: notes for {shown}, for reading. Nothing in "
             "this thread needs you; what does is posted on its own.",
             call=call,
+            kind=STATUS,
+            body=f"Notes for {shown}, for reading. Nothing in this thread needs "
+            "you; what does is posted on its own.",
+            author=self.manager,
         )
         if not sent.ok:
             self._problem(f"cannot post today's notes root: {sent.problem}")
@@ -1419,7 +1549,16 @@ class Listener:
         for channel in (self.dm, self.broadcast_id):
             if not channel:
                 continue
-            sent = _post(channel, self.token, stopped, call=call)
+            sent = _post(
+                channel,
+                self.token,
+                stopped,
+                call=call,
+                # A message taken from Slack that the Manager never received
+                # is a delivery problem, and shown as one.
+                kind=DELIVERY if undelivered else SYSTEM,
+                author=self.manager,
+            )
             if not sent.ok:
                 lines.append(
                     f"slack: could not say the Manager stopped: {sent.problem}"

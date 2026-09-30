@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.68 · **Date:** 2026-09-30
+**Version:** 0.24.69 · **Date:** 2026-09-30
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -4385,8 +4385,17 @@ however init was run (interactive, `--yes`, `--config`), `cli/init/setup.py`:
   credential is offered that namespace, naming the keys it holds; `--yes`
   takes it and says so. The remote is the only identity that survives `rm -rf`
   and a fresh clone.
-- **Not yet:** declaring a Manager (S15) waits for S16's `rite add manager`;
-  `run_init` carries a TODO seam where it goes.
+- **A Manager is offered** (S15, 0.24.69) and declared through S16's
+  `declare_manager`, the one writer of `coordination.managers` and
+  `manager_roles` and the parser's own validation, so init writes what `rite
+  add manager` would and refuses what it would. Default `lead` (preset `lead`)
+  on an Owner machine, `executor` (preset `executor`) on a Manager machine;
+  a no asks for another name, Enter for none. `--yes` declares the default
+  and says so (two keys of local config); `--config` sets `managers.add`
+  (or `false`) and `managers.preset`. Asked after the answers, not at the
+  Owner/Manager question itself: the config it writes into is built only
+  then, on either route. With none declared the last line says so and gives
+  the command.
 
 If no repos found:
 
@@ -7160,6 +7169,33 @@ each Manager's `mail/` (outside `~/.rite` since DF3). A Manager's profile
 grants its own `mail/` and `mail/out` only, so no Manager can read or write
 it.
 
+#### 9.16.8. What each post is, at a glance (S29, 0.24.69)
+
+Every post the relay makes opens with a type tag naming its author, and ends
+with a divider, so two posts never run together, even when Slack groups them
+under one sender and one timestamp. Live run (Robert): a Manager's question,
+status paragraphs and a delivery warning stacked into one wall, and the
+question read as status.
+
+| tag | what | shown |
+|---|---|---|
+| `❓ *Needs your answer*` · `` `<ticket>` `` · author | a question, or a check-in holding questions; the ticket when rite's own first line names one | loud: section blocks |
+| `❗ *Needs you*` · author | a message with no recorded kind (unknown is action, RP1) | loud |
+| `ℹ️ *Status*` · author | a reply, a check-in with no questions, the notes root, a check-in's broadcast mirror | muted: context blocks |
+| `⚙️ *rite*` · author | the start and stop lines | muted |
+| `⚠️ *Delivery*` · author | a stop line that says a message taken from Slack was not delivered | muted |
+
+**Loud is exactly what rite waits on.** The kind comes from
+`pending.kind_of`, the same decision as what `pending` tracks until it is
+answered, never from the text: a post looks like it needs an answer exactly
+when it stays pending until it gets one. A check-in's broadcast mirror is
+muted even when the DM copy is loud, because an answer under it is context.
+
+The blocks are what a reader sees; `text` is unchanged, and is what a
+notification shows. A body is split under Slack's 3000-character limit per
+block, and a message is capped at Slack's 50 blocks, saying `rite replies`
+has the rest.
+
 ## 10. Credentials
 
 ⚠ **SUPERSEDED IN 0.6.0 for where credentials are stored:** one 0600 file
@@ -7762,6 +7798,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.69 — each Slack post says what it is (S29), and `rite init` offers a Manager (S15) (v0.7.0a4 lane 4).** New §9.16.8; §9.3's S15 line. S29: `slack.present`, `TAGS`, `LOUD`, `ticket_in`, `_chunks`; `_post(kind=, body=, author=, ticket=)` sends `blocks` beside the unchanged `text`; every post the relay makes is tagged (start, stop, replies, thread posts, the notes root, the check-in mirror); `pending.kind_of` (`NEEDS_ANSWER`, `NEEDS_YOU`, `READING`) over `_tracked`. S15: `cli/init/setup.offer_a_manager` through `config.managers.declare_manager`, `DEFAULT_MANAGER`, `_ask_preset`; `what_is_missing` names a missing Manager; Lane 1's TODO seam removed. Tests: `tests/test_slack_posts_show_what_they_are.py`, whose invariant runs every sequence of one to three posts over six message kinds (a question naming a ticket, one naming none, an unknown kind, a reply, a check-in with questions, one without), by one author and by two alternating in one conversation: every post has exactly one tag naming its author and ends in a divider, is loud exactly when `pending` waits on it, and names the ticket exactly on a question that names one; `tests/test_init_offers_a_manager.py`, whose invariant runs three routes × two machine roles × accept/decline/another: the keys agree, `configuration_problems` is empty, `rite start`'s own resolver finds exactly what was declared, and the last line says so exactly when none was. Nineteen mutations each go red. Existing init tests answer the Manager question explicitly; one Slack test's whole-payload assertion now checks the blocks it carries.
 
 **Changes in 0.24.68 — three setup steps that needed a text editor now have commands (v0.7.0a4 lane 2: S16, S24, S23).** New §9.5.1 and §9.5.2; §9.1 lists both; §9.6 gains the paragraph on a module's own instructions. **S16** `rite add manager <name> --preset <p>`: `config.managers.declare_manager` builds the entry, splices it into the list and re-runs `parse_managers`, so every refusal is the parser's own and the command cannot write a file the next command rejects. It writes BOTH keys, appends (the order is priority, and the first active Manager is Owner), and UPDATES a name already listed — without that, declaring a second Manager on a project whose first is a bare name fails on the first one and the only way out is the file. The refusal names the command that declares it, for the new Manager as well as existing ones. **S24** `rite module set-command <module> <key> "<cmd>"`: `workspace.manage.set_module_command` sets the field and re-serialises through `write_modules`, so it lands nested under `commands:` — a top-level `test:` is refused by the parser, measured and pinned by a test — then calls `refresh_project`, the refresher `rite update` uses, so the correction reaches the project's CLAUDE.md and every Worker's. An edited section is kept and REPORTED; a file that does not parse is reported as that and not as a hand edit, which an early draft got wrong. An empty command unrecords the key (`None`, not `""`). **S23** `rite add worker` looks for `CLAUDE.md`, `AGENTS.md` and `CONTRIBUTING.md` in each module the Worker gets, names them and ASKS; the answer is `WorkerManifest.follow_module_docs`, written to `worker.yml` and rendered into the Worker's CLAUDE.md with the rule that rite and the ticket win and the Worker reports a contradiction rather than choosing. `--follow-module-docs/--no-follow-module-docs` answer it without a prompt; with nobody at the terminal it is NOT asked — a prompt on an empty stdin aborts, which turned `rite add worker` in a script into a command that made no Worker, caught by an existing test going red — so the files are named, nothing is followed and the message says which flag answers it; nothing found asks nothing; and a file rite GENERATED is never offered, since a repository that is its own module puts the project's own CLAUDE.md at the module's path. **Tests: 90**, including an invariant across each full range rather than its ends — every preset and every duty (S16), every one of the five command keys set, changed and unrecorded (S24), and all eight subsets of the three document names, across two modules (S23). Eighteen mutations were run and each went red; a nineteenth survived and is why `TestUnrecording` now asserts on the returned object: through the file, `""` and `None` are indistinguishable.
 

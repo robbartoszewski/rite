@@ -15,6 +15,8 @@ the same root). So these steps run after the answers, whichever way they came:
 * **namespace** (S18): credentials stored for the same repository before a
   reset are offered back instead of orphaned;
 * **Worker** (S20): offered once there is a module to give it;
+* **Manager** (S15): offered, and declared through `rite add manager`'s own
+  `declare_manager`;
 * and the last line says what is still missing, instead of "Ready.".
 
 Each is asked interactively, taken from `--config` when the preset has it, and
@@ -251,11 +253,88 @@ def offer_a_worker(root: Path, answers, preset, interactive: bool) -> str | None
     return name
 
 
+# --- a Manager (S15) ------------------------------------------------------------
+
+DEFAULT_MANAGER = {"owner": ("lead", "lead"), "manager": ("executor", "executor")}
+"""(name, preset) offered by default, by this machine's role: the Owner machine
+runs the Manager that owns the board; a Manager machine one that executes."""
+
+
+def offer_a_manager(answers, preset, interactive: bool) -> str | None:
+    """Offer to declare a Manager, so `rite start <name>` has one to start
+    (S15). Declared through S16's `declare_manager`, the one writer of
+    `coordination.managers` and `manager_roles` and the parser's own
+    validation, never a second copy of either. Returns the name declared, or
+    one already declared, or None.
+
+    Default yes, and `--yes` takes it and says so: it writes two keys of
+    local config and reaches nothing. `--config` sets `managers.add: <name>`
+    (or `false`) and `managers.preset`."""
+    from rite_ai.config.managers import PRESETS, declare_manager
+
+    coordination = answers.config.coordination
+    if coordination.managers:
+        return coordination.managers[0]
+    name, chosen = DEFAULT_MANAGER.get(answers.role, DEFAULT_MANAGER["owner"])
+    asked_name = preset.get("managers.add")
+    asked_preset = preset.get("managers.preset")
+    if asked_name is not None or asked_preset is not None:
+        if asked_name is False:
+            return None
+        name = str(asked_name or name).strip()
+        chosen = str(asked_preset or chosen).strip()
+        how = "--config"
+    elif interactive:
+        click.echo()
+        what = ", ".join(PRESETS[chosen])
+        if not ui.confirm(
+            f"Declare Manager '{name}' (preset {chosen}: {what}), so `rite start "
+            f"{name}` has one to run?",
+            default=True,
+        ):
+            name = ui.text(
+                "Another Manager's name, or Enter to declare none", default=""
+            ).strip()
+            if not name:
+                return None
+            chosen = _ask_preset()
+        how = ""
+    else:
+        how = "--yes"
+    declared = declare_manager(
+        coordination.managers, coordination.manager_roles, name, preset=chosen
+    )
+    if declared.error:
+        ui.warn(f"Manager '{name}' was NOT declared: {declared.error}")
+        return None
+    coordination.managers = declared.names
+    coordination.manager_roles = declared.roles
+    said = f"Manager '{name}' (preset {chosen})"
+    click.echo(f"  {how}: declared {said}" if how else f"  Declared {said}.")
+    return name
+
+
+def _ask_preset() -> str:
+    from rite_ai.config.managers import PRESETS
+
+    names = sorted(PRESETS)
+    while True:
+        answer = ui.text(f"Its preset ({', '.join(names)})", default="lead").strip()
+        if answer in PRESETS:
+            return answer
+        ui.warn(f"{answer!r} is not a preset: one of {', '.join(names)}.")
+
+
 # --- the last line ------------------------------------------------------------
 
 
 def what_is_missing(root: Path, answers, worker: str | None) -> list[str]:
     missing = []
+    if not answers.config.coordination.managers:
+        missing.append(
+            "no Manager is declared, so `rite start` has nothing to start: "
+            "`rite add manager lead --preset lead`"
+        )
     if not answers.modules:
         missing.append(f"no module is registered: add one with {HOW_TO_ADD_A_MODULE}")
     elif worker is None:

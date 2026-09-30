@@ -134,6 +134,8 @@ def run_init(
     # said, and asked about while someone is there to answer.
     setup.settle_modules(root, answers, interactive)
     setup.settle_schedule(answers, preset, interactive)
+    # S15: before config.yaml is written, which is where the declaration goes.
+    setup.offer_a_manager(answers, preset, interactive)
 
     created: list[str] = []
 
@@ -345,10 +347,6 @@ def run_init(
             "API token and the project key, and the board works once it has."
         )
     worker = setup.offer_a_worker(root, answers, preset, interactive)
-    # TODO(S15): offer to declare a Manager here, once S16's `rite add manager`
-    # (another lane) gives init one writer of `coordination.managers` and
-    # `manager_roles` to call. Until then init writes neither, and says so
-    # below, as `rite start` would.
     missing = setup.what_is_missing(root, answers, worker)
     if missing:
         click.echo(setup.not_ready(missing))

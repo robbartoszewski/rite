@@ -63,7 +63,7 @@ def _app_with_code(home: Path) -> Path:
 def _init_with_defaults(app: Path) -> None:
     # spec or existing code? y · path [.] · changes Enter · role Enter · add
     # ./? Enter · declare a Worker? n (S20)
-    result = CliRunner().invoke(cli, ["init", str(app)], input="y\n\n\n\n\nn\n")
+    result = CliRunner().invoke(cli, ["init", str(app)], input="y\n\n\n\n\n\nn\n")
     assert result.exit_code == 0, result.output
     commit_all(app, "rite init")
 

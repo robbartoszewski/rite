@@ -195,7 +195,7 @@ def test_an_existing_projects_schedule_is_untouched(tmp_path):
     }
     cfg.write_text(yaml.safe_dump(raw))
     # Re-running init on an existing project records a change and nothing else.
-    _init(root, input="y\n\nplease rename it\n")
+    _init(root, input="y\n\nplease rename it\n\n")
     s = _config(root).schedule
     assert [(w.hours, w.workers) for w in s.windows] == [("10:00-12:00", 2)]
 
@@ -205,7 +205,7 @@ def test_an_existing_projects_schedule_is_untouched(tmp_path):
     [
         (["--yes"], None),
         ([], "n\n" + "\n" * 10 + "3\n" + "\n" * 20 + "n\n"),
-        ([], "y\n\n\n\n\nn\n"),
+        ([], "y\n\n\n\n\n\nn\n"),
     ],
     ids=["yes", "scratch", "existing-code"],
 )
@@ -227,7 +227,7 @@ def test_no_route_leaves_the_schedule_empty_or_unsaid(
 def test_accepting_the_offer_declares_a_worker_with_the_module(tmp_path):
     root = _repo(tmp_path / "app")
     # existing code? y · path · changes · role · add ./? · Worker? Enter · name
-    out = _init(root, input="y\n\n\n\n\n\n\n")
+    out = _init(root, input="y\n\n\n\n\n\n\n\n")
     assert (root / "workers" / "w1" / "worker.yml").is_file()
     assert (root / "workers" / "w1" / "app" / "main.go").is_file()
     assert "Ready. Start a Dispatch session" in out
@@ -235,7 +235,7 @@ def test_accepting_the_offer_declares_a_worker_with_the_module(tmp_path):
 
 def test_declining_says_a_worker_is_needed(tmp_path):
     root = _repo(tmp_path / "app")
-    out = _init(root, input="y\n\n\n\n\nn\n")
+    out = _init(root, input="y\n\n\n\n\n\nn\n")
     assert not (root / "workers").exists()
     assert "NOT ready for work: no Worker is declared" in out
     assert "rite add worker w1" in out
@@ -260,7 +260,7 @@ def test_the_config_can_declare_one(tmp_path):
 def test_no_module_means_no_offer(tmp_path):
     root = tmp_path / "empty"
     root.mkdir()
-    out = _init(root, input="y\n\n\n\n")
+    out = _init(root, input="y\n\n\n\n\n")
     assert "Declare a Worker now" not in out
 
 
@@ -326,7 +326,7 @@ def test_a_reinit_offers_the_namespace_exactly_when_it_is_this_repos_and_held(
     else:
         # existing code? y · path · changes · role · add ./? · [reuse?] · Worker? n
         out = _init(
-            root, input="y\n\n\n\n\n" + (f"{answer}\n" if offered else "") + "n\n"
+            root, input="y\n\n\n\n\n\n" + (f"{answer}\n" if offered else "") + "n\n"
         )
     assert (f"namespace {old}" in out) == offered
     reused = _config(root).credentials.namespace == old
@@ -342,11 +342,11 @@ def test_a_wiped_reinit_offers_back_the_namespace_it_wiped(tmp_path):
     old = _config(root).credentials.namespace
     (store.default_rite_home() / store.NAMESPACES_FILENAME).unlink()
     _hold(old)
-    # existing code? n · wipe? y · … from scratch, every default · reuse? y ·
-    # Worker? n
+    # existing code? n · wipe? y · … from scratch, every default · Manager?
+    # Enter (S15) · reuse? y · Worker? n
     out = _init(
         root,
-        input="n\ny\n" + "\n" * 10 + "3\n" + "\n" * 4 + "y\nn\n",
+        input="n\ny\n" + "\n" * 10 + "3\n" + "\n" * 4 + "\ny\nn\n",
     )
     assert f"namespace {old}" in out
     assert _config(root).credentials.namespace == old
