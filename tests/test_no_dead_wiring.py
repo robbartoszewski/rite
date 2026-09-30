@@ -144,6 +144,19 @@ UNCALLED_ON_PURPOSE = {
         "`user_dir` is here."
     ),
     # --- rite_ai/managers/, added when this guard was widened ---
+    "managers_with_state": (
+        "Called by `running_instances` in the same file. Public because it "
+        'is the answer to "which Managers does this checkout have", which '
+        "MM1's tests assert directly — the listing is built from the "
+        "per-Manager directories now, and that IS the property."
+    ),
+    "flat_entries": (
+        "Called by `_flat_present` in the same file. Public because it IS "
+        "MM1's enumeration — the (old path, new path) pairs the migration "
+        "moves — and §5.4.6's whole argument is that such a list needs a "
+        "test behind it, so the test asserts against this rather than "
+        "against what happened to be moved."
+    ),
     "instance_path": (
         "Same: called by `record_instance`, `read_instance` and "
         "`forget_instance` in the same file."

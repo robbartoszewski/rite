@@ -40,7 +40,7 @@ from pathlib import Path
 
 import pytest
 
-from rite_ai.managers import designate, designated, designation_path, user_dir
+from rite_ai.managers import designate, designated, designation_path
 from rite_ai.managers.supervise import StartResult, supervise
 
 POISON = "abc\nrm -rf /"
@@ -49,12 +49,18 @@ POISON = "abc\nrm -rf /"
 @pytest.fixture
 def project(tmp_path: Path) -> Path:
     (tmp_path / ".rite").mkdir()
-    user_dir(tmp_path).mkdir(parents=True, exist_ok=True)
     return tmp_path
 
 
 def _poison(root: Path, manager: str, value: object) -> None:
-    designation_path(root, manager).write_text(json.dumps({"session": value}) + "\n")
+    # ⚠ The directory is made HERE since MM1. The designation used to live in
+    # `.rite/user/`, which the fixture created once for the whole file; it is
+    # under `manager_dir` now, which is per Manager and outside the project,
+    # so the poison is written beside wherever rite would write it rather
+    # than into a directory this test happens to know the shape of.
+    path = designation_path(root, manager)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"session": value}) + "\n")
 
 
 class TestReadingIt:

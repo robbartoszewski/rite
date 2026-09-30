@@ -56,11 +56,20 @@ class TestTheBoundaryIsAPathNow:
             instance_path(project, hostile)
 
     def test_instances_are_per_user_and_profiles_are_not(self, project):
-        """`.rite/user/` is uncommitted runtime state. A shared config must
-        never claim a Manager is running on somebody else's laptop."""
+        """An instance record is uncommitted runtime state. A shared config
+        must never claim a Manager is running on somebody else's laptop.
+
+        ⚠ **Since MM1 it is under `manager_dir`, not `.rite/user/`**, and the
+        assertion moved with it rather than being dropped. Both halves still
+        matter and each is checked: it is not in the project (so nothing
+        commits it), and it is not in the flat `.rite/user/`, which every
+        Manager can write."""
         record_instance(project, ManagerInstance(name="planner", pid=1))
-        assert instance_path(project, "planner").parent == user_dir(project)
-        assert user_dir(project) == project / ".rite" / "user"
+        assert instance_path(project, "planner").parent == manager_dir(
+            project, "planner"
+        )
+        assert not instance_path(project, "planner").is_relative_to(project)
+        assert not instance_path(project, "planner").is_relative_to(user_dir(project))
 
 
 class TestInstancesRoundTrip:
@@ -97,8 +106,13 @@ class TestInstancesRoundTrip:
         assert read_instance(project, "lead") is None
 
     def test_listing_skips_the_unreadable_rather_than_inventing(self, project):
+        """⚠ The unreadable record goes in a Manager's OWN directory since
+        MM1. The listing is built from those directories now, so a stray file
+        in the old flat `.rite/user/` would not be read at all and this would
+        pass without testing anything."""
         record_instance(project, ManagerInstance(name="good", pid=1))
-        bad = user_dir(project) / "bad.json"
+        bad = instance_path(project, "bad")
+        bad.parent.mkdir(parents=True, exist_ok=True)
         bad.write_text("{{{")
         assert [i.name for i in running_instances(project)] == ["good"]
 

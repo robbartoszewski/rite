@@ -192,8 +192,15 @@ def instance_path(root: Path, name: str) -> Path:
     return manager_dir(root, name) / INSTANCE_FILENAME
 
 
-def legacy_instance_path(root: Path, name: str) -> Path:
-    """Where the instance record lived before MM1. `relocate` only."""
+def legacy_instance_file(root: Path, name: str) -> Path:
+    """Where the instance record lived before MM1. `relocate` only.
+
+    ⚠ Named `..._file`, not `..._path`, deliberately.
+    `tests/test_no_dead_wiring.py` decides "is this called anywhere else" by
+    looking for the substring `<name>(` across `src/`, so a helper called
+    `legacy_instance_path` makes `instance_path` look called from
+    `relocate.py` and quietly invalidates its exemption — a guard weakened by
+    a naming choice, which is worse than the guard not existing."""
     problem = manager_name_problem(name)
     if problem:
         raise ValueError(problem)
@@ -393,8 +400,9 @@ def designation_path(root: Path, name: str) -> Path:
     return manager_dir(root, name) / DESIGNATION_FILENAME
 
 
-def legacy_designation_path(root: Path, name: str) -> Path:
-    """Where the designation lived before MM1. `relocate` only."""
+def legacy_designation_file(root: Path, name: str) -> Path:
+    """Where the designation lived before MM1. `relocate` only. Named
+    `..._file` for `legacy_instance_file`'s reason."""
     _checked(name)
     return user_dir(root) / f"{name}{DESIGNATION_SUFFIX}"
 

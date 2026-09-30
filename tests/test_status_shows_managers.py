@@ -83,7 +83,13 @@ def test_a_corrupt_record_does_not_invent_a_manager(tmp_path):
     _record(root, "planner", os.getpid())
     from rite_ai.managers import instance_path
 
-    instance_path(root, "broken").write_text("{ not json")
+    # ⚠ The directory is made here since MM1: a Manager's record lives in
+    # its own directory now, which does not exist until something writes
+    # there — where the old flat `.rite/user/` was made by whoever wrote
+    # first.
+    broken = instance_path(root, "broken")
+    broken.parent.mkdir(parents=True, exist_ok=True)
+    broken.write_text("{ not json")
 
     lines = _manager_lines(root)
 

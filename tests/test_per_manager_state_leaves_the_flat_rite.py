@@ -192,13 +192,13 @@ class TestAnUpgradeMovesTheFlatStateAndNeverUnderARunningManager:
     @staticmethod
     def _flat_state(root, name: str, session: str = SESSION) -> None:
         """What a rite older than 0.7.0 left in the flat `.rite/user/`."""
-        from rite_ai.managers import legacy_designation_path, legacy_instance_path
+        from rite_ai.managers import legacy_designation_file, legacy_instance_file
         from rite_ai.managers.enclosure import _legacy_engine_tmp  # noqa: PLC2701
 
-        instance = legacy_instance_path(root, name)
+        instance = legacy_instance_file(root, name)
         instance.parent.mkdir(parents=True, exist_ok=True)
         instance.write_text(f'{{"name": "{name}", "pid": 1}}')
-        legacy_designation_path(root, name).write_text(f'{{"session_id": "{session}"}}')
+        legacy_designation_file(root, name).write_text(f'{{"session_id": "{session}"}}')
         scratch = _legacy_engine_tmp(root, name)
         scratch.mkdir(parents=True, exist_ok=True)
         (scratch / "left-behind").write_text("scratch")
@@ -331,9 +331,9 @@ class TestAnUpgradeMovesTheFlatStateAndNeverUnderARunningManager:
         assert "rite manager stop beta" in got.refused
         # NOTHING moved, including the Manager that was free. A partial move
         # is the state with no way back.
-        from rite_ai.managers import legacy_instance_path
+        from rite_ai.managers import legacy_instance_file
 
-        assert legacy_instance_path(project, "alpha").exists()
+        assert legacy_instance_file(project, "alpha").exists()
 
     def test_the_lock_is_what_stops_it_not_the_absence_of_a_manager(self, project):
         """⚠ **The control.** Without it the refusal test proves only that

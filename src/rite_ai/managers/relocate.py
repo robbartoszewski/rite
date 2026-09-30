@@ -52,8 +52,8 @@ from rite_ai.managers import (
     INSTANCE_FILENAME,
     MANAGERS_DIRNAME,
     USER_DIRNAME,
-    legacy_designation_path,
-    legacy_instance_path,
+    legacy_designation_file,
+    legacy_instance_file,
     legacy_manager_dir,
     manager_dir,
 )
@@ -93,8 +93,8 @@ def flat_entries(root: Path, name: str) -> list[tuple[Path, Path]]:
 
     target = manager_dir(root, name)
     return [
-        (legacy_instance_path(root, name), target / INSTANCE_FILENAME),
-        (legacy_designation_path(root, name), target / DESIGNATION_FILENAME),
+        (legacy_instance_file(root, name), target / INSTANCE_FILENAME),
+        (legacy_designation_file(root, name), target / DESIGNATION_FILENAME),
         (_legacy_engine_tmp(root, name), target / ENGINE_TMP_DIRNAME),
     ]
 
