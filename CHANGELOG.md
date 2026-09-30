@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### A Slack app another project already uses is flagged when you set the token
+
+rite has refused to run two projects on one Slack app for a while — two
+projects there share your DM, so each acts on the other's instructions. But it
+only said so at the first `rite start`, once the app had been made, the token
+stored and the project set up, and the fix it offered ("create a new Slack
+app") is the heaviest step in the whole setup.
+
+`rite credential set slack` now tells you as soon as you give it the token,
+naming the project that already holds the app, and `rite doctor` reports it
+too. The advice points at api.slack.com/apps and names the `reactions:read`
+scope a new app also needs. Your token is still stored either way — you may be
+moving a project onto its own app in either order — and `rite start` still
+refuses to open a relay on a shared app.
+
+If rite cannot reach Slack to check, it says so and leaves it at that, rather
+than reporting a problem it has not found.
+
 ### `rite credential set slack` sets Slack up in one pass
 
 It now asks for your Slack member id and the broadcast channel as well as the

@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.67 · **Date:** 2026-09-30
+**Version:** 0.24.68 · **Date:** 2026-09-30
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -6883,6 +6883,22 @@ Two consequences, written down so they are not discovered:
   latency grow with the number of channels. **Cap or rotation is OPEN**, an
   implementation choice not yet made.
 
+**Found where the token is set, not at the first run (0.24.68).** The binding
+above is consulted by `rite credential set slack` as soon as a bot token is
+stored, and by `rite doctor` before it probes the targets — a shared app is
+not a target that fails, so the probe says "ok". Both ask
+`slack_app.sharing`, which READS the binding record (`_holder_of`) and never
+writes one: `bind` answers by binding, so a report using it would take the app
+for itself and make the project that really uses it the second one. It answers
+`ok`, `shared` or `unknown`; "could not ask Slack" is said and not counted,
+because a report must not call a project faulty because a network was
+unreachable. The guidance names api.slack.com/apps and the `reactions:read`
+scope, in the same words §9.16 already uses for it. Setting the credential is
+not refused — the token is real, a project may be moved onto its own app in
+either order, and refusing to store it would leave the person unable to record
+the app they had just made. `rite start` still refuses to open a listener
+(v0.7.0 dogfood S22a).
+
 #### 9.16.7. Several Managers in one project: only the Owner hears Slack (0.6.0)
 
 **Status: DECIDED 2026-09-26 (Robert: MMQ2, option (c)). BUILT: only the
@@ -7671,6 +7687,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.68 — a shared Slack app is found where the token is set, not at the first run (v0.7.0a4 lane 3: S22a).** §9.16.6 gains the paragraph. The binding was consulted only where a listener opens, so a token belonging to another project was accepted by `rite credential set slack`, stored and configured, and the collision surfaced at `rite start` — with "create a new Slack app", the heaviest step in the setup, offered last and with no mention of the scopes it needs. `slack_app._holder_of` reads the binding record and writes nothing (private: it is an in-module read, and the dead-wiring guard is right that it is not a public entry point); `slack_app.sharing` returns `ok`, `shared` or `unknown`, and `DEDICATED_APP` names api.slack.com/apps and `reactions:read` in the wording `managers/slack.py` already uses for that scope. Asked by `rite credential set slack` right after the token is stored, and by `_doctor_slack` before the targets are probed (a shared app is not a target that fails — the probe says "ok"). ⚠ It exists because `bind` answers by BINDING: doctor on a project that had never run would take the app for itself and make the project that really uses it the second one. ⚠ Three answers, not two: `bind` collapses "could not ask Slack" into a refusal, which is right when the choice is whether to open a listener and wrong in a report, where it would call a project faulty because a network was unreachable — so `unknown` is said and not counted. Setting a credential is NOT refused on a shared app: the token is real, a project may be moved onto its own app in either order, and refusing to store it would leave the person unable to record the app they just made; `rite start` still refuses to open a listener. Tests: `tests/test_a_shared_slack_app_is_found_at_setup.py`, with two invariants run over every state the binding can be in (none, this project, another project, unreadable, cannot ask) — the check never writes a binding, and both entry points give the same verdict, only a known collision counting as a problem. Six mutations (the check binding instead of reading, an unknown reported as shared, either entry point not asking, the scope dropped from the guidance, the holder ignored) each go red.
 
 **Changes in 0.24.67 — Slack is set up by one command, and a channel is taken as typed (v0.7.0a4 lane 3: S14, S19).** §10.5 gains three paragraphs. S14: `Field.optional`, `Field.normalize`/`clean` and `Field.problem`; the `slack` service gains `owner_user` and `broadcast_channel`, both optional and both `config_path`, so one command writes the committed Slack config; `_set_service` prompts optionally, normalises, and asks again for a value the parser would refuse rather than writing a `config.yaml` that will not parse. S19: `config.parse.normalize_slack_channel` (a bare name gains `#`, a `C…`/`G…` id is untouched), applied by the parser and by the prompt, with `slack_field_problem` reusing `_slack_problem` so the two cannot drift; `credentials_despite_config_error` recovers the namespace alone, and `rite credential set` continues on a config error elsewhere — naming it, skipping the fields that would rewrite the file, and still refusing where no namespace is recorded. Tests: `tests/test_slack_setup_is_one_command.py`, with the channel invariant run across the full range of what a person types (bare, `#`-prefixed, padded, `C…`, `G…`, empty, dotted) through BOTH the prompt's cleaner and the file, so one entry point cannot accept what the other refuses; plus one command recording both settings, Enter leaving Slack off, a name typed where an id belongs being asked again, and a malformed channel not blocking a credential set. Six mutations (the normaliser returning its input, the two fields removed, the validation dropped, the hard exit restored, the rewrite guard dropped, an id given a `#`) each go red. Two existing tests changed rather than added to: a bare channel is now normalised, not a `ParseError`, and `credential set` on a refused config now continues while still never rewriting the file — the file-untouched assertion each was written for is kept, and the refusal it achieved that with is now a second test for the no-namespace case.
 

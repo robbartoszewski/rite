@@ -117,6 +117,80 @@ def identity_of(token: str, *, call=None) -> Identity | Refused:
     return Identity(team=team, user=user)
 
 
+@dataclass(frozen=True)
+class Sharing:
+    """Whether this app is already another project's, as far as rite can tell.
+
+    ⚠ **Three answers, not two.** "Could not ask" is not "shared" and is not
+    "clear": reported as either, a person is told something rite does not
+    know. `bind` collapses the unknown into a refusal, which is right where
+    the choice is whether to OPEN A LISTENER — refusing costs a run, guessing
+    costs the confidentiality failure §9.16.6 exists to prevent. It is wrong
+    in a report, where nothing is at stake but what the reader is told.
+    """
+
+    kind: str
+    """`ok`, `shared`, or `unknown`."""
+    message: str = ""
+    """What to tell the reader; empty for `ok`."""
+
+    @property
+    def is_a_problem(self) -> bool:
+        """Only a KNOWN collision is a problem. An unknown is a gap in the
+        report, and counting it would make `rite doctor` fail on an
+        unreachable network."""
+        return self.kind == "shared"
+
+
+DEDICATED_APP = (
+    "Give this project its own Slack app: create one at api.slack.com/apps, "
+    "install it to the workspace, and store its bot token with `rite "
+    "credential set slack`. It needs the scopes rite posts and reads with, "
+    "and `reactions:read` — without that one, rite cannot see a reaction to a "
+    "question, so only a reply in the question's thread confirms it reached "
+    "you (add it under OAuth & Permissions)."
+)
+
+
+def _holder_of(identity: Identity) -> str:
+    """Which project this app is bound to, or "" — READ ONLY.
+
+    `bind` is the only other way to ask, and it answers by BINDING, which a
+    report may not do: `rite doctor` on a project that has never run would
+    take the app for itself and make the project that really uses it the
+    second one. So the record is read and nothing is written.
+    """
+    try:
+        return str(json.loads(_binding_path(identity).read_text())["project"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return ""
+
+
+def sharing(token: str, project: Path, *, call=None) -> Sharing:
+    """Whether another project already uses this app (v0.7.0 dogfood S22a).
+
+    Asked where the token is SET and where the project is CHECKED, not only
+    where the listener opens. Until this, the collision surfaced at `rite
+    start`, after the app was made, the token stored and the project
+    configured — and the only guidance was "give this project its own Slack
+    app", which is the heaviest step in the setup, offered last.
+    """
+    who = identity_of(token, call=call)
+    if isinstance(who, Refused):
+        return Sharing("unknown", who.reason)
+    holder = _holder_of(who)
+    if not holder or Path(holder) == project.resolve():
+        return Sharing("ok")
+    return Sharing(
+        "shared",
+        f"this Slack app (workspace {who.team}, bot {who.user}) is already "
+        f"used by another project: {holder}. Two projects on one app share "
+        f"the Owner's DM, so each takes the other's instructions and reads "
+        f"the other's messages (SPEC §9.16.6). {DEDICATED_APP} If {holder} no "
+        f"longer uses this one, remove {_binding_path(who)} and start again.",
+    )
+
+
 def _binding_path(identity: Identity) -> Path:
     return _apps_dir() / f"{identity.name}.json"
 
