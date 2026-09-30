@@ -9,8 +9,13 @@ bot token, and records the two that are not secrets in `.rite/config.yaml` —
 the same thing `rite credential set jira` does with the site and board key.
 Before this it stored the token and stopped, so `slack.owner_user` had to be
 hand-edited in, and until it was, a refinement round that asks you by DM had
-nowhere to go. Both are optional: press Enter to skip either, and a token on
-its own is still a working broadcast-only setup.
+nowhere to go.
+
+Both are optional — press Enter to skip either. A channel with no member id is
+a working broadcast-only setup: rite posts status, and nothing typed in Slack
+instructs a Manager. But a token on its OWN leaves Slack switched off, because
+neither target is set, so the command now says so instead of looking like it
+finished the job.
 
 ### A Slack channel is taken as you type it
 

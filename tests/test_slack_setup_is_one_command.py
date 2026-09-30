@@ -81,8 +81,9 @@ def test_one_command_records_both_slack_settings(tmp_path, monkeypatch):
 
 
 def test_skipping_both_leaves_slack_off_and_the_token_stored(tmp_path, monkeypatch):
-    """Optional means optional: a token alone is a legitimate broadcast-only
-    setup, so Enter must not be a wall in front of it."""
+    """Optional means optional — Enter must not be a wall. But skipping BOTH
+    leaves Slack with no target, so it is off, and that is said rather than
+    left to be discovered at the first refinement round."""
     root = _project(tmp_path)
 
     result = _set_slack(root, monkeypatch, f"{TOKEN}\n\n")
@@ -91,7 +92,51 @@ def test_skipping_both_leaves_slack_off_and_the_token_stored(tmp_path, monkeypat
     slack = _slack_of(root)
     assert slack.owner_user == "" and slack.broadcast_channel == ""
     assert not slack.enabled
+    assert "slack_bot_token" in result.output, "the token is stored either way"
+    assert OFF in result.output, "and the off state is not silent"
+
+
+OFF = "Slack is OFF"
+
+# (what is answered after the token) -> whether Slack ends up ON
+ANSWERS = [
+    ("\n\n", False),  # token only — no target at all
+    (f"{OWNER}\n\n", True),  # a command channel
+    ("\nall-rite\n", True),  # broadcast only: a channel, no owner
+    (f"{OWNER}\nall-rite\n", True),  # both
+]
+
+
+@pytest.mark.parametrize(("answers", "on"), ANSWERS)
+def test_the_off_notice_appears_exactly_when_slack_lands_off(
+    tmp_path, monkeypatch, answers, on
+):
+    """IFF, across every way this command can end. The notice must not cry
+    wolf on a working broadcast-only setup, and must not stay quiet on the one
+    that turns nothing on."""
+    root = _project(tmp_path)
+
+    result = _set_slack(root, monkeypatch, f"{TOKEN}{answers}")
+
+    assert result.exit_code == 0, result.output
+    assert _slack_of(root).enabled is on
+    assert (OFF in result.output) is (not on), result.output
+    # Stored whatever the answer: this notice is never a refusal.
     assert "slack_bot_token" in result.output
+
+
+def test_skipping_both_is_quiet_when_slack_is_already_on(tmp_path, monkeypatch):
+    """Read off the RESULTING config, not off what this run answered. Someone
+    rotating a token on a configured project skips both and has turned nothing
+    off — telling them Slack is off would be false."""
+    root = _project(tmp_path)
+    _set_slack(root, monkeypatch, f"{TOKEN}{OWNER}\nall-rite\n")
+
+    result = _set_slack(root, monkeypatch, f"{TOKEN}\n\n")
+
+    assert result.exit_code == 0, result.output
+    assert _slack_of(root).enabled
+    assert OFF not in result.output
 
 
 def test_a_name_typed_where_an_id_belongs_is_asked_again(tmp_path, monkeypatch):

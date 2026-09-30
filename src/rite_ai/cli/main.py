@@ -2313,6 +2313,24 @@ def _set_service(
         for path, value in configured:
             click.echo(f"  {path:<32} {value}")
 
+    # ⚠ **An off switch is said, not left to be discovered.** Slack is on only
+    # if it has a target: `SlackConfig.enabled` is `owner_user or
+    # broadcast_channel`, so a token with both skipped stores a real
+    # credential and turns nothing on. Every line above it says "stored" and
+    # "recorded", which is what a finished setup looks like — and the next
+    # thing that happens is a refinement round with nowhere to go, far from
+    # here. Read off the RESULTING config, not off what this run answered, so
+    # a run that skips both on a project already configured stays quiet.
+    if svc.name == "slack" and config is not None and not config.slack.enabled:
+        click.echo(
+            "\n⚠ the token is stored, and Slack is OFF: it has no target, so "
+            "nothing is posted and nothing is read. Give it one — a channel "
+            "for status (`slack.broadcast_channel`), your member id for a "
+            "command channel (`slack.owner_user`), or both — by running this "
+            "again and answering, or in .rite/config.yaml.",
+            err=True,
+        )
+
 
 @credential.command("set")
 @click.argument("name")
