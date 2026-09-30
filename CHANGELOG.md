@@ -1,6 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.7.0a3 (2026-09-30) — alpha: `rite init` points you at the code
+
+⚠ **Still an alpha, cut for the same dogfood** (a real contribution to yoloAI
+through rite). Setting up the 0.7.0a2 run, `rite init` on an empty directory
+produced a project with nothing to work on and said it was ready; these fix
+that route and its neighbour. Not installed by default: `install.sh` still
+installs 0.6.0 unless you ask for this one (`RITE_VERSION=v0.7.0a3`).
+Everything 0.7.0a1 and 0.7.0a2 said is and is not in it still holds.
 
 ### `rite init` asks where the code is when the path you give is empty
 
