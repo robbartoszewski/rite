@@ -115,17 +115,30 @@ def _quoted(text: str) -> str:
     return "\n".join(f"    > {line}" for line in clean.splitlines())
 
 
-def brief(root: Path, manager: str, board, config, *, now: float | None = None) -> str:
-    """This cycle's refinement work for the Manager that refines, or ""."""
+def brief(
+    root: Path, manager: str, board, config, *, now: float | None = None, say=None
+) -> str:
+    """This cycle's refinement work for the Manager that refines, or "".
+
+    It also reconciles the `ready-to-work` view (TR7) first, from the same
+    reads: the Manager that refines is the Owner, the one supervisor that
+    writes the label. `say` gets the start line of what it corrected.
+    """
     if board is None or not _is_refiner(root, manager, config):
         return ""
-    from rite_ai.coordination.ticket_labels import SCHEDULED
+    from rite_ai.refinement import view
     from rite_ai.tickets import BackendError, TicketFilter
 
     now = time.time() if now is None else now
-    listed = board.list_tickets(TicketFilter(label=SCHEDULED))
+    labels = view.reconcile(board, view.managers_of(config))
+    if callable(say) and labels.line():
+        say(labels.line())
+    corrected = labels.instruction()
+    listed = labels.scheduled
+    if listed is None:
+        listed = board.list_tickets(TicketFilter(label=view.SCHEDULED))
     if isinstance(listed, BackendError):
-        return (
+        return corrected + (
             "\n\n## Refinement: this cycle (rite)\n\nrite could not read the "
             f"board ({listed.message}), so there is no refinement list this "
             "cycle. Do not refine from memory.\n"
@@ -133,7 +146,9 @@ def brief(root: Path, manager: str, board, config, *, now: float | None = None) 
     attempts = rounds.all_attempts(root, manager)
     states, tickets = [], {}
     for ticket in listed:
-        answer = st.checked(lambda t: st.status(board, t), ticket.id)
+        answer = labels.statuses.get(ticket.id) or st.checked(
+            lambda t: st.status(board, t), ticket.id
+        )
         shown = answer.ticket or ticket
         tickets[ticket.id] = shown
         states.append(
@@ -171,8 +186,10 @@ def brief(root: Path, manager: str, board, config, *, now: float | None = None) 
     for ticket_id, why in work.needs_person.items():
         lines.append(f"- **{ticket_id} needs a person**: {why}")
     if not lines:
-        return ""
-    return "\n\n## Refinement: this cycle (rite)\n\n" + "\n".join(lines) + "\n"
+        return corrected
+    return (
+        corrected + "\n\n## Refinement: this cycle (rite)\n\n" + "\n".join(lines) + "\n"
+    )
 
 
 def _open_entry(ticket, state, config) -> list[str]:

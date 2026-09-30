@@ -64,6 +64,14 @@ def status(board, ticket_id: str) -> Status:
     The board's identity comes from `board` itself, so the record is checked
     against the board that was actually read.
     """
+    return status_and_thread(board, ticket_id)[0]
+
+
+def status_and_thread(board, ticket_id: str):
+    """`status`, and the thread it was decided from: `(Status, Thread |
+    BackendError)`. For a caller that also needs the comments of that same
+    read (TR7's view, which says a thing on a ticket once per record state),
+    so it neither reads the ticket twice nor composes the predicate itself."""
     from rite_ai.refinement import key as refinement_key
 
     identity = rec.board_identity(board)
@@ -75,8 +83,8 @@ def status(board, ticket_id: str) -> Status:
             f"rite cannot identify this board ({type(board).__name__}), so no "
             "record on it can be checked",
             thread.ticket if isinstance(thread, Thread) else None,
-        )
-    return evaluate(ticket_id, identity, thread, refinement_key.load())
+        ), thread
+    return evaluate(ticket_id, identity, thread, refinement_key.load()), thread
 
 
 def board_for(root, config, *, role: str = "workers"):

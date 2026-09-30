@@ -587,7 +587,12 @@ def _write(root: Path, owner: str, board, attempt, save) -> list[str]:
         return [f"{outcome.message}. rite tries again at the next cycle"]
     attempt.accepted = {}
     save(attempt)
-    return [f"{attempt.ticket} refined: record {outcome.record.record_id}"]
+    from rite_ai.refinement import view
+
+    labelled = view.settle(board, attempt.ticket, view.managers_at(root))
+    return [f"{attempt.ticket} refined: record {outcome.record.record_id}"] + (
+        [labelled] if labelled else []
+    )
 
 
 def retry_accepted(root: Path, owner: str, board) -> list[str]:

@@ -118,10 +118,18 @@ def accept(
     )
     if not outcome.ok:
         return outcome
+    from pathlib import Path
+
+    from rite_ai.refinement import view
+
+    # TR7: the view follows the record at once, not at the next cycle.
+    managers = view.managers_at(Path(root)) if root is not None else []
+    labelled = view.settle(board, ticket_id, managers)
     return Outcome(
         True,
         f"{ticket_id}: REFINED — record {outcome.record.record_id}, attested by a "
-        "session running as you (not confirmed through your channel)",
+        "session running as you (not confirmed through your channel)"
+        + (f"\n{labelled}" if labelled else ""),
         outcome.record,
     )
 

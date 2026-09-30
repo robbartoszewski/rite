@@ -444,6 +444,49 @@ class GitHubBackend(TicketBackend):
                 return result
         return None
 
+    def describe_label(
+        self, name: str, description: str, color: str
+    ) -> None | BackendError:
+        """Create `name` with a description, if the repo has no such label.
+
+        `label()` would create it grey and blank (the POST above). An
+        existing label is left exactly as it is: its colour and description
+        may be a person's (TR7, the note's part 3.10). Asked once per
+        backend; a lost race to create it is success.
+        """
+        done = getattr(self, "_described", set())
+        if name in done:
+            return None
+        from urllib.parse import quote
+
+        found = self._gh(["api", f"repos/{self.repo}/labels/{quote(name)}"])
+        if isinstance(found, BackendError):
+            if "404" not in found.message and "Not Found" not in found.message:
+                return found
+            made = self._gh(
+                [
+                    "api",
+                    "-X",
+                    "POST",
+                    f"repos/{self.repo}/labels",
+                    "-f",
+                    f"name={name}",
+                    "-f",
+                    f"description={description}",
+                    "-f",
+                    f"color={color}",
+                ]
+            )
+            if isinstance(made, BackendError):
+                # Someone created it between the two calls: read it again
+                # rather than trust the wording of gh's error.
+                again = self._gh(["api", f"repos/{self.repo}/labels/{quote(name)}"])
+                if isinstance(again, BackendError):
+                    return made
+        done.add(name)
+        self._described = done
+        return None
+
     def matches(self, ticket: Ticket, filters: TicketFilter | None) -> bool | None:
         """`gh issue list`'s own filter, applied to one issue as read."""
         f = filters or TicketFilter()
