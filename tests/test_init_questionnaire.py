@@ -84,7 +84,12 @@ def test_interactive_output_shows_progress_sections(tmp_path: Path):
     result = runner.invoke(_init_cmd, [str(tmp_path)], input=_ALL_BLANK)
     assert "[1/7]" in result.output
     assert "[7/7]" in result.output
-    assert "Ready. Start a Dispatch session" in result.output
+    # An empty directory, every question skipped: no module, so init says it
+    # is not ready rather than "Ready." (S13, the --yes gap's interactive twin).
+    assert "Initialised, but NOT ready for work: no module is registered" in (
+        result.output
+    )
+    assert "Ready. Start a Dispatch session" not in result.output
 
 
 def test_interactive_project_name_prompt_prefilled_with_dirname(tmp_path: Path):
@@ -163,6 +168,7 @@ def test_interactive_detects_and_adds_repos(tmp_path: Path):
                 "",  # kb link
                 "",  # kb file
                 "",  # kb commit
+                "n",  # declare a Worker? (S20)
             ]
         )
         + "\n"

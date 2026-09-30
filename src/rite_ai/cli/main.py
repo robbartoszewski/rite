@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -7,6 +8,7 @@ import click
 
 from rite_ai import __version__
 from rite_ai.cli.help import RiteGroup
+from rite_ai.config.managers import CLAUDE, DUTIES, PRESETS, effective_duties
 from rite_ai.credentials.store import STORED
 from rite_ai.state import exclusion_holds
 
@@ -2166,7 +2168,24 @@ def _store_one(name: str, value: str, global_: bool, root, config) -> str:
         )
         click.echo(f"set RITE_{name.upper()} as an environment variable instead")
         raise SystemExit(1)
+    if not global_ and config is not None:
+        _remember_the_namespace(root, config)
     return account
+
+
+def _remember_the_namespace(root, config) -> None:
+    """S18: note which namespace this project's repositories use, so a re-init
+    after a reset (or `rm -rf` and a fresh clone) can offer these credentials
+    back. Never fails the store it follows."""
+    from rite_ai.config.parse import ParseError, parse_modules
+    from rite_ai.credentials.store import remember_namespace
+
+    if root is None:
+        return
+    modules = parse_modules(Path(root) / ".rite" / "modules.yaml")
+    if isinstance(modules, ParseError):
+        return
+    remember_namespace(config.credentials.namespace, [m.url for m in modules if m.url])
 
 
 def _apply_config_field(config, dotted: str, value: str) -> None:
@@ -3098,6 +3117,64 @@ def credential_rotate() -> None:
         click.echo(f"  {entry.name} rotated")
 
 
+@cli.group()
+def module() -> None:
+    """A registered module's settings."""
+
+
+@module.command("set-command")
+@click.argument("name")
+@click.argument("key")
+@click.argument("command")
+def module_set_command_cmd(name: str, key: str, command: str) -> None:
+    """Record how to build, test or lint a module, and refresh the
+    instructions that quote it.
+
+    Detection derives these from a module's own manifests. It is right for
+    most modules and wrong for some — a scheme it cannot see, a test target
+    that needs a flag — and this is how the correction is made without
+    opening `.rite/modules.yaml`.
+
+    ⚠ The correction also reaches the project's `CLAUDE.md` and every
+    Worker's, which quote these commands. Before this, `modules.yaml` was
+    the only thing a correction reached, and the agent kept reading the old
+    command out of its instructions.
+
+    An empty command UNRECORDS the key, so detection decides it again.
+
+    Examples:
+      rite module set-command backend test "pytest -q"
+      rite module set-command frontend build "npm run build -- --prod"
+      rite module set-command backend test ""
+    """
+    from rite_ai.workspace.manage import set_module_command
+
+    root = _find_project_root()
+    result = set_module_command(root, name, key, command)
+    if not result.ok:
+        click.echo(result.message, err=True)
+        raise SystemExit(1)
+
+    click.echo(result.message)
+    for where in result.refreshed:
+        click.echo(f"  refreshed {where}")
+    # ⚠ Said, not swallowed. A section somebody edited is KEPT — that is the
+    # right rule — but silence here would leave them believing a command they
+    # just recorded had reached instructions it never did.
+    for where in result.kept:
+        click.echo(f"  NOT refreshed {where}", err=True)
+    if result.kept:
+        click.echo(
+            "  those sections were edited by hand, so rite left them alone — "
+            "`rite update --take <section>` takes rite's version",
+            err=True,
+        )
+    # ⚠ A file rite could not write at all is NOT an edited section, and
+    # saying so would send someone looking for an edit they never made.
+    for note in result.notes:
+        click.echo(f"  NOT refreshed {note}", err=True)
+
+
 # --- Add / Remove ---
 
 
@@ -3136,6 +3213,209 @@ def add_module_cmd(name: str, url: str, branch: str, description: str) -> None:
         raise SystemExit(1)
 
 
+def _somebody_is_there() -> bool:
+    """Whether there is a person at the terminal to answer a question.
+
+    Separate and tiny so a test can flip it: what it guards is a prompt,
+    and a prompt cannot be exercised by a test that has already answered
+    it.
+    """
+    try:
+        return bool(sys.stdin.isatty())
+    except (AttributeError, ValueError):  # a closed or replaced stream
+        return False
+
+
+def _ask_about_module_docs(
+    root: Path, module_subset: list[str] | None, answer: bool | None
+) -> list[str]:
+    """Which of the modules' own instruction files this Worker follows (S23).
+
+    ⚠ **Asked, not assumed, in either direction.** A module's
+    `CONTRIBUTING.md` is written for people and may contradict how rite
+    drives a Worker. Following it silently would put instructions nobody
+    chose into a Worker's brief; ignoring it silently loses the conventions
+    the module actually has. So the files are found, named, and the
+    question is put.
+
+    Nothing found means nothing asked — a question with no subject is
+    noise, and answering it changes nothing.
+    """
+    from rite_ai.workspace.manage import module_docs, modules_for_worker
+
+    modules = modules_for_worker(root, module_subset)
+    if isinstance(modules, str):
+        # Whatever is wrong with the subset, `add_worker` refuses on it a
+        # moment later with the same words. Saying it twice, or refusing
+        # here, would put the error in two places.
+        return []
+    found = module_docs(root, modules)
+    if not found:
+        return []
+
+    click.echo("these modules keep instructions of their own:")
+    for path in found:
+        click.echo(f"  {path}")
+    if answer is None and not _somebody_is_there():
+        # 🔴 **A prompt is not an exception, it is the absence of an answer**
+        # (defect class 15). `click.confirm` on an empty stdin ABORTS, so
+        # asking unconditionally turned `rite add worker` in a script into a
+        # command that creates no Worker — found by an existing test going
+        # red. Not asked, not followed, and BOTH said, with the flag that
+        # answers it: a default taken in silence is the other half of the
+        # same defect.
+        click.echo(
+            "  not asked — nothing is attached to answer. Not followed; pass "
+            "--follow-module-docs to follow them, or --no-follow-module-docs "
+            "to say so explicitly",
+            err=True,
+        )
+        return []
+    if answer is None:
+        answer = click.confirm("  should this Worker follow them?", default=True)
+    if not answer:
+        click.echo("  not followed — the Worker is not told to read them")
+        return []
+    click.echo("  followed — named in the Worker's CLAUDE.md, under rite's own")
+    return found
+
+
+@add.command("manager")
+@click.argument("name")
+@click.option(
+    "--preset",
+    default="",
+    help="A named set of duties rite ships: " + ", ".join(sorted(PRESETS)) + ".",
+)
+@click.option(
+    "--duties",
+    default="",
+    help="Comma-separated duties, instead of a preset: " + ", ".join(DUTIES) + ".",
+)
+@click.option(
+    "--engine",
+    default=CLAUDE,
+    help="What does the work: 'claude', 'human', or 'local:<class>'.",
+)
+@click.option("--model", default="", help="Model name, for a claude or local engine.")
+@click.option("--endpoint", default="", help="Endpoint URL, for a local engine.")
+@click.option("--agent", default="", help="Agent runtime, for a local engine.")
+@click.option(
+    "--credential",
+    default="",
+    help="A credential NAME this Manager's endpoint needs — never a value.",
+)
+@click.option(
+    "--context-window",
+    type=int,
+    default=0,
+    help="Tokens a local Manager's model is served with.",
+)
+def add_manager_cmd(
+    name: str,
+    preset: str,
+    duties: str,
+    engine: str,
+    model: str,
+    endpoint: str,
+    agent: str,
+    credential: str,
+    context_window: int,
+) -> None:
+    """Declare a Manager in config.yaml, without editing the file.
+
+    Writes BOTH keys the file has: the name into `coordination.managers`,
+    which is priority order, and the declaration into `manager_roles`,
+    which is what the Manager is FOR. Writing one and not the other is
+    exactly the disagreement `rite doctor` reports.
+
+    A new Manager is appended, because the order is priority and the first
+    active one is Owner — adding one must not change who that is.
+
+    ⚠ Naming a Manager that is already listed CHANGES its declaration
+    rather than adding a second. That is deliberate: once any Manager
+    declares a preset, every Manager must, so declaring your second one
+    fails on your first until the first is declared too — and this is the
+    command that declares it.
+
+    Examples:
+      rite add manager lead --preset lead
+      rite add manager planner --preset planner
+      rite add manager scribe --duties spec,plan-review
+      rite add manager small --engine local:small --endpoint http://localhost:11434 \
+          --model qwen3:8b --agent goose --context-window 32768
+    """
+    from rite_ai.cli.init.scaffold import write_config
+    from rite_ai.config.managers import declare_manager
+
+    root, config = _load_config_for_write()
+    wanted = tuple(d.strip() for d in duties.split(",") if d.strip())
+    declared = declare_manager(
+        config.coordination.managers,
+        config.coordination.manager_roles,
+        name.strip(),
+        preset=preset.strip(),
+        duties=wanted,
+        engine=engine.strip() or CLAUDE,
+        model=model.strip(),
+        endpoint=endpoint.strip(),
+        agent=agent.strip(),
+        credential=credential.strip(),
+        context_window=context_window,
+    )
+    if declared.error:
+        click.echo(f"refusing to declare: {declared.error}", err=True)
+        # ⚠ The parser's refusal names the Managers that declare nothing; it
+        # cannot know there is now a command for that. Without this line the
+        # only route left is hand-editing config.yaml, which is what this
+        # command exists to avoid.
+        for undeclared in _undeclared_in(declared.error, config, name.strip()):
+            click.echo(
+                f"  declare it first: rite add manager {undeclared} --preset "
+                f"<{'|'.join(sorted(PRESETS))}>",
+                err=True,
+            )
+        raise SystemExit(1)
+
+    config.coordination.managers = declared.names
+    config.coordination.manager_roles = declared.roles
+    rite_dir = root / ".rite"
+    rite_dir.mkdir(parents=True, exist_ok=True)
+    write_config(rite_dir, config)
+
+    role = next(r for r in declared.roles if r.name == name.strip())
+    held = sorted(effective_duties(role, len(declared.roles)))
+    click.echo(
+        f"{'updated' if declared.updated else 'declared'} manager "
+        f"'{role.name}' in .rite/config.yaml"
+    )
+    click.echo(f"  engine: {role.engine}")
+    click.echo(f"  duties: {', '.join(held) if held else '(none)'}")
+    click.echo(
+        f"  priority: {declared.names.index(role.name) + 1} of {len(declared.names)}"
+    )
+
+
+def _undeclared_in(error: str, config, candidate: str = "") -> list[str]:
+    """The Managers a parser refusal is complaining are undeclared.
+
+    Read back out of the message rather than recomputed, so this can never
+    name a Manager the refusal did not — the two would drift, and a remedy
+    printed for the wrong name is worse than none.
+
+    ⚠ `candidate` is the Manager being declared right now, which is NOT yet
+    in the config and is the one named when someone gives `--engine` and no
+    duties. Without it that user gets the refusal and no way out, which is
+    the whole failure this command exists to end.
+    """
+    if "declare no preset and no duties" not in error:
+        return []
+    known = {r.name for r in config.coordination.manager_roles}
+    if candidate:
+        known.add(candidate)
+    return sorted(n for n in known if f"{n}," in error or f"{n} declare" in error)
+
+
 @add.command("worker")
 @click.argument("name")
 @click.option("--manager", "-m", default="", help="Manager name")
@@ -3156,8 +3436,19 @@ def add_module_cmd(name: str, url: str, branch: str, description: str) -> None:
     "project's repos. Off by default: Workers share the project's "
     "credentials.",
 )
+@click.option(
+    "--follow-module-docs/--no-follow-module-docs",
+    default=None,
+    help="Answer the question about the modules' own CLAUDE.md / AGENTS.md / "
+    "CONTRIBUTING.md without being asked. Unset means ask.",
+)
 def add_worker_cmd(
-    name: str, manager: str, modules: str, instructions: str, scoped_token: bool
+    name: str,
+    manager: str,
+    modules: str,
+    instructions: str,
+    scoped_token: bool,
+    follow_module_docs: bool | None,
 ) -> None:
     """Create a new worker workspace.
 
@@ -3179,12 +3470,14 @@ def add_worker_cmd(
     module_subset = (
         [m.strip() for m in modules.split(",") if m.strip()] if modules else None
     )
+    follow = _ask_about_module_docs(root, module_subset, follow_module_docs)
     result = add_worker(
         root,
         name,
         manager=manager,
         module_subset=module_subset,
         instructions=instructions,
+        follow_docs=follow,
     )
     if not result.ok:
         click.echo(result.message, err=True)
@@ -10094,6 +10387,11 @@ rite — multi-session Claude coordination for teams.
 Getting started:
   rite init                         Set up a new project (interactive)
   rite add module backend <git-url> Register a repo as a module
+  rite add manager lead --preset lead
+                                    Declare a Manager (no config.yaml editing)
+  rite module set-command backend test "pytest -q"
+                                    Fix a module's test command, and the
+                                    instructions that quote it
   rite add worker alpha             Create a worker workspace
 
 Day to day:

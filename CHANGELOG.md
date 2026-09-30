@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### `rite init` no longer says "Ready." about a project with nothing to work on
+
+Whichever way you run it, including a bare `rite init --yes`, init now says
+when no module would be registered and, if you are there, asks for the
+repository. rite's own files (the installer the setup downloads, a previous
+init's CLAUDE.md) no longer count as your code. A fresh project's schedule
+(1 Worker, all day, in your machine's timezone) is stated rather than left
+empty, init offers to declare a Worker, and re-initialising a project whose
+repository already has credentials stored offers that credential namespace
+back instead of starting an empty one. The last line says what is still
+missing, if anything.
 ### `rite credential set slack` sets Slack up in one pass
 
 It now asks for your Slack member id and the broadcast channel as well as the
@@ -52,6 +63,52 @@ terminal, is now recorded as the owner's (`slack.owner_user`) in the same
 shape, and the agreed definition of done says which channel it came by: one
 typed at the terminal is marked as such, because rite cannot tell you from a
 session running as you.
+
+### Declare a Manager without opening config.yaml
+
+`rite add manager <name> --preset lead` declares a Manager. Until now there
+was no command for it at all: you edited `.rite/config.yaml`, and you had to
+know a Manager lives in two places in that file. The command writes both, and
+puts a new Manager last so adding one never changes which Manager is Owner.
+
+Naming a Manager that is already there changes what it is for rather than
+adding a second — which is what you need on a project set up before Managers
+had roles, because declaring your second Manager is refused until the first
+one is declared too. `--duties`, `--engine`, `--model` and the rest cover
+every shape of Manager the file allows.
+
+### Correct a module's build or test command from the command line
+
+`rite module set-command backend test "pytest -q"` records how to test a
+module when rite's detection got it wrong, and refreshes the instructions
+that quote it — the project's `CLAUDE.md` and every Worker's. Before, the
+correction reached `modules.yaml` and stopped there, so agents kept reading
+the old command out of their instructions.
+
+If you have edited one of those sections by hand, rite leaves it alone and
+says so, rather than quietly overwriting your text or quietly leaving a stale
+command in it. An empty command clears the correction and lets detection
+decide again.
+
+### `rite add worker` asks about a module's own instructions
+
+If a module keeps its own `CLAUDE.md`, `AGENTS.md` or `CONTRIBUTING.md`,
+`rite add worker` now finds them, shows you what it found, and asks whether
+the Worker should follow them. Say yes and they are named in the Worker's
+instructions; say no and nothing changes.
+
+If nothing is attached to answer — a script, CI — it does not ask and does
+not follow them, and says so along with the flag that decides it, so
+`rite add worker` still works unattended. A `CLAUDE.md` rite generated
+itself is never offered: on a project whose repository is its own module
+that file is the project's own brief, not the module's conventions.
+
+It asks rather than deciding either way, because those files are written for
+people and do not know how rite runs a Worker — one may tell it to open a
+pull request from a fork, which a Worker holds no credential to do. Where a
+module's file contradicts rite's instructions or the ticket, the Worker is
+told that rite and the ticket win, and to report the contradiction rather
+than pick one quietly.
 
 ### A Manager's board, status and loop commands no longer crash in its sandbox
 

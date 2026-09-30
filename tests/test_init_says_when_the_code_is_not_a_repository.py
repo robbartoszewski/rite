@@ -71,7 +71,8 @@ def test_control_the_same_code_in_a_repository_is_registered(tmp_path: Path):
             check=True,
             capture_output=True,
         )
-    out = _init(root, input="y\n\n\n\n\n\n")
+    # … changes · role · add ./? Enter · declare a Worker? n (S20)
+    out = _init(root, input="y\n\n\n\n\nn\n")
 
     assert SAID not in out
     assert list(_modules(root)) == ["app"]

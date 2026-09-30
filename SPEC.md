@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.67 · **Date:** 2026-09-30
+**Version:** 0.24.69 · **Date:** 2026-09-30
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -3989,6 +3989,9 @@ rite init --config <file> [--yes]  # non-interactive setup from a file
 
 rite add worker <name>             # create a worker workspace
 rite add module <name> [git-url]   # register (and optionally clone) a module
+rite add manager <name> --preset <p>   # declare a Manager in config.yaml (§9.5.1)
+rite module set-command <m> <key> <cmd>  # record a module's build/test command,
+                                    #   and refresh what quotes it (§9.5.2)
 
 rite remove worker <name>          # remove a worker workspace and deregister
 rite remove module <name>          # deregister a module (does not delete files)
@@ -4345,6 +4348,46 @@ here, then `path: ./`; or `rite add module <name> <URL>`). Found assessing the
 the hook and CI only. An empty directory is S11's case, and a directory inside
 another repository is in one, so neither is told this.
 
+**What init leaves a project with is settled the same way on every route
+(0.24.67, v0.7.0 dogfood S13, S18, S20, S21 and the `--yes` gap).** After the
+answers, whichever route produced them (from scratch or existing code) and
+however init was run (interactive, `--yes`, `--config`), `cli/init/setup.py`:
+
+- **Zero modules is said, and asked about.** If no module would be registered,
+  init says so (with S12's explanation when the root holds code in no
+  repository) and, when someone is there and has not already been asked where
+  the code is, asks for the repository. It never ends on "Ready." with no
+  module: the last line says it is initialised but not ready, and what is
+  missing. A bare `rite init --yes` reached no module check before, wrote
+  `modules: {}` and said "Ready."; #150's only `--yes` test named a
+  `source.path`, the one shape that did reach it.
+- **rite's own leftovers are not the project's content** (`detect.content_
+  entries`, shared by `holds_nothing` and the S12 check): hidden entries, a
+  CLAUDE.md carrying rite's generated marker, rite's installer (recognised by
+  its `# rite installer.` header, never by the name `install.sh`), and a
+  `workers/` of rite Worker workspaces. S13: the setup's own `install.sh` in
+  the root turned the repository prompt off. An existing rite project is still
+  one: its changes are recorded, not read as an empty directory.
+- **The schedule is a stated default** (S21): a fresh project gets 1 Worker,
+  `00:00-24:00`, every day, in this machine's zone written down, and init
+  says so on every run with how to change it. `--config` sets
+  `schedule.timezone`, `schedule.workers` and `schedule.hours`. Not asked:
+  one command changes it. An empty schedule authorised 0 Workers, silently.
+- **A Worker is offered** (S20) once there is a module (default name `w1`,
+  cloned through `add_worker`). `--yes` declares none, because a Worker clones
+  every module over the network, and says one is needed; `--config`
+  `workers.add: <name>` declares one.
+- **The credential namespace is offered back** (S18). `~/.rite/namespaces.json`
+  records each namespace against its project's module remotes, normalised to
+  `host/owner/repo` so every spelling of one repository matches; `rite init`,
+  a wipe (before it deletes), and `rite credential set` write it. A re-init
+  whose module remote matches a recorded namespace that still holds a stored
+  credential is offered that namespace, naming the keys it holds; `--yes`
+  takes it and says so. The remote is the only identity that survives `rm -rf`
+  and a fresh clone.
+- **Not yet:** declaring a Manager (S15) waits for S16's `rite add manager`;
+  `run_init` carries a TODO seam where it goes.
+
 If no repos found:
 
 ```
@@ -4611,6 +4654,61 @@ them (GitHub, GitLab, Bitbucket) using the tool they already have (`gh repo crea
 rite's auth surface to what it needs for its own operations — reading/writing tickets,
 pushing code — not org admin for repo creation.
 
+#### 9.5.1. `rite add manager` — declaring a Manager without editing the file
+
+`rite add manager <name> --preset <preset>` declares a Manager. Before it
+there was no CLI for this at all: `.rite/config.yaml` was the only way, and a
+normal user does not hand-edit that file for basic setup.
+
+**It writes BOTH keys.** `coordination.managers` is priority order (§2.4) and
+`manager_roles` is what each Manager is FOR (§2.4.1). They are separate keys,
+parsed independently, and allowed to disagree on disk — a writer that touched
+one and not the other would author exactly the configuration `rite doctor`
+reports.
+
+**A new Manager is appended.** The order is priority and the first active
+Manager is Owner, so appending is the only position that cannot change who
+the Owner is on a project that already runs.
+
+**Naming a Manager that is already listed CHANGES its declaration** rather
+than adding a second. Once any Manager declares a preset or duties, every
+Manager must (§2.4.1), so declaring a second Manager on a project whose first
+is a bare name fails on the FIRST one — and this is the command that declares
+it. A bare `add` of a name already present is still refused, and says which
+flags to give.
+
+**Validation is the parser's.** The entry is spliced into the list and run
+back through `parse_managers`; whatever that refuses, this refuses, in the
+same words. So the command cannot write a config.yaml the next command
+rejects, and a rule added to the parser covers this writer too.
+
+`--duties`, `--engine`, `--model`, `--endpoint`, `--agent`, `--credential`
+and `--context-window` cover the rest of a declaration, so no shape of
+Manager the schema allows needs the file. `--credential` takes a credential
+NAME, never a value (§10).
+
+#### 9.5.2. `rite module set-command` — correcting a module's commands
+
+`rite module set-command <module> <key> "<command>"` records one of a
+module's `install`, `build`, `test`, `lint` or `format` commands. Detection
+derives these from a module's own manifests; it is right for most modules and
+wrong for some, and this is the correction without opening `modules.yaml`.
+
+**It is written nested under `commands:`.** A module entry refuses an unknown
+key, and a top-level `test:` is one — so a writer that wrote it flat would
+leave a file no later command can read. The command sets the field and hands
+the list to the one serialiser that knows the shape.
+
+**It also refreshes what quotes the command.** A module's commands are
+rendered into the project's `CLAUDE.md` and every Worker's, so a correction
+that stopped at `modules.yaml` would leave the agent reading the old command
+out of its instructions. The refresh is `rite update`'s (§9.9), not a second
+renderer: a section somebody has edited by hand is KEPT and **reported**, and
+a file rite cannot read is reported as that rather than as a hand edit.
+
+An empty command unrecords the key, which is not the same as recording an
+empty one: detection decides it again.
+
 ### 9.6. `rite add worker`
 
 Creates `workers/<name>/` with cloned copies of all modules registered in
@@ -4625,6 +4723,36 @@ exactly this Worker's `modules.yaml` repos, contents+PR permissions only
 (§5.3.3), stored via the same keychain path §10 uses for every other
 credential. The token is created or requested here, as part of the same flow
 that creates the Worker; it never passes through chat (§5.3.4).
+
+**It ASKS about the modules' own instructions.** A module often keeps a
+`CLAUDE.md`, `AGENTS.md` or `CONTRIBUTING.md` of its own. `rite add worker`
+looks for those three in each module this Worker gets, names what it found,
+and asks whether the Worker should follow them; the answer is recorded as
+`follow_module_docs` in that Worker's `worker.yml` and rendered into its
+`CLAUDE.md`. `--follow-module-docs` / `--no-follow-module-docs` answer it
+without a prompt, and nothing found means nothing asked.
+
+**With nobody at the terminal it is not asked, and that is said.** A prompt
+is not an exception, it is the absence of an answer (§9.11): asking
+unconditionally made `rite add worker` abort in a script rather than create
+a Worker. With no tty and no flag, the files are named, nothing is followed,
+and the message says both that and which flag answers it — a default taken
+in silence would leave the user never learning the files were there.
+
+**A file rite generated is never offered.** A project whose repository is
+its own module (§9.3) has the project's own generated `CLAUDE.md` at the
+module's path; offering it would ask whether a Worker should follow the
+Owner's brief, and a yes would put project-wide instructions into a session
+that does not make project-wide decisions.
+
+⚠ **Asked rather than assumed, in both directions.** Those files are written
+for the module and mostly for people: they do not know that a Worker holds no
+GitHub credential, or that whether to push is not the Worker's to decide
+(§5.3.4). Following them silently would put instructions nobody chose into a
+Worker's brief; ignoring them silently would lose the conventions the module
+really has. Where one contradicts rite's own instructions or the ticket, the
+Worker's `CLAUDE.md` says rite and the ticket win and that the Worker reports
+the contradiction rather than choosing quietly.
 
 ### 9.7. `rite remove`
 
@@ -7240,7 +7368,7 @@ answered `none`, `rite credential set jira` recorded both, `type` stayed `none`,
 and rite read no board at all. A project already on another board keeps it and
 is told how to switch; rite does not replace a board it did not choose.
 
-**Slack is set up by the same command (0.24.67).** `rite credential set slack`
+**Slack is set up by the same command (0.24.69).** `rite credential set slack`
 asks for the Owner's member id and the broadcast channel as well as the bot
 token, and writes the two non-secret ones to `slack:` in the committed config
 through the same `config_path` route. The token alone had been the whole
@@ -7260,7 +7388,7 @@ answer the config parser would refuse is asked again rather than written:
 this command writes `config.yaml`, so storing one would leave every later
 `rite` run failing on the file this one created.
 
-**A channel is taken as it is typed (0.24.67).** `all-rite` and `#all-rite` are
+**A channel is taken as it is typed (0.24.69).** `all-rite` and `#all-rite` are
 the same channel, wherever the name is given — the prompt above or
 `config.yaml` — and a `C…` or `G…` id is kept as it is, since `#` in front of
 one names a different conversation. `config.parse.normalize_slack_channel` is
@@ -7270,7 +7398,7 @@ shows in its own sidebar was refused as "neither a channel name starting with
 unnameable after normalising is still refused.
 
 **And a refused `config.yaml` no longer takes the credential commands with it
-(0.24.67).** A `slack.broadcast_channel` the parser refused made every `rite
+(0.24.69).** A `slack.broadcast_channel` the parser refused made every `rite
 credential set` answer with that parse error and exit 1 — including the runs
 that would have repaired the project (S19). The project's credential namespace
 is now recovered on its own, so the secret still lands in this project's scope,
@@ -7678,7 +7806,10 @@ Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
 
-**Changes in 0.24.67 — Slack is set up by one command, and a channel is taken as typed (v0.7.0a4 lane 3: S14, S19).** §10.5 gains three paragraphs. S14: `Field.optional`, `Field.normalize`/`clean` and `Field.problem`; the `slack` service gains `owner_user` and `broadcast_channel`, both optional and both `config_path`, so one command writes the committed Slack config; `_set_service` prompts optionally, normalises, and asks again for a value the parser would refuse rather than writing a `config.yaml` that will not parse. A run that leaves Slack with no target at all says so (`Slack is OFF`), decided from the RESULTING config so a token rotated on a configured project is quiet; a notice, not a refusal, since the token is valid. S19: `config.parse.normalize_slack_channel` (a bare name gains `#`, a `C…`/`G…` id is untouched), applied by the parser and by the prompt, with `slack_field_problem` reusing `_slack_problem` so the two cannot drift; `credentials_despite_config_error` recovers the namespace alone, and `rite credential set` continues on a config error elsewhere — naming it, skipping the fields that would rewrite the file, and still refusing where no namespace is recorded. Tests: `tests/test_slack_setup_is_one_command.py`, with the channel invariant run across the full range of what a person types (bare, `#`-prefixed, padded, `C…`, `G…`, empty, dotted) through BOTH the prompt's cleaner and the file, so one entry point cannot accept what the other refuses; plus one command recording both settings, a name typed where an id belongs being asked again, a malformed channel not blocking a credential set, and the off notice appearing exactly when Slack lands off across all four endings (token only, +owner, +channel, +both) and staying quiet on a project already configured. Nine mutations (the normaliser returning its input, the two fields removed, the validation dropped, the hard exit restored, the rewrite guard dropped, an id given a `#`, the off notice dropped, the notice always firing, the notice decided from the run's answers rather than the result) each go red. Two existing tests changed rather than added to: a bare channel is now normalised, not a `ParseError`, and `credential set` on a refused config now continues while still never rewriting the file — the file-untouched assertion each was written for is kept, and the refusal it achieved that with is now a second test for the no-namespace case.
+**Changes in 0.24.69 — Slack is set up by one command, and a channel is taken as typed (v0.7.0a4 lane 3: S14, S19).** §10.5 gains three paragraphs. S14: `Field.optional`, `Field.normalize`/`clean` and `Field.problem`; the `slack` service gains `owner_user` and `broadcast_channel`, both optional and both `config_path`, so one command writes the committed Slack config; `_set_service` prompts optionally, normalises, and asks again for a value the parser would refuse rather than writing a `config.yaml` that will not parse. A run that leaves Slack with no target at all says so (`Slack is OFF`), decided from the RESULTING config so a token rotated on a configured project is quiet; a notice, not a refusal, since the token is valid. S19: `config.parse.normalize_slack_channel` (a bare name gains `#`, a `C…`/`G…` id is untouched), applied by the parser and by the prompt, with `slack_field_problem` reusing `_slack_problem` so the two cannot drift; `credentials_despite_config_error` recovers the namespace alone, and `rite credential set` continues on a config error elsewhere — naming it, skipping the fields that would rewrite the file, and still refusing where no namespace is recorded. Tests: `tests/test_slack_setup_is_one_command.py`, with the channel invariant run across the full range of what a person types (bare, `#`-prefixed, padded, `C…`, `G…`, empty, dotted) through BOTH the prompt's cleaner and the file, so one entry point cannot accept what the other refuses; plus one command recording both settings, a name typed where an id belongs being asked again, a malformed channel not blocking a credential set, and the off notice appearing exactly when Slack lands off across all four endings (token only, +owner, +channel, +both) and staying quiet on a project already configured. Nine mutations (the normaliser returning its input, the two fields removed, the validation dropped, the hard exit restored, the rewrite guard dropped, an id given a `#`, the off notice dropped, the notice always firing, the notice decided from the run's answers rather than the result) each go red. Two existing tests changed rather than added to: a bare channel is now normalised, not a `ParseError`, and `credential set` on a refused config now continues while still never rewriting the file — the file-untouched assertion each was written for is kept, and the refusal it achieved that with is now a second test for the no-namespace case.
+**Changes in 0.24.68 — three setup steps that needed a text editor now have commands (v0.7.0a4 lane 2: S16, S24, S23).** New §9.5.1 and §9.5.2; §9.1 lists both; §9.6 gains the paragraph on a module's own instructions. **S16** `rite add manager <name> --preset <p>`: `config.managers.declare_manager` builds the entry, splices it into the list and re-runs `parse_managers`, so every refusal is the parser's own and the command cannot write a file the next command rejects. It writes BOTH keys, appends (the order is priority, and the first active Manager is Owner), and UPDATES a name already listed — without that, declaring a second Manager on a project whose first is a bare name fails on the first one and the only way out is the file. The refusal names the command that declares it, for the new Manager as well as existing ones. **S24** `rite module set-command <module> <key> "<cmd>"`: `workspace.manage.set_module_command` sets the field and re-serialises through `write_modules`, so it lands nested under `commands:` — a top-level `test:` is refused by the parser, measured and pinned by a test — then calls `refresh_project`, the refresher `rite update` uses, so the correction reaches the project's CLAUDE.md and every Worker's. An edited section is kept and REPORTED; a file that does not parse is reported as that and not as a hand edit, which an early draft got wrong. An empty command unrecords the key (`None`, not `""`). **S23** `rite add worker` looks for `CLAUDE.md`, `AGENTS.md` and `CONTRIBUTING.md` in each module the Worker gets, names them and ASKS; the answer is `WorkerManifest.follow_module_docs`, written to `worker.yml` and rendered into the Worker's CLAUDE.md with the rule that rite and the ticket win and the Worker reports a contradiction rather than choosing. `--follow-module-docs/--no-follow-module-docs` answer it without a prompt; with nobody at the terminal it is NOT asked — a prompt on an empty stdin aborts, which turned `rite add worker` in a script into a command that made no Worker, caught by an existing test going red — so the files are named, nothing is followed and the message says which flag answers it; nothing found asks nothing; and a file rite GENERATED is never offered, since a repository that is its own module puts the project's own CLAUDE.md at the module's path. **Tests: 90**, including an invariant across each full range rather than its ends — every preset and every duty (S16), every one of the five command keys set, changed and unrecorded (S24), and all eight subsets of the three document names, across two modules (S23). Eighteen mutations were run and each went red; a nineteenth survived and is why `TestUnrecording` now asserts on the returned object: through the file, `""` and `None` are indistinguishable.
+
+**Changes in 0.24.67 — `rite init` settles what it leaves a project with, on every route (v0.7.0a4 lane 1: S13, the `--yes` gap, S21, S20, S18).** §9.3 gains the paragraph. `cli/init/setup.py` (`settle_modules`, `settle_schedule`, `settle_namespace`, `remember_existing`, `offer_a_worker`, `what_is_missing`, `not_ready`); `detect.content_entries` and `_is_rite_leftover`, used by `holds_nothing` and `holds_files_but_no_repository`; `questionnaire.ask_for_a_repository` split out of `ask_for_the_code`, and `InitAnswers.asked_for_code`; `credentials.store` `normalise_remote`, `remember_namespace`, `namespaces_for`, `NamespaceMatch`; `rite credential set` records the namespace; `_read_changes` keeps an existing project an existing project; a TODO seam for S15. `docs/install-notes.md` downloads the installer into a scratch directory. Tests: `tests/test_init_never_leaves_no_module_unsaid.py`, the invariant over four routes (from scratch, existing code, `--yes`, `--yes` with a preset path) × eight directories (empty, rite's installer, a prior init's leftovers, a README, code in no repository, someone else's `install.sh`, a repository with nothing committed, one with a commit), four properties each (told, asked, no false claim, never "Ready."): against main `71257ae`, 64 of 128 fail, and property 1 holds there only at #150's two covered extremes; `tests/test_init_settles_what_it_leaves.py` (every combination of rite's leftovers with each kind of real content; the schedule on every route; the Worker offer; the namespace offer over three remote spellings × credentials held or not × yes/no/`--yes`, a wipe, `rm -rf` and a re-clone, and `rite credential set`). Nineteen mutations each go red, one (the S12 check's own definition of content) only after a test was added for it. Existing init tests now answer the Worker offer and the repository question explicitly; the one that pinned "Ready." for an empty, all-skipped interactive init now pins the not-ready line.
 
 **Changes in 0.24.66 — an item the host measures, and one attribution for every answer (v0.7.0a4 lane 5: S31, S22b).** New §6.7.5 and §6.7.6. S31: `Record.host_measured` (signed, emitted only when non-empty; `schema_problem` refuses indexes that are out of range, repeated, unordered or not integers); `ask`'s `[host]` tag, `Round.host_items`, the round's line naming it, the accept signing it; `rite refine accept --host-item`; `render_for_worker` and the board comment mark it (`HOST_TAG_FOR_WORKER`, `HOST_TAG_ON_BOARD`); `refinement/measurement.py` (`build`, `verifies`, `render`, `append`, `logged`, `latest_for`, `holds`) and `rite refine measured`; the publish snapshot keeps the started-on record's payload; `deliver._host_measurement_hold` holds a push or pull request. S22b: `refinement/attribution.py` (`answered_by`, `via_of`, `owner_user_of`, `describe`); `protocol.Reply.by`, carried into answers, the pending accept and provenance; `rite refine answer`; `record.how_agreed`, one wording for the board, TICKET.md and `rite refine status`. `record.extract_kind` generalises `extract`. Tests: `tests/test_a_host_measured_item_is_the_hosts.py` and `tests/test_every_answer_is_the_owners.py`, over real keys and git, with two invariants: every definition of done of one to four items with every set of marks, crossed with every combination of six result histories per marked item (none, pass, fail, forged, another record's, fail then pass), agrees across the record, TICKET.md, the board and the hold; and every answer route (DM, refinement channel, this machine, `rite refine answer`) with the owner set or unset leaves the same shape and the same owner on an answer and on the record. Twenty-three mutations each go red, one of them (the item-text binding) only after a test was added for it.
 

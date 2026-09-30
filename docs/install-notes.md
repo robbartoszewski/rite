@@ -77,7 +77,9 @@ Three ways, same result. Pick by how much you want to read first:
 # 1. one-liner
 curl -fsSL https://raw.githubusercontent.com/robbartoszewski/rite/v0.6.0/install.sh | sh
 
-# 2. download, check, then run
+# 2. download, check, then run (in a scratch directory, not your project:
+#    `rite init` ignores rite's own installer, but it is not your project's)
+cd "$(mktemp -d)"
 curl -fsSLO https://raw.githubusercontent.com/robbartoszewski/rite/v0.6.0/install.sh
 shasum -a 256 install.sh          # compare against the v0.6.0 release notes
 sh install.sh

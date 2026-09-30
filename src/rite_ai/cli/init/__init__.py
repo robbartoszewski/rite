@@ -36,7 +36,7 @@ from rite_ai.gate import gitleaks_runner
 from rite_ai.gate.hook import redirected_hooks_dir
 from rite_ai.state import write_atomic
 
-from . import claude_gen, scaffold, ui
+from . import claude_gen, scaffold, setup, ui
 from .config_file import ConfigFileError, load_preset
 from .detect import run_detection
 from .questionnaire import (
@@ -116,6 +116,9 @@ def run_init(
             )
         import shutil
 
+        # S18: what the wiped project was, so its credentials can be offered
+        # back rather than orphaned (read before it is gone).
+        setup.remember_existing(rite_dir)
         shutil.rmtree(rite_dir)
 
     rite_dir.mkdir(parents=True, exist_ok=True)
@@ -126,6 +129,12 @@ def run_init(
         detection = run_detection(root)
         answers = run_questionnaire(root, preset, detection, yes)
 
+    # Route-independent, whichever way the answers came (S13, and `--yes`
+    # from scratch, which reached no module check at all): zero modules is
+    # said, and asked about while someone is there to answer.
+    setup.settle_modules(root, answers, interactive)
+    setup.settle_schedule(answers, preset, interactive)
+
     created: list[str] = []
 
     write_brief_path = scaffold.write_brief(rite_dir, answers.brief)
@@ -135,8 +144,10 @@ def run_init(
     created.append(str(write_modules_path.relative_to(root)))
     if answers.link is not None:
         _add_the_linked_module(root, answers)
+    setup.settle_namespace(root, answers, interactive)
 
     write_config_path = scaffold.write_config(rite_dir, answers.config)
+    setup.remember_namespace(answers)
     created.append(str(write_config_path.relative_to(root)))
     # Seen by this machine from its first command, so another project that
     # reads the same board can tell (`tickets.scope.sharing_problems`).
@@ -333,7 +344,16 @@ def run_init(
             "JIRA: run `rite credential set jira` — it asks for your email, an "
             "API token and the project key, and the board works once it has."
         )
-    click.echo("Ready. Start a Dispatch session — it knows what to do from here.")
+    worker = setup.offer_a_worker(root, answers, preset, interactive)
+    # TODO(S15): offer to declare a Manager here, once S16's `rite add manager`
+    # (another lane) gives init one writer of `coordination.managers` and
+    # `manager_roles` to call. Until then init writes neither, and says so
+    # below, as `rite start` would.
+    missing = setup.what_is_missing(root, answers, worker)
+    if missing:
+        click.echo(setup.not_ready(missing))
+    else:
+        click.echo("Ready. Start a Dispatch session — it knows what to do from here.")
 
     return InitResult(
         status="created",
@@ -424,11 +444,15 @@ def _add_the_linked_module(root: Path, answers) -> None:
 def _read_changes(source: Path, preset, interactive: bool) -> str:
     # Nothing to read, so neither "will be taken from what's there" nor "what
     # is stale in it" is true to ask (S11); `source_answers` asks for the code.
-    if holds_nothing(source):
+    # ⚠ Except an existing rite project: `.rite/` and a generated CLAUDE.md are
+    # rite's own leftovers to `holds_nothing` (S13), and its changes are still
+    # asked for and recorded.
+    existing = _rite_project_at(source) is not None
+    if holds_nothing(source) and not existing:
         return ""
     click.echo()
     click.echo(READING.format(path=_display(source)))
-    if _rite_project_at(source) is not None:
+    if existing:
         click.echo()
         click.echo(ALREADY_A_PROJECT)
     preset_changes = preset.get("source.changes")
