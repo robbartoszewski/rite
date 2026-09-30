@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.62 · **Date:** 2026-09-30
+**Version:** 0.24.63 · **Date:** 2026-09-30
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -2195,6 +2195,42 @@ is a WORKER scope. **`Claim` carries `paths`, `worker`, `ticket` and
 cannot express "release only my own Manager's claims."** Both fixes are worth
 making and neither delivers §5.4.1 on its own.
 
+✅ **The claim half is BUILT since 0.7.0 (MM3).** `Claim` carries `manager`,
+filled by the CLI from `managers.current_manager()` and defaulted to `""` so
+a ledger written by an older rite still parses. `force_release` takes the
+acting Manager and narrows the PATH-matched release to claims that Manager
+may release: its own, and unowned ones. Another Manager's are left alone and
+reported — `last_refused_other_managers`, which `rite release --force` prints
+as "not yours: <path> (held by <worker>, under Manager '<name>')".
+
+Three boundaries of the rule, each a decision rather than an omission, and
+each pinned by a test in
+`tests/test_a_force_release_stops_at_another_manager.py`:
+
+- **`manager=None` means "the caller is not a Manager", not "match every
+  Manager."** That is the whole of MM3's "no default that matches across
+  Managers": the wildcard is what a caller gets by saying it is nobody, and a
+  Manager says its name. `current_manager()` returns `""` outside a session
+  and the CLI turns that into `None`, so a human's `rite release --force`
+  keeps the reach it has always had — the case the command mainly serves.
+  ⚠ The join is at the CLI, so the ledger's own tests cannot reach it:
+  dropping that one translation leaves every ledger test green and breaks the
+  human's command. It is covered end to end, through `RITE_MANAGER`.
+- **`manager == ""` on a CLAIM means unowned, not "a Manager named ''".** It
+  is what every claim from a human's shell carries, and what every claim
+  written before 0.7.0 carries. A Manager may release those; refusing them
+  would turn an upgrade into a project full of claims nothing can clear.
+- **A `worker`-scoped release is NOT narrowed.** That caller has named the
+  holder, so it is already exact: `pool.archive` watched the slot die. A
+  Manager reaping a Worker that another Manager started is cleanup, not a
+  boundary crossing, and narrowing it would stop the reaper. The dangerous
+  call is the one that names no holder — "clear this path, I do not care who
+  has it" — because with two Managers the answer to "who has it" is no longer
+  "someone I am responsible for".
+
+⚠ **`destroy_worker`'s project scope is still open**, and is a different job
+from this one.
+
 #### 5.4.4. Credentials are scoped to what the Manager needs
 
 A Manager running a local engine holding the Claude token is an exposure with
@@ -2318,7 +2354,7 @@ here.
 (0.24.18: this line said "Not enforced" after the state below had changed):
 P2 holds, pinned by a test on both platforms, with its tmux half open on
 Linux; P1 holds for the per-Manager directories and every inbox, not for
-flat state; P3 and P4 do not.
+flat state; P4 holds for claims since MM3, not for destroy; P3 does not.
 ⚠ **Scope moved on 2026-09-26: two Managers on one machine are 0.6.0**
 (Robert). A Claude Manager as Owner, and a local secondary, in one root, is
 being built for 0.6.0. Several machines stay out of 0.6.0. **So the state
@@ -2339,7 +2375,7 @@ be tested:
 | **P1** | No rite command acting as Manager A writes rite state belonging to Manager B | the name-to-path join (§5.4.2), and §5.4.7's test at **Manager** granularity |
 | **P2** | Manager A's processes cannot signal Manager B's, or drive B's session | the Manager's sandbox profile: signals limited to its own processes, and the tmux server out of reach |
 | **P3** | State shared by decision (§5.4.6) is written only through its locked writer, and the list is enumerated by a test | §5.4.6 |
-| **P4** | A release or destroy names the Manager whose thing it is | §5.4.3, with a Manager field on the claim |
+| **P4** | A release or destroy names the Manager whose thing it is | §5.4.3, with a Manager field on the claim (`Claim.manager`, since MM3) |
 
 **State on `main`, measured 2026-09-25 at `9862b59`, and reproduced at `8d5fc22` and again after `7ae2ecc` changed the profile:**
 
@@ -2459,8 +2495,13 @@ be tested:
   per-Manager directory out would fix nothing there. Do not propose the
   directory move for `.rite/user/`'s sake. What it would buy is the root
   grant on Linux (D17).
-- **P3 and P4 do not.** The shared-by-decision list has no test behind it
-  (§5.4.6). And `Claim` has no Manager field (§5.4.3).
+- **P3 does not.** The shared-by-decision list has no test behind it
+  (§5.4.6).
+- **P4 holds FOR CLAIMS since 0.7.0 (MM3), and not for destroy.** `Claim`
+  carries `manager`, and a path-matched `force_release` releases the acting
+  Manager's own claims and unowned ones, leaving another Manager's and naming
+  whose they are (§5.4.3). `destroy_worker`'s missing scope is the PROJECT,
+  not a Manager, and is still open.
 
 ⚠ **Before MM-2 the Manager's sandbox did not enforce P1, and was measured
 not to**: each profile granted the whole project tree, and one Manager wrote
@@ -7486,6 +7527,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.63 — a force-release stops at another Manager (v0.7.0 MM3; SPEC §5.4.8 P4).** §5.4.3 records what was built and the three boundaries of the rule; §5.4.8's status line, its P4 row and its state list say P4 holds for claims and not for destroy. `Claim.manager`, defaulted to `""` so a ledger written by an older rite still parses; `ClaimsLedger.claim(manager=)`, filled by the CLI from `managers.current_manager()`; `force_release(manager=)` narrows the PATH-matched release to the acting Manager's own claims and unowned ones; `last_refused_other_managers`, printed by `rite release --force` as "not yours: <path> (held by <worker>, under Manager '<name>')"; the force-release audit record names the Manager. `worker=`-scoped releases are NOT narrowed, so `pool.archive` can still reap a Worker another Manager started. Tests: two Managers on different paths, A's release leaves B's and says whose it is, releases its own and an unowned one; a human outside any session still clears the path; a pre-0.7.0 ledger reads. Five mutations (the guard removed, unowned claims refused too, the CLI's `or None` dropped, a `worker`-scoped release narrowed, the refusal printed silently) each go red.
 
 **Changes in 0.24.62 — `rite init` says when the code it was pointed at is not a git repository (0.7.0a2 dogfood assessment).** §9.3 gains the paragraph. `detect.holds_files_but_no_repository`; `offer_modules` warns when there are no candidates and it holds. Tests: the existing-code route and the from-scratch route both say it and register nothing; controls: the same code in a repository is registered and not told, an empty directory is not told this, a directory inside another repository is not told it is outside one. Three mutations (silent again, said inside a repository, said for an empty directory) each go red.
 

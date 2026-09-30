@@ -1556,13 +1556,24 @@ def claim(paths: tuple[str, ...], worker: str, ticket: str) -> None:
     """Claim file/directory paths for a worker."""
     from rite_ai.claims.ledger import ClaimsLedger
     from rite_ai.coordination.identity import claims_channel
+    from rite_ai.managers import current_manager
 
     _require_project_root()
     ledger = ClaimsLedger(_claims_path())
     # P2-5a/P2-5b: with a fleet, a claim is checked against and published to
     # the other machines. Without one, both are None and nothing changes.
     layer, machine = claims_channel(_find_project_root())
-    result = ledger.claim(list(paths), worker, ticket, layer=layer, machine=machine)
+    # The Manager this claim is made under, so a force-release can be scoped
+    # to one (MM3). "" outside a Manager session, which is the common case and
+    # a real answer — see `Claim.manager`.
+    result = ledger.claim(
+        list(paths),
+        worker,
+        ticket,
+        manager=current_manager(),
+        layer=layer,
+        machine=machine,
+    )
     if result.ok:
         scope = "across the fleet" if layer is not None else "on this machine only"
         # WHICH MODE, every time. The same success line for both is correct
@@ -1630,6 +1641,7 @@ def release(
     """
     from rite_ai.claims.ledger import ClaimsLedger
     from rite_ai.coordination.identity import claims_channel
+    from rite_ai.managers import current_manager
 
     _require_project_root()
     ledger = ClaimsLedger(_claims_path())
@@ -1661,10 +1673,30 @@ def release(
             click.echo("--force requires both --by and --reason (SPEC §5.2)", err=True)
             raise SystemExit(2)
         layer, machine = claims_channel(_find_project_root())
+        # `current_manager()` is "" from a human's own shell, and `manager=None`
+        # is what keeps today's reach for them: a Manager says its name and is
+        # held to its own claims, nobody says nothing and clears the path
+        # (MM3 — `force_release`'s `manager` parameter says why).
         released = ledger.force_release(
-            list(paths), by=by, reason=reason, layer=layer, machine=machine
+            list(paths),
+            by=by,
+            reason=reason,
+            manager=current_manager() or None,
+            layer=layer,
+            machine=machine,
         )
         click.echo(f"force-released {released} claim(s), by {by}: {reason}")
+
+        # Named before the overlap notes below: "it is not yours" is the
+        # reason a release did nothing, and an overlap note printed first
+        # reads as though naming the path directly would work.
+        for holder_manager, holder, path in ledger.last_refused_other_managers:
+            click.echo(
+                f"  not yours: {path} (held by {holder}, under Manager "
+                f"{holder_manager!r}) was left alone. A Manager force-releases "
+                f"its own claims and unowned ones; ask {holder_manager!r} to "
+                "release it, or run this from outside a Manager session"
+            )
 
         # The exact/overlap gap, said out loud. `--force` matches paths
         # exactly; `claim()` refuses on overlap. So clearing `users/src` can
