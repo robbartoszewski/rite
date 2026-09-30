@@ -77,7 +77,7 @@ def test_an_empty_path_asks_for_the_code_and_adds_it(tmp_path: Path):
     root.mkdir()
     # existing code? y · path [.] · where is the code? <url> · add it? Enter ·
     # role Enter · declare a Worker? n (S20)
-    out = _init(root, input=f"y\n\n{repo}\n\n\nn\n")
+    out = _init(root, input=f"y\n\n{repo}\n\n\n\nn\n")
 
     assert NOTHING in out and ASKED in out
     assert CLAIM not in out, "it still claims to read code from an empty path"
@@ -97,7 +97,7 @@ def test_declining_leaves_an_honest_empty_state(tmp_path: Path):
     root = tmp_path / "yoloAI"
     root.mkdir()
     # existing code? y · path [.] · where is the code? Enter · role · sandbox
-    out = _init(root, input="y\n\n\n\n\n")
+    out = _init(root, input="y\n\n\n\n\n\n")
 
     assert ASKED in out
     assert _modules(root) == {}
@@ -110,7 +110,7 @@ def test_saying_no_to_the_offered_module_leaves_it_out(tmp_path: Path):
     repo = _a_repository(tmp_path)
     root = tmp_path / "yoloAI"
     root.mkdir()
-    out = _init(root, input=f"y\n\n{repo}\nn\n\n\n")
+    out = _init(root, input=f"y\n\n{repo}\nn\n\n\n\n")
 
     assert _modules(root) == {}
     assert not (root / "yoloai").exists()
@@ -141,7 +141,7 @@ def test_control_a_path_with_code_is_not_asked(tmp_path: Path):
     _git(root, "commit", "-qm", "code")
     # existing code? y · path [.] · changes Enter · add ./? Enter · role ·
     # declare a Worker? n (S20)
-    out = _init(root, input="y\n\n\n\n\nn\n")
+    out = _init(root, input="y\n\n\n\n\n\nn\n")
 
     assert ASKED not in out and NOTHING not in out
     assert CLAIM in out
@@ -154,7 +154,7 @@ def test_a_sentence_is_not_taken_for_a_repository(tmp_path: Path):
     repo = _a_repository(tmp_path)
     root = tmp_path / "yoloAI"
     root.mkdir()
-    out = _init(root, input=f"y\n\nThe feed poller is stale\n{repo}\n\n\nn\n")
+    out = _init(root, input=f"y\n\nThe feed poller is stale\n{repo}\n\n\n\nn\n")
 
     assert "'The feed poller is stale' is not a repository URL" in out
     assert "as module 'The feed poller is stale'" not in out

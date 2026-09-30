@@ -47,7 +47,7 @@ def _code(root: Path) -> Path:
 def test_the_existing_code_route_says_so(tmp_path: Path):
     root = _code(tmp_path / "app")
     # existing code? y · path [.] · changes Enter · role · sandbox
-    out = _init(root, input="y\n\n\n\n\n")
+    out = _init(root, input="y\n\n\n\n\n\n")
 
     assert SAID in out
     assert "rite add module <name> <repository URL>" in out
@@ -72,7 +72,7 @@ def test_control_the_same_code_in_a_repository_is_registered(tmp_path: Path):
             capture_output=True,
         )
     # … changes · role · add ./? Enter · declare a Worker? n (S20)
-    out = _init(root, input="y\n\n\n\n\nn\n")
+    out = _init(root, input="y\n\n\n\n\n\nn\n")
 
     assert SAID not in out
     assert list(_modules(root)) == ["app"]

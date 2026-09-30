@@ -124,6 +124,29 @@ def _tracked(root: Path, manager: str, message) -> bool:
     return True
 
 
+NEEDS_ANSWER = "needs-answer"
+"""A question, or a check-in that holds questions: the person's answer is
+what it waits for."""
+NEEDS_YOU = "needs-you"
+"""Needs the person but is not a question: a message with no recorded kind,
+or one this rite does not know (`mailbox._needs_action`: unknown is action)."""
+READING = "reading"
+"""Nothing waits on the person."""
+
+
+def kind_of(root: Path, manager: str, message) -> str:
+    """What a message is to the person, for how it is shown (S29): the SAME
+    decision as what this module tracks, so a post that looks like it needs
+    an answer is exactly one that stays pending until it gets one, and a post
+    that looks like reading is exactly one nothing waits on. Never read from
+    the text."""
+    from rite_ai.managers.mailbox import CHECKIN, QUESTION
+
+    if not _tracked(root, manager, message):
+        return READING
+    return NEEDS_ANSWER if message.kind in (QUESTION, CHECKIN) else NEEDS_YOU
+
+
 def sync(root: Path, manager: str, *, now: float | None = None) -> str:
     """Record every message in the outbox that needs the person and is not
     recorded yet. Returns a line to say, the first time only (see the module

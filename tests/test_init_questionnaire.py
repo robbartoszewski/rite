@@ -43,7 +43,8 @@ def _init_cmd(config: str | None, yes: bool, directory: str) -> None:
 # name, root_branch, module name (blank = no repos found), kind, features,
 # platform, languages, frameworks, architecture, ticket backend ("3" = None for
 # now, to skip the extra JIRA-site prompt), sandbox, kb link, kb file, kb commit.
-_ALL_BLANK = "n\n" + "\n".join([""] * 10 + ["3"] + [""] * 4) + "\n"
+# … kb commit, then (S15) declare Manager 'lead'? Enter
+_ALL_BLANK = "n\n" + "\n".join([""] * 10 + ["3"] + [""] * 5) + "\n"
 
 
 def test_interactive_all_defaults_creates_every_file(tmp_path: Path):
@@ -120,6 +121,7 @@ def test_interactive_custom_answers_are_used(tmp_path: Path):
                 "",  # kb link
                 "",  # kb file
                 "",  # kb commit default yes
+                "",  # declare Manager 'lead'? default yes (S15)
             ]
         )
         + "\n"
@@ -168,6 +170,7 @@ def test_interactive_detects_and_adds_repos(tmp_path: Path):
                 "",  # kb link
                 "",  # kb file
                 "",  # kb commit
+                "",  # declare Manager 'lead'? default yes (S15)
                 "n",  # declare a Worker? (S20)
             ]
         )
@@ -323,6 +326,7 @@ def test_manager_role_prompts_for_owner_ref(tmp_path: Path):
                 "",  # kb link
                 "",  # kb file
                 "",  # kb commit
+                "",  # declare Manager 'executor'? default yes (S15)
             ]
         )
         + "\n"

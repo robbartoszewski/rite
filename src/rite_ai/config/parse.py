@@ -590,7 +590,9 @@ def parse_config(path: Path) -> ProjectConfig | ParseError:
     slack_raw = raw.get("slack") or {}
     slack = SlackConfig(
         owner_user=str(slack_raw.get("owner_user") or ""),
-        broadcast_channel=str(slack_raw.get("broadcast_channel") or ""),
+        broadcast_channel=normalize_slack_channel(
+            slack_raw.get("broadcast_channel") or ""
+        ),
     )
 
     wd_raw = raw.get("watchdog", {})
@@ -731,6 +733,67 @@ def parse_config(path: Path) -> ProjectConfig | ParseError:
 
 _SLACK_USER = re.compile(r"^[UW][A-Z0-9]{2,}$")
 _SLACK_CHANNEL = re.compile(r"^(#[a-z0-9][a-z0-9._-]*|[CG][A-Z0-9]{2,})$")
+_SLACK_CHANNEL_ID = re.compile(r"^[CG][A-Z0-9]{2,}$")
+
+
+def slack_field_problem(key: str, value: str) -> str:
+    """Why one `slack:` value cannot be stored, or "" — the same rules
+    `_slack_problem` applies to the file, reusable before the file is written
+    so a setup command cannot create a config.yaml that will not parse."""
+    return _slack_problem({key: value})
+
+
+def credentials_despite_config_error(path: Path) -> CredentialsConfig | None:
+    """This project's credential namespace, read on its own when the rest of
+    `config.yaml` will not parse — or None when even this cannot be read.
+
+    v0.7.0 dogfood S19. A `slack.broadcast_channel` rite could not name made
+    `parse_config` return a `ParseError`, and `rite credential set` answered
+    every invocation with it and exited 1 — so the one command that repairs a
+    project's credentials was unusable until an unrelated line was hand-edited.
+    The same reasoning `coordination` already carries (a malformed block
+    narrows rather than failing the parse, because a raising parse "takes out
+    every command that reads config.yaml, including the ones that would repair
+    it"), applied to the credential commands.
+
+    ⚠ **Scoping, not silence.** Reading nothing here would leave
+    `rite credential set` writing to the machine-wide store while the project
+    has a namespace, which is the wrong entry written under a "stored" —
+    worse than the refusal. So the namespace is recovered, the caller says
+    what is still broken, and only the namespace is trusted.
+    """
+    try:
+        raw = yaml.safe_load(path.read_text()) or {}
+    except (OSError, yaml.YAMLError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    cred_raw = raw.get("credentials", {})
+    if not isinstance(cred_raw, dict):
+        return CredentialsConfig()
+    return CredentialsConfig(namespace=str(cred_raw.get("namespace", "") or ""))
+
+
+def normalize_slack_channel(value: object) -> str:
+    """A channel as rite stores it: `all-rite` and `#all-rite` are the same
+    channel, so the one the user typed without Slack's `#` is not an error.
+
+    v0.7.0 dogfood S19. Slack's own UI writes a channel as `#all-rite` and its
+    API takes it either way, so a person copying the name out of the sidebar
+    types the bare word and met "neither a channel name starting with '#' nor
+    a channel id" — a rejection for a channel rite could name exactly. An id
+    (`C…`, `G…`) is returned untouched: `#` in front of one would be a channel
+    named after an id, which is not the same conversation.
+
+    Only the shape is settled here. Whether the channel EXISTS is Slack's
+    answer, at the first post, and `rite doctor` asks it.
+    """
+    if not isinstance(value, str):
+        return ""
+    text = value.strip()
+    if not text or text.startswith("#") or _SLACK_CHANNEL_ID.match(text):
+        return text
+    return f"#{text}"
 
 
 def _github_app_problem(raw: object) -> str:
@@ -878,7 +941,9 @@ def _slack_problem(raw: object) -> str:
             f"slack.owner_user {owner!r} is not a Slack user id — it looks like "
             "U0123ABCD (profile → ⋮ → Copy member ID), not a name or an email"
         )
-    broadcast = raw.get("broadcast_channel") or ""
+    # NORMALISED first: a bare `all-rite` is the channel `#all-rite`, not a
+    # mistake (S19). What is left after that really is unnameable.
+    broadcast = normalize_slack_channel(raw.get("broadcast_channel") or "")
     if broadcast and not (
         isinstance(broadcast, str) and _SLACK_CHANNEL.match(broadcast)
     ):
