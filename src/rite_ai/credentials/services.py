@@ -73,6 +73,44 @@ class Field:
     and `--value` would put it on argv, so it is set only with
     `rite credential set <key> --stdin`."""
 
+    optional: bool = False
+    """Enter skips it, leaving whatever is already there. For a field the
+    integration works without: Slack posts to a default channel when none is
+    named, so demanding one would make the prompt a wall in front of a
+    perfectly good setup."""
+
+    normalize: str = ""
+    """Name of the cleaner applied to what the user typed, before it is
+    validated or stored. `slack_channel` turns a bare `all-rite` into
+    `#all-rite` (v0.7.0 dogfood S19) — a name is what Slack's own sidebar
+    shows, so typing it without the `#` is not a mistake to refuse."""
+
+    def problem(self, value: str) -> str:
+        """Why this answer cannot be stored, or "".
+
+        ⚠ **Checked HERE because this command writes config.yaml.** A
+        `slack.owner_user` the parser refuses would be written by the very
+        command meant to set Slack up, and every later `rite` run would then
+        answer with that parse error (v0.7.0 dogfood S19's blocking shape,
+        created by S14's own fix). The parser's rules are reused rather than
+        restated, so the two cannot drift.
+        """
+        if not value:
+            return ""
+        from rite_ai.config.parse import slack_field_problem
+
+        if self.config_path.startswith("slack."):
+            return slack_field_problem(self.config_path.split(".", 1)[1], value)
+        return ""
+
+    def clean(self, value: str) -> str:
+        """What the user typed, as rite stores it."""
+        if self.normalize == "slack_channel":
+            from rite_ai.config.parse import normalize_slack_channel
+
+            return normalize_slack_channel(value)
+        return value.strip() if isinstance(value, str) else value
+
 
 @dataclass(frozen=True)
 class Service:
@@ -153,16 +191,39 @@ SERVICES: dict[str, Service] = {
     "slack": Service(
         name="slack",
         label="Slack — the relay that reads and writes a Manager's mailbox",
-        # ONE field. A bot token carries the workspace and the identity, so
-        # there is nothing else to ask for — the same shape as GitHub's PAT
-        # and for the same reason. The channel is configuration rather than a
-        # credential and belongs with the Slack settings.
+        # The token is the only SECRET, and the channel really is
+        # configuration rather than a credential — but "not a credential" was
+        # read as "not this command's business", and the result was a Slack
+        # integration this command could not finish. v0.7.0 dogfood S14:
+        # `rite credential set slack` stored the token and stopped, leaving
+        # `slack.owner_user` to be hand-edited into config.yaml, and a
+        # refinement DM with nowhere to go until it was. `config_path` already
+        # carries the non-secret half of JIRA into the committed config; Slack
+        # takes the same route, so one command sets the integration up (§10.5).
         fields=(
             Field(
                 "bot_token",
                 "Slack bot token (starts with xoxb-)",
                 secret=True,
                 env="SLACK_BOT_TOKEN",
+            ),
+            Field(
+                "owner_user",
+                "Your Slack member id (U…, profile → ⋮ → Copy member ID) "
+                "— its DM with the app is where a Manager takes instructions; "
+                "Enter to skip, leaving Slack broadcast-only",
+                secret=False,
+                optional=True,
+                config_path="slack.owner_user",
+            ),
+            Field(
+                "broadcast_channel",
+                "Channel for status anyone may read (#all-rite, or a C… id) "
+                "— Enter for the default",
+                secret=False,
+                optional=True,
+                normalize="slack_channel",
+                config_path="slack.broadcast_channel",
             ),
         ),
         note=(
