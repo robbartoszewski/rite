@@ -40,6 +40,10 @@ class Record:
     ticket: str
     started_at: str
     modules: dict[str, dict]  # module -> {strategy, squash, auto_merge}
+    refinement: dict | None = None
+    """The signed refinement record the Worker was started on, as its payload
+    (S31): what `deliver` holds publishing against when it has host-measured
+    items. None for a Worker started by an older rite, or with no ticket."""
 
 
 @dataclass(frozen=True)
@@ -76,8 +80,10 @@ def write(
     config: ProjectConfig,
     modules: list[Module],
     now: datetime | None = None,
+    refinement: dict | None = None,
 ) -> Path:
-    """Record what `worker` is started under, for `ticket`, per module."""
+    """Record what `worker` is started under, for `ticket`, per module, and
+    the refinement record it was started on."""
     stamp = (now or datetime.now(UTC)).strftime("%Y-%m-%dT%H:%M:%SZ")
     body = {
         "version": RECORD_VERSION,
@@ -86,6 +92,8 @@ def write(
         "started_at": stamp,
         "modules": {m.name: settings(effective(config.publish, m)) for m in modules},
     }
+    if refinement is not None:
+        body["refinement"] = refinement
     path = _path(root, worker)
     path.parent.mkdir(parents=True, exist_ok=True)
     write_atomic(path, json.dumps(body, indent=2, sort_keys=True) + "\n")
@@ -115,9 +123,13 @@ def read(root: Path, worker: str) -> Record | Unreadable | None:
             "auto_merge",
         }:
             return Unreadable(f"{path}: a module's settings are malformed")
+    refinement = raw.get("refinement")
+    if refinement is not None and not isinstance(refinement, dict):
+        return Unreadable(f"{path}: its refinement record is malformed")
     return Record(
         worker=raw["worker"],
         ticket=raw["ticket"],
         started_at=raw["started_at"],
         modules=modules,
+        refinement=refinement,
     )

@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.65 · **Date:** 2026-09-30
+**Version:** 0.24.66 · **Date:** 2026-09-30
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -3040,6 +3040,61 @@ nothing, and one removed by hand blocks nothing.
 - **The truth, not the view:** `rite board list --ready` and
   `--needs-refinement` read every `scheduled` ticket fresh and never read the
   label.
+
+
+#### 6.7.5. An item the host measures — BUILT (S31)
+
+Some definition-of-done items need a measurement a Worker cannot take inside
+its sandbox: a nested sandbox is denied there ("Operation not permitted",
+v0.7.0 dogfood KAN-29). Such an item is agreed as the host's **at refinement,
+in the signed record**, not as a flag beside it.
+
+- **Marked.** `Record.host_measured` holds the item indexes, inside the MAC
+  and the record id, and is written only when non-empty, so a record written
+  before it keeps its id and verifies. A proposal item is tagged `[host]` on
+  top of its source tag, and the round the User sees names it and says the
+  work is not published until the host's result is recorded; his accept word
+  signs the mark. `rite refine accept --host-item "…"` marks it on the
+  attest path.
+- **Told.** TICKET.md's definition of done (`render_for_worker`, its one
+  writer) marks the item "not yours to run: the host will measure this" and
+  tells the Worker to do the rest, commit, say which items wait, and stop.
+- **Measured, signed, audited.** `rite refine measured <ID> --item N
+  --result pass|fail --output FILE|-`, on the host only, writes a result
+  signed with the refinement key: who measured (§6.7.6's attribution, via the
+  terminal), when, the result, and the SHA-256 and length of the output given
+  as evidence, bound to the ticket, the board, the refinement record's id and
+  the item's text hash. It is posted on the ticket, read back, and only then
+  appended to an append-only log beside the publish records (outside every
+  Manager's grant). Its comment never reads as a record claim.
+- **The pause.** The publish snapshot taken at Worker start
+  (`publishing/record`) keeps the signed record the Worker was started on.
+  `rite deliver` still collects the work, so the host has it to measure, and
+  under `push` or `pull_request` publishes it only when every host item's
+  latest genuine result in the log is PASS. A FAIL, a result for another
+  record or item, one that does not verify, a snapshot that does not verify,
+  or no key to verify with, holds, and the hold names the item.
+- ⚠ **What it proves.** That someone holding the host's key recorded this
+  result, for this exact item of this exact record, citing this output. Not
+  that the measurement was run as described: on the host rite cannot tell
+  the person from a session running as them (TRQ10), and the record says
+  `via: terminal`.
+
+#### 6.7.6. Who answered a round: one attribution — BUILT (S22b)
+
+A round can be answered in Slack (the Owner's DM, or the refinement channel
+where the relay marks it the Owner's), by a message written on this machine
+(`rite message`, no rite header), or with `rite refine answer <ID> <words…>
+[--round k]`, host-only. **Every answer is attributed to the one owner
+identity, `slack.owner_user`, in one shape**: `{"owner_user", "via"}`, where
+`via` is `slack` or `terminal` (`refinement/attribution.py`). The round
+ledger's answers, a pending accept and the signed record's provenance all
+carry it, through the same `protocol.handle`. The record says a terminal
+answer came from the terminal, where rite cannot tell the person from a
+session running as them; before this, an `ok` sent with `rite message` was
+recorded as "accepted by the User in their channel". With no
+`slack.owner_user` set, the owner is recorded as unset and said, never
+invented.
 
 
 ## 7. Review convention and checklists
@@ -7579,6 +7634,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.66 — an item the host measures, and one attribution for every answer (v0.7.0a4 lane 5: S31, S22b).** New §6.7.5 and §6.7.6. S31: `Record.host_measured` (signed, emitted only when non-empty; `schema_problem` refuses indexes that are out of range, repeated, unordered or not integers); `ask`'s `[host]` tag, `Round.host_items`, the round's line naming it, the accept signing it; `rite refine accept --host-item`; `render_for_worker` and the board comment mark it (`HOST_TAG_FOR_WORKER`, `HOST_TAG_ON_BOARD`); `refinement/measurement.py` (`build`, `verifies`, `render`, `append`, `logged`, `latest_for`, `holds`) and `rite refine measured`; the publish snapshot keeps the started-on record's payload; `deliver.host_measurement_hold` holds a push or pull request. S22b: `refinement/attribution.py` (`answered_by`, `via_of`, `owner_user_of`, `describe`); `protocol.Reply.by`, carried into answers, the pending accept and provenance; `rite refine answer`; `record.how_agreed`, one wording for the board, TICKET.md and `rite refine status`. `record.extract_kind` generalises `extract`. Tests: `tests/test_a_host_measured_item_is_the_hosts.py` and `tests/test_every_answer_is_the_owners.py`, over real keys and git, with two invariants: every definition of done of one to four items with every set of marks, crossed with every combination of six result histories per marked item (none, pass, fail, forged, another record's, fail then pass), agrees across the record, TICKET.md, the board and the hold; and every answer route (DM, refinement channel, this machine, `rite refine answer`) with the owner set or unset leaves the same shape and the same owner on an answer and on the record. Twenty-three mutations each go red, one of them (the item-text binding) only after a test was added for it.
 
 **Changes in 0.24.65 — board, status and loop commands degrade where the credential store cannot be read (live yoloAI run, S25).** §10.3 gains the paragraph. `create_backend` returns a BackendError when reading the Jira credentials raises `CredentialStoreError`; `warn_if_global` returns quietly for a store it cannot read; `plan_cycle` takes the board's `board_problem`, which `rite loop run` (and `--watch`) now pass instead of discarding; `format_cycle` says "not read this cycle" and "could not be established" for an unread board and an unknown verdict. Tests through the real CLI with rite's file-store keyring and the store's read failing with EPERM (the suite's in-memory keyring never reads a file, and an earlier draft passed through it without touching the store), and under a real `sandbox-exec` profile that denies only reading the store's contents, with the same profile minus the deny as control; an environment-credential control and a no-board control; `rite loop run --watch`, which `rite loop start` runs, stops on the unreadable board naming it (S27). Six mutations (board construction or `warn_if_global` letting the error through, which reproduces the live traceback; the reason dropped, in one run or under `--watch`; an unread board counted as 0; unknown read as "the work is there") each go red.
 

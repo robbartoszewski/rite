@@ -258,6 +258,9 @@ def send(
                 proposal=bool(checked.ask.proposal),
                 where=raised.id,
                 items=[item.text for item in checked.ask.proposal],
+                host_items=[
+                    i for i, item in enumerate(checked.ask.proposal) if item.host
+                ],
                 questions=list(checked.ask.questions),
                 body=body,
             )
@@ -404,18 +407,34 @@ class Reply:
     words: str
     message: str
     sent_at: float
+    by: dict
+    """`attribution.answered_by`: the owner, and the channel it came by. The
+    same shape whichever channel (S22b)."""
 
 
 def attribute(
-    root: Path, owner: str, text: str, *, message: str, sent_at: float
+    root: Path,
+    owner: str,
+    text: str,
+    *,
+    message: str,
+    sent_at: float,
+    owner_user: str | None = None,
 ) -> Reply | None:
     """Which round `text` answers, or None. Decided from rite's header and
-    the ledger, never from what the words seem to mean (part 3.4 step 3)."""
+    the ledger, never from what the words seem to mean (part 3.4 step 3).
+
+    Who answered is the project's owner (`owner_user`, read from the config
+    when None), by the channel rite's header says it came through."""
     from rite_ai.managers import delivered
+    from rite_ai.refinement import attribution
 
     heard = delivered.classify(text)
     if not heard.users:
         return None
+    if owner_user is None:
+        owner_user = attribution.owner_user_of(root)
+    by = attribution.answered_by(owner_user, attribution.via_of(heard.where))
     attempts = rounds.all_attempts(root, owner)
     label = _thread_label(text)
     if label is not None:
@@ -426,18 +445,18 @@ def attribute(
         for attempt in attempts.values():
             for r in attempt.rounds:
                 if question and r.where == question.group(0):
-                    return Reply(attempt.ticket, r.k, heard.words, message, sent_at)
+                    return Reply(attempt.ticket, r.k, heard.words, message, sent_at, by)
         leading = label.split(" · ", 1)[0].strip()
         attempt = attempts.get(leading)
         if attempt is not None and attempt.rounds and not question:
-            return Reply(leading, attempt.latest.k, heard.words, message, sent_at)
+            return Reply(leading, attempt.latest.k, heard.words, message, sent_at, by)
         return None
     first, _, rest = heard.words.strip().partition(" ")
     ticket = first.rstrip(":,.;")
     attempt = attempts.get(ticket)
     if attempt is None or not attempt.rounds or not rest.strip():
         return None
-    return Reply(ticket, attempt.latest.k, rest.strip(), message, sent_at)
+    return Reply(ticket, attempt.latest.k, rest.strip(), message, sent_at, by)
 
 
 def _thread_label(text: str) -> str | None:
@@ -480,6 +499,7 @@ def handle(root: Path, owner: str, board, reply: Reply, *, limits) -> list[str]:
                 "id": reply.message,
                 "at": reply.sent_at,
                 "k": latest.k,
+                "by": reply.by,
             }
             latest.answered_at = reply.sent_at
             save(attempt)
@@ -510,7 +530,12 @@ def handle(root: Path, owner: str, board, reply: Reply, *, limits) -> list[str]:
             attempt.blocker = ""
             attempt.misses = 0
         attempt.answers.append(
-            {"id": reply.message, "words": reply.words, "at": reply.sent_at}
+            {
+                "id": reply.message,
+                "words": reply.words,
+                "at": reply.sent_at,
+                "by": reply.by,
+            }
         )
         if reply.k == latest.k and not latest.answered:
             latest.answered_at = reply.sent_at
@@ -569,19 +594,25 @@ def _write(root: Path, owner: str, board, attempt, save) -> list[str]:
             f"{attempt.ticket}: the ticket changed since the proposal; the "
             "accept was not recorded and the User was told. Refine it again"
         ]
+    provenance = {
+        "kind": rec.ACCEPTED,
+        "message": attempt.accepted["id"],
+        "sent_at": datetime.fromtimestamp(attempt.accepted["at"], UTC).isoformat(
+            timespec="seconds"
+        ),
+    }
+    if attempt.accepted.get("by"):
+        # S22b: who accepted, in the signed record, in the shape every answer
+        # has. Absent only for an accept pending from before S22b.
+        provenance["by"] = attempt.accepted["by"]
     outcome = accept.write(
         board,
         before,
         attempt.ticket,
         items=list(latest.items),
         verify=rec.NONE_AGREED,
-        provenance={
-            "kind": rec.ACCEPTED,
-            "message": attempt.accepted["id"],
-            "sent_at": datetime.fromtimestamp(attempt.accepted["at"], UTC).isoformat(
-                timespec="seconds"
-            ),
-        },
+        provenance=provenance,
+        host_measured=list(latest.host_items),
     )
     if not outcome.ok:
         return [f"{outcome.message}. rite tries again at the next cycle"]
@@ -903,6 +934,7 @@ def step(root: Path, manager: str, board, say, *, messages=(), now=None) -> list
             message.text,
             message=delivered.message_id(message.path),
             sent_at=message.timestamp,
+            owner_user=config.slack.owner_user,
         )
         if reply is None:
             continue

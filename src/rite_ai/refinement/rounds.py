@@ -111,6 +111,9 @@ class Round:
     items: list[str] = field(default_factory=list)
     """The proposal's items as the User was shown them: what an accept word
     makes the definition of done, and nothing else."""
+    host_items: list[int] = field(default_factory=list)
+    """S31: indexes into `items` of the ones tagged `[host]`, as the User was
+    shown them; an accept word makes them the record's host-measured items."""
     questions: list[str] = field(default_factory=list)
     """The numbered questions it asked: what is still open, as asked, for a
     blocker that has to say so."""

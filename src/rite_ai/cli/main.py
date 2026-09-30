@@ -4248,7 +4248,7 @@ def _provenance_line(provenance: dict) -> str:
     from rite_ai.refinement import record as refinement_record
 
     if provenance.get("kind") == refinement_record.ACCEPTED:
-        return "agreed: accepted by the User in their channel"
+        return "agreed: " + refinement_record.how_agreed(provenance)
     return (
         f"agreed: {refinement_record.ATTESTED_TOKEN} — attested by a session "
         f"running as the person at {provenance.get('at', '?')}; not confirmed "
@@ -4492,6 +4492,13 @@ def refine_sync(role: str) -> None:
 )
 @click.option("--in-scope", "scope_in", multiple=True, help="In scope (repeatable)")
 @click.option("--out-of-scope", "scope_out", multiple=True, help="Out of scope")
+@click.option(
+    "--host-item",
+    "host_items",
+    multiple=True,
+    help="A definition-of-done item the HOST measures, because a Worker cannot "
+    "take that measurement in its sandbox (repeatable; listed after the others)",
+)
 @click.option("--role", default="workers", help="board | workers | testing")
 def refine_accept(
     ticket_id: str,
@@ -4500,6 +4507,7 @@ def refine_accept(
     verify: tuple[str, ...],
     scope_in: tuple[str, ...],
     scope_out: tuple[str, ...],
+    host_items: tuple[str, ...],
     role: str,
 ) -> None:
     """Attest a definition of done for TICKET_ID, as the person, at this host.
@@ -4513,6 +4521,10 @@ def refine_accept(
 
     With no --verify, the record says "none agreed", and a Worker is told to
     report how it checked each item.
+
+    A --host-item is one the Worker is told is not its to run: the host
+    measures it and records the result with `rite refine measured`, and rite
+    holds publishing the work until that result is a pass.
 
     Examples:
       rite refine accept KAN-7 --item "the HTTP timeout in main.py is a flag" \\
@@ -4529,11 +4541,195 @@ def refine_accept(
         verify=list(verify),
         scope_in=list(scope_in),
         scope_out=list(scope_out),
+        host_items=list(host_items),
         use_ticket_text=use_ticket_text,
         role=role,
     )
     click.echo(outcome.message, err=not outcome.ok)
     raise SystemExit(0 if outcome.ok else 1)
+
+
+def _refuse_in_a_manager(what: str) -> None:
+    from rite_ai.managers import current_manager
+
+    if current_manager():
+        click.echo(
+            f"refusing: {what} is the person's, at the host, and this is a "
+            "Manager's session",
+            err=True,
+        )
+        raise SystemExit(1)
+
+
+@refine.command("answer")
+@click.argument("ticket_id")
+@click.argument("words", nargs=-1, required=True)
+@click.option(
+    "--round",
+    "k",
+    type=int,
+    default=None,
+    help="The round answered (default: the latest)",
+)
+def refine_answer(ticket_id: str, words: tuple[str, ...], k: int | None) -> None:
+    """Answer a refinement round from this terminal, as the owner (S22b).
+
+    For when Slack cannot reach you, or you are at the terminal anyway. The
+    answer is the same as a reply in the round's Slack thread: attributed to
+    this project's owner (`slack.owner_user`), kept in the same place, and an
+    accept word writes the same signed record. The record says it came from
+    the terminal, because rite cannot tell you from a session running as you.
+
+    Examples:
+      rite refine answer KAN-7 the http one, in main.py
+      rite refine answer KAN-7 ok
+    """
+    import time as _time
+
+    from rite_ai.config.managers import routing_owner
+    from rite_ai.config.parse import ParseError, parse_config
+    from rite_ai.managers.telling import tell_manager
+    from rite_ai.refinement import attribution, protocol, rounds
+    from rite_ai.refinement import status as refinement_status
+
+    _refuse_in_a_manager("answering a refinement round")
+    root = _require_project_root()
+    config = parse_config(root / ".rite" / "config.yaml")
+    if isinstance(config, ParseError):
+        click.echo(f"config error: {config.message}", err=True)
+        raise SystemExit(1)
+    roles = list(config.coordination.manager_roles)
+    names = list(config.coordination.managers)
+    owner = routing_owner(roles) if roles else (names[0] if len(names) == 1 else "")
+    if not owner:
+        click.echo("refusing: rite cannot tell which Manager refines here", err=True)
+        raise SystemExit(1)
+    ticket_id = ticket_id.strip()
+    attempt = rounds.load(root, owner, ticket_id)
+    if attempt is None or not attempt.rounds:
+        click.echo(f"{ticket_id} has no refinement round to answer", err=True)
+        raise SystemExit(1)
+    k = attempt.latest.k if k is None else k
+    if not any(r.k == k for r in attempt.rounds):
+        click.echo(f"{ticket_id} has no round {k}", err=True)
+        raise SystemExit(1)
+    board = refinement_status.board_for(root, config)
+    if isinstance(board, refinement_status.Status):
+        click.echo(f"{ticket_id}: {board.detail}", err=True)
+        raise SystemExit(1)
+    now = _time.time()
+    reply = protocol.Reply(
+        ticket=ticket_id,
+        k=k,
+        words=" ".join(words).strip(),
+        message=f"terminal-{_time.time_ns()}",
+        sent_at=now,
+        by=attribution.answered_by(config.slack.owner_user, attribution.TERMINAL),
+    )
+    notes = protocol.handle(root, owner, board, reply, limits=config.refinement)
+    for note in notes:
+        click.echo(note)
+        try:
+            tell_manager(root, owner, "refinement", note)
+        except OSError as e:
+            click.echo(f"could not tell {owner!r}: {e}", err=True)
+    if not config.slack.owner_user:
+        click.echo(
+            "note: no slack.owner_user is set, so this answer is recorded as the "
+            "owner's with no Slack id to name"
+        )
+
+
+@refine.command("measured")
+@click.argument("ticket_id")
+@click.option("--item", "item", type=int, required=True, help="The item, from 1")
+@click.option(
+    "--result", type=click.Choice(["pass", "fail"]), required=True, help="pass | fail"
+)
+@click.option(
+    "--output",
+    "output",
+    type=click.File("rb"),
+    required=True,
+    help="The measurement's output, as evidence ('-' for stdin); rite keeps "
+    "its SHA-256",
+)
+@click.option("--role", default="workers", help="board | workers | testing")
+def refine_measured(ticket_id: str, item: int, result: str, output, role: str) -> None:
+    """Record the host's measurement of a host-measured item (S31).
+
+    For a definition-of-done item agreed as the host's to measure, because a
+    Worker cannot take it in its sandbox. rite signs the result (who, when,
+    pass or fail, and the output's SHA-256), binds it to the ticket's current
+    refinement record and that item's text, posts it on the ticket, reads it
+    back, and appends it to its audit log. Publishing the Worker's work waits
+    until every such item has a PASS.
+
+    Examples:
+      rite refine measured KAN-29 --item 3 --result pass --output measured.txt
+    """
+    from rite_ai.refinement import attribution, measurement
+    from rite_ai.refinement import key as refinement_key
+    from rite_ai.refinement import status as refinement_status
+
+    _refuse_in_a_manager("recording a host measurement")
+    root = _require_project_root()
+    board = refinement_status.board_for(root, None, role=role)
+    if isinstance(board, refinement_status.Status):
+        click.echo(f"{ticket_id}: {board.detail}", err=True)
+        raise SystemExit(1)
+    now = refinement_status.status(board, ticket_id)
+    if not now.refined or now.record is None:
+        click.echo(
+            f"{ticket_id}: {now.state} — {now.detail}. A host measurement is "
+            "recorded only against an agreed definition of done",
+            err=True,
+        )
+        raise SystemExit(1)
+    try:
+        key = refinement_key.ensure()
+        made = measurement.build(
+            record=now.record,
+            item=item - 1,
+            result=result,
+            output=output.read(),
+            by=attribution.answered_by(
+                attribution.owner_user_of(root), attribution.TERMINAL
+            ),
+            key=key,
+        )
+    except (OSError, ValueError) as e:
+        click.echo(f"{ticket_id}: not recorded: {e}", err=True)
+        raise SystemExit(1) from e
+    posted = board.comment(ticket_id, measurement.render(made, now.record))
+    if posted is not None:
+        click.echo(f"{ticket_id}: not recorded: {posted.message}", err=True)
+        raise SystemExit(1)
+    back = refinement_status.status_and_thread(board, ticket_id)[1]
+    from rite_ai.tickets import Thread
+
+    read_back = [
+        measurement.rec.extract_kind(c.body, measurement.MARKER) or {}
+        for c in (back.comments if isinstance(back, Thread) else [])
+    ]
+    seen = any(
+        p.get("measurement_id") == made.payload["measurement_id"]
+        and measurement.verifies(p, key, now.record, item - 1)
+        for p in read_back
+    )
+    if not seen:
+        click.echo(
+            f"{ticket_id}: the result was posted, but reading the ticket back did "
+            "not find it intact; NOT recorded",
+            err=True,
+        )
+        raise SystemExit(1)
+    measurement.append(root, made)
+    click.echo(
+        f"{ticket_id}: item {item} measured on the host: {result.upper()} "
+        f"(measurement {made.payload['measurement_id']}, output sha256 "
+        f"{made.payload['output_sha256'][:12]}…), for record {now.record.record_id}"
+    )
 
 
 @cli.group()
@@ -6580,10 +6776,13 @@ def sandbox_start(
         clear_delivery(worker_dir)
         prompt = None
     else:
-        read_at, record_id = _deliver_ticket(
+        read_at, started_on = _deliver_ticket(
             worker, worker_dir, ticket, root, config, modules
         )
-        _record_publish_settings(root, worker, ticket, config, modules)
+        record_id = started_on.record_id
+        _record_publish_settings(
+            root, worker, ticket, config, modules, started_on.payload()
+        )
         prompt = (
             f"Work ticket {ticket} to its agreed definition of done, refinement "
             f"record {record_id}. The ticket and that definition of done, as rite "
@@ -6649,7 +6848,9 @@ def refused_for_refinement(state: str, ticket: str) -> str:
     return st.refusal(state, ticket)
 
 
-def _record_publish_settings(root: Path, worker: str, ticket: str, config, modules):
+def _record_publish_settings(
+    root: Path, worker: str, ticket: str, config, modules, refinement=None
+):
     """Record what this Worker is started under (PB1, read once), or exit.
 
     From the SAME parse that wrote TICKET.md's Publishing section, so what
@@ -6659,7 +6860,7 @@ def _record_publish_settings(root: Path, worker: str, ticket: str, config, modul
     from rite_ai.publishing import record
 
     try:
-        record.write(root, worker, ticket, config, modules)
+        record.write(root, worker, ticket, config, modules, refinement=refinement)
     except (OSError, ValueError) as e:
         click.echo(
             f"not starting '{worker}': rite could not record which publish "
@@ -6674,7 +6875,7 @@ def _deliver_ticket(
 ) -> tuple[str, str]:
     """Check TICKET is refined and write it, with its agreed definition of
     done, into the Worker's workspace, or exit. Returns the UTC time of the
-    read and the record id.
+    read and the signed record.
 
     A sandboxed Worker holds no board credential (§5.3.4), so this is the
     only way it learns what its ticket says and what counts as done.
@@ -6733,7 +6934,7 @@ def _deliver_ticket(
         f"delivered ticket {ticket} and its agreed definition of done (record "
         f"{record_id}) as read at {read_at} UTC to {path}"
     )
-    return read_at, record_id
+    return read_at, checked.record
 
 
 def _worker_cannot_deliver(

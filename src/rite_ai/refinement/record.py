@@ -119,8 +119,17 @@ class Record:
     scope_in: tuple[str, ...] = ()
     scope_out: tuple[str, ...] = ()
     exchange: tuple[dict, ...] = ()
+    host_measured: tuple[int, ...] = ()
+    """S31: indexes into `definition_of_done` of the items the host measures,
+    because a Worker cannot take that measurement inside its sandbox (a nested
+    `sandbox_apply` is denied there). Agreed at refinement, so it is signed
+    with the rest; written into the payload only when there is one, so every
+    record written before it keeps its id and its MAC."""
     record_id: str = ""
     mac: str = ""
+
+    def is_host_measured(self, index: int) -> bool:
+        return index in self.host_measured
 
     def payload(self) -> dict:
         body = {
@@ -141,6 +150,8 @@ class Record:
             "provenance": self.provenance,
             "exchange": list(self.exchange),
         }
+        if self.host_measured:
+            body["host_measured"] = list(self.host_measured)
         if self.mac:
             body["mac"] = self.mac
         return body
@@ -160,6 +171,7 @@ def build(
     scope_in: list[str] | None = None,
     scope_out: list[str] | None = None,
     exchange: list[dict] | None = None,
+    host_measured: list[int] | None = None,
 ) -> Record:
     """A signed record for the ticket text given. Refuses, rather than
     repairs, a record that could not be valid: a definition of done must
@@ -169,6 +181,7 @@ def build(
             "definition_of_done": definition_of_done,
             "verify": verify,
             "provenance": provenance,
+            "host_measured": sorted(set(host_measured or ())),
         }
     )
     if problem:
@@ -187,6 +200,7 @@ def build(
         scope_in=tuple(scope_in or ()),
         scope_out=tuple(scope_out or ()),
         exchange=tuple(exchange or ()),
+        host_measured=tuple(sorted(set(host_measured or ()))),
     )
     unsigned = replace(unsigned, record_id=record_id_of(unsigned.payload()))
     return replace(unsigned, mac=mac_of(unsigned.payload(), key))
@@ -211,6 +225,17 @@ def schema_problem(payload: dict) -> str:
         PROVENANCE_KINDS
     ):
         return "its provenance is not one of " + ", ".join(PROVENANCE_KINDS)
+    host = payload.get("host_measured", [])
+    if (
+        not isinstance(host, list)
+        or not all(type(i) is int and 0 <= i < len(dod) for i in host)
+        or len(set(host)) != len(host)
+        or host != sorted(host)
+    ):
+        return (
+            "its host-measured items are not distinct, ordered indexes of its "
+            "definition of done"
+        )
     return ""
 
 
@@ -230,8 +255,23 @@ def render_for_worker(record: Record) -> str:
     lines = [
         f"Agreed definition of done for {record.ticket} "
         f"(refinement record {record.record_id}):",
-        *[f"- [ ] {clean(item)}" for item in record.definition_of_done],
+        *[
+            f"- [ ] {HOST_TAG_FOR_WORKER if record.is_host_measured(i) else ''}"
+            f"{clean(item)}"
+            for i, item in enumerate(record.definition_of_done)
+        ],
     ]
+    if record.host_measured:
+        numbers = ", ".join(str(i + 1) for i in record.host_measured)
+        lines += [
+            f"Item(s) {numbers} are NOT YOURS TO RUN: the host will measure "
+            "them. They need a measurement a Worker cannot take inside its "
+            "sandbox (a nested sandbox is denied there), and the User agreed "
+            "at refinement that the host takes it. Do not attempt them, and do "
+            "not report them done. Do every other item, commit, and say in your "
+            "report which items wait for the host measurement. rite holds "
+            "publishing your work until the host's result is recorded.",
+        ]
     if record.scope_in:
         lines += ["In scope:", *[f"- {clean(item)}" for item in record.scope_in]]
     if record.scope_out:
@@ -242,13 +282,29 @@ def render_for_worker(record: Record) -> str:
         )
     else:
         lines += ["Verify with:", *[f"    {clean(c)}" for c in record.verify]]
-    how = (
-        "accepted by the User"
-        if record.provenance.get("kind") == ACCEPTED
-        else "attested by a session running as the person, not confirmed to be a person"
+    lines.append(
+        f"This definition of done was {how_agreed(record.provenance)}. Work to "
+        "it, not to the title."
     )
-    lines.append(f"This definition of done was {how}. Work to it, not to the title.")
     return "\n".join(lines)
+
+
+HOST_TAG_FOR_WORKER = "(not yours to run: the host will measure this) "
+HOST_TAG_ON_BOARD = "(measured on the host, not by the Worker) "
+
+
+def how_agreed(provenance: dict) -> str:
+    """How a record's definition of done was agreed, in words: one wording for
+    the board, TICKET.md and `rite refine status`, so none of them can make a
+    terminal answer read as a Slack one (S22b)."""
+    from rite_ai.refinement import attribution
+
+    if provenance.get("kind") == ACCEPTED:
+        return "accepted by " + attribution.describe(provenance.get("by"))
+    return (
+        f"{ATTESTED_TOKEN}: attested by a session running as the person, outside "
+        "any sandbox; not confirmed through the User's channel"
+    )
 
 
 def render(record: Record) -> str:
@@ -256,7 +312,10 @@ def render(record: Record) -> str:
     lines = [
         f"**rite: agreed definition of done for {record.ticket}**",
         "",
-        *[f"- [ ] {item}" for item in record.definition_of_done],
+        *[
+            f"- [ ] {HOST_TAG_ON_BOARD if record.is_host_measured(i) else ''}{item}"
+            for i, item in enumerate(record.definition_of_done)
+        ],
         "",
     ]
     if isinstance(record.verify, str):
@@ -264,16 +323,9 @@ def render(record: Record) -> str:
     else:
         lines.append("Verify:")
         lines.extend(f"    {command}" for command in record.verify)
-    kind = record.provenance.get("kind", "")
-    how = (
-        "accepted by the User in their channel"
-        if kind == ACCEPTED
-        else f"{ATTESTED_TOKEN}: attested by a session running as the person, "
-        "outside any sandbox; not confirmed through the User's channel"
-    )
     lines += [
         "",
-        f"Provenance: {how}.",
+        f"Provenance: {how_agreed(record.provenance)}.",
         "",
         "Written by rite. Editing this comment makes it unreadable to rite, and "
         "deleting it leaves the ticket without an agreed definition of done.",
@@ -296,7 +348,13 @@ def extract(text: str) -> dict | None:
     the marker, then decodes the first JSON object after it. It does not
     tolerate changed characters; that is what the MAC is for.
     """
-    at = text.find(MARKER)
+    return extract_kind(text, MARKER)
+
+
+def extract_kind(text: str, kind: str) -> dict | None:
+    """`extract`, for any of rite's signed comment kinds (a record, or a host
+    measurement, `refinement.measurement`)."""
+    at = text.find(kind)
     if at < 0:
         return None
     start = text.find("{", at)
@@ -306,7 +364,7 @@ def extract(text: str) -> dict | None:
         except json.JSONDecodeError:
             start = text.find("{", start + 1)
             continue
-        if isinstance(obj, dict) and obj.get("kind") == MARKER:
+        if isinstance(obj, dict) and obj.get("kind") == kind:
             return obj
         start = text.find("{", start + 1)
     return None
@@ -326,6 +384,7 @@ def from_payload(payload: dict) -> Record:
         scope_in=tuple(payload.get("scope_in") or ()),
         scope_out=tuple(payload.get("scope_out") or ()),
         exchange=tuple(payload.get("exchange") or ()),
+        host_measured=tuple(payload.get("host_measured") or ()),
         record_id=str(payload.get("record_id", "")),
         mac=str(payload.get("mac", "")),
     )
