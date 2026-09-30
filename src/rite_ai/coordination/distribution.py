@@ -42,7 +42,11 @@ from pathlib import Path
 
 from rite_ai.config.models import ScheduleConfig
 from rite_ai.coordination.refusal import Refused, refusal_reason, refuse_assignment
-from rite_ai.coordination.ticket_labels import SCHEDULED, module_required_by
+from rite_ai.coordination.ticket_labels import (
+    READY_TO_WORK,
+    SCHEDULED,
+    module_required_by,
+)
 from rite_ai.schedule import current_moment, workers_at
 from rite_ai.tickets import BackendError, TicketFilter
 
@@ -176,7 +180,16 @@ def distribute(
             )
             continue
         worker = free[0]
-        written = backend.label(ticket.id, [worker], remove=[manager, SCHEDULED])
+        # TR7: `ready-to-work` leaves in the same write as `scheduled`, so
+        # the board never shows an assigned ticket as ready to be assigned.
+        # Only when the ticket carries it: `gh issue edit --remove-label`
+        # refuses a label the REPOSITORY lacks (measured, gh 2.98.0: "'…' not
+        # found", exit 1), which would fail every assignment on a repository
+        # rite has never labelled `ready-to-work`.
+        remove = [manager, SCHEDULED]
+        if READY_TO_WORK in (ticket.labels or []):
+            remove.append(READY_TO_WORK)
+        written = backend.label(ticket.id, [worker], remove=remove)
         if isinstance(written, BackendError):
             # The Worker stays free and the ticket stays put. An assignment
             # that did not land must not be reported as one.

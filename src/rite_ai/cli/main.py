@@ -3909,14 +3909,38 @@ def board_move(ticket_id: str, status: str, role: str) -> None:
 @click.option("--status", default=None)
 @click.option("--assignee", default=None)
 @click.option("--label", default=None)
+@click.option(
+    "--ready",
+    "ready",
+    is_flag=True,
+    help="Only queued tickets with an agreed definition of done and no "
+    "Manager yet, from a fresh read of each (not from the label).",
+)
+@click.option(
+    "--needs-refinement",
+    "needs_refinement",
+    is_flag=True,
+    help="Only queued tickets that are not ready, each with its state.",
+)
 @click.option("--role", default="workers", help="board | workers | testing")
 def board_list(
-    status: str | None, assignee: str | None, label: str | None, role: str
+    status: str | None,
+    assignee: str | None,
+    label: str | None,
+    ready: bool,
+    needs_refinement: bool,
+    role: str,
 ) -> None:
     """List tickets, optionally filtered.
 
+    --ready and --needs-refinement compute the answer from a fresh read of
+    every `scheduled` ticket, so they are right even when the board's
+    `ready-to-work` label is stale (TR7).
+
     Examples:
       rite board list --status "In Progress"
+      rite board list --ready
+      rite board list --needs-refinement
     """
     from rite_ai.tickets import BackendError, TicketFilter
 
@@ -3924,6 +3948,19 @@ def board_list(
     if err:
         click.echo(err, err=True)
         raise SystemExit(1)
+    if ready or needs_refinement:
+        if ready and needs_refinement:
+            click.echo("give --ready or --needs-refinement, not both", err=True)
+            raise SystemExit(1)
+        if status or assignee or label:
+            click.echo(
+                "--ready and --needs-refinement read every `scheduled` ticket; "
+                "they take no other filter",
+                err=True,
+            )
+            raise SystemExit(1)
+        _board_list_by_refinement(backend, ready=ready)
+        return
     filters = TicketFilter(status=status, assignee=assignee, label=label)
     result = backend.list_tickets(filters)
     if isinstance(result, BackendError):
@@ -3933,6 +3970,30 @@ def board_list(
         click.echo("no tickets")
         return
     _render_tickets(result)
+
+
+def _board_list_by_refinement(backend, *, ready: bool) -> None:
+    """`rite board list --ready` / `--needs-refinement` (TR7)."""
+    from rite_ai.config.parse import ParseError, parse_config
+    from rite_ai.normalise import normalise
+    from rite_ai.refinement import view
+
+    config = parse_config(_find_project_root() / ".rite" / "config.yaml")
+    managers = [] if isinstance(config, ParseError) else view.managers_of(config)
+    rows, cut = view.truth(backend, managers)
+    shown = [r for r in rows if r.ready == ready]
+    if not shown:
+        click.echo("no tickets")
+    for row in shown:
+        title = normalise(row.ticket.title).text
+        if ready:
+            click.echo(f"  {row.ticket.id}  {title}")
+        elif row.status.refined:
+            click.echo(f"  {row.ticket.id}  [assigned]  {title}")
+        else:
+            click.echo(f"  {row.ticket.id}  [{row.status.state}]  {title}")
+    if cut:
+        click.echo(f"  … {cut}")
 
 
 @board.command("query")
@@ -4362,6 +4423,57 @@ def refine_reopen(ticket_id: str, manager: str) -> None:
             raise SystemExit(1)
         owner = names[0]
     click.echo(rounds.reopen(root, owner, ticket_id.strip()))
+    from rite_ai.refinement import status as refinement_status
+    from rite_ai.refinement import view
+
+    # TR7: the ticket reopened is re-labelled from a fresh read at once.
+    board = refinement_status.board_for(root, None)
+    if not isinstance(board, refinement_status.Status):
+        labelled = view.settle(board, ticket_id.strip(), view.managers_at(root))
+        if labelled:
+            click.echo(labelled)
+
+
+@refine.command("sync")
+@click.option("--role", default="workers", help="board | workers | testing")
+def refine_sync(role: str) -> None:
+    """Correct the `ready-to-work` label on this board, now (TR7).
+
+    The label is rite's view of the refinement records: on a ticket exactly
+    when it is `scheduled`, REFINED and not yet assigned. Nothing reads it to
+    decide anything. The Owner's supervisor corrects it every cycle; this
+    does the same with no Manager running, from one read of every ticket
+    that is `scheduled` or carries the label. A label added by hand to a
+    ticket that is not REFINED is removed, with one comment on the ticket
+    per record state; one removed from a REFINED ticket is put back.
+
+    Run it on the host: a Manager's or Worker's sandbox cannot read the key
+    the records are checked with.
+
+    Examples:
+      rite refine sync
+    """
+    from rite_ai.managers import current_manager
+    from rite_ai.refinement import view
+
+    if current_manager():
+        click.echo(
+            "refusing: the label is corrected by the Owner's supervisor every "
+            "cycle, and a Manager's session cannot read the refinement records",
+            err=True,
+        )
+        raise SystemExit(1)
+    root = _require_project_root()
+    board, err = _ticket_backend(role, root=root)
+    if err:
+        click.echo(err, err=True)
+        raise SystemExit(1)
+    done = view.reconcile(board, view.managers_at(root))
+    for change in done.changes:
+        verb = "added" if change.added else "removed"
+        click.echo(f"  {change.ticket}: {verb} ({change.state})")
+    click.echo(done.line() or f"{view.READY}: every label already right")
+    raise SystemExit(0 if done.complete and not done.problems else 1)
 
 
 @refine.command("accept")
@@ -7372,7 +7484,7 @@ def _ticket_work_rule(root: Path, manager: str) -> str:
     return ticket_work(manager, owner, one_root=one_root)
 
 
-def _refinement_briefing(root: Path, manager: str, board) -> str:
+def _refinement_briefing(root: Path, manager: str, board, say=None) -> str:
     """`refinement.instructions` then `refinement.brief`, for `manager`."""
     from rite_ai.config.parse import ParseError, parse_config
     from rite_ai.refinement import instructions as refinement_instructions
@@ -7382,7 +7494,7 @@ def _refinement_briefing(root: Path, manager: str, board) -> str:
         return ""
     return refinement_instructions.instructions(
         root, manager, config
-    ) + refinement_instructions.brief(root, manager, board, config)
+    ) + refinement_instructions.brief(root, manager, board, config, say=say)
 
 
 def _with_refinement(router, refine):
@@ -8086,7 +8198,11 @@ def _start_a_manager(
             # TR2/TR3: how the Owner refines, and this cycle's refinement
             # work, from one read of each scheduled ticket; "" for a Manager
             # that does not refine.
-            refinement_brief=lambda say: _refinement_briefing(root, role.name, board),
+            # TR7: it reconciles the `ready-to-work` view first, and says
+            # how many labels it corrected.
+            refinement_brief=lambda say: _refinement_briefing(
+                root, role.name, board, say
+            ),
             # TR2: refinement runs wherever routing runs (before, during and
             # after a cycle, and in every wait), so a round the Owner asks
             # for goes out in seconds and a chat instruction he left

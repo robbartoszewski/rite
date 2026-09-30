@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.63 · **Date:** 2026-09-30
+**Version:** 0.24.64 · **Date:** 2026-09-30
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -2999,9 +2999,45 @@ accept-word set (D-104), "you decide" answered with a recommendation to
 confirm (D-105), rounds bounded and timed (D-103), a silent ticket shown as
 waiting for the User and a silent chat instruction becoming an unrefined chore
 after `chore_after_minutes` (D-110), the questions in the DM or a private
-channel (D-108), the `ready-to-work` label as a view of the record and never
-an input (TR7), and the loop's third verdict for a board whose work exists but
-none of which can start yet, neither `idle` nor `ready` (TR2).
+channel (D-108), and the loop's third verdict for a board whose work exists but
+none of which can start yet, neither `idle` nor `ready` (TR2). The
+`ready-to-work` label is built: §6.7.4.
+
+#### 6.7.4. The `ready-to-work` label: a view, never an input — BUILT (TR7)
+
+So that the Owner and the User can filter "ready to be assigned" from "needs
+refinement" on the board itself, rite keeps one label, `ready-to-work`, on a
+ticket exactly when its latest read shows `scheduled`, REFINED (§6.7.1) and no
+Manager's name on it. **Nothing reads it to decide anything**: every gate in
+§6.7.2 reads `scheduled` and the record, so a label added by hand starts
+nothing, and one removed by hand blocks nothing.
+
+- **Who writes it** (`refinement/view.py`). The Owner's supervisor, at the
+  start of every cycle, from the same reads as its refinement brief; the one
+  record writer (`accept.write`, for `rite refine accept` and the User's accept
+  word), for its ticket, after the read-back; `rite refine reopen`, for its
+  ticket; `rite refine sync`, on the host, on demand; and a Worker assignment,
+  which takes it off in the same write that takes `scheduled` off, and only
+  when the ticket carries it (`gh issue edit --remove-label` refuses a label
+  the repository lacks: measured, gh 2.98.0).
+- **What a pass looks at.** Every ticket in `list(scheduled)` and
+  `list(ready-to-work)`, each read once; a project's board already folds in
+  rite's own recent writes (DF4), so a lagging list does not hide one. The
+  second list finds a label left behind while no rite ran. A list cut short
+  makes the pass incomplete, and it says so rather than calling the board
+  reconciled. Each start line says how many labels it corrected.
+- **A wrong label.** Added by hand to a ticket that is not REFINED: removed,
+  with one comment on the ticket per record state (found in the ticket's own
+  thread, so a person re-adding it cannot start a comment war) and a line in
+  the Owner's instruction every time. Removed from a REFINED ticket: put back,
+  with no comment. A ticket read as UNREADABLE (for example with no key) keeps
+  its label, and that is said: the view is not changed on a guess.
+- **On GitHub**, rite creates the label once, with the description "Set and
+  removed by rite … Adding it by hand does nothing", and leaves an existing
+  label of that name as its owner made it. Jira labels have no description.
+- **The truth, not the view:** `rite board list --ready` and
+  `--needs-refinement` read every `scheduled` ticket fresh and never read the
+  label.
 
 
 ## 7. Review convention and checklists
@@ -7527,6 +7563,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.64 — the `ready-to-work` label, a view of the refinement record (v0.7.0 TR7).** New §6.7.4; §6.7.3 no longer lists it as not built. `refinement/view.py` (`wanted`, `reconcile`, `settle`, `truth`); `refinement.instructions.brief` reconciles first and tells the Owner what it removed; `accept.write`'s two callers and `rite refine reopen` re-label their ticket; `coordination.distribution` takes the label off with `scheduled`, only when carried; `GitHubBackend.describe_label`; `rite refine sync`; `rite board list --ready` / `--needs-refinement`; `ready-to-work` joins the labels a scope label may not be. Tests over real signed records: accepting (both paths) labels at once; an edit takes it off at the next read with one STALE comment; a Manager's name means not ready; assignment takes it off in the same write, and does not ask to remove one the ticket lacks; a hand-added label starts nothing and is removed with one comment however often it is re-added, a new record state gets its own; a hand-removed one is back with no comment; one left while nothing ran is found through its own list and counted; a list cut short is said; an UNREADABLE ticket keeps its label; the Owner's cycle reconciles and a secondary writes nothing; `--ready` reads the record, not the label; the GitHub label is described once and a person's is left alone. Seven mutations (assignment keeps it, never removed, a comment every cycle, the cycle not reconciling, UNREADABLE stripping it, each accept path not labelling) each go red. ⚠ Not yet observed on real GitHub and real Jira (the plan's done-when).
 
 **Changes in 0.24.63 — a force-release stops at another Manager (v0.7.0 MM3; SPEC §5.4.8 P4).** §5.4.3 records what was built and the three boundaries of the rule; §5.4.8's status line, its P4 row and its state list say P4 holds for claims and not for destroy. `Claim.manager`, defaulted to `""` so a ledger written by an older rite still parses; `ClaimsLedger.claim(manager=)`, filled by the CLI from `managers.current_manager()`; `force_release(manager=)` narrows the PATH-matched release to the acting Manager's own claims and unowned ones; `last_refused_other_managers`, printed by `rite release --force` as "not yours: <path> (held by <worker>, under Manager '<name>')"; the force-release audit record names the Manager. `worker=`-scoped releases are NOT narrowed, so `pool.archive` can still reap a Worker another Manager started. Tests: two Managers on different paths, A's release leaves B's and says whose it is, releases its own and an unowned one; a human outside any session still clears the path; a pre-0.7.0 ledger reads. Five mutations (the guard removed, unowned claims refused too, the CLI's `or None` dropped, a `worker`-scoped release narrowed, the refusal printed silently) each go red.
 

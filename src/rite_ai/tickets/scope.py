@@ -40,10 +40,10 @@ from pathlib import Path
 
 from rite_ai.tickets.interface import TicketBackend, TicketFilter
 
-RESERVED = frozenset({"scheduled", "chore", "blocked"})
+RESERVED = frozenset({"scheduled", "chore", "blocked", "ready-to-work"})
 """rite's own label words (`coordination.ticket_labels`, `managers.chores`,
-`refinement.protocol`). A scope label equal to one would put every one of the
-project's tickets into that state."""
+`refinement.protocol`, `refinement.view`). A scope label equal to one would
+put every one of the project's tickets into that state."""
 
 _LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
@@ -141,6 +141,11 @@ class Scoped(TicketBackend):
 
     def link(self, ticket_id, target_id, link_type):
         return self.inner.link(ticket_id, target_id, link_type)
+
+    def describe_label(self, name, description, color):
+        # Optional (GitHub only): present here only when the board has it.
+        describe = getattr(self.inner, "describe_label", None)
+        return describe(name, description, color) if callable(describe) else None
 
 
 def unwrapped(board):
