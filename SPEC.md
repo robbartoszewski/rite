@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.66 · **Date:** 2026-09-30
+**Version:** 0.24.67 · **Date:** 2026-09-30
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -4345,6 +4345,46 @@ here, then `path: ./`; or `rite add module <name> <URL>`). Found assessing the
 the hook and CI only. An empty directory is S11's case, and a directory inside
 another repository is in one, so neither is told this.
 
+**What init leaves a project with is settled the same way on every route
+(0.24.67, v0.7.0 dogfood S13, S18, S20, S21 and the `--yes` gap).** After the
+answers, whichever route produced them (from scratch or existing code) and
+however init was run (interactive, `--yes`, `--config`), `cli/init/setup.py`:
+
+- **Zero modules is said, and asked about.** If no module would be registered,
+  init says so (with S12's explanation when the root holds code in no
+  repository) and, when someone is there and has not already been asked where
+  the code is, asks for the repository. It never ends on "Ready." with no
+  module: the last line says it is initialised but not ready, and what is
+  missing. A bare `rite init --yes` reached no module check before, wrote
+  `modules: {}` and said "Ready."; #150's only `--yes` test named a
+  `source.path`, the one shape that did reach it.
+- **rite's own leftovers are not the project's content** (`detect.content_
+  entries`, shared by `holds_nothing` and the S12 check): hidden entries, a
+  CLAUDE.md carrying rite's generated marker, rite's installer (recognised by
+  its `# rite installer.` header, never by the name `install.sh`), and a
+  `workers/` of rite Worker workspaces. S13: the setup's own `install.sh` in
+  the root turned the repository prompt off. An existing rite project is still
+  one: its changes are recorded, not read as an empty directory.
+- **The schedule is a stated default** (S21): a fresh project gets 1 Worker,
+  `00:00-24:00`, every day, in this machine's zone written down, and init
+  says so on every run with how to change it. `--config` sets
+  `schedule.timezone`, `schedule.workers` and `schedule.hours`. Not asked:
+  one command changes it. An empty schedule authorised 0 Workers, silently.
+- **A Worker is offered** (S20) once there is a module (default name `w1`,
+  cloned through `add_worker`). `--yes` declares none, because a Worker clones
+  every module over the network, and says one is needed; `--config`
+  `workers.add: <name>` declares one.
+- **The credential namespace is offered back** (S18). `~/.rite/namespaces.json`
+  records each namespace against its project's module remotes, normalised to
+  `host/owner/repo` so every spelling of one repository matches; `rite init`,
+  a wipe (before it deletes), and `rite credential set` write it. A re-init
+  whose module remote matches a recorded namespace that still holds a stored
+  credential is offered that namespace, naming the keys it holds; `--yes`
+  takes it and says so. The remote is the only identity that survives `rm -rf`
+  and a fresh clone.
+- **Not yet:** declaring a Manager (S15) waits for S16's `rite add manager`;
+  `run_init` carries a TODO seam where it goes.
+
 If no repos found:
 
 ```
@@ -7634,6 +7674,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.67 — `rite init` settles what it leaves a project with, on every route (v0.7.0a4 lane 1: S13, the `--yes` gap, S21, S20, S18).** §9.3 gains the paragraph. `cli/init/setup.py` (`settle_modules`, `settle_schedule`, `settle_namespace`, `remember_existing`, `offer_a_worker`, `what_is_missing`, `not_ready`); `detect.content_entries` and `_is_rite_leftover`, used by `holds_nothing` and `holds_files_but_no_repository`; `questionnaire.ask_for_a_repository` split out of `ask_for_the_code`, and `InitAnswers.asked_for_code`; `credentials.store` `normalise_remote`, `remember_namespace`, `namespaces_for`, `NamespaceMatch`; `rite credential set` records the namespace; `_read_changes` keeps an existing project an existing project; a TODO seam for S15. `docs/install-notes.md` downloads the installer into a scratch directory. Tests: `tests/test_init_never_leaves_no_module_unsaid.py`, the invariant over four routes (from scratch, existing code, `--yes`, `--yes` with a preset path) × eight directories (empty, rite's installer, a prior init's leftovers, a README, code in no repository, someone else's `install.sh`, a repository with nothing committed, one with a commit), four properties each (told, asked, no false claim, never "Ready."): against main `71257ae`, 64 of 128 fail, and property 1 holds there only at #150's two covered extremes; `tests/test_init_settles_what_it_leaves.py` (every combination of rite's leftovers with each kind of real content; the schedule on every route; the Worker offer; the namespace offer over three remote spellings × credentials held or not × yes/no/`--yes`, a wipe, `rm -rf` and a re-clone, and `rite credential set`). Nineteen mutations each go red, one (the S12 check's own definition of content) only after a test was added for it. Existing init tests now answer the Worker offer and the repository question explicitly; the one that pinned "Ready." for an empty, all-skipped interactive init now pins the not-ready line.
 
 **Changes in 0.24.66 — an item the host measures, and one attribution for every answer (v0.7.0a4 lane 5: S31, S22b).** New §6.7.5 and §6.7.6. S31: `Record.host_measured` (signed, emitted only when non-empty; `schema_problem` refuses indexes that are out of range, repeated, unordered or not integers); `ask`'s `[host]` tag, `Round.host_items`, the round's line naming it, the accept signing it; `rite refine accept --host-item`; `render_for_worker` and the board comment mark it (`HOST_TAG_FOR_WORKER`, `HOST_TAG_ON_BOARD`); `refinement/measurement.py` (`build`, `verifies`, `render`, `append`, `logged`, `latest_for`, `holds`) and `rite refine measured`; the publish snapshot keeps the started-on record's payload; `deliver._host_measurement_hold` holds a push or pull request. S22b: `refinement/attribution.py` (`answered_by`, `via_of`, `owner_user_of`, `describe`); `protocol.Reply.by`, carried into answers, the pending accept and provenance; `rite refine answer`; `record.how_agreed`, one wording for the board, TICKET.md and `rite refine status`. `record.extract_kind` generalises `extract`. Tests: `tests/test_a_host_measured_item_is_the_hosts.py` and `tests/test_every_answer_is_the_owners.py`, over real keys and git, with two invariants: every definition of done of one to four items with every set of marks, crossed with every combination of six result histories per marked item (none, pass, fail, forged, another record's, fail then pass), agrees across the record, TICKET.md, the board and the hold; and every answer route (DM, refinement channel, this machine, `rite refine answer`) with the owner set or unset leaves the same shape and the same owner on an answer and on the record. Twenty-three mutations each go red, one of them (the item-text binding) only after a test was added for it.
 

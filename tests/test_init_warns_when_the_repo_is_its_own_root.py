@@ -58,8 +58,9 @@ def _init(root: Path, *args: str, input: str | None = None) -> str:
 
 def test_interactive_init_warns_before_asking(tmp_path: Path):
     app = _repo(tmp_path / "app", "https://github.com/someone/app.git")
-    # spec or existing code? y · path [.] · changes · role · add ./? Enter
-    out = _init(app, input="y\n\n\n\n\n")
+    # spec or existing code? y · path [.] · changes · role · add ./? Enter ·
+    # declare a Worker? n (S20)
+    out = _init(app, input="y\n\n\n\n\nn\n")
 
     assert WARNING in out
     # Before the question, so the answer can still be no.

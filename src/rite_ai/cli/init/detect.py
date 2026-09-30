@@ -135,10 +135,60 @@ def root_has_nothing_committed(root: Path) -> bool:
     return (root / ".git").exists() and not _has_a_commit(root)
 
 
+RITE_INSTALLER_HEADER = "# rite installer."
+"""The first comment line of rite's `install.sh`. The setup's own first step
+(`curl -fsSLO …/install.sh`) drops it in whatever directory it is run in, which
+is usually the project root (v0.7.0 dogfood S13)."""
+
+
+def _is_rite_leftover(p: Path) -> bool:
+    """An entry rite itself put here, which says nothing about the project.
+
+    Hidden entries (`.git`, `.rite/`, `.claude/`, `.github/`, `.gitignore`);
+    a CLAUDE.md that carries rite's generated marker (a prior init's); rite's
+    installer, recognised by its header and never by its name, since a
+    project's own `install.sh` is code; and a `workers/` tree holding only
+    rite Worker workspaces. A CLAUDE.md a person wrote is theirs, so it is
+    content (init moves it aside, never away)."""
+    name = p.name
+    if name.startswith("."):
+        return True
+    if name == "CLAUDE.md" and p.is_file():
+        from rite_ai.cli.init.claude_gen import GENERATED_MARKER
+
+        return GENERATED_MARKER in _head(p, 4096)
+    if name == "install.sh" and p.is_file():
+        first = _head(p, 512).splitlines()[:5]
+        return any(line.strip() == RITE_INSTALLER_HEADER for line in first)
+    if name == "workers" and p.is_dir():
+        children = list(p.iterdir())
+        return all(
+            c.name.startswith(".") or (c / "worker.yml").is_file() for c in children
+        )
+    return False
+
+
+def _head(path: Path, n: int) -> str:
+    try:
+        with path.open("rb") as f:
+            return f.read(n).decode("utf-8", "replace")
+    except OSError:
+        return ""
+
+
+def content_entries(path: Path) -> list[Path]:
+    """What in the directory `path` is the project's own: its code or spec.
+    Everything rite left there is not (`_is_rite_leftover`). The one
+    definition `holds_nothing` and `holds_files_but_no_repository` share."""
+    if not path.is_dir():
+        return []
+    return sorted(p for p in path.iterdir() if not _is_rite_leftover(p))
+
+
 def holds_files_but_no_repository(root: Path) -> bool:
-    """The root has something in it besides hidden entries, and is in no git
-    repository: there is code (or a spec) a Worker could never clone."""
-    if not root.is_dir() or not any(not p.name.startswith(".") for p in root.iterdir()):
+    """The root has code or a spec in it (not only rite's own leftovers), and
+    is in no git repository: there is something a Worker could never clone."""
+    if not content_entries(root):
         return False
     return _git(root, ["rev-parse", "--is-inside-work-tree"]) is None
 
