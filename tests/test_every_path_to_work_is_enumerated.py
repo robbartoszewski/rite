@@ -43,6 +43,14 @@ KNOWN = {
         "`rite board list`: reporting only"
     ),
     ("cli/main.py", "board_query", "query"): ("`rite board query`: reporting only"),
+    ("refinement/view.py", "reconcile", "list_tickets"): (
+        "TR7's view: lists `scheduled` and `ready-to-work` to correct a label "
+        "nothing reads; gives nothing to anyone"
+    ),
+    ("refinement/view.py", "truth", "list_tickets"): (
+        "`rite board list --ready` / `--needs-refinement`: reporting only, "
+        "from the predicate"
+    ),
     # --- writes that give a ticket to someone ------------------------------
     ("scheduler/__init__.py", "_assign_the_pool", "assign_to_manager"): (
         "GATED: Rule 0, before the call"
@@ -71,6 +79,10 @@ KNOWN = {
     ),
     ("refinement/protocol.py", "handle", "label"): (
         "removes `blocked` when his reply unblocks it (TR2); gives it to nobody"
+    ),
+    ("refinement/view.py", "reconcile_one", "label"): (
+        "TR7: writes only `ready-to-work`, a view no gate reads; takes it off "
+        "an unrefined ticket and gives nothing to anyone"
     ),
     ("cli/main.py", "board_label", "label"): (
         "`rite board label`: a hand write; nothing starts from a label, and "

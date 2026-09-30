@@ -123,7 +123,8 @@ def accept(
     from rite_ai.refinement import view
 
     # TR7: the view follows the record at once, not at the next cycle.
-    labelled = view.settle(board, ticket_id, view.managers_at(Path(root)))
+    managers = view.managers_at(Path(root)) if root is not None else []
+    labelled = view.settle(board, ticket_id, managers)
     return Outcome(
         True,
         f"{ticket_id}: REFINED — record {outcome.record.record_id}, attested by a "

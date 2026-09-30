@@ -34,7 +34,6 @@ from dataclasses import dataclass, field
 
 from rite_ai.coordination.ticket_labels import READY_TO_WORK as READY
 from rite_ai.coordination.ticket_labels import SCHEDULED
-from rite_ai.refinement import record as rec
 from rite_ai.refinement import status as st
 
 DESCRIPTION = (
@@ -153,22 +152,16 @@ def _describe(board) -> str:
 
 def reconcile_one(board, ticket_id: str, into: Reconciled, managers=()) -> None:
     """Read `ticket_id` once and set its label to what that read says."""
-    from rite_ai.refinement import key as refinement_key
     from rite_ai.tickets import BackendError, Thread
 
-    identity = rec.board_identity(board)
-    thread = board.read_thread(ticket_id)
-    if identity is None or not isinstance(thread, Thread):
-        why = (
-            thread.message
-            if isinstance(thread, BackendError)
-            else "rite cannot identify this board"
-        )
+    status, thread = st.status_and_thread(board, ticket_id)
+    if not isinstance(thread, Thread):
         # Unread is left as it is: a view rite cannot recompute is not changed
         # on a guess, in either direction.
-        into.problems.append(f"{ticket_id} could not be read ({why}); label unchanged")
+        into.problems.append(
+            f"{ticket_id} could not be read ({thread.message}); label unchanged"
+        )
         return
-    status = st.evaluate(ticket_id, identity, thread, refinement_key.load())
     into.statuses[ticket_id] = status
     if status.state == st.UNREADABLE:
         # Not "not refined": the record may be there and unreadable from here
@@ -288,21 +281,14 @@ def truth(board, managers=()) -> tuple[list[Truth], str]:
     be assigned: what `rite board list --ready` and `--needs-refinement`
     print. Never reads `ready-to-work`, and never writes. Returns the rows and
     "" or what makes them incomplete."""
-    from rite_ai.refinement import key as refinement_key
     from rite_ai.tickets import BackendError, Thread, TicketFilter
 
     listed = board.list_tickets(TicketFilter(label=SCHEDULED))
     if isinstance(listed, BackendError):
         return [], f"the board could not list `{SCHEDULED}` ({listed.message})"
-    identity = rec.board_identity(board)
-    loaded = refinement_key.load()
     rows: list[Truth] = []
     for listed_ticket in listed:
-        thread = board.read_thread(listed_ticket.id)
-        if identity is None:
-            status = st.Status(st.UNREADABLE, None, "rite cannot identify this board")
-        else:
-            status = st.evaluate(listed_ticket.id, identity, thread, loaded)
+        status, thread = st.status_and_thread(board, listed_ticket.id)
         ticket = thread.ticket if isinstance(thread, Thread) else listed_ticket
         rows.append(Truth(ticket, status, wanted(ticket, status, managers)))
     cut = (

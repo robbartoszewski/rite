@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### `ready-to-work`: see on the board which tickets are ready to assign
+
+rite now keeps a `ready-to-work` label on every ticket that is scheduled, has
+an agreed definition of done, and has not been assigned yet, so a filter on
+the board shows what is ready and what still needs refining. It is a view:
+nothing in rite reads it to decide anything, so adding it by hand starts
+nothing (rite removes it and says so once on the ticket), and removing it
+blocks nothing (rite puts it back). The Owner's supervisor corrects it every
+cycle; `rite refine sync` does it on demand, and `rite board list --ready` /
+`--needs-refinement` answer from a fresh read of each ticket rather than
+from the label.
+
 ## 0.7.0a3 (2026-09-30) — alpha: `rite init` points you at the code
 
 ⚠ **Still an alpha, cut for the same dogfood** (a real contribution to yoloAI
