@@ -1,5 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
+**Version:** 0.24.69 · **Date:** 2026-09-30
 **Version:** 0.24.68 · **Date:** 2026-09-30
 
 **Revision history** is at the end of this document (§14) — it records what
@@ -7011,6 +7012,22 @@ Two consequences, written down so they are not discovered:
   latency grow with the number of channels. **Cap or rotation is OPEN**, an
   implementation choice not yet made.
 
+**Found where the token is set, not at the first run (0.24.68).** The binding
+above is consulted by `rite credential set slack` as soon as a bot token is
+stored, and by `rite doctor` before it probes the targets — a shared app is
+not a target that fails, so the probe says "ok". Both ask
+`slack_app.sharing`, which READS the binding record (`_holder_of`) and never
+writes one: `bind` answers by binding, so a report using it would take the app
+for itself and make the project that really uses it the second one. It answers
+`ok`, `shared` or `unknown`; "could not ask Slack" is said and not counted,
+because a report must not call a project faulty because a network was
+unreachable. The guidance names api.slack.com/apps and the `reactions:read`
+scope, in the same words §9.16 already uses for it. Setting the credential is
+not refused — the token is real, a project may be moved onto its own app in
+either order, and refusing to store it would leave the person unable to record
+the app they had just made. `rite start` still refuses to open a listener
+(v0.7.0 dogfood S22a).
+
 #### 9.16.7. Several Managers in one project: only the Owner hears Slack (0.6.0)
 
 **Status: DECIDED 2026-09-26 (Robert: MMQ2, option (c)). BUILT: only the
@@ -7367,6 +7384,71 @@ project key alone were not a board: measured in the v0.7.0 dogfood, `rite init`
 answered `none`, `rite credential set jira` recorded both, `type` stayed `none`,
 and rite read no board at all. A project already on another board keeps it and
 is told how to switch; rite does not replace a board it did not choose.
+
+**Slack is set up by the same command (0.24.69).** `rite credential set slack`
+asks for the Owner's member id and the broadcast channel as well as the bot
+token, and writes the two non-secret ones to `slack:` in the committed config
+through the same `config_path` route. The token alone had been the whole
+command, on the reasoning that a channel is configuration rather than a
+credential — which is true, and is why it goes to `config.yaml`, but it had
+been read as "not this command's business": measured in the v0.7.0 dogfood
+(S14), `slack.owner_user` was left to be hand-edited, and until it was, a
+`refinement.questions_to: dm` round had nowhere to go. Both are optional —
+Enter skips them, because a channel with no member id is a working
+broadcast-only setup. A token with BOTH skipped is not: `SlackConfig.enabled`
+is `owner_user or broadcast_channel`, so it stores a real credential and turns
+nothing on, under lines that say "stored" and "recorded". The command says so
+(`⚠ the token is stored, and Slack is OFF`), read off the RESULTING config
+rather than off what the run answered, so rotating a token on a configured
+project stays quiet. It is a notice, not a refusal — the token is valid. An
+answer the config parser would refuse is asked again rather than written:
+this command writes `config.yaml`, so storing one would leave every later
+`rite` run failing on the file this one created.
+
+**One guided flow, and it never posts (0.24.69).** `rite credential set slack`
+runs as one setup: it names the project, takes the bot token and checks it
+against Slack, says whether another project already uses that app, asks for the
+member id and the channel, writes the two non-secrets to `config.yaml`, and
+ends on one summary saying whether Slack is now ACTIVE (and where it posts) or
+INACTIVE (and exactly what to add).
+
+⚠ **The token check is a READ — `auth.test`, never a post.** A person setting
+rite up is not announcing it, and a setup command that posts spams a workspace
+every time it is re-run. `auth.test` also names the workspace and bot user, so
+one read answers both "does this token work?" and "whose app is this?"
+(`slack_app.check_token`, `sharing_for`). A live POST to prove delivery belongs
+in `rite doctor`, where the person asked for a check.
+
+⚠ **Three answers, not two, at every step.** A token Slack REFUSED is asked for
+again, because Slack answered and asking again is useful. A Slack that could
+not be REACHED warns and stores anyway: the token is probably fine, and
+refusing on an unreachable network would leave the person unable to record it
+at all. Where the app could not be identified, the sharing question is said to
+be unanswered rather than guessed either way. Nothing on this path binds an app
+— that still happens only where a listener opens.
+
+**A channel is taken as it is typed (0.24.69).** `all-rite` and `#all-rite` are
+the same channel, wherever the name is given — the prompt above or
+`config.yaml` — and a `C…` or `G…` id is kept as it is, since `#` in front of
+one names a different conversation. `config.parse.normalize_slack_channel` is
+the single rule both entry points use. v0.7.0 dogfood S19: the bare name Slack
+shows in its own sidebar was refused as "neither a channel name starting with
+'#' nor a channel id", for a channel rite could name exactly. What is still
+unnameable after normalising is still refused.
+
+**And a refused `config.yaml` no longer takes the credential commands with it
+(0.24.69).** A `slack.broadcast_channel` the parser refused made every `rite
+credential set` answer with that parse error and exit 1 — including the runs
+that would have repaired the project (S19). The project's credential namespace
+is now recovered on its own, so the secret still lands in this project's scope,
+the unrelated problem is named, and the fields that would REWRITE `config.yaml`
+are skipped rather than asked for. The file is never rewritten while it is in a
+state rite could not read. Where no namespace has been recorded yet there is
+nothing to scope to, and the command still refuses: generating one would
+rewrite the very file the user has to repair. This is the reasoning
+`coordination` already carried — a malformed block narrows rather than failing
+the parse, because a raising parse takes out every command that reads
+`config.yaml`, including the ones that would repair it.
 
 **Every hint names the same command (0.24.57).** A hint for a missing
 credential names the service when a prompt can set the key (`rite credential set
@@ -7763,9 +7845,11 @@ Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
 
+**Changes in 0.24.69 — one guided `rite credential set slack` (v0.7.0a4 lane 3: S14, S19, S22a).** **The command is one guided flow:** it names the project, takes the bot token and checks it with a live `auth.test` READ (`slack_app.check_token`, three answers — `ok`, a token Slack REFUSED which is asked for again, and a Slack that could not be REACHED which warns and stores anyway), reuses that one read to answer the shared-app question (`sharing_for`, read only, never binding), asks for the member id and the channel, writes the non-secrets, and ends on one summary: ACTIVE with where it posts and whose DM it takes instructions from, or INACTIVE with exactly what to add (`_say_how_slack_stands`, read off the RESULTING config so rotating a token on a configured project is quiet). ⚠ **It never posts**: `auth.test` only, because a setup command that posts spams a workspace every time it is re-run; a live post to confirm delivery belongs in `rite doctor`. The test stub fails on any Slack method but `auth.test`, so the rule is enforced for every test in the file rather than asserted in one. Invariants run over the state space — token {ok, refused, unreachable} × owner {set, unset} × channel {unset, bare, `#name`, id} × app {unbound, this project, another, cannot tell} — asserting the summary is right in every cell, that a credential set never binds an app, and that could-not-check is never treated as refused. Five further mutations (the live check removed, a refused token treated as unreachable, an unreachable one treated as refused, the summary binding instead of reading, the command posting a confirmation) each go red; the second of those survived a first draft that asserted the MESSAGE rather than that the token was asked for again, and the test was strengthened until it failed. **S22a, folded in:** §9.16.6 gains the paragraph. The binding was consulted only where a listener opens, so a token belonging to another project was accepted by `rite credential set slack`, stored and configured, and the collision surfaced at `rite start` — with "create a new Slack app", the heaviest step in the setup, offered last and with no mention of the scopes it needs. `slack_app._holder_of` reads the binding record and writes nothing (private: it is an in-module read, and the dead-wiring guard is right that it is not a public entry point); `slack_app.sharing` returns `ok`, `shared` or `unknown`, and `DEDICATED_APP` names api.slack.com/apps and `reactions:read` in the wording `managers/slack.py` already uses for that scope. Asked by `rite credential set slack` right after the token is stored, and by `_doctor_slack` before the targets are probed (a shared app is not a target that fails — the probe says "ok"). ⚠ It exists because `bind` answers by BINDING: doctor on a project that had never run would take the app for itself and make the project that really uses it the second one. ⚠ Three answers, not two: `bind` collapses "could not ask Slack" into a refusal, which is right when the choice is whether to open a listener and wrong in a report, where it would call a project faulty because a network was unreachable — so `unknown` is said and not counted. Setting a credential is NOT refused on a shared app: the token is real, a project may be moved onto its own app in either order, and refusing to store it would leave the person unable to record the app they just made; `rite start` still refuses to open a listener. Tests: `tests/test_a_shared_slack_app_is_found_at_setup.py`, with two invariants run over every state the binding can be in (none, this project, another project, unreadable, cannot ask) — the check never writes a binding, and both entry points give the same verdict, only a known collision counting as a problem. Six mutations (the check binding instead of reading, an unknown reported as shared, either entry point not asking, the scope dropped from the guidance, the holder ignored) each go red. **The rest:** §10.5 gains three paragraphs. S14: `Field.optional`, `Field.normalize`/`clean` and `Field.problem`; the `slack` service gains `owner_user` and `broadcast_channel`, both optional and both `config_path`, so one command writes the committed Slack config; `_set_service` prompts optionally, normalises, and asks again for a value the parser would refuse rather than writing a `config.yaml` that will not parse. A run that leaves Slack with no target at all says so (`Slack is OFF`), decided from the RESULTING config so a token rotated on a configured project is quiet; a notice, not a refusal, since the token is valid. S19: `config.parse.normalize_slack_channel` (a bare name gains `#`, a `C…`/`G…` id is untouched), applied by the parser and by the prompt, with `slack_field_problem` reusing `_slack_problem` so the two cannot drift; `credentials_despite_config_error` recovers the namespace alone, and `rite credential set` continues on a config error elsewhere — naming it, skipping the fields that would rewrite the file, and still refusing where no namespace is recorded. Tests: `tests/test_slack_setup_is_one_command.py`, with the channel invariant run across the full range of what a person types (bare, `#`-prefixed, padded, `C…`, `G…`, empty, dotted) through BOTH the prompt's cleaner and the file, so one entry point cannot accept what the other refuses; plus one command recording both settings, a name typed where an id belongs being asked again, a malformed channel not blocking a credential set, and the off notice appearing exactly when Slack lands off across all four endings (token only, +owner, +channel, +both) and staying quiet on a project already configured. Nine mutations (the normaliser returning its input, the two fields removed, the validation dropped, the hard exit restored, the rewrite guard dropped, an id given a `#`, the off notice dropped, the notice always firing, the notice decided from the run's answers rather than the result) each go red. Two existing tests changed rather than added to: a bare channel is now normalised, not a `ParseError`, and `credential set` on a refused config now continues while still never rewriting the file — the file-untouched assertion each was written for is kept, and the refusal it achieved that with is now a second test for the no-namespace case.
 **Changes in 0.24.68 — three setup steps that needed a text editor now have commands (v0.7.0a4 lane 2: S16, S24, S23).** New §9.5.1 and §9.5.2; §9.1 lists both; §9.6 gains the paragraph on a module's own instructions. **S16** `rite add manager <name> --preset <p>`: `config.managers.declare_manager` builds the entry, splices it into the list and re-runs `parse_managers`, so every refusal is the parser's own and the command cannot write a file the next command rejects. It writes BOTH keys, appends (the order is priority, and the first active Manager is Owner), and UPDATES a name already listed — without that, declaring a second Manager on a project whose first is a bare name fails on the first one and the only way out is the file. The refusal names the command that declares it, for the new Manager as well as existing ones. **S24** `rite module set-command <module> <key> "<cmd>"`: `workspace.manage.set_module_command` sets the field and re-serialises through `write_modules`, so it lands nested under `commands:` — a top-level `test:` is refused by the parser, measured and pinned by a test — then calls `refresh_project`, the refresher `rite update` uses, so the correction reaches the project's CLAUDE.md and every Worker's. An edited section is kept and REPORTED; a file that does not parse is reported as that and not as a hand edit, which an early draft got wrong. An empty command unrecords the key (`None`, not `""`). **S23** `rite add worker` looks for `CLAUDE.md`, `AGENTS.md` and `CONTRIBUTING.md` in each module the Worker gets, names them and ASKS; the answer is `WorkerManifest.follow_module_docs`, written to `worker.yml` and rendered into the Worker's CLAUDE.md with the rule that rite and the ticket win and the Worker reports a contradiction rather than choosing. `--follow-module-docs/--no-follow-module-docs` answer it without a prompt; with nobody at the terminal it is NOT asked — a prompt on an empty stdin aborts, which turned `rite add worker` in a script into a command that made no Worker, caught by an existing test going red — so the files are named, nothing is followed and the message says which flag answers it; nothing found asks nothing; and a file rite GENERATED is never offered, since a repository that is its own module puts the project's own CLAUDE.md at the module's path. **Tests: 90**, including an invariant across each full range rather than its ends — every preset and every duty (S16), every one of the five command keys set, changed and unrecorded (S24), and all eight subsets of the three document names, across two modules (S23). Eighteen mutations were run and each went red; a nineteenth survived and is why `TestUnrecording` now asserts on the returned object: through the file, `""` and `None` are indistinguishable.
 
 **Changes in 0.24.67 — `rite init` settles what it leaves a project with, on every route (v0.7.0a4 lane 1: S13, the `--yes` gap, S21, S20, S18).** §9.3 gains the paragraph. `cli/init/setup.py` (`settle_modules`, `settle_schedule`, `settle_namespace`, `remember_existing`, `offer_a_worker`, `what_is_missing`, `not_ready`); `detect.content_entries` and `_is_rite_leftover`, used by `holds_nothing` and `holds_files_but_no_repository`; `questionnaire.ask_for_a_repository` split out of `ask_for_the_code`, and `InitAnswers.asked_for_code`; `credentials.store` `normalise_remote`, `remember_namespace`, `namespaces_for`, `NamespaceMatch`; `rite credential set` records the namespace; `_read_changes` keeps an existing project an existing project; a TODO seam for S15. `docs/install-notes.md` downloads the installer into a scratch directory. Tests: `tests/test_init_never_leaves_no_module_unsaid.py`, the invariant over four routes (from scratch, existing code, `--yes`, `--yes` with a preset path) × eight directories (empty, rite's installer, a prior init's leftovers, a README, code in no repository, someone else's `install.sh`, a repository with nothing committed, one with a commit), four properties each (told, asked, no false claim, never "Ready."): against main `71257ae`, 64 of 128 fail, and property 1 holds there only at #150's two covered extremes; `tests/test_init_settles_what_it_leaves.py` (every combination of rite's leftovers with each kind of real content; the schedule on every route; the Worker offer; the namespace offer over three remote spellings × credentials held or not × yes/no/`--yes`, a wipe, `rm -rf` and a re-clone, and `rite credential set`). Nineteen mutations each go red, one (the S12 check's own definition of content) only after a test was added for it. Existing init tests now answer the Worker offer and the repository question explicitly; the one that pinned "Ready." for an empty, all-skipped interactive init now pins the not-ready line.
+**Changes in 0.24.67 — Slack is set up by one command, and a channel is taken as typed (v0.7.0a4 lane 3: S14, S19).** §10.5 gains three paragraphs. S14: `Field.optional`, `Field.normalize`/`clean` and `Field.problem`; the `slack` service gains `owner_user` and `broadcast_channel`, both optional and both `config_path`, so one command writes the committed Slack config; `_set_service` prompts optionally, normalises, and asks again for a value the parser would refuse rather than writing a `config.yaml` that will not parse. S19: `config.parse.normalize_slack_channel` (a bare name gains `#`, a `C…`/`G…` id is untouched), applied by the parser and by the prompt, with `slack_field_problem` reusing `_slack_problem` so the two cannot drift; `credentials_despite_config_error` recovers the namespace alone, and `rite credential set` continues on a config error elsewhere — naming it, skipping the fields that would rewrite the file, and still refusing where no namespace is recorded. Tests: `tests/test_slack_setup_is_one_command.py`, with the channel invariant run across the full range of what a person types (bare, `#`-prefixed, padded, `C…`, `G…`, empty, dotted) through BOTH the prompt's cleaner and the file, so one entry point cannot accept what the other refuses; plus one command recording both settings, Enter leaving Slack off, a name typed where an id belongs being asked again, and a malformed channel not blocking a credential set. Six mutations (the normaliser returning its input, the two fields removed, the validation dropped, the hard exit restored, the rewrite guard dropped, an id given a `#`) each go red. Two existing tests changed rather than added to: a bare channel is now normalised, not a `ParseError`, and `credential set` on a refused config now continues while still never rewriting the file — the file-untouched assertion each was written for is kept, and the refusal it achieved that with is now a second test for the no-namespace case.
 
 **Changes in 0.24.66 — an item the host measures, and one attribution for every answer (v0.7.0a4 lane 5: S31, S22b).** New §6.7.5 and §6.7.6. S31: `Record.host_measured` (signed, emitted only when non-empty; `schema_problem` refuses indexes that are out of range, repeated, unordered or not integers); `ask`'s `[host]` tag, `Round.host_items`, the round's line naming it, the accept signing it; `rite refine accept --host-item`; `render_for_worker` and the board comment mark it (`HOST_TAG_FOR_WORKER`, `HOST_TAG_ON_BOARD`); `refinement/measurement.py` (`build`, `verifies`, `render`, `append`, `logged`, `latest_for`, `holds`) and `rite refine measured`; the publish snapshot keeps the started-on record's payload; `deliver._host_measurement_hold` holds a push or pull request. S22b: `refinement/attribution.py` (`answered_by`, `via_of`, `owner_user_of`, `describe`); `protocol.Reply.by`, carried into answers, the pending accept and provenance; `rite refine answer`; `record.how_agreed`, one wording for the board, TICKET.md and `rite refine status`. `record.extract_kind` generalises `extract`. Tests: `tests/test_a_host_measured_item_is_the_hosts.py` and `tests/test_every_answer_is_the_owners.py`, over real keys and git, with two invariants: every definition of done of one to four items with every set of marks, crossed with every combination of six result histories per marked item (none, pass, fail, forged, another record's, fail then pass), agrees across the record, TICKET.md, the board and the hold; and every answer route (DM, refinement channel, this machine, `rite refine answer`) with the owner set or unset leaves the same shape and the same owner on an answer and on the record. Twenty-three mutations each go red, one of them (the item-text binding) only after a test was added for it.
 

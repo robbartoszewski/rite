@@ -2210,7 +2210,72 @@ def _apply_config_field(config, dotted: str, value: str) -> None:
         setattr(target, last, value)
 
 
-def _set_service(service_name: str, global_: bool, root, config) -> None:
+def _say_how_slack_stands(root: Path, config, app) -> None:
+    """The one summary `rite credential set slack` ends on: whose app it is,
+    and whether Slack is now ON.
+
+    Two things had been said in passing, and they are one question — "did that
+    work?" — whose answer was spread over a shared-app warning, a line saying
+    the token was stored, and nothing at all about whether Slack would now do
+    anything.
+
+    ⚠ Nothing here posts. The app was named by `auth.test` during the prompt,
+    one read for the whole run, and the binding is read from disk. A live post
+    to prove delivery belongs in `rite doctor`, where the person asked for a
+    check — a setup command that posts spams a workspace every time it is
+    re-run.
+    """
+    if (root / ".rite").is_dir():
+        if app is not None:
+            from rite_ai.managers.slack_app import sharing_for
+
+            shared = sharing_for(app, root)
+            if shared.kind == "shared":
+                click.echo(f"\n⚠ {shared.message}", err=True)
+        else:
+            # `auth.test` could not be asked, so which app this is cannot be
+            # told, so the binding cannot be looked up. Said, not guessed
+            # either way, and never counted as a collision.
+            click.echo(
+                "\n  could not check whether another project already uses "
+                "this Slack app, because Slack could not be asked which app "
+                "the token belongs to.",
+                err=True,
+            )
+    if config is None:
+        return
+    # ⚠ **Read off the RESULTING config, not off what this run answered**, so
+    # rotating a token on an already-configured project stays quiet. Slack is
+    # on only if it has a TARGET: `SlackConfig.enabled` is `owner_user or
+    # broadcast_channel`, so a token with both skipped stores a real
+    # credential and turns nothing on, under lines that say "stored" and
+    # "recorded" — and the next thing that happens is a refinement round with
+    # nowhere to go, far from here.
+    slack = config.slack
+    if slack.enabled:
+        who = (
+            f", and takes instructions from {slack.owner_user}'s DM"
+            if slack.owner_user
+            else " (broadcast-only: no owner set, so nothing typed in Slack "
+            "instructs a Manager)"
+        )
+        click.echo(
+            f"\nSlack is ACTIVE for this project: posts to {slack.broadcast}{who}."
+        )
+        return
+    click.echo(
+        "\n⚠ Slack is INACTIVE: the token is stored, but it has no target, "
+        "so nothing is posted and nothing is read. Add one and it is on — a "
+        "channel for status (`slack.broadcast_channel`), your member id for a "
+        "command channel (`slack.owner_user`), or both — by running this "
+        "again and answering, or in .rite/config.yaml.",
+        err=True,
+    )
+
+
+def _set_service(
+    service_name: str, global_: bool, root, config, config_writable: bool = True
+) -> None:
     """Ask for every field a service has, in order, and store each.
 
     The prompts are the service's own words. Nothing here asks the user
@@ -2232,19 +2297,67 @@ def _set_service(service_name: str, global_: bool, root, config) -> None:
                 err=True,
             )
         raise SystemExit(2)
+    if svc.name == "slack":
+        click.echo(f"Setting up Slack for {_project_label()}.")
     click.echo(f"{svc.label}")
     if svc.note:
         click.echo(f"  note: {svc.note}")
 
     stored: list[tuple[str, str]] = []
     configured: list[tuple[str, str]] = []
+    secrets: dict[str, str] = {}
+    app = None  # the Slack app `auth.test` named, when it could be asked
     for field in svc.fields:
-        value = click.prompt(
-            f"  {field.prompt}",
-            hide_input=field.secret,
-            confirmation_prompt=field.secret,
-            err=True,
-        )
+        if field.config_path and not config_writable:
+            # config.yaml is not in a state this command may rewrite (an
+            # unrelated parse error, recovered for its namespace only). Asking
+            # for a value rite would then drop is worse than not asking.
+            click.echo(
+                f"  (skipped {field.name}: .rite/config.yaml has an unrelated "
+                f"problem, so rite will not rewrite it. Set {field.config_path} "
+                f"by hand, or re-run this once the file parses.)",
+                err=True,
+            )
+            continue
+        while True:
+            value = field.clean(
+                click.prompt(
+                    f"  {field.prompt}",
+                    hide_input=field.secret,
+                    confirmation_prompt=field.secret,
+                    default="" if field.optional else None,
+                    show_default=False,
+                    err=True,
+                )
+            )
+            problem = field.problem(value)
+            if not problem and svc.name == "slack" and field.name == "bot_token":
+                # ⚠ A READ, never a post (`auth.test`). Setting a credential
+                # must not put a message in anyone's channel: a person setting
+                # rite up is not announcing it, and a setup that posts spams a
+                # workspace every time it is re-run. A live POST belongs in
+                # `rite doctor`, where the person asked for a check.
+                from rite_ai.managers.slack_app import check_token
+
+                checked = check_token(value)
+                if checked.kind == "bad":
+                    # Slack ANSWERED and said no, so asking again is useful.
+                    click.echo(f"  {checked.message}", err=True)
+                    continue
+                if checked.kind == "unknown":
+                    # Could not ask ≠ refused. Storing it is right: the token
+                    # is probably fine, and refusing on an unreachable network
+                    # would leave the person unable to record it at all.
+                    click.echo(f"  {checked.message} — storing it anyway", err=True)
+                app = checked.identity
+            if not problem:
+                break
+            # Asked again rather than stored: this command writes config.yaml,
+            # and a value the parser refuses would make every later `rite` run
+            # fail on the file this run created (S14/S19).
+            click.echo(f"  {problem}", err=True)
+        if field.optional and not value:
+            continue
         if field.config_path:
             # CONFIGURATION, not a credential. It is the same for everyone
             # on the team, it is not a secret, and putting it in the
@@ -2262,6 +2375,7 @@ def _set_service(service_name: str, global_: bool, root, config) -> None:
             continue
         key = service_key(svc.name, field.name)
         stored.append((key, _store_one(key, value, global_, root, config)))
+        secrets[field.name] = value
 
     if configured and svc.board_type:
         # ⚠ **The site and the project key alone are not a board.** Measured
@@ -2304,6 +2418,9 @@ def _set_service(service_name: str, global_: bool, root, config) -> None:
         )
         for path, value in configured:
             click.echo(f"  {path:<32} {value}")
+
+    if svc.name == "slack" and secrets.get("bot_token"):
+        _say_how_slack_stands(root, config, app)
 
 
 @credential.command("set")
@@ -2395,20 +2512,52 @@ def credential_set(
     # `--global` means, so it is what happens rather than an error.
     root_for_scope = _find_project_root()
     config_for_scope = None
+    config_writable = True
     if not global_ and (root_for_scope / ".rite").is_dir():
         from rite_ai.config.models import ProjectConfig
         from rite_ai.config.parse import ParseError, parse_config
 
         parsed = parse_config(root_for_scope / ".rite" / "config.yaml")
         if isinstance(parsed, ParseError):
+            # ⚠ **A problem elsewhere in config.yaml does not take this
+            # command out** (v0.7.0 dogfood S19). A channel name rite could
+            # not read used to answer every `rite credential set` with the
+            # parse error and exit 1 — including the runs that would have
+            # repaired the project's credentials. The namespace is recovered
+            # on its own so the secret still lands in THIS project's scope,
+            # and the unrelated problem is said rather than swallowed.
+            from rite_ai.config.parse import credentials_despite_config_error
+            from rite_ai.credentials.store import is_valid_namespace
+
+            recovered = credentials_despite_config_error(
+                root_for_scope / ".rite" / "config.yaml"
+            )
             click.echo(f"config error: {parsed.message}", err=True)
+            # ⚠ Only a namespace ALREADY RECORDED lets this go on. Generating
+            # one here would make `_ensure_namespace` write a config.yaml
+            # rebuilt from a near-empty `ProjectConfig`, destroying the file
+            # the user still has to repair — a far worse outcome than the
+            # refusal this replaces.
+            if recovered is None or not is_valid_namespace(recovered.namespace):
+                click.echo(
+                    "  this project has no credential namespace recorded yet, "
+                    "so there is nothing to scope a secret to until the line "
+                    "above is fixed. Fix it, or use --global to store "
+                    "machine-wide without it.",
+                    err=True,
+                )
+                raise SystemExit(1)
             click.echo(
-                "  fix .rite/config.yaml, or use --global to store "
-                "machine-wide without it",
+                "  continuing anyway: that is not a credential setting, and "
+                f"this project's namespace ({recovered.namespace}) was read on "
+                "its own, so the secret still lands in this project's scope. "
+                "Fix the line above before running a Manager.",
                 err=True,
             )
-            raise SystemExit(1)
-        config_for_scope = parsed if isinstance(parsed, ProjectConfig) else None
+            config_for_scope = ProjectConfig(credentials=recovered)
+            config_writable = False
+        else:
+            config_for_scope = parsed if isinstance(parsed, ProjectConfig) else None
 
     service = canonical_service(name)
     if service is not None:
@@ -2423,7 +2572,13 @@ def credential_set(
                 err=True,
             )
             raise SystemExit(2)
-        _set_service(service, global_, root_for_scope, config_for_scope)
+        _set_service(
+            service,
+            global_,
+            root_for_scope,
+            config_for_scope,
+            config_writable=config_writable,
+        )
         _echo_credential_status(extra)
         return
 
@@ -8372,6 +8527,20 @@ def _doctor_slack(root: Path, problems: list[str]) -> None:
         click.echo("slack: NO TOKEN — `rite credential set slack` stores one")
         problems.append("slack is configured and slack_bot_token is not set")
         return
+    # Before the targets are probed: a shared app is not a target that fails,
+    # it is two projects reading one DM, and the probe would say "ok" (S22a).
+    from rite_ai.managers.slack_app import sharing
+
+    shared = sharing(token, root)
+    if shared.kind == "shared":
+        click.echo(f"slack: SHARED APP — {shared.message}")
+        problems.append(f"slack app shared with another project: {shared.message}")
+    elif shared.kind == "unknown":
+        # Said, not counted. An unreachable Slack is a gap in this report,
+        # not a fault in the project being reported on.
+        click.echo(
+            f"slack: could not check whether the app is shared — {shared.message}"
+        )
     for checked in probe(slack.owner_user, slack.broadcast, token):
         click.echo(
             f"slack {checked.target}: {'ok' if checked.ok else 'FAILED'} — "

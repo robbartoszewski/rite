@@ -13,6 +13,62 @@ empty, init offers to declare a Worker, and re-initialising a project whose
 repository already has credentials stored offers that credential namespace
 back instead of starting an empty one. The last line says what is still
 missing, if anything.
+### A Slack app another project already uses is flagged when you set the token
+
+rite has refused to run two projects on one Slack app for a while — two
+projects there share your DM, so each acts on the other's instructions. But it
+only said so at the first `rite start`, once the app had been made, the token
+stored and the project set up, and the fix it offered ("create a new Slack
+app") is the heaviest step in the whole setup.
+
+`rite credential set slack` now tells you as soon as you give it the token,
+naming the project that already holds the app, and `rite doctor` reports it
+too. The advice points at api.slack.com/apps and names the `reactions:read`
+scope a new app also needs. Your token is still stored either way — you may be
+moving a project onto its own app in either order — and `rite start` still
+refuses to open a relay on a shared app.
+
+If rite cannot reach Slack to check, it says so and leaves it at that, rather
+than reporting a problem it has not found.
+
+### `rite credential set slack` is one guided setup
+
+It now asks for your Slack member id and the broadcast channel as well as the
+bot token, and records the two that are not secrets in `.rite/config.yaml` —
+the same thing `rite credential set jira` does with the site and board key.
+Before this it stored the token and stopped, so `slack.owner_user` had to be
+hand-edited in, and until it was, a refinement round that asks you by DM had
+nowhere to go.
+
+It also checks the token against Slack as you give it (a read — it never posts
+anything to your workspace), asks again if Slack refuses it, and tells you if
+the app already belongs to another project, pointing at api.slack.com/apps and
+the `reactions:read` scope a new one needs. If Slack cannot be reached it says
+so and stores the token anyway.
+
+It ends on one line telling you where you stand: **ACTIVE**, naming the channel
+it posts to and whose DM it takes instructions from, or **INACTIVE** and what to
+add. Both answers are optional — press Enter to skip either. A channel with no
+member id is a working broadcast-only setup: rite posts status, and nothing
+typed in Slack instructs a Manager. A token on its OWN is INACTIVE, because
+neither target is set, and the command says so instead of looking like it
+finished the job.
+
+### A Slack channel is taken as you type it
+
+`all-rite` and `#all-rite` are the same channel now, whether you type it at
+that prompt or write it in `.rite/config.yaml`; a `C…` channel id is kept as
+it is. The bare name Slack shows in its own sidebar used to be refused as
+"neither a channel name starting with '#' nor a channel id".
+
+### A broken line in `config.yaml` no longer blocks `rite credential set`
+
+A channel name rite could not read used to make every `rite credential set`
+print that error and stop — including the run that would have fixed the
+project. It now says what is wrong and carries on, storing the secret under
+this project's namespace. It will not rewrite `config.yaml` while the file is
+in a state it could not read, so the fields that go into the file are skipped
+until you have fixed it.
 
 ### An item only the host can measure is agreed as the host's
 
