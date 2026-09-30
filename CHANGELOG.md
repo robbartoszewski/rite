@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### In Slack, a post that needs your answer stands out
+
+Each post from a Manager now opens with what it is (❓ Needs your answer, with
+the ticket; ℹ️ Status; ⚙️ rite; ⚠️ Delivery) and its author, and ends with a
+divider, so posts no longer run together under one avatar. Posts that need
+you are shown in full; status and system lines are shown small and grey.
+
+### `rite init` offers to declare a Manager
+
+Init now offers a Manager (`lead` on the Owner machine) and declares it the
+way `rite add manager` does, so `rite start lead` works without editing
+`.rite/config.yaml`. Decline it, or run init with `--yes`, and init says how
+to add one later.
+
 ### `rite init` no longer says "Ready." about a project with nothing to work on
 
 Whichever way you run it, including a bare `rite init --yes`, init now says
