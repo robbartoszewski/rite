@@ -2168,7 +2168,24 @@ def _store_one(name: str, value: str, global_: bool, root, config) -> str:
         )
         click.echo(f"set RITE_{name.upper()} as an environment variable instead")
         raise SystemExit(1)
+    if not global_ and config is not None:
+        _remember_the_namespace(root, config)
     return account
+
+
+def _remember_the_namespace(root, config) -> None:
+    """S18: note which namespace this project's repositories use, so a re-init
+    after a reset (or `rm -rf` and a fresh clone) can offer these credentials
+    back. Never fails the store it follows."""
+    from rite_ai.config.parse import ParseError, parse_modules
+    from rite_ai.credentials.store import remember_namespace
+
+    if root is None:
+        return
+    modules = parse_modules(Path(root) / ".rite" / "modules.yaml")
+    if isinstance(modules, ParseError):
+        return
+    remember_namespace(config.credentials.namespace, [m.url for m in modules if m.url])
 
 
 def _apply_config_field(config, dotted: str, value: str) -> None:

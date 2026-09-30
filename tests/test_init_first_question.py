@@ -74,7 +74,9 @@ def test_yes_mode_without_a_preset_asks_nothing_and_records_no_source(
 
 def test_yes_then_enter_twice_is_four_prompts_and_done(tmp_path: Path):
     (tmp_path / "main.py").write_text("print('hi')\n")
-    result = CliRunner().invoke(_init_cmd, [str(tmp_path)], input="y\n\n\n\n")
+    # The four, then (S13) the repository: code in no repository registers no
+    # module, so init asks where the code's repository is. Enter skips.
+    result = CliRunner().invoke(_init_cmd, [str(tmp_path)], input="y\n\n\n\n\n")
     assert result.exit_code == 0, result.output
     assert "STATUS:created" in result.output
     for prompt in (EXISTING, PATH, CHANGES, ROLE):
@@ -88,7 +90,7 @@ def test_the_brief_holds_the_path_and_the_answer(tmp_path: Path):
     # is instead (dogfood S11, `test_init_asks_for_the_code_when_the_path_is_empty`).
     (tmp_path / "notes.md").write_text("# the feed poller\n")
     result = CliRunner().invoke(
-        _init_cmd, [str(tmp_path)], input="y\n\nThe feed poller is stale\n\n"
+        _init_cmd, [str(tmp_path)], input="y\n\nThe feed poller is stale\n\n\n"
     )
     assert result.exit_code == 0, result.output
     brief = _brief(tmp_path)
@@ -214,14 +216,15 @@ class TestTheRoleIsAskedOnEveryPath:
 
     def test_the_source_path_asks_it(self, tmp_path: Path):
         (tmp_path / "main.py").write_text("print('hi')\n")
-        result = CliRunner().invoke(_init_cmd, [str(tmp_path)], input="y\n\n\n\n")
+        # … and the repository, Enter (S13: code in no repository).
+        result = CliRunner().invoke(_init_cmd, [str(tmp_path)], input="y\n\n\n\n\n")
         assert result.exit_code == 0, result.output
         assert ROLE in result.output
         assert _brief(tmp_path)["project"]["role"] == "owner"
 
     def test_manager_is_recorded_not_assumed(self, tmp_path: Path):
         (tmp_path / "main.py").write_text("print('hi')\n")
-        result = CliRunner().invoke(_init_cmd, [str(tmp_path)], input="y\n\n\n2\n\n")
+        result = CliRunner().invoke(_init_cmd, [str(tmp_path)], input="y\n\n\n2\n\n\n")
         assert result.exit_code == 0, result.output
         assert _brief(tmp_path)["project"]["role"] == "manager"
 

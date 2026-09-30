@@ -28,7 +28,9 @@ from rite_ai.cli.main import cli
 CLAIM = "will be taken\nfrom what's there"
 ASKED = "Where is the code? A repository URL to add as a module"
 NOTHING = "has no code and no spec in it"
-NO_MODULE = "No module is registered, so this project has nothing to work on yet"
+NO_MODULE = (
+    "No module would be registered, so this project would have nothing to work on"
+)
 
 
 @pytest.fixture(autouse=True)
@@ -74,8 +76,8 @@ def test_an_empty_path_asks_for_the_code_and_adds_it(tmp_path: Path):
     root = tmp_path / "yoloAI"
     root.mkdir()
     # existing code? y · path [.] · where is the code? <url> · add it? Enter ·
-    # role Enter · sandbox Enter
-    out = _init(root, input=f"y\n\n{repo}\n\n\n\n")
+    # role Enter · declare a Worker? n (S20)
+    out = _init(root, input=f"y\n\n{repo}\n\n\nn\n")
 
     assert NOTHING in out and ASKED in out
     assert CLAIM not in out, "it still claims to read code from an empty path"
@@ -137,8 +139,9 @@ def test_control_a_path_with_code_is_not_asked(tmp_path: Path):
     (root / "main.go").write_text("package main\n")
     _git(root, "add", "-A")
     _git(root, "commit", "-qm", "code")
-    # existing code? y · path [.] · changes Enter · add ./? Enter · role · sandbox
-    out = _init(root, input="y\n\n\n\n\n\n")
+    # existing code? y · path [.] · changes Enter · add ./? Enter · role ·
+    # declare a Worker? n (S20)
+    out = _init(root, input="y\n\n\n\n\nn\n")
 
     assert ASKED not in out and NOTHING not in out
     assert CLAIM in out
@@ -151,7 +154,7 @@ def test_a_sentence_is_not_taken_for_a_repository(tmp_path: Path):
     repo = _a_repository(tmp_path)
     root = tmp_path / "yoloAI"
     root.mkdir()
-    out = _init(root, input=f"y\n\nThe feed poller is stale\n{repo}\n\n\n\n")
+    out = _init(root, input=f"y\n\nThe feed poller is stale\n{repo}\n\n\nn\n")
 
     assert "'The feed poller is stale' is not a repository URL" in out
     assert "as module 'The feed poller is stale'" not in out
