@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### An item only the host can measure is agreed as the host's
+
+Some definition-of-done items need a measurement a Worker cannot take inside
+its sandbox. Such an item can now be agreed at refinement as the host's: tag
+it `[host]` in a round's proposal, or pass it with `rite refine accept
+--host-item`. The Worker's `TICKET.md` says it is not the Worker's to run.
+When the work is delivered, rite collects it but holds a push or pull request
+until you record the result with `rite refine measured <ID> --item N --result
+pass --output <file>`. That result is signed, says who measured and when, and
+keeps the output's hash, both on the ticket and in rite's audit log.
+
+### Answer a refinement round from the terminal
+
+`rite refine answer <ID> <words…>` answers a round the way a reply in its Slack
+thread does, for when Slack cannot reach you. Every answer, from Slack or the
+terminal, is now recorded as the owner's (`slack.owner_user`) in the same
+shape, and the agreed definition of done says which channel it came by: one
+typed at the terminal is marked as such, because rite cannot tell you from a
+session running as you.
+
 ### A Manager's board, status and loop commands no longer crash in its sandbox
 
 Inside a Manager's sandbox, where rite's credential file is deliberately not

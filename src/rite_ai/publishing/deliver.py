@@ -568,6 +568,39 @@ def _worker_modules(root: Path, worker: str, modules: list[Module]) -> list[Modu
     return [m for m in modules if m.name in wanted]
 
 
+def _host_measurement_hold(root: Path, started) -> list[str]:
+    """Why this Worker's work must not be published yet (S31), or [].
+
+    Read from the refinement record the Worker was STARTED on (the publish
+    snapshot), never from the board now: that is the definition of done the
+    work was done to. A start with no snapshot, or a record with no
+    host-measured items, holds nothing. One that has them holds until each
+    has a genuine PASS (`refinement.measurement`), and fails closed: a
+    snapshot that does not verify, or no key to verify with, holds.
+    """
+    if not isinstance(started, publish_record.Record):
+        return []
+    payload = started.refinement
+    if not isinstance(payload, dict) or not payload.get("host_measured"):
+        return []
+    from rite_ai.refinement import key as refinement_key
+    from rite_ai.refinement import measurement
+    from rite_ai.refinement import record as rec
+
+    key = refinement_key.load().key
+    if key is None:
+        return [
+            "rite cannot read its refinement key here, so no host measurement "
+            "can be verified"
+        ]
+    if not rec.mac_verifies(payload, key):
+        return [
+            "the refinement record this Worker was started on does not verify, "
+            "so which items the host measures cannot be trusted"
+        ]
+    return measurement.holds(root, rec.from_payload(payload), key)
+
+
 def deliver(
     root: Path,
     worker: str,
@@ -651,6 +684,7 @@ def deliver(
 
     from rite_ai.workspace import git_ops
 
+    held = _host_measurement_hold(root, started)
     outcomes: list[Outcome] = []
     applied: set[str] = set()
     for module in modules:
@@ -711,6 +745,21 @@ def deliver(
                     f"publish changed {was}→{is_now} since the Worker "
                     f"started; {where} only",
                     f"Ask the User to run: rite deliver {worker}",
+                )
+            )
+        elif strategy in PUSHES and held:
+            # S31: collected, so the host has the work to measure, and not
+            # published until every host-measured item has a genuine PASS.
+            outcomes.append(
+                Outcome(
+                    module.name,
+                    ticket,
+                    False,
+                    f"held for the host measurement: {'; '.join(held)}; "
+                    f"{where}, not pushed",
+                    f"Measure it on the host, record it with `rite refine "
+                    f"measured {ticket} --item <n> --result pass --output "
+                    "<file>`, then ask for the delivery again",
                 )
             )
         elif strategy in PUSHES:

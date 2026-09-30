@@ -68,6 +68,7 @@ def accept(
     verify: list[str],
     scope_in: list[str] | None = None,
     scope_out: list[str] | None = None,
+    host_items: list[str] | None = None,
     use_ticket_text: bool = False,
     role: str = "workers",
     now: datetime | None = None,
@@ -93,6 +94,11 @@ def accept(
                 "with list items, so there is nothing to accept as written. "
                 "Pass each item with --item",
             )
+    # S31: the host-measured items follow the others, and the record names
+    # them by their place in the definition of done.
+    host_items = [h for h in host_items or [] if h.strip()]
+    host_measured = list(range(len(items), len(items) + len(host_items)))
+    items = list(items) + host_items
     if not items:
         return Outcome(False, "no definition of done: pass --item, or --as-written")
     when = (now or datetime.now(UTC)).isoformat(timespec="seconds")
@@ -115,6 +121,7 @@ def accept(
         provenance=provenance,
         scope_in=scope_in,
         scope_out=scope_out,
+        host_measured=host_measured,
     )
     if not outcome.ok:
         return outcome
@@ -144,6 +151,7 @@ def write(
     provenance: dict,
     scope_in: list[str] | None = None,
     scope_out: list[str] | None = None,
+    host_measured: list[int] | None = None,
 ) -> Outcome:
     """Sign a record against `before`'s ticket, post it, read it back.
 
@@ -179,6 +187,7 @@ def write(
             key=key,
             scope_in=scope_in,
             scope_out=scope_out,
+            host_measured=host_measured,
         )
     except ValueError as e:
         return Outcome(False, f"not a valid definition of done: {e}")

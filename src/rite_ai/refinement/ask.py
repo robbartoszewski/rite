@@ -14,6 +14,8 @@ true while a model is doing the asking:
   proposal than to answer a question, and "you decide" is answered by one
   (TRQ4). Round 1 may propose already, when the Owner has no doubts
   (TRQ11: "if it has any doubts").
+* **An item the Worker cannot measure is tagged `[host]`** as well (S31):
+  the round names it as the host's to measure, and the record carries it.
 * **Every proposed item says where it came from**, in brackets at its end:
   `[ticket: "<quote>"]`, `[answer: "<quote>"]`, or `[proposed]`. **Every
   quote must be an exact substring of the ticket's text, or of an answer
@@ -49,6 +51,10 @@ _HEADER_LIKE = re.compile(
 """rite's own first line. The Owner may not write one: a second header in
 the body is a line a person could take as rite's."""
 _TAG = re.compile(r'\[\s*(ticket|answer)\s*:\s*"([^"]+)"\s*\]|\[\s*(proposed)\s*\]')
+_HOST = re.compile(r"\[\s*host\s*\]", re.IGNORECASE)
+"""S31: an item whose check the host runs, because a Worker cannot run it in
+its sandbox. A mark on top of the item's source tag, never instead of one:
+it says who measures, not where the item came from."""
 
 
 @dataclass(frozen=True)
@@ -58,6 +64,8 @@ class Item:
     quotes: tuple[tuple[str, str], ...] = ()
     """(source, quote) pairs: `ticket` or `answer`."""
     proposed: bool = False
+    host: bool = False
+    """Tagged `[host]`: the host measures it, not the Worker (S31)."""
 
 
 @dataclass
@@ -81,11 +89,13 @@ class Checked:
 
 
 def _parse_item(line: str) -> Item:
+    host = bool(_HOST.search(line))
+    line = _HOST.sub("", line)
     tags = list(_TAG.finditer(line))
     quotes = tuple((m.group(1), m.group(2)) for m in tags if m.group(1))
     proposed = any(m.group(3) for m in tags)
     text = _TAG.sub("", line).strip().rstrip(",;").strip()
-    return Item(text=text, quotes=quotes, proposed=proposed)
+    return Item(text=text, quotes=quotes, proposed=proposed, host=host)
 
 
 def _quoted_in(quote: str, text: str) -> bool:
@@ -237,6 +247,9 @@ def check(
     return Checked(None if problems else ask, problems)
 
 
+HOST_LINE = " — measured on the host, not by the Worker"
+
+
 def first_line(ticket: str, k: int) -> str:
     """rite's line naming the round. The thread label an answer is matched
     by is `asking`'s line above it."""
@@ -290,10 +303,20 @@ def render(
                 source = f"proposed by {manager}, not from the ticket or your answers"
             else:
                 source = "; ".join(f'from the {s}: "{q}"' for s, q in item.quotes)
-            lines.append(f"{n}. {item.text} ({source})")
+            host = HOST_LINE if item.host else ""
+            lines.append(f"{n}. {item.text} ({source}){host}")
     if ask.outro:
         lines += ["", ask.outro]
     lines.append("")
+    hosted = [str(n) for n, item in enumerate(ask.proposal, 1) if item.host]
+    if hosted:
+        lines += [
+            f"Item(s) {', '.join(hosted)}: the Worker cannot take this "
+            "measurement inside its sandbox, so the host runs it, and the "
+            "work is not published until the result is recorded with `rite "
+            "refine measured`. Accepting agrees to that too.",
+            "",
+        ]
     if ask.proposal:
         words = ", ".join(f"`{w}`" for w in accept_words)
         lines.append(
