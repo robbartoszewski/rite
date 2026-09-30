@@ -449,7 +449,15 @@ def warn_if_global(key: str, credentials: object | None = None) -> str | None:
     """
     if key in _WARNED_GLOBAL:
         return None
-    r = resolve(key, credentials)
+    try:
+        r = resolve(key, credentials)
+    except CredentialStoreError:
+        # ⚠ Which tier a key resolves at cannot be told from a store that
+        # cannot be read, so there is nothing to warn about HERE; whoever
+        # reads the value meets the same store and says why (live run
+        # finding S25: inside a Manager's sandbox this raised out of every
+        # board, status and loop command as a traceback).
+        return None
     if r.tier != GLOBAL or r.project_account == r.global_account:
         return None
     _WARNED_GLOBAL.add(key)

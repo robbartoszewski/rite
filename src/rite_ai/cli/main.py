@@ -5063,7 +5063,7 @@ def loop_run(dry_run: bool, watch: bool, interval: float) -> None:
         )
         raise SystemExit(1)
 
-    board, _ = _ticket_backend("workers")
+    board, board_problem = _ticket_backend("workers")
     from rite_ai.sandbox import worker_sandbox_status
 
     if watch:
@@ -5075,6 +5075,7 @@ def loop_run(dry_run: bool, watch: bool, interval: float) -> None:
             emit=click.echo,
             board=board,
             sandbox_status=worker_sandbox_status,
+            board_problem=board_problem or "",
         )
         # The drain is the only exit a human asked for, so it is the only one
         # that is a success. "Stopped because it could not tell" must not read
@@ -5088,7 +5089,12 @@ def loop_run(dry_run: bool, watch: bool, interval: float) -> None:
             return
         raise SystemExit(3 if why == DEADLOCKED else 1)
 
-    cycle = plan_cycle(root, board=board, sandbox_status=worker_sandbox_status)
+    cycle = plan_cycle(
+        root,
+        board=board,
+        sandbox_status=worker_sandbox_status,
+        board_problem=board_problem or "",
+    )
     for line in format_cycle(cycle):
         click.echo(line)
 

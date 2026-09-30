@@ -164,6 +164,7 @@ def plan_cycle(
     clock: float | None = None,
     refiner: str | None = None,
     refinement=None,
+    board_problem: str = "",
 ) -> Cycle:
     """Read everything, decide nothing that acts. Returns, never raises.
 
@@ -257,8 +258,16 @@ def plan_cycle(
         return cycle
 
     if board is None:
+        # ⚠ WHY there is no board, when the caller knows: "not configured"
+        # and "configured, and its credentials cannot be read here" need
+        # different people to act (live run finding S25: inside a Manager's
+        # sandbox this said "no ticket backend is configured" about a Jira
+        # board that was configured).
         cycle.verdict = UNKNOWN
-        cycle.detail = "no ticket backend is configured, so there is no queue to read"
+        cycle.detail = (
+            board_problem
+            or "no ticket backend is configured, so there is no queue to read"
+        )
         cycle.problems.append(cycle.detail)
         return cycle
 
@@ -824,10 +833,15 @@ def format_cycle(cycle: Cycle) -> list[str]:
 
     lines.append("")
     takeable = [t for t in cycle.ready if t not in cycle.blocked]
-    lines.append(
-        f"waiting on the board: {len(cycle.ready)} "
-        f"({len(takeable)} takeable, {len(cycle.blocked)} blocked on held paths)"
-    )
+    if cycle.board_read_at is None:
+        # Not read is not "0 waiting" (S25): a count of nothing read out of an
+        # unreadable board reads as an empty queue.
+        lines.append("waiting on the board: not read this cycle")
+    else:
+        lines.append(
+            f"waiting on the board: {len(cycle.ready)} "
+            f"({len(takeable)} takeable, {len(cycle.blocked)} blocked on held paths)"
+        )
     if takeable:
         lines.append(
             f"  takeable: {', '.join(takeable[:12])}"
@@ -850,8 +864,11 @@ def format_cycle(cycle: Cycle) -> list[str]:
     if cycle.would_dispatch:
         lines.append("would start (DRY RUN — nothing was started):")
         lines.extend(f"  · {t} → {w}" for t, w in cycle.would_dispatch)
-    lines.append(
-        "a reason to stop: "
-        + ("yes" if cycle.is_reason_to_stop else "no — the work is there")
-    )
+    if cycle.is_reason_to_stop:
+        stop = "yes"
+    elif cycle.verdict == UNKNOWN:
+        stop = "no — whether there is work could not be established"
+    else:
+        stop = "no — the work is there"
+    lines.append(f"a reason to stop: {stop}")
     return lines
