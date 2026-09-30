@@ -38,11 +38,18 @@ from rite_ai.refinement import record as rec
 from rite_ai.refinement import status as st
 
 DESCRIPTION = (
-    "Set and removed by rite: this ticket is scheduled and its definition of "
-    "done is agreed. Adding it by hand does nothing."
+    "Set by rite: scheduled, with an agreed definition of done. Adding it by "
+    "hand does nothing."
 )
 """What a person browsing the repository's labels reads (GitHub only: Jira
-labels have no description). Written once, when rite first needs the label."""
+labels have no description). Written once, when rite first needs the label.
+
+⚠ **At most 100 characters.** GitHub refuses a longer one with 422
+("description is too long (maximum is 100 characters)": measured 2026-09-30,
+101 refused and 100 accepted). The note's part 3.10 wording is 119, and the
+first live run lost the description to exactly that."""
+
+DESCRIPTION_MAX = 100
 
 COLOUR = "0e8a16"
 

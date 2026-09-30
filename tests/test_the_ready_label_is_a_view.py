@@ -355,6 +355,11 @@ class TestTheGitHubLabelIsDescribedOnce:
         assert backend.describe_label(READY, view.DESCRIPTION, view.COLOUR) is None
         assert len(calls) == 2
 
+    def test_the_description_fits_what_github_accepts(self):
+        """GitHub refuses a label description over 100 characters (422,
+        measured); the first live run lost the description to that."""
+        assert len(view.DESCRIPTION) <= view.DESCRIPTION_MAX == 100
+
     def test_an_existing_label_is_left_as_the_person_made_it(self):
         backend, calls = self._backend(['{"name": "ready-to-work", "color": "ff0000"}'])
         assert backend.describe_label(READY, view.DESCRIPTION, view.COLOUR) is None
