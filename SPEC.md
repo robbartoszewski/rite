@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.66 · **Date:** 2026-09-30
+**Version:** 0.24.67 · **Date:** 2026-09-30
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -3989,6 +3989,9 @@ rite init --config <file> [--yes]  # non-interactive setup from a file
 
 rite add worker <name>             # create a worker workspace
 rite add module <name> [git-url]   # register (and optionally clone) a module
+rite add manager <name> --preset <p>   # declare a Manager in config.yaml (§9.5.1)
+rite module set-command <m> <key> <cmd>  # record a module's build/test command,
+                                    #   and refresh what quotes it (§9.5.2)
 
 rite remove worker <name>          # remove a worker workspace and deregister
 rite remove module <name>          # deregister a module (does not delete files)
@@ -4611,6 +4614,61 @@ them (GitHub, GitLab, Bitbucket) using the tool they already have (`gh repo crea
 rite's auth surface to what it needs for its own operations — reading/writing tickets,
 pushing code — not org admin for repo creation.
 
+#### 9.5.1. `rite add manager` — declaring a Manager without editing the file
+
+`rite add manager <name> --preset <preset>` declares a Manager. Before it
+there was no CLI for this at all: `.rite/config.yaml` was the only way, and a
+normal user does not hand-edit that file for basic setup.
+
+**It writes BOTH keys.** `coordination.managers` is priority order (§2.4) and
+`manager_roles` is what each Manager is FOR (§2.4.1). They are separate keys,
+parsed independently, and allowed to disagree on disk — a writer that touched
+one and not the other would author exactly the configuration `rite doctor`
+reports.
+
+**A new Manager is appended.** The order is priority and the first active
+Manager is Owner, so appending is the only position that cannot change who
+the Owner is on a project that already runs.
+
+**Naming a Manager that is already listed CHANGES its declaration** rather
+than adding a second. Once any Manager declares a preset or duties, every
+Manager must (§2.4.1), so declaring a second Manager on a project whose first
+is a bare name fails on the FIRST one — and this is the command that declares
+it. A bare `add` of a name already present is still refused, and says which
+flags to give.
+
+**Validation is the parser's.** The entry is spliced into the list and run
+back through `parse_managers`; whatever that refuses, this refuses, in the
+same words. So the command cannot write a config.yaml the next command
+rejects, and a rule added to the parser covers this writer too.
+
+`--duties`, `--engine`, `--model`, `--endpoint`, `--agent`, `--credential`
+and `--context-window` cover the rest of a declaration, so no shape of
+Manager the schema allows needs the file. `--credential` takes a credential
+NAME, never a value (§10).
+
+#### 9.5.2. `rite module set-command` — correcting a module's commands
+
+`rite module set-command <module> <key> "<command>"` records one of a
+module's `install`, `build`, `test`, `lint` or `format` commands. Detection
+derives these from a module's own manifests; it is right for most modules and
+wrong for some, and this is the correction without opening `modules.yaml`.
+
+**It is written nested under `commands:`.** A module entry refuses an unknown
+key, and a top-level `test:` is one — so a writer that wrote it flat would
+leave a file no later command can read. The command sets the field and hands
+the list to the one serialiser that knows the shape.
+
+**It also refreshes what quotes the command.** A module's commands are
+rendered into the project's `CLAUDE.md` and every Worker's, so a correction
+that stopped at `modules.yaml` would leave the agent reading the old command
+out of its instructions. The refresh is `rite update`'s (§9.9), not a second
+renderer: a section somebody has edited by hand is KEPT and **reported**, and
+a file rite cannot read is reported as that rather than as a hand edit.
+
+An empty command unrecords the key, which is not the same as recording an
+empty one: detection decides it again.
+
 ### 9.6. `rite add worker`
 
 Creates `workers/<name>/` with cloned copies of all modules registered in
@@ -4625,6 +4683,36 @@ exactly this Worker's `modules.yaml` repos, contents+PR permissions only
 (§5.3.3), stored via the same keychain path §10 uses for every other
 credential. The token is created or requested here, as part of the same flow
 that creates the Worker; it never passes through chat (§5.3.4).
+
+**It ASKS about the modules' own instructions.** A module often keeps a
+`CLAUDE.md`, `AGENTS.md` or `CONTRIBUTING.md` of its own. `rite add worker`
+looks for those three in each module this Worker gets, names what it found,
+and asks whether the Worker should follow them; the answer is recorded as
+`follow_module_docs` in that Worker's `worker.yml` and rendered into its
+`CLAUDE.md`. `--follow-module-docs` / `--no-follow-module-docs` answer it
+without a prompt, and nothing found means nothing asked.
+
+**With nobody at the terminal it is not asked, and that is said.** A prompt
+is not an exception, it is the absence of an answer (§9.11): asking
+unconditionally made `rite add worker` abort in a script rather than create
+a Worker. With no tty and no flag, the files are named, nothing is followed,
+and the message says both that and which flag answers it — a default taken
+in silence would leave the user never learning the files were there.
+
+**A file rite generated is never offered.** A project whose repository is
+its own module (§9.3) has the project's own generated `CLAUDE.md` at the
+module's path; offering it would ask whether a Worker should follow the
+Owner's brief, and a yes would put project-wide instructions into a session
+that does not make project-wide decisions.
+
+⚠ **Asked rather than assumed, in both directions.** Those files are written
+for the module and mostly for people: they do not know that a Worker holds no
+GitHub credential, or that whether to push is not the Worker's to decide
+(§5.3.4). Following them silently would put instructions nobody chose into a
+Worker's brief; ignoring them silently would lose the conventions the module
+really has. Where one contradicts rite's own instructions or the ticket, the
+Worker's `CLAUDE.md` says rite and the ticket win and that the Worker reports
+the contradiction rather than choosing quietly.
 
 ### 9.7. `rite remove`
 
@@ -7634,6 +7722,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.67 — three setup steps that needed a text editor now have commands (v0.7.0a4 lane 2: S16, S24, S23).** New §9.5.1 and §9.5.2; §9.1 lists both; §9.6 gains the paragraph on a module's own instructions. **S16** `rite add manager <name> --preset <p>`: `config.managers.declare_manager` builds the entry, splices it into the list and re-runs `parse_managers`, so every refusal is the parser's own and the command cannot write a file the next command rejects. It writes BOTH keys, appends (the order is priority, and the first active Manager is Owner), and UPDATES a name already listed — without that, declaring a second Manager on a project whose first is a bare name fails on the first one and the only way out is the file. The refusal names the command that declares it, for the new Manager as well as existing ones. **S24** `rite module set-command <module> <key> "<cmd>"`: `workspace.manage.set_module_command` sets the field and re-serialises through `write_modules`, so it lands nested under `commands:` — a top-level `test:` is refused by the parser, measured and pinned by a test — then calls `refresh_project`, the refresher `rite update` uses, so the correction reaches the project's CLAUDE.md and every Worker's. An edited section is kept and REPORTED; a file that does not parse is reported as that and not as a hand edit, which an early draft got wrong. An empty command unrecords the key (`None`, not `""`). **S23** `rite add worker` looks for `CLAUDE.md`, `AGENTS.md` and `CONTRIBUTING.md` in each module the Worker gets, names them and ASKS; the answer is `WorkerManifest.follow_module_docs`, written to `worker.yml` and rendered into the Worker's CLAUDE.md with the rule that rite and the ticket win and the Worker reports a contradiction rather than choosing. `--follow-module-docs/--no-follow-module-docs` answer it without a prompt; with nobody at the terminal it is NOT asked — a prompt on an empty stdin aborts, which turned `rite add worker` in a script into a command that made no Worker, caught by an existing test going red — so the files are named, nothing is followed and the message says which flag answers it; nothing found asks nothing; and a file rite GENERATED is never offered, since a repository that is its own module puts the project's own CLAUDE.md at the module's path. **Tests: 90**, including an invariant across each full range rather than its ends — every preset and every duty (S16), every one of the five command keys set, changed and unrecorded (S24), and all eight subsets of the three document names, across two modules (S23). Eighteen mutations were run and each went red; a nineteenth survived and is why `TestUnrecording` now asserts on the returned object: through the file, `""` and `None` are indistinguishable.
 
 **Changes in 0.24.66 — an item the host measures, and one attribution for every answer (v0.7.0a4 lane 5: S31, S22b).** New §6.7.5 and §6.7.6. S31: `Record.host_measured` (signed, emitted only when non-empty; `schema_problem` refuses indexes that are out of range, repeated, unordered or not integers); `ask`'s `[host]` tag, `Round.host_items`, the round's line naming it, the accept signing it; `rite refine accept --host-item`; `render_for_worker` and the board comment mark it (`HOST_TAG_FOR_WORKER`, `HOST_TAG_ON_BOARD`); `refinement/measurement.py` (`build`, `verifies`, `render`, `append`, `logged`, `latest_for`, `holds`) and `rite refine measured`; the publish snapshot keeps the started-on record's payload; `deliver._host_measurement_hold` holds a push or pull request. S22b: `refinement/attribution.py` (`answered_by`, `via_of`, `owner_user_of`, `describe`); `protocol.Reply.by`, carried into answers, the pending accept and provenance; `rite refine answer`; `record.how_agreed`, one wording for the board, TICKET.md and `rite refine status`. `record.extract_kind` generalises `extract`. Tests: `tests/test_a_host_measured_item_is_the_hosts.py` and `tests/test_every_answer_is_the_owners.py`, over real keys and git, with two invariants: every definition of done of one to four items with every set of marks, crossed with every combination of six result histories per marked item (none, pass, fail, forged, another record's, fail then pass), agrees across the record, TICKET.md, the board and the hold; and every answer route (DM, refinement channel, this machine, `rite refine answer`) with the owner set or unset leaves the same shape and the same owner on an answer and on the record. Twenty-three mutations each go red, one of them (the item-text binding) only after a test was added for it.
 

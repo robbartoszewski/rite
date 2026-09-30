@@ -956,6 +956,7 @@ def parse_worker(path: Path) -> WorkerManifest | ParseError:
         manager=worker.get("manager", ""),
         modules=_str_list(worker.get("modules", [])),
         claude_instructions=worker.get("claude_instructions", ""),
+        follow_module_docs=_str_list(worker.get("follow_module_docs", [])),
     )
 
 
