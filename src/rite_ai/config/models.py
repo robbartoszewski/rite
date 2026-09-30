@@ -524,6 +524,13 @@ class WorkerManifest:
     manager: str = ""
     modules: list[str] = field(default_factory=list)
     claude_instructions: str = ""
+    # The module's OWN instructions this Worker was told to follow (S23):
+    # repo-relative paths to a module's `CLAUDE.md`, `AGENTS.md` or
+    # `CONTRIBUTING.md`. Empty means the question was asked and declined, or
+    # there was nothing to ask about — NOT "nobody has looked". A Worker
+    # follows what it was told to follow, and that is a decision somebody
+    # made rather than a file that happened to exist.
+    follow_module_docs: list[str] = field(default_factory=list)
 
 
 @dataclass

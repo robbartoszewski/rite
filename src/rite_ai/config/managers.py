@@ -350,6 +350,111 @@ def parse_managers(raw: object) -> ParsedManagers:
     return out
 
 
+@dataclass
+class Declaration:
+    """The two keys after declaring one Manager, or why it was refused."""
+
+    names: list[str] = field(default_factory=list)
+    roles: list[ManagerRole] = field(default_factory=list)
+    error: str = ""
+    updated: bool = False
+    """True when an already-listed Manager's declaration was changed rather
+    than a new one added — see `declare_manager`."""
+
+
+def declare_manager(
+    names: list[str],
+    roles: list[ManagerRole],
+    name: str,
+    *,
+    preset: str = "",
+    duties: tuple[str, ...] = (),
+    engine: str = CLAUDE,
+    model: str = "",
+    endpoint: str = "",
+    agent: str = "",
+    credential: str = "",
+    context_window: int = 0,
+) -> Declaration:
+    """Declare one Manager, for `rite add manager` (S16).
+
+    ⚠ **BOTH KEYS, because the file has two and they are allowed to
+    disagree.** `coordination.managers` is the priority order thirty-nine
+    call sites read; `manager_roles` is what each Manager is FOR. A writer
+    that touched one would produce exactly the disagreement
+    `configuration_problems` exists to report — a role for a Manager nobody
+    listed, or a listed Manager with no role — and it would be rite that
+    wrote it. So this returns both, and its caller writes both.
+
+    ⚠ **VALIDATION IS THE PARSER'S, not a second copy here.** The entry is
+    built, spliced into the list as it stands, and run back through
+    `parse_managers`. Whatever that refuses, this refuses, with the same
+    words — so `rite add manager` cannot write a config.yaml that the next
+    command to read it rejects, and a rule added to the parser later covers
+    this writer for free. The alternative, checking the arguments here, is
+    the second copy of a security-relevant checklist that falls behind.
+
+    ⚠ **A new Manager goes LAST, and the order is priority** (§2.4: the
+    first active Manager is Owner). Appending is the only position that
+    cannot change who the Owner is on a project that already runs.
+
+    ⚠ **An already-listed name is UPDATED, not refused**, when something to
+    declare is given. That is not "add" being loose: `parse_managers`
+    requires every Manager to declare a preset or duties as soon as ONE
+    does, so declaring a second Manager on a project whose first is a bare
+    name fails on the FIRST one. Without a way to declare the Manager that
+    already exists, the only route left is hand-editing config.yaml, which
+    is the thing this command is for. Refusing a bare `add` of a name that
+    is already there is still right, and it says which flags to give.
+    """
+    entry: dict[str, object] = {"name": name}
+    if engine != CLAUDE:
+        entry["engine"] = engine
+    if preset:
+        entry["preset"] = preset
+    if duties:
+        entry["duties"] = list(duties)
+    for key, value in (
+        ("endpoint", endpoint),
+        ("model", model),
+        ("agent", agent),
+        ("credential", credential),
+        ("context_window", context_window),
+    ):
+        if value:
+            entry[key] = value
+
+    at = next((i for i, r in enumerate(roles) if r.name == name), None)
+    declared_something = len(entry) > 1
+    if at is not None and not declared_something:
+        return Declaration(
+            error=(
+                f"manager {name!r} is already declared. To change what it is "
+                "for, give --preset or --duties; to add a different Manager, "
+                "give a different name"
+            )
+        )
+
+    raw: list[object] = [to_yaml_entry(r) for r in roles]
+    if at is None:
+        raw.append(entry)
+    else:
+        raw[at] = entry
+
+    parsed = parse_managers(raw)
+    if parsed.error:
+        return Declaration(error=parsed.error)
+
+    # The name list is its own key and may already hold names no role does
+    # (and the other way round) — so it is extended, never rebuilt from the
+    # roles. Rebuilding it would silently drop a listed Manager that has no
+    # role, which is a configuration this file is allowed to hold.
+    out_names = list(names) if name in names else [*names, name]
+    return Declaration(
+        names=out_names, roles=parsed.roles, updated=at is not None or name in names
+    )
+
+
 def to_yaml_entry(role: ManagerRole) -> str | dict:
     """A role that says nothing but its name is written back as a bare name, so
     a file written before roles existed round-trips byte-identically.
