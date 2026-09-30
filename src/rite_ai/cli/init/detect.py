@@ -135,6 +135,14 @@ def root_has_nothing_committed(root: Path) -> bool:
     return (root / ".git").exists() and not _has_a_commit(root)
 
 
+def holds_files_but_no_repository(root: Path) -> bool:
+    """The root has something in it besides hidden entries, and is in no git
+    repository: there is code (or a spec) a Worker could never clone."""
+    if not root.is_dir() or not any(not p.name.startswith(".") for p in root.iterdir()):
+        return False
+    return _git(root, ["rev-parse", "--is-inside-work-tree"]) is None
+
+
 def _describe_repo(path: Path) -> DetectedRepo:
     url = _git(path, ["remote", "get-url", "origin"])
     branch = _git(path, ["branch", "--show-current"]) or "main"

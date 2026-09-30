@@ -40,6 +40,7 @@ from .detect import (
     DetectionSummary,
     detect_repos,
     detect_root_branch,
+    holds_files_but_no_repository,
     root_has_nothing_committed,
 )
 
@@ -980,6 +981,18 @@ def offer_modules(
                 "This directory is a git repository with nothing committed, so "
                 "it is not offered as a module: a Worker could not clone it. "
                 "Commit, then add it to .rite/modules.yaml as `path: ./`."
+            )
+        elif root is not None and holds_files_but_no_repository(root):
+            # ⚠ Said, not silent (0.7.0a2 dogfood assessment, beside S11):
+            # code with no repository registered nothing, and init went on to
+            # "Ready" with no word that a Worker would have nothing to clone.
+            ui.warn(
+                f"{root} has files in it but is not a git repository, so no "
+                "module is registered and a Worker would have nothing to work "
+                "on: a Worker's workspace is its modules' clones. Either `git "
+                "init` here, commit, and add it to .rite/modules.yaml as `path: "
+                "./`, or register the repository it comes from with `rite add "
+                "module <name> <repository URL>`."
             )
         return []
     plural = "y" if len(candidates) == 1 else "ies"

@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.61 · **Date:** 2026-09-30
+**Version:** 0.24.62 · **Date:** 2026-09-30
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -4202,6 +4202,15 @@ says no module is registered and gives the command. Measured on 0.7.0a2 (dogfood
 S11): an empty directory got "languages, structure and conventions will be taken
 from what's there", an empty brief, no module, and "Ready".
 
+**A directory with files but no git repository is said, not passed over
+(0.24.62).** When nothing is offered as a module and the root holds files but
+is in no git repository, init says that no module is registered, that a Worker
+would have nothing to work on, and the two ways out (`git init` and commit
+here, then `path: ./`; or `rite add module <name> <URL>`). Found assessing the
+0.7.0a2 init beside S11: code with no repository got "Ready" and warnings about
+the hook and CI only. An empty directory is S11's case, and a directory inside
+another repository is in one, so neither is told this.
+
 If no repos found:
 
 ```
@@ -7477,6 +7486,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.62 — `rite init` says when the code it was pointed at is not a git repository (0.7.0a2 dogfood assessment).** §9.3 gains the paragraph. `detect.holds_files_but_no_repository`; `offer_modules` warns when there are no candidates and it holds. Tests: the existing-code route and the from-scratch route both say it and register nothing; controls: the same code in a repository is registered and not told, an empty directory is not told this, a directory inside another repository is not told it is outside one. Three mutations (silent again, said inside a repository, said for an empty directory) each go red.
 
 **Changes in 0.24.61 — `rite init`'s existing-code route asks for the code when the path is empty (v0.7.0 dogfood S11; Robert's design).** §9.3 gains the paragraph. `questionnaire.holds_nothing`, `ask_for_the_code`, `module_name_for`; `InitAnswers.link`; `run_init` registers the link with `workspace.add_module` right after `modules.yaml` and carries it into the answers; `_read_changes` no longer claims to read an empty path. Tests through the real CLI with a local repository: the empty path is asked about, and the accepted link is registered, cloned on the remote's branch and named in CLAUDE.md; declining, saying no to the offer, and `--yes` each leave no module and say so; a path with code is not asked (control); an answer that is not a repository (a URL, `user@host:path`, or a local repository) is asked again, found when an older test's sentence was offered as a module. Seven mutations (never asking, the link not added, asking for a path with code, declining silently, the false claim restored, the module not carried into CLAUDE.md, any text accepted as a repository) each go red. `test_init_first_question`'s brief test now gives its path something in it, which is what it tests.
 
