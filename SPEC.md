@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.68 · **Date:** 2026-09-30
+**Version:** 0.24.69 · **Date:** 2026-09-30
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -5688,6 +5688,29 @@ wall-clock window**, both of which rite can enforce exactly. It is named as a
 count in the interface and in the command's output, never as a spend figure
 it cannot substantiate.
 
+✅ **A refinement round is NOT a session start (0.24.69, v0.7.0a4 dogfood
+S26).** A round is rite composing and sending text from the supervisor,
+outside any session, at a tick that was going to happen anyway. Charging one
+against this ceiling would let a project whose board needs refining spend its
+whole budget refining and never start the work. `cycles` is appended only
+where an engine is actually launched, and
+`tests/test_a_refinement_round_is_not_a_session.py` pins it across every
+ceiling of 1–4 crossed with 0–5 rounds a tick.
+
+⚠ **S26 was filed as "`--sessions` caps concurrent Workers (machine-thrash
+protection)", which conflates two different caps**, and the correction
+belongs here because the wording is how the confusion spreads:
+
+- **`--sessions`** bounds the COUNT of engine session STARTS in one Manager
+  run. Not concurrency — a Manager runs one session at a time — and not
+  spend, which is the window's job, as the paragraph below says at length.
+- **`sandbox.max_concurrent_workers`** bounds how many Workers run AT ONCE.
+  That is the machine-thrash protection, enforced by
+  `schedule.check_worker_cap` at schedule-design time and again at spawn,
+  refused rather than clamped in both (§2.5.9, §2.7.5).
+
+Neither is the other, and a refinement round is charged against neither.
+
 ⚠ **A count ceiling does not bound cost, and this section will not pretend
 otherwise.** Three sessions may run arbitrarily long and burn arbitrarily
 much. §9.14.5's own line — "a ceiling enforced after the fact is a report,
@@ -6906,6 +6929,60 @@ scanned.
 decisions above.** Robert accepted it on 2026-09-25, and the label stays
 because it records where the rule came from.
 
+#### 9.16.5a. A Worker's question is answered through the Owner (S30, 0.24.69)
+
+**The person answers in the Slack thread, and the Owner relays it into the
+Worker.** Robert's decision, 2026-09-30, and the only shape available: a
+sandboxed Worker never appears in Claude Code's session list
+(`sandbox.worker_pane`), so nothing can message it directly, while the Owner
+already supervises it, holds its sandbox handle, and runs outside every
+boundary.
+
+⚠ **The claim that had stopped this was wrong about the protocol.**
+`worker_questions` said in its own docstring that it "does not deliver an
+answer back", because "yoloAI 0.11.0 has no way to send input to a running
+agent". That is true of the agent's SESSION and irrelevant: yoloAI's injected
+`CLAUDE.md` tells the agent to write `question.json` and then to POLL
+`answer.json`. The return path is a file the Worker is already watching, in
+the directory rite already reads the question from
+(`yoloai files <name> path`). The last dogfood run paid for the mistake — the
+operator had to `yoloai attach` the Worker and type an answer rite had
+already carried to Slack.
+
+**How it runs.** `sandbox.questions.deliver_answer` writes the answer file;
+`worker_questions.relay` matches an answer to its question by the id
+`asking` wrote into rite's first line — the same rule the Slack relay uses
+for a refinement round, imported rather than restated — and rides the
+supervisor's existing watcher, so it runs at every poll, cycle boundary and
+wait tick, with or without an Owner session. It reads the inbox WITHOUT
+consuming it: the answer is the Owner's mail too, and taking it would remove
+it from the Manager's next prompt with nobody saying so.
+
+⚠ **Isolation, stated rather than implied.** This crosses from the host into
+a sandboxed Worker's exchange directory and **changes no sandbox rule**: no
+flag, no grant, no permission, and nothing in it can be made to turn a
+Worker's sandbox off. What is written is data, in the directory yoloAI
+created for this exchange, read by the agent because its own runtime
+instructions say to. The alternative — `tmux -S … send-keys` into the live
+pane — is what `worker_pane` calls "a separate, consequential act" and is
+deliberately not taken.
+
+**An answer that cannot land comes back to the person.** Delivery is refused,
+and reported, when the sandbox is gone, when yoloAI could not be asked, when
+the Worker's status was never established, or when nothing is waiting — an
+answer to a question nobody asked would be read against the Worker's NEXT
+question. `Undeliverable` says which, and whether the Worker is gone for good
+(a different sentence: the work needs starting again). Silence here is the
+defect the whole path exists to remove — a person who answers and hears
+nothing believes the Worker is working.
+
+⚠ **What it cannot tell.** A sandbox whose agent has exited while the sandbox
+lingers still has its exchange directory and may still show a pending
+question; the answer is written and reported delivered, and nothing here
+observes that nobody is polling. The status check narrows that window and is
+why a missing status is refused rather than assumed. The claim is "written
+where it is polled for", never "read".
+
 #### 9.16.6. Several projects in one workspace: one Slack app per project (D-101)
 
 **Decided 2026-09-25 (Robert).** Companies run several projects in one Slack
@@ -7762,6 +7839,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.69 — a Worker's question is answered through the Owner, and a refinement round is not a session (v0.7.0a4 lane 6: S30, S26).** New §9.16.5a; §9.14.5 gains the refinement paragraph and the correction of S26's own wording. **S30:** `sandbox.questions.deliver_answer`, `Delivered`, `Undeliverable`; `worker_questions.relay`, joined to the supervisor's existing watcher ahead of `surface` so an arriving answer settles its question before the same tick re-raises it. The answer goes to `answer.json`, which yoloAI's own injected instructions tell the agent to poll — the docstring claiming "no way to send input to a running agent" was true of the SESSION and wrong about the protocol, and cost the last dogfood run an operator `yoloai attach`. No sandbox rule changes: no flag, no grant, no permission, and the `tmux send-keys` route into the live pane is deliberately not taken. Delivery is refused and REPORTED when the sandbox is gone, yoloAI could not be asked, the status was never established, or nothing is waiting. **S26:** a round is charged against neither cap, and the two caps `--sessions` (a count of engine session starts) and `sandbox.max_concurrent_workers` (concurrency, the machine-thrash protection) are distinguished. Tests: `tests/test_the_owner_relays_a_workers_answer.py`, whose invariant is all 45 combinations of five liveness answers × three exchange-directory states × three question states, asserted as an exact iff; and `tests/test_a_refinement_round_is_not_a_session.py`, every ceiling 1–4 crossed with 0–5 rounds a tick. Eight mutations each go red, two of them (the unestablished-status branch, the relayed-message ledger) only after a test was added: both were behaviour-preserving until something observed what they uniquely prevent.
 
 **Changes in 0.24.68 — three setup steps that needed a text editor now have commands (v0.7.0a4 lane 2: S16, S24, S23).** New §9.5.1 and §9.5.2; §9.1 lists both; §9.6 gains the paragraph on a module's own instructions. **S16** `rite add manager <name> --preset <p>`: `config.managers.declare_manager` builds the entry, splices it into the list and re-runs `parse_managers`, so every refusal is the parser's own and the command cannot write a file the next command rejects. It writes BOTH keys, appends (the order is priority, and the first active Manager is Owner), and UPDATES a name already listed — without that, declaring a second Manager on a project whose first is a bare name fails on the first one and the only way out is the file. The refusal names the command that declares it, for the new Manager as well as existing ones. **S24** `rite module set-command <module> <key> "<cmd>"`: `workspace.manage.set_module_command` sets the field and re-serialises through `write_modules`, so it lands nested under `commands:` — a top-level `test:` is refused by the parser, measured and pinned by a test — then calls `refresh_project`, the refresher `rite update` uses, so the correction reaches the project's CLAUDE.md and every Worker's. An edited section is kept and REPORTED; a file that does not parse is reported as that and not as a hand edit, which an early draft got wrong. An empty command unrecords the key (`None`, not `""`). **S23** `rite add worker` looks for `CLAUDE.md`, `AGENTS.md` and `CONTRIBUTING.md` in each module the Worker gets, names them and ASKS; the answer is `WorkerManifest.follow_module_docs`, written to `worker.yml` and rendered into the Worker's CLAUDE.md with the rule that rite and the ticket win and the Worker reports a contradiction rather than choosing. `--follow-module-docs/--no-follow-module-docs` answer it without a prompt; with nobody at the terminal it is NOT asked — a prompt on an empty stdin aborts, which turned `rite add worker` in a script into a command that made no Worker, caught by an existing test going red — so the files are named, nothing is followed and the message says which flag answers it; nothing found asks nothing; and a file rite GENERATED is never offered, since a repository that is its own module puts the project's own CLAUDE.md at the module's path. **Tests: 90**, including an invariant across each full range rather than its ends — every preset and every duty (S16), every one of the five command keys set, changed and unrecorded (S24), and all eight subsets of the three document names, across two modules (S23). Eighteen mutations were run and each went red; a nineteenth survived and is why `TestUnrecording` now asserts on the returned object: through the file, `""` and `None` are indistinguishable.
 

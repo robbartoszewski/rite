@@ -7899,7 +7899,7 @@ def _worker_question_watch(root: Path, manager: str):
     from rite_ai.config.managers import routing_owner
     from rite_ai.config.models import ProjectConfig
     from rite_ai.config.parse import ParseError, parse_config
-    from rite_ai.managers.worker_questions import surface
+    from rite_ai.managers.worker_questions import relay, surface
 
     parsed = parse_config(root / ".rite" / "config.yaml")
     config = parsed if not isinstance(parsed, ParseError) else ProjectConfig()
@@ -7915,6 +7915,11 @@ def _worker_question_watch(root: Path, manager: str):
         if last["at"] is not None and now - last["at"] < WORKER_QUESTION_EVERY:
             return
         last["at"] = now
+        # ⚠ RELAY FIRST, then surface (S30). An answer that has arrived
+        # settles its question, so relaying first means `surface` does not
+        # re-raise a question in the same tick that answered it. The other
+        # order tells the person about a question rite is about to resolve.
+        relay(root, manager, say)
         surface(root, manager, say)
 
     return watch

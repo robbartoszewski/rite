@@ -76,8 +76,21 @@ class TestTellingThePerson:
         assert first.startswith("KAN-7 · q")
         assert first.endswith("· Worker alpha is waiting · reply in this thread")
         assert "> WHICH timeout" in out.text
-        assert "yoloai attach rite-p-alpha" in out.text
-        assert "cannot pass it on to the Worker" in out.text
+        # ⚠ S30 REPLACED WHAT THIS PINNED, and the new promise is pinned just
+        # as strictly. It used to require "yoloai attach <sandbox>" and "cannot
+        # pass it on to the Worker" — the instruction to answer by hand, and
+        # the admission that a reply reached nobody. Both are now false: the
+        # Owner relays a reply into the sandbox the Worker polls. Note the
+        # header one line up has always said "reply in this thread"; the body
+        # contradicted it, and S30 is what makes the two agree.
+        assert "the answer goes to the Worker" in out.text
+        assert "the Owner relays it" in out.text
+        assert "yoloai attach" not in out.text, (
+            "the answer-by-hand instruction is what S30 removed"
+        )
+        # And the undeliverable case is promised here too, so nobody is left
+        # waiting on a reply that cannot arrive.
+        assert "If it has stopped by then" in out.text
         assert any("told the User" in s for s in said)
 
     def test_the_owner_is_told_as_context_not_instruction(self, project):

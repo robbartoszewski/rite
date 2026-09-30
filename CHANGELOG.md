@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### Answer a Worker's question in Slack and it reaches the Worker
+
+When a Worker stops to ask something, rite already sent you the question.
+Reply in that thread and the answer now goes to the Worker — the Owner
+carries it in. Before this you had to attach to the Worker's sandbox and type
+the answer in by hand, which is what the last test run had to do.
+
+If the Worker stopped before your answer arrived, rite tells you so in the
+same thread instead of leaving you waiting for a reply that cannot come.
+
+Nothing about a Worker's sandbox changes: the answer is a file in the
+directory the sandbox already uses to ask questions, and rite does not type
+into the Worker's session.
+
+### Refining a ticket does not use up a session
+
+`--sessions` limits how many sessions a Manager starts. A refinement round is
+not one of them, so a project with a board that needs refining no longer
+spends its budget on refinement and never gets to the work. (The separate
+`sandbox.max_concurrent_workers` setting is the one that limits how many
+Workers run at once.)
+
 ### `rite init` no longer says "Ready." about a project with nothing to work on
 
 Whichever way you run it, including a bare `rite init --yes`, init now says

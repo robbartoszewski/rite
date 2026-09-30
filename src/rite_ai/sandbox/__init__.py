@@ -1978,9 +1978,10 @@ def destroy_worker(
                 f"on a question, asked at {asked.since()} and never answered:\n"
                 f"  {asked.headline()}\n"
                 f"  destroying it deletes the question. Read it in full with "
-                f"`rite sandbox pane {worker}` or {asked.path}; answer it by "
-                f"attaching (`yoloai attach {name}`), or "
-                f"`rite sandbox destroy {worker} --force` to discard it",
+                f"`rite sandbox pane {worker}` or {asked.path}; answer it in "
+                "the Slack thread rite raised it in, and the Owner relays it "
+                f"(S30), or `rite sandbox destroy {worker} --force` to "
+                "discard it",
             )
         if isinstance(asked, Unknown):
             return SandboxResult(

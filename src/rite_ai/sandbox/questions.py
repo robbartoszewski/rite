@@ -28,6 +28,23 @@ rewrote it twice), so the newest question is the one reported.
 **"Could not check" is not "no question".** As with `SandboxStatus`, a
 yoloAI that cannot be asked is said as such. Every caller that would act on
 "no question", `destroy` above all, must not act on "could not check".
+
+**Answering (S30, v0.7.0a4).** The paragraph above said "answering stays a
+person's job for now", and the reason given elsewhere was that "yoloAI 0.11.0
+has no way to send input to a running agent". ⚠ **That was wrong about this
+protocol, and `deliver_answer` is the correction.** yoloAI's own injected
+`CLAUDE.md` tells the agent to write `question.json` and then to POLL
+`answer.json` — so the return path is a file the Worker is already watching,
+reached through the same `yoloai files <name> path` this module already uses
+to read the question. Writing it is not typing into a live session and not
+reaching into yoloAI's private layout; it is the other half of the exchange
+yoloAI documents.
+
+⚠ **Nothing here weakens a Worker's sandbox.** No permission changes, no
+flag, no new grant: the answer is a file in the exchange directory yoloAI
+created for exactly this, written by the host, read by the agent because its
+own runtime instructions tell it to. See `deliver_answer` for what it
+refuses to do and what it cannot tell.
 """
 
 from __future__ import annotations
@@ -161,3 +178,125 @@ def worker_question(
     from rite_ai.sandbox import existing_sandbox_name
 
     return pending_question(existing_sandbox_name(worker, root))
+
+
+@dataclass(frozen=True)
+class Delivered:
+    """An answer written where the Worker polls for it."""
+
+    sandbox: str
+    path: Path
+
+
+@dataclass(frozen=True)
+class Undeliverable:
+    """An answer that was NOT delivered, and why.
+
+    ⚠ **Never a silent drop.** S30's whole point: an answer that cannot reach
+    the Worker must come back to the person who wrote it, because they are
+    now waiting on something that will never arrive. Every caller reports
+    this; none may treat it as "nothing to do".
+    """
+
+    sandbox: str
+    reason: str
+    stopped: bool = False
+    """True when the Worker is gone rather than merely unreachable — a
+    different sentence for the person: nothing will make this land, so the
+    answer needs somewhere else to go."""
+
+
+def deliver_answer(
+    sandbox: str,
+    text: str,
+    *,
+    status=None,
+) -> Delivered | Undeliverable:
+    """Write `text` where the Worker in `sandbox` polls for its answer (S30).
+
+    The return path yoloAI documents: its injected `CLAUDE.md` tells the
+    agent to write `question.json` and poll `answer.json`, and this writes
+    the second in the directory `yoloai files <name> path` names. No session
+    is typed into and no sandbox rule is touched.
+
+    `status` is the `SandboxStatus` the caller already has, passed in rather
+    than fetched here so this function shells out for one thing only (the
+    path) and a test can state liveness without a yoloAI. Omitted means the
+    caller has not established it, which is NOT read as alive: see below.
+
+    **It refuses, rather than writing, when:**
+
+    - the sandbox is gone (`files_dir` -> None) — the Worker has stopped;
+    - yoloAI could not be asked — `Unknown` is not "no sandbox" (§ the
+      module docstring), so it is reported, never guessed past;
+    - `status` says `not found`, or is not `known`, or was not given;
+    - nothing is waiting: no `question.json`, or one already answered. An
+      answer to a question nobody asked would sit in the exchange directory
+      and be read against the NEXT question the Worker asks, which is worse
+      than not delivering it.
+
+    ⚠ **What it cannot tell, said rather than papered over.** A sandbox whose
+    agent has exited while the sandbox itself lingers still has its exchange
+    directory and may still have a pending `question.json`. This writes the
+    answer and reports `Delivered`; nothing here can observe that the agent
+    is no longer polling. `status` is what narrows that window, and it is the
+    caller's to obtain — which is why a missing one is refused rather than
+    assumed. The honest claim is "written where it is polled for", not "read".
+    """
+    from rite_ai.state import write_atomic
+
+    if status is None:
+        return Undeliverable(
+            sandbox,
+            "rite did not establish whether the Worker is still running, and "
+            "an answer is not written on an assumption",
+        )
+    if not getattr(status, "known", False):
+        return Undeliverable(
+            sandbox, f"rite could not ask yoloAI about the sandbox: {status}"
+        )
+    if str(status) == "not found":
+        return Undeliverable(
+            sandbox,
+            "the Worker's sandbox is gone, so it stopped before this answer arrived",
+            stopped=True,
+        )
+
+    where = files_dir(sandbox)
+    if where is None:
+        return Undeliverable(
+            sandbox,
+            "there is no such sandbox, so the Worker has stopped",
+            stopped=True,
+        )
+    if isinstance(where, Unknown):
+        return Undeliverable(sandbox, where.reason)
+
+    asked = question_in(where, sandbox)
+    if isinstance(asked, Unknown):
+        return Undeliverable(sandbox, asked.reason)
+    if asked is None:
+        return Undeliverable(
+            sandbox,
+            "nothing is waiting on an answer in that sandbox — the question "
+            "was already answered, or withdrawn",
+        )
+
+    path = where / ANSWER_FILE
+    payload = {"answer": text, "answered_at": time.time()}
+    try:
+        write_atomic(path, json.dumps(payload, indent=1) + "\n")
+    except OSError as e:
+        return Undeliverable(sandbox, f"{path} could not be written: {e}")
+
+    # ⚠ Verified, not assumed. `question_in`'s own rule is that an answer
+    # counts only when its mtime is at or after the question's; a clock or a
+    # filesystem that does not honour that would leave the Worker waiting on
+    # an answer rite had reported as delivered.
+    if question_in(where, sandbox) is not None:
+        return Undeliverable(
+            sandbox,
+            f"{path} was written but the question still reads as unanswered, "
+            "so the Worker would not see it",
+        )
+    return Delivered(sandbox, path)
