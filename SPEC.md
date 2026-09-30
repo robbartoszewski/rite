@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.63 · **Date:** 2026-09-30
+**Version:** 0.24.64 · **Date:** 2026-09-30
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -5167,9 +5167,60 @@ the quota spend **is** what was typed.
 
 - **Idempotence must be restored explicitly, because D-50's first test still
   applies and this section is not exempting itself from it.** A project has
-  **at most one Manager session**, and a second `rite start <provider>`
-  against a live one is **refused, naming the running session and how to
-  reach it** — not silently joined, not started alongside.
+  **at most one Manager session PER NAME**, and a second `rite start <name>`
+  against a live one of that name is **refused, naming the running session
+  and how to reach it** — not silently joined, not started alongside.
+
+  ⚠ **"Per name", not "per project", and the sentence above said "per
+  project" until 0.24.64 (MM6).** The code has always refused per name —
+  `session.start` keys every check on `session_name(root, manager)` — so the
+  amendment D-50 was charged for was never the one that was paid. This
+  paragraph now states the rule the code enforces, and argues for it, rather
+  than describing a stricter rule nothing implements.
+
+  **The argument for per-name.** D-79 decided the shared-root model:
+  several Managers run in ONE project root (§5.4.8), because separate roots
+  mean separate claim ledgers and two Managers that silently cannot see each
+  other's claims. A per-PROJECT refusal would forbid exactly the
+  configuration D-79 decided to build, so the two cannot both hold and this
+  one yields. §9.14.9's own shape agrees: `manager_roles:` is a LIST, and the
+  Owner/secondary split (MMQ2, §9.16.7) needs at least two live at once.
+
+  **What idempotence then means, precisely.** D-50's test is that calling
+  `start` twice does not do the work twice. The work here is *starting the
+  Manager that was named*, so the unit of idempotence is the name, not the
+  root: `rite start planner` twice starts one `planner`, and `rite start
+  planner` followed by `rite start reviewer` starts two Managers because two
+  were asked for, by name, which is §5.1.1's rule that a command's surprising
+  effects should be things the user asked for BY NAME. Nothing is started
+  that was not typed.
+
+  ⚠ **What fails closed when two DIFFERENT Managers are asked for at once
+  (D-74).** Two names asked for separately are two starts and neither refuses
+  the other — that is the configuration, not an accident. The case that must
+  fail closed is the one where rite would have to GUESS which of several was
+  meant, and there are two shapes of it:
+
+  - **A bare `rite start` in a project declaring two or more Managers
+    REFUSES AND LISTS THEM** (`manager_to_start`, D-78). Picking one would be
+    a guess about which engine spends which quota. Zero configured fails too,
+    rather than inventing a default.
+  - **The liveness check behind the per-name refusal fails closed, and the
+    bare-start path inherits that by COMPOSITION rather than by repeating
+    it.** `_a_manager_is_running` (D-80) calls `running()`, which answers
+    None when it cannot tell — fail-open, read on its own. It is safe only
+    because every path it permits goes on to `session.start`, whose
+    `here.known` check refuses a start it cannot prove is not a duplicate.
+    ⚠ **So `running()` must never become the last word on whether to start
+    something.** A future caller that acts on it without going through
+    `session.start` reintroduces exactly the two-paid-sessions defect D-74
+    was written for, and it will look correct in review because the
+    fail-closed check is in another file.
+
+  **What is NOT claimed.** Nothing here stops two Managers of DIFFERENT names
+  doing the same work, or contending for one ticket. That is the claim
+  ledger's job and the Owner's routing (§5.4.8 P4, §9.16.7), not this
+  refusal's.
 
   ⚠ **The liveness check behind that refusal MUST FAIL CLOSED, and this
   paragraph says so because a draft of it did not.** An earlier version said
@@ -5197,6 +5248,48 @@ the quota spend **is** what was typed.
   two Managers against one board with neither refusing, unless the rule
   inherits the loop's outright refusal to run in a worktree — which would be
   a significant usability fact nobody has stated. The plan must settle it.
+
+  ✅ **SETTLED 2026-09-30 (MM6): a worktree IS its own project, and this
+  refusal does not reach across worktrees. Measured, not inferred.**
+  `session_name(root, manager)` is `rite-mgr-<project_slug>-<manager>`, and
+  `label.project_slug` hashes six hex of the RESOLVED PATH — deliberately, so
+  that two checkouts of one repository are distinguishable in `tmux ls`. Two
+  worktrees therefore produce two different session names, and neither start
+  sees the other. The same is true of the claim ledger: a tracked `.rite/`
+  gives every worktree its own `claims.json`, so the two Managers do not
+  exclude each other on paths either.
+
+  **Why that is the answer rather than a defect to fix.** Making the refusal
+  span worktrees would mean keying it on the repository rather than the path,
+  and the repository is the wrong unit for everything else rite keys this
+  way: the sandbox grant, the per-Manager directory (`<data>/rite/mail/<checkout>/…`),
+  the pool's slot names and the claim ledger are all per checkout, on purpose,
+  because two checkouts genuinely are two working trees with two sets of
+  files to claim. A refusal that alone spanned them would be inconsistent
+  with all of it, and inheriting the loop's outright worktree refusal would
+  forbid a workflow people actually use.
+
+  ⚠ **What is NOT protected, said out loud, because this is the cost of the
+  answer.** Two worktrees of one repository run two Managers against ONE
+  board, and nothing refuses. They will not contend on FILES, because their
+  files are different files and each worktree has its own `claims.json`. They
+  can both pick up the same TICKET, because the board is shared and the
+  ledger is not.
+
+  ⚠ **And §6.1.1 does not catch it, deliberately** — do not read that section
+  as the missing guard. `scope.sharing_problems` skips another project whose
+  credential namespace matches this one, commented "another checkout of this
+  project", because worktrees and clones share the committed config, scope
+  label included. §6.1.1 exists to stop two DIFFERENT projects taking each
+  other's tickets; two worktrees are one project by exactly the test it uses.
+  So the `rite start` refusal §6.1.1 adds is silent here by design, and the
+  per-name refusal in this section does not span worktrees either.
+
+  **What is left, then:** the Owner's routing (§9.16.7) within one root, and
+  the operator between roots. An operator running Managers in two worktrees
+  of one repository is responsible for giving them different work. Nothing
+  refuses on their behalf, and no section should be cited as though something
+  did.
 
   Refusing is the behaviour §2.5.1 and `check_worker_cap` establish — though
   note they refuse against a **configured cap**, which is always readable,
@@ -7467,7 +7560,7 @@ happened once already and left no trace until this review found it.
 | D-59 | A lease that expires implausibly far ahead | **Not credible beyond `owner_lease_minutes + skew_tolerance`, and therefore challengeable** | §2.4.1's tolerance protects an incumbent from a fast challenger; the reverse case had no rule, and read literally a Manager whose clock is a day ahead holds the role permanently — a wedge needing no malice, only a wrong clock. Nothing honest can write an expiry beyond the longest permitted lease plus the most drift tolerated, so anything past that ceiling is invalid. Derived from two values already in `coordination:` rather than a third number to keep in step: raising the lease duration moves the ceiling with it. Logged distinctly, because it means somebody's clock is wrong. §2.4.1. |
 | D-60 | The lease's `priority` field | **Written for audit, ignored on read; config order always wins** | `coordination.managers` is declared intent under version control; a lease is ephemeral runtime state. A stale lease written before someone reordered the list must not override that reorder, or a deliberate config change silently fails to take effect until a lease happens to expire. The field is kept because what the holder believed its priority was at acquisition is useful when reconstructing why a promotion went the way it did — but it never participates in the comparison. Both halves stated so the field is neither deleted as dead weight nor, worse, started being read. §2.4.1. |
 | D-61 | Granularity of the state layer's compare-and-swap | **Per key, not whole-state; the version is an opaque fingerprint of the value** | The interface must be substitutable (D-20, D-21) or the git-versus-Redis question has no answer but "rewrite it". The first cut made the version whole-state because that is what `--force-with-lease` compares, on the stated ground that per-key CAS was not implementable on git — which was wrong: a git backend compares the key's own value, merges, pushes with the lease, and re-merges when the ref moved for an unrelated key, absorbing §2.4.2(b)'s ref-level race instead of exporting it. Better for git (that race can no longer mark a live Manager falsely stalled) and necessary for anything else (a key-value store would otherwise funnel every write through one global version). A version fingerprints the VALUE, so no backend needs a durable counter and an A→B→A rewrite is harmless: a decision made on content stays sound when the content is what was read. Proven rather than argued — `tests/test_state_layer_kv.py` binds a socket-served key-value store with no trees, refs or merges to the conformance suite unchanged, and it passes, including the process-burst concurrency tests. |
-| D-62 | Whether `rite start <provider>` inherits D-50 | **No — it AMENDS D-50, and the amendment is recorded rather than implied** | A Manager session is not idempotent, local or free; it fails all three of D-50's tests where the loop failed only one, and §9.10 refuses to start even the free loop. What buys the amendment is §5.1.1 — a command's surprising effects should be things the user asked for BY NAME, and `rite start claude` names it. What it costs is paid here: at most one Manager session per project, a second invocation refused, and bare `rite start` unchanged because it is what a session runs to orient itself. §9.14.0. ⚠ **Narrowed, 2026-09-25 (recorded, not newly decided): the shipped refusal is per Manager NAME, not per project** (`managers/session.py`). D-72 and D-79 made several Managers per project legal, and §9.14.7b recorded that they void "one per project". The idempotence argument per name is owed (`docs/design/V070_RELEASE_PLAN.md`, MM6). |
+| D-62 | Whether `rite start <provider>` inherits D-50 | **No — it AMENDS D-50, and the amendment is recorded rather than implied** | A Manager session is not idempotent, local or free; it fails all three of D-50's tests where the loop failed only one, and §9.10 refuses to start even the free loop. What buys the amendment is §5.1.1 — a command's surprising effects should be things the user asked for BY NAME, and `rite start claude` names it. What it costs is paid here: at most one Manager session PER NAME (narrowed from "per project" in 0.24.64, MM6 — the code always refused per name, and a per-project rule would forbid the shared-root model D-79 decided), a second invocation of that name refused, and bare `rite start` unchanged because it is what a session runs to orient itself. §9.14.0. ⚠ **Narrowed, 2026-09-25 (recorded, not newly decided): the shipped refusal is per Manager NAME, not per project** (`managers/session.py`). D-72 and D-79 made several Managers per project legal, and §9.14.7b recorded that they void "one per project". The idempotence argument per name is owed (`docs/design/V070_RELEASE_PLAN.md`, MM6). |
 | D-63 | When the provider adapter interface freezes | **When `local` binds UNCHANGED to an adapter conformance suite — and that suite is written WITH the `claude` adapter, against the contract, not deferred to the freeze** | §3.3's precedent is sharper than a draft of §9.14.2 read it: `tests/state_layer_conformance.py` was P2-1a, written with the FIRST backend against the contract, and the git backend had to bind to it unchanged. Deferring the suite to the freeze moment inverts the thing that made it work. No adapter suite, interface or code exists today, so as drafted this froze on an unwritten artifact. Writing it now is also where the §9.14.7b mismatch with the built `local` package would surface automatically. §9.14.2. |
 | D-64 | Provider order after `claude` | **`local` second, `cursor` third — the most DIFFERENT provider second, not the easiest** | A local engine has no session concept, no session id to resume, no quota and possibly no interactive surface, so it violates every assumption the first adapter will bake in. Two hosted assistants would agree with each other and fail on the third. §9.14.8. |
 | D-65 | Whether a Manager session may be detached with logged output | **No — attachability is an interface requirement, not a Claude implementation detail** | A session a human cannot talk to is a report about a session. Stated at the interface because an abstraction designed from the mechanics alone arrives at "start, capture, log", which satisfies everything else and fails this completely. tmux gives the first adapter all of it free, which is exactly why it constrains the second. §9.14.3. |
@@ -7527,6 +7620,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.64 — the idempotence argument, per name (v0.7.0 MM6).** No code changes; §9.14.0 and D-62 are corrected to the rule the code enforces. §9.14.0 said "a project has at most one Manager session"; `session.start` has always keyed every check on `session_name(root, manager)`, so the amendment D-50 was charged for was never the one paid. The rule is per NAME, and the argument is written: a per-project refusal would forbid the shared-root model D-79 decided (several Managers in one root, because separate roots mean separate claim ledgers), and `manager_roles:` is a list. What fails closed when two DIFFERENT Managers are asked for at once (D-74): a bare `rite start` with 2+ configured refuses and lists them (`manager_to_start`, D-78), and the bare-start path's `_a_manager_is_running` is fail-OPEN on its own — `running()` answers None when it cannot tell — and is safe only by composition, because every path it permits reaches `session.start`'s `here.known` refusal. Written down because a future caller acting on `running()` without going through `session.start` reintroduces D-74's two-paid-sessions defect and would look correct in review. The worktree question §9.14.0 left for the plan is settled: a worktree IS its own project (`label.project_slug` hashes the resolved path, so two worktrees get two session names and two ledgers), the cost is stated, and §6.1.1 is named as NOT the missing guard — `scope.sharing_problems` skips another checkout of the same project by credential namespace, on purpose.
 
 **Changes in 0.24.63 — a force-release stops at another Manager (v0.7.0 MM3; SPEC §5.4.8 P4).** §5.4.3 records what was built and the three boundaries of the rule; §5.4.8's status line, its P4 row and its state list say P4 holds for claims and not for destroy. `Claim.manager`, defaulted to `""` so a ledger written by an older rite still parses; `ClaimsLedger.claim(manager=)`, filled by the CLI from `managers.current_manager()`; `force_release(manager=)` narrows the PATH-matched release to the acting Manager's own claims and unowned ones; `last_refused_other_managers`, printed by `rite release --force` as "not yours: <path> (held by <worker>, under Manager '<name>')"; the force-release audit record names the Manager. `worker=`-scoped releases are NOT narrowed, so `pool.archive` can still reap a Worker another Manager started. Tests: two Managers on different paths, A's release leaves B's and says whose it is, releases its own and an unowned one; a human outside any session still clears the path; a pre-0.7.0 ledger reads. Five mutations (the guard removed, unowned claims refused too, the CLI's `or None` dropped, a `worker`-scoped release narrowed, the refusal printed silently) each go red.
 
