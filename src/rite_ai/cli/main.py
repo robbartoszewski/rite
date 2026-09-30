@@ -450,17 +450,32 @@ def _doctor_check(label: str, problems: list[str]):
 
 
 @cli.command()
-def doctor() -> None:
+@click.option(
+    "--network",
+    is_flag=True,
+    help=(
+        "Also run the checks that talk to a service: whether each Worker's "
+        "GitHub token can PUSH, and a test message to the Slack channel. Off "
+        "by default so a plain `rite doctor` stays fast and works offline."
+    ),
+)
+def doctor(network: bool) -> None:
     """Is this healthy? (SPEC §9.8) Token presence, external tool
     availability, `.rite/` integrity, module sync state, git remote
     reachability, and schedule validation — as distinct from `rite
-    status`'s "what's happening?"."""
+    status`'s "what's happening?".
+
+    \b
+    The live checks are opt-in:
+      rite doctor              # fast, offline-safe
+      rite doctor --network    # also asks GitHub and Slack
+    """
     problems: list[str] = []
     # Structural, not one call site: each section runs inside a guard, and
     # this outer one catches whatever a future check adds outside them, so
     # the command cannot end in a traceback.
     with _doctor_check("doctor", problems):
-        _doctor_report(problems)
+        _doctor_report(problems, network=network)
     if problems:
         click.echo(f"\n{len(problems)} problem(s) found")
         raise SystemExit(1)
@@ -523,6 +538,90 @@ def _doctor_worker_github_token(root: Path, modules: list, problems: list) -> No
         )
 
 
+def _doctor_worker_push_access(
+    root: Path, modules: list, config, problems: list, network: bool
+) -> None:
+    """Whether each Worker's token can actually PUSH (v0.7.0 dogfood S28).
+
+    ⚠ **Presence is not permission.** `_doctor_worker_github_token` answers
+    "is there a token?", and a read-only fine-grained PAT passes it — then
+    `rite sandbox start` refuses the Worker, because a token that cannot write
+    the repository is a Worker that works and delivers nothing. The report a
+    person reads BEFORE starting said nothing about it.
+
+    ⚠ **Three answers, and `unknown` is not one of the problems.**
+    `push_access_refusal` collapses "could not ask" into a refusal, which is
+    right for a START and wrong here: reported as a refusal, an unreachable
+    network tells someone to reissue a credential that was fine. So the probe
+    is `push_access`, which keeps them apart.
+
+    ⚠ **Off unless asked for.** The probe is one HTTPS round trip per remote
+    per Worker. On every `rite doctor` that is a slow, network-dependent
+    report — and offline, a wall of "could not check" that says nothing. So
+    it runs under `--network`, and without it doctor says the check exists
+    rather than pretending it passed.
+    """
+    from rite_ai.credentials.store import store_is_readable
+
+    if not store_is_readable():
+        return  # reported as an unreadable store, not as a missing permission
+    workers_dir = root / "workers"
+    if not workers_dir.is_dir():
+        return
+    from rite_ai.sandbox import clone_remotes, push_access, resolve_worker_token
+
+    creds = _project_credentials()
+    workers = sorted(
+        p.name for p in workers_dir.iterdir() if (p / "worker.yml").is_file()
+    )
+    if not workers:
+        return
+    if not network:
+        click.echo(
+            "workers: GitHub push access not checked (no network calls) — "
+            "`rite doctor --network` asks GitHub whether each Worker's token "
+            "can push, which is what `rite sandbox start` refuses on"
+        )
+        return
+    for worker in workers:
+        token, _tier = resolve_worker_token(worker, creds)
+        if token is None:
+            continue  # the missing-token check above already says so
+        remotes = clone_remotes(workers_dir / worker)
+        if config is not None:
+            # A module published by `strategy: commit` never pushes, so
+            # asking about push access to it would be a fault invented here.
+            from rite_ai.publishing.settings import effective
+
+            local = {
+                m.name
+                for m in modules
+                if effective(config.publish, m).strategy == "commit"
+            }
+            remotes = [r for r in remotes if Path(r.clone).name not in local]
+        if not remotes:
+            continue
+        got = push_access(remotes, token)
+        if got.kind == "ok":
+            click.echo(f"workers: {worker}'s GitHub token can push")
+        elif got.kind == "cannot_push":
+            click.echo(
+                f"workers: {worker}'s GitHub token CANNOT push to "
+                f"{got.repository} ({got.why}) — `rite sandbox start` will "
+                f"refuse it. Give the token Contents: read and write there"
+            )
+            problems.append(
+                f"worker {worker}: token cannot push to {got.repository}"
+            )
+        else:
+            # Said, never counted: a report must not call a token bad
+            # because a network was unreachable.
+            click.echo(
+                f"workers: could not check whether {worker}'s GitHub token "
+                f"can push to {got.repository} ({got.reason})"
+            )
+
+
 def _doctor_publishing(project, problems: list[str]) -> None:
     """Each module's EFFECTIVE publish settings, and where each came from.
 
@@ -580,7 +679,7 @@ def _first_few(names: list[str], limit: int = 5) -> str:
     return ", ".join(names[:limit]) + f" and {len(names) - limit} more"
 
 
-def _doctor_report(problems: list[str]) -> None:
+def _doctor_report(problems: list[str], *, network: bool = False) -> None:
     """Every check doctor runs, appending to `problems`."""
     import shutil
 
@@ -833,6 +932,19 @@ def _doctor_report(problems: list[str]) -> None:
     # `could not read Username`. `rite sandbox start` refuses the same state.
     if module_sandbox.enabled:
         _doctor_worker_github_token(root, modules, problems)
+        # And whether the token that IS there can write, which is the half
+        # that let a read-only PAT reach `rite sandbox start` (S28).
+        with _doctor_check("worker push access", problems):
+            from rite_ai.config.parse import parse_config as _parse_config
+
+            _cfg = _parse_config(rite_dir / "config.yaml")
+            _doctor_worker_push_access(
+                root,
+                modules,
+                None if isinstance(_cfg, ParseError) else _cfg,
+                problems,
+                network,
+            )
 
     # The WORKERS' checkouts, which the loop above never looked at. Every
     # module line it prints is about `<root>/<module>` — the project's own
@@ -1395,7 +1507,7 @@ def _doctor_report(problems: list[str]) -> None:
             _doctor_board_can_create(root, problems)
 
         with _doctor_check("slack", problems):
-            _doctor_slack(root, problems)
+            _doctor_slack(root, problems, network=network)
 
         with _doctor_check("refinement", problems):
             _doctor_refinement_reaches_you(root, problems)
@@ -8508,7 +8620,7 @@ def _slack_listener(root: Path, manager: str):
     return listener
 
 
-def _doctor_slack(root: Path, problems: list[str]) -> None:
+def _doctor_slack(root: Path, problems: list[str], *, network: bool = False) -> None:
     """Probe both Slack targets, naming Slack's own error (A6).
 
     Nothing is printed for a project without Slack: a check for a feature
@@ -8553,6 +8665,40 @@ def _doctor_slack(root: Path, problems: list[str]) -> None:
         )
         if not checked.ok:
             problems.append(f"slack {checked.target}: {checked.detail}")
+
+    # ⚠ **Posting is allowed HERE and nowhere else in setup.** `rite
+    # credential set slack` must never put a message in a channel — someone
+    # setting rite up is not announcing it. `rite doctor --network` is the
+    # opposite case: the person ASKED whether Slack works, and the only
+    # answer that settles it is a message that arrives. Still opt-in, because
+    # a plain `rite doctor` must not post every time it is run.
+    if network and slack.broadcast:
+        with _doctor_check("slack delivery", problems):
+            from rite_ai.managers.slack import _call
+
+            try:
+                got = _call(
+                    "chat.postMessage",
+                    token,
+                    {
+                        "channel": slack.broadcast,
+                        "text": "rite doctor: this channel is reachable.",
+                    },
+                )
+            except Exception as e:  # noqa: BLE001 - could not ask, not a fault
+                click.echo(
+                    f"slack delivery: could not check — {type(e).__name__}"
+                )
+                return
+            if (got or {}).get("ok"):
+                click.echo(
+                    f"slack delivery: ok — posted to {slack.broadcast} "
+                    f"(channel {(got or {}).get('channel') or '?'})"
+                )
+                return
+            detail = (got or {}).get("error") or "no ok in the reply"
+            click.echo(f"slack delivery: FAILED — {detail}")
+            problems.append(f"slack delivery to {slack.broadcast}: {detail}")
 
 
 def _engine_ready_for(role):

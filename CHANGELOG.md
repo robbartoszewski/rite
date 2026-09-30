@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+### `rite doctor --network` checks what only a live call can
+
+A plain `rite doctor` still makes no call that can hang — it is read by people
+who are stuck, sometimes offline. Adding `--network` runs the two checks that
+need a real answer:
+
+- **Whether each Worker's GitHub token can actually push.** A token that
+  exists can still be read-only, which passed the old report and was then
+  refused by `rite sandbox start` — so the check you ran first told you
+  nothing about the thing that stopped you. If rite cannot reach GitHub it
+  says the check could not be made, rather than reporting your token as bad.
+- **Whether your Slack channel really delivers**, by posting one message to
+  it. (`rite credential set slack` still never posts — setting rite up is not
+  announcing it.)
+
+Without the flag, doctor says these were not checked rather than passing over
+them in silence.
+
+### Declaring a Manager on one machine no longer looks like a broken setup
+
+`rite doctor` used to report that the machine "is not enrolled — it will not
+publish a heartbeat, stand for Owner, or take over another machine's work" as
+soon as a project declared a Manager, even with no second machine anywhere.
+Every part of that is about other machines. A project with no coordination
+remote is now left alone; one that has other machines is warned exactly as
+before.
+
+
 ### In Slack, a post that needs your answer stands out
 
 Each post from a Manager now opens with what it is (❓ Needs your answer, with

@@ -1578,9 +1578,42 @@ def remote_access_refusal(
 RECEIVE_PACK = "application/x-git-receive-pack-advertisement"
 
 
-def push_access_refusal(
-    worker: str, remotes: list[CloneRemote], token: str, timeout: int = 30
-) -> str | None:
+@dataclass(frozen=True)
+class PushAccess:
+    """Whether a token can push, in THREE answers.
+
+    ⚠ **"Could not ask" is not "cannot push".** `push_access_refusal` collapses
+    the two, which is right where the choice is whether to START A WORKER: an
+    unchecked token is refused rather than trusted, because a Worker that runs
+    and cannot deliver costs a whole ticket. It is wrong in a REPORT, where
+    nothing is at stake but what the reader is told — there, an unreachable
+    network would be reported as a bad token, and the person would go and
+    reissue a credential that was fine (v0.7.0 dogfood S28).
+    """
+
+    kind: str
+    """`ok`, `cannot_push`, or `unknown`."""
+    owner: str = ""
+    repo: str = ""
+    why: str = ""
+    """For `cannot_push`: what GitHub's answer meant."""
+    reason: str = ""
+    """For `unknown`: the class of failure that stopped the check."""
+
+    @property
+    def repository(self) -> str:
+        return f"{self.owner}/{self.repo}"
+
+    @property
+    def is_a_problem(self) -> bool:
+        """Only a KNOWN refusal is a problem. Counting `unknown` would make
+        `rite doctor` report a fault for being offline."""
+        return self.kind == "cannot_push"
+
+
+def push_access(
+    remotes: list[CloneRemote], token: str, timeout: int = 30
+) -> PushAccess:
     """Whether `token` can PUSH to each GitHub remote, asked of GitHub.
 
     ⚠ **Push, not read.** `check_token_access` asks `GET repos/o/r`, which
@@ -1592,20 +1625,17 @@ def push_access_refusal(
     authorises receive-pack there, before any ref could be sent, and a GET
     cannot send one — so rite still has no path that writes to a remote
     (`test_blast_radius`). Measured 2026-09-28: a token that can write the
-    repository → 200 with the receive-pack advertisement; the same token on
-    a public repository it can only read → 403; a bogus token → 401; no
-    token → 401; a repository that does not exist → 404. Only the first is
+    repository -> 200 with the receive-pack advertisement; the same token on
+    a public repository it can only read -> 403; a bogus token -> 401; no
+    token -> 401; a repository that does not exist -> 404. Only the first is
     allowed.
 
     The token is sent as the password, as `gh auth git-credential` gives it
     to git inside the sandbox, and nothing of the host's is consulted.
-
-    A check that cannot finish refuses: "could not ask" is not "allowed"."""
+    """
     import base64
     import urllib.error
     import urllib.request
-
-    from rite_ai.credentials.services import how_to_set
 
     basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
     for remote in remotes:
@@ -1623,10 +1653,8 @@ def push_access_refusal(
         except urllib.error.HTTPError as e:
             status, kind = e.code, ""
         except (OSError, ValueError) as e:
-            return (
-                f"not starting '{worker}': could not check that its GitHub "
-                f"token can push to {owner}/{repo} ({e.__class__.__name__}), "
-                "and an unchecked token is refused rather than trusted"
+            return PushAccess(
+                "unknown", owner=owner, repo=repo, reason=e.__class__.__name__
             )
         if status != 200 or not kind.startswith(RECEIVE_PACK):
             why = {
@@ -1634,15 +1662,39 @@ def push_access_refusal(
                 403: "the token can read it but not write it",
                 404: "the repository does not exist, or the token cannot see it",
             }.get(status, f"HTTP {status}")
-            return (
-                f"not starting '{worker}': its GitHub token cannot push to "
-                f"{owner}/{repo} ({why}). Give the token Contents: read and "
-                "write on that repository, or set another with `rite "
-                f"credential set {how_to_set('github_token')}` (or `rite "
-                f"credential set sandbox_token_{worker}`, if this Worker has "
-                "a token of its own)"
-            )
-    return None
+            return PushAccess("cannot_push", owner=owner, repo=repo, why=why)
+    return PushAccess("ok")
+
+
+def push_access_refusal(
+    worker: str, remotes: list[CloneRemote], token: str, timeout: int = 30
+) -> str | None:
+    """Why `worker` must not start, or None — `push_access` collapsed to the
+    two answers a START needs.
+
+    A check that cannot finish REFUSES: "could not ask" is not "allowed" when
+    a Worker is about to run. `rite doctor` calls `push_access` directly,
+    because a report must keep the three apart (S28).
+    """
+    from rite_ai.credentials.services import how_to_set
+
+    got = push_access(remotes, token, timeout)
+    if got.kind == "ok":
+        return None
+    if got.kind == "unknown":
+        return (
+            f"not starting '{worker}': could not check that its GitHub "
+            f"token can push to {got.repository} ({got.reason}), "
+            "and an unchecked token is refused rather than trusted"
+        )
+    return (
+        f"not starting '{worker}': its GitHub token cannot push to "
+        f"{got.repository} ({got.why}). Give the token Contents: read and "
+        "write on that repository, or set another with `rite "
+        f"credential set {how_to_set('github_token')}` (or `rite "
+        f"credential set sandbox_token_{worker}`, if this Worker has "
+        "a token of its own)"
+    )
 
 
 def _local_origins(
