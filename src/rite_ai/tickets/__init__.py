@@ -123,11 +123,23 @@ def create_backend(
         for _key in ("jira_email", credential_name or "jira_token"):
             warn_if_global(_key, credentials)
 
-        email = get_scoped("jira_email", credentials)
+        # ⚠ An unreadable credential store is a board that cannot be built
+        # HERE, not a crash. Measured in the live yoloAI run (finding S25):
+        # inside a Manager's sandbox the store is denied by design (a Manager
+        # is not given rite's credentials), and `rite status`, `rite board
+        # list` and `rite loop run` all died with a traceback from this
+        # read. Every caller already reports a BackendError as the board
+        # being unavailable and carries on; that is what this is.
+        from rite_ai.credentials.file_store import CredentialStoreError
+
+        token_key = credential_name or "jira_token"
+        try:
+            email = get_scoped("jira_email", credentials)
+            token = get_scoped(token_key, credentials) if email else None
+        except CredentialStoreError as e:
+            return BackendError(f"the Jira credentials cannot be read here: {e}")
         if not email:
             return BackendError(_missing_credential("jira_email", credentials))
-        token_key = credential_name or "jira_token"
-        token = get_scoped(token_key, credentials)
         if not token:
             return BackendError(_missing_credential(token_key, credentials))
         resolved_key = (projects or {}).get(board_role) or project_key

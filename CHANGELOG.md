@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### A Manager's board, status and loop commands no longer crash in its sandbox
+
+Inside a Manager's sandbox, where rite's credential file is deliberately not
+readable, `rite status`, `rite board list` and `rite loop run` stopped with a
+Python traceback. They now report the board as unavailable, with the reason,
+and carry on; `rite loop run` names that reason instead of saying no ticket
+backend is configured.
+
 ### `ready-to-work`: see on the board which tickets are ready to assign
 
 rite now keeps a `ready-to-work` label on every ticket that is scheduled, has
