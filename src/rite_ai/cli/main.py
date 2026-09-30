@@ -2191,7 +2191,9 @@ def _apply_config_field(config, dotted: str, value: str) -> None:
         setattr(target, last, value)
 
 
-def _set_service(service_name: str, global_: bool, root, config) -> None:
+def _set_service(
+    service_name: str, global_: bool, root, config, config_writable: bool = True
+) -> None:
     """Ask for every field a service has, in order, and store each.
 
     The prompts are the service's own words. Nothing here asks the user
@@ -2220,12 +2222,37 @@ def _set_service(service_name: str, global_: bool, root, config) -> None:
     stored: list[tuple[str, str]] = []
     configured: list[tuple[str, str]] = []
     for field in svc.fields:
-        value = click.prompt(
-            f"  {field.prompt}",
-            hide_input=field.secret,
-            confirmation_prompt=field.secret,
-            err=True,
-        )
+        if field.config_path and not config_writable:
+            # config.yaml is not in a state this command may rewrite (an
+            # unrelated parse error, recovered for its namespace only). Asking
+            # for a value rite would then drop is worse than not asking.
+            click.echo(
+                f"  (skipped {field.name}: .rite/config.yaml has an unrelated "
+                f"problem, so rite will not rewrite it. Set {field.config_path} "
+                f"by hand, or re-run this once the file parses.)",
+                err=True,
+            )
+            continue
+        while True:
+            value = field.clean(
+                click.prompt(
+                    f"  {field.prompt}",
+                    hide_input=field.secret,
+                    confirmation_prompt=field.secret,
+                    default="" if field.optional else None,
+                    show_default=False,
+                    err=True,
+                )
+            )
+            problem = field.problem(value)
+            if not problem:
+                break
+            # Asked again rather than stored: this command writes config.yaml,
+            # and a value the parser refuses would make every later `rite` run
+            # fail on the file this run created (S14/S19).
+            click.echo(f"  {problem}", err=True)
+        if field.optional and not value:
+            continue
         if field.config_path:
             # CONFIGURATION, not a credential. It is the same for everyone
             # on the team, it is not a secret, and putting it in the
@@ -2376,20 +2403,52 @@ def credential_set(
     # `--global` means, so it is what happens rather than an error.
     root_for_scope = _find_project_root()
     config_for_scope = None
+    config_writable = True
     if not global_ and (root_for_scope / ".rite").is_dir():
         from rite_ai.config.models import ProjectConfig
         from rite_ai.config.parse import ParseError, parse_config
 
         parsed = parse_config(root_for_scope / ".rite" / "config.yaml")
         if isinstance(parsed, ParseError):
+            # ⚠ **A problem elsewhere in config.yaml does not take this
+            # command out** (v0.7.0 dogfood S19). A channel name rite could
+            # not read used to answer every `rite credential set` with the
+            # parse error and exit 1 — including the runs that would have
+            # repaired the project's credentials. The namespace is recovered
+            # on its own so the secret still lands in THIS project's scope,
+            # and the unrelated problem is said rather than swallowed.
+            from rite_ai.config.parse import credentials_despite_config_error
+            from rite_ai.credentials.store import is_valid_namespace
+
+            recovered = credentials_despite_config_error(
+                root_for_scope / ".rite" / "config.yaml"
+            )
             click.echo(f"config error: {parsed.message}", err=True)
+            # ⚠ Only a namespace ALREADY RECORDED lets this go on. Generating
+            # one here would make `_ensure_namespace` write a config.yaml
+            # rebuilt from a near-empty `ProjectConfig`, destroying the file
+            # the user still has to repair — a far worse outcome than the
+            # refusal this replaces.
+            if recovered is None or not is_valid_namespace(recovered.namespace):
+                click.echo(
+                    "  this project has no credential namespace recorded yet, "
+                    "so there is nothing to scope a secret to until the line "
+                    "above is fixed. Fix it, or use --global to store "
+                    "machine-wide without it.",
+                    err=True,
+                )
+                raise SystemExit(1)
             click.echo(
-                "  fix .rite/config.yaml, or use --global to store "
-                "machine-wide without it",
+                "  continuing anyway: that is not a credential setting, and "
+                f"this project's namespace ({recovered.namespace}) was read on "
+                "its own, so the secret still lands in this project's scope. "
+                "Fix the line above before running a Manager.",
                 err=True,
             )
-            raise SystemExit(1)
-        config_for_scope = parsed if isinstance(parsed, ProjectConfig) else None
+            config_for_scope = ProjectConfig(credentials=recovered)
+            config_writable = False
+        else:
+            config_for_scope = parsed if isinstance(parsed, ProjectConfig) else None
 
     service = canonical_service(name)
     if service is not None:
@@ -2404,7 +2463,13 @@ def credential_set(
                 err=True,
             )
             raise SystemExit(2)
-        _set_service(service, global_, root_for_scope, config_for_scope)
+        _set_service(
+            service,
+            global_,
+            root_for_scope,
+            config_for_scope,
+            config_writable=config_writable,
+        )
         _echo_credential_status(extra)
         return
 

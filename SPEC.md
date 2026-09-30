@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.66 · **Date:** 2026-09-30
+**Version:** 0.24.67 · **Date:** 2026-09-30
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -7240,6 +7240,43 @@ answered `none`, `rite credential set jira` recorded both, `type` stayed `none`,
 and rite read no board at all. A project already on another board keeps it and
 is told how to switch; rite does not replace a board it did not choose.
 
+**Slack is set up by the same command (0.24.67).** `rite credential set slack`
+asks for the Owner's member id and the broadcast channel as well as the bot
+token, and writes the two non-secret ones to `slack:` in the committed config
+through the same `config_path` route. The token alone had been the whole
+command, on the reasoning that a channel is configuration rather than a
+credential — which is true, and is why it goes to `config.yaml`, but it had
+been read as "not this command's business": measured in the v0.7.0 dogfood
+(S14), `slack.owner_user` was left to be hand-edited, and until it was, a
+`refinement.questions_to: dm` round had nowhere to go. Both are optional —
+Enter skips them, because a token alone is a working broadcast-only setup. An
+answer the config parser would refuse is asked again rather than written:
+this command writes `config.yaml`, so storing one would leave every later
+`rite` run failing on the file this one created.
+
+**A channel is taken as it is typed (0.24.67).** `all-rite` and `#all-rite` are
+the same channel, wherever the name is given — the prompt above or
+`config.yaml` — and a `C…` or `G…` id is kept as it is, since `#` in front of
+one names a different conversation. `config.parse.normalize_slack_channel` is
+the single rule both entry points use. v0.7.0 dogfood S19: the bare name Slack
+shows in its own sidebar was refused as "neither a channel name starting with
+'#' nor a channel id", for a channel rite could name exactly. What is still
+unnameable after normalising is still refused.
+
+**And a refused `config.yaml` no longer takes the credential commands with it
+(0.24.67).** A `slack.broadcast_channel` the parser refused made every `rite
+credential set` answer with that parse error and exit 1 — including the runs
+that would have repaired the project (S19). The project's credential namespace
+is now recovered on its own, so the secret still lands in this project's scope,
+the unrelated problem is named, and the fields that would REWRITE `config.yaml`
+are skipped rather than asked for. The file is never rewritten while it is in a
+state rite could not read. Where no namespace has been recorded yet there is
+nothing to scope to, and the command still refuses: generating one would
+rewrite the very file the user has to repair. This is the reasoning
+`coordination` already carried — a malformed block narrows rather than failing
+the parse, because a raising parse takes out every command that reads
+`config.yaml`, including the ones that would repair it.
+
 **Every hint names the same command (0.24.57).** A hint for a missing
 credential names the service when a prompt can set the key (`rite credential set
 github`), and the key only where the service form cannot take it: a multi-line
@@ -7634,6 +7671,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.67 — Slack is set up by one command, and a channel is taken as typed (v0.7.0a4 lane 3: S14, S19).** §10.5 gains three paragraphs. S14: `Field.optional`, `Field.normalize`/`clean` and `Field.problem`; the `slack` service gains `owner_user` and `broadcast_channel`, both optional and both `config_path`, so one command writes the committed Slack config; `_set_service` prompts optionally, normalises, and asks again for a value the parser would refuse rather than writing a `config.yaml` that will not parse. S19: `config.parse.normalize_slack_channel` (a bare name gains `#`, a `C…`/`G…` id is untouched), applied by the parser and by the prompt, with `slack_field_problem` reusing `_slack_problem` so the two cannot drift; `credentials_despite_config_error` recovers the namespace alone, and `rite credential set` continues on a config error elsewhere — naming it, skipping the fields that would rewrite the file, and still refusing where no namespace is recorded. Tests: `tests/test_slack_setup_is_one_command.py`, with the channel invariant run across the full range of what a person types (bare, `#`-prefixed, padded, `C…`, `G…`, empty, dotted) through BOTH the prompt's cleaner and the file, so one entry point cannot accept what the other refuses; plus one command recording both settings, Enter leaving Slack off, a name typed where an id belongs being asked again, and a malformed channel not blocking a credential set. Six mutations (the normaliser returning its input, the two fields removed, the validation dropped, the hard exit restored, the rewrite guard dropped, an id given a `#`) each go red. Two existing tests changed rather than added to: a bare channel is now normalised, not a `ParseError`, and `credential set` on a refused config now continues while still never rewriting the file — the file-untouched assertion each was written for is kept, and the refusal it achieved that with is now a second test for the no-namespace case.
 
 **Changes in 0.24.66 — an item the host measures, and one attribution for every answer (v0.7.0a4 lane 5: S31, S22b).** New §6.7.5 and §6.7.6. S31: `Record.host_measured` (signed, emitted only when non-empty; `schema_problem` refuses indexes that are out of range, repeated, unordered or not integers); `ask`'s `[host]` tag, `Round.host_items`, the round's line naming it, the accept signing it; `rite refine accept --host-item`; `render_for_worker` and the board comment mark it (`HOST_TAG_FOR_WORKER`, `HOST_TAG_ON_BOARD`); `refinement/measurement.py` (`build`, `verifies`, `render`, `append`, `logged`, `latest_for`, `holds`) and `rite refine measured`; the publish snapshot keeps the started-on record's payload; `deliver._host_measurement_hold` holds a push or pull request. S22b: `refinement/attribution.py` (`answered_by`, `via_of`, `owner_user_of`, `describe`); `protocol.Reply.by`, carried into answers, the pending accept and provenance; `rite refine answer`; `record.how_agreed`, one wording for the board, TICKET.md and `rite refine status`. `record.extract_kind` generalises `extract`. Tests: `tests/test_a_host_measured_item_is_the_hosts.py` and `tests/test_every_answer_is_the_owners.py`, over real keys and git, with two invariants: every definition of done of one to four items with every set of marks, crossed with every combination of six result histories per marked item (none, pass, fail, forged, another record's, fail then pass), agrees across the record, TICKET.md, the board and the hold; and every answer route (DM, refinement channel, this machine, `rite refine answer`) with the owner set or unset leaves the same shape and the same owner on an answer and on the record. Twenty-three mutations each go red, one of them (the item-text binding) only after a test was added for it.
 

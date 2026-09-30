@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### `rite credential set slack` sets Slack up in one pass
+
+It now asks for your Slack member id and the broadcast channel as well as the
+bot token, and records the two that are not secrets in `.rite/config.yaml` —
+the same thing `rite credential set jira` does with the site and board key.
+Before this it stored the token and stopped, so `slack.owner_user` had to be
+hand-edited in, and until it was, a refinement round that asks you by DM had
+nowhere to go. Both are optional: press Enter to skip either, and a token on
+its own is still a working broadcast-only setup.
+
+### A Slack channel is taken as you type it
+
+`all-rite` and `#all-rite` are the same channel now, whether you type it at
+that prompt or write it in `.rite/config.yaml`; a `C…` channel id is kept as
+it is. The bare name Slack shows in its own sidebar used to be refused as
+"neither a channel name starting with '#' nor a channel id".
+
+### A broken line in `config.yaml` no longer blocks `rite credential set`
+
+A channel name rite could not read used to make every `rite credential set`
+print that error and stop — including the run that would have fixed the
+project. It now says what is wrong and carries on, storing the secret under
+this project's namespace. It will not rewrite `config.yaml` while the file is
+in a state it could not read, so the fields that go into the file are skipped
+until you have fixed it.
+
 ### An item only the host can measure is agreed as the host's
 
 Some definition-of-done items need a measurement a Worker cannot take inside
