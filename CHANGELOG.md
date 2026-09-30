@@ -13,7 +13,8 @@ you are shown in full; status and system lines are shown small and grey.
 
 Init now offers a Manager (`lead` on the Owner machine) and declares it the
 way `rite add manager` does, so `rite start lead` works without editing
-`.rite/config.yaml`. Decline it and init says how to add one later.
+`.rite/config.yaml`. Decline it, or run init with `--yes`, and init says how
+to add one later.
 
 ### `rite init` no longer says "Ready." about a project with nothing to work on
 

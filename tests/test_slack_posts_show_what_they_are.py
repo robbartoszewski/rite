@@ -33,8 +33,8 @@ from rite_ai.managers.slack import (
     SYSTEM,
     TAGS,
     Listener,
-    present,
-    ticket_in,
+    _present,
+    _ticket_in,
 )
 from tests.test_slack_posts_what_the_manager_says import Slack
 
@@ -64,7 +64,7 @@ def _tag_of(post: dict) -> str:
 class TestPresent:
     @pytest.mark.parametrize("kind", sorted(TAGS))
     def test_each_kind_has_its_tag_its_author_and_a_divider(self, kind):
-        blocks = present(kind, "the body", author="lead")
+        blocks = _present(kind, "the body", author="lead")
         assert _text(blocks[0]) == f"{TAGS[kind]} · lead"
         assert _text(blocks[1]) == "the body"
         assert blocks[-1] == {"type": "divider"}
@@ -73,7 +73,7 @@ class TestPresent:
         assert loud == (kind in LOUD) and muted == (kind not in LOUD)
 
     def test_a_needs_answer_post_names_its_ticket(self):
-        blocks = present(NEEDS_ANSWER, "which timeout?", author="lead", ticket="KAN-7")
+        blocks = _present(NEEDS_ANSWER, "which timeout?", author="lead", ticket="KAN-7")
         assert _text(blocks[0]) == "❓ *Needs your answer* · `KAN-7` · lead"
 
     def test_the_loud_kinds_are_exactly_the_ones_needing_the_person(self):
@@ -82,19 +82,19 @@ class TestPresent:
 
     def test_a_long_body_is_split_under_slacks_limits_and_capped(self):
         body = ("x" * 100 + "\n") * 2000
-        blocks = present(STATUS, body, author="lead")
+        blocks = _present(STATUS, body, author="lead")
         assert len(blocks) <= BLOCKS_MAX
         assert all(len(_text(b)) <= SECTION_CHARS for b in blocks)
         assert "`rite replies` has all of it" in _text(blocks[-2])
 
     def test_an_unknown_kind_is_refused(self):
         with pytest.raises(ValueError):
-            present("urgent", "x")
+            _present("urgent", "x")
 
     def test_the_ticket_is_read_from_rites_own_first_line(self):
-        assert ticket_in(f"{ASKING_LINE}\nwhich one?") == "KAN-7"
-        assert ticket_in("KAN-7 is merged") == ""
-        assert ticket_in("") == ""
+        assert _ticket_in(f"{ASKING_LINE}\nwhich one?") == "KAN-7"
+        assert _ticket_in("KAN-7 is merged") == ""
+        assert _ticket_in("") == ""
 
 
 # --- through the relay ----------------------------------------------------------

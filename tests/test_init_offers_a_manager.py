@@ -71,15 +71,15 @@ def _keys(root: Path):
     return c.managers, c.manager_roles
 
 
-def test_yes_declares_lead_and_says_so(tmp_path):
+def test_yes_declares_none_and_says_how(tmp_path):
+    """A declared Manager makes `rite doctor` report a one-machine project as
+    uncoordinated, so `--yes` declares none by default, and says how to add
+    one; `--config` declares one (below)."""
     root = _repo(tmp_path / "app")
     out = _init(root, "--yes")
-    assert "--yes: declared Manager 'lead' (preset lead)" in out
-    assert _found_by_start(root) == ["lead"]
-    names, roles = _keys(root)
-    assert names == ["lead"] and [(r.name, r.preset) for r in roles] == [
-        ("lead", "lead")
-    ]
+    assert _keys(root) == ([], [])
+    assert "no Manager is declared" in out
+    assert "rite add manager lead --preset lead" in out
 
 
 def test_accepting_the_default_declares_it_with_no_hand_edit(tmp_path):
@@ -160,7 +160,7 @@ def test_it_goes_through_add_managers_own_writer(tmp_path, monkeypatch):
         return real(*a, **kw)
 
     monkeypatch.setattr(managers, "declare_manager", spy)
-    _init(_repo(tmp_path / "app"), "--yes")
+    _init(_repo(tmp_path / "app"), input="y\n\n\n\n\n\nn\n")
     assert calls == [("lead", "lead")]
 
 
@@ -185,7 +185,7 @@ ANSWERS = {"accept": "\n", "decline": "n\n\n", "other": "n\nplanner\nplanner\n"}
     [
         (r, ro, a)
         for r, ro, a in itertools.product(ROUTES, ROLES, ANSWERS)
-        if r != "yes" or (ro, a) == ("owner", "accept")
+        if r != "yes" or (ro, a) == ("owner", "decline")
     ],
 )
 def test_whatever_is_declared_rite_start_finds_and_the_keys_agree(

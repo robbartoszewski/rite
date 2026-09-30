@@ -251,7 +251,8 @@ def test_yes_declares_none_and_says_so(tmp_path):
 def test_the_config_can_declare_one(tmp_path):
     root = _repo(tmp_path / "app")
     preset = tmp_path / "p.yaml"
-    preset.write_text("workers:\n  add: bob\n")
+    # With a Manager too (S15): `--yes` declares none by itself.
+    preset.write_text("workers:\n  add: bob\nmanagers:\n  add: lead\n  preset: lead\n")
     out = _init(root, "--yes", "--config", str(preset))
     assert (root / "workers" / "bob" / "app" / "main.go").is_file()
     assert "Ready. Start a Dispatch session" in out

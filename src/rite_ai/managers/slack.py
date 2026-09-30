@@ -314,7 +314,7 @@ BLOCKS_MAX = 50
 _QUESTION_FIRST_LINE = re.compile(r"^(.+?) · q[0-9a-f]{4} · ")
 
 
-def ticket_in(text: str) -> str:
+def _ticket_in(text: str) -> str:
     """The ticket a question names on its first line, the line
     `asking.raise_to_person` writes (`<subject> · q1a2b · … · reply in this
     thread`), or ""."""
@@ -335,7 +335,7 @@ def _chunks(text: str, size: int = SECTION_CHARS) -> list[str]:
     return pieces
 
 
-def present(kind: str, body: str, *, author: str = "", ticket: str = "") -> list:
+def _present(kind: str, body: str, *, author: str = "", ticket: str = "") -> list:
     """The blocks one post is shown as: its tag line (with the ticket and the
     author), its body, then a divider. Loud for what needs the person, muted
     for the rest. Never more than Slack takes: a body too long for the blocks
@@ -375,7 +375,7 @@ def _post(
 ) -> Posted:
     """Post `text` to a channel, a channel name, or a user id. Never raises.
 
-    With `kind` (S29), the post is also sent as blocks (`present`): `body`
+    With `kind` (S29), the post is also sent as blocks (`_present`): `body`
     (default `text`) under its tag line, with a divider after it. `text` is
     then the notification's fallback.
 
@@ -390,7 +390,7 @@ def _post(
     caller = call or _call
     payload = {"channel": channel, "text": text}
     if kind:
-        payload["blocks"] = present(
+        payload["blocks"] = _present(
             kind, text if body is None else body, author=author, ticket=ticket
         )
     if thread:
@@ -1339,7 +1339,7 @@ class Listener:
                 kind=STATUS if shown == pending.READING else shown,
                 body=text,
                 author=self.manager,
-                ticket=ticket_in(text) if shown == pending.NEEDS_ANSWER else "",
+                ticket=_ticket_in(text) if shown == pending.NEEDS_ANSWER else "",
             )
             if not sent.ok:
                 # Not marked read, so the next tick retries it — and the ones

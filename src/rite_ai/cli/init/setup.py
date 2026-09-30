@@ -267,9 +267,12 @@ def offer_a_manager(answers, preset, interactive: bool) -> str | None:
     validation, never a second copy of either. Returns the name declared, or
     one already declared, or None.
 
-    Default yes, and `--yes` takes it and says so: it writes two keys of
-    local config and reaches nothing. `--config` sets `managers.add: <name>`
-    (or `false`) and `managers.preset`."""
+    Default yes interactively. ⚠ **`--yes` declares none**, and the last line
+    says one is missing and how to add it: a declared Manager makes `rite
+    doctor` report this one-machine project as uncoordinated (no `remote`, no
+    `.rite/machine`), so declaring one by default would fail every scripted
+    init's first doctor. `--config` sets `managers.add: <name>` (or `false`)
+    and `managers.preset`, and declares it."""
     from rite_ai.config.managers import PRESETS, declare_manager
 
     coordination = answers.config.coordination
@@ -300,7 +303,7 @@ def offer_a_manager(answers, preset, interactive: bool) -> str | None:
             chosen = _ask_preset()
         how = ""
     else:
-        how = "--yes"
+        return None
     declared = declare_manager(
         coordination.managers, coordination.manager_roles, name, preset=chosen
     )
