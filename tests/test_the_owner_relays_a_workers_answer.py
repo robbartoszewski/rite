@@ -591,6 +591,40 @@ class TestOnlyTheUsersInstructionReachesAWorker:
             "a bystander's comment settled the Worker's question"
         )
 
+    def test_a_refused_reply_is_said_once_not_on_every_tick(
+        self, project, tmp_path, monkeypatch
+    ):
+        """⚠ A refusal that repeats is how a person learns to ignore the log.
+
+        The watcher runs at every poll, cycle boundary and wait tick, and a
+        bystander's comment stays in the inbox — the relay reads it without
+        consuming it, deliberately. So without recording the refusal the
+        "not relaying …" line would be written on every tick for as long as
+        the message sits there, which in a real run is the rest of the
+        session. Recorded in the same ledger as a carried answer, because the
+        question is the same one: has this MESSAGE been dealt with."""
+        root = project
+        _arrange(monkeypatch, tmp_path, PRESENT, PENDING)
+        monkeypatch.setattr(
+            "rite_ai.sandbox.worker_sandbox_status",
+            lambda w, r=None: _Status("running"),
+        )
+        _answer_arrives(root, _raised(root), _broadcast_context)
+
+        first: list[str] = []
+        second: list[str] = []
+        third: list[str] = []
+        for said in (first, second, third):
+            wq.relay(root, OWNER, said.append)
+
+        assert [line for line in first if "not relaying" in line], first
+        assert second == [] and third == [], (
+            f"the refusal repeated on later ticks: {second + third}"
+        )
+        # And the message really is still there — the relay reads without
+        # consuming, so "said once" cannot be an artefact of it being gone.
+        assert mailbox.read(root, OWNER, mailbox.INBOX), "the message was eaten"
+
     def test_the_owners_own_dm_reply_is_carried(self, project, tmp_path, monkeypatch):
         """The control. Without it, a relay that refused EVERYTHING would pass
         every test above while delivering S30 not at all."""
