@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.60 · **Date:** 2026-09-30
+**Version:** 0.24.61 · **Date:** 2026-09-30
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -4191,6 +4191,17 @@ fork contributed from did exactly that, and nothing said so. The warning comes
 before the question, and under `--yes`, while only an empty `.rite/` exists, and
 names the separate-root commands for this repository.
 
+**The existing-code route asks for the code when the path holds none (0.24.61,
+Robert, 2026-09-30).** A path with no code and no spec (a directory with
+nothing in it but hidden entries) is not read as if it held some: init says
+there is nothing there, skips "what is stale in it", and asks for a repository
+URL, offering it as a module (named from the URL). Accepted, it is registered
+and cloned through the same `add_module` as `rite add module`, before the hooks
+and CLAUDE.md are written, so they include it. Declined, or under `--yes`, init
+says no module is registered and gives the command. Measured on 0.7.0a2 (dogfood
+S11): an empty directory got "languages, structure and conventions will be taken
+from what's there", an empty brief, no module, and "Ready".
+
 If no repos found:
 
 ```
@@ -7466,6 +7477,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.61 — `rite init`'s existing-code route asks for the code when the path is empty (v0.7.0 dogfood S11; Robert's design).** §9.3 gains the paragraph. `questionnaire.holds_nothing`, `ask_for_the_code`, `module_name_for`; `InitAnswers.link`; `run_init` registers the link with `workspace.add_module` right after `modules.yaml` and carries it into the answers; `_read_changes` no longer claims to read an empty path. Tests through the real CLI with a local repository: the empty path is asked about, and the accepted link is registered, cloned on the remote's branch and named in CLAUDE.md; declining, saying no to the offer, and `--yes` each leave no module and say so; a path with code is not asked (control); an answer that is not a repository (a URL, `user@host:path`, or a local repository) is asked again, found when an older test's sentence was offered as a module. Seven mutations (never asking, the link not added, asking for a path with code, declining silently, the false claim restored, the module not carried into CLAUDE.md, any text accepted as a repository) each go red. `test_init_first_question`'s brief test now gives its path something in it, which is what it tests.
 
 **Changes in 0.24.60 — a project reads only its own tickets on a board it shares (v0.7.0 dogfood S1; Robert, 2026-09-29, option A).** New §6.1.1. `ticket_backend.scope_label`; `tickets/scope.py` (`Scoped`, `label_for`, `label_problem`, `sharing_problems`, `name_problems`, `unwrapped`); `machine_projects.py`; `create_backend_from_config` wraps a scoped board, with or without a root; `refinement.record` sees through every wrapper; `rite init` defaults the label and records the project; `rite start` refuses before anything starts; `rite doctor` reports it as `board scope:`. Tests: a scoped list excludes another project's tickets (with the unscoped control), a create is stamped, a ticket rite relabelled is not read back into another project's list, the JQL Jira is sent carries the label; init's default and record; an unusable label refused; start refuses on either side unscoped, on one shared label and on a Worker's name, and starts with both scoped and for another checkout of the same project; doctor flags it and is quiet when both are scoped. Thirteen mutations each go red. The v0.7.0 dogfood's board test sees through every wrapper now that init scopes each project.
 
