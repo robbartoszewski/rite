@@ -568,7 +568,7 @@ def _worker_modules(root: Path, worker: str, modules: list[Module]) -> list[Modu
     return [m for m in modules if m.name in wanted]
 
 
-def host_measurement_hold(root: Path, started) -> list[str]:
+def _host_measurement_hold(root: Path, started) -> list[str]:
     """Why this Worker's work must not be published yet (S31), or [].
 
     Read from the refinement record the Worker was STARTED on (the publish
@@ -684,7 +684,7 @@ def deliver(
 
     from rite_ai.workspace import git_ops
 
-    held = host_measurement_hold(root, started)
+    held = _host_measurement_hold(root, started)
     outcomes: list[Outcome] = []
     applied: set[str] = set()
     for module in modules:

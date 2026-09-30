@@ -25,7 +25,7 @@ from click.testing import CliRunner
 
 from rite_ai.config.parse import parse_config, parse_modules
 from rite_ai.publishing import record as publish_record
-from rite_ai.publishing.deliver import Outcome, host_measurement_hold
+from rite_ai.publishing.deliver import Outcome, _host_measurement_hold
 from rite_ai.refinement import accept, ask, attribution, measurement
 from rite_ai.refinement import key as refinement_key
 from rite_ai.refinement import record as rec
@@ -435,8 +435,8 @@ class TestPublishingWaits:
         tampered = replace(
             started, refinement=dict(started.refinement, host_measured=[0])
         )
-        assert host_measurement_hold(p.root, tampered)
-        assert "does not verify" in host_measurement_hold(p.root, tampered)[0]
+        assert _host_measurement_hold(p.root, tampered)
+        assert "does not verify" in _host_measurement_hold(p.root, tampered)[0]
 
     def test_no_key_holds(self, tmp_path, key, monkeypatch):
         p, record = self._started(tmp_path, key)
@@ -445,13 +445,15 @@ class TestPublishingWaits:
         started = publish_record.read(p.root, "alpha")
         assert (
             "cannot read its refinement key"
-            in host_measurement_hold(p.root, started)[0]
+            in _host_measurement_hold(p.root, started)[0]
         )
 
     def test_an_older_start_with_no_snapshot_holds_nothing(self, tmp_path, key):
         p = Project(tmp_path, "pull_request")
         p.start()
-        assert host_measurement_hold(p.root, publish_record.read(p.root, "alpha")) == []
+        assert (
+            _host_measurement_hold(p.root, publish_record.read(p.root, "alpha")) == []
+        )
 
 
 # --- the invariant, over every definition of done up to four items ------------
