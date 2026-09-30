@@ -31,7 +31,7 @@ refuses to open a relay on a shared app.
 If rite cannot reach Slack to check, it says so and leaves it at that, rather
 than reporting a problem it has not found.
 
-### `rite credential set slack` sets Slack up in one pass
+### `rite credential set slack` is one guided setup
 
 It now asks for your Slack member id and the broadcast channel as well as the
 bot token, and records the two that are not secrets in `.rite/config.yaml` —
@@ -40,10 +40,18 @@ Before this it stored the token and stopped, so `slack.owner_user` had to be
 hand-edited in, and until it was, a refinement round that asks you by DM had
 nowhere to go.
 
-Both are optional — press Enter to skip either. A channel with no member id is
-a working broadcast-only setup: rite posts status, and nothing typed in Slack
-instructs a Manager. But a token on its OWN leaves Slack switched off, because
-neither target is set, so the command now says so instead of looking like it
+It also checks the token against Slack as you give it (a read — it never posts
+anything to your workspace), asks again if Slack refuses it, and tells you if
+the app already belongs to another project, pointing at api.slack.com/apps and
+the `reactions:read` scope a new one needs. If Slack cannot be reached it says
+so and stores the token anyway.
+
+It ends on one line telling you where you stand: **ACTIVE**, naming the channel
+it posts to and whose DM it takes instructions from, or **INACTIVE** and what to
+add. Both answers are optional — press Enter to skip either. A channel with no
+member id is a working broadcast-only setup: rite posts status, and nothing
+typed in Slack instructs a Manager. A token on its OWN is INACTIVE, because
+neither target is set, and the command says so instead of looking like it
 finished the job.
 
 ### A Slack channel is taken as you type it

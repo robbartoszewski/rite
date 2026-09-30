@@ -2210,6 +2210,69 @@ def _apply_config_field(config, dotted: str, value: str) -> None:
         setattr(target, last, value)
 
 
+def _say_how_slack_stands(root: Path, config, app) -> None:
+    """The one summary `rite credential set slack` ends on: whose app it is,
+    and whether Slack is now ON.
+
+    Two things had been said in passing, and they are one question — "did that
+    work?" — whose answer was spread over a shared-app warning, a line saying
+    the token was stored, and nothing at all about whether Slack would now do
+    anything.
+
+    ⚠ Nothing here posts. The app was named by `auth.test` during the prompt,
+    one read for the whole run, and the binding is read from disk. A live post
+    to prove delivery belongs in `rite doctor`, where the person asked for a
+    check — a setup command that posts spams a workspace every time it is
+    re-run.
+    """
+    if (root / ".rite").is_dir():
+        if app is not None:
+            from rite_ai.managers.slack_app import sharing_for
+
+            shared = sharing_for(app, root)
+            if shared.kind == "shared":
+                click.echo(f"\n⚠ {shared.message}", err=True)
+        else:
+            # `auth.test` could not be asked, so which app this is cannot be
+            # told, so the binding cannot be looked up. Said, not guessed
+            # either way, and never counted as a collision.
+            click.echo(
+                "\n  could not check whether another project already uses "
+                "this Slack app, because Slack could not be asked which app "
+                "the token belongs to.",
+                err=True,
+            )
+    if config is None:
+        return
+    # ⚠ **Read off the RESULTING config, not off what this run answered**, so
+    # rotating a token on an already-configured project stays quiet. Slack is
+    # on only if it has a TARGET: `SlackConfig.enabled` is `owner_user or
+    # broadcast_channel`, so a token with both skipped stores a real
+    # credential and turns nothing on, under lines that say "stored" and
+    # "recorded" — and the next thing that happens is a refinement round with
+    # nowhere to go, far from here.
+    slack = config.slack
+    if slack.enabled:
+        who = (
+            f", and takes instructions from {slack.owner_user}'s DM"
+            if slack.owner_user
+            else " (broadcast-only: no owner set, so nothing typed in Slack "
+            "instructs a Manager)"
+        )
+        click.echo(
+            f"\nSlack is ACTIVE for this project: posts to {slack.broadcast}{who}."
+        )
+        return
+    click.echo(
+        "\n⚠ Slack is INACTIVE: the token is stored, but it has no target, "
+        "so nothing is posted and nothing is read. Add one and it is on — a "
+        "channel for status (`slack.broadcast_channel`), your member id for a "
+        "command channel (`slack.owner_user`), or both — by running this "
+        "again and answering, or in .rite/config.yaml.",
+        err=True,
+    )
+
+
 def _set_service(
     service_name: str, global_: bool, root, config, config_writable: bool = True
 ) -> None:
@@ -2234,6 +2297,8 @@ def _set_service(
                 err=True,
             )
         raise SystemExit(2)
+    if svc.name == "slack":
+        click.echo(f"Setting up Slack for {_project_label()}.")
     click.echo(f"{svc.label}")
     if svc.note:
         click.echo(f"  note: {svc.note}")
@@ -2241,6 +2306,7 @@ def _set_service(
     stored: list[tuple[str, str]] = []
     configured: list[tuple[str, str]] = []
     secrets: dict[str, str] = {}
+    app = None  # the Slack app `auth.test` named, when it could be asked
     for field in svc.fields:
         if field.config_path and not config_writable:
             # config.yaml is not in a state this command may rewrite (an
@@ -2265,6 +2331,25 @@ def _set_service(
                 )
             )
             problem = field.problem(value)
+            if not problem and svc.name == "slack" and field.name == "bot_token":
+                # ⚠ A READ, never a post (`auth.test`). Setting a credential
+                # must not put a message in anyone's channel: a person setting
+                # rite up is not announcing it, and a setup that posts spams a
+                # workspace every time it is re-run. A live POST belongs in
+                # `rite doctor`, where the person asked for a check.
+                from rite_ai.managers.slack_app import check_token
+
+                checked = check_token(value)
+                if checked.kind == "bad":
+                    # Slack ANSWERED and said no, so asking again is useful.
+                    click.echo(f"  {checked.message}", err=True)
+                    continue
+                if checked.kind == "unknown":
+                    # Could not ask ≠ refused. Storing it is right: the token
+                    # is probably fine, and refusing on an unreachable network
+                    # would leave the person unable to record it at all.
+                    click.echo(f"  {checked.message} — storing it anyway", err=True)
+                app = checked.identity
             if not problem:
                 break
             # Asked again rather than stored: this command writes config.yaml,
@@ -2334,48 +2419,8 @@ def _set_service(
         for path, value in configured:
             click.echo(f"  {path:<32} {value}")
 
-    # ⚠ **Asked HERE, where the token arrives** (v0.7.0 dogfood S22a). The
-    # binding was only consulted when a listener opened, so a token belonging
-    # to another project was accepted, stored and configured, and the
-    # collision surfaced at `rite start` — after the app had been made and the
-    # project set up, with "create a new Slack app", the heaviest step in the
-    # setup, offered last. Said now, the next step is the right one.
-    #
-    # NOT a refusal: the token is stored either way. It is a real token, the
-    # person may be moving a project onto its own app in either order, and
-    # refusing to store it would leave them with no way to record the one they
-    # just made. `rite start` still refuses to OPEN a listener on it, which is
-    # where refusing belongs.
-    if svc.name == "slack" and secrets.get("bot_token") and (root / ".rite").is_dir():
-        from rite_ai.managers.slack_app import sharing
-
-        shared = sharing(secrets["bot_token"], root)
-        if shared.kind == "shared":
-            click.echo(f"\n⚠ {shared.message}", err=True)
-        elif shared.kind == "unknown":
-            click.echo(
-                f"\n  could not check whether another project already uses "
-                f"this Slack app — {shared.message}",
-                err=True,
-            )
-
-    # ⚠ **An off switch is said, not left to be discovered.** Slack is on only
-    # if it has a target: `SlackConfig.enabled` is `owner_user or
-    # broadcast_channel`, so a token with both skipped stores a real
-    # credential and turns nothing on. Every line above it says "stored" and
-    # "recorded", which is what a finished setup looks like — and the next
-    # thing that happens is a refinement round with nowhere to go, far from
-    # here. Read off the RESULTING config, not off what this run answered, so
-    # a run that skips both on a project already configured stays quiet.
-    if svc.name == "slack" and config is not None and not config.slack.enabled:
-        click.echo(
-            "\n⚠ the token is stored, and Slack is OFF: it has no target, so "
-            "nothing is posted and nothing is read. Give it one — a channel "
-            "for status (`slack.broadcast_channel`), your member id for a "
-            "command channel (`slack.owner_user`), or both — by running this "
-            "again and answering, or in .rite/config.yaml.",
-            err=True,
-        )
+    if svc.name == "slack" and secrets.get("bot_token"):
+        _say_how_slack_stands(root, config, app)
 
 
 @credential.command("set")
