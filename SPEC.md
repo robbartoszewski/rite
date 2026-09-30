@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.70 · **Date:** 2026-09-30
+**Version:** 0.24.71 · **Date:** 2026-09-30
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -5700,6 +5700,29 @@ wall-clock window**, both of which rite can enforce exactly. It is named as a
 count in the interface and in the command's output, never as a spend figure
 it cannot substantiate.
 
+✅ **A refinement round is NOT a session start (0.24.71, v0.7.0a4 dogfood
+S26).** A round is rite composing and sending text from the supervisor,
+outside any session, at a tick that was going to happen anyway. Charging one
+against this ceiling would let a project whose board needs refining spend its
+whole budget refining and never start the work. `cycles` is appended only
+where an engine is actually launched, and
+`tests/test_a_refinement_round_is_not_a_session.py` pins it across every
+ceiling of 1–4 crossed with 0–5 rounds a tick.
+
+⚠ **S26 was filed as "`--sessions` caps concurrent Workers (machine-thrash
+protection)", which conflates two different caps**, and the correction
+belongs here because the wording is how the confusion spreads:
+
+- **`--sessions`** bounds the COUNT of engine session STARTS in one Manager
+  run. Not concurrency — a Manager runs one session at a time — and not
+  spend, which is the window's job, as the paragraph below says at length.
+- **`sandbox.max_concurrent_workers`** bounds how many Workers run AT ONCE.
+  That is the machine-thrash protection, enforced by
+  `schedule.check_worker_cap` at schedule-design time and again at spawn,
+  refused rather than clamped in both (§2.5.9, §2.7.5).
+
+Neither is the other, and a refinement round is charged against neither.
+
 ⚠ **A count ceiling does not bound cost, and this section will not pretend
 otherwise.** Three sessions may run arbitrarily long and burn arbitrarily
 much. §9.14.5's own line — "a ceiling enforced after the fact is a report,
@@ -6918,6 +6941,60 @@ scanned.
 decisions above.** Robert accepted it on 2026-09-25, and the label stays
 because it records where the rule came from.
 
+#### 9.16.5a. A Worker's question is answered through the Owner (S30, 0.24.71)
+
+**The person answers in the Slack thread, and the Owner relays it into the
+Worker.** Robert's decision, 2026-09-30, and the only shape available: a
+sandboxed Worker never appears in Claude Code's session list
+(`sandbox.worker_pane`), so nothing can message it directly, while the Owner
+already supervises it, holds its sandbox handle, and runs outside every
+boundary.
+
+⚠ **The claim that had stopped this was wrong about the protocol.**
+`worker_questions` said in its own docstring that it "does not deliver an
+answer back", because "yoloAI 0.11.0 has no way to send input to a running
+agent". That is true of the agent's SESSION and irrelevant: yoloAI's injected
+`CLAUDE.md` tells the agent to write `question.json` and then to POLL
+`answer.json`. The return path is a file the Worker is already watching, in
+the directory rite already reads the question from
+(`yoloai files <name> path`). The last dogfood run paid for the mistake — the
+operator had to `yoloai attach` the Worker and type an answer rite had
+already carried to Slack.
+
+**How it runs.** `sandbox.questions.deliver_answer` writes the answer file;
+`worker_questions.relay` matches an answer to its question by the id
+`asking` wrote into rite's first line — the same rule the Slack relay uses
+for a refinement round, imported rather than restated — and rides the
+supervisor's existing watcher, so it runs at every poll, cycle boundary and
+wait tick, with or without an Owner session. It reads the inbox WITHOUT
+consuming it: the answer is the Owner's mail too, and taking it would remove
+it from the Manager's next prompt with nobody saying so.
+
+⚠ **Isolation, stated rather than implied.** This crosses from the host into
+a sandboxed Worker's exchange directory and **changes no sandbox rule**: no
+flag, no grant, no permission, and nothing in it can be made to turn a
+Worker's sandbox off. What is written is data, in the directory yoloAI
+created for this exchange, read by the agent because its own runtime
+instructions say to. The alternative — `tmux -S … send-keys` into the live
+pane — is what `worker_pane` calls "a separate, consequential act" and is
+deliberately not taken.
+
+**An answer that cannot land comes back to the person.** Delivery is refused,
+and reported, when the sandbox is gone, when yoloAI could not be asked, when
+the Worker's status was never established, or when nothing is waiting — an
+answer to a question nobody asked would be read against the Worker's NEXT
+question. `Undeliverable` says which, and whether the Worker is gone for good
+(a different sentence: the work needs starting again). Silence here is the
+defect the whole path exists to remove — a person who answers and hears
+nothing believes the Worker is working.
+
+⚠ **What it cannot tell.** A sandbox whose agent has exited while the sandbox
+lingers still has its exchange directory and may still show a pending
+question; the answer is written and reported delivered, and nothing here
+observes that nobody is polling. The status check narrows that window and is
+why a missing status is refused rather than assumed. The claim is "written
+where it is polled for", never "read".
+
 #### 9.16.6. Several projects in one workspace: one Slack app per project (D-101)
 
 **Decided 2026-09-25 (Robert).** Companies run several projects in one Slack
@@ -7882,6 +7959,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.71 — a Worker's question is answered through the Owner, and a refinement round is not a session (v0.7.0a4 lane 6: S30, S26).** New §9.16.5a; §9.14.5 gains the refinement paragraph and the correction of S26's own wording. **S30:** `sandbox.questions.deliver_answer`, `Delivered`, `Undeliverable`; `worker_questions.relay`, joined to the supervisor's existing watcher ahead of `surface` so an arriving answer settles its question before the same tick re-raises it. The answer goes to `answer.json`, which yoloAI's own injected instructions tell the agent to poll — the docstring claiming "no way to send input to a running agent" was true of the SESSION and wrong about the protocol, and cost the last dogfood run an operator `yoloai attach`. No sandbox rule changes: no flag, no grant, no permission, and the `tmux send-keys` route into the live pane is deliberately not taken. Delivery is refused and REPORTED when the sandbox is gone, yoloAI could not be asked, the status was never established, or nothing is waiting. **S26:** a round is charged against neither cap, and the two caps `--sessions` (a count of engine session starts) and `sandbox.max_concurrent_workers` (concurrency, the machine-thrash protection) are distinguished. Tests: `tests/test_the_owner_relays_a_workers_answer.py`, whose invariant is all 45 combinations of five liveness answers × three exchange-directory states × three question states, asserted as an exact iff; and `tests/test_a_refinement_round_is_not_a_session.py`, every ceiling 1–4 crossed with 0–5 rounds a tick. Eight mutations each go red, two of them (the unestablished-status branch, the relayed-message ledger) only after a test was added: both were behaviour-preserving until something observed what they uniquely prevent.
 
 **Changes in 0.24.70 — each Slack post says what it is (S29), and `rite init` offers a Manager (S15) (v0.7.0a4 lane 4).** New §9.16.8; §9.3's S15 line. S29: `slack._present`, `TAGS`, `LOUD`, `_ticket_in`, `_chunks`; `_post(kind=, body=, author=, ticket=)` sends `blocks` beside the unchanged `text`; every post the relay makes is tagged (start, stop, replies, thread posts, the notes root, the check-in mirror); `pending.kind_of` (`NEEDS_ANSWER`, `NEEDS_YOU`, `READING`) over `_tracked`. S15: `cli/init/setup.offer_a_manager` through `config.managers.declare_manager`, `DEFAULT_MANAGER`, `_ask_preset`; `what_is_missing` names a missing Manager; `--yes` declares none (a declared Manager makes `rite doctor` report a one-machine project as uncoordinated, as S16's command does); Lane 1's TODO seam removed. Tests: `tests/test_slack_posts_show_what_they_are.py`, whose invariant runs every sequence of one to three posts over six message kinds (a question naming a ticket, one naming none, an unknown kind, a reply, a check-in with questions, one without), by one author and by two alternating in one conversation: every post has exactly one tag naming its author and ends in a divider, is loud exactly when `pending` waits on it, and names the ticket exactly on a question that names one; `tests/test_init_offers_a_manager.py`, whose invariant runs three routes × two machine roles × accept/decline/another (and bare `--yes`): the keys agree, `configuration_problems` is empty, `rite start`'s own resolver finds exactly what was declared, and the last line says so exactly when none was. Nineteen mutations each go red. Existing init tests answer the Manager question explicitly; one Slack test's whole-payload assertion now checks the blocks it carries.
 
