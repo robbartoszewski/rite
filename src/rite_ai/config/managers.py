@@ -646,10 +646,21 @@ def effective_model(role: ManagerRole) -> str:
     if role.engine == HUMAN:
         return f"manager {role.name}: a person, no model"
     if role.is_local:
+        # ⚠ S35, as a NOTE and not a refusal. The window is pinned into the
+        # model, so the server serves it to any client; an agent rite has no
+        # env mapping for is simply not TOLD the number. S33 owns the refusal,
+        # and it refuses the genuinely unenforceable case: no window declared.
+        from rite_ai.local.enforcement import for_agent
+
         window = (
-            f"a {role.context_window}-token window pinned into the model"
-            if role.context_window
-            else "NO context_window declared, so `rite start` refuses it"
+            "NO context_window declared, so `rite start` refuses it"
+            if not role.context_window
+            else f"a {role.context_window}-token window pinned into the model"
+            if for_agent(role.agent) is not None
+            else (
+                f"a {role.context_window}-token window pinned into the model, "
+                f"which agent {role.agent!r} is not told"
+            )
         )
         return (
             f"manager {role.name}: {role.model} at {role.endpoint}, "

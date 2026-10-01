@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.74 · **Date:** 2026-10-01
+**Version:** 0.24.75 · **Date:** 2026-10-01
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -2518,6 +2518,48 @@ wrong path join, a broad `pkill`, a `tmux kill-server`, a force-release
 matched by path. The tickets and the open questions (where per-instance
 configuration lives, whether Workers belong to a Manager, a per-Manager
 worker cap) are in `docs/design/V070_RELEASE_PLAN.md`, track MM.
+
+
+#### 5.4.9. A local Manager's permission mode is `auto`, and that is not a boundary
+
+**`GOOSE_MODE=auto` is the supported posture for a local (Goose) Manager, and
+rite places it on the pane rather than inheriting it.** Settled 2026-10-01.
+
+**Why there is no choice to make.** B4d measured both modes in a headless run:
+under `auto` Goose exits 0 and will run `rm` on a file unattended; under
+`approve` it exits **1** on the first tool call — *"Tool approval required in
+non-interactive mode … Approve/SmartApprove modes require an interactive
+terminal."* `GOOSE_MODE` is whole-session, so there is no per-command refusal
+in between. The alternative to `auto` is therefore not a safer Manager, it is
+a Manager that dies before it does anything.
+
+⚠ **That `approve` fails FAST rather than hanging is the part worth keeping.**
+Defect class 15 is *"a prompt is not an exception, it is the absence of an
+answer"*, and a headless agent blocked on an approval nobody can give would be
+exactly that. It does not block. So the failure mode is loud, which is why
+`auto` can be chosen on its merits rather than to avoid a hang.
+
+⚠ **`auto` is not a containment decision and must never be recorded as one.**
+Containment for a local Manager comes from the seatbelt profile its pane runs
+inside (§5.4, D-76 as superseded), never from this value. A local Manager run
+on the host outside that profile is an unconstrained agent with the operator's
+own file and network access. Stated here because "the permission mode is
+settled" reads like a safety property and is not one.
+
+**Why rite places the value instead of letting Goose default.** An operator
+with `GOOSE_MODE=approve` exported in their shell would otherwise get a
+Manager that dies on its first tool call, and one with nothing exported would
+get Goose's own default, which is `auto` by accident rather than by rite's
+decision. `engines.GOOSE.permission_env` names the destination and
+`supervise` puts the value there, on the pane's own environment. An earlier
+version knew only that permission was *not* argv for Goose, which was enough
+to refuse writing a flag and not enough to put the value anywhere — a refusal
+that leaves a value homeless is worse than no refusal.
+
+**This changes no behaviour.** `supervise` has placed `auto` since the
+permission destination landed, and a test has asserted it. What was open was
+the *ruling*: the adapter's own docstring said the question was "not yet
+settled" while the code had already chosen. The record now matches the code.
 
 ### 5.5. Egress — where an agent may talk (0.8.0)
 
@@ -7995,6 +8037,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.75 — a local Manager's permission mode is settled as `auto`, and said not to be a boundary (v0.7.0 local tier: 1c).** New §5.4.9. No behaviour changes: `supervise` has placed `GOOSE_MODE=auto` on a local Manager's pane since the permission destination landed (`engines.GOOSE.permission_env`), and `tests/test_the_permission_reaches_the_engine.py` has asserted it, including that an operator's exported `GOOSE_MODE=approve` is overridden. What was open was the ruling: `local/goose_agent.py`'s `mode` docstring said B4d "is measuring" the question and it "is not yet settled" while the code had already chosen, so a reader was told the opposite of what ran. The ruling and its reason are now recorded in both places — and the reason is that `approve` CANNOT work headless, not that `auto` is safe: B4d measured `auto` exiting 0 having run `rm` unattended, and `approve` exiting 1 on the first tool call with "Tool approval required in non-interactive mode", with no per-command mode in between because `GOOSE_MODE` is whole-session. ⚠ Recorded with the limit that makes it honest: `auto` is **not** a containment decision, containment comes from the seatbelt profile the pane runs inside (§5.4, D-76 as superseded), and a local Manager host-run outside that profile is an unconstrained agent with the operator's file and network access. That `approve` fails fast rather than hanging is kept as the reason the choice is not forced by defect class 15. Tests: `tests/test_the_local_managers_permission_mode_is_settled.py` pins the posture at every layer that could drift — `GooseAgent.mode`'s default, the value the agent puts in the environment, `engines.GOOSE.permission_env`'s destination, and the placement the real supervisor computes with and without an operator `GOOSE_MODE` — plus a guard that the adapter no longer describes the question as unsettled. Four mutations (the default changed to `approve`, the agent not placing the mode, the destination emptied, the docstring's "not yet settled" restored) each go red.
 
 **Changes in 0.24.74 — every local Manager declares its context window, whatever its agent (v0.7.0a4 S33).** `f340103` (0.24.25) made `rite start` refuse, and `rite doctor` warn about, a local Manager with no `context_window`, but only for `agent == "goose"`, the one local agent then; any other agent a role names reached a launch on its server's default window, which cannot be read before the model loads and cuts an over-long prompt from the front with no error (S34), and `rite doctor` described it only as "the server's default window". Now one predicate, `config.managers.window_undeclared` (a local role with no window), is what `rite doctor`'s probe, `effective_model` and `rite start` all ask; `supervise._window_refusal` asks it on the start path FIRST, before `permission_placement` (which refuses an agent rite has no spelling for, and asked first would tell such a Manager the wrong thing); the refusal and the doctor line no longer name Goose. A Claude or human Manager is untouched: the start path reads nothing for a Manager with no agent. A declared window below the minimum was already refused at parse for every local engine and is unchanged. Tests: `tests/test_every_local_agent_declares_its_window.py`, the invariant over five agent names × declared, larger and undeclared windows through the probe, `effective_model` and the start refusal, the real start path's ordering for every agent rite cannot launch, and Claude and human controls; `test_local_engine_probe.py`'s fixture now declares a window, since an `opencode` role with none had been pinned as having no problems, which was S33 itself. Seven mutations (the Goose gate back in the predicate, in doctor's probe and in `effective_model`; the start path not asking; asking after `permission_placement`; the refusal never firing; the refusal naming Goose) each go red. `docs/guide.md` says every local Manager. Not widened here: the Ollama-log check for a cut prompt (`_say_if_the_window_was_cut`) is still Goose-only; it detects, it does not refuse.
 

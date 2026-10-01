@@ -2562,12 +2562,22 @@ def _engine_model_env(root: Path, manager: str, agent: str):
     the operator's GLOBAL config instead, silently. Measured 2026-09-25:
     declared `qwen3:8b`, ran `qwen3-vl:8b-instruct`.
     """
-    if agent != "goose":
+    # ⚠ **EVERY LOCAL AGENT, NOT GOOSE (S35).** This read `agent != "goose"`,
+    # and it is the FIRST line of the function — so for any other local agent
+    # it returned before `pin_window` below ever ran. S33 made the window
+    # DECLARATION required of every agent, and that is right, but the
+    # declaration was then honoured for Goose alone: a Manager on another
+    # agent passed S33's check and launched with nothing pinned, on the
+    # server's default. Declaring a window you do not get is worse than being
+    # refused for not declaring one.
+    #
+    # An empty `agent` is a CLAUDE Manager (S33's `_window_refusal` says so
+    # too), and its path is exactly what it was.
+    if not agent:
         return {}, "", ""
     from urllib.parse import urlsplit
 
     from rite_ai.config.parse import ParseError, parse_config
-    from rite_ai.local.goose_agent import goose_environment
 
     parsed = parse_config(root / ".rite" / "config.yaml")
     if isinstance(parsed, ParseError):
@@ -2608,7 +2618,21 @@ def _engine_model_env(root: Path, manager: str, agent: str):
     # with no error, and only Ollama's log says so (plan, Track MS).
     if not role.context_window:
         return {}, _undeclared_window(manager), ""
+    # ⚠ **A DISPATCH, NOT A REFUSAL (S35, corrected against S33).** An
+    # earlier version of this refused an agent rite has no env mapping for,
+    # even with a window declared. That was wrong, and the reason is
+    # `pin_window`'s own contract: it gives "a model that is served with
+    # exactly `window` tokens, whatever the server's default" — the pin goes
+    # INTO THE MODEL on the server, so Ollama serves that window to ANY
+    # client. `GOOSE_CONTEXT_LIMIT` only tells Goose the number so it can
+    # compact at 80%; it is not the enforcement. So an unmapped agent is
+    # enforced too, and refusing it would have refused a Manager that works.
+    #
+    # What an unmapped agent does NOT get is being TOLD its window, and that
+    # is said rather than hidden: an agent that does not know will run into
+    # the limit instead of compacting before it.
     from rite_ai.local.context_window import pin_window
+    from rite_ai.local.enforcement import for_agent, not_told
 
     pinned = pin_window(role.endpoint, role.model, role.context_window)
     if pinned.problem:
@@ -2623,12 +2647,19 @@ def _engine_model_env(root: Path, manager: str, agent: str):
     # What pinning wrote to the operator's model library, said at the start:
     # `context_window.py`'s rule is that rite names anything it puts there
     # and says how to remove it.
+    note = pinned.detail if pinned.created else ""
+    enforcement = for_agent(role.agent)
+    if enforcement is None:
+        # Pinned for everyone; only the agent-specific env is skipped. Handing
+        # an agent `GOOSE_CONTEXT_LIMIT` it does not read would be worse than
+        # handing it nothing, and pretending it had been told would be worse
+        # than both.
+        said = not_told(role.agent, role.context_window)
+        return {}, "", f"{note} {said}".strip() if note else said
     return (
-        goose_environment(
-            role.endpoint, pinned.model, context_limit=role.context_window
-        ),
+        enforcement.environment(role.endpoint, pinned.model, role.context_window),
         "",
-        pinned.detail if pinned.created else "",
+        note,
     )
 
 

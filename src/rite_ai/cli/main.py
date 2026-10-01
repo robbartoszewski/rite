@@ -3584,7 +3584,7 @@ def add_manager_cmd(
       rite add manager planner --preset planner
       rite add manager scribe --duties spec,plan-review
       rite add manager small --engine local:small --endpoint http://localhost:11434 \
-          --model qwen3:8b --agent goose --context-window 32768
+          --model qwen3.8:latest --agent goose --context-window 32768
     """
     from rite_ai.cli.init.scaffold import write_config
     from rite_ai.config.managers import declare_manager
@@ -7052,6 +7052,24 @@ def spec_stamp(units: tuple[str, ...], all_: bool) -> None:
                 failed = True
                 continue
             targets.append(read)
+
+    if not targets and not failed:
+        # ⚠ **SAID, because silence read as success.** `--all` over a project
+        # with no derived files printed NOTHING and exited 0, so a person who
+        # had just run `rite spec index` believed their units were stamped and
+        # had none. Naming a unit has always refused clearly ("no derived file
+        # at … — write it first"); `--all` now answers in the same voice.
+        # Non-zero, because nothing was stamped and the caller asked for
+        # stamping — `rite spec verify` is the command that reports.
+        where = units_dir(root).relative_to(root)
+        click.echo(
+            f"nothing to stamp: no derived unit text in {where}. `rite spec "
+            "index` writes the index; the derived text for each unit is "
+            "written by hand (or by a session) and stamped after. "
+            "`rite spec status` lists which units have none.",
+            err=True,
+        )
+        raise SystemExit(1)
 
     for target in targets:
         result = stamp(target, by_id)
