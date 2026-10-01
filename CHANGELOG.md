@@ -1,6 +1,18 @@
 # Changelog
 
-## Unreleased
+## 0.7.0a5 (2026-10-01) — alpha: init finishes what it starts, and the publish gate runs behind someone else's
+
+⚠ **Still an alpha, cut for the same dogfood** (a real contribution to yoloAI
+through rite). This one is the setup pass: seven things `rite init` left for
+you to do by hand, and a security fix — rite's publish gate was installed
+nowhere at all on a machine with a global `core.hooksPath`. Not installed by
+default: `install.sh` still installs 0.6.0 unless you ask for this one
+(`RITE_VERSION=v0.7.0a5`). Everything 0.7.0a1 to 0.7.0a4 said is and is not in
+it still holds.
+
+**Upgrading does not update a project's files.** `rite update --files-only
+--dry-run` shows what would change in an existing project, and `rite update
+--files-only` applies it.
 
 ### `rite init` finishes the job it starts
 
@@ -77,6 +89,17 @@ since moving the board changes what every ticket command reads. With nothing
 attached to answer it does not ask and does not move. Accepting it clears the
 fields that described the old board, and names each one, so `config.yaml` does
 not go on describing two.
+
+### A local Manager on any other agent is told its window, or told it is not
+
+A local Manager running something other than Goose was handed
+`GOOSE_CONTEXT_LIMIT` — a variable that agent does not read — so it was told
+its context window in a vocabulary it could not understand, and nothing said
+so. The window itself was always enforced (it is pinned into the model on the
+server, so it holds for any client); what was missing was the agent knowing
+the number, which is the difference between compacting before the limit and
+meeting it. rite now says that out loud for an agent it has no mapping for,
+instead of handing it Goose's variable.
 
 ### A local Manager works one subtask at a time: `rite local step`
 
