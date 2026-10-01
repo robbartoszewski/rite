@@ -206,6 +206,14 @@ def run_subtask(
         )
         outcome.agent_claimed = report.claimed_success
         outcome.infrastructure_fault = report.infrastructure_fault
+        if report.summary:
+            # ⚠ KEPT, because discarding it hid the first real failure. The
+            # agent refused before its turn and said why in `summary`; the
+            # outcome carried only `claimed_success`, so the operator saw a
+            # verify failing on a missing file and nothing about the turn
+            # never having happened. The agent's words are evidence about the
+            # agent — the same reason the disagreement below is kept.
+            outcome.notes.append(f"the agent said: {report.summary}")
 
         # rite runs the verify itself. The agent's report is not consulted to
         # decide whether to run it: a verify skipped because the agent said it

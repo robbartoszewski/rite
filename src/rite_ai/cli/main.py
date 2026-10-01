@@ -2024,6 +2024,58 @@ def _partial_reads(status) -> list[tuple[str, str]]:
 
 
 @cli.group()
+def local() -> None:
+    """Run a local-model Manager's work, one subtask at a time."""
+
+
+@local.command("step")
+@click.argument("manager")
+@click.argument("ticket")
+def local_step(manager: str, ticket: str) -> None:
+    """Run the next planned subtask of TICKET as local Manager MANAGER.
+
+    \b
+    ⚠ **One subtask, not the ticket.** The agent is given that subtask and
+    its spec slice and nothing else; rite runs the verify itself, commits the
+    branch itself, and records the outcome itself. Two real runs of a
+    `qwen3:8b` Manager on a whole ticket spent their whole window on detours
+    and reported nothing, which is what this replaces.
+
+    \b
+    ⚠ A plan arrives approved or nothing runs. rite has no decomposer yet, so
+    a decomposition is authored by hand and approved by a plan-review holder.
+
+    Examples:
+      rite local step small KAN-7
+    """
+    from rite_ai.local.step import take_one_step
+
+    root = _require_project_root()
+    step = take_one_step(root, manager, ticket)
+    if step.problem:
+        click.echo(f"nothing ran: {step.problem}", err=True)
+        raise SystemExit(1)
+    verdict = "accepted" if step.accepted else step.status
+    click.echo(f"{step.ticket} {step.subtask}: {verdict}")
+    if step.branch:
+        at = f" @ {step.commit[:8]}" if step.commit else ""
+        click.echo(f"  branch {step.branch}{at}")
+    if step.claim_disagreed:
+        # The honesty signal, said out loud rather than buried in a record:
+        # the agent reported one thing and rite's own verify found another.
+        click.echo(
+            "  ⚠ the agent's claim disagreed with the verify — kept as "
+            "evidence about the agent, not about the work"
+        )
+    for line in step.lines:
+        click.echo(f"  {line}")
+    if step.verify_output and not step.accepted:
+        click.echo("  verify said:")
+        for line in step.verify_output.splitlines()[:20]:
+            click.echo(f"    {line}")
+
+
+@cli.group()
 def credential() -> None:
     """Manage credentials."""
 
