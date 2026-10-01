@@ -371,7 +371,40 @@ def _ask_preset() -> str:
 # --- the last line ------------------------------------------------------------
 
 
+NO_BOARD = (
+    "no ticket board is configured (`ticket_backend.type: none`), so `rite "
+    "start` will find nothing to work on: `rite credential set jira` asks for "
+    "the site, your account email, an API token and the project key, and "
+    "records `ticket_backend.type`, `ticket_backend.site` and "
+    "`ticket_backend.projects.workers` from your answers"
+)
+
+NO_ROUTE_FOR_QUESTIONS = (
+    "refinement questions go to your Slack DM (`refinement.questions_to: "
+    "dm`) but `slack.owner_user` is empty, so a round has nowhere to be "
+    "delivered: `rite credential set slack` asks for a bot token and your "
+    "member id (U…) and records `slack.owner_user`. Until then a round "
+    "reaches you only through `rite replies`, and you answer it at the host "
+    "with `rite refine answer`"
+)
+
+
 def what_is_missing(root: Path, answers, worker: str | None) -> list[str]:
+    """Everything that would stop this project working, as rows for the last
+    line. No rows means "Ready.", so a row missing here is a project told it
+    is ready and is not.
+
+    ⚠ **The workspace is not the work.** This checked that a Manager, a module
+    and a Worker existed and stopped there, so a project whose
+    `ticket_backend.type` was still `none` finished init with "Ready. Start a
+    Dispatch session" — measured in the v0.7.0 dogfood, where a4's changelog
+    already claimed init "no longer says 'Ready.' about a project with
+    nothing to work on". The board is where the work comes from.
+
+    🔴 **Rows point at the command that does the wiring, never at a file to
+    edit.** init does not write backend config — `rite credential set` does,
+    from `Field.config_path` — and a row saying "set this in config.yaml"
+    would be rite telling someone to hand-edit what it has a command for."""
     missing = []
     if not answers.config.coordination.managers:
         missing.append(
@@ -385,6 +418,16 @@ def what_is_missing(root: Path, answers, worker: str | None) -> list[str]:
             f"no Worker is declared, so `rite start` would wait for one forever: "
             f"`rite add worker {DEFAULT_WORKER_NAME}`"
         )
+    config = answers.config
+    if config.ticket_backend.type == "none":
+        missing.append(NO_BOARD)
+    elif config.refinement.questions_to == "dm" and not config.slack.owner_user:
+        # ⚠ `elif`, following `rite doctor`'s own rule: a project with no
+        # board refines nothing, so the route for refinement questions is not
+        # a problem it has yet — the board row above is. Two rows describing
+        # one unconfigured project would make the second read as noise, which
+        # is how a row stops being read at all.
+        missing.append(NO_ROUTE_FOR_QUESTIONS)
     return missing
 
 
