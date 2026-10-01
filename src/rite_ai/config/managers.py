@@ -618,6 +618,24 @@ def configuration_problems(
     return problems
 
 
+def window_undeclared(role) -> bool:
+    """A local Manager that declares no `context_window`, which `rite start`
+    refuses and `rite doctor` warns about (S33).
+
+    ⚠ **Every local agent, not Goose alone.** The rule came with `f340103`
+    gated on `agent == "goose"`, the only agent then; nothing about it is
+    Goose's. A model served by an endpoint takes that server's default window
+    unless rite sets one, the default cannot be read before the model loads,
+    and a prompt over it is cut from the front with no error (S34: 4096 on
+    this Mac, `truncating input prompt limit=2050 prompt=5583`). Gated on the
+    agent, the next local agent would have started on exactly that default,
+    silently. The one predicate `rite start`, `rite doctor` and
+    `effective_model` all ask, so they cannot disagree about it."""
+    return bool(getattr(role, "is_local", False)) and not getattr(
+        role, "context_window", 0
+    )
+
+
 def effective_model(role: ManagerRole) -> str:
     """What model a Manager runs, and where that comes from, in one line.
 
@@ -632,8 +650,6 @@ def effective_model(role: ManagerRole) -> str:
             f"a {role.context_window}-token window pinned into the model"
             if role.context_window
             else "NO context_window declared, so `rite start` refuses it"
-            if role.agent == "goose"
-            else "the server's default window"
         )
         return (
             f"manager {role.name}: {role.model} at {role.endpoint}, "

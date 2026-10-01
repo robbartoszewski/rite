@@ -171,7 +171,9 @@ Start prepares the worker's workspace first and refuses one it cannot prepare,
 saying what to do. The ticket arrives as the session's opening prompt, so you
 don't need to attach. After the prepare summary, start prints the sandbox's
 name and a `yoloai attach <name>` command for watching the session or typing
-to it (detach with `Ctrl-b d`). That session's first screen shows the credentials
+to it (detach with `Ctrl-b d`). A question the Worker asks reaches you in
+Slack, and your reply in that thread is carried back to it, so you need not
+attach to answer. That session's first screen shows the credentials
 passed in, in plain text, so don't share or record it; `rite sandbox pane`
 shows it with them redacted.
 
@@ -232,10 +234,12 @@ rite status                  # what is happening now
 rite doctor                  # tools and credentials — non-zero on problems
 ```
 
-`rite status` and `rite doctor` change nothing you would notice, with two
+`rite status` and `rite doctor` change nothing you would notice, with three
 exceptions worth naming rather than rounding off. Once a coordination remote
 is configured, doctor pushes and then deletes one throwaway branch there to
-check that force-push is allowed. And `rite status` takes a lock file inside
+check that force-push is allowed. `rite doctor --network`, and only with that
+flag, posts one message to your Slack broadcast channel to check it delivers.
+And `rite status` takes a lock file inside
 `.rite/` while it reads the coordinator pool — measured, not assumed: a
 `rite status --no-board` in a fresh project leaves `.rite/pool.json.lock`
 behind. Neither touches your code. `rite help` tours the rest.
@@ -243,9 +247,10 @@ behind. Neither touches your code. `rite help` tours the rest.
 ## Running a Manager
 
 A Manager is a long-running session that works your board and talks to you,
-over Slack if you set it up. `rite init` does not ask about Managers yet, and
-there is no `rite manager add`: declare them in `.rite/config.yaml`, then run
-`rite doctor`, which checks what you wrote.
+over Slack if you set it up. `rite init` offers to declare one (`lead`, on
+the Owner machine), and `rite add manager <name> --preset <preset>` declares
+more, without opening `.rite/config.yaml`; then run `rite doctor`, which checks
+what was written.
 
 One Manager on Claude, the place to start:
 
@@ -274,11 +279,14 @@ coordination:
   manager_roles:
     - {name: lead, preset: lead}          # Claude; the Owner, it holds 'route'
     - {name: helper, engine: 'local:small', preset: executor,
-       endpoint: 'http://localhost:11434/v1', model: 'qwen3:8b', agent: goose}
+       endpoint: 'http://localhost:11434/v1', model: 'qwen3:8b', agent: goose,
+       context_window: 32768}
 ```
 
-`helper` needs Goose, Ollama with the model pulled, and
-`OLLAMA_CONTEXT_LENGTH=32768` set before Ollama starts. Run each Manager in
+`helper` needs Goose and Ollama with the model pulled. A local Manager must
+declare its `context_window` (at least 32768): `rite start` refuses one that
+does not, and rite pins the window into the model it runs, so Ollama's own
+default does not decide it. Run each Manager in
 its own terminal (`rite start lead …`, `rite start helper …`). The Owner hands
 work down with `rite route --ticket RT-12 helper -`, the text on stdin (every route names its
 ticket; work you asked for in chat becomes a chore ticket first); while that work is unfinished its
@@ -472,11 +480,14 @@ what rite tells them to do — but rite does not read the results, so there is
 no coverage threshold, no accessibility pass, and no opinion on your test
 strategy.
 
-**A local model tier needs `OLLAMA_CONTEXT_LENGTH` set.** Ollama serves every
+**A local Manager must declare its context window.** Ollama serves every
 model at 4096 tokens by default, which is smaller than an agent's own system
-prompt — so the tier fails in ways that look like models unable to call tools
-and agents losing conversation history, rather than like a setting. `rite
-doctor` reports the window actually in force. See the guide.
+prompt — so a Manager on that default fails in ways that look like a model
+unable to call tools and an agent losing its conversation history, rather
+than like a setting. So rite refuses a local Manager with no
+`context_window` (at least 32768), whatever its agent, and pins the declared
+window into the model it runs; `rite doctor` says which window each Manager
+gets. See the guide.
 
 **A Manager runs on Claude Code, or on Goose for a local model.**
 `CLAUDE.md` and `.claude/agents/` are first-class here rather than behind a

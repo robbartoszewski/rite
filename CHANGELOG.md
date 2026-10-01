@@ -1,6 +1,32 @@
 # Changelog
 
-## Unreleased
+## 0.7.0a4 (2026-10-01) — alpha: setup that finishes, and answers that come back
+
+⚠ **Still an alpha, cut for the same dogfood** (a real contribution to yoloAI
+through rite). This one closes the gaps the 0.7.0a3 run hit in setting up and
+running a project: init now leaves a project that can start, Slack is set up
+in one command, a Worker's question is answered from Slack, and `rite doctor`
+stops accusing a working setup. Not installed by default: `install.sh` still
+installs 0.6.0 unless you ask for this one (`RITE_VERSION=v0.7.0a4`).
+Everything 0.7.0a1 to 0.7.0a3 said is and is not in it still holds.
+
+### `rite release --force` no longer takes another Manager's claims
+
+With two Managers in one project, `rite release --force <path>` released
+whoever held the path, a sibling Manager's live work included, and the record
+of it named nobody. A force-release from a Manager now releases only that
+Manager's claims and unowned ones, and names each one it left: "not yours:
+<path> (held by <worker>, under Manager '<name>')". Run from your own terminal,
+outside any Manager, it still clears the path. Claims written by an older rite
+still read.
+
+### Every local Manager must declare its context window, not only a Goose one
+
+`rite start` refuses, and `rite doctor` warns about, a local Manager with no
+`context_window` whatever agent it runs. Before, only Goose Managers were
+checked, so any other local agent would have run on its server's default
+window, which can be small enough to cut the Manager's instructions short
+without any error.
 
 ### A local Manager works one subtask at a time: `rite local step`
 
