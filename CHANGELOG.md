@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+### A local Manager works one subtask at a time: `rite local step`
+
+A Manager running on a local model is given one subtask and the slice of the
+spec it cites — not the whole ticket, and not a pointer into a file it has no
+room to read. rite then runs the subtask's verify itself, commits the result
+to a local branch itself, and records the outcome itself.
+
+That last part is the point. A model's claim that it finished is kept as a
+note and never decides anything: whether a subtask is accepted comes from the
+verify and the commit alone, and a claim that disagrees with the verify is
+recorded because the disagreement is worth seeing.
+
+Before this, a local Manager was handed a whole ticket and asked to report
+back. Two runs on `qwen3:8b` spent their entire context window wandering and
+reported nothing at all. One subtask costs about an eighth of the window, and
+it does not grow as subtasks go by, because each one starts fresh.
+
+A plan has to be approved before anything runs from it, and rite does not
+write plans yet — you write the decomposition and approve it.
+
 ## 0.7.0a4 (2026-10-01) — alpha: setup that finishes, and answers that come back
 
 ⚠ **Still an alpha, cut for the same dogfood** (a real contribution to yoloAI
@@ -27,26 +49,6 @@ still read.
 checked, so any other local agent would have run on its server's default
 window, which can be small enough to cut the Manager's instructions short
 without any error.
-
-### A local Manager works one subtask at a time: `rite local step`
-
-A Manager running on a local model is given one subtask and the slice of the
-spec it cites — not the whole ticket, and not a pointer into a file it has no
-room to read. rite then runs the subtask's verify itself, commits the result
-to a local branch itself, and records the outcome itself.
-
-That last part is the point. A model's claim that it finished is kept as a
-note and never decides anything: whether a subtask is accepted comes from the
-verify and the commit alone, and a claim that disagrees with the verify is
-recorded because the disagreement is worth seeing.
-
-Before this, a local Manager was handed a whole ticket and asked to report
-back. Two runs on `qwen3:8b` spent their entire context window wandering and
-reported nothing at all. One subtask costs about an eighth of the window, and
-it does not grow as subtasks go by, because each one starts fresh.
-
-A plan has to be approved before anything runs from it, and rite does not
-write plans yet — you write the decomposition and approve it.
 
 ### `--help` no longer points at documents you do not have
 
