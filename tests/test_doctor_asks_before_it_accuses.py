@@ -27,8 +27,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from click.testing import CliRunner
 
-from rite_ai.cli.main import _doctor_worker_push_access
+from rite_ai.cli.main import _doctor_worker_push_access, cli
 from rite_ai.config.models import CoordinationConfig
 from rite_ai.coordination.identity import enrolment
 from rite_ai.sandbox import (
@@ -110,13 +111,26 @@ def _http_error(code):
 
 VERDICTS = [
     ("ok", _Answer(200, RECEIVE), None),
+    # GitHub's verdict on the token: these three, and only these three.
+    ("cannot_push", None, _http_error(401)),
     ("cannot_push", None, _http_error(403)),
+    ("cannot_push", None, _http_error(404)),
+    # Not a verdict — the question was not answered.
     ("unknown", None, TimeoutError("timed out")),
+    ("unknown", None, _http_error(500)),  # GitHub is down
+    ("unknown", None, _http_error(503)),
+    ("unknown", None, _http_error(429)),  # rate limited
+    ("unknown", _Answer(200, "text/html"), None),  # a proxy, not GitHub
 ]
 
 
 @pytest.mark.parametrize(("kind", "answer", "raises"), VERDICTS)
 def test_the_probe_gives_three_answers(kind, answer, raises):
+    """⚠ An OUTAGE IS NOT A VERDICT. A 500, a 503, a 429 or a 200 from a proxy
+    all used to sort as `cannot_push`, so `rite doctor --network` during a
+    GitHub incident would report "token cannot push" about a token that is
+    fine, and send someone to reissue a working credential — the exact false
+    accusation S28 exists to prevent."""
     with patch(
         "urllib.request.urlopen",
         **({"side_effect": raises} if raises else {"return_value": answer}),
@@ -237,8 +251,15 @@ def test_the_slack_delivery_post_happens_only_under_network(
     """⚠ Posting is allowed HERE and nowhere else in setup. `rite credential
     set slack` must never put a message in a channel; `rite doctor --network`
     is the opposite case — the person ASKED whether Slack works, and the only
-    answer that settles it is a message that arrives. Still opt-in: a plain
-    `rite doctor` must not post every time it runs.
+    answer that settles it is a message that arrives. Still opt-in.
+
+    ⚠ And it must be a POST. `_call` sends a GET when it is given `params`
+    and a JSON POST when it is given `payload`; a first draft passed the
+    message as `params`, so the check issued a GET with the text in the query
+    string. Nothing says Slack honours `chat.postMessage` that way, so the
+    check could have reported a delivery that never happened. The fake below
+    tells the two apart — an earlier one did not, which is why the draft
+    passed.
     """
     import rite_ai.managers.slack as slack_mod
     from rite_ai.cli.main import _doctor_slack
@@ -250,13 +271,15 @@ def test_the_slack_delivery_post_happens_only_under_network(
     )
     monkeypatch.setenv("RITE_SLACK_BOT_TOKEN", "xoxb-1")
     posts: list[dict] = []
+    gets: list[str] = []
 
     def call(method, token, params=None, payload=None):
-        args = payload or params or {}
-        if method == "chat.postMessage":
-            posts.append(args)
-            return {"ok": True, "channel": "C1", "ts": "1.0"}
-        return {"ok": True}
+        if payload is None:
+            # This is what `_call` turns into a GET.
+            gets.append(method)
+            return {"ok": True}
+        posts.append({"method": method, **payload})
+        return {"ok": True, "channel": "C1", "ts": "1.0"}
 
     monkeypatch.setattr(slack_mod, "_call", call)
     monkeypatch.setattr(slack_mod, "probe", lambda *a, **k: [])
@@ -265,10 +288,118 @@ def test_the_slack_delivery_post_happens_only_under_network(
     _doctor_slack(root, problems, network=network)
     out = capsys.readouterr().out
 
-    assert (len(posts) == 1) is network, f"posts={posts} network={network}"
+    assert (len(posts) == 1) is network, f"posts={posts} gets={gets}"
+    assert not [m for m in gets if m == "chat.postMessage"], (
+        "chat.postMessage was sent as a GET"
+    )
     if network:
         assert posts[0]["channel"] == "#all-rite"
+        assert posts[0]["text"]
         assert "slack delivery: ok" in out
     else:
         assert "slack delivery" not in out
     assert problems == []
+
+
+def test_a_slack_refusal_of_the_test_post_is_a_problem(tmp_path, monkeypatch, capsys):
+    """And it is counted, unlike could-not-check: Slack ANSWERED and said no."""
+    import rite_ai.managers.slack as slack_mod
+    from rite_ai.cli.main import _doctor_slack
+
+    root = tmp_path / "p"
+    (root / ".rite").mkdir(parents=True)
+    (root / ".rite" / "config.yaml").write_text(
+        "slack:\n  broadcast_channel: '#all-rite'\n"
+    )
+    monkeypatch.setenv("RITE_SLACK_BOT_TOKEN", "xoxb-1")
+    monkeypatch.setattr(
+        slack_mod,
+        "_call",
+        lambda m, t, params=None, payload=None: {
+            "ok": False,
+            "error": "channel_not_found",
+        },
+    )
+    monkeypatch.setattr(slack_mod, "probe", lambda *a, **k: [])
+    problems: list[str] = []
+
+    _doctor_slack(root, problems, network=True)
+
+    assert "slack delivery: FAILED" in capsys.readouterr().out
+    assert problems and "slack delivery" in problems[0]
+
+
+# --- S32, end to end: the only measure that would have caught it -------------
+
+
+def _solo_project(tmp_path, *, managers: list[str], remote: str = "") -> Path:
+    """A project with nothing wrong but the thing under test. Sandbox off, so
+    a machine without a stored Claude token is not a second finding."""
+    from rite_ai.cli.init import run_init
+
+    root = tmp_path / "solo"
+    root.mkdir()
+    run_init(root, yes=True)
+    config = root / ".rite" / "config.yaml"
+    text = config.read_text().replace("enabled: true", "enabled: false", 1)
+    roles = "\n".join(f"    - name: {m}\n      preset: lead" for m in managers)
+    text += (
+        "coordination:\n"
+        f"  managers: [{', '.join(managers)}]\n"
+        + (f"  remote: {remote}\n" if remote else "")
+        + f"  manager_roles:\n{roles}\n"
+    )
+    config.write_text(text)
+    return root
+
+
+def test_doctor_exits_zero_on_a_solo_project_that_declared_a_manager(
+    tmp_path, monkeypatch
+):
+    """⚠ **The assertion that would have caught the half-fix.** The first S32
+    test asserted the absence of ONE sentence, and passed while `rite doctor`
+    still exited 1 on the very setup the finding is about: a second path
+    (`coordination/config_check`) called a declared Manager with no `remote`
+    "N manager(s) listed but no `remote` … no election can ever happen".
+
+    Reproduced by hand before this was written: `rite init --yes`, `rite add
+    manager lead --preset lead`, `rite doctor` -> exit 1. What S32 asks for is
+    an exit code, so that is what is asserted.
+    """
+    import rite_ai.sandbox as sb
+
+    monkeypatch.setattr(sb, "platform_can_sandbox", lambda: False)
+    monkeypatch.setenv("RITE_CREDENTIAL_DIR", str(tmp_path / "creds"))
+    root = _solo_project(tmp_path, managers=["lead"])
+    monkeypatch.chdir(root)
+
+    result = CliRunner().invoke(cli, ["doctor"])
+
+    assert "coordination:" not in result.output, result.output
+    assert result.exit_code == 0, result.output
+
+
+def test_a_remote_with_nobody_eligible_is_still_a_problem(tmp_path, monkeypatch):
+    """The control on the other side. Removing the solo warning must not take
+    the real one with it: a `remote` and an empty `managers` list is still
+    nobody eligible to be Owner."""
+    from rite_ai.coordination.config_check import coordination_problems
+
+    said = coordination_problems(
+        CoordinationConfig(managers=[], remote="git@example.com:t/c.git")
+    )
+
+    assert any("eligible to be Owner" in p for p in said), said
+
+
+def test_two_managers_with_no_remote_is_still_reported():
+    """The boundary, and the existing invariant this must not take with it.
+    A reader who listed several Managers is describing a fleet, and a fleet
+    with nowhere to coordinate through cannot elect. Only the solo case went
+    quiet. `test_coordination_config_check` asserts this too, and caught a
+    first fix that widened too far."""
+    from rite_ai.coordination.config_check import coordination_problems
+
+    said = coordination_problems(CoordinationConfig(managers=["lead", "helper"]))
+
+    assert any("no election can ever happen" in p for p in said), said

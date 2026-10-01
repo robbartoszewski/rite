@@ -456,7 +456,8 @@ def _doctor_check(label: str, problems: list[str]):
     help=(
         "Also run the checks that talk to a service: whether each Worker's "
         "GitHub token can PUSH, and a test message to the Slack channel. Off "
-        "by default so a plain `rite doctor` stays fast and works offline."
+        "by default, so a plain run adds no network call of its own and needs "
+        "no connection for these two."
     ),
 )
 def doctor(network: bool) -> None:
@@ -467,8 +468,8 @@ def doctor(network: bool) -> None:
 
     \b
     The live checks are opt-in:
-      rite doctor              # fast, offline-safe
-      rite doctor --network    # also asks GitHub and Slack
+      rite doctor              # adds no network call of its own
+      rite doctor --network    # also asks GitHub, and posts to Slack
     """
     problems: list[str] = []
     # Structural, not one call site: each section runs inside a guard, and
@@ -556,10 +557,16 @@ def _doctor_worker_push_access(
     is `push_access`, which keeps them apart.
 
     ⚠ **Off unless asked for.** The probe is one HTTPS round trip per remote
-    per Worker. On every `rite doctor` that is a slow, network-dependent
-    report — and offline, a wall of "could not check" that says nothing. So
-    it runs under `--network`, and without it doctor says the check exists
-    rather than pretending it passed.
+    per Worker. On every `rite doctor` that is a slower, more
+    network-dependent report — and offline, a wall of "could not check" that
+    says nothing. So it runs under `--network`, and without it doctor says the
+    check exists rather than pretending it passed.
+
+    ⚠ It does NOT make `rite doctor` fast: other checks that predate this one
+    (git remote reachability, the Slack target probes, the engine probes) go
+    to the network on every run, and a doctor sweep takes minutes because of
+    them. The flag keeps THIS probe off the default path; it is not a promise
+    about the command.
     """
     from rite_ai.credentials.store import store_is_readable
 
@@ -8670,31 +8677,29 @@ def _doctor_slack(root: Path, problems: list[str], *, network: bool = False) -> 
     # opposite case: the person ASKED whether Slack works, and the only
     # answer that settles it is a message that arrives. Still opt-in, because
     # a plain `rite doctor` must not post every time it is run.
+    #
+    # ⚠ Through `slack._post`, which is the path a Manager posts on: a JSON
+    # POST. A first draft passed the message to `_call` as `params`, which
+    # sends a GET with the text in the query string — nothing says Slack
+    # honours `chat.postMessage` that way, so the check could have reported a
+    # delivery that never happened. Using the production helper also means
+    # this check cannot drift from what rite really does.
     if network and slack.broadcast:
         with _doctor_check("slack delivery", problems):
-            from rite_ai.managers.slack import _call
+            from rite_ai.managers.slack import _post
 
-            try:
-                got = _call(
-                    "chat.postMessage",
-                    token,
-                    {
-                        "channel": slack.broadcast,
-                        "text": "rite doctor: this channel is reachable.",
-                    },
-                )
-            except Exception as e:  # noqa: BLE001 - could not ask, not a fault
-                click.echo(f"slack delivery: could not check — {type(e).__name__}")
-                return
-            if (got or {}).get("ok"):
+            posted = _post(
+                slack.broadcast, token, "rite doctor: this channel is reachable."
+            )
+            if posted.ok and posted.ts:
                 click.echo(
                     f"slack delivery: ok — posted to {slack.broadcast} "
-                    f"(channel {(got or {}).get('channel') or '?'})"
+                    f"(channel {posted.channel or '?'})"
                 )
-                return
-            detail = (got or {}).get("error") or "no ok in the reply"
-            click.echo(f"slack delivery: FAILED — {detail}")
-            problems.append(f"slack delivery to {slack.broadcast}: {detail}")
+            else:
+                detail = posted.problem or "Slack accepted it but returned no message"
+                click.echo(f"slack delivery: FAILED — {detail}")
+                problems.append(f"slack delivery to {slack.broadcast}: {detail}")
 
 
 def _engine_ready_for(role):

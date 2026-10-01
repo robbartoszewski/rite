@@ -1656,13 +1656,31 @@ def push_access(
             return PushAccess(
                 "unknown", owner=owner, repo=repo, reason=e.__class__.__name__
             )
+        # ⚠ **Only these three are GitHub's VERDICT on the token.** Everything
+        # else that is not a receive-pack 200 means the question was not
+        # answered: a 500 or 503 is GitHub being down, a 429 is rate limiting,
+        # and a 200 carrying anything else is a proxy or captive portal, not
+        # GitHub saying yes. Sorted as `cannot_push`, an outage would have
+        # `rite doctor --network` report "token cannot push" for a token that
+        # is fine — the exact false accusation S28 exists to prevent — and
+        # send someone to reissue a working credential. They are `unknown`,
+        # which `push_access_refusal` still turns into a refusal for a START.
+        verdict = {
+            401: "GitHub does not accept the token",
+            403: "the token can read it but not write it",
+            404: "the repository does not exist, or the token cannot see it",
+        }
+        if status in verdict:
+            return PushAccess(
+                "cannot_push", owner=owner, repo=repo, why=verdict[status]
+            )
         if status != 200 or not kind.startswith(RECEIVE_PACK):
-            why = {
-                401: "GitHub does not accept the token",
-                403: "the token can read it but not write it",
-                404: "the repository does not exist, or the token cannot see it",
-            }.get(status, f"HTTP {status}")
-            return PushAccess("cannot_push", owner=owner, repo=repo, why=why)
+            reason = (
+                f"HTTP {status}"
+                if status != 200
+                else "a 200 that is not a receive-pack advertisement"
+            )
+            return PushAccess("unknown", owner=owner, repo=repo, reason=reason)
     return PushAccess("ok")
 
 
