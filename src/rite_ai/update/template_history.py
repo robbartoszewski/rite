@@ -2,7 +2,7 @@
 
 SHA-256 of every command and agent template each tagged release shipped,
 from: v0.1.0, v0.2.0, v0.3.0, v0.4.0, v0.5.0, v0.5.1, v0.6.0, v0.7.0a1, v0.7.0a2,
-v0.7.0a3, v0.7.0a4.
+v0.7.0a3, v0.7.0a4, v0.7.0a5.
 """
 
 RELEASED: dict[str, frozenset[str]] = {
@@ -39,6 +39,7 @@ RELEASED: dict[str, frozenset[str]] = {
             "a1ccd9ce36863a9367f9593be33b13509744d7cb3589e1c87a4601dbc3250f40",
             "a87b33135cd3dd28b98ff947b01452cb2e8bb9f4b1193144c0eed1be8de99f21",
             "a909e6f26bf5aede7f75fdcfefaacd3cbc954c12929937ce26e03de74d43f1b9",
+            "cfd0c8c9b666a22a75e60300fe9c80fe44b629dd3344dc818708b2826299ba8e",
             "e2266bd379218f9ca014740a6255120208edf64516ccc34a62999a918fe5b586",
             "ff1f67865f2fa62450cda8b6bf0be7f4531c3dd746cb537cd7a3fabb833d6b9f",
         }
