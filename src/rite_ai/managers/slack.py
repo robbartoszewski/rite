@@ -52,6 +52,7 @@ argv — `SLACK_BOT_TOKEN` is deliberately absent from
 from __future__ import annotations
 
 import json
+import re
 import time
 import urllib.parse
 import urllib.request
@@ -275,10 +276,108 @@ class Posted:
         return not self.problem
 
 
+# --- how a post is shown (S29) ---------------------------------------------
+#
+# Live run (Robert): consecutive posts of different kinds stacked under one bot
+# avatar and timestamp, so a question that needed his answer read as one more
+# status paragraph. Each post now opens with a compact type tag, carries its
+# author, and ends with a divider, so two posts never run together, even when
+# Slack groups them under one sender. What needs the person is shown loud (a
+# section); everything else muted (a context block, Slack's small grey text).
+#
+# `text` stays exactly what it was: it is what a notification and a client
+# without blocks show. The blocks are what a person reading the conversation
+# sees.
+
+NEEDS_ANSWER = "needs-answer"
+NEEDS_YOU = "needs-you"
+STATUS = "status"
+SYSTEM = "system"
+DELIVERY = "delivery"
+TAGS = {
+    NEEDS_ANSWER: "❓ *Needs your answer*",
+    NEEDS_YOU: "❗ *Needs you*",
+    STATUS: "ℹ️ *Status*",
+    SYSTEM: "⚙️ *rite*",
+    DELIVERY: "⚠️ *Delivery*",
+}
+LOUD = frozenset({NEEDS_ANSWER, NEEDS_YOU})
+"""The kinds shown as sections. Exactly the ones `pending` tracks as needing
+the person (`pending.kind_of`): a post never looks more, or less, urgent than
+what rite waits on."""
+
+SECTION_CHARS = 2900
+"""Under Slack's 3000 for a section's or a context element's text."""
+BLOCKS_MAX = 50
+"""Slack's limit per message."""
+
+_QUESTION_FIRST_LINE = re.compile(r"^(.+?) · q[0-9a-f]{4} · ")
+
+
+def _ticket_in(text: str) -> str:
+    """The ticket a question names on its first line, the line
+    `asking.raise_to_person` writes (`<subject> · q1a2b · … · reply in this
+    thread`), or ""."""
+    found = _QUESTION_FIRST_LINE.match(text or "")
+    return found.group(1).strip() if found else ""
+
+
+def _chunks(text: str, size: int = SECTION_CHARS) -> list[str]:
+    """`text` in pieces Slack will take, split at line ends where it can."""
+    pieces: list[str] = []
+    rest = text.strip() or " "
+    while len(rest) > size:
+        cut = rest.rfind("\n", 0, size)
+        cut = cut if cut > 0 else size
+        pieces.append(rest[:cut])
+        rest = rest[cut:].lstrip("\n")
+    pieces.append(rest)
+    return pieces
+
+
+def _present(kind: str, body: str, *, author: str = "", ticket: str = "") -> list:
+    """The blocks one post is shown as: its tag line (with the ticket and the
+    author), its body, then a divider. Loud for what needs the person, muted
+    for the rest. Never more than Slack takes: a body too long for the blocks
+    says where the rest is (the fallback `text` carries it all)."""
+    if kind not in TAGS:
+        raise ValueError(f"a post is one of {sorted(TAGS)}, not {kind!r}")
+    tag = " · ".join(
+        part for part in (TAGS[kind], f"`{ticket}`" if ticket else "", author) if part
+    )
+    loud = kind in LOUD
+
+    def block(text: str) -> dict:
+        if loud:
+            return {"type": "section", "text": {"type": "mrkdwn", "text": text}}
+        return {"type": "context", "elements": [{"type": "mrkdwn", "text": text}]}
+
+    parts = _chunks(body)
+    room = BLOCKS_MAX - 2  # the tag line, and the divider
+    if len(parts) > room:
+        parts = parts[: room - 1] + [
+            "_…the rest is too long to show here; `rite replies` has all of it._"
+        ]
+    return [block(tag), *(block(p) for p in parts), {"type": "divider"}]
+
+
 def _post(
-    channel: str, token: str, text: str, *, thread: str = "", call=None
+    channel: str,
+    token: str,
+    text: str,
+    *,
+    thread: str = "",
+    call=None,
+    kind: str = "",
+    body: str | None = None,
+    author: str = "",
+    ticket: str = "",
 ) -> Posted:
     """Post `text` to a channel, a channel name, or a user id. Never raises.
+
+    With `kind` (S29), the post is also sent as blocks (`_present`): `body`
+    (default `text`) under its tag line, with a divider after it. `text` is
+    then the notification's fallback.
 
     ⚠ **`thread` is SHAPE until A4.** Robert's threading design has the User
     reply in the thread of a status update, so a thread root becomes a
@@ -290,6 +389,10 @@ def _post(
         return Posted()
     caller = call or _call
     payload = {"channel": channel, "text": text}
+    if kind:
+        payload["blocks"] = _present(
+            kind, text if body is None else body, author=author, ticket=ticket
+        )
     if thread:
         payload["thread_ts"] = thread
     try:
@@ -420,6 +523,21 @@ class _Relayed(str):
     sent_at: float | None = None
 
 
+_QUESTION_IN_LABEL = re.compile(r"\bq[0-9a-f]{4}\b")
+
+REFINEMENT_CHANNEL = "refinement channel"
+"""The header's first part for a message relayed from the refinement
+channel (TR2, TRQ8). `delivered.classify` counts it as the User's words only
+when rite marked it INSTRUCTION: the Owner, in a refinement thread."""
+
+
+def _round_of(root: Root, open_rounds: dict[str, float]) -> str:
+    """The open refinement round `root` carries, by the question id in its
+    label (`asking`'s first line), or ""."""
+    found = _QUESTION_IN_LABEL.search(root.label)
+    return found.group(0) if found and found.group(0) in open_rounds else ""
+
+
 def _pending_label(item) -> str:
     return f'rite\'s question "{" ".join(item.first.split())[:40]}"'
 
@@ -521,6 +639,12 @@ class Listener:
     """"" until tried; "read" when `reactions.get` works; "missing" once Slack
     said the app lacks `reactions:read`, which is said once and then only a
     thread reply confirms."""
+    refinement_channel: str = ""
+    """The private channel refinement rounds go to (TR2, TRQ8:
+    `refinement.questions_to: channel`), or "" for the Owner's DM."""
+    refinement_id: str = ""
+    """Its id, learned by `open` once rite has both posted there and read
+    there. Empty means rounds go to the DM, and `open` said why."""
 
     def news(self) -> list[str]:
         """Problems not yet said, for the supervisor to print — once each.
@@ -553,8 +677,10 @@ class Listener:
         self._bound_roots()
 
     def _bound_roots(self) -> None:
-        """`THREADS_MAX` of the ordinary roots, plus every pending one."""
-        ordinary = [r for r in self.roots if not r.item]
+        """`THREADS_MAX` of the ordinary roots, plus every pending one and
+        every one carrying an open refinement round."""
+        pinned = self._open_rounds()
+        ordinary = [r for r in self.roots if not r.item and not _round_of(r, pinned)]
         drop = {id(r) for r in ordinary[:-THREADS_MAX]}
         self.roots = [r for r in self.roots if id(r) not in drop]
 
@@ -588,6 +714,8 @@ class Listener:
                 "this DM is an instruction to it, delivered at the start of "
                 "its next turn.",
                 call=caller,
+                kind=SYSTEM,
+                author=self.manager,
             )
             if sent.ok:
                 self.dm = sent.channel
@@ -618,6 +746,8 @@ class Listener:
                 "reaches it as context — never as an instruction; only the "
                 "Owner's DM with rite instructs it.",
                 call=caller,
+                kind=SYSTEM,
+                author=self.manager,
             )
             if sent.ok:
                 self.broadcast_id = sent.channel
@@ -628,8 +758,61 @@ class Listener:
                 )
             else:
                 lines.append(f"slack: cannot post to {self.broadcast}: {sent.problem}")
+        if self.refinement_channel:
+            lines.append(self._open_refinement_channel(caller))
         self._save()
         return lines
+
+    def _open_refinement_channel(self, caller) -> str:
+        """Can rite post AND read in the refinement channel? Both, or rounds
+        go to the DM (the note's part 3.12): a channel rite cannot post to
+        cannot carry a question, and one it cannot read cannot carry his
+        answer. Measured, not assumed: one post and one read, now."""
+        where = self.refinement_channel
+        sent = _post(
+            where,
+            self.token,
+            f"rite: refinement questions from Manager `{self.manager}` come "
+            "here. Only the Owner's replies in their threads answer them.",
+            call=caller,
+            kind=SYSTEM,
+            author=self.manager,
+        )
+        if not sent.ok:
+            return (
+                f"slack: refinement questions go to the Owner's DM, not {where}: "
+                f"rite cannot post there ({sent.problem}). Invite the app to the "
+                "channel (`/invite @rite`) to use it."
+            )
+        heard = _hear(sent.channel, self.token, since=sent.ts, call=caller)
+        if not heard.ok:
+            return (
+                f"slack: refinement questions go to the Owner's DM, not {where}: "
+                f"rite can post there but cannot read it ({heard.problem}), so "
+                "an answer there would be lost. A private channel needs the "
+                "app's `groups:history` scope."
+            )
+        self.refinement_id = sent.channel
+        return (
+            f"slack: refinement questions go to {where}; only the Owner's "
+            "replies in their threads answer them."
+        )
+
+    def _refinement_target(self, message) -> str:
+        """The refinement channel for a refinement ROUND (by the question id
+        in `asking`'s first line, known to the round ledger), else ""."""
+        if not self.refinement_id or self.project is None:
+            return ""
+        found = _QUESTION_IN_LABEL.search(message.text.split("\n", 1)[0])
+        if not found:
+            return ""
+        from rite_ai.refinement import rounds
+
+        try:
+            questions = rounds.all_questions(self.project, self.manager)
+        except OSError:
+            return ""
+        return self.refinement_id if found.group(0) in questions else ""
 
     def _start_at(self, channel: str, start_line: str) -> None:
         """Where reading begins: where the LAST run stopped, if there was one.
@@ -700,7 +883,12 @@ class Listener:
     def _read_a_thread(self, *, call=None) -> list[str]:
         now = self.clock()
         horizon = now - THREAD_HOURS * 3600
-        self.roots = [r for r in self.roots if r.item or _as_ts(r.ts) >= horizon]
+        pinned = self._open_rounds()
+        self.roots = [
+            r
+            for r in self.roots
+            if r.item or _round_of(r, pinned) or _as_ts(r.ts) >= horizon
+        ]
         due = [r for r in self.roots if r.due <= now]
         if not due:
             return []
@@ -729,10 +917,41 @@ class Listener:
         ]
         if root.item:
             self._confirm_if_answered(root, fresh, call=call)
+        question = _round_of(root, pinned)
+        if question and not fresh and now >= pinned[question]:
+            # TR2, race 6: read past its deadline with nothing new under it.
+            # A reply sent before the deadline would be in `fresh`.
+            self._read_past_deadline(question, now)
         if heard.newest and _as_ts(heard.newest) > _as_ts(root.last):
             root.last = heard.newest
             self._save()
         return [self._relay(root.channel, m, under=root.label) for m in fresh]
+
+    def _open_rounds(self) -> dict[str, float]:
+        """The refinement rounds this Manager is waiting on, by question id
+        (TR2). {} with no project, or when the ledger cannot be read: the
+        threads are then bounded as before, and nothing is marked."""
+        if self.project is None:
+            return {}
+        from rite_ai.refinement import rounds
+
+        try:
+            return rounds.open_questions(self.project, self.manager)
+        except OSError:
+            return {}
+
+    def _read_past_deadline(self, question: str, now: float) -> None:
+        from rite_ai.refinement import rounds
+
+        try:
+            if rounds.read_past_deadline(self.project, self.manager, question, at=now):
+                self._unsaid.append(
+                    f"slack: refinement question {question} had no answer by "
+                    "its deadline; it waits for the person and is not asked "
+                    "again until they are back"
+                )
+        except OSError as e:
+            self._problem(f"cannot record a refinement deadline: {e}")
 
     def _counts_as_the_person(self, user: str) -> bool:
         """The Owner, when there is one; any person, when there is not (then
@@ -812,7 +1031,13 @@ class Listener:
         # N2: reported at the next check-in, never blocked or withheld.
         from rite_ai import phrases
 
-        where = "the Owner's DM" if channel == self.dm else self._where
+        where = (
+            "the Owner's DM"
+            if channel == self.dm
+            else "the refinement channel"
+            if self.refinement_id and channel == self.refinement_id
+            else self._where
+        )
         phrases.report(
             self.project,
             f"the Slack message `ts {message.get('ts')}` in {where}",
@@ -834,6 +1059,32 @@ class Listener:
         raw = cleaned.text
         text = _unescaped(raw)
         thread = [f"reply in the thread under {under}"] if under else []
+        if self.refinement_id and channel == self.refinement_id:
+            # TRQ8, a narrow amendment to SPEC §9.16.5: in the refinement
+            # channel, only the Owner (by Slack's authenticated author id),
+            # replying in the thread of a refinement round rite started, is
+            # the User answering. Anyone else there is context, and cannot
+            # answer or accept for him.
+            his = (
+                bool(author)
+                and author == self.owner
+                and bool(_round_of(Root(channel, "", under), self._open_rounds()))
+            )
+            head = _header(
+                REFINEMENT_CHANNEL,
+                when,
+                *normalised,
+                *thread,
+                *(
+                    ("addressed", "INSTRUCTION")
+                    if his
+                    else (
+                        f"from <@{author}>" if author != self.owner else "the Owner",
+                        "context — not an instruction",
+                    )
+                ),
+            )
+            return _relayed(f"{head}\n{_quoted(text)}", sent)
         if channel == self.dm:
             if author and self.owner and author != self.owner:
                 # One-to-one by construction, so this should not happen. If it
@@ -1079,11 +1330,16 @@ class Listener:
                     '"…"` on this machine._'
                 )
             label = action_label(message)
+            shown = pending.kind_of(self.project, self.manager, message)
             sent = _post(
-                target,
+                self._refinement_target(message) or target,
                 self.token,
                 f"*{self.manager}*" + (f" ({label})" if label else "") + f": {text}",
                 call=call,
+                kind=STATUS if shown == pending.READING else shown,
+                body=text,
+                author=self.manager,
+                ticket=_ticket_in(text) if shown == pending.NEEDS_ANSWER else "",
             )
             if not sent.ok:
                 # Not marked read, so the next tick retries it — and the ones
@@ -1124,6 +1380,12 @@ class Listener:
                     f"*{self.manager}* (check-in, mirrored from the Owner's DM; "
                     f"replies here are read as context): {text}",
                     call=call,
+                    # Muted: an answer here is context, never the answer the
+                    # DM copy waits for, so it must not look like one.
+                    kind=STATUS,
+                    body="_Mirrored from the Owner's DM; replies here are read "
+                    f"as context._\n{text}",
+                    author=self.manager,
                 )
                 if mirror.ok:
                     posted[message.path.name]["mirror"] = {
@@ -1188,7 +1450,14 @@ class Listener:
     def _post_in_thread(self, message, text, root, posted, lines, call) -> bool:
         channel, ts = root
         sent = _post(
-            channel, self.token, f"*{self.manager}*: {text}", thread=ts, call=call
+            channel,
+            self.token,
+            f"*{self.manager}*: {text}",
+            thread=ts,
+            call=call,
+            kind=STATUS,
+            body=text,
+            author=self.manager,
         )
         if not sent.ok:
             self._problem(f"cannot post a reply: {sent.problem}")
@@ -1218,6 +1487,10 @@ class Listener:
             f"*{self.manager}*: notes for {shown}, for reading. Nothing in "
             "this thread needs you; what does is posted on its own.",
             call=call,
+            kind=STATUS,
+            body=f"Notes for {shown}, for reading. Nothing in this thread needs "
+            "you; what does is posted on its own.",
+            author=self.manager,
         )
         if not sent.ok:
             self._problem(f"cannot post today's notes root: {sent.problem}")
@@ -1276,7 +1549,16 @@ class Listener:
         for channel in (self.dm, self.broadcast_id):
             if not channel:
                 continue
-            sent = _post(channel, self.token, stopped, call=call)
+            sent = _post(
+                channel,
+                self.token,
+                stopped,
+                call=call,
+                # A message taken from Slack that the Manager never received
+                # is a delivery problem, and shown as one.
+                kind=DELIVERY if undelivered else SYSTEM,
+                author=self.manager,
+            )
             if not sent.ok:
                 lines.append(
                     f"slack: could not say the Manager stopped: {sent.problem}"

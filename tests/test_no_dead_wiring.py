@@ -43,6 +43,9 @@ COORDINATION = SRC / "rite_ai" / "coordination"
 WATCHED = (
     COORDINATION,
     SRC / "rite_ai" / "managers",
+    # PB1: publishing is built in pieces across several PRs, which is exactly
+    # when a finished-and-tested function waits for a caller that never comes.
+    SRC / "rite_ai" / "publishing",
 )
 
 # name -> why nothing calls it. A reason is required; "not yet" is not one.

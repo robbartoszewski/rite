@@ -480,7 +480,7 @@ def _coordination_tick(root: Path, project) -> list[str]:
         # decide the handover on must be the same reading, or the tick can
         # advertise itself busy and hand over in the same breath.
         workers, in_flight = _this_machines_load(root)
-        board, off = _board_for_distribution(project)
+        board, off = _board_for_distribution(project, root)
         monitor = ManagerMonitor(
             holder,
             root=root,
@@ -524,7 +524,7 @@ def _coordination_tick(root: Path, project) -> list[str]:
     return lines
 
 
-def _board_for_distribution(project) -> tuple[object | None, str]:
+def _board_for_distribution(project, root=None) -> tuple[object | None, str]:
     """(board, why not) for an unattended tick's distribution arm (Q9).
 
     The board is built HERE rather than inside the monitor: the monitor is
@@ -543,6 +543,7 @@ def _board_for_distribution(project) -> tuple[object | None, str]:
         project.config.ticket_backend,
         board_role="workers",
         credentials=project.config.credentials,
+        root=root,
     )
     if isinstance(backend, BackendError):
         # Turned on and unreachable is not the same as turned off, and a
@@ -571,7 +572,9 @@ def _distribution_lines(tick) -> list[str]:
     return lines
 
 
-def _assign_the_pool(layer, config, project, name: str, board, now) -> list[str]:
+def _assign_the_pool(
+    layer, config, project, name: str, board, now, refinement=None
+) -> list[str]:
     """The Owner labels waiting tickets with a Manager's name (P2-3a, §2.3).
 
     `manager_views`, `choose_manager` and `assign_to_manager` were three of
@@ -585,6 +588,15 @@ def _assign_the_pool(layer, config, project, name: str, board, now) -> list[str]
     ticket still matches the query above: without this it is assigned again
     next tick, to a possibly different Manager, and two Managers hand the same
     work to two Workers. Each write looks correct on its own.
+
+    **RULE 0 — only a REFINED ticket is assigned (TR5).** `scheduled` means
+    "work on this", not "this is agreed": scheduled and not refined is the
+    Owner's to refine, and scheduled and refined is assignable (Robert). An
+    assigned unrefined ticket reaches a Manager whose Worker start then
+    refuses it (TR4), so the ticket sits labelled with a Manager's name and
+    nobody working on it. Checked with the one predicate, one read per
+    ticket, and anything but REFINED (UNREADABLE included) is left and said.
+    `refinement` is injectable for tests; None checks `board` itself.
 
     **RULE 2 — never to a Manager that refused this ticket.** Refusing costs
     the refuser nothing, so it is still the least loaded and gets the ticket
@@ -624,12 +636,37 @@ def _assign_the_pool(layer, config, project, name: str, board, now) -> list[str]
     if not unassigned:
         return []
 
+    # Rule 0. Before the fleet is read: an unrefined ticket goes nowhere
+    # whoever is idle, and saying so is the part the Owner acts on.
+    from rite_ai.refinement import status as refinement_status
+
+    if refinement is None:
+
+        def refinement(ticket_id: str):
+            return refinement_status.status(board, ticket_id)
+
+    lines: list[str] = []
+    refined = []
+    for ticket in unassigned:
+        answer = refinement_status.checked(refinement, ticket.id)
+        if answer.refined:
+            refined.append(ticket)
+        else:
+            lines.append(
+                f"coordination: {ticket.id} not assigned — {answer.state}: "
+                "it has no agreed definition of done to hand a Manager"
+                + (f" ({answer.detail})" if answer.detail else "")
+            )
+    unassigned = refined
+    if not unassigned:
+        return lines
+
     # Rule 2's memory. Unreadable is a REFUSAL to assign, not a licence to
     # assign without it: the failure this rule prevents is silent and
     # repeating, and one quiet tick is cheaper than restarting a ping-pong.
     refusals = refusals_by_ticket(layer)
     if isinstance(refusals, Unavailable):
-        return [
+        return lines + [
             "coordination: assigned nothing — the refusal log could not be "
             f"read ({refusals.reason}), and assigning without it can hand a "
             "ticket back to the Manager that just refused it"
@@ -642,7 +679,7 @@ def _assign_the_pool(layer, config, project, name: str, board, now) -> list[str]
     if capacity == 0:
         # §2.7.3's clean stop, and the schedule's own answer rather than a
         # failure: the user scheduled nobody for this hour.
-        return [
+        return lines + [
             f"coordination: assigned nothing — the schedule has 0 Workers in "
             f"this window, so there is nowhere for {len(unassigned)} waiting "
             "ticket(s) to go yet"
@@ -665,7 +702,6 @@ def _assign_the_pool(layer, config, project, name: str, board, now) -> list[str]
     stage = "decompose" if roles else ""
     live = {v.name for v in views if v.assignable}
 
-    lines: list[str] = []
     for ticket in unassigned:
         refused_by = {
             manager

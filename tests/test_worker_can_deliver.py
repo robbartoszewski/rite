@@ -85,7 +85,7 @@ def test_no_token_is_refused_and_names_the_command():
     assert refusal is not None
     assert "no GitHub token" in refusal
     assert "acme/app" in refusal
-    assert "rite credential set github_token" in refusal
+    assert "rite credential set github`" in refusal
     assert "\n" not in refusal, "the supervisor relays one line"
 
 
@@ -283,7 +283,10 @@ def test_start_proceeds_when_the_token_can_push(tmp_path, monkeypatch):
 
     _project(tmp_path, monkeypatch, modules=True, origin="git@github.com:acme/app.git")
     monkeypatch.setenv("RITE_GITHUB_TOKEN", "tok")
+    from tests.test_cli import _with_a_board
+
     with (
+        _with_a_board(),
         patch("rite_ai.sandbox.push_access_refusal", return_value=None),
         patch(
             "rite_ai.sandbox.start_worker",

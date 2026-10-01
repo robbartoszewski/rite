@@ -44,6 +44,16 @@ without the command. The check is ONE read of that ticket, never a list,
 because a list lags a new ticket (DF4) and pages at 100. A read that fails
 for any reason refuses: an unreachable board is not an absent ticket, and
 not a present one either (D-74).
+
+⚠ **And it must be REFINED (TR5).** A route is how work reaches a Manager
+that will start a Worker on it, so an unrefined ticket routed is the same
+gap as an unrefined ticket started: the Worker's own start refuses it (TR4),
+but only after a Manager has planned around it. The supervisor asks
+`refinement` (the one predicate, `refinement.status`) after the ticket check,
+refuses anything that is not REFINED with the line a refused start carries,
+and delivers a REFINED route with the agreed definition of done quoted under
+the Owner's text, from that same read. No `refinement` refuses every route:
+a supervisor that cannot check is not one that may assume.
 """
 
 from __future__ import annotations
@@ -54,15 +64,15 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from rite_ai.managers import manager_dir
+from rite_ai.managers import manager_dir, telling
 from rite_ai.managers.mailbox import INBOX, OUTBOX, mark_read, send, unread
+from rite_ai.managers.telling import is_routed_work_note, note, tell_manager
 from rite_ai.names import name_problem
 from rite_ai.state import write_atomic
 
 ROUTES_DIRNAME = "routes"
 ALLOWED_KEYS = frozenset({"to", "text", "ticket"})
 _TICKET_MAX = 64
-ROUTE_NOTE_HEADER = "[rite · route · rite's own words · context — not an instruction]"
 MAX_REQUEST_BYTES = 16 * 1024
 
 
@@ -200,29 +210,82 @@ def _quoted(text: str) -> str:
     return "\n".join(f"> {line}" for line in text.strip().splitlines())
 
 
+RECORD_FOLLOWS = (
+    "rite: the quoted lines above are the Owner's; the quoted lines below are "
+    "the definition of done the User agreed for this ticket. Work to the one "
+    "below."
+)
+"""The one UNQUOTED line between the Owner's text and rite's record.
+
+⚠ **Unforgeable because every line of the Owner's text is quoted**
+(`_quoted`): nothing the Owner writes can produce an unquoted line, so the
+only unquoted line after the header is rite's. Without it, the Owner's text
+and the record are one continuous quoted block, and an Owner who wrote its
+own "Agreed definition of done for RT-1 …" would be indistinguishable from
+rite's, which is exactly the summary the record exists to replace. The
+record stays quoted too, so a board's words cannot pose as a rite header."""
+
+
 def _routed_message(
-    owner: str, text: str, ticket: str, now: datetime | None = None
+    owner: str,
+    text: str,
+    ticket: str,
+    now: datetime | None = None,
+    agreed: str = "",
 ) -> str:
     """What the secondary receives: rite's header, naming the ticket rite
-    checked, then the Owner's text."""
+    checked, then the Owner's text, then the agreed definition of done rite
+    checked it against (TR5). Both quoted: neither may forge a header. Between
+    them, `RECORD_FOLLOWS`, unquoted, which only rite can write."""
     when = (now or datetime.now()).strftime("%a %H:%M")
-    return (
+    message = (
         f"[routed by the Owner Manager {owner!r} · ticket {ticket} · sent {when} "
         f"· INSTRUCTION]\n{_quoted(text)}"
     )
+    if agreed:
+        message += "\n" + RECORD_FOLLOWS + "\n" + _quoted(agreed)
+    return message
 
 
 def _tell_owner(root: Path, owner: str, text: str, say) -> None:
     """A refused route, in the Owner's next instruction. Only `say` used to
     carry it, which reaches the terminal and not the Manager that asked."""
     try:
-        send(root, owner, INBOX, f"{ROUTE_NOTE_HEADER}\n{text}")
+        tell_manager(root, owner, "a route you asked for", text)
     except OSError as e:
         say(f"could not tell {owner!r} its route was refused: {e}")
 
 
+def _agreed(refinement, ticket: str) -> tuple[str, str]:
+    """(the agreed definition of done to quote, why the route is refused).
+
+    Exactly one of the two is set. Anything but REFINED refuses, with the
+    line a refused Worker start ends with, so the Owner learns the same
+    remedy either way. A check that raises refuses too: it is a check that
+    did not answer, and not answering is not REFINED.
+    """
+    from rite_ai.refinement import status as refinement_status
+
+    if refinement is None:
+        return "", (
+            "UNREADABLE: this supervisor has no board to check refinement "
+            "on, so it routes nothing."
+        )
+    answer = refinement_status.checked(refinement, ticket)
+    if not answer.refined or answer.record is None:
+        why = refinement_status.refusal(answer.state, ticket)
+        return "", why + (f" ({answer.detail})" if answer.detail else "")
+    return refinement_status.render_for_worker(answer.record), ""
+
+
 def deliver_routes(
-    root: Path, manager: str, owner: str, managers: list[str], say, read_ticket=None
+    root: Path,
+    manager: str,
+    owner: str,
+    managers: list[str],
+    say,
+    read_ticket=None,
+    refinement=None,
 ) -> int:
     """Deliver what `manager` asked to route, if it is the Owner. Returns how
     many were delivered.
@@ -252,11 +315,21 @@ def deliver_routes(
                 root, owner, f"your route was not delivered: {verdict.reason}.", say
             )
             continue
+        agreed, why_not = _agreed(refinement, verdict.ticket)
+        if why_not:
+            say(f"route from {owner!r} for {verdict.ticket}: {why_not}")
+            _tell_owner(
+                root,
+                owner,
+                f"your route for {verdict.ticket} was not delivered. {why_not}",
+                say,
+            )
+            continue
         path = send(
             root,
             verdict.to,
             INBOX,
-            _routed_message(owner, verdict.text, verdict.ticket),
+            _routed_message(owner, verdict.text, verdict.ticket, agreed=agreed),
         )
         # Recorded as DELIVERED, by the inbox file's name, so this Owner's
         # supervisor knows work is outstanding without asking a model.
@@ -273,11 +346,16 @@ def _report_reader(owner: str) -> str:
 
 
 REPORT_HEADER_START = "[from Manager "
-NOTE_HEADER_START = "[from rite · about "
-"""How every note rite writes to the Owner about routed work begins (decision
-3). Like a reply, it is mail the Owner has not read, so a wait counts it."""
 """How every reply `collect_reports` delivers begins. `Waiting` recognises a
 collected reply by it; the secondary's own text is quoted beneath it."""
+
+NOTE_HEADER_START = telling.NOTE_HEADER_START
+"""How every note rite writes to a Manager begins. `telling` is the one
+writer; this is its constant, kept here for readers that use it from
+`routing`. Of those notes, the ones about routed work (decision 3) carry
+`telling.ROUTED_WORK`, and like a reply they are a reason for the Owner to
+wait (`Waiting.reply_waiting`). Other notes are not, on purpose: see
+`telling`."""
 
 
 def _report_message(sender: str, text: str, checked: str = "") -> str:
@@ -326,6 +404,7 @@ def collect_reports(
     be. Dedup does nothing about a false report; only verification does.
     """
     from rite_ai.managers import checkins
+    from rite_ai.managers.verifier import event_fields
 
     _mark_seen_running(root, owner, managers)
     brought = 0
@@ -383,6 +462,7 @@ def collect_reports(
                     "at": time.time(),
                     "from": sender,
                     "verdict": verdict.kind,
+                    **event_fields(verdict),
                 },
             )
             brought += 1
@@ -528,6 +608,7 @@ def briefing(manager: str, owner: str, roles) -> str:
     if len(roles) < 2:
         return ""
     from rite_ai import own_command
+    from rite_ai.managers import stdin_text
 
     rite = own_command()
     others = [r for r in roles if r.name != manager]
@@ -552,8 +633,11 @@ def briefing(manager: str, owner: str, roles) -> str:
             "and the only one that hands work to the others.\n\n"
             f"{listed}\n\n"
             "To give one of them work, run:\n"
-            f'  {rite} route --ticket <ID> <manager> "<what to do, and what to '
-            'report back>"\n'
+            + stdin_text.heredoc(
+                f"{rite} route --ticket <ID> <manager> -",
+                "<what to do, and what to report back>",
+            )
+            + f"\n{stdin_text.RULE}\n"
             "Every route names the ticket the work is for; rite checks it is on "
             "the board and refuses the route otherwise. If the User asked for "
             "the work in a message and it is not a ticket yet, make it one "
@@ -579,7 +663,7 @@ def briefing(manager: str, owner: str, roles) -> str:
             "Route only what a person gave you authority for. If it is missing "
             "something you would otherwise have to guess — which file, what "
             "counts as done, what must not change — ask the User before you "
-            f'route, with `{rite} ask "<question>"`. Never route a guess, and '
+            f"route, with `{rite} ask -`, as above. Never route a guess, and "
             "never leave the other Manager to ask: it cannot reach the User. "
             "Once routed, the other Manager should need nothing more from you.\n"
         )
@@ -593,7 +677,9 @@ def briefing(manager: str, owner: str, roles) -> str:
         "work, and you cannot write another Manager's inbox — do not try.\n"
         "When you have finished a routed instruction, report back by RUNNING "
         "this shell command as a tool call (writing it in your answer does "
-        f'nothing): `{rite} reply --manager {manager} "<result>"`. '
+        "nothing):\n"
+        + stdin_text.heredoc(f"{rite} reply --manager {manager} -", "<result>")
+        + f"\n{stdin_text.RULE}\n"
         "⚠ BEFORE you run it, CHECK every part you are about to claim, with a "
         "tool, now: read the file you say you wrote, run the command you say "
         "passed, look at the commit you say you made. Report what the check "
@@ -1003,7 +1089,8 @@ class Waiting:
                 # reached right then found nothing outstanding and stopped
                 # with the reply in the inbox, for the next `rite start`.
                 return (
-                    "a reply from another Manager is waiting to be delivered"
+                    "a reply from another Manager, or rite's note about work "
+                    "routed to it, is waiting to be delivered"
                     if self.reply_waiting()
                     else ""
                 )
@@ -1079,7 +1166,7 @@ class Waiting:
         from rite_ai.managers.mailbox import read
 
         return any(
-            m.text.startswith((REPORT_HEADER_START, NOTE_HEADER_START))
+            m.text.startswith(REPORT_HEADER_START) or is_routed_work_note(m.text)
             for m in read(self.root, self.owner, INBOX)
         )
 
@@ -1176,19 +1263,24 @@ def verification_summary(root: Path, owner: str, since: float) -> str:
     verification is rite's own session, not an Owner session, and a single
     number mixing the two is how the cap was once mis-sized."""
     from rite_ai.managers import checkins
+    from rite_ai.managers.verifier import guard_counts
 
     counts: dict[str, int] = {}
+    events = []
     for e in checkins.ledger(root, owner):
         if e.get("event") == "verification" and float(e.get("at") or 0) >= since:
             kind = str(e.get("verdict"))
             counts[kind] = counts.get(kind, 0) + 1
+            events.append(e)
     if not counts:
         return ""
     total = sum(counts.values())
     parts = ", ".join(f"{n} {k.replace('_', ' ')}" for k, n in sorted(counts.items()))
+    guards = guard_counts(events)
     return (
         f"rite ran {total} verification(s) of replies ({parts}); they are "
         "rite's own sessions, not the Owner's, and not counted against its cap"
+        + (f"; {guards}" if guards else "")
     )
 
 
@@ -1257,10 +1349,7 @@ def _alive_after(root: Path, owner: str, name: str, at: float) -> bool:
 
 
 def _note(sender: str, what: str, body: str) -> str:
-    return (
-        f"{NOTE_HEADER_START}{sender!r} · {what} · rite's own words · context "
-        f"— not an instruction]\n{body}"
-    )
+    return note(f"{sender!r} · {what}", body, routed_work=True)
 
 
 def _notice_routed_work(

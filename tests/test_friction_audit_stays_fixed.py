@@ -112,7 +112,7 @@ def test_item_5_a_worker_nobody_started_is_not_a_stall(
     status = _in(a_generated_project, monkeypatch, ["status"]).output
     watchdog = _in(a_generated_project, monkeypatch, ["watchdog"])
 
-    assert "not started" in status.lower(), status
+    assert "no heartbeat or claims yet" in status, status
     assert watchdog.exit_code == 0, watchdog.output
 
 

@@ -74,7 +74,11 @@ class TestListHonoursARenamedTokenKey:
         # And it must not ALSO demand the default name the project renamed
         # away from — that is the half that reads as a second missing
         # credential.
-        assert "rite credential set jira_token" not in result.output
+        # Asserted on the table's rows: the remedy line names the service
+        # (`set jira`), which the still-missing `jira_email` legitimately
+        # prints too, so a text search for the remedy could not tell them apart.
+        rows = [line.split()[0] for line in result.output.splitlines() if line.strip()]
+        assert "jira_token" not in rows
 
     def test_the_default_still_applies_when_nothing_is_renamed(
         self, tmp_path, monkeypatch
@@ -261,8 +265,8 @@ class TestStatusDoesNotRepeatTheWholeRemedy:
         multiline = (
             "jira_token not found — looked in: $RITE_JIRA_TOKEN, keychain "
             "'acme-1a2b3c/jira_token' (this project).\n"
-            "  Set it for this project:  rite credential set jira_token\n"
-            "  Or machine-wide:          rite credential set jira_token --global\n"
+            "  Set it for this project:  rite credential set jira\n"
+            "  Or machine-wide:          rite credential set jira --global\n"
             "  What this project needs:  rite credential list"
         )
         boards = [
@@ -275,7 +279,7 @@ class TestStatusDoesNotRepeatTheWholeRemedy:
         rendered = "\n".join(lines)
         assert "jira_token not found" in rendered
         # The remedy appears nowhere — not once, and certainly not three times.
-        assert "rite credential set jira_token" not in rendered
+        assert "rite credential set jira" not in rendered
         assert "What this project needs" not in rendered
         # One line per role, plus the section header.
         assert sum(1 for line in lines if "unavailable" in line) == 3

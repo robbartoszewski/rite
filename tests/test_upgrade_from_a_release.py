@@ -47,13 +47,33 @@ def _release_tags() -> list[str]:
     except (OSError, subprocess.CalledProcessError):
         return []
 
-    def version(tag: str) -> tuple[int, ...]:
+    return _by_version(tags)
+
+
+def _by_version(tags: list[str]) -> list[str]:
+    """Oldest first, by version. A pre-release is a release: `v0.7.0a1` used
+    to fail an int-per-part parse, sort as `()` — the OLDEST — and so be
+    silently left out of "the newest release" this file upgrades from."""
+    from packaging.version import InvalidVersion, Version
+
+    def version(tag: str):
         try:
-            return tuple(int(part) for part in tag.lstrip("v").split("."))
-        except ValueError:
-            return ()
+            return Version(tag.lstrip("v"))
+        except InvalidVersion:
+            return Version("0")
 
     return sorted(tags, key=version)
+
+
+def test_a_pre_release_sorts_as_the_release_it_is():
+    tags = ["v0.10.0", "v0.6.0", "v0.7.0a1", "v0.4.0", "v0.7.0a2"]
+    assert _by_version(tags) == [
+        "v0.4.0",
+        "v0.6.0",
+        "v0.7.0a1",
+        "v0.7.0a2",
+        "v0.10.0",
+    ]
 
 
 def _build_with(tag: str, tmp_path: Path) -> Path:

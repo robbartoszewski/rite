@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.40 · **Date:** 2026-09-28
+**Version:** 0.24.76 · **Date:** 2026-10-01
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -263,53 +263,79 @@ third number to keep in step. **Log a lease rejected as not-credible distinctly*
 it means somebody's clock is wrong, which is worth knowing rather than silently
 recovering from, and it is the only signal that will say so.
 
-#### 2.4.1a. ⚠ OBSERVED ONCE: two simultaneous Owners under extreme load
+#### 2.4.1a. Two simultaneous Owners reported by the graceful-handover test: a measurement fault, not the lease
 
-**The property this section exists to provide failed once, and the
-mechanism is not established.** Recorded here rather than closed, because a
-safety property that has been seen to break belongs in the spec even when
-it cannot be reproduced.
+**Status 2026-09-29: the mechanism is established, and it is in the test's
+bookkeeping, not in the lease.** This section used to record the Owner-lease
+guarantee as failing under extreme load (a "stated bound"). That reading is
+withdrawn; what follows is why, and what would still show a real failure.
 
-`tests/test_graceful_handover_across_processes.py` asserts
-`not overlapping_owners(runs)`. On 2026-09-20 it failed inside a full-suite
-run:
+⚠ **v0.6.0 shipped with this section stating that limit, and the claim was
+not supported.** The lease, election and state-layer code v0.6.0 shipped is
+the code measured clean below: between the `v0.6.0` tag and the fix, it
+differs only by the additive `released_at`. Do not design around a load
+limit on the Owner lease; there is no evidence for one.
 
-    beta's lease   ...0594.8 -> ...3644.8
-    alpha acquired ...3540.9
-    OVERLAP          103.9s
+**What the guarantee DOES rest on is clock agreement.** A challenger promotes
+once the lease has expired by ITS clock plus `skew_tolerance_seconds`
+(§2.4.1), and an incumbent whose renewal is uncertain keeps the role until
+its OWN clock says the lease has expired. Two machines whose clocks disagree
+by more than `skew_tolerance_seconds` can therefore have a challenger promote
+while the incumbent still believes it holds the role. That is real, cannot
+be exercised by a test whose processes share one clock by construction, and
+closing it needs a shared clock or fencing tokens: v0.8.0, LS3.
 
-⚠ **Note the direction: alpha acquired 103.9s BEFORE beta's lease
-expired.** `stand_for_owner` cannot promote against a lease its holder
-reads as `HELD` — it returns `StillOwner`/`NotOwner` and stops. So alpha
-did not take the role because beta was slow to yield. Either alpha read a
-lease that beta had already renewed past, or the two processes' clocks
-disagreed by more than `skew_tolerance_seconds`. **Which of those it was is
-unknown**, and the difference matters: one is a defect in the state layer's
-read, one is a defect in `verdict`, and one is an environment fact.
+`tests/test_graceful_handover_across_processes.py` asserted that no two
+ownership runs overlap. It failed twice: on 2026-09-20 in a full-suite run at
+load ~140 (overlap 103.9 simulated s), and on 2026-09-28 in CI on macOS (run
+36476910158, head `36f103d`, overlap 78.2 simulated s; the clock runs 600x,
+so 0.17 s and 0.13 s real).
 
-**What is established, and what is not:**
+**What was wrong.** The test closed the incumbent's ownership run when its
+handover TICK returned. The release lands before that: after its push the
+tick still runs the write's housekeeping and returns, and a loaded or
+descheduled process can take longer over that than the successor takes to
+read the release, wait out `skew_tolerance`, and promote. The run therefore
+ended after the successor's began, and the test reported two Owners while
+only one held the lease. The earlier reading here ("alpha acquired BEFORE
+beta's lease expired") took the late close for the lease's end.
 
-| | |
-|---|---|
-| The failure is the PROPERTY, not a timeout | established — the assertion is `overlapping_owners` |
-| It occurred at load average ~140, 1023 processes | established |
-| Reachable at ordinary CPU contention | **NO** — 10 consecutive passes at 14 hogs on 14 cores |
-| The mechanism | **NOT established** |
+**What established it** (macOS, this Mac, swap 26.8-26.9 GB of 27.6 GB used,
+load 4.1-6.8, one harness for all rows):
 
-⚠ **"It needs load 140" is not "it is not real".** A dogfood run on
-somebody else's machine is not a controlled environment, and this is the
-guarantee the whole coordination layer exists to provide. It is recorded as
-a **stated bound** — the Owner-lease guarantee has been observed to fail
-under load roughly ten times core saturation — rather than as a closed
-ticket.
+| run | test reported two Owners | a write took a lease that still held |
+|---|---|---|
+| unmodified, 40 runs | 0 | 0 |
+| 0.4 s added after beta's pushes, main `f34c32b`, 20 runs | **20** | 0 |
+| the same, with the fix, 20 runs | 0 | 0 |
+| control: alpha misjudges beta's valid lease, 3 runs | 3 | **3** |
 
-**The next occurrence is self-diagnosing.** The harness now records, every
-tick, the lease each process actually READ beside that process's own clock,
-and the failure message splits the three causes: a promotion where
-`read_was_expired=False` means the challenger promoted against a lease it
-read as VALID (`verdict`); `True` means it acted correctly on a stale read
-(the state layer, or clock skew). Neither could be told from the timestamps
-alone, which is why this took a conversation rather than a log line.
+The right-hand column is **ground truth from the remote**: with its reflog
+on, every write that landed is kept in order, and a write naming a new owner
+while the previous lease (plus the skew margin) still held is a real split
+brain. It needs no process's reading of events. The control shows it catches
+one.
+
+**The fix.** A release now carries the stamp it wrote (`Released`,
+`HandedOver` and `Tick` carry `released_at`), stamped before its push, and
+the test closes a handed-over run there. The test also checks the remote's
+history directly (`election_harness.lease_history`,
+`promotions_over_valid_leases`), and a variant with 1.0 s between a release
+landing and returning reproduces the old failure on demand; each of three
+mutations of the fix turns it red in 3 of 3 runs.
+
+⚠ **The earlier "self-diagnosing" probe could not diagnose this.** It read
+the lease AFTER each tick, so at a promotion it showed the challenger's own
+new lease, and its caption ("promoted against a lease it read as VALID")
+described a read it never recorded. It is kept as a record of what each
+process held after acting, and the caption now says so.
+
+**What is NOT established.** The 2026-09-20 occurrence was before the remote
+check existed, so it cannot be shown to be the same fault; it has the same
+signature (a successor's run starting inside an incumbent's run that ends at
+a late close), which is consistent with it and no more. And a lease that
+genuinely fails would now show in the right-hand column rather than as an
+overlap alone.
 
 #### 2.4.2. Atomic promotion via git push
 
@@ -1362,10 +1388,58 @@ properties, not features, and `tests/test_blast_radius.py` asserts them.
 `cherry-pick` appears in any git invocation in the package; the only
 repository-mutating verbs are `clone`, `fetch --prune`, `checkout`,
 `checkout -b` and `merge --ff-only`, and every one of them runs against a
-worker's own clone under `workers/<name>/`, never against the project's
-checkout. `gh` is confined to the issue board — never `pr`, never `repo`.
-Merging and pushing stay a human action, so the blast area is new changes
-rather than project history. A test enumerates every `["git", ...]` argument
+worker's own clone under `workers/<name>/` — with one exception, below.
+`gh` is confined to the issue board — never `repo`, and `pr` only as below.
+Merging stays a human action, so the blast area is new changes rather than
+project history.
+
+**The exception: `rite deliver` adds branches to the project's checkout
+(PB1, `docs/design/V070_PUBLISHING.md`).** A Worker's commits live in its
+sandbox's copy, which a destroy deletes, and "don't push must never mean
+don't commit". So `rite deliver` collects each module's ticket branch into
+the project's own checkout of that module, in `rite_ai/publishing/`
+only, with `fetch <copy> <ticket>:<ticket>` (git refuses a non-fast-forward
+and a checked-out branch), and, when `publish.squash` is on, `commit-tree`
+plus `branch <ticket> <sha>` on a branch that does not exist yet. It adds
+refs; it never changes a working tree, never moves an existing branch other
+than by fast-forward, and never deletes one.
+
+**Every commit a Worker's work leaves in credits rite and Claude (0.24.55,
+Robert, 2026-09-29):** the body line `🤖 Generated with rite
+(https://github.com/robbartoszewski/rite)` and the trailer `Co-Authored-By:
+Claude <noreply@anthropic.com>`, with no model version (security-flagged work
+can run on a downgraded model, so a version would sometimes be false in
+permanent public history) and no rite trailer or email. Added by rite
+(`publishing/attribution.py`), never remembered by a Worker: a
+`prepare-commit-msg` hook rite installs in every clone before the sandbox
+starts (it runs under `--no-verify` too; a Worker whose hook cannot be written
+is not started), and `credit` on the squash commit `rite deliver` builds. The
+body line goes before the trailer block and nothing is repeated, since Claude
+Code adds the same trailer itself. Measured inside a real seatbelt sandbox.
+
+**And `rite deliver` writes to a remote, in the same file only, under a
+strategy that permits it.** Under `publish.strategy: push` it pushes the
+collected ticket branch onto the module's branch; under `pull_request` it
+pushes the ticket branch and opens a pull request with `gh pr create --draft`.
+**Only a draft, only on a repository the operator owns, only against its
+default branch (0.24.54, Robert, 2026-09-29: rite opens PRs on his fork, and he
+takes them upstream himself)** — checked BEFORE the push, since a branch pushed
+to someone else's repository has already gone upstream: the owner of the token
+rite pushes with (asked of GitHub, `gh api user`) must own both `origin` and
+the repository the module's URL names, and the base must be that repository's
+default branch; anything rite cannot establish refuses. Both
+run only after rite's publish gate passed on exactly the commits being sent
+(a gate that could not run is not a pass), with the Worker's own token, and
+never with `--force`: a branch that moved is refused by the remote and
+reported, never rebased. `rite deliver` never merges. **rite merges in one place,
+`rite_ai/publishing/merging.py`, only under `publish.auto_merge`, which the
+settings the Worker was started under AND the config read at that attempt
+must both allow**, only when `merge_gate` finds a green on exactly the head
+rite pushed that contains the base's live tip, on a base branch requiring
+up-to-date branches, with the publish gate passed by name, and only as
+`gh pr merge --match-head-commit <that head>`. `tests/test_blast_radius.py`
+allows `git push` in `deliver.py`, `gh pr` in `deliver.py` and `merging.py`,
+and `gh pr merge` only in `merging.py` with `--match-head-commit`. A test enumerates every `["git", ...]` argument
 list rather than grepping file text, because docstrings legitimately discuss
 pushing.
 
@@ -1567,13 +1641,39 @@ backend, and what that backend actually restricts.
 ⚠ **And rite exposes no way to ask for network isolation on any backend.**
 `SandboxConfig` (`config/models.py`) has fields for `enabled`, `backend`,
 `token_permissions` and `max_concurrent_workers` — and nothing for the network.
-`start_worker` passes `new --backend <b> --agent claude`, an `--env` per credential
+`start_worker` passes `new --backend <b> --agent claude` (on seatbelt, after
+`--data-dir ~/.yoloai`, and run with rite's own `HOME`: below), an `--env` per credential
 plus `RITE_PROJECT_ROOT` and git's `GIT_CONFIG_*` settings, its `-d` mounts, an
 optional `--prompt-file`, `<name>` and `<workdir>` — never `--network-isolated`,
 never `--network-none`.
 **Until such a field exists, every rite-managed sandbox has unrestricted outbound
 network, on every backend.** That is a statement about rite, and it is the one that
 matters here — the backend differences below decide only what rite *could* ask for.
+
+⚠ **A Worker does not get the operator's Claude settings (0.24.49, dogfood #27).**
+yoloAI 0.11.0's claude agent copies `~/.claude/settings.json` (and `statusline.sh`)
+from the home of the process running it into every sandbox, on every `new`, `start`
+and `restart` (`internal/agent/agent.go` SeedFiles; `envsetup.CopySeedFiles` and
+`RefreshHomeSeed`; not `agent_files`, and no option turns it off). Measured on the
+v0.6.0 dogfood's Worker: its settings were the operator's hooks — a coordination
+system of their own, run at every session start and stop — and `env`, merged with
+yoloAI's. On seatbelt rite now runs `yoloai new` with `HOME` set to a directory it
+owns (`worker_home`: an empty `.claude/settings.json` and nothing else) and
+`--data-dir ~/.yoloai`, which is yoloAI's default, so its state stays where it was.
+Measured: the Worker's settings then hold yoloAI's hooks only. The home also decides
+what the sandbox may read (yoloAI's seatbelt profile grants `<home>/.local` and some
+Swift/Xcode paths): measured with an empty home, `rite` inside a Worker could not load
+its Python, so `worker_home` links those paths to the operator's own. It links
+`.gitconfig` and `.config/git` too, which yoloAI also grants, so a Worker commits as
+the operator exactly as before (Robert, 2026-09-29); measured with neither, git
+invented `<user>@<host>.home`. rite's `GIT_CONFIG_*` still override what cannot work
+inside (credential helper, signing, hooks path).
+**Not covered:** a `yoloai start`, `restart` or `attach --resume` a person runs from
+their own shell copies their settings back into that sandbox (rite runs none of
+them); sandboxes created
+before 0.24.49 keep what they were given; container backends are unchanged
+(unmeasured: their clients read configuration from the home); and the operator's
+`~/.tmux.conf` no longer styles a Worker's session.
 
 For completeness, from yoloAI 0.11.0's own `help security` (read from its
 documentation, not measured): `--network-isolated` installs an IPv4 allowlist, and
@@ -1642,14 +1742,27 @@ allowlist at all.
   Prefer `rite sandbox destroy` over `rite sandbox stop` once a token is no longer
   wanted on a machine, and rotate it if a stopped sandbox has been sitting
   around** (§10 already requires rotation to be cheap for exactly this reason).
-  Note that `destroy` passes `--abandon-unapplied`, so it discards whatever is
-  in the sandbox's copy of the Worker's workspace. A Worker's work leaves by
-  pushing its branch; anything not pushed is gone. So `destroy` first reads
-  the copy with local git and refuses, without `--force`, while it holds
-  uncommitted changes or commits on no remote, naming module, branch and
-  count; `stop` reports the same and stops anyway. The copy's location is
-  yoloAI's layout as measured on 0.11.0, not an interface: a copy that
-  cannot be found is reported, not taken as safe.
+  A Worker's work leaves by pushing its branch; anything not pushed is lost
+  with the sandbox's copy. So `destroy` has two checks that fail
+  independently. rite's own reads the copy with local git and refuses,
+  without `--force`, while it holds uncommitted changes or commits on no
+  remote, naming module, branch and count (`stop` reports the same and stops
+  anyway). yoloAI's own refuses while anything is "unapplied", and rite
+  passes `--abandon-unapplied` only under `--force` — with one exception.
+  **yoloAI's "unapplied" means "not copied back with `yoloai apply`", and a
+  Worker's work never leaves that way**, so a finished Worker whose branch is
+  pushed is still "unapplied" (measured on the pingr proof, 2026-09-28: the
+  only unapplied path was the clone, its one commit already on origin). That
+  made every ordinary destroy need `--force`, which teaches that the guard is
+  skippable (dogfood F1's shape). So when yoloAI refuses for unapplied work,
+  rite stops the sandbox (its agent can no longer commit), asks yoloAI which
+  paths it means, and abandons them only if every path is one of the
+  Worker's clones in a copy rite found and each clone holds nothing
+  uncommitted and no commit on no remote. Anything else — a file outside the
+  clones, work that appeared before the stop, a diff or copy rite cannot
+  read — keeps the refusal, names what is in the way, and leaves the sandbox
+  stopped. The copy's location is yoloAI's layout as measured on 0.11.0, not
+  an interface: a copy that cannot be found is reported, not taken as safe.
 - **Checked before the sandbox starts, and refused rather than discovered.**
   `rite sandbox start` — the one path every Worker start takes, the
   supervisor's included — refuses, in one line naming the remedy, a Worker
@@ -1698,11 +1811,76 @@ allowlist at all.
 
 #### 5.3.4. Workers are fungible, so they all get the same credentials
 
-**Every Worker on a project receives every credential the project holds.** Not
-a per-Worker subset. This section previously specified narrow per-Worker
-scoping and presented it as least privilege; that is no longer what the design
-does, and leaving the claim in place would be overclaiming a security property
-the tool does not have.
+**Every Worker on a project receives the same credentials: the engine's own
+(Claude), and nothing else** (`credentials.store.WORKER_SERVICES`).
+
+⚠ **No GitHub credential, since 0.24.53 (Robert, 2026-09-29: "push and PR are
+the deterministic code's job").** rite clones and fetches on the host before a
+sandbox starts (`rite prepare`), and `rite deliver` collects a Worker's
+commits and pushes and opens the pull request on the host, with the token it
+resolves there (`publishing/deliver.py`). Nothing a Worker is told to do
+needs GitHub, and in the Worker transcripts on this machine no Worker ran
+`git fetch`/`pull`/`push`/`clone`/`remote` or `gh`. A token in the sandbox
+could only let a Worker push, open a pull request (upstream too) or merge,
+forbidden only by its instructions. `start_worker` refuses to start a sandbox
+that would receive `GITHUB_TOKEN`, `GH_TOKEN` or `GH_ENTERPRISE_TOKEN`,
+whatever the caller passed. Measured through `start_worker` with a token
+available to rite: before, the value was in three files inside the sandbox
+(`ro/secrets/GITHUB_TOKEN`, the shell history, the agent log); after, in none.
+(yoloAI does not forward the host's own environment to the agent: measured,
+a `GITHUB_TOKEN` in `yoloai new`'s environment did not reach it.)
+Not a per-Worker subset — that is what "fungible" below still means — and no
+longer "every credential the project holds".
+
+⚠ **Reversed 2026-09-29 — do not restore "every credential" as a fix.** From
+the fungibility decision until then, every Worker received every credential
+the project held: Jira, Slack and whatever else was stored. Robert reversed it
+("Narrow it down") on evidence rather than argument: the pingr Worker proof's
+launch line carried `SLACK_BOT_TOKEN`, `JIRA_API_TOKEN` and `JIRA_EMAIL`, none
+of which the Worker used for its work, and SB12 measured that a sandbox's
+environment is readable from other sandboxes on the same machine. Fewer
+credentials in a Worker's environment is less for another sandbox to read —
+the only SB12 mitigation available before v0.8.0 — and less for yoloAI to
+write into the sandbox's files (below). What was checked before narrowing,
+from the code rather than from one Worker: no Worker instruction or installed
+command uses Slack; the one Worker use of Jira is reading its own ticket with
+`rite board show` (see "Reading the ticket" below). A service joins
+`WORKER_SERVICES` only when a Worker is shown to need it.
+
+Fungibility is unaffected by the narrowing: every Worker still holds the same
+set, so assignment still never asks which Worker *can* do a job.
+
+**Reading the ticket.** A Worker cannot read the board: it holds no board
+credential. So its ticket is read where every other board read and write
+already happens, outside the sandbox. `rite sandbox start` reads the ticket
+on the host — every start with a ticket, which since TR9 is all Worker work,
+chores included — renders it exactly as `rite board show` does (one
+function, `sandbox.delivery.render_ticket`, normalised and phrase-scanned),
+and writes it to `workers/<worker>/TICKET.md` before yoloAI copies the
+directory in. The file names the board and the UTC time of the read and says
+it is **a copy taken at that moment, not the live ticket**: if the ticket
+changes afterwards, the Worker works from the copy, and the record shows what
+it worked from. A ticket that cannot be read refuses the start; a start with
+no ticket removes a previous copy. Further host-read content for a Worker is a
+section of the same file (`write_delivery(..., sections=...)`), so board
+content reaches a Worker by one path.
+
+**Only an agreed definition of done starts a Worker (TR4, built).** The read
+above is `refinement.status.of`: ONE read of the ticket and its comments,
+which returns the refinement state, the signed record and the ticket text
+together. Only REFINED starts a Worker. `TICKET.md` then carries that read's
+ticket text and, as the section "Agreed definition of done", that read's
+record (`render_for_worker`); the opening prompt names the record id, and the
+Worker cites it in its pull request. The board is never read a second time for
+the text, so a Worker can never be handed ticket text that does not match the
+record rite checked (the refinement note's race 4). Every other state (NOT
+REFINED, STALE, CONFLICT, UNREADABLE) refuses the start, names itself, and
+removes any earlier copy. `--prompt` files an unrefined chore (TRQ11) and
+starts nothing. Measured 2026-09-29 through the real CLI against
+ritetest Jira and GitHub, with a stand-in `yoloai` that recorded only the
+names of the variables passed: main passed `JIRA_API_TOKEN`, `JIRA_EMAIL`
+and `SLACK_BOT_TOKEN` to a Worker; after this change none of them, and
+`TICKET.md` held KAN-10 as read at `2026-09-29T00:40:37Z`.
 
 **Why, and it is an engineering trade rather than a security argument.** A
 Worker is an abstract entity that maps to a workspace and, at any one moment,
@@ -1730,8 +1908,8 @@ narrower limit *between* Workers of the same project.
   inside the sandbox — `ro/secrets/<NAME>`, the shell history, the agent log
   and `sandbox.jsonl` — all of which survive `yoloai stop` and are removed only
   by `destroy` (measured 2026-09-12; this settles the report §5.3.3 previously
-  carried as unverified). Injecting a project's whole credential set rather than
-  one token multiplies that surface by the number of credentials. **`destroy`,
+  carried as unverified). That surface grows with every credential injected,
+  which is one reason the set is now two. **`destroy`,
   not `stop`, is therefore load-bearing** and is what the daily loop should use.
 - Least privilege now rests entirely on the permission bound (contents and pull
   requests) rather than on the repo bound.
@@ -2017,11 +2195,47 @@ is a WORKER scope. **`Claim` carries `paths`, `worker`, `ticket` and
 cannot express "release only my own Manager's claims."** Both fixes are worth
 making and neither delivers §5.4.1 on its own.
 
+✅ **The claim half is BUILT since 0.7.0 (MM3).** `Claim` carries `manager`,
+filled by the CLI from `managers.current_manager()` and defaulted to `""` so
+a ledger written by an older rite still parses. `force_release` takes the
+acting Manager and narrows the PATH-matched release to claims that Manager
+may release: its own, and unowned ones. Another Manager's are left alone and
+reported — `last_refused_other_managers`, which `rite release --force` prints
+as "not yours: <path> (held by <worker>, under Manager '<name>')".
+
+Three boundaries of the rule, each a decision rather than an omission, and
+each pinned by a test in
+`tests/test_a_force_release_stops_at_another_manager.py`:
+
+- **`manager=None` means "the caller is not a Manager", not "match every
+  Manager."** That is the whole of MM3's "no default that matches across
+  Managers": the wildcard is what a caller gets by saying it is nobody, and a
+  Manager says its name. `current_manager()` returns `""` outside a session
+  and the CLI turns that into `None`, so a human's `rite release --force`
+  keeps the reach it has always had — the case the command mainly serves.
+  ⚠ The join is at the CLI, so the ledger's own tests cannot reach it:
+  dropping that one translation leaves every ledger test green and breaks the
+  human's command. It is covered end to end, through `RITE_MANAGER`.
+- **`manager == ""` on a CLAIM means unowned, not "a Manager named ''".** It
+  is what every claim from a human's shell carries, and what every claim
+  written before 0.7.0 carries. A Manager may release those; refusing them
+  would turn an upgrade into a project full of claims nothing can clear.
+- **A `worker`-scoped release is NOT narrowed.** That caller has named the
+  holder, so it is already exact: `pool.archive` watched the slot die. A
+  Manager reaping a Worker that another Manager started is cleanup, not a
+  boundary crossing, and narrowing it would stop the reaper. The dangerous
+  call is the one that names no holder — "clear this path, I do not care who
+  has it" — because with two Managers the answer to "who has it" is no longer
+  "someone I am responsible for".
+
+⚠ **`destroy_worker`'s project scope is still open**, and is a different job
+from this one.
+
 #### 5.4.4. Credentials are scoped to what the Manager needs
 
 A Manager running a local engine holding the Claude token is an exposure with
-no purpose. §5.3.4 argues that *Workers* are fungible and so all get every
-credential; **Managers are not fungible** — they differ by engine, by duty and
+no purpose. §5.3.4 argues that *Workers* are fungible and so all get the same
+credentials; **Managers are not fungible** — they differ by engine, by duty and
 by which services their work touches — so the argument does not carry across
 and should not be assumed to.
 
@@ -2140,7 +2354,7 @@ here.
 (0.24.18: this line said "Not enforced" after the state below had changed):
 P2 holds, pinned by a test on both platforms, with its tmux half open on
 Linux; P1 holds for the per-Manager directories and every inbox, not for
-flat state; P3 and P4 do not.
+flat state; P4 holds for claims since MM3, not for destroy; P3 does not.
 ⚠ **Scope moved on 2026-09-26: two Managers on one machine are 0.6.0**
 (Robert). A Claude Manager as Owner, and a local secondary, in one root, is
 being built for 0.6.0. Several machines stay out of 0.6.0. **So the state
@@ -2161,7 +2375,7 @@ be tested:
 | **P1** | No rite command acting as Manager A writes rite state belonging to Manager B | the name-to-path join (§5.4.2), and §5.4.7's test at **Manager** granularity |
 | **P2** | Manager A's processes cannot signal Manager B's, or drive B's session | the Manager's sandbox profile: signals limited to its own processes, and the tmux server out of reach |
 | **P3** | State shared by decision (§5.4.6) is written only through its locked writer, and the list is enumerated by a test | §5.4.6 |
-| **P4** | A release or destroy names the Manager whose thing it is | §5.4.3, with a Manager field on the claim |
+| **P4** | A release or destroy names the Manager whose thing it is | §5.4.3, with a Manager field on the claim (`Claim.manager`, since MM3) |
 
 **State on `main`, measured 2026-09-25 at `9862b59`, and reproduced at `8d5fc22` and again after `7ae2ecc` changed the profile:**
 
@@ -2281,8 +2495,13 @@ be tested:
   per-Manager directory out would fix nothing there. Do not propose the
   directory move for `.rite/user/`'s sake. What it would buy is the root
   grant on Linux (D17).
-- **P3 and P4 do not.** The shared-by-decision list has no test behind it
-  (§5.4.6). And `Claim` has no Manager field (§5.4.3).
+- **P3 does not.** The shared-by-decision list has no test behind it
+  (§5.4.6).
+- **P4 holds FOR CLAIMS since 0.7.0 (MM3), and not for destroy.** `Claim`
+  carries `manager`, and a path-matched `force_release` releases the acting
+  Manager's own claims and unowned ones, leaving another Manager's and naming
+  whose they are (§5.4.3). `destroy_worker`'s missing scope is the PROJECT,
+  not a Manager, and is still open.
 
 ⚠ **Before MM-2 the Manager's sandbox did not enforce P1, and was measured
 not to**: each profile granted the whole project tree, and one Manager wrote
@@ -2299,6 +2518,48 @@ wrong path join, a broad `pkill`, a `tmux kill-server`, a force-release
 matched by path. The tickets and the open questions (where per-instance
 configuration lives, whether Workers belong to a Manager, a per-Manager
 worker cap) are in `docs/design/V070_RELEASE_PLAN.md`, track MM.
+
+
+#### 5.4.9. A local Manager's permission mode is `auto`, and that is not a boundary
+
+**`GOOSE_MODE=auto` is the supported posture for a local (Goose) Manager, and
+rite places it on the pane rather than inheriting it.** Settled 2026-10-01.
+
+**Why there is no choice to make.** B4d measured both modes in a headless run:
+under `auto` Goose exits 0 and will run `rm` on a file unattended; under
+`approve` it exits **1** on the first tool call — *"Tool approval required in
+non-interactive mode … Approve/SmartApprove modes require an interactive
+terminal."* `GOOSE_MODE` is whole-session, so there is no per-command refusal
+in between. The alternative to `auto` is therefore not a safer Manager, it is
+a Manager that dies before it does anything.
+
+⚠ **That `approve` fails FAST rather than hanging is the part worth keeping.**
+Defect class 15 is *"a prompt is not an exception, it is the absence of an
+answer"*, and a headless agent blocked on an approval nobody can give would be
+exactly that. It does not block. So the failure mode is loud, which is why
+`auto` can be chosen on its merits rather than to avoid a hang.
+
+⚠ **`auto` is not a containment decision and must never be recorded as one.**
+Containment for a local Manager comes from the seatbelt profile its pane runs
+inside (§5.4, D-76 as superseded), never from this value. A local Manager run
+on the host outside that profile is an unconstrained agent with the operator's
+own file and network access. Stated here because "the permission mode is
+settled" reads like a safety property and is not one.
+
+**Why rite places the value instead of letting Goose default.** An operator
+with `GOOSE_MODE=approve` exported in their shell would otherwise get a
+Manager that dies on its first tool call, and one with nothing exported would
+get Goose's own default, which is `auto` by accident rather than by rite's
+decision. `engines.GOOSE.permission_env` names the destination and
+`supervise` puts the value there, on the pane's own environment. An earlier
+version knew only that permission was *not* argv for Goose, which was enough
+to refuse writing a flag and not enough to put the value anywhere — a refusal
+that leaves a value homeless is worse than no refusal.
+
+**This changes no behaviour.** `supervise` has placed `auto` since the
+permission destination landed, and a test has asserted it. What was open was
+the *ruling*: the adapter's own docstring said the question was "not yet
+settled" while the code had already chosen. The record now matches the code.
 
 ### 5.5. Egress — where an agent may talk (0.8.0)
 
@@ -2453,6 +2714,42 @@ return `BackendError` here rather than fabricate a substitute — `gh api` again
 GitHub's REST issue-dependency endpoints is the escape hatch to evaluate if and when
 this becomes worth building, not assumed available now.
 
+#### 6.1.1. A project reads only its own tickets (0.24.60, Robert, 2026-09-29)
+
+Several rite projects can read one board. Measured before the v0.7.0a1 alpha
+run: three projects on one machine read Jira KAN, refinement listed `labels =
+"scheduled"` across the whole board, and the yoloAI project would have refined
+pingr's tickets and never its own.
+
+- **`ticket_backend.scope_label`**, when set, is ANDed into every list rite
+  makes of the board — refinement, loop, scheduler, distribution, status, `rite
+  board list` — and stamped on every ticket rite creates, chores included. One
+  wrapper (`tickets.scope.Scoped`), applied where every board is built
+  (`create_backend_from_config`), so no caller can build an unscoped board of a
+  scoped project. Empty is the whole board, as before.
+- **Not scoped:** a raw `rite board query` (the escape hatch, answered as
+  typed) and a read by id (an id names one ticket; refusing it on a label would
+  make "which project is this?" read as "it does not exist").
+- **`rite init` sets it to the project's name**, lowercased, anything outside
+  `[a-z0-9_.-]` made `-`; one of rite's own labels (`scheduled`, `chore`,
+  `blocked`) gets `project-` in front. A label a board cannot hold, or one of
+  those words, is a config error, never dropped: a dropped label would leave a
+  project reading every other project's tickets while its owner believes it is
+  scoped.
+- **`rite start` refuses a Manager, and `rite doctor` reports a problem,** when
+  another rite project on this machine reads a board this one reads and either
+  is unscoped, or both use the same label; and when the scope label is also a
+  Worker's or Manager's name (those names are assignment labels, §9.10).
+  Checkouts of the same project (the same credential namespace, committed with
+  the config) are not a collision.
+- **"On this machine" is `~/.rite/projects.json`**: the root of every project
+  that has run `rite init`, `rite start` or `rite doctor`, paths only, each
+  project's board and label read from its own config at the time of the check.
+  The Dispatch registry could not serve: it is opt-in, and neither colliding
+  project was in it. **Stated limits:** a project on another machine, or one
+  that has run none of those commands since this existed, is not seen; the
+  refusal says so.
+
 ### 6.2. JIRA (default backend)
 
 The default implementation uses JIRA Cloud REST API.
@@ -2549,7 +2846,8 @@ and N2 both landed and were observed (the v0.6.0 plan's § N). It was
 planned for 0.6.0, sequenced last and droppable, and was not dropped.
 
 **What rite does TODAY.** On rite's read paths (`rite board show`, `list`
-and `query`, and the Slack relay), ticket and Slack text is **NORMALISED**
+and `query`, the ticket copy `rite sandbox start` delivers to a Worker, and
+the Slack relay), ticket and Slack text is **NORMALISED**
 (§6.6.1, N1) and **PHRASE-SCANNED, with matches REPORTED at the next
 check-in** (§6.6.2, N2). Nothing is ever withheld. Two limits hold whatever
 else ships:
@@ -2653,6 +2951,193 @@ worded as a task, still reaches the agent unflagged. What limits the damage is n
 here. It is the command allowlist (C4) today, and destination control
 (§5.5, v0.8.0, decided and not built), which makes a fooled agent harmless
 rather than trying to stop it being fooled.
+
+### 6.7. Refinement: the record, the predicate, the protocol
+
+**The property (Robert, 2026-09-28): no work starts on a ticket whose
+definition of done the User has not agreed**, and that definition of done is
+never invented: it is the User's accepted text, or a person's attested text,
+and nothing else. The design, with every race and every ruling, is
+`docs/design/V070_TICKET_REFINEMENT.md`; this section states what rite does,
+and marks what is decided and not built. Enforcement is the standard, with no
+setting and no exemption (D-102).
+
+#### 6.7.1. The record and the one predicate — BUILT (TR1)
+
+A ticket is **REFINED** if and only if ONE read of the board (the ticket and
+its comments, shown complete) finds exactly one head record, rite's HMAC over
+it verifies with the refinement key, and it was signed against the ticket's
+current title and description. The record is a board **comment**, never an
+edit to the description (G2: rite never rewrites the person's text). The key
+lives beside the credential root, in no path any Manager or Worker profile
+grants, and never enters an argv or an environment. Measured unreadable (TR0,
+2026-09-29) from a Manager on macOS and on Linux and from a yoloAI Worker on
+macOS, where seatbelt still shows the file's size and mode (harmless for an
+HMAC key); **a Linux Worker is not yet measured**, and is on the release
+candidate run's checklist.
+
+Every other state names itself and is never read as another: **NOT REFINED**
+(no record), **STALE** (the ticket changed after it was agreed), **CONFLICT**
+(two heads; a person decides, never "latest wins"), **UNREADABLE** (the board,
+the comments or the key could not be read). **UNREADABLE means rite could not
+check, never "no definition of done"** (D-74: an unreachable board is not an
+empty one).
+
+`refinement.status.of(root, config, id)` is **the one path from a ticket id to
+a state**, and `refinement.status.status(board, id)` its core for a caller
+that already holds a board: `rite refine status`, a Worker's start, a route
+and the Owner's assignment all go through them, and
+`test_nothing_else_composes_the_predicate` fails if anything composes the
+check itself.
+`rite refine status <ID>` exits 0 only for REFINED. `rite refine accept <ID>
+--item … [--verify …] [--as-written]` writes a record from a session running as
+the person, outside any sandbox, marked **attested** and carrying
+`rite-attested`, with nothing identifying the machine (D-111). A sandboxed
+agent cannot sign: it cannot read the key.
+
+#### 6.7.2. Every path to work asks it — BUILT (TR4, TR5, TR9)
+
+| path | what rite does with a ticket that is not REFINED |
+|---|---|
+| `rite sandbox start --ticket` (and every Manager's Worker request, which runs it) | refuses, naming the state and the remedy in a last line of at most 200 characters, because that line is what reaches the Manager (`broker.honour`, then `tell_manager`) |
+| `rite route --ticket` (the Owner to another Manager) | refuses, in the same words, through the Owner's next instruction |
+| the Owner's assignment of waiting tickets to Managers | leaves it unassigned and says so, ticket by ticket, with its state; a check that fails for one ticket holds that ticket and the tick goes on. The check is the board itself by default, so there is no call site that could forget it |
+
+**What a REFINED ticket carries.** A Worker's `TICKET.md` holds the ticket's
+text and, as "Agreed definition of done", the record, **both from the same
+read that found it REFINED** (race 4: what was checked is what is delivered),
+and the start prompt names the record id for the Worker to cite. A route
+carries the same rendering after the Owner's quoted text, quoted, below one
+unquoted line only rite can write (`routing.RECORD_FOLLOWS`), so the secondary
+works to what the User agreed, not to the Owner's summary of it.
+
+**Why a Worker never checks.** The host checked the record, in that same read,
+before the sandbox existed. From inside a sandbox the check could only answer
+UNREADABLE for a refined ticket (no key by design, no board credential since
+§5.3.4's narrowing), and trusting the delivered file instead would let a file
+the Worker can edit decide refinement. A person's own session, which can read
+both, runs `rite refine status` (`/ticket` step 1).
+
+**Every piece of Worker work carries a ticket (D-106).** `rite route` requires
+`--ticket`. A User's chat instruction becomes a chore: the Manager names the
+delivered message (`rite chore <message-id>`) and rite writes the ticket from
+the User's words as delivered, labelled `chore` and `scheduled`; a Manager
+cannot author one. `rite sandbox start --prompt` files an unrefined chore and
+starts nothing. A chore goes through the same predicate (D-110).
+
+#### 6.7.3. Who refines, and how — DECIDED, NOT BUILT (TR2)
+
+The Owner refines, and only the Owner: it is the one Manager that talks to the
+User (`routing_owner`), so there is at most one refiner (D-107's dissolved
+question). A secondary and a Worker never refine; they report a gap and stop.
+Until TR2 is built, **a ticket is refined only by a person's `rite refine
+accept`**, which `/refine` walks through with the person present: at most three
+numbered questions, every proposed item tagged with where it came from, an
+explicit yes, then `accept`.
+
+Not built, decided: rounds through `rite refine ask` with a lint, answers
+attributed by thread or leading id and never by a model, a configurable
+accept-word set (D-104), "you decide" answered with a recommendation to
+confirm (D-105), rounds bounded and timed (D-103), a silent ticket shown as
+waiting for the User and a silent chat instruction becoming an unrefined chore
+after `chore_after_minutes` (D-110), the questions in the DM or a private
+channel (D-108), and the loop's third verdict for a board whose work exists but
+none of which can start yet, neither `idle` nor `ready` (TR2). The
+`ready-to-work` label is built: §6.7.4.
+
+#### 6.7.4. The `ready-to-work` label: a view, never an input — BUILT (TR7)
+
+So that the Owner and the User can filter "ready to be assigned" from "needs
+refinement" on the board itself, rite keeps one label, `ready-to-work`, on a
+ticket exactly when its latest read shows `scheduled`, REFINED (§6.7.1) and no
+Manager's name on it. **Nothing reads it to decide anything**: every gate in
+§6.7.2 reads `scheduled` and the record, so a label added by hand starts
+nothing, and one removed by hand blocks nothing.
+
+- **Who writes it** (`refinement/view.py`). The Owner's supervisor, at the
+  start of every cycle, from the same reads as its refinement brief; the one
+  record writer (`accept.write`, for `rite refine accept` and the User's accept
+  word), for its ticket, after the read-back; `rite refine reopen`, for its
+  ticket; `rite refine sync`, on the host, on demand; and a Worker assignment,
+  which takes it off in the same write that takes `scheduled` off, and only
+  when the ticket carries it (`gh issue edit --remove-label` refuses a label
+  the repository lacks: measured, gh 2.98.0).
+- **What a pass looks at.** Every ticket in `list(scheduled)` and
+  `list(ready-to-work)`, each read once; a project's board already folds in
+  rite's own recent writes (DF4), so a lagging list does not hide one. The
+  second list finds a label left behind while no rite ran. A list cut short
+  makes the pass incomplete, and it says so rather than calling the board
+  reconciled. Each start line says how many labels it corrected.
+- **A wrong label.** Added by hand to a ticket that is not REFINED: removed,
+  with one comment on the ticket per record state (found in the ticket's own
+  thread, so a person re-adding it cannot start a comment war) and a line in
+  the Owner's instruction every time. Removed from a REFINED ticket: put back,
+  with no comment. A ticket read as UNREADABLE (for example with no key) keeps
+  its label, and that is said: the view is not changed on a guess.
+- **On GitHub**, rite creates the label once, with the description "Set by
+  rite: scheduled, with an agreed definition of done. Adding it by hand does
+  nothing." (GitHub's limit is 100 characters, measured), and leaves an
+  existing label of that name as its owner made it. Jira labels have no
+  description.
+- **The truth, not the view:** `rite board list --ready` and
+  `--needs-refinement` read every `scheduled` ticket fresh and never read the
+  label.
+
+
+#### 6.7.5. An item the host measures — BUILT (S31)
+
+Some definition-of-done items need a measurement a Worker cannot take inside
+its sandbox: a nested sandbox is denied there ("Operation not permitted",
+v0.7.0 dogfood KAN-29). Such an item is agreed as the host's **at refinement,
+in the signed record**, not as a flag beside it.
+
+- **Marked.** `Record.host_measured` holds the item indexes, inside the MAC
+  and the record id, and is written only when non-empty, so a record written
+  before it keeps its id and verifies. A proposal item is tagged `[host]` on
+  top of its source tag, and the round the User sees names it and says the
+  work is not published until the host's result is recorded; his accept word
+  signs the mark. `rite refine accept --host-item "…"` marks it on the
+  attest path.
+- **Told.** TICKET.md's definition of done (`render_for_worker`, its one
+  writer) marks the item "not yours to run: the host will measure this" and
+  tells the Worker to do the rest, commit, say which items wait, and stop.
+- **Measured, signed, audited.** `rite refine measured <ID> --item N
+  --result pass|fail --output FILE|-`, on the host only, writes a result
+  signed with the refinement key: who measured (§6.7.6's attribution, via the
+  terminal), when, the result, and the SHA-256 and length of the output given
+  as evidence, bound to the ticket, the board, the refinement record's id and
+  the item's text hash. It is posted on the ticket, read back, and only then
+  appended to an append-only log beside the publish records (outside every
+  Manager's grant). Its comment never reads as a record claim.
+- **The pause.** The publish snapshot taken at Worker start
+  (`publishing/record`) keeps the signed record the Worker was started on.
+  `rite deliver` still collects the work, so the host has it to measure, and
+  under `push` or `pull_request` publishes it only when every host item's
+  latest genuine result in the log is PASS. A FAIL, a result for another
+  record or item, one that does not verify, a snapshot that does not verify,
+  or no key to verify with, holds, and the hold names the item.
+- ⚠ **What it proves.** That someone holding the host's key recorded this
+  result, for this exact item of this exact record, citing this output. Not
+  that the measurement was run as described: on the host rite cannot tell
+  the person from a session running as them (TRQ10), and the record says
+  `via: terminal`.
+
+#### 6.7.6. Who answered a round: one attribution — BUILT (S22b)
+
+A round can be answered in Slack (the Owner's DM, or the refinement channel
+where the relay marks it the Owner's), by a message written on this machine
+(`rite message`, no rite header), or with `rite refine answer <ID> <words…>
+[--round k]`, host-only. **Every answer is attributed to the one owner
+identity, `slack.owner_user`, in one shape**: `{"owner_user", "via"}`, where
+`via` is `slack` or `terminal` (`refinement/attribution.py`). The round
+ledger's answers, a pending accept and the signed record's provenance all
+carry it, through the same `protocol.handle`. The record says a terminal
+answer came from the terminal, where rite cannot tell the person from a
+session running as them; before this, an `ok` sent with `rite message` was
+recorded as "accepted by the User in their channel". With no
+`slack.owner_user` set, the owner is recorded as unset and said, never
+invented.
+
 
 ## 7. Review convention and checklists
 
@@ -3546,6 +4031,9 @@ rite init --config <file> [--yes]  # non-interactive setup from a file
 
 rite add worker <name>             # create a worker workspace
 rite add module <name> [git-url]   # register (and optionally clone) a module
+rite add manager <name> --preset <p>   # declare a Manager in config.yaml (§9.5.1)
+rite module set-command <m> <key> <cmd>  # record a module's build/test command,
+                                    #   and refresh what quotes it (§9.5.2)
 
 rite remove worker <name>          # remove a worker workspace and deregister
 rite remove module <name>          # deregister a module (does not delete files)
@@ -3620,10 +4108,10 @@ rite scheduler uninstall           # deregister it
 rite sandbox start <worker> [--ticket ID | --prompt TEXT]
                                     # process-isolate a Worker's session via yoloAI (§5.3).
                                     #   Prepares the workspace first (as `rite prepare`)
-                                    #   and refuses when it cannot. `--prompt` first files
-                                    #   TEXT as a chore ticket (labelled `chore` and the
-                                    #   Worker), and refuses with no board or a refused
-                                    #   create: all Worker work carries a ticket (TR9).
+                                    #   and refuses when it cannot. Starts only on a ticket
+                                    #   rite reports REFINED, handing it that record (TR4).
+                                    #   `--prompt` files TEXT as an unrefined chore
+                                    #   (`chore`, `scheduled`) and starts nothing (TRQ11).
                                     #   The opening prompt goes
                                     #   in as a prompt file. The Worker works on yoloAI's
                                     #   full copy (`:copy-all`, gitignored files included:
@@ -3784,10 +4272,9 @@ project? [y/N]"*, asked before anything else.
   sections below. Then *"Reading <path> — languages, structure and conventions
   will be taken from what's there."* and one open question: *"Anything stale, or
   that you'd like changed? Free text, or Enter to skip."* The brief records the
-  path and that answer as `source.path` and `source.changes`, registers the
-  repositories in the source as modules the way Section 3 detects them (when
-  the source is inside the project), and none of the sections below is
-  asked. `source.path` is written relative to the project
+  path and that answer as `source.path` and `source.changes`, offers each
+  repository in the source as a module the way Section 3 does (when the
+  source is inside the project), and no other section below is asked. `source.path` is written relative to the project
   (`.` for the default answer), as `~/…` when it is elsewhere under home, and
   absolute only outside home: `brief.yaml` is committed, and a home path in it
   fails the publish gate's built-in rule (§11.3) on the first push. When the path is already a rite project, `init` says
@@ -3802,20 +4289,34 @@ project? [y/N]"*, asked before anything else.
 
 ```
 ─── Role ───────────────────────────────────────────
-Is this the Owner machine or a Manager machine?
-
-  ▸ Owner    — owns the board, assigns work, one per project
-    Manager  — receives work from an Owner, runs its own workers
+  This machine is the project's Owner — it owns the board and assigns the
+  work. A Manager machine, which takes work from another project's Owner,
+  needs the multi-manager work planned for 0.9.0 and is not offered yet.
 ```
 
-Required. Not skippable — nothing downstream works without this. **In Phase 1
-(single machine), this only determines whether `rite init` fetches an existing
-Owner's `config.yaml` for alignment (§2.4) — it has no other effect until a
-second machine exists.** Answering "Manager" does not enrol in leader election;
-there is nothing to enrol in yet.
+⚠ **Not asked, and said rather than silent, until multi-manager ships (0.9.0).**
+A Manager MACHINE needs work this release does not ship, so offering it offered an
+answer that does not work. `brief.project.role` is still written (as `owner`),
+still parsed, and still read by every consumer, so a project already carrying
+`role: manager` keeps working — this stops rite **offering** one, not reading one.
+A question that silently stopped being asked is indistinguishable from one nobody
+noticed, which is why the section says what it took.
 
-If Manager: *"Owner's project URL or config path?"* — to pull the project's
-`config.yaml` and align on ticket backend, expertise tags, etc.
+⚠ **The question existed on BOTH routes** — the from-scratch questionnaire and
+the "existing spec or code" path — and suppressing one would have changed nothing
+for the run that reported it. One suppression point, asserted as a property: no
+init path can produce `role != "owner"`.
+
+`--config` with `project.role: manager` is **refused**, naming multi-manager, and
+refused before `.rite/` is created. Not coerced to `owner`: silently discarding a
+key the user wrote is the defect class rite refuses everywhere else, where an
+unknown `config.yaml` key is refused rather than dropped.
+
+**What 0.9.0 restores.** The question, and the *"Owner's project URL or config
+path?"* that followed a Manager answer — pulling that project's `config.yaml` to
+align on ticket backend and expertise tags (§2.4). The options, the prompt and
+the borrow are all still in the code, unreferenced on purpose, behind one named
+constant, so the restore is a re-wire rather than a rewrite.
 
 **Section 2 — Project** `[2/7]`
 
@@ -3841,28 +4342,158 @@ If existing repos were detected:
 ```
 ─── Modules ────────────────────────────────────────
 Found 3 repositories:
+  this directory (./)  git@github.com:org/app.git
+  backend/  git@github.com:org/backend.git
+  shared/  local only
 
-  ✓ backend/     (git@github.com:org/backend.git)
-  ✓ frontend/    (git@github.com:org/frontend.git)
-  ✓ shared/      (local only)
-
-Add all as modules? [Y/n]
+Add this directory (./) as module 'app'? [Y/n]
+Add backend/ as module 'backend'? [Y/n]
+Add shared/ as module 'shared'? [Y/n]
 ```
 
-Default Yes. Individual repos can be deselected. For each added module,
-rite records the remote URL and the branch currently checked out.
+**Each repository is offered, and registered only when confirmed** (Robert,
+2026-09-29: "If there is a git repo in the root folder - it should ask if
+that's a module and add it if User confirms. If there are repos in the root
+directory, it should ask about those as well."). The candidates are the
+project root itself, when it is a git repository with at least one commit,
+then each immediate subdirectory that is one. Default yes. For each module
+rite records the remote URL and the branch currently checked out. The same
+offer is made on the existing-code path (above).
 
-The repositories are the project root's immediate subdirectories that are
-git repositories. When there are none and **the root is itself a repository
-with at least one commit**, the root is the one module, at path `./`: a
-single repository is the commonest project there is, and a Worker's
-workspace is its modules' clones, so registering nothing gave every Worker an
-empty workspace (dogfood F2). A root with nothing committed is not a module:
-it cannot be cloned, and is usually a workspace about to receive its modules.
-Every clone of a root module carries the project's committed `.rite/`, so a
-session in one would resolve to the clone; `rite sandbox start` gives each
-sandboxed Worker `RITE_PROJECT_ROOT`, which wins, and `rite doctor` reports
-the root module as a problem only when Workers are not sandboxed.
+**`--yes` answers yes to each, and prints one line per module it added**
+(`--yes: added this directory (./) as module 'app' (<url>)`). The other
+reading — add nothing unconfirmed — is how a `--yes` run ends up with an
+empty `modules.yaml` and Workers with nothing to clone (dogfood F2), looking
+on screen like an interactive run that added them.
+
+**Each registered module is then asked what it is**, with a default read out of
+that module's own README — its first prose line's first sentence, past the title,
+the badges and the lists, capped at a line. Enter accepts it, anything typed
+replaces it, `--config` naming one wins, and `--yes` takes the default silently,
+which is the rule every other `--yes` answer follows. The answer is the module's
+`description` (§8.2) and it renders into the brief's module table, under that
+module's own heading.
+
+⚠ **Offered, never taken unshown.** A README's first sentence is usually what a
+module would say about itself and is sometimes a slogan, so anything that is not
+prose yields nothing rather than a guess: a wrong description in the one file an
+agent reads to find out what it is working on is worse than none. Before this,
+`rite add module --description` could set it and `rite init` passed nothing, so
+every module init registered rendered with no line saying what it was — the same
+"init's path is thinner than the CLI command it stands in for" as §9.6's Worker.
+A module registered from a URL for an empty project root is asked before the
+clone, so it has no README to derive from and no default.
+
+A root with nothing committed is not offered, and init says why: it cannot
+be cloned, which is the one thing a module is for here. A single repository
+is the commonest project there is, and a Worker's workspace is its modules'
+clones, so registering nothing gave every Worker an empty workspace (dogfood
+F2). Every clone of a root module carries the project's committed `.rite/`,
+so a session in one would resolve to the clone; `rite sandbox start` gives
+each sandboxed Worker `RITE_PROJECT_ROOT`, which wins, and `rite doctor`
+reports the root module as a problem only when Workers are not sandboxed.
+
+**Before the root is offered as a module, init says it is becoming the project
+root too (0.24.59).** rite writes its own files into that repository —
+CLAUDE.md (an existing one moved aside), `.gitignore`, `.rite/`, `.claude/`,
+the gate workflow — as uncommitted changes in the working tree Workers' work is
+delivered from. Measured in the v0.7.0 dogfood: `rite init` in a clone of a
+fork contributed from did exactly that, and nothing said so. The warning comes
+before the question, and under `--yes`, while only an empty `.rite/` exists, and
+names the separate-root commands for this repository.
+
+**The existing-code route asks for the code when the path holds none (0.24.61,
+Robert, 2026-09-30).** A path with no code and no spec (a directory with
+nothing in it but hidden entries) is not read as if it held some: init says
+there is nothing there, skips "what is stale in it", and asks for a repository
+URL, offering it as a module (named from the URL). Accepted, it is registered
+and cloned through the same `add_module` as `rite add module`, before the hooks
+and CLAUDE.md are written, so they include it. Declined, or under `--yes`, init
+says no module is registered and gives the command. Measured on 0.7.0a2 (dogfood
+S11): an empty directory got "languages, structure and conventions will be taken
+from what's there", an empty brief, no module, and "Ready".
+
+**A directory with files but no git repository is said, not passed over
+(0.24.62).** When nothing is offered as a module and the root holds files but
+is in no git repository, init says that no module is registered, that a Worker
+would have nothing to work on, and the two ways out (`git init` and commit
+here, then `path: ./`; or `rite add module <name> <URL>`). Found assessing the
+0.7.0a2 init beside S11: code with no repository got "Ready" and warnings about
+the hook and CI only. An empty directory is S11's case, and a directory inside
+another repository is in one, so neither is told this.
+
+**What init leaves a project with is settled the same way on every route
+(0.24.67, v0.7.0 dogfood S13, S18, S20, S21 and the `--yes` gap).** After the
+answers, whichever route produced them (from scratch or existing code) and
+however init was run (interactive, `--yes`, `--config`), `cli/init/setup.py`:
+
+- **Zero modules is said, and asked about.** If no module would be registered,
+  init says so (with S12's explanation when the root holds code in no
+  repository) and, when someone is there and has not already been asked where
+  the code is, asks for the repository. It never ends on "Ready." with no
+  module: the last line says it is initialised but not ready, and what is
+  missing. A bare `rite init --yes` reached no module check before, wrote
+  `modules: {}` and said "Ready."; #150's only `--yes` test named a
+  `source.path`, the one shape that did reach it.
+- **rite's own leftovers are not the project's content** (`detect.content_
+  entries`, shared by `holds_nothing` and the S12 check): hidden entries, a
+  CLAUDE.md carrying rite's generated marker, rite's installer (recognised by
+  its `# rite installer.` header, never by the name `install.sh`), and a
+  `workers/` of rite Worker workspaces. S13: the setup's own `install.sh` in
+  the root turned the repository prompt off. An existing rite project is still
+  one: its changes are recorded, not read as an empty directory.
+- **The schedule is a stated default** (S21): a fresh project gets 1 Worker,
+  `00:00-24:00`, every day, in this machine's zone written down, and init
+  says so on every run with how to change it. `--config` sets
+  `schedule.timezone`, `schedule.workers` and `schedule.hours`. Not asked:
+  one command changes it. An empty schedule authorised 0 Workers, silently.
+- **A Worker is offered** (S20) once there is a module (default name `w1`,
+  cloned through `add_worker`). `--yes` declares none, because a Worker clones
+  every module over the network, and says one is needed; `--config`
+  `workers.add: <name>` declares one. ⚠ **Declared with everything `rite add
+  worker` would declare it with** — the Manager declared above, and the
+  modules'-own-instructions question (§9.6). It passed two of `add_worker`'s
+  five parameters, and the two it dropped are the two a Worker's brief is built
+  out of.
+- **The credential namespace is offered back** (S18). `~/.rite/namespaces.json`
+  records each namespace against its project's module remotes, normalised to
+  `host/owner/repo` so every spelling of one repository matches; `rite init`,
+  a wipe (before it deletes), and `rite credential set` write it. A re-init
+  whose module remote matches a recorded namespace that still holds a stored
+  credential is offered that namespace, naming the keys it holds; `--yes`
+  takes it and says so. The remote is the only identity that survives `rm -rf`
+  and a fresh clone.
+- **A Manager is offered** (S15, 0.24.70) and declared through S16's
+  `declare_manager`, the one writer of `coordination.managers` and
+  `manager_roles` and the parser's own validation, so init writes what `rite
+  add manager` would and refuses what it would. Default `lead` (preset `lead`)
+  on an Owner machine, `executor` (preset `executor`) on a Manager machine;
+  a no asks for another name, Enter for none. ⚠ `--yes` declares none, and
+  the last line says so with the command: a declared Manager makes `rite
+  doctor` report a one-machine project as uncoordinated (no `remote`, no
+  `.rite/machine`), true of S16's `rite add manager` too, so a default
+  declaration would fail every scripted init's first doctor. `--config` sets
+  `managers.add` (or `false`) and `managers.preset`, and declares it. Asked after the answers, not at the
+  Owner/Manager question itself: the config it writes into is built only
+  then, on either route. With none declared the last line says so and gives
+  the command.
+- **The board is part of being ready** (0.24.76). The last line also says when
+  `ticket_backend.type` is `none` — `rite start` would find nothing to work on
+  — naming `rite credential set jira` and the three fields it records
+  (`ticket_backend.type`, `.site`, `.projects.workers`), because the dogfood's
+  actual failure was believing the site and the project key were a board while
+  `type` stayed `none` (§10.5). On a project that HAS a board it says when
+  `refinement.questions_to` is `dm` with no `slack.owner_user`, so a refinement
+  round has no delivery route: `rite credential set slack`, and meanwhile `rite
+  replies` and `rite refine answer` at the host. ⚠ Rows point at the command
+  that does the wiring, **never at a file to edit** — init does not write
+  backend config, and a row saying "set this in config.yaml" would be rite
+  sending someone to hand-edit what it has a command for. The board row and the
+  Slack row are exclusive, following `rite doctor`'s rule that a project with no
+  board refines nothing: two rows describing one unconfigured project is how a
+  row stops being read. This check covered the workspace and stopped short of
+  the thing the work comes from, so a ticket-driven project with no board was
+  told "Ready."
 
 If no repos found:
 
@@ -4078,7 +4709,10 @@ no other Managers' state.
 **Worker** — minimal CLAUDE.md: the modules it works on, its Manager's name,
 the claims system, the review convention, the ticket workflow. No org chart, no
 board management, no other workers' state. A worker should be able to start cold
-on a ticket with only its own CLAUDE.md.
+on a ticket with only its own CLAUDE.md **and the `TICKET.md` rite delivers**:
+it works to that file's "Agreed definition of done", the record rite checked,
+and never judges for itself whether a ticket is complete enough. A definition
+of done that cannot be met as written is reported and the Worker stops (§6.7).
 
 #### 9.4.3. Templated versus derived
 
@@ -4127,6 +4761,61 @@ them (GitHub, GitLab, Bitbucket) using the tool they already have (`gh repo crea
 rite's auth surface to what it needs for its own operations — reading/writing tickets,
 pushing code — not org admin for repo creation.
 
+#### 9.5.1. `rite add manager` — declaring a Manager without editing the file
+
+`rite add manager <name> --preset <preset>` declares a Manager. Before it
+there was no CLI for this at all: `.rite/config.yaml` was the only way, and a
+normal user does not hand-edit that file for basic setup.
+
+**It writes BOTH keys.** `coordination.managers` is priority order (§2.4) and
+`manager_roles` is what each Manager is FOR (§2.4.1). They are separate keys,
+parsed independently, and allowed to disagree on disk — a writer that touched
+one and not the other would author exactly the configuration `rite doctor`
+reports.
+
+**A new Manager is appended.** The order is priority and the first active
+Manager is Owner, so appending is the only position that cannot change who
+the Owner is on a project that already runs.
+
+**Naming a Manager that is already listed CHANGES its declaration** rather
+than adding a second. Once any Manager declares a preset or duties, every
+Manager must (§2.4.1), so declaring a second Manager on a project whose first
+is a bare name fails on the FIRST one — and this is the command that declares
+it. A bare `add` of a name already present is still refused, and says which
+flags to give.
+
+**Validation is the parser's.** The entry is spliced into the list and run
+back through `parse_managers`; whatever that refuses, this refuses, in the
+same words. So the command cannot write a config.yaml the next command
+rejects, and a rule added to the parser covers this writer too.
+
+`--duties`, `--engine`, `--model`, `--endpoint`, `--agent`, `--credential`
+and `--context-window` cover the rest of a declaration, so no shape of
+Manager the schema allows needs the file. `--credential` takes a credential
+NAME, never a value (§10).
+
+#### 9.5.2. `rite module set-command` — correcting a module's commands
+
+`rite module set-command <module> <key> "<command>"` records one of a
+module's `install`, `build`, `test`, `lint` or `format` commands. Detection
+derives these from a module's own manifests; it is right for most modules and
+wrong for some, and this is the correction without opening `modules.yaml`.
+
+**It is written nested under `commands:`.** A module entry refuses an unknown
+key, and a top-level `test:` is one — so a writer that wrote it flat would
+leave a file no later command can read. The command sets the field and hands
+the list to the one serialiser that knows the shape.
+
+**It also refreshes what quotes the command.** A module's commands are
+rendered into the project's `CLAUDE.md` and every Worker's, so a correction
+that stopped at `modules.yaml` would leave the agent reading the old command
+out of its instructions. The refresh is `rite update`'s (§9.9), not a second
+renderer: a section somebody has edited by hand is KEPT and **reported**, and
+a file rite cannot read is reported as that rather than as a hand edit.
+
+An empty command unrecords the key, which is not the same as recording an
+empty one: detection decides it again.
+
 ### 9.6. `rite add worker`
 
 Creates `workers/<name>/` with cloned copies of all modules registered in
@@ -4142,6 +4831,58 @@ exactly this Worker's `modules.yaml` repos, contents+PR permissions only
 credential. The token is created or requested here, as part of the same flow
 that creates the Worker; it never passes through chat (§5.3.4).
 
+**It ASKS about the modules' own instructions.** A module often keeps a
+`CLAUDE.md`, `AGENTS.md` or `CONTRIBUTING.md` of its own. `rite add worker`
+looks for those three in each module this Worker gets, names what it found,
+and asks whether the Worker should follow them; the answer is recorded as
+`follow_module_docs` in that Worker's `worker.yml` and rendered into its
+`CLAUDE.md`. `--follow-module-docs` / `--no-follow-module-docs` answer it
+without a prompt, and nothing found means nothing asked.
+
+⚠ **That step belongs to every entry point that creates a Worker, not to this
+command.** It shipped inside the command, reachable from nowhere else, so a
+Worker `rite init` created was never offered its module's conventions at all —
+the module carried all three files and `worker.yml` had no `follow_module_docs`
+key to show the question had been considered. One helper now, which `rite init`
+also calls, with the no-tty guard INSIDE it: a caller that got to decide whether
+`--yes` counts as somebody being there is a caller that can reintroduce the
+abort below. Init's own way out of the guard is named in init's words, since
+`--follow-module-docs` is this command's.
+
+⚠ **A Worker init creates is linked to the Manager init declared.** `--manager`
+is this command's; init passed none, so an init-created Worker recorded
+`manager: ''` and got a brief whose line 7 said "No Manager assigned yet." and
+whose line 112 said "Tell your Manager you are free" — instructions that
+repeatedly name an authority the Worker was told does not exist, because only
+that one line is conditional. Nothing detected it: §9.3's readiness check asks
+that a Manager, a module and a Worker each exist, never that they are
+connected. The link is None-safe — `--yes` declares no Manager by design (§9.3
+Section 1's S15 note) and a Worker can still be declared on that path — and
+where more than one Manager is declared it is the first, which is the project's
+priority order (§2.4).
+
+**With nobody at the terminal it is not asked, and that is said.** A prompt
+is not an exception, it is the absence of an answer (§9.11): asking
+unconditionally made `rite add worker` abort in a script rather than create
+a Worker. With no tty and no flag, the files are named, nothing is followed,
+and the message says both that and which flag answers it — a default taken
+in silence would leave the user never learning the files were there.
+
+**A file rite generated is never offered.** A project whose repository is
+its own module (§9.3) has the project's own generated `CLAUDE.md` at the
+module's path; offering it would ask whether a Worker should follow the
+Owner's brief, and a yes would put project-wide instructions into a session
+that does not make project-wide decisions.
+
+⚠ **Asked rather than assumed, in both directions.** Those files are written
+for the module and mostly for people: they do not know that a Worker holds no
+GitHub credential, or that whether to push is not the Worker's to decide
+(§5.3.4). Following them silently would put instructions nobody chose into a
+Worker's brief; ignoring them silently would lose the conventions the module
+really has. Where one contradicts rite's own instructions or the ticket, the
+Worker's `CLAUDE.md` says rite and the ticket win and that the Worker reports
+the contradiction rather than choosing quietly.
+
 ### 9.7. `rite remove`
 
 `rite remove module <name>` deregisters from `modules.yaml` but does **not** delete
@@ -4153,6 +4894,42 @@ are rite's own artifact, so removing them is safe — unlike module directories 
 may contain uncommitted work.
 
 ### 9.8. `rite status` vs `rite doctor`
+
+**The live checks are opt-in (0.24.72).** The GitHub push probe and the Slack
+delivery post run under `rite doctor --network`, and without the flag doctor
+SAYS the check was not run rather than letting a silent skip read as a pass.
+⚠ `--network` gates only those two; Slack's target probes are unchanged, and
+the flag is therefore not a promise that a plain `rite doctor` is fast — other
+checks that predate it (git remote reachability, the Slack target probes, the
+engine probes) reach the network on every run and a sweep takes minutes.
+
+**Presence is not permission (0.24.72, S28).** A GitHub token that exists can
+still be read-only, which passes "is there a token?" and is then refused by
+`rite sandbox start` — the report a person reads BEFORE starting said nothing
+about the thing that would stop them. Under `--network`, each Worker's token
+is asked of GitHub with `sandbox.push_access`, which answers `ok`,
+`cannot_push` or `unknown`. ⚠ **Only `cannot_push` is a problem.**
+`push_access_refusal` collapses `unknown` into a refusal, which is right when
+the choice is whether to START a Worker — an unchecked token is refused rather
+than trusted — and wrong in a report, where it would tell someone offline to
+reissue a credential that was fine. One probe serves both, so they cannot
+drift.
+
+**And doctor may post, where setup may not (0.24.72).** Under `--network`,
+doctor posts one message to the broadcast channel: whether a channel delivers
+is not answerable by configuration, and the person running doctor asked.
+`rite credential set slack` never posts (§10.5) — someone setting rite up is
+not announcing it, and a setup command that posts spams a workspace every time
+it is re-run.
+
+**A single-machine project is not an un-enrolled one (0.24.72, S32).**
+`enrolment` says nothing about `.rite/machine` when `coordination.remote` is
+unset: enrolment is how several machines tell each other apart, and a solo
+project has no other machine to publish a heartbeat to, stand for Owner
+against, or take work over from. Declaring a Manager sets
+`coordination.managers`, which alone used to defeat the Phase-1 return, so the
+warning arrived the moment declaring a Manager became an ordinary thing to do.
+
 
 Two distinct questions:
 
@@ -4166,6 +4943,15 @@ Two distinct questions:
   same check `rite schedule set` runs at write time, re-run here for a schedule
   that was hand-edited into `config.yaml` directly. The view someone reads when
   something is broken.
+
+  **It also says when a refinement round cannot reach the person (0.24.58).**
+  Refinement runs on every project with a board, and no Worker starts on a
+  ticket until it is refined, so a project with a board whose refinement
+  target is unreachable is a problem, not a feature nobody turned on: with
+  `refinement.questions_to: dm` (the default), an empty `slack.owner_user` or
+  no Slack bot token; with `channel`, no token. It names what is missing and
+  what to set. A project with no board refines nothing and is not checked, and
+  an unreadable credential store is "cannot check", never "missing".
 
 ### 9.9. `rite update`
 
@@ -4235,7 +5021,8 @@ After setup, Dispatch reads the project state and acts on the first matching con
 | Blocked tickets with unresolved blockers | Surface blockers to the human; work on unblocked items |
 | No project spec registered (`spec.paths` empty) | Run `/spec` before planning or ticketing (§9.13.1). `rite start` and `rite doctor` report this row, and report a spec file that exists but is not registered as that instead |
 | `modules.yaml` lists repos with no review checklist | Generate default review checklists |
-| `scheduled` tickets in the backlog, at least one claim-safe | Pick the first safe one and start (same logic as §5.2 claims check) |
+| `scheduled` tickets in the backlog, none REFINED | Not "nothing to do": they need their definition of done agreed with the person first (§6.7). A Worker will not start on one, and saying which ones and why is the action |
+| `scheduled` tickets in the backlog, at least one REFINED and claim-safe | Pick the first safe one and start (same logic as §5.2 claims check). A ticket rite does not report REFINED is not ready, however it is labelled |
 | `scheduled` tickets in the backlog, but every claim attempt is refused | Report "nothing safe to start" to the human; increment the coordination-cost counter (§2.7.2) — this is a distinct, counted state, not silently the same as either neighbouring row |
 | Board is empty | Report "nothing to do" and wait for work |
 
@@ -4953,7 +5740,7 @@ session lifecycle does not invent a second opinion:
 | `ready` | continue | work is ready and a Worker is free |
 | `saturated` | continue | a queue, not a fault |
 | `blocked` | continue | the work is real and the holder will let go — the loop's own text says stopping here is wrong |
-| `idle` | **stop** | the board has nothing ready; the work is done |
+| `idle` | **stop** | the board LISTED nothing ready, as of the read's time, which the stop prints ("nothing ready as of 14:32:05"). A board's list can lag writes by seconds (GitHub measured, up to 6.5 s; Jira documented, not observed in 8 trials on ritetest), so every ticket rite created, labelled, moved or assigned is read back exactly (`tickets/own_writes.py`); one a person created shortly before the read, or since, is not in it. rite stops rather than reading again after a delay, which would only narrow that window |
 | `deadlocked` | **stop** | nobody is coming back, so waiting is indefinite |
 | `unknown` | **stop** | something could not be established, and a loop's default on the unknown is to stop and say so |
 
@@ -5065,6 +5852,29 @@ exists, **the mandatory ceiling is a maximum number of session starts, plus a
 wall-clock window**, both of which rite can enforce exactly. It is named as a
 count in the interface and in the command's output, never as a spend figure
 it cannot substantiate.
+
+✅ **A refinement round is NOT a session start (0.24.71, v0.7.0a4 dogfood
+S26).** A round is rite composing and sending text from the supervisor,
+outside any session, at a tick that was going to happen anyway. Charging one
+against this ceiling would let a project whose board needs refining spend its
+whole budget refining and never start the work. `cycles` is appended only
+where an engine is actually launched, and
+`tests/test_a_refinement_round_is_not_a_session.py` pins it across every
+ceiling of 1–4 crossed with 0–5 rounds a tick.
+
+⚠ **S26 was filed as "`--sessions` caps concurrent Workers (machine-thrash
+protection)", which conflates two different caps**, and the correction
+belongs here because the wording is how the confusion spreads:
+
+- **`--sessions`** bounds the COUNT of engine session STARTS in one Manager
+  run. Not concurrency — a Manager runs one session at a time — and not
+  spend, which is the window's job, as the paragraph below says at length.
+- **`sandbox.max_concurrent_workers`** bounds how many Workers run AT ONCE.
+  That is the machine-thrash protection, enforced by
+  `schedule.check_worker_cap` at schedule-design time and again at spawn,
+  refused rather than clamped in both (§2.5.9, §2.7.5).
+
+Neither is the other, and a refinement round is charged against neither.
 
 ⚠ **A count ceiling does not bound cost, and this section will not pretend
 otherwise.** Three sessions may run arbitrarily long and burn arbitrarily
@@ -6163,6 +6973,22 @@ and 0.6.0. The Slack relay and the check-ins that use it are planned in
 `docs/design/V060_CHECKINS.md`. *Both are built and observed in 0.6.0
 (`docs/design/V060_TAG_READINESS.md`, D7 and D8).*
 
+**A Manager's text reaches rite on stdin, never on the command line (0.24.48,
+F14).** `rite reply`, `rite ask` and `rite route` take `-` where the text was,
+read the text from stdin, and refuse text given as an argument. A Manager's
+instructions show each as a quoted heredoc (`<<'…'`), in which the shell
+expands nothing, ending on a delimiter rite draws fresh for each set of
+instructions, so text quoted from a ticket cannot end it early. The reason is
+command injection, observed: in the v0.6.0 dogfood a Claude Owner's
+`rite reply "… \`rite update --files-only\` …"` ran that command — Claude Code
+allows a substitution whose inner command is on the allowlist — and the
+output reached the person. A Manager's text often quotes a ticket, an issue or
+another Manager, so double quotes let whoever wrote that text run commands.
+**Not covered:** rite cannot stop a model putting a substitution into some
+other command (`gh issue comment --body "…"`); the refusal cannot un-run a
+substitution the shell already ran, only keep its output from being sent; and
+`--while` on `rite ask --defer` is still an argument.
+
 #### 9.16.1. Two separate questions, and neither answers the other
 
 Every message that reaches a Manager is asked two things, and they are
@@ -6267,6 +7093,60 @@ scanned.
 ⚠ **Extending §6.6 to Slack is this section's inference, not part of the
 decisions above.** Robert accepted it on 2026-09-25, and the label stays
 because it records where the rule came from.
+
+#### 9.16.5a. A Worker's question is answered through the Owner (S30, 0.24.71)
+
+**The person answers in the Slack thread, and the Owner relays it into the
+Worker.** Robert's decision, 2026-09-30, and the only shape available: a
+sandboxed Worker never appears in Claude Code's session list
+(`sandbox.worker_pane`), so nothing can message it directly, while the Owner
+already supervises it, holds its sandbox handle, and runs outside every
+boundary.
+
+⚠ **The claim that had stopped this was wrong about the protocol.**
+`worker_questions` said in its own docstring that it "does not deliver an
+answer back", because "yoloAI 0.11.0 has no way to send input to a running
+agent". That is true of the agent's SESSION and irrelevant: yoloAI's injected
+`CLAUDE.md` tells the agent to write `question.json` and then to POLL
+`answer.json`. The return path is a file the Worker is already watching, in
+the directory rite already reads the question from
+(`yoloai files <name> path`). The last dogfood run paid for the mistake — the
+operator had to `yoloai attach` the Worker and type an answer rite had
+already carried to Slack.
+
+**How it runs.** `sandbox.questions.deliver_answer` writes the answer file;
+`worker_questions.relay` matches an answer to its question by the id
+`asking` wrote into rite's first line — the same rule the Slack relay uses
+for a refinement round, imported rather than restated — and rides the
+supervisor's existing watcher, so it runs at every poll, cycle boundary and
+wait tick, with or without an Owner session. It reads the inbox WITHOUT
+consuming it: the answer is the Owner's mail too, and taking it would remove
+it from the Manager's next prompt with nobody saying so.
+
+⚠ **Isolation, stated rather than implied.** This crosses from the host into
+a sandboxed Worker's exchange directory and **changes no sandbox rule**: no
+flag, no grant, no permission, and nothing in it can be made to turn a
+Worker's sandbox off. What is written is data, in the directory yoloAI
+created for this exchange, read by the agent because its own runtime
+instructions say to. The alternative — `tmux -S … send-keys` into the live
+pane — is what `worker_pane` calls "a separate, consequential act" and is
+deliberately not taken.
+
+**An answer that cannot land comes back to the person.** Delivery is refused,
+and reported, when the sandbox is gone, when yoloAI could not be asked, when
+the Worker's status was never established, or when nothing is waiting — an
+answer to a question nobody asked would be read against the Worker's NEXT
+question. `Undeliverable` says which, and whether the Worker is gone for good
+(a different sentence: the work needs starting again). Silence here is the
+defect the whole path exists to remove — a person who answers and hears
+nothing believes the Worker is working.
+
+⚠ **What it cannot tell.** A sandbox whose agent has exited while the sandbox
+lingers still has its exchange directory and may still show a pending
+question; the answer is written and reported delivered, and nothing here
+observes that nobody is polling. The status check narrows that window and is
+why a missing status is refused rather than assumed. The claim is "written
+where it is polled for", never "read".
 
 #### 9.16.6. Several projects in one workspace: one Slack app per project (D-101)
 
@@ -6373,6 +7253,22 @@ Two consequences, written down so they are not discovered:
   latency grow with the number of channels. **Cap or rotation is OPEN**, an
   implementation choice not yet made.
 
+**Found where the token is set, not at the first run (0.24.68).** The binding
+above is consulted by `rite credential set slack` as soon as a bot token is
+stored, and by `rite doctor` before it probes the targets — a shared app is
+not a target that fails, so the probe says "ok". Both ask
+`slack_app.sharing`, which READS the binding record (`_holder_of`) and never
+writes one: `bind` answers by binding, so a report using it would take the app
+for itself and make the project that really uses it the second one. It answers
+`ok`, `shared` or `unknown`; "could not ask Slack" is said and not counted,
+because a report must not call a project faulty because a network was
+unreachable. The guidance names api.slack.com/apps and the `reactions:read`
+scope, in the same words §9.16 already uses for it. Setting the credential is
+not refused — the token is real, a project may be moved onto its own app in
+either order, and refusing to store it would leave the person unable to record
+the app they had just made. `rite start` still refuses to open a listener
+(v0.7.0 dogfood S22a).
+
 #### 9.16.7. Several Managers in one project: only the Owner hears Slack (0.6.0)
 
 **Status: DECIDED 2026-09-26 (Robert: MMQ2, option (c)). BUILT: only the
@@ -6406,7 +7302,7 @@ such a project behaves as before.
 
 **The Owner routes, and cannot do it by writing an inbox (built).** No
 Manager may write a Manager's inbox (§5.4.8, P1), so the Owner ASKS, as it
-does for a Worker. `rite route --ticket <ID> <manager> "…"` writes a request
+does for a Worker. `rite route --ticket <ID> <manager> -`, the text on stdin (§9.16), writes a request
 into the Owner's own directory. **Every route names its ticket (TR9):** the
 supervisor refuses a request with none, or one whose ticket a single-issue
 read of the board does not return (a board that cannot be read refuses too),
@@ -6521,6 +7417,33 @@ process) is written only by supervisors, in a `routing/` directory beside
 each Manager's `mail/` (outside `~/.rite` since DF3). A Manager's profile
 grants its own `mail/` and `mail/out` only, so no Manager can read or write
 it.
+
+#### 9.16.8. What each post is, at a glance (S29, 0.24.70)
+
+Every post the relay makes opens with a type tag naming its author, and ends
+with a divider, so two posts never run together, even when Slack groups them
+under one sender and one timestamp. Live run (Robert): a Manager's question,
+status paragraphs and a delivery warning stacked into one wall, and the
+question read as status.
+
+| tag | what | shown |
+|---|---|---|
+| `❓ *Needs your answer*` · `` `<ticket>` `` · author | a question, or a check-in holding questions; the ticket when rite's own first line names one | loud: section blocks |
+| `❗ *Needs you*` · author | a message with no recorded kind (unknown is action, RP1) | loud |
+| `ℹ️ *Status*` · author | a reply, a check-in with no questions, the notes root, a check-in's broadcast mirror | muted: context blocks |
+| `⚙️ *rite*` · author | the start and stop lines | muted |
+| `⚠️ *Delivery*` · author | a stop line that says a message taken from Slack was not delivered | muted |
+
+**Loud is exactly what rite waits on.** The kind comes from
+`pending.kind_of`, the same decision as what `pending` tracks until it is
+answered, never from the text: a post looks like it needs an answer exactly
+when it stays pending until it gets one. A check-in's broadcast mirror is
+muted even when the DM copy is loud, because an answer under it is context.
+
+The blocks are what a reader sees; `text` is unchanged, and is what a
+notification shows. A body is split under Slack's 3000-character limit per
+block, and a message is capped at Slack's 50 blocks, saying `rite replies`
+has the rest.
 
 ## 10. Credentials
 
@@ -6639,6 +7562,20 @@ inside a sandbox means **"cannot check"**, not "missing" — the same distinctio
 check` and `rite credential list` detect the unreadable keychain and say so,
 rather than advising `rite credential set`, which would change nothing.
 
+**Where the store cannot be read, a board is unavailable, not a crash (0.24.65,
+live yoloAI run S25).** Inside a Manager's sandbox the credential file is denied
+by design, so building a Jira board from it cannot succeed there: the board is
+reported unavailable with the store's own reason ("…could not be read
+(Operation not permitted). Inside a Manager's sandbox this is expected…"), and
+`rite status`, `rite board list` and `rite loop run` go on as for any
+unavailable board. `warn_if_global` says nothing about a store it cannot read.
+`rite loop run` reports the board's actual problem, never "no ticket backend is
+configured" for a board that is configured, and neither counts an unread board
+as empty nor calls an unknown verdict "the work is there". Credentials given in
+the environment (tier 1) still build the board without touching the file.
+Measured: in the run, all three commands died with a `CredentialStoreError`
+traceback.
+
 ### 10.4. Phase 2 — multi-machine credential identity
 
 **Module lists are per-project, shared between Managers.** Two Managers on two
@@ -6707,6 +7644,110 @@ keychain; config fields carry a `config_path` and are written to the committed
 teammate clones the project, already has the site and the board key, and needs
 only their own token. One command sets up a working integration instead of
 setting a credential and then separately discovering the config it also needed.
+
+**And the board's type with them (0.24.56).** A service that is a ticket board
+(`board_type` in `credentials/services.py`; today only `jira`) also sets
+`ticket_backend.type` when the project has no board (`none`). The site and the
+project key alone were not a board: measured in the v0.7.0 dogfood, `rite init`
+answered `none`, `rite credential set jira` recorded both, `type` stayed `none`,
+and rite read no board at all.
+
+**A project already on another board is ASKED, default No (0.24.76).** It used
+to be told to *"Set it to 'jira' in .rite/config.yaml"* — the one path left in
+setup that sent someone to hand-edit what rite has a command for. Refusing to
+retarget a board **silently** was right; refusing to retarget it at all was not.
+Default No because a retarget changes which board every ticket command reads,
+and a mistyped service name must not move it.
+
+⚠ **Never unattended.** `credential set` runs in scripts — the fields can come
+down a pipe — so with nobody at the terminal it does not ask and does not move,
+and prints the note instead. Same rule as §9.6's: a prompt is not an answer
+(§9.11).
+
+On a retarget the **outgoing** board's own fields are cleared and each one is
+named: `site` and `projects` leaving `jira`, `repo` leaving `github`, and
+`credential`, which renames the outgoing board's token key. The incoming board
+re-prompts for everything it needs in the same run, so nothing needed is ever
+stale — only leftovers, and a `config.yaml` describing two boards invites a
+reader to believe a `site:` that nothing uses. `credential` is cleared rather
+than replaced: an empty one falls back to the new board's default key, and
+naming a new one is a separate question. `scope_label` survives, because it
+marks a ticket as this project's and is backend-agnostic (§6.1.1). Declining
+keeps what was just typed — nothing reads a JIRA site while the board is
+GitHub, and saying yes next time is then all it takes.
+
+**Slack is set up by the same command (0.24.69).** `rite credential set slack`
+asks for the Owner's member id and the broadcast channel as well as the bot
+token, and writes the two non-secret ones to `slack:` in the committed config
+through the same `config_path` route. The token alone had been the whole
+command, on the reasoning that a channel is configuration rather than a
+credential — which is true, and is why it goes to `config.yaml`, but it had
+been read as "not this command's business": measured in the v0.7.0 dogfood
+(S14), `slack.owner_user` was left to be hand-edited, and until it was, a
+`refinement.questions_to: dm` round had nowhere to go. Both are optional —
+Enter skips them, because a channel with no member id is a working
+broadcast-only setup. A token with BOTH skipped is not: `SlackConfig.enabled`
+is `owner_user or broadcast_channel`, so it stores a real credential and turns
+nothing on, under lines that say "stored" and "recorded". The command says so
+(`⚠ the token is stored, and Slack is OFF`), read off the RESULTING config
+rather than off what the run answered, so rotating a token on a configured
+project stays quiet. It is a notice, not a refusal — the token is valid. An
+answer the config parser would refuse is asked again rather than written:
+this command writes `config.yaml`, so storing one would leave every later
+`rite` run failing on the file this one created.
+
+**One guided flow, and it never posts (0.24.69).** `rite credential set slack`
+runs as one setup: it names the project, takes the bot token and checks it
+against Slack, says whether another project already uses that app, asks for the
+member id and the channel, writes the two non-secrets to `config.yaml`, and
+ends on one summary saying whether Slack is now ACTIVE (and where it posts) or
+INACTIVE (and exactly what to add).
+
+⚠ **The token check is a READ — `auth.test`, never a post.** A person setting
+rite up is not announcing it, and a setup command that posts spams a workspace
+every time it is re-run. `auth.test` also names the workspace and bot user, so
+one read answers both "does this token work?" and "whose app is this?"
+(`slack_app.check_token`, `sharing_for`). A live POST to prove delivery belongs
+in `rite doctor`, where the person asked for a check.
+
+⚠ **Three answers, not two, at every step.** A token Slack REFUSED is asked for
+again, because Slack answered and asking again is useful. A Slack that could
+not be REACHED warns and stores anyway: the token is probably fine, and
+refusing on an unreachable network would leave the person unable to record it
+at all. Where the app could not be identified, the sharing question is said to
+be unanswered rather than guessed either way. Nothing on this path binds an app
+— that still happens only where a listener opens.
+
+**A channel is taken as it is typed (0.24.69).** `all-rite` and `#all-rite` are
+the same channel, wherever the name is given — the prompt above or
+`config.yaml` — and a `C…` or `G…` id is kept as it is, since `#` in front of
+one names a different conversation. `config.parse.normalize_slack_channel` is
+the single rule both entry points use. v0.7.0 dogfood S19: the bare name Slack
+shows in its own sidebar was refused as "neither a channel name starting with
+'#' nor a channel id", for a channel rite could name exactly. What is still
+unnameable after normalising is still refused.
+
+**And a refused `config.yaml` no longer takes the credential commands with it
+(0.24.69).** A `slack.broadcast_channel` the parser refused made every `rite
+credential set` answer with that parse error and exit 1 — including the runs
+that would have repaired the project (S19). The project's credential namespace
+is now recovered on its own, so the secret still lands in this project's scope,
+the unrelated problem is named, and the fields that would REWRITE `config.yaml`
+are skipped rather than asked for. The file is never rewritten while it is in a
+state rite could not read. Where no namespace has been recorded yet there is
+nothing to scope to, and the command still refuses: generating one would
+rewrite the very file the user has to repair. This is the reasoning
+`coordination` already carried — a malformed block narrows rather than failing
+the parse, because a raising parse takes out every command that reads
+`config.yaml`, including the ones that would repair it.
+
+**Every hint names the same command (0.24.57).** A hint for a missing
+credential names the service when a prompt can set the key (`rite credential set
+github`), and the key only where the service form cannot take it: a multi-line
+key, a `--stdin` read, or a per-Worker `sandbox_token_<worker>`
+(`services.how_to_set`, the one answer every hint uses). Measured in the v0.7.0
+dogfood: one `rite doctor` report said `set github_token` where `rite credential
+list` said `set github` for the same gap.
 
 **rite stores and injects; it does not interpret.** A credential is a name, a
 set of fields, and a destination environment variable. rite does not know what
@@ -6845,18 +7886,69 @@ while being entirely inactive. It is the same family as §2.5.10's refusal-witho
 and §5.3's uncountable worker cap, one step earlier: not a check that could not run,
 but a check that was never installed, reporting itself installed.
 
-**Both installers ask git where it will actually look** (`git rev-parse --git-path
-hooks`) and compare that against the repo's own hooks directory. When they differ,
-`rite publish install-hook` refuses with the reason and the remedy, and `rite init`
-declines to count the repo and prints a warning rather than silently omitting the
-line. The remedy is the user's choice of `git config --local core.hooksPath
-.git/hooks` followed by `rite publish install-hook`, or adding `exec rite publish
-pre-push` to the pre-push hook in the redirected directory by hand.
+**One installer asks git where it will actually look** (`git rev-parse --git-path
+hooks`) and compares that against the repo's own hooks directory. There were two —
+`gate/hook.py`'s and a copy inside `rite init`'s scaffold, kept in step by hand; the
+scaffold now delegates, so `rite init` and `rite publish install-hook` cannot
+diverge on this again.
 
-**Deliberately NOT handled by writing into the redirected directory.** That path is
-typically shared across every repo the user owns, so installing there would reach far
-outside the project `rite init` was pointed at — the same "surprise in someone else's
-repo" the installer already refuses to cause by clobbering a hand-written hook.
+**A global redirect is CHAINED behind, not switched off.** This refused outright
+until 0.24.76, and the refusal was right twice over — see the paragraph below — but
+stopping there meant the gate ran **nowhere automatically** on a machine with a
+global `core.hooksPath`, in any rite project, for the life of that redirect.
+Measured, and the directory it pointed at held another project's data-leak gate.
+So the installer writes a `pre-push` that runs the redirected hook FIRST and
+`rite publish pre-push` second, and points **this repository's** `core.hooksPath`
+at its own hooks directory so git reads it. Four properties make that safe rather
+than clever, and each is pinned by a test:
+
+* the redirected hook's path is resolved **at run time**, from git's global and
+  system scopes, not baked in — so the other project moving its hooks directory, or
+  writing its hook after rite ran, keeps working. ⚠ Read with `git config
+  --type=path`, which is git's own tilde expansion, because git stores the value
+  verbatim: a `~/…` hooksPath came back with a literal tilde, no shell expands one
+  inside quotes, so the `-x` test was false for a hook that existed and the chain
+  fell through to the gate ALONE — the upstream hook disarmed while the installer
+  reported a chain. The Python half always expanded `~`, so the two halves
+  disagreed about one value, which is the defect; the tilde only exposed it.
+  Measured: `--type=path` expands `~` and leaves absolute and relative values
+  untouched;
+* that hook's **exit code is final**, and the gate is not reached when it refuses: a
+  confidentiality control consulted after the push has been decided is not a control;
+* git's **ref list reaches both**. git feeds `pre-push` its refs on stdin, which one
+  reader consumes, so the chain writes them to a file and feeds each hook from it;
+* the hook is written **before** `core.hooksPath` is pointed at it, and when the chain
+  cannot be built the installer **refuses loudly** rather than installing half of it.
+  The reverse order has a window in which git reads a directory with no `pre-push`,
+  and that window silently drops the other project's gate — strictly worse than the
+  loud refusal this replaced.
+
+A `core.hooksPath` set on the repository **itself** stays a refusal: somebody chose
+that here, deliberately, and the chain resolves exactly the scopes a local value
+overrides. The local value rite writes is **absolute**, never `.git/hooks`: a relative
+`core.hooksPath` resolves against the working tree a hook runs in, and measured end to
+end, `.git/hooks` ran the hook from the main checkout and ran **nothing** from a
+worktree — both gates gone, silently.
+
+⚠ **"Is this repo redirected?" is not the question the installer asks.** Once
+`core.hooksPath` points back at the repo the answer is no, so an installer asking it
+would write the unchained script on its second run and disarm the other project's gate
+with every signal still reading active. It asks what the global and system scopes say
+instead (`upstream_hooks_dir`), which is what has to keep running.
+
+**Deliberately still NOT handled by writing into the redirected directory.** That path
+is typically shared across every repo the user owns, so installing there would reach
+far outside the project `rite init` was pointed at — the same "surprise in someone
+else's repo" the installer already refuses to cause by clobbering a hand-written hook.
+The other project's installer also owns that file and would overwrite it.
+
+⚠ **A repository is a question for git, not for `.git/`.** In a git **worktree** `.git`
+is a *file*, so `(repo_root / ".git").is_dir()` answered "not a git repository" for
+every worktree there has ever been, and the redirect check reported a redirect in every
+worktree with none set — because it compared git's answer against a path that does not
+exist there. Both now resolve through `--git-common-dir`, which is where git really
+reads a worktree's hooks, guarded by `--show-toplevel` so a plain subdirectory
+registered as a module does not inherit the project's hooks and get reported active.
 
 **Fails OPEN when git cannot answer** (not a repo, git missing, a timeout). The
 installer's job is to install a hook, not to police git's configuration, and a false
@@ -7074,6 +8166,18 @@ happened once already and left no trace until this review found it.
 | D-99 | Where may an agent talk, and where is that enforced? | **Only to destinations the operator sanctioned, inbound and outbound, enforced at the NETWORK layer — never by which program runs** | A permitted list is closed by construction, and a list of threats loses to the one nobody listed. It is the control that makes §6.6.3's 8-of-8 survivable: it does not care what the agent believes. The tool layer cannot carry it, because `git` and `gh` are permitted and reach the network, and `python -c` or a hook can make any request. Measured constraint: for IP, a seatbelt profile can confine to loopback and name no host, so a Manager's host list is enforced outside its boundary. Local sockets it can refuse by path. §5.5. |
 | D-100 | What content is scanned on the way out? | **Only payloads to ALLOWED destinations that PUBLISH, with the structural credential rule. Model calls are NEVER scanned** | The destination is the primary control, and scanning covers the one case it passes: a token in an issue body on the operator's own repository. A scanner on the model path alarms on every request, or is tuned to ignore it and watches nothing while appearing to watch. Which destinations count as publishing is open. §5.5.4. |
 | D-101 | How do several projects share one Slack workspace? | **One Slack app per project** | A DM is with the APP, so two projects on one app read the same DM and both act on it. Rate limits are per method, per workspace, **per app**: one relay's history poll is 30/min, two on one app are 60 against Tier 3's "50+", and three are 90. An app per project gives each its own DM and its own bucket, which removes both problems at once. A free workspace allows 10 third-party or custom apps (Slack help centre), so it holds about ten projects. Private channels bound to a project are a v0.7.0 convenience, not the binding. §9.16.6. |
+| D-102 | Is refinement enforced? | **Yes, as the standard: no setting, no exemption** | Robert, TRQ1: "There aren't really any 'existing projects' so let's just implement it as a standard." `scheduled` and not refined is refinement work for the Owner; `scheduled` and REFINED is assignable. §6.7. |
+| D-103 | How many rounds, how long, how many at once? | **3 rounds, 24 h, 5 open, 3 started per Owner session, all configurable** | Robert, TRQ2: "the limits sound good. We can make them configurable for advanced users." Not built (TR2). §6.7.3. |
+| D-104 | What accepts a proposal? | **One word from a configurable set: `ok`, `yes`, `accept`, `lgtm`, `proceed`** | Robert, TRQ3. No model decides whether a reply is a yes; words that read as refusals are refused in configuration. Not built (TR2). |
+| D-105 | What does "you decide" do? | **rite comes back with a complete recommendation, for a final confirmation** | Robert, TRQ4. Nothing is recorded until the word arrives, so a definition of done is still never invented. Not built (TR2). |
+| D-106 | Work with no ticket? | **Every piece of Worker work carries a ticket; a chat instruction becomes a chore written by rite** | Robert, TRQ5: "Can we just ticket all work that Workers do?" `route` requires `--ticket`; a chore quotes the User's delivered words and a Manager cannot author one. Built (TR9). §6.7.2. |
+| D-107 | A ticket the person already wrote properly? | **Guardrail: no agent replaces the User's text without explicit permission; rite never edits a title or description** | Robert, TRQ6, reframed. G2 is built and pinned by a test; trusting a well-written ticket without one word needs agent board identity (D-112). TRQ7 (two refiners) dissolved: the Owner owns the board, and there is one Owner. |
+| D-108 | Where do refinement questions go? | **The DM, or a private channel with the app in it, configurable** | Robert, TRQ8. In the channel only `owner_user` may answer or accept. Not built (TR2). |
+| D-109 | Must a definition of done name commands that verify it? | **Optional but explicit: commands, or "none agreed"** | Robert, TRQ9. A Worker on "none agreed" says in its report how it checked each item. Built. |
+| D-110 | Does a chore need refinement? | **Yes, the same predicate; ask at once and refine in place; on silence, an unrefined chore with exactly the User's words** | Robert, TRQ11: "the Owner should ask follow up questions (if it has any doubts) and refine straight away. If the User doesn't reply within some timeout, create a chore with what it's got and then refine later". Built: chores go through the predicate and `--prompt` files an unrefined one. The timeout is not built (TR2). |
+| D-111 | May a session running as the person attest a definition of done? | **Yes, marked `attested` and findable** | Robert, TRQ10: "Allow it." rite cannot tell the person from a model running as them, and says so in the record; the Slack DM stays the stronger path. `/dev/tty` confirmation was measured not to be a barrier and is not used. Built (`rite refine accept`). |
+| D-112 | Should agents write to the board under their own identity? | **rite builds no identity management** | Robert, TRQ12: "Can't the User control it by choosing if they give rite their token or create a separate account for them?" rite works under either choice, says which is in use, and enforces the guardrail where the choice allows it. The same principle covers commit authorship. |
+| D-113 | May an executor Manager do routed work itself? | **Only a chore or a trivial ticket, only REFINED, only on a ticket-named branch through a PR** | Robert, Q4: "Yes, close the bypass. However, instruct that it's meant for chores and trivial tickets. Any serious work should be passed to workers." Instructed (TR3); enforced only once PB1's publish step can refuse (TR10). |
 
 ---
 
@@ -7082,6 +8186,77 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.76 — `rite init` finishes the job it starts, and the publish gate runs behind a redirected `core.hooksPath` (v0.7.0a5: SCRUM-5 … SCRUM-11).** §9.3 (Section 1, the modules section, the settle list), §9.6, §10.5 and §11.5.1 rewritten. Seven items from a read-only investigation of a real `rite init` run on 0.7.0a4, five of them one root cause: **init's path is thinner than the `rite add *` command it stands in for**. **SCRUM-5 + SCRUM-6:** `setup.offer_a_worker` called `add_worker(root, name)` — two of five parameters — so an init-created Worker was linked to no Manager (brief line 7 "No Manager assigned yet." against line 112 "Tell your Manager you are free", because only that one line is conditional) and was never offered the modules' own instruction files, S23's feature being reachable from `add_worker_cmd` alone. New `cli/module_docs.py` holds the find-and-ask and the no-tty probe, called by both entry points, with the guard INSIDE the step so no caller can pass its way past the `click.confirm` abort (defect class 15); the link is None-safe, since `--yes` declares no Manager and a Worker can still be declared there. **SCRUM-7:** `what_is_missing` gains a board row (`ticket_backend.type: none`, naming `rite credential set jira` and the three fields it writes) and an exclusive Slack row (`refinement.questions_to: dm` with no `slack.owner_user`, naming `rite credential set slack`, `rite replies` and `rite refine answer`); signposts only, because init does not write backend config. **SCRUM-8:** `credential set` asks before retargeting a board, default No, never without a tty, clearing the outgoing backend's exclusive fields and `credential` while `scope_label` survives (`config.models.leave_the_old_board`). **SCRUM-10:** `OWNER_ONLY_UNTIL_MULTI_MANAGER` suppresses the Owner-vs-Manager MACHINE question on both routes through one point (`_ask_role`; the second site is the "existing spec or code" route, which is the one the reported run hit), says which machine it took, and REFUSES `--config project.role: manager` before `.rite/` exists rather than discarding a declared key; `ROLE_OPTIONS`, the select and `_borrow_owner_config` are intact and unreferenced so 0.9.0 re-wires. **SCRUM-11:** modules get a description, defaulted from the module's own README's first prose sentence and offered rather than taken (`manage.description_from_readme`), and `modules.yaml` has ONE writer again (`manage.write_modules_file`, atomic and lockable) where `scaffold.write_modules` was a second, non-atomic one also used by `rite module set-command`. **SCRUM-9, security-sensitive:** a global `core.hooksPath` meant the publish gate ran nowhere automatically, in any rite project, for the life of the redirect — and the directory it pointed at held another project's data-leak gate, so the old refusal was right twice over and wrong to stop there. `install_pre_push_hook` now writes a chained hook (redirected hook first, its exit code final, gate second, ref list duplicated through a file because git feeds them on stdin, upstream resolved at RUN time from the global and system scopes) and points only this repository's `core.hooksPath` at its own hooks, ABSOLUTE — a relative `.git/hooks` ran the hook from the main checkout and nothing at all from a worktree, measured. The hook is written BEFORE the config is pointed at it and the installer refuses loudly when the chain cannot be built, because the reverse order has a window that silently drops the other project's gate. `upstream_hooks_dir` is deliberately not `redirected_hooks_dir`: once pointed back, "is this redirected?" says no, and an installer asking that would write the unchained script on its second run. `own_hooks_dir` (`--git-common-dir`, guarded by `--show-toplevel`) replaces `(repo_root / ".git").is_dir()`, which answered "not a git repository" for every worktree and made the redirect check report a redirect in every worktree with none set; `scaffold.install_pre_push_hooks` was a SECOND installer and now delegates, carrying each refusal's words back. Review found three gaps, all closed on the branch: the chain read `core.hooksPath` with a bare `--get`, so a `~/…` value disarmed the upstream hook silently (latent on an absolute value, live the moment anything rewrites that line in `~` form); no test could catch it because every fixture wrote the expanded path; and `settle_module_descriptions`' `if module.description` guard was unpinned, though a module name containing a dot (which `name_problem` allows) defeats `Preset.get`'s dotted walk and lets the README-derived default replace a description declared in `--config`. Tests: `tests/test_init_declares_a_whole_worker.py`, `tests/test_init_does_not_call_a_boardless_project_ready.py`, `tests/test_init_is_owner_only_until_multi_manager.py`, `tests/test_init_says_what_each_module_is.py`, `tests/test_a_board_is_retargeted_only_when_asked.py`, `tests/test_the_gate_runs_behind_a_redirected_hooks_path.py` — the last drives real git, real hooks and real pushes to a real remote, with a per-test global git config because these tests WRITE a redirect and the suite's own isolation file is session-scoped. ⚠ BEHAVIOURAL, not a parameter ledger: a test enumerating `add_worker`'s parameters passes with the bug present the moment someone adds the argument and gets it wrong. Twenty-four mutations run and reverted, each red. Existing init tests lose the role answer and gain a description answer; two that pinned "Ready." for a boardless project now pin the board row; `tests/test_init_scaffold.py`'s hook tests use real repositories, because the installer now asks git rather than looking for a `.git` directory.
+
+**Changes in 0.24.75 — a local Manager's permission mode is settled as `auto`, and said not to be a boundary (v0.7.0 local tier: 1c).** New §5.4.9. No behaviour changes: `supervise` has placed `GOOSE_MODE=auto` on a local Manager's pane since the permission destination landed (`engines.GOOSE.permission_env`), and `tests/test_the_permission_reaches_the_engine.py` has asserted it, including that an operator's exported `GOOSE_MODE=approve` is overridden. What was open was the ruling: `local/goose_agent.py`'s `mode` docstring said B4d "is measuring" the question and it "is not yet settled" while the code had already chosen, so a reader was told the opposite of what ran. The ruling and its reason are now recorded in both places — and the reason is that `approve` CANNOT work headless, not that `auto` is safe: B4d measured `auto` exiting 0 having run `rm` unattended, and `approve` exiting 1 on the first tool call with "Tool approval required in non-interactive mode", with no per-command mode in between because `GOOSE_MODE` is whole-session. ⚠ Recorded with the limit that makes it honest: `auto` is **not** a containment decision, containment comes from the seatbelt profile the pane runs inside (§5.4, D-76 as superseded), and a local Manager host-run outside that profile is an unconstrained agent with the operator's file and network access. That `approve` fails fast rather than hanging is kept as the reason the choice is not forced by defect class 15. Tests: `tests/test_the_local_managers_permission_mode_is_settled.py` pins the posture at every layer that could drift — `GooseAgent.mode`'s default, the value the agent puts in the environment, `engines.GOOSE.permission_env`'s destination, and the placement the real supervisor computes with and without an operator `GOOSE_MODE` — plus a guard that the adapter no longer describes the question as unsettled. Four mutations (the default changed to `approve`, the agent not placing the mode, the destination emptied, the docstring's "not yet settled" restored) each go red.
+
+**Changes in 0.24.74 — every local Manager declares its context window, whatever its agent (v0.7.0a4 S33).** `f340103` (0.24.25) made `rite start` refuse, and `rite doctor` warn about, a local Manager with no `context_window`, but only for `agent == "goose"`, the one local agent then; any other agent a role names reached a launch on its server's default window, which cannot be read before the model loads and cuts an over-long prompt from the front with no error (S34), and `rite doctor` described it only as "the server's default window". Now one predicate, `config.managers.window_undeclared` (a local role with no window), is what `rite doctor`'s probe, `effective_model` and `rite start` all ask; `supervise._window_refusal` asks it on the start path FIRST, before `permission_placement` (which refuses an agent rite has no spelling for, and asked first would tell such a Manager the wrong thing); the refusal and the doctor line no longer name Goose. A Claude or human Manager is untouched: the start path reads nothing for a Manager with no agent. A declared window below the minimum was already refused at parse for every local engine and is unchanged. Tests: `tests/test_every_local_agent_declares_its_window.py`, the invariant over five agent names × declared, larger and undeclared windows through the probe, `effective_model` and the start refusal, the real start path's ordering for every agent rite cannot launch, and Claude and human controls; `test_local_engine_probe.py`'s fixture now declares a window, since an `opencode` role with none had been pinned as having no problems, which was S33 itself. Seven mutations (the Goose gate back in the predicate, in doctor's probe and in `effective_model`; the start path not asking; asking after `permission_placement`; the refusal never firing; the refusal naming Goose) each go red. `docs/guide.md` says every local Manager. Not widened here: the Ollama-log check for a cut prompt (`_say_if_the_window_was_cut`) is still Goose-only; it detects, it does not refuse.
+
+**Changes in 0.24.73 — help written for the user, and a revision history that is single-valued (v0.7.0a4 lane 7: S17, plus SPEC hygiene).** S17: the SPEC and plan section numbers are gone from every command's `--help` — "Is this healthy? (SPEC §9.8)", "The standup a check-in opens with (plan § K4)" and thirty-odd more pointed a user at documents they do not have, in the one text rite shows them at the moment they are lost. rite's own decision ids (`(D-46)`) and design-document paths (`docs/design/V070_TICKET_REFINEMENT.md`) are gone from help too (Robert, 2026-10-01, for consistency), except in the `spec` group's examples, where `D-12` is the syntax for a decision in the USER's own spec; a reference carrying the sentence is reworded rather than cut ("D-87 requires that an entry … is REFUSED" reads "an entry … must be REFUSED"), and `board state (§9.8's counts by column)` reads "(its counts by column)" and not "('s counts by column)". ⚠ Only the rendered help is touched: the same references in comments and in non-command docstrings are how a maintainer finds the design a piece of code answers to, and 46 of them remain in `cli/main.py` alone. **SPEC hygiene:** two entries shared 0.24.67 — three lanes were in flight at once, each branching before the one before it merged, and one merge resolution kept both sides of a conflict, leaving the superseded copy of an entry that had already been renumbered to 0.24.69. The stale copy is removed; the surviving 0.24.69 entry is a strict superset of it. Tests: `tests/test_help_is_for_the_user_not_the_spec.py` walks every command and group Click exposes (121) and asserts none cites a section, a rite decision id or a design document, with a floor so an empty walk cannot pass vacuously, controls for each kind, the `spec` exemption shown narrow (a design-doc path there is still refused; a path in the user's own docs is an example and allowed), and one control that re-adds a decision id to a real command's help and sees the walk catch it; `test_spec_citations` gains `test_the_revision_history_is_single_valued` and `test_the_revision_history_is_in_descending_order` — the existing header test only reads `entries[0]`, so a duplicate anywhere below the newest was invisible to it, and the wrong-order entry is how this one hid. Three controls: a planted duplicate, an entry filed out of order, and a re-added section reference in one command's help each go red.
+
+**Changes in 0.24.72 — `rite doctor` asks before it accuses (v0.7.0a4 lane doctor: S28, S32).** §9.8 gains the paragraphs. **S28:** `sandbox.push_access` returns a three-answer `PushAccess` (`ok`, `cannot_push`, `unknown`) with `is_a_problem` true only for `cannot_push`; `push_access_refusal` is now that probe collapsed to the two answers a START needs, with its sentences unchanged, so `rite sandbox start` still refuses an unchecked token and the two callers cannot drift. ⚠ Only 401, 403 and 404 are GitHub's VERDICT on a token; a 5xx, a 429 and a 200 that is not a receive-pack advertisement are `unknown`, because an outage or a rate limit reported as "cannot push" is the false accusation this finding exists to prevent. `_doctor_worker_push_access` reports each Worker's verdict, counting only a known refusal — presence is not permission, and a read-only fine-grained PAT passed the old report and was then refused by `rite sandbox start`. ⚠ The live probe is one HTTPS round trip per remote per Worker, so it is opt-in: `rite doctor --network`. Without the flag doctor says the check exists rather than pretending it passed, and a plain run stays fast and works offline. `--network` also runs a live Slack `chat.postMessage` to the broadcast channel, through `slack._post` — the path a Manager posts on, a JSON POST; passing the message to `_call` as `params` sends a GET with the text in the query string, which nothing says Slack honours, so the check could have reported a delivery that never happened, the only answer that settles whether the channel delivers — ⚠ posting is allowed in `doctor`, where the person asked, and never in `rite credential set slack`, which must not put a message in a channel because someone setting rite up is not announcing it. `--network` gates ONLY these two; Slack's existing target probes are unchanged. **S32, BOTH paths:** `coordination.identity.enrolment` no longer calls a SINGLE-machine project un-enrolled, and `coordination.config_check` no longer reports "N manager(s) listed but no `remote` — no election can ever happen" for a SINGLE Manager, where it is simply false: there is nobody to hold an election against. It left `rite doctor` exiting 1 on a project whose only sin was running `rite add manager lead`, the command rite tells people to run. Two or more with no remote is still reported and still means what it said. ⚠ A first fix removed the rule outright and was caught by `test_managers_without_a_remote_is_reported`, whose helper lists two Managers — the boundary now has a test on each side. Measured before and after: `rite init --yes`, `rite add manager lead --preset lead`, `rite doctor` -> exit 1, now exit 0. ⚠ The test asserts the EXIT CODE, because the first version of it asserted the absence of one sentence and passed while the command still failed. `coordination.managers` alone defeated the Phase-1 early return, so a solo project that declared a Manager was told it "will not publish a heartbeat, stand for Owner, or take over another machine's work" — every clause about other machines a solo project does not have, arriving the moment declaring a Manager became ordinary (found from lane 4). Without `coordination.remote` there is nothing to enrol into, so nothing is said; with one, the warning is unchanged. Tests: `tests/test_doctor_asks_before_it_accuses.py`, with the invariant run over verdict {ok, cannot_push, unknown} × probe {off, on} — the probe fires only under `--network`, and could-not-check is never counted — plus the same three verdicts through `push_access_refusal` as a control that a START still refuses an unchecked token, the delivery post happening only under the flag, and S32 both ways (solo silent with and without `.rite/machine`; multi-machine still warned). Eight mutations (an unknown counted as a problem, the probe running unflagged, an unknown reported as CANNOT push, a start no longer refusing an unchecked token, the S32 fix removed, the S32 fix over-applied to multi-machine, the delivery post unflagged, the delivery post dropped) each go red.
+
+**Changes in 0.24.71 — a Worker's question is answered through the Owner, and a refinement round is not a session (v0.7.0a4 lane 6: S30, S26).** New §9.16.5a; §9.14.5 gains the refinement paragraph and the correction of S26's own wording. **S30:** `sandbox.questions.deliver_answer`, `Delivered`, `Undeliverable`; `worker_questions.relay`, joined to the supervisor's existing watcher ahead of `surface` so an arriving answer settles its question before the same tick re-raises it. The answer goes to `answer.json`, which yoloAI's own injected instructions tell the agent to poll — the docstring claiming "no way to send input to a running agent" was true of the SESSION and wrong about the protocol, and cost the last dogfood run an operator `yoloai attach`. No sandbox rule changes: no flag, no grant, no permission, and the `tmux send-keys` route into the live pane is deliberately not taken. Delivery is refused and REPORTED when the sandbox is gone, yoloAI could not be asked, the status was never established, or nothing is waiting. **S26:** a round is charged against neither cap, and the two caps `--sessions` (a count of engine session starts) and `sandbox.max_concurrent_workers` (concurrency, the machine-thrash protection) are distinguished. Tests: `tests/test_the_owner_relays_a_workers_answer.py`, whose invariant is all 45 combinations of five liveness answers × three exchange-directory states × three question states, asserted as an exact iff; and `tests/test_a_refinement_round_is_not_a_session.py`, every ceiling 1–4 crossed with 0–5 rounds a tick. Eight mutations each go red, two of them (the unestablished-status branch, the relayed-message ledger) only after a test was added: both were behaviour-preserving until something observed what they uniquely prevent.
+
+**Changes in 0.24.70 — each Slack post says what it is (S29), and `rite init` offers a Manager (S15) (v0.7.0a4 lane 4).** New §9.16.8; §9.3's S15 line. S29: `slack._present`, `TAGS`, `LOUD`, `_ticket_in`, `_chunks`; `_post(kind=, body=, author=, ticket=)` sends `blocks` beside the unchanged `text`; every post the relay makes is tagged (start, stop, replies, thread posts, the notes root, the check-in mirror); `pending.kind_of` (`NEEDS_ANSWER`, `NEEDS_YOU`, `READING`) over `_tracked`. S15: `cli/init/setup.offer_a_manager` through `config.managers.declare_manager`, `DEFAULT_MANAGER`, `_ask_preset`; `what_is_missing` names a missing Manager; `--yes` declares none (a declared Manager makes `rite doctor` report a one-machine project as uncoordinated, as S16's command does); Lane 1's TODO seam removed. Tests: `tests/test_slack_posts_show_what_they_are.py`, whose invariant runs every sequence of one to three posts over six message kinds (a question naming a ticket, one naming none, an unknown kind, a reply, a check-in with questions, one without), by one author and by two alternating in one conversation: every post has exactly one tag naming its author and ends in a divider, is loud exactly when `pending` waits on it, and names the ticket exactly on a question that names one; `tests/test_init_offers_a_manager.py`, whose invariant runs three routes × two machine roles × accept/decline/another (and bare `--yes`): the keys agree, `configuration_problems` is empty, `rite start`'s own resolver finds exactly what was declared, and the last line says so exactly when none was. Nineteen mutations each go red. Existing init tests answer the Manager question explicitly; one Slack test's whole-payload assertion now checks the blocks it carries.
+
+**Changes in 0.24.69 — one guided `rite credential set slack` (v0.7.0a4 lane 3: S14, S19, S22a).** **The command is one guided flow:** it names the project, takes the bot token and checks it with a live `auth.test` READ (`slack_app.check_token`, three answers — `ok`, a token Slack REFUSED which is asked for again, and a Slack that could not be REACHED which warns and stores anyway), reuses that one read to answer the shared-app question (`sharing_for`, read only, never binding), asks for the member id and the channel, writes the non-secrets, and ends on one summary: ACTIVE with where it posts and whose DM it takes instructions from, or INACTIVE with exactly what to add (`_say_how_slack_stands`, read off the RESULTING config so rotating a token on a configured project is quiet). ⚠ **It never posts**: `auth.test` only, because a setup command that posts spams a workspace every time it is re-run; a live post to confirm delivery belongs in `rite doctor`. The test stub fails on any Slack method but `auth.test`, so the rule is enforced for every test in the file rather than asserted in one. Invariants run over the state space — token {ok, refused, unreachable} × owner {set, unset} × channel {unset, bare, `#name`, id} × app {unbound, this project, another, cannot tell} — asserting the summary is right in every cell, that a credential set never binds an app, and that could-not-check is never treated as refused. Five further mutations (the live check removed, a refused token treated as unreachable, an unreachable one treated as refused, the summary binding instead of reading, the command posting a confirmation) each go red; the second of those survived a first draft that asserted the MESSAGE rather than that the token was asked for again, and the test was strengthened until it failed. **S22a, folded in:** §9.16.6 gains the paragraph. The binding was consulted only where a listener opens, so a token belonging to another project was accepted by `rite credential set slack`, stored and configured, and the collision surfaced at `rite start` — with "create a new Slack app", the heaviest step in the setup, offered last and with no mention of the scopes it needs. `slack_app._holder_of` reads the binding record and writes nothing (private: it is an in-module read, and the dead-wiring guard is right that it is not a public entry point); `slack_app.sharing` returns `ok`, `shared` or `unknown`, and `DEDICATED_APP` names api.slack.com/apps and `reactions:read` in the wording `managers/slack.py` already uses for that scope. Asked by `rite credential set slack` right after the token is stored, and by `_doctor_slack` before the targets are probed (a shared app is not a target that fails — the probe says "ok"). ⚠ It exists because `bind` answers by BINDING: doctor on a project that had never run would take the app for itself and make the project that really uses it the second one. ⚠ Three answers, not two: `bind` collapses "could not ask Slack" into a refusal, which is right when the choice is whether to open a listener and wrong in a report, where it would call a project faulty because a network was unreachable — so `unknown` is said and not counted. Setting a credential is NOT refused on a shared app: the token is real, a project may be moved onto its own app in either order, and refusing to store it would leave the person unable to record the app they just made; `rite start` still refuses to open a listener. Tests: `tests/test_a_shared_slack_app_is_found_at_setup.py`, with two invariants run over every state the binding can be in (none, this project, another project, unreadable, cannot ask) — the check never writes a binding, and both entry points give the same verdict, only a known collision counting as a problem. Six mutations (the check binding instead of reading, an unknown reported as shared, either entry point not asking, the scope dropped from the guidance, the holder ignored) each go red. **The rest:** §10.5 gains three paragraphs. S14: `Field.optional`, `Field.normalize`/`clean` and `Field.problem`; the `slack` service gains `owner_user` and `broadcast_channel`, both optional and both `config_path`, so one command writes the committed Slack config; `_set_service` prompts optionally, normalises, and asks again for a value the parser would refuse rather than writing a `config.yaml` that will not parse. A run that leaves Slack with no target at all says so (`Slack is OFF`), decided from the RESULTING config so a token rotated on a configured project is quiet; a notice, not a refusal, since the token is valid. S19: `config.parse.normalize_slack_channel` (a bare name gains `#`, a `C…`/`G…` id is untouched), applied by the parser and by the prompt, with `slack_field_problem` reusing `_slack_problem` so the two cannot drift; `credentials_despite_config_error` recovers the namespace alone, and `rite credential set` continues on a config error elsewhere — naming it, skipping the fields that would rewrite the file, and still refusing where no namespace is recorded. Tests: `tests/test_slack_setup_is_one_command.py`, with the channel invariant run across the full range of what a person types (bare, `#`-prefixed, padded, `C…`, `G…`, empty, dotted) through BOTH the prompt's cleaner and the file, so one entry point cannot accept what the other refuses; plus one command recording both settings, a name typed where an id belongs being asked again, a malformed channel not blocking a credential set, and the off notice appearing exactly when Slack lands off across all four endings (token only, +owner, +channel, +both) and staying quiet on a project already configured. Nine mutations (the normaliser returning its input, the two fields removed, the validation dropped, the hard exit restored, the rewrite guard dropped, an id given a `#`, the off notice dropped, the notice always firing, the notice decided from the run's answers rather than the result) each go red. Two existing tests changed rather than added to: a bare channel is now normalised, not a `ParseError`, and `credential set` on a refused config now continues while still never rewriting the file — the file-untouched assertion each was written for is kept, and the refusal it achieved that with is now a second test for the no-namespace case.
+
+**Changes in 0.24.68 — three setup steps that needed a text editor now have commands (v0.7.0a4 lane 2: S16, S24, S23).** New §9.5.1 and §9.5.2; §9.1 lists both; §9.6 gains the paragraph on a module's own instructions. **S16** `rite add manager <name> --preset <p>`: `config.managers.declare_manager` builds the entry, splices it into the list and re-runs `parse_managers`, so every refusal is the parser's own and the command cannot write a file the next command rejects. It writes BOTH keys, appends (the order is priority, and the first active Manager is Owner), and UPDATES a name already listed — without that, declaring a second Manager on a project whose first is a bare name fails on the first one and the only way out is the file. The refusal names the command that declares it, for the new Manager as well as existing ones. **S24** `rite module set-command <module> <key> "<cmd>"`: `workspace.manage.set_module_command` sets the field and re-serialises through `write_modules`, so it lands nested under `commands:` — a top-level `test:` is refused by the parser, measured and pinned by a test — then calls `refresh_project`, the refresher `rite update` uses, so the correction reaches the project's CLAUDE.md and every Worker's. An edited section is kept and REPORTED; a file that does not parse is reported as that and not as a hand edit, which an early draft got wrong. An empty command unrecords the key (`None`, not `""`). **S23** `rite add worker` looks for `CLAUDE.md`, `AGENTS.md` and `CONTRIBUTING.md` in each module the Worker gets, names them and ASKS; the answer is `WorkerManifest.follow_module_docs`, written to `worker.yml` and rendered into the Worker's CLAUDE.md with the rule that rite and the ticket win and the Worker reports a contradiction rather than choosing. `--follow-module-docs/--no-follow-module-docs` answer it without a prompt; with nobody at the terminal it is NOT asked — a prompt on an empty stdin aborts, which turned `rite add worker` in a script into a command that made no Worker, caught by an existing test going red — so the files are named, nothing is followed and the message says which flag answers it; nothing found asks nothing; and a file rite GENERATED is never offered, since a repository that is its own module puts the project's own CLAUDE.md at the module's path. **Tests: 90**, including an invariant across each full range rather than its ends — every preset and every duty (S16), every one of the five command keys set, changed and unrecorded (S24), and all eight subsets of the three document names, across two modules (S23). Eighteen mutations were run and each went red; a nineteenth survived and is why `TestUnrecording` now asserts on the returned object: through the file, `""` and `None` are indistinguishable.
+
+**Changes in 0.24.67 — `rite init` settles what it leaves a project with, on every route (v0.7.0a4 lane 1: S13, the `--yes` gap, S21, S20, S18).** §9.3 gains the paragraph. `cli/init/setup.py` (`settle_modules`, `settle_schedule`, `settle_namespace`, `remember_existing`, `offer_a_worker`, `what_is_missing`, `not_ready`); `detect.content_entries` and `_is_rite_leftover`, used by `holds_nothing` and `holds_files_but_no_repository`; `questionnaire.ask_for_a_repository` split out of `ask_for_the_code`, and `InitAnswers.asked_for_code`; `credentials.store` `normalise_remote`, `remember_namespace`, `namespaces_for`, `NamespaceMatch`; `rite credential set` records the namespace; `_read_changes` keeps an existing project an existing project; a TODO seam for S15. `docs/install-notes.md` downloads the installer into a scratch directory. Tests: `tests/test_init_never_leaves_no_module_unsaid.py`, the invariant over four routes (from scratch, existing code, `--yes`, `--yes` with a preset path) × eight directories (empty, rite's installer, a prior init's leftovers, a README, code in no repository, someone else's `install.sh`, a repository with nothing committed, one with a commit), four properties each (told, asked, no false claim, never "Ready."): against main `71257ae`, 64 of 128 fail, and property 1 holds there only at #150's two covered extremes; `tests/test_init_settles_what_it_leaves.py` (every combination of rite's leftovers with each kind of real content; the schedule on every route; the Worker offer; the namespace offer over three remote spellings × credentials held or not × yes/no/`--yes`, a wipe, `rm -rf` and a re-clone, and `rite credential set`). Nineteen mutations each go red, one (the S12 check's own definition of content) only after a test was added for it. Existing init tests now answer the Worker offer and the repository question explicitly; the one that pinned "Ready." for an empty, all-skipped interactive init now pins the not-ready line.
+**Changes in 0.24.66 — an item the host measures, and one attribution for every answer (v0.7.0a4 lane 5: S31, S22b).** New §6.7.5 and §6.7.6. S31: `Record.host_measured` (signed, emitted only when non-empty; `schema_problem` refuses indexes that are out of range, repeated, unordered or not integers); `ask`'s `[host]` tag, `Round.host_items`, the round's line naming it, the accept signing it; `rite refine accept --host-item`; `render_for_worker` and the board comment mark it (`HOST_TAG_FOR_WORKER`, `HOST_TAG_ON_BOARD`); `refinement/measurement.py` (`build`, `verifies`, `render`, `append`, `logged`, `latest_for`, `holds`) and `rite refine measured`; the publish snapshot keeps the started-on record's payload; `deliver._host_measurement_hold` holds a push or pull request. S22b: `refinement/attribution.py` (`answered_by`, `via_of`, `owner_user_of`, `describe`); `protocol.Reply.by`, carried into answers, the pending accept and provenance; `rite refine answer`; `record.how_agreed`, one wording for the board, TICKET.md and `rite refine status`. `record.extract_kind` generalises `extract`. Tests: `tests/test_a_host_measured_item_is_the_hosts.py` and `tests/test_every_answer_is_the_owners.py`, over real keys and git, with two invariants: every definition of done of one to four items with every set of marks, crossed with every combination of six result histories per marked item (none, pass, fail, forged, another record's, fail then pass), agrees across the record, TICKET.md, the board and the hold; and every answer route (DM, refinement channel, this machine, `rite refine answer`) with the owner set or unset leaves the same shape and the same owner on an answer and on the record. Twenty-three mutations each go red, one of them (the item-text binding) only after a test was added for it.
+
+**Changes in 0.24.65 — board, status and loop commands degrade where the credential store cannot be read (live yoloAI run, S25).** §10.3 gains the paragraph. `create_backend` returns a BackendError when reading the Jira credentials raises `CredentialStoreError`; `warn_if_global` returns quietly for a store it cannot read; `plan_cycle` takes the board's `board_problem`, which `rite loop run` (and `--watch`) now pass instead of discarding; `format_cycle` says "not read this cycle" and "could not be established" for an unread board and an unknown verdict. Tests through the real CLI with rite's file-store keyring and the store's read failing with EPERM (the suite's in-memory keyring never reads a file, and an earlier draft passed through it without touching the store), and under a real `sandbox-exec` profile that denies only reading the store's contents, with the same profile minus the deny as control; an environment-credential control and a no-board control; `rite loop run --watch`, which `rite loop start` runs, stops on the unreadable board naming it (S27). Six mutations (board construction or `warn_if_global` letting the error through, which reproduces the live traceback; the reason dropped, in one run or under `--watch`; an unread board counted as 0; unknown read as "the work is there") each go red.
+
+**Changes in 0.24.64 — the `ready-to-work` label, a view of the refinement record (v0.7.0 TR7).** New §6.7.4; §6.7.3 no longer lists it as not built. `refinement/view.py` (`wanted`, `reconcile`, `settle`, `truth`), deciding from `status.status_and_thread`, the one composition of the predicate, which now also hands back the thread it read; `refinement.instructions.brief` reconciles first and tells the Owner what it removed; `accept.write`'s two callers and `rite refine reopen` re-label their ticket; `coordination.distribution` takes the label off with `scheduled`, only when carried; `GitHubBackend.describe_label`; `rite refine sync`; `rite board list --ready` / `--needs-refinement`; `ready-to-work` joins the labels a scope label may not be. Tests over real signed records: accepting (both paths) labels at once; an edit takes it off at the next read with one STALE comment; a Manager's name means not ready; assignment takes it off in the same write, and does not ask to remove one the ticket lacks; a hand-added label starts nothing and is removed with one comment however often it is re-added, a new record state gets its own; a hand-removed one is back with no comment; one left while nothing ran is found through its own list and counted; a list cut short is said; an UNREADABLE ticket keeps its label; the Owner's cycle reconciles and a secondary writes nothing; `--ready` reads the record, not the label; the GitHub label is described once and a person's is left alone. Eight mutations (assignment keeps it, never removed, a comment every cycle, the cycle not reconciling, UNREADABLE stripping it, each accept path not labelling, the description over GitHub's limit) each go red. **Observed 2026-09-30 on real GitHub (`rite-dogfood-board` #46) and real Jira (`ritetest` KAN-30), both probes closed:** a hand-added label removed three times with one comment; `rite refine accept` adds it; a hand-removed one is put back; a description edit removes it with a STALE comment; `--ready`, `--needs-refinement` and the Owner's two JQL filters return the right sets. The first GitHub run found that GitHub refuses a label description over 100 characters (422, measured: 101 refused, 100 accepted), which the design's 119-character wording exceeded; the description is now 90, pinned by a test, and was then created as written. ⚠ Not observed live: the assignment removal (needs a Manager handing to a Worker) and a label drifted while no rite ran; both are covered by tests.
+
+**Changes in 0.24.63 — a force-release stops at another Manager (v0.7.0 MM3; SPEC §5.4.8 P4).** §5.4.3 records what was built and the three boundaries of the rule; §5.4.8's status line, its P4 row and its state list say P4 holds for claims and not for destroy. `Claim.manager`, defaulted to `""` so a ledger written by an older rite still parses; `ClaimsLedger.claim(manager=)`, filled by the CLI from `managers.current_manager()`; `force_release(manager=)` narrows the PATH-matched release to the acting Manager's own claims and unowned ones; `last_refused_other_managers`, printed by `rite release --force` as "not yours: <path> (held by <worker>, under Manager '<name>')"; the force-release audit record names the Manager. `worker=`-scoped releases are NOT narrowed, so `pool.archive` can still reap a Worker another Manager started. Tests: two Managers on different paths, A's release leaves B's and says whose it is, releases its own and an unowned one; a human outside any session still clears the path; a pre-0.7.0 ledger reads. Five mutations (the guard removed, unowned claims refused too, the CLI's `or None` dropped, a `worker`-scoped release narrowed, the refusal printed silently) each go red.
+
+**Changes in 0.24.62 — `rite init` says when the code it was pointed at is not a git repository (0.7.0a2 dogfood assessment).** §9.3 gains the paragraph. `detect.holds_files_but_no_repository`; `offer_modules` warns when there are no candidates and it holds. Tests: the existing-code route and the from-scratch route both say it and register nothing; controls: the same code in a repository is registered and not told, an empty directory is not told this, a directory inside another repository is not told it is outside one. Three mutations (silent again, said inside a repository, said for an empty directory) each go red.
+
+**Changes in 0.24.61 — `rite init`'s existing-code route asks for the code when the path is empty (v0.7.0 dogfood S11; Robert's design).** §9.3 gains the paragraph. `questionnaire.holds_nothing`, `ask_for_the_code`, `module_name_for`; `InitAnswers.link`; `run_init` registers the link with `workspace.add_module` right after `modules.yaml` and carries it into the answers; `_read_changes` no longer claims to read an empty path. Tests through the real CLI with a local repository: the empty path is asked about, and the accepted link is registered, cloned on the remote's branch and named in CLAUDE.md; declining, saying no to the offer, and `--yes` each leave no module and say so; a path with code is not asked (control); an answer that is not a repository (a URL, `user@host:path`, or a local repository) is asked again, found when an older test's sentence was offered as a module. Seven mutations (never asking, the link not added, asking for a path with code, declining silently, the false claim restored, the module not carried into CLAUDE.md, any text accepted as a repository) each go red. `test_init_first_question`'s brief test now gives its path something in it, which is what it tests.
+
+**Changes in 0.24.60 — a project reads only its own tickets on a board it shares (v0.7.0 dogfood S1; Robert, 2026-09-29, option A).** New §6.1.1. `ticket_backend.scope_label`; `tickets/scope.py` (`Scoped`, `label_for`, `label_problem`, `sharing_problems`, `name_problems`, `unwrapped`); `machine_projects.py`; `create_backend_from_config` wraps a scoped board, with or without a root; `refinement.record` sees through every wrapper; `rite init` defaults the label and records the project; `rite start` refuses before anything starts; `rite doctor` reports it as `board scope:`. Tests: a scoped list excludes another project's tickets (with the unscoped control), a create is stamped, a ticket rite relabelled is not read back into another project's list, the JQL Jira is sent carries the label; init's default and record; an unusable label refused; start refuses on either side unscoped, on one shared label and on a Worker's name, and starts with both scoped and for another checkout of the same project; doctor flags it and is quiet when both are scoped. Thirteen mutations each go red. The v0.7.0 dogfood's board test sees through every wrapper now that init scopes each project.
+
+**Changes in 0.24.59 — `rite init` warns when the repository is becoming its own project root (v0.7.0 dogfood).** §9.3 gains the paragraph. `questionnaire.doubling_as_root`, shown by `offer_modules` for the `./` candidate before it is asked about (and under `--yes`). Tests through the real CLI: interactive and `--yes` both warn before the answer, with this repository's name and URL in the separate-root commands; a workspace holding a repository is not warned about. Mutations (no warning, warned after the question, warned for every module) each go red.
+
+**Changes in 0.24.58 — `rite doctor` says when a refinement round cannot reach you in Slack (v0.7.0 dogfood).** §9.8 gains the paragraph. `_doctor_refinement_reaches_you`, beside `_doctor_slack` (which stays silent for a project without Slack): a counted problem when a project with a board sends questions to a DM with no `slack.owner_user`, or to Slack with no bot token. Measured before the alpha run: `questions_to: dm`, no owner, no token, and doctor said nothing. Tests: the dogfood's config (both gaps named, with the commands); each gap alone; a channel needing the token and not the owner; controls for a complete setup, a project with no board and an unreadable store; the full `rite doctor` reporting and counting it. Six mutations (not wired in, owner not checked, token not checked, no-board projects checked, unreadable store read as missing, printed but not counted) each go red.
+
+**Changes in 0.24.57 — every missing-credential hint names the command `rite credential list` names (v0.7.0 dogfood).** §10.5 gains the paragraph. `credentials.services.how_to_set` is the one answer (the CLI's `_how_to_set` delegates to it; a multi-line key stays a key, where it used to suggest `set github_app`, which refuses it). Seven hints named a key where the service works: doctor's Worker-token line, the sandbox's no-token and cannot-push refusals (the second now also names `sandbox_token_<worker>`), `rite deliver`, a Claude Manager's missing login, the board's missing-credential message and `rite credential check`; and four doc lines. Tests: `how_to_set` for every promptable key and the keys that stay keys; a scan of every source file with split string literals joined (and a control that it sees a split one); each hint as a person reads it. Six mutations (each site back to the key, and `how_to_set` suggesting a service for a multi-line key) each go red. One existing assertion was vacuous — `set jira_token` was never printed, so "not printed" could not fail — and now asserts on the table's rows.
+
+**Changes in 0.24.56 — `rite credential set jira` makes Jira the board on a project with none (v0.7.0 dogfood).** §10.5 gains the paragraph. `Service.board_type` (`jira`); `_set_service` sets `ticket_backend.type` from it when the type is `none`, reports it with the other recorded config, and leaves any other board in place with a note. Tests through the real CLI in the dogfood's order (`rite init --yes`, then `rite credential set jira`): the type becomes `jira` and the Manager's board is Jira's and not ABSENT; a GitHub project keeps GitHub and is told. Mutations (type not set, the whole step removed, any board overwritten) each go red.
+
+**Changes in 0.24.55 — every Worker commit credits rite and Claude (Robert, 2026-09-29).** §5.1.1 gains the paragraph. `publishing/attribution.py`: `credit`, and the hook `install_hooks` puts in each clone from `start_worker`; `_squash_message` credits the commit rite builds. Tests with real git (plain, `--no-verify`, a Claude-Code-style trailer, another trailer, amend, a pre-existing hook, the squash end to end, hook and `credit` agreeing byte for byte) and a control without the hook; five mutations each go red (install skipped, squash uncredited, no trailer, no body line, body line after the trailers).
+
+**Changes in 0.24.54 — rite opens a pull request only as a draft, on a repository the operator owns, against its default branch (Robert, 2026-09-29).** §5.1.1: `_pull_request_target_refusal` runs before the push under `pull_request`; `gh pr create` gains `--draft`. Tests: the operator's own fork allowed; someone else's origin, PR target, or both refused; an unreadable token owner or default branch refused; a non-default base refused; end to end, a refused target leaves origin without the branch. Mutations (the check removed from `_publish`, the ownership comparison disabled, `--draft` removed, an unreadable owner allowed) each go red.
+
+**Changes in 0.24.53 — Workers hold no GitHub credential (Robert, 2026-09-29).** §5.3.4: `WORKER_SERVICES` is Claude only; `worker_environment` no longer takes a Worker token; `start_worker` no longer takes one and refuses a sandbox that would receive `GITHUB_TOKEN`/`GH_TOKEN`/`GH_ENTERPRISE_TOKEN`. The token is still resolved and checked at start, for `rite deliver` to push with on the host, and `rite sandbox pane` still masks it. Measured before and after with a fake token: three files inside the sandbox held it before, none after. Tests: a GitHub token is refused at the sandbox door; the CLI keeps the provisioned token on the host; three mutations (GitHub back in `WORKER_SERVICES`, the refusal removed, the CLI handing it over) each go red.
+
+**Changes in 0.24.52 — a Worker does not get the operator's Claude settings (dogfood #27).** §5.3.2 gains the paragraph, and `start_worker`'s argument list says what it now passes. yoloAI's claude agent copies the host's `~/.claude/settings.json` into every sandbox at every create, start and restart, with no switch; on seatbelt rite runs `yoloai new` with its own `HOME` (an empty settings file) and `--data-dir ~/.yoloai`, and passes the operator's `user.name`/`user.email` through `GIT_CONFIG_*`, because that home has no `.gitconfig`. Measured before building, with controls: the settings seed follows `HOME`, `start` re-seeds from whichever home it runs under, and without an identity git invents one from the host name. `tests/test_a_worker_does_not_carry_the_operators_claude_settings.py`, with a live opt-in test (`RITE_LIVE_YOLOAI=1`) that fails on the operator's hooks when the clean home is switched off.
+
+**Changes in 0.24.51 — "nothing ready" is said as a snapshot with its read time (DF4, coordinator's ruling 2026-09-29).** The `idle` row of the lifecycle table: `rite start` still stops when the board lists nothing ready, and now says when it looked ("done: the board listed nothing ready as of HH:MM:SS"), so a person who filed a ticket seconds before can see why it was not picked up. A second read after a delay would narrow the window rather than remove it, so there is none. The loop's idle detail says the same. Jira measured on ritetest KAN, 2026-09-29 13:10 CEST: `/search/jql` reflected a create on the first read in 5 of 5, and a label removal in 3 of 3 (KAN-20 to KAN-27, closed; KAN-12 to KAN-19 were a first batch whose probe could not tell "first check" from "never seen", discarded and closed). Atlassian documents that search may lag; it was not observed here, and `own_writes` covers it if it does.
+
+**Changes in 0.24.50 — §6.7, refinement, as built and as decided (TR3).** New §6.7 states the property (no work starts on a ticket whose definition of done the User has not agreed, and none is invented), the record and the one predicate (BUILT, TR1), every path to work that asks it (the Worker start, the route and the Owner's assignment, BUILT, TR4, TR5, TR9), why a Worker never checks from inside its sandbox, and the round protocol (DECIDED, NOT BUILT, TR2). D-102 to D-113 record Robert's rulings on TRQ1 to TRQ12 and Q4, each marked built or not. §9.4.2: a Worker starts cold with its CLAUDE.md and the delivered `TICKET.md`, and works to its record. §9.10's orientation table: a backlog with nothing REFINED is its own row, not "nothing to do", and only REFINED is ready. Written only from what is on `main`; the design note keeps the races and the protocol's detail.
+
+**Changes in 0.24.49 — the verifier's CONTRADICTED is not a finding when it rested on the claimant's own state, which it cannot open.** #102 covered replies that cite a file; a pathless "I journaled it" still met a verifier that runs in the Owner's boundary and cannot open another Manager's state (dogfood V1). The verifier must now say what its verdict rested on (`rested_on`, required in its schema). Whether that ground was readable is established by trying from inside the verifier's own boundary, never by rite looking on its behalf, and rite never reads the journal (§9.15.5 holds: a journal that could change how its author's replies are judged would be a control channel into its own verification). A CONTRADICTED that rested on the claimant's state folder, or its pre-MM8 `.rite/managers/<claimant>/`, becomes COULD NOT TELL, said as rite being unable to establish the claim, with the verifier's words unaltered; the #102 path guard now speaks the same way. One that names nothing stands and is counted in the verification summary and the standup. A false "I journaled it" also comes out COULD NOT TELL: nothing that could see checked it. No boundary moved (an exception to DF3 was proposed and withdrawn). Tests: the seeded false claim stays CONTRADICTED; a pathless true claim through the real `sandbox-exec` is COULD NOT TELL, the stand-in's own CONTRADICTED the control; `test_nothing_in_rite_reads_the_journal` passes unexempted. Mutations (guard ignoring `rested_on`, empty `rested_on` firing, no guard, not counted) each turn a test red.
+
+**Changes in 0.24.48 — a Manager's text is read from stdin, never the command line (F14, W9).** §9.16 gains the paragraph, and the routing paragraph ("The Owner routes") shows the new form. Found in the v0.6.0 dogfood: a Claude Owner's double-quoted `rite reply` ran `rite update --files-only` and `rite doctor` through backticks and sent their output to the person. `rite reply`, `rite ask` and `rite route` now take `-` and read stdin, refuse text as an argument, and are taught as quoted heredocs with a fresh unguessable delimiter. W9 (v0.6.0 readiness): a refused command containing backticks or `$( )` is now reported as a substitution, not as a settings file the engine failed to apply. Tested with a ticket's text run through the Owner's instructions by real bash and zsh, with a control showing the old form runs the canary (`tests/test_a_managers_text_never_becomes_shell.py`).
+
+**Changes in 0.24.47 — a Worker starts only on an agreed definition of done, and is handed that record (TR4).** §5.3.4 "Reading the ticket": `rite sandbox start` now reads the ticket through `refinement.status.of`, one read that returns the state, the signed record and the ticket text. Only REFINED starts a Worker; `TICKET.md` carries that read's text and, as "Agreed definition of done", that read's record, and the prompt names the record id. Every other state refuses, names itself and removes an earlier copy. `--prompt` files an unrefined chore labelled `chore` and `scheduled` and starts nothing (TRQ11, Robert, 2026-09-29), no longer the Worker's label, since nothing runs on it. Tests go through the real predicate with a real key and a signed record; only the network is faked. Mutations each turn tests red: an unrefined ticket allowed, a second board read for the text, the record not delivered, the record id not in the prompt, a stale copy left on refusal.
+
+**Changes in 0.24.46 — a board read sees what rite itself just wrote (DF4).** Measured 2026-09-29 on `rite-dogfood-board` (gh 2.98.0): after an issue is created and labelled `scheduled`, `gh issue list --label scheduled` missed it for 1.6–6.5 s (5 of 5) while `gh issue view` returned it on the first try; after `scheduled` was removed, the list still returned it for up to 1.9 s (3 of 3). Jira documents the same for `/search/jql` ("Recent updates might not be immediately visible"). Every ticket rite creates, labels, moves or assigns is recorded in `.rite/board-writes.json`; every list asks the board's consistent single-ticket read about each recorded ticket, which adds it or takes it out; an entry leaves only when the list shows the same state and `updated` time as that read. No wait or retry in the path. A ticket a person created is still subject to the lag, and `idle` says "listed", not "has". Through the real CLI against GitHub: `rite loop run` straight after `rite board create -l scheduled` listed the new issue 5 of 5; with the ledger removed, 0 of 5 (four empty, one offering an issue rite had just closed).
+
+**Changes in 0.24.45 — Workers receive GitHub and Claude credentials only; their ticket is delivered by the host (Robert, 2026-09-29: "Narrow it down").** §5.3.4 reversed: `worker_environment` delivers `WORKER_SERVICES` (github, claude) instead of every credential the project holds. The evidence: the pingr Worker proof's launch line carried `SLACK_BOT_TOKEN`, `JIRA_API_TOKEN` and `JIRA_EMAIL`, and SB12 measured a sandbox's environment readable from other sandboxes. Checked from the code first: no Worker uses Slack; the one Worker use of Jira was reading its ticket with `rite board show`, so the ticket is now read on the host and delivered as `TICKET.md` ("Reading the ticket"). Before/after through the real CLI with a stand-in `yoloai`: main passed the three to the Worker, this passes none. Tests: restoring the old set fails 3; skipping delivery, normalisation, the snapshot warning, the refusal of an unreadable ticket, or removing a stale copy each fail the delivery tests.
+
+**Changes in 0.24.44 — §2.4.1a says what v0.6.0 got wrong, and what the Owner lease really rests on.** The section as shipped in v0.6.0 stated a load limit on the Owner-lease guarantee; that claim is now marked unsupported, with how it was established (the lease code v0.6.0 shipped differs from the code measured clean only by the additive `released_at`). And the real residual is stated beside it: the guarantee rests on clocks agreeing within `skew_tolerance_seconds`, which one machine and the election tests cannot exercise, filed for v0.8.0 as LS3 (fencing or a shared clock).
+
+**Changes in 0.24.43 — §2.4.1a rewritten: the two Owners the graceful-handover test reported were its own bookkeeping, not the lease.** CI run 36476910158 (macOS) reproduced the 2026-09-20 failure. The test closed a handed-over Owner's run at its tick's end, after the release had landed; the successor promoted correctly in between. Established with ground truth from the remote's reflog: under an injected slow tail after the release, main reported two Owners in 20 of 20 runs while the remote showed a correct handover in 20 of 20; with the fix, 0 of 20; a control where the successor promotes over a valid lease is caught 3 of 3. The "stated bound" on the Owner-lease guarantee is withdrawn. A release now carries its stamp (`released_at`), the test closes the run there and checks the remote's writes directly, and the probe caption that claimed a diagnosis it could not make is corrected.
+
+**Changes in 0.24.42 — `rite init` asks about each repository before registering it (Robert, 2026-09-29).** §9.3 Section 3: the project root (with a commit) and each immediate subdirectory repository are offered one at a time, root first, and registered on confirmation, on both the existing-code and from-scratch paths. Before this the existing-code path registered silently and the root was offered only when no subdirectory held a repository. `--yes` answers yes and prints a line per module added; a root with nothing committed is explained, not offered. Pre-registered dogfood tests re-run on this change under `~` with the hook installed: F1 (init with defaults → `git add -A; git commit; git push` → push exit 0, `rite publish check` clean, no `.rite/gitleaksignore` created) and F2 (`rite status` lists `app: ./`; `rite add worker alpha` → `workers/alpha/app/main.py`). Mutations each turn tests red: adding without asking, `--yes` adding nothing, `--yes` adding silently, the root dropped when subdirectories hold repositories.
+
+**Changes in 0.24.41 — `rite sandbox destroy` destroys a finished Worker without `--force` (pingr Worker proof, finding 7).** §5.3.3: yoloAI's "unapplied" means "not copied back with `yoloai apply`", and a Worker's work leaves by push, so every finished Worker was unapplied and every ordinary destroy needed `--force` — F1's shape. When yoloAI refuses for unapplied work, rite stops the sandbox, asks `yoloai diff --name-only --json` which paths it means, and passes `--abandon-unapplied` only when every path is a clone in a copy rite found and `unsaved_work` finds nothing there after the stop; otherwise the refusal stands, naming the paths, with the sandbox stopped. Measured with yoloAI 0.11.0 on macOS through the CLI: a pushed-only Worker — main refused (`1 sandbox(es) have unapplied changes`), the fix destroyed it; the same plus `NOTES.md` outside the clone — refused, `not a pushed clone: NOTES.md`, sandbox stopped, file kept. Tests replace a fake yoloAI whose `destroy` always succeeded (why the existing pushed-work test was green) with one that refuses as measured; five mutations each turn them red. SPEC's sentence that `destroy` always passes `--abandon-unapplied` was stale and is replaced.
 
 **Changes in 0.24.40 — ⚠ BEHAVIOUR CHANGE: a message a person sent is delivered, or the person is told it was not.** The coordinator's property, 2026-09-28, after the fifth instance in a day of one defect (a message sent, believed delivered, never seen). Found on Linux in SB11: `rite message lead` said "delivered at the start of its next turn", then `rite start lead` stopped on "the board has nothing ready" with the message in the inbox and nothing said. (1) **When a Manager starts changes:** an `idle` board with mail in the inbox now starts ONE session to deliver it. The inbox is read as a state at the moment of stopping, never as an event, so mail that arrived while nothing was watching is found. `closed` (the person's schedule) and the fault verdicts still start nothing, and the session ceiling still bounds. (2) **Not a loop (F22):** each delivery takes the mail, so another session needs new mail; and if the same messages are still there after a session started to deliver them, that session could not take them, which is REPORTED and not retried. (3) **Every run that ends with mail undelivered says so** (`supervise.undelivered_line`), at the terminal and in the Slack goodbye in the Owner's DM, from the `finally` at the end of `rite start`, so it holds however the run ended, an interrupted one and exits added later included. (4) **`rite message` says at send time** when the Manager is not running (`routing.supervisor_state`, recorded identity), instead of "delivered at the start of its next turn". Mutations, each red: an idle board never delivering (4), undelivered mail retried (1), `closed` overridden (1), the end of the run silent (3), the Slack goodbye omitting it (1), `rite message` claiming a next turn (1). A `last_basis` line meant to let F22 judge a delivery session was removed: an idle verdict's basis cannot equal a ready one's, so it could never change a decision.
 

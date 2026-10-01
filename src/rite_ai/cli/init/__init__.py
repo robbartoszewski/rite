@@ -33,13 +33,20 @@ import yaml
 from rite_ai.config.models import ProjectBrief
 from rite_ai.config.parse import parse_brief
 from rite_ai.gate import gitleaks_runner
-from rite_ai.gate.hook import redirected_hooks_dir
+from rite_ai.gate.hook import upstream_hooks_dir
 from rite_ai.state import write_atomic
 
-from . import claude_gen, scaffold, ui
+from . import claude_gen, scaffold, setup, ui
 from .config_file import ConfigFileError, load_preset
 from .detect import run_detection
-from .questionnaire import portable_source_path, run_questionnaire, source_answers
+from .questionnaire import (
+    DESCRIBE_A_MODULE,
+    holds_nothing,
+    portable_source_path,
+    role_preset_problem,
+    run_questionnaire,
+    source_answers,
+)
 
 
 @dataclass
@@ -63,6 +70,13 @@ def run_init(
             status="error",
             message=f"Could not read config file {preset.file}: {preset.message}",
         )
+
+    # C7: a Manager machine is 0.9.0's. Refused here — before `.rite/` is
+    # created — rather than coerced to Owner, so a declared key is never
+    # silently discarded and a refusal leaves nothing behind.
+    role_problem = role_preset_problem(preset)
+    if role_problem is not None:
+        return InitResult(status="error", message=role_problem)
 
     source = _existing_source(root, preset, interactive)
     if isinstance(source, InitResult):
@@ -111,6 +125,9 @@ def run_init(
             )
         import shutil
 
+        # S18: what the wiped project was, so its credentials can be offered
+        # back rather than orphaned (read before it is gone).
+        setup.remember_existing(rite_dir)
         shutil.rmtree(rite_dir)
 
     rite_dir.mkdir(parents=True, exist_ok=True)
@@ -121,6 +138,14 @@ def run_init(
         detection = run_detection(root)
         answers = run_questionnaire(root, preset, detection, yes)
 
+    # Route-independent, whichever way the answers came (S13, and `--yes`
+    # from scratch, which reached no module check at all): zero modules is
+    # said, and asked about while someone is there to answer.
+    setup.settle_modules(root, answers, interactive)
+    setup.settle_schedule(answers, preset, interactive)
+    # S15: before config.yaml is written, which is where the declaration goes.
+    setup.offer_a_manager(answers, preset, interactive)
+
     created: list[str] = []
 
     write_brief_path = scaffold.write_brief(rite_dir, answers.brief)
@@ -128,9 +153,18 @@ def run_init(
 
     write_modules_path = scaffold.write_modules(rite_dir, answers.modules)
     created.append(str(write_modules_path.relative_to(root)))
+    if answers.link is not None:
+        _add_the_linked_module(root, answers, interactive)
+    setup.settle_namespace(root, answers, interactive)
 
     write_config_path = scaffold.write_config(rite_dir, answers.config)
+    setup.remember_namespace(answers)
     created.append(str(write_config_path.relative_to(root)))
+    # Seen by this machine from its first command, so another project that
+    # reads the same board can tell (`tickets.scope.sharing_problems`).
+    from rite_ai.machine_projects import note
+
+    note(root)
 
     # Record which config schema these files were written against, so a
     # future migration can tell this project apart from one created before
@@ -150,7 +184,9 @@ def run_init(
     created.append(str(checklist_path.relative_to(root)))
 
     scaffold.update_gitignore(root, answers.kb.commit)
-    installed_hooks = scaffold.install_pre_push_hooks(root, answers.modules)
+    installed_hooks, refused_hooks = scaffold.install_pre_push_hooks(
+        root, answers.modules
+    )
     ci = scaffold.write_ci_workflow(root)
     if ci.status == "written":
         created.append(scaffold.CI_WORKFLOW_REL_PATH)
@@ -196,28 +232,36 @@ def run_init(
         "in CI either (see below)."
     )
     if installed_hooks:
-        ui.created(f".git/hooks/pre-push ({len(installed_hooks)} repo(s))")
+        # Named when it is a chain, because what runs first is another
+        # project's gate and the reader should know rite put itself behind it
+        # rather than in place of it (§11.5.1).
+        upstream = upstream_hooks_dir(root)
+        behind = f", chained behind {upstream}/pre-push" if upstream else ""
+        ui.created(f"pre-push hook ({len(installed_hooks)} repo(s){behind})")
+        for why in refused_hooks:
+            # A repo that got one and a repo that did not are different facts.
+            ui.note(f"but not everywhere — {why}")
+    elif refused_hooks:
+        # The installer's own words, which name the cause and the remedy. This
+        # branch used to re-derive both and could only describe one cause.
+        for why in refused_hooks:
+            ui.note(f"no pre-push hook installed — {why}{ci_backstop}")
     else:
         # Never silently. The gate is the thing that stops a secret reaching a
         # remote, so "no hook installed" has to be as loud as a created file —
         # a cold rehearsal found a push carrying four planted secrets going
         # through with exit 0 because git was reading hooks from elsewhere.
-        redirected = redirected_hooks_dir(root)
-        if redirected is not None:
-            ui.note(
-                f"no pre-push hook installed — git reads hooks from "
-                f"{redirected} (core.hooksPath), not .git/hooks. The publish "
-                "gate will NOT run on push. Either add `exec rite publish "
-                "pre-push` to the pre-push hook in that directory, or run "
-                "`git config --local core.hooksPath .git/hooks` followed by "
-                "`rite publish install-hook`." + ci_backstop
-            )
-        else:
-            ui.note(
-                "no pre-push hook installed — the publish gate will not "
-                "run automatically on push. Install it with `rite publish "
-                "install-hook`, or run `rite publish check` by hand." + ci_backstop
-            )
+        #
+        # Nothing installed AND nothing refused means there was no repository
+        # to install into. A redirected `core.hooksPath` is no longer a cause
+        # here: it is chained behind, or it is refused with the installer's own
+        # words in the branch above.
+        ui.note(
+            "no pre-push hook installed — there is no git repository here to "
+            "install one in, so the publish gate will not run automatically "
+            "on push. `git init` and commit, then `rite publish "
+            "install-hook`; or run `rite publish check` by hand." + ci_backstop
+        )
     # The CI half of SPEC §11.5's "belt and braces", and per §11.5.1 the
     # load-bearing half: the hook above is disarmable by this machine's own
     # git config, with no signal that it happened, and CI is the only layer
@@ -321,7 +365,12 @@ def run_init(
             "JIRA: run `rite credential set jira` — it asks for your email, an "
             "API token and the project key, and the board works once it has."
         )
-    click.echo("Ready. Start a Dispatch session — it knows what to do from here.")
+    worker = setup.offer_a_worker(root, answers, preset, interactive)
+    missing = setup.what_is_missing(root, answers, worker)
+    if missing:
+        click.echo(setup.not_ready(missing))
+    else:
+        click.echo("Ready. Start a Dispatch session — it knows what to do from here.")
 
     return InitResult(
         status="created",
@@ -391,10 +440,48 @@ def _existing_source(root: Path, preset, interactive: bool) -> Path | InitResult
         ui.warn(f"Nothing at {_display(path)} — check the path and enter it again.")
 
 
+def _add_the_linked_module(root: Path, answers, interactive: bool) -> None:
+    """Register and clone the repository the person named for an empty path,
+    through the same `add_module` as `rite add module`, and carry it into the
+    answers so the hooks and CLAUDE.md written after this include it.
+
+    C8: with `description=`, which `rite add module` takes and this omitted —
+    so every module init registered this way rendered into the brief's module
+    table with no line saying what it is. ⚠ Asked BEFORE the clone, so there
+    is no README to derive a default from yet; the other routes register a
+    module that is already on disk and offer its README's first sentence.
+    """
+    from rite_ai.workspace import add_module
+
+    name, url = answers.link
+    description = (
+        ui.text(DESCRIBE_A_MODULE.format(name=name), default="").strip()
+        if interactive
+        else ""
+    )
+    result = add_module(root, name, url=url, description=description)
+    if result.ok and result.module is not None:
+        answers.modules.append(result.module)
+        ui.created(f"module '{name}' ({url}), cloned to {name}/")
+        return
+    ui.warn(
+        f"module '{name}' was NOT added: {result.message}. Nothing else was "
+        f"changed; try again with `rite add module {name} {url}`."
+    )
+
+
 def _read_changes(source: Path, preset, interactive: bool) -> str:
+    # Nothing to read, so neither "will be taken from what's there" nor "what
+    # is stale in it" is true to ask (S11); `source_answers` asks for the code.
+    # ⚠ Except an existing rite project: `.rite/` and a generated CLAUDE.md are
+    # rite's own leftovers to `holds_nothing` (S13), and its changes are still
+    # asked for and recorded.
+    existing = _rite_project_at(source) is not None
+    if holds_nothing(source) and not existing:
+        return ""
     click.echo()
     click.echo(READING.format(path=_display(source)))
-    if _rite_project_at(source) is not None:
+    if existing:
         click.echo()
         click.echo(ALREADY_A_PROJECT)
     preset_changes = preset.get("source.changes")

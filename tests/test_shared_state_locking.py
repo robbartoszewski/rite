@@ -103,17 +103,17 @@ class TestModulesYaml:
         `load_project` failing on one is what sends a handover to the
         outbox instead of the board."""
         from rite_ai.config.models import Module
-        from rite_ai.workspace.manage import _write_modules
+        from rite_ai.workspace.manage import write_modules_file
 
         path = tmp_path / "modules.yaml"
-        _write_modules(path, [Module(name="keep", path="keep/")])
+        write_modules_file(path, [Module(name="keep", path="keep/")])
         before = path.read_text()
 
         monkeypatch.setattr(
             "os.replace", lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt())
         )
         with pytest.raises(KeyboardInterrupt):
-            _write_modules(path, [Module(name="lost", path="lost/")])
+            write_modules_file(path, [Module(name="lost", path="lost/")])
 
         assert path.read_text() == before
 

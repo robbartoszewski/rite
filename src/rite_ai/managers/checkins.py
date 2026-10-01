@@ -662,6 +662,11 @@ def _deliver_checkin(root: Path, manager: str) -> str:
     from rite_ai.managers import pending
 
     lines += pending.checkin_lines(root, manager, now=time.time())
+    # TR2: an escalated refinement is in every checkpoint until he decides it
+    # (Robert: "escalates it as a blocker ... in the checkpoint status updates").
+    from rite_ai.refinement import protocol as refinement_protocol
+
+    lines += refinement_protocol.checkin_lines(root, manager)
     path = send(root, manager, OUTBOX, "\n".join(lines), kind=CHECKIN)
     now = time.time()
     # Which outbox file IS a check-in, kept here rather than in the message
@@ -702,6 +707,7 @@ def instructions(root: Path, manager: str) -> str:
     of one text is how they drift.
     """
     from rite_ai import own_command
+    from rite_ai.managers import stdin_text
 
     rite = own_command()
     state = windows(root)
@@ -717,13 +723,18 @@ def instructions(root: Path, manager: str) -> str:
         "waited costs the User thirty seconds. So asking now is the "
         "default, and every doubt is resolved by asking now.",
         "",
-        f'To ask now: `{rite} ask --manager {manager} "<question>"`.',
+        "To ask now:",
+        stdin_text.heredoc(f"{rite} ask --manager {manager} -", "<question>"),
+        stdin_text.RULE,
         "",
         "Only when a question is CLEARLY deferrable, meaning you have real "
         "work to do meanwhile that does not depend on the answer, you may "
         "defer it to the User's next check-in:",
-        f'  {rite} ask --manager {manager} --defer "<question>" --while '
-        '"<what you will do meanwhile>"',
+        stdin_text.heredoc(
+            f"{rite} ask --manager {manager} --defer "
+            '--while "<what you will do meanwhile>" -',
+            "<question>",
+        ),
         "If you cannot name that work, the question blocks you: ask now. A "
         "deferral with no --while is refused.",
         "",

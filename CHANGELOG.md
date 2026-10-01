@@ -1,7 +1,790 @@
 # Changelog
 
-## Unreleased: 0.7.0 (notes in progress, completed at release)
+## 0.7.0a5 (2026-10-01) — alpha: init finishes what it starts, and the publish gate runs behind someone else's
 
+⚠ **Still an alpha, cut for the same dogfood** (a real contribution to yoloAI
+through rite). This one is the setup pass: seven things `rite init` left for
+you to do by hand, and a security fix — rite's publish gate was installed
+nowhere at all on a machine with a global `core.hooksPath`. Not installed by
+default: `install.sh` still installs 0.6.0 unless you ask for this one
+(`RITE_VERSION=v0.7.0a5`). Everything 0.7.0a1 to 0.7.0a4 said is and is not in
+it still holds.
+
+**Upgrading does not update a project's files.** `rite update --files-only
+--dry-run` shows what would change in an existing project, and `rite update
+--files-only` applies it.
+
+### `rite init` finishes the job it starts
+
+Seven things `rite init` left for you to do by hand, found by setting up a real
+project with 0.7.0a4.
+
+**A Worker it created is now a whole Worker.** It was linked to no Manager —
+even when you had just declared one in the same run — so its instructions said
+"No Manager assigned yet." on line 7 and "Tell your Manager you are free" on
+line 112. And it was never asked about the modules' own `CLAUDE.md`,
+`AGENTS.md` or `CONTRIBUTING.md`, a question `rite add worker` has asked since
+0.7.0a4. Both because init built its Worker with two of the five things that
+command can set.
+
+**It no longer says "Ready." about a project with no board.** A project whose
+ticket backend is still `none` has nothing for `rite start` to work on, and the
+last line now says so and names `rite credential set jira` and the fields it
+records for you. Same for a project whose refinement questions go to a Slack DM
+with no member id set: `rite credential set slack`, and meanwhile `rite replies`
+and `rite refine answer` at your terminal.
+
+**It asks what each module is**, offering a line read out of that module's own
+README, which you accept with Enter or type over. That line renders into the
+module table in the project's instructions; before, every module init registered
+had none, while `rite add module --description` could set one.
+
+**It no longer asks whether this is an Owner or a Manager machine.** A Manager
+machine needs multi-manager coordination, which this release does not ship, so
+the question offered an answer that did not work. Your project is the Owner, and
+init says so. A `--config` naming `project.role: manager` is refused rather than
+quietly turned into an Owner. Separate from "Declare Manager 'lead'?", which is
+unchanged.
+
+### The publish gate runs even when git reads hooks from somewhere else
+
+⚠ **Security fix, and it touches a security control that may not be rite's.**
+
+If `git config --global core.hooksPath` points somewhere — some tools and
+companies set it, to install one hook for every repository you own — rite's
+publish gate was installed **nowhere**, in any project, and said so in a line
+that was easy to lose. The gate is the thing standing between a secret and a
+remote.
+
+rite now installs a `pre-push` hook that runs **the hook git would have run
+first**, and the publish gate second, and points only *this repository's*
+`core.hooksPath` at its own hooks. Your global git config is not touched and
+neither is the hook it names. If that hook refuses a push, the push is refused
+and rite's gate is not consulted — a gate asked after the decision is not a
+gate. Both hooks see the list of refs git is pushing.
+
+That hook's path is read through git's own `~` expansion. git stores
+`core.hooksPath` exactly as written, so a path written `~/hooks` came back with
+a literal `~`, which no shell expands — and the chain would have run rite's gate
+alone while reporting that it had run both. Found in review before release; it
+needed only for that line to be written in `~` form.
+
+If rite cannot build that chain it **refuses and says so** rather than
+installing half of it, because half of it would mean git reading a directory
+where the other hook is not — silently dropping a control somebody installed on
+purpose. A `core.hooksPath` you set on the repository itself is left alone, with
+the reason and what to do about it.
+
+**And a git worktree gets the hook at all.** rite looked for a `.git`
+directory, and in a worktree `.git` is a file, so no worktree has ever had the
+publish gate installed — a separate bug that the message about `core.hooksPath`
+was taking the blame for. `rite doctor` also stops reporting a redirect in a
+worktree where there is none.
+
+### `rite credential set` offers to move the board instead of telling you to edit a file
+
+Setting up JIRA on a project already pointed at another board printed a note
+telling you to edit `.rite/config.yaml`. It now asks, defaulting to **no**,
+since moving the board changes what every ticket command reads. With nothing
+attached to answer it does not ask and does not move. Accepting it clears the
+fields that described the old board, and names each one, so `config.yaml` does
+not go on describing two.
+
+### A local Manager on any other agent is told its window, or told it is not
+
+A local Manager running something other than Goose was handed
+`GOOSE_CONTEXT_LIMIT` — a variable that agent does not read — so it was told
+its context window in a vocabulary it could not understand, and nothing said
+so. The window itself was always enforced (it is pinned into the model on the
+server, so it holds for any client); what was missing was the agent knowing
+the number, which is the difference between compacting before the limit and
+meeting it. rite now says that out loud for an agent it has no mapping for,
+instead of handing it Goose's variable.
+
+### A local Manager works one subtask at a time: `rite local step`
+
+A Manager running on a local model is given one subtask and the slice of the
+spec it cites — not the whole ticket, and not a pointer into a file it has no
+room to read. rite then runs the subtask's verify itself, commits the result
+to a local branch itself, and records the outcome itself.
+
+That last part is the point. A model's claim that it finished is kept as a
+note and never decides anything: whether a subtask is accepted comes from the
+verify and the commit alone, and a claim that disagrees with the verify is
+recorded because the disagreement is worth seeing.
+
+Before this, a local Manager was handed a whole ticket and asked to report
+back. Two runs on `qwen3:8b` spent their entire context window wandering and
+reported nothing at all. One subtask costs about an eighth of the window, and
+it does not grow as subtasks go by, because each one starts fresh.
+
+A plan has to be approved before anything runs from it, and rite does not
+write plans yet — you write the decomposition and approve it.
+
+## 0.7.0a4 (2026-10-01) — alpha: setup that finishes, and answers that come back
+
+⚠ **Still an alpha, cut for the same dogfood** (a real contribution to yoloAI
+through rite). This one closes the gaps the 0.7.0a3 run hit in setting up and
+running a project: init now leaves a project that can start, Slack is set up
+in one command, a Worker's question is answered from Slack, and `rite doctor`
+stops accusing a working setup. Not installed by default: `install.sh` still
+installs 0.6.0 unless you ask for this one (`RITE_VERSION=v0.7.0a4`).
+Everything 0.7.0a1 to 0.7.0a3 said is and is not in it still holds.
+
+### `rite release --force` no longer takes another Manager's claims
+
+With two Managers in one project, `rite release --force <path>` released
+whoever held the path, a sibling Manager's live work included, and the record
+of it named nobody. A force-release from a Manager now releases only that
+Manager's claims and unowned ones, and names each one it left: "not yours:
+<path> (held by <worker>, under Manager '<name>')". Run from your own terminal,
+outside any Manager, it still clears the path. Claims written by an older rite
+still read.
+
+### Every local Manager must declare its context window, not only a Goose one
+
+`rite start` refuses, and `rite doctor` warns about, a local Manager with no
+`context_window` whatever agent it runs. Before, only Goose Managers were
+checked, so any other local agent would have run on its server's default
+window, which can be small enough to cut the Manager's instructions short
+without any error.
+
+### `--help` no longer points at documents you do not have
+
+Command help carried rite's own internal section numbers — "Is this healthy?
+(SPEC §9.8)", "The standup a check-in opens with (plan § K4)". Those are
+references into design documents that do not ship with rite, in the one text
+you read at the moment you are stuck. They are gone from every command's
+`--help`, and so are rite's internal decision numbers ("(D-46)") and the paths
+of its design notes; the notes themselves are unchanged for anyone reading the
+source. `rite spec slice D-12` still shows `D-12`: there it is how you name a
+decision in your own spec.
+
+### `rite doctor --network` checks what only a live call can
+
+A plain `rite doctor` still makes no call that can hang — it is read by people
+who are stuck, sometimes offline. Adding `--network` runs the two checks that
+need a real answer:
+
+- **Whether each Worker's GitHub token can actually push.** A token that
+  exists can still be read-only, which passed the old report and was then
+  refused by `rite sandbox start` — so the check you ran first told you
+  nothing about the thing that stopped you. Only GitHub actually refusing the
+  token counts against it: if GitHub is down, rate-limiting you, or
+  unreachable, rite says the check could not be made rather than telling you
+  your token is bad.
+- **Whether your Slack channel really delivers**, by posting one message to
+  it. (`rite credential set slack` still never posts — setting rite up is not
+  announcing it.)
+
+Without the flag, doctor says these were not checked rather than passing over
+them in silence.
+
+### Declaring a Manager on one machine no longer looks like a broken setup
+
+`rite doctor` used to exit 1 on a project whose only sin was running `rite add
+manager lead`: it reported that the machine "is not enrolled — it will not
+publish a heartbeat, stand for Owner, or take over another machine's work",
+and separately that there were "manager(s) listed but no `remote` … no
+election can ever happen", even with no second machine anywhere. A project
+with one Manager and no coordination remote is now left alone; one that lists
+several, or that has other machines, is warned exactly as before.
+
+
+### In Slack, a post that needs your answer stands out
+
+Each post from a Manager now opens with what it is (❓ Needs your answer, with
+the ticket; ℹ️ Status; ⚙️ rite; ⚠️ Delivery) and its author, and ends with a
+divider, so posts no longer run together under one avatar. Posts that need
+you are shown in full; status and system lines are shown small and grey.
+
+### `rite init` offers to declare a Manager
+
+Init now offers a Manager (`lead` on the Owner machine) and declares it the
+way `rite add manager` does, so `rite start lead` works without editing
+`.rite/config.yaml`. Decline it, or run init with `--yes`, and init says how
+to add one later.
+
+### Answer a Worker's question in Slack and it reaches the Worker
+
+When a Worker stops to ask something, rite already sent you the question.
+Reply in that thread and the answer now goes to the Worker — the Owner
+carries it in. Before this you had to attach to the Worker's sandbox and type
+the answer in by hand, which is what the last test run had to do.
+
+If the Worker stopped before your answer arrived, rite tells you so in the
+same thread instead of leaving you waiting for a reply that cannot come.
+
+Nothing about a Worker's sandbox changes: the answer is a file in the
+directory the sandbox already uses to ask questions, and rite does not type
+into the Worker's session.
+
+### Refining a ticket does not use up a session
+
+`--sessions` limits how many sessions a Manager starts. A refinement round is
+not one of them, so a project with a board that needs refining no longer
+spends its budget on refinement and never gets to the work. (The separate
+`sandbox.max_concurrent_workers` setting is the one that limits how many
+Workers run at once.)
+
+### `rite init` no longer says "Ready." about a project with nothing to work on
+
+Whichever way you run it, including a bare `rite init --yes`, init now says
+when no module would be registered and, if you are there, asks for the
+repository. rite's own files (the installer the setup downloads, a previous
+init's CLAUDE.md) no longer count as your code. A fresh project's schedule
+(1 Worker, all day, in your machine's timezone) is stated rather than left
+empty, init offers to declare a Worker, and re-initialising a project whose
+repository already has credentials stored offers that credential namespace
+back instead of starting an empty one. The last line says what is still
+missing, if anything.
+### A Slack app another project already uses is flagged when you set the token
+
+rite has refused to run two projects on one Slack app for a while — two
+projects there share your DM, so each acts on the other's instructions. But it
+only said so at the first `rite start`, once the app had been made, the token
+stored and the project set up, and the fix it offered ("create a new Slack
+app") is the heaviest step in the whole setup.
+
+`rite credential set slack` now tells you as soon as you give it the token,
+naming the project that already holds the app, and `rite doctor` reports it
+too. The advice points at api.slack.com/apps and names the `reactions:read`
+scope a new app also needs. Your token is still stored either way — you may be
+moving a project onto its own app in either order — and `rite start` still
+refuses to open a relay on a shared app.
+
+If rite cannot reach Slack to check, it says so and leaves it at that, rather
+than reporting a problem it has not found.
+
+### `rite credential set slack` is one guided setup
+
+It now asks for your Slack member id and the broadcast channel as well as the
+bot token, and records the two that are not secrets in `.rite/config.yaml` —
+the same thing `rite credential set jira` does with the site and board key.
+Before this it stored the token and stopped, so `slack.owner_user` had to be
+hand-edited in, and until it was, a refinement round that asks you by DM had
+nowhere to go.
+
+It also checks the token against Slack as you give it (a read — it never posts
+anything to your workspace), asks again if Slack refuses it, and tells you if
+the app already belongs to another project, pointing at api.slack.com/apps and
+the `reactions:read` scope a new one needs. If Slack cannot be reached it says
+so and stores the token anyway.
+
+It ends on one line telling you where you stand: **ACTIVE**, naming the channel
+it posts to and whose DM it takes instructions from, or **INACTIVE** and what to
+add. Both answers are optional — press Enter to skip either. A channel with no
+member id is a working broadcast-only setup: rite posts status, and nothing
+typed in Slack instructs a Manager. A token on its OWN is INACTIVE, because
+neither target is set, and the command says so instead of looking like it
+finished the job.
+
+### A Slack channel is taken as you type it
+
+`all-rite` and `#all-rite` are the same channel now, whether you type it at
+that prompt or write it in `.rite/config.yaml`; a `C…` channel id is kept as
+it is. The bare name Slack shows in its own sidebar used to be refused as
+"neither a channel name starting with '#' nor a channel id".
+
+### A broken line in `config.yaml` no longer blocks `rite credential set`
+
+A channel name rite could not read used to make every `rite credential set`
+print that error and stop — including the run that would have fixed the
+project. It now says what is wrong and carries on, storing the secret under
+this project's namespace. It will not rewrite `config.yaml` while the file is
+in a state it could not read, so the fields that go into the file are skipped
+until you have fixed it.
+
+### An item only the host can measure is agreed as the host's
+
+Some definition-of-done items need a measurement a Worker cannot take inside
+its sandbox. Such an item can now be agreed at refinement as the host's: tag
+it `[host]` in a round's proposal, or pass it with `rite refine accept
+--host-item`. The Worker's `TICKET.md` says it is not the Worker's to run.
+When the work is delivered, rite collects it but holds a push or pull request
+until you record the result with `rite refine measured <ID> --item N --result
+pass --output <file>`. That result is signed, says who measured and when, and
+keeps the output's hash, both on the ticket and in rite's audit log.
+
+### Answer a refinement round from the terminal
+
+`rite refine answer <ID> <words…>` answers a round the way a reply in its Slack
+thread does, for when Slack cannot reach you. Every answer, from Slack or the
+terminal, is now recorded as the owner's (`slack.owner_user`) in the same
+shape, and the agreed definition of done says which channel it came by: one
+typed at the terminal is marked as such, because rite cannot tell you from a
+session running as you.
+
+### Declare a Manager without opening config.yaml
+
+`rite add manager <name> --preset lead` declares a Manager. Until now there
+was no command for it at all: you edited `.rite/config.yaml`, and you had to
+know a Manager lives in two places in that file. The command writes both, and
+puts a new Manager last so adding one never changes which Manager is Owner.
+
+Naming a Manager that is already there changes what it is for rather than
+adding a second — which is what you need on a project set up before Managers
+had roles, because declaring your second Manager is refused until the first
+one is declared too. `--duties`, `--engine`, `--model` and the rest cover
+every shape of Manager the file allows.
+
+### Correct a module's build or test command from the command line
+
+`rite module set-command backend test "pytest -q"` records how to test a
+module when rite's detection got it wrong, and refreshes the instructions
+that quote it — the project's `CLAUDE.md` and every Worker's. Before, the
+correction reached `modules.yaml` and stopped there, so agents kept reading
+the old command out of their instructions.
+
+If you have edited one of those sections by hand, rite leaves it alone and
+says so, rather than quietly overwriting your text or quietly leaving a stale
+command in it. An empty command clears the correction and lets detection
+decide again.
+
+### `rite add worker` asks about a module's own instructions
+
+If a module keeps its own `CLAUDE.md`, `AGENTS.md` or `CONTRIBUTING.md`,
+`rite add worker` now finds them, shows you what it found, and asks whether
+the Worker should follow them. Say yes and they are named in the Worker's
+instructions; say no and nothing changes.
+
+If nothing is attached to answer — a script, CI — it does not ask and does
+not follow them, and says so along with the flag that decides it, so
+`rite add worker` still works unattended. A `CLAUDE.md` rite generated
+itself is never offered: on a project whose repository is its own module
+that file is the project's own brief, not the module's conventions.
+
+It asks rather than deciding either way, because those files are written for
+people and do not know how rite runs a Worker — one may tell it to open a
+pull request from a fork, which a Worker holds no credential to do. Where a
+module's file contradicts rite's instructions or the ticket, the Worker is
+told that rite and the ticket win, and to report the contradiction rather
+than pick one quietly.
+
+### A Manager's board, status and loop commands no longer crash in its sandbox
+
+Inside a Manager's sandbox, where rite's credential file is deliberately not
+readable, `rite status`, `rite board list` and `rite loop run` stopped with a
+Python traceback. They now report the board as unavailable, with the reason,
+and carry on; `rite loop run` names that reason instead of saying no ticket
+backend is configured.
+
+### `ready-to-work`: see on the board which tickets are ready to assign
+
+rite now keeps a `ready-to-work` label on every ticket that is scheduled, has
+an agreed definition of done, and has not been assigned yet, so a filter on
+the board shows what is ready and what still needs refining. It is a view:
+nothing in rite reads it to decide anything, so adding it by hand starts
+nothing (rite removes it and says so once on the ticket), and removing it
+blocks nothing (rite puts it back). The Owner's supervisor corrects it every
+cycle; `rite refine sync` does it on demand, and `rite board list --ready` /
+`--needs-refinement` answer from a fresh read of each ticket rather than
+from the label.
+
+## 0.7.0a3 (2026-09-30) — alpha: `rite init` points you at the code
+
+⚠ **Still an alpha, cut for the same dogfood** (a real contribution to yoloAI
+through rite). Setting up the 0.7.0a2 run, `rite init` on an empty directory
+produced a project with nothing to work on and said it was ready; these fix
+that route and its neighbour. Not installed by default: `install.sh` still
+installs 0.6.0 unless you ask for this one (`RITE_VERSION=v0.7.0a3`).
+Everything 0.7.0a1 and 0.7.0a2 said is and is not in it still holds.
+
+### `rite init` asks where the code is when the path you give is empty
+
+Choosing "existing spec or code" and giving a directory with nothing in it
+used to produce an empty project that said it had read your code. Init now says
+there is nothing there, asks for the repository, and adds it as a module
+(cloned, as `rite add module` does). Skip it, and init says no module is
+registered and how to add one.
+
+### `rite init` says when your code is not in a git repository
+
+Pointed at a directory with code that is not a git repository, `rite init`
+registered nothing and said "Ready". Workers work on clones of a project's
+modules, so they would have had nothing. Init now says so, and how to fix it:
+`git init` and commit, or `rite add module` with the repository's URL.
+
+## 0.7.0a2 (2026-09-30) — alpha: the setup fixes from 0.7.0a1's dogfood
+
+⚠ **Still an alpha, cut for the same dogfood** (a real contribution to yoloAI
+through rite). 0.7.0a1's setup, checked before its first run, found rite
+getting five things wrong; each is fixed below with a test shown able to fail.
+Not installed by default: `install.sh` still installs 0.6.0 unless you ask
+for this one (`RITE_VERSION=v0.7.0a2`). Everything 0.7.0a1 said is and is not
+in it still holds.
+
+**Upgrading a project from 0.7.0a1:** new projects are scoped to their own
+tickets automatically. An existing project that shares its board with another
+rite project must set `ticket_backend.scope_label` (see below), and its
+tickets need that label as well as `scheduled`; `rite start` refuses until it
+does.
+
+Also fixed for this release, found when 0.7.0a1 was tagged: the release's own
+files are recorded so `rite update` recognises them, the release-checksum tool
+names a pre-release's own tag, and a pre-release tag sorts as the release it
+is.
+
+### `rite credential set jira` now makes Jira the board
+
+On a project whose ticket backend was `none`, `rite credential set jira`
+recorded the Jira site and project key but left the backend `none`, so rite
+read no board at all. It now sets `ticket_backend.type: jira` too, and says
+so. A project already on a GitHub board keeps it, and is told how to switch.
+
+### Every hint for a missing credential names the same command
+
+`rite doctor`, `rite sandbox start`, `rite deliver` and others told you to run
+`rite credential set github_token` where `rite credential list` said `rite
+credential set github`. Both work; now every hint names the service
+(`github`, `claude`, `jira`, `slack`), and names the key only where the service
+form cannot take it (a key read from a file with `--stdin`, or a Worker's own
+`sandbox_token_<worker>`).
+
+### `rite doctor` says when refinement cannot reach you in Slack
+
+No Worker starts on a ticket until you have agreed its definition of done,
+and rite asks you in Slack. A project with a board but no `slack.owner_user`
+or no Slack bot token got no word about it from `rite doctor`: the questions
+would have reached you only through `rite replies`. `rite doctor` now reports
+it as a problem and says what to set.
+
+### `rite init` warns when your repository is becoming the project root
+
+Run inside a repository, `rite init` registers it as its own module and writes
+its files (CLAUDE.md, `.gitignore`, `.rite/`, `.claude/`, a CI workflow) into
+that repository. It now says so before asking, and for someone else's project
+or a fork you contribute from, gives the commands for a separate project root
+instead.
+
+### A project reads only its own tickets on a board it shares
+
+Two rite projects on one board used to see each other's tickets: refinement
+took any ticket labelled `scheduled`, whichever project it was for. A project
+now has `ticket_backend.scope_label` (`rite init` sets it to the project's
+name): rite reads only tickets that carry it, and puts it on every ticket it
+creates. `rite start` refuses a Manager, and `rite doctor` reports a problem,
+when another project on this machine reads the same board without a scope
+label of its own, or with the same one.
+
+**To upgrade a project that shares a board:** set `ticket_backend.scope_label`
+in its config, and add that label to its tickets, alongside `scheduled`.
+
+## 0.7.0a1 (2026-09-29) — alpha: ticket refinement and Worker safety, a preview
+
+⚠ **An alpha, not a release candidate.** It is cut to run one dogfood — a
+real contribution to yoloAI through rite — on ticket refinement and the
+Worker-safety work below. It is **not** the v0.7.0 scope, and it is not
+installed by default: `install.sh` still installs 0.6.0 unless you ask for
+this one (`RITE_VERSION=v0.7.0a1`).
+
+**What is in it:** ticket refinement (a Worker starts only on a ticket whose
+definition of done you agreed, refined with you in Slack; the record and
+predicate, the round protocol, delivering the record to the Worker, the
+refusal to route or assign unrefined work, every route carrying a ticket);
+publishing (`rite deliver`: `commit`, `push`, `pull_request`, `squash`,
+gated `auto_merge`; a pull request only as a draft, only on a repository the
+token's owner owns); and the Worker-safety fixes listed below — no GitHub
+token in a Worker's sandbox, no operator Claude settings in it, no Manager
+text run as shell, every Worker commit credited. Plus the fixes from the
+v0.6.0 dogfood and the per-Manager directory move (MM8).
+
+**What is NOT in it**, though the v0.7.0 plan (`docs/design/V070_RELEASE_PLAN.md`)
+names it:
+
+- **Cursor**: no Cursor Workers; no `rite doctor` for Cursor (CU5); the cost
+  observation (CU6) not done. Cursor Managers exist, and CU4 — the Cursor key
+  is readable from sibling sandboxes — is unresolved.
+- **Multi-Manager correctness**: per-Manager state (MM1), the cross-Manager
+  write test (MM2), claims carrying the Manager (MM3), the per-name argument
+  (MM6).
+- **The scenario gate**: not built (a design pass is open).
+- **Manager sandbox**: SB5, SB7, SB8, SB10 open.
+- **Refinement**: the `ready-to-work` label (TR7), TR8 beyond "rite never edits
+  a ticket's text", and the gate on an Owner working an unrefined ticket itself
+  (TR10).
+- **v0.6.0 leftovers not landed**: B7, C1, C3, C14, C15, C31, C33, C34, W14.
+
+⚠ **A Worker's sandbox is escapable in the yoloAI that ships today (dogfood
+#35).** From inside a Worker, a command handed to a tmux server running
+outside the sandbox runs as you. The fix belongs in yoloAI's seatbelt profile;
+it has been measured working **only in a locally patched yoloAI build**, and
+is not released by yoloAI. Until it is, run Workers only with that patched
+build first on `PATH`, or treat every Worker as able to act as you.
+
+### Every commit a worker makes credits rite and Claude
+
+rite adds `🤖 Generated with rite (https://github.com/robbartoszewski/rite)`
+and `Co-Authored-By: Claude <noreply@anthropic.com>` to every commit a
+worker makes, and to the squash commit `rite deliver` builds. It does this
+with a git hook it installs before the sandbox starts, not by asking the
+worker. No model version is named.
+
+### rite opens a pull request only as a draft, on your own repository
+
+Under `publish.strategy: pull_request`, rite now opens the pull request as a
+draft, and only when the token it pushes with belongs to the owner of both
+the repository it pushes to and the one the pull request goes to, against
+that repository's default branch. It checks before pushing. So a module
+pointed at a repository you do not own (upstream) is refused, and you open
+that pull request yourself, from your fork.
+
+### Workers no longer receive a GitHub token
+
+rite pushes a worker's branch and opens its pull request itself, on your
+machine (`rite deliver`), so the worker's sandbox no longer gets
+`GITHUB_TOKEN`. A token there could only have let the worker push, open a
+pull request anywhere, or merge. rite still needs the project's
+`github_token` for its own push, and still checks at start that it can push;
+it refuses to start a sandbox that would receive one.
+
+### A Worker no longer runs with your personal Claude settings
+
+yoloAI copies `~/.claude/settings.json` from your home into every Worker
+sandbox, so your own hooks and `env` ran inside Workers. rite now starts
+Workers (on seatbelt, macOS) with a home of its own holding an empty
+settings file. A Worker still commits as you: your `~/.gitconfig` is linked
+into that home, as yoloAI links it today. If you restart a Worker yourself with
+`yoloai start`, `yoloai restart` or `yoloai attach --resume`, yoloAI copies your
+settings into that sandbox again; rite runs none of those.
+
+### ⚠ Workers no longer merge; `rite deliver` brings a finished ticket home
+
+**A Worker's commits now leave its sandbox by rite, not by the Worker.**
+`rite deliver <worker>` collects each module's ticket branch from the
+Worker's sandbox into the project's own checkout of that module, as a
+branch you can rebase. It adds that branch and changes nothing else, and it
+squashes when `publish.squash` is on, keeping the full history beside it.
+The sandbox is removed once every module is delivered. Uncommitted work is
+refused, never committed for the Worker.
+
+The new `publish:` block in `config.yaml` sets what happens next: `strategy`
+is `commit`, `push` or `pull_request` (the default), and a module can
+override it in `modules.yaml`. `rite doctor` prints each module's strategy
+and where it came from. Under `commit` nothing is pushed, and a Worker is
+told so, per ticket, in its `TICKET.md`. **No Worker merges a pull request
+any more, under any strategy.**
+
+rite records the settings a Worker was started under. If they change before
+it is delivered, rite commits locally and does nothing else, says both
+values, and names the command for you to run. A change can take permission
+away from work in flight, never give it. `push_to_shared` and `shared_repo`
+are refused until v0.8.0.
+
+### The verifier no longer contradicts a claim about ground it could not open
+
+#102 stopped the verifier contradicting a reply that names a file it cannot
+read. A reply that says "I journaled the observation" without a path was
+still exposed: the verifier runs as the Owner, and cannot open another
+Manager's state. The verifier now has to say what its answer rested on, and
+rite checks, from inside the verifier's own boundary, whether it could open
+that. When it could not, the Owner reads that rite could not establish the
+claim either way, not that it looks false. rite never reads a Manager's
+journal to decide this. How often a contradiction names nothing it rested
+on is counted in the verification summary and the standup.
+
+### ⚠ A Manager's text goes on stdin: `rite reply`, `rite ask` and `rite route` take `-`
+
+**Text given to these commands as an argument is now refused.** In the
+v0.6.0 dogfood, a Manager's `rite reply "… \`rite update --files-only\` …"`
+ran that command, because the shell runs backticks inside double quotes, and
+the output was sent to the person. A Manager's text often quotes a ticket
+someone else wrote, so this let the ticket's author run commands. Each
+command now takes `-` and reads the text from stdin, and the Managers'
+instructions show a quoted heredoc:
+
+    rite reply --manager lead - <<'RITE_TEXT_1f2e3d'
+    tickets 12 and 13 merged; `make test` green
+    RITE_TEXT_1f2e3d
+
+A Manager started on an earlier release is given the new form in its next
+instruction. If you script these commands, pipe the text in. A refused
+command with backticks or `$( )` in it is now reported as that, not as a
+broken settings file.
+
+### ⚠ Workers now start only on a ticket with an agreed definition of done
+
+**Read this before upgrading: Workers stop starting on tickets you have not
+refined.** This applies to every ticket on your boards, old ones included.
+
+`rite sandbox start --ticket <ID>`, which is also what a Manager's Worker
+request runs, checks the ticket with one read of the board and starts the
+Worker only if rite reports it REFINED. The Worker is then given the ticket
+and its agreed definition of done in `TICKET.md`, and the record id to cite
+in its pull request. Any other state refuses the start, and says which state
+and what to do:
+
+- **NOT REFINED** (no agreed definition of done): agree one on the host with
+  `rite refine accept <ID> --item "…"` (repeat `--item`; add `--verify` for
+  commands that prove it), or `--as-written` if the ticket already has a
+  "Definition of done" heading. Then start it again.
+- **STALE** (the ticket changed after it was agreed): agree it again, the
+  same way.
+- **CONFLICT** or **UNREADABLE**: `rite refine status <ID>` says why. rite
+  assumes nothing: UNREADABLE means rite could not check, not that there is
+  no definition of done.
+
+A Manager whose Worker request is refused is told the same in its next
+instruction.
+
+The same check now comes earlier, so an unrefined ticket does not reach a
+Manager at all. **The Owner's routes** (`rite route --ticket <ID>`) are
+delivered only for a REFINED ticket, with its agreed definition of done
+quoted beneath the Owner's text; any other state is refused and the Owner is
+told which, in the same words. **Unattended assignment** (with board writes
+turned on) labels only REFINED `scheduled` tickets with a Manager's name, and
+the tick's report names each ticket it left and its state; a Manager hands
+a ticket to one of its Workers only if it is REFINED at that moment, so a
+ticket given a Manager's name by hand, or changed after it was assigned, is
+held and its state said. Until the Owner can refine tickets with you over Slack (later in
+0.7.0), `rite refine accept` is how a ticket gets refined.
+
+`/ticket` now sends a Worker to the agreed definition of done in `TICKET.md`,
+and a person's session to `rite refine status`; nothing asks an agent to judge
+whether a ticket is "complete enough" any more. Run `rite update --files-only`
+to carry the new `/ticket` into an existing project.
+
+`/refine` now ends by recording what you agreed with `rite refine accept`,
+after an explicit yes from you, instead of rewriting the ticket's
+description. It asks at most three questions at a time, and marks which
+items are its own proposal rather than your words or the ticket's.
+
+**A board of unrefined tickets is work, not an empty board.** `rite loop`
+and the Owner's supervisor count only REFINED tickets as ready for Workers,
+and have two new verdicts for the rest. `refining`: nothing is refined yet
+and the Owner may start refining now, so a session starts. `waiting-on-user`:
+nothing can start until you answer, so the Owner waits and starts no
+session until you reply or a question's deadline passes. `idle` now means
+nothing is scheduled at all. A secondary Manager never refines; that is the
+Owner's.
+
+Refinement is bounded so a backlog of unrefined tickets cannot flood you or
+spend sessions: oldest first, at most 5 open at once, at most 3 started per
+session, and new ones only after you have replied (or a deadline passed)
+since the last refinement session. Twenty unrefined tickets mean three
+questions, not twenty. The limits, and the words that accept a proposal
+(`ok`, `yes`, `accept`, `lgtm`, `proceed`), are configurable under a new
+`refinement:` section in `.rite/config.yaml`; a value out of range, or an
+accept word people type to refuse ("no", "stop", …), is refused rather than
+corrected. Whether refinement is enforced is not configurable.
+
+**The Owner refines tickets with you in Slack.** It asks with `rite refine
+ask <ID> -` (the text on stdin): at most three numbered questions, and from
+the second round a proposed definition of done you can accept in one word.
+rite checks every round before you see it: an item it says came from the
+ticket or from you must quote the ticket or your answer exactly, and items
+that are the Owner's own idea are labelled as its proposal. The round goes
+to your DM (as something that needs you, so it comes back at your check-in
+until you answer) and onto the ticket as a comment. Reply in its thread, or
+in your DM starting with the ticket's id. `ok`, `yes`, `accept`, `lgtm` or
+`proceed`, alone, under the latest proposal records it, signed, with your
+message as its provenance; anything else is an answer the next round builds
+on. If the ticket changed after the proposal, nothing is recorded and you
+are told. A question you have not answered by its deadline (24 hours, or the
+end of your next check-in if sooner) is not asked again while you are away;
+it comes back when you are next active. There is no limit on rounds while
+you are answering: a complex ticket takes the rounds it needs, and if the
+Owner's proposal has not changed from one round to the next, the message
+says so. What is limited is asking without a reply: after three messages in
+a row about a ticket go unanswered (`refinement.unanswered`), or when the
+Owner was handed a ticket twice without asking you anything, it is parked:
+rite tells you, and replying about it, `rite refine reopen <ID>`, or editing
+the ticket brings it back. Any reply resets the count.
+
+An instruction you give the Owner in chat is refined straight away too. If
+you do not reply within `refinement.chore_after_minutes` (60 by default),
+rite files it as a chore with exactly your words, so it is not lost, and
+refinement continues on it. Every chore rite files now opens by saying it
+was unrefined when created, and no work starts on it until a definition of
+done is agreed.
+
+The Owner is told, every cycle, which tickets to refine and where each
+stands, with the ticket's text and your earlier answers, so it never has to
+read the board to refine (which it cannot on Jira).
+
+**Refinement questions can go to a private channel** instead of your DM:
+`refinement.questions_to: channel` and `refinement.channel: <its id>`, with
+the app invited (`/invite @rite`) and, for a private channel, the app's
+`groups:history` scope. rite checks at start that it can post and read
+there; if not, the questions go to your DM and it says why. Only your own
+replies in a question's thread there count as answers; a teammate's are
+context. The check-in stays in your DM, and a question you have not
+confirmed seeing comes back there.
+
+### `rite start` sees a ticket rite has just filed
+
+A board's list lags new writes by seconds, on GitHub (measured, up to 6.5 s)
+and Jira (documented), so a `rite start` right after a ticket was filed or
+scheduled read "nothing ready" and stopped, and a cycle right after a
+dispatch could offer the ticket it had just handed out. rite now reads back
+every ticket it created, labelled, moved or assigned from the board's
+consistent single-ticket read, so its own writes are always seen, and seen
+as they are now. A ticket a person creates on the board's web page can still
+take a few seconds to be listed; the idle stop now says the board *listed*
+nothing, and when: "nothing ready as of 14:32:05".
+
+### rite's verifier no longer contradicts a true reply about a file it cannot read
+
+The verifier runs inside the Owner's boundary, which cannot read another
+Manager's state. In the v0.6.0 dogfood it answered CONTRADICTED to a
+secondary's true report that it had written its journal, because it could
+not see the directory, and the Owner was told not to relay it. rite now
+looks at every path a reply cites itself, outside the boundary, and checks
+from inside it whether the verifier can read it. A path the verifier cannot
+read is given to it as rite's own observation (exists, size, time; or does
+not exist). A CONTRADICTED from a verifier that could not read a cited file
+that exists is delivered as COULD NOT TELL, saying why and keeping the
+verifier's words. A false claim about a file the verifier can see is still
+CONTRADICTED.
+### `rite status` no longer says a Worker is "not started"
+
+It said so for any Worker with no heartbeat and no claims, without looking at
+its sandbox, and in the v0.6.0 dogfood a Manager passed it on as "no
+progress" about a Worker that had read its ticket and was waiting at its
+prompt. `rite status`, `rite sandbox status` and `rite loop run` now print
+one sentence about a Worker's sandbox, from one look at yoloAI: its word and
+what yoloAI says it means (`sandbox idle: its agent is waiting at its
+prompt`). Where yoloAI cannot be asked, all three say the state is unknown;
+with no sandbox, status says so, and that a session opened by hand shows only
+once it beats or claims. The sandbox is looked at whatever `sandbox.enabled`
+says, since `rite sandbox start` runs either way. `rite loop run` says
+"busy" only of an agent yoloAI reports working, and no longer calls a queue
+"not a fault" when a Worker holding it is not working. A Worker created with
+no modules shows `modules=[none]`, not `[all]`.
+
+
+
+### Sandboxed workers get only GitHub and Claude credentials
+
+A sandboxed worker used to receive every credential the project held,
+including the Jira and Slack tokens, none of which it needs to do its work,
+and another sandbox on the same machine can read a sandbox's environment.
+Workers now receive the GitHub token and the Claude login only.
+
+A worker therefore no longer reads its ticket from the board itself.
+`rite sandbox start` reads it on your machine and puts it in the worker's
+directory as `TICKET.md`, with the board and the time it was read; the worker
+works from that copy. If the ticket cannot be read, the worker is not
+started.
+### `rite sandbox destroy` no longer needs `--force` for a finished Worker
+
+yoloAI refuses to destroy a sandbox with "unapplied changes", and it counts
+a Worker's pushed commits as unapplied, because work leaves a Worker by
+being pushed, never by `yoloai apply`. So every finished Worker needed
+`--force`. Now, when yoloAI refuses, rite stops the sandbox and destroys it
+only if everything yoloAI means is a clone whose work is all on a remote.
+Anything else still refuses, names what is in the way, and leaves the
+sandbox stopped with its work kept.
+
+### `rite claim` works inside a Worker's sandbox
+
+Inside a sandbox `rite claim` and `rite release` failed with a
+`PermissionError` on the project's `workers/` directory, which the sandbox
+cannot read, so a sandboxed Worker could not claim its paths and nothing
+stopped two Workers taking the same file. They now read only what they need;
+a claim made inside lands in the project's ledger and a second Worker's
+overlapping claim is refused. A Worker's instructions now say to stop, not
+carry on, if `rite claim` errors.
 ### A Worker that could not deliver is not started
 
 `rite sandbox start` (and so every Worker a Manager starts) now refuses,
@@ -21,12 +804,35 @@ before the other project's maintainer does. A fine-grained token enforces
 that (it cannot open a pull request on a repository you are not a member
 of); don't swap in a classic token to skip it.
 
+### `rite init` offers the repositories it finds as modules
+
+### An agreed definition of done, and a command that checks for one
+
+`rite refine status <ID>` reads the ticket and every comment on it once, and
+says whether it carries a definition of done that was agreed and signed by
+rite: REFINED, or NOT REFINED, STALE (the ticket changed since),
+CONFLICT (two records each claim to be current) or UNREADABLE (the board or
+a record could not be read). It exits 0 only for REFINED. Nothing else counts
+as agreement: not a label, and not an agent saying so.
+
+`rite refine accept <ID>` writes one, from your terminal or any session
+running as you: pass each item with `--item`, or `--as-written` to accept
+the items under the ticket's own "Definition of done" heading, and
+optionally `--verify` commands. The record is posted as a comment and read
+back, and it says **attested** by a session running as you, not confirmed
+through your channel, because rite cannot tell you from an agent using your
+login. Every attested record carries the word `rite-attested`, so a search
+for it finds them all. It cannot be run from inside a Manager's or Worker's
+sandbox.
+
 ### `rite init` in a single repository registers it
 
 `rite init` in a repository with code used to register no module, so a
-Worker's workspace held nothing to work on. When the project root holds no
-repositories but is one (with at least one commit), it is now the module, at
-path `./`, with its origin URL and branch. An origin that is a directory
+Worker's workspace held nothing to work on. It now offers the project root
+(when it is a git repository with a commit) and each repository in a
+subdirectory, one at a time, and registers the ones you confirm, at `./` or
+their subdirectory, with their origin URL and branch. `rite init --yes`
+answers yes to each and prints a line for every module it added. An origin that is a directory
 under your home is written `~/…`, so it does not trip the publish gate. A project initialised by 0.6.0 can
 add it to `.rite/modules.yaml` by hand:
 
@@ -90,6 +896,11 @@ to change code and commit it themselves: a ticket is worked by a Worker or
 routed, so that it gets a claim, a review and a pull request. This is an
 instruction, not yet enforced.
 
+A secondary Manager doing routed work is now told it may do only a chore or
+a trivial ticket itself, and then only on a branch named for the ticket and
+through a pull request, never a commit to a default branch; anything more
+goes to a Worker.
+
 ### A request in chat becomes a chore ticket, written by rite
 
 Work a Worker or another Manager does is meant to carry a ticket, including
@@ -103,10 +914,9 @@ message in the Owner's DM, or one sent from this machine. A message routed
 by another Manager, or said in a channel, cannot. The Manager is told
 the new ticket's id, or why the board refused it, in its next instruction.
 
-**`rite sandbox start <worker> --prompt "…"`** now files your text, exactly as
-typed, as a chore ticket labelled `chore` and the Worker's name, then starts
-the Worker on that ticket. With no board, or a board that refuses the ticket,
-nothing starts.
+**`rite sandbox start <worker> --prompt "…"`** files your text, exactly as
+typed, as a chore labelled `chore` and `scheduled`, and starts nothing: the
+chore has no agreed definition of done yet. It prints what to run next.
 
 **`rite doctor` says whether rite can file a ticket on your board**,
 read-only: on GitHub, that issues are on, the repository is not archived,

@@ -111,7 +111,9 @@ def for_manager(manager: str, *, root: Path, extra: str = "") -> str:
         "authentication error, every time. If a request is refused, report "
         "the refusal and stop — do not work around it.\n"
     )
-    return base + extra
+    from rite_ai.publishing.requests import instructions as delivering
+
+    return base + delivering(root, manager) + extra
 
 
 TICKET_WORK = (
@@ -131,18 +133,36 @@ route. This is ADVICE until PB1's publish step can refuse such a commit
 work is what the Owner routes to it (see `ticket_work`)."""
 
 
-def ticket_work(manager: str, owner: str, *, one_root: bool) -> str:
-    """`TICKET_WORK` for this Manager, or "".
+ROUTED_TICKET_WORK = (
+    "\n\n## Routed work you do yourself\n\n"
+    "Work routed to you names its ticket. Do it yourself only when it is a "
+    "chore or a trivial ticket, and then only on a branch named for the "
+    "ticket and through a pull request: never a commit to a default branch. "
+    "Anything more is a Worker's: request one (above) for it. If you are "
+    "unsure whether a ticket is trivial, it is not. A commit made straight to "
+    "a default branch skips the review a pull request gets, and nothing rite "
+    "reports shows that it happened.\n"
+)
+"""⚠ **Robert, 2026-09-29 (Q4):** close the bypass, and keep the executor's
+own path for chores and trivial tickets, with real work routed to a Worker.
+F22's Owner committed a ticket directly; an `executor` secondary doing routed
+work could do the same one level down. Advice until PB1's publish step can
+refuse such a commit (TR10)."""
 
-    "" only for a SECONDARY: a root with one Owner that is someone else. Its
-    work is routed to it, and whether an `executor` may commit routed work
-    itself is not settled here. Everyone else — a lone Manager (its own
-    Owner), the Owner, and any Manager whose Owner cannot be named here (a
-    `remote`, or no single `route` holder) — is told, because the failure is
-    silent and the text costs one paragraph.
+
+def ticket_work(manager: str, owner: str, *, one_root: bool) -> str:
+    """`TICKET_WORK` for this Manager, or `ROUTED_TICKET_WORK` for a secondary.
+
+    A SECONDARY is a Manager in a root with one Owner that is someone else:
+    its work is routed to it, and it may do chores and trivial tickets itself
+    through a pull request (`ROUTED_TICKET_WORK`). Everyone else — a lone
+    Manager (its own Owner), the Owner, and any Manager whose Owner cannot be
+    named here (a `remote`, or no single `route` holder) — is told not to
+    implement tickets at all, because the failure is silent and the text
+    costs one paragraph.
     """
     if one_root and owner and owner != manager:
-        return ""
+        return ROUTED_TICKET_WORK
     return TICKET_WORK
 
 

@@ -38,6 +38,7 @@ placed here by name.
 | **SB2**, `(allow network*)` in the Manager's profile | `V070_RELEASE_PLAN.md` track SB | its row already says EG3 closes it, so it moves with EG3. The row stays in track SB and says so |
 | **PB2**, the `push_to_shared` strategy and the three `shared_repo` rules | `V070_RELEASE_PLAN.md` track PB (PB1 as first written) | named by Robert. Track PB also records it as "a collaboration mechanism for several Managers", and MX1 names it as its transport |
 | **MM4** and **MMQ1**, per-instance configuration | `V070_RELEASE_PLAN.md` track MM | ⚠ **a judgement, not named by Robert.** Its done-when is "changes one machine's Manager and appears in no `git status`": configuration that differs by machine, which one machine does not need. EGQ3 depends on it, and EGQ3 is here. Robert may place it otherwise |
+| **SB12**, a process's environment readable from every sandbox on the machine | `V070_RELEASE_PLAN.md` track SB; `spikes/SB12-environment-readable-across-sandboxes.md` | named by Robert, 2026-09-28: fix the cause upstream in yoloAI first, then do what is left on rite's side here (track SB12 below) |
 | **LS1**, Slack gated on the Owner lease | SPEC §9.16.7 ("Gating Slack on the lease is v0.7.0"); `cli/main.py` | the lease elects an Owner across machines. In one root the Owner is the `route` holder, which is built. The SPEC sentence is corrected to v0.8.0 with this plan |
 
 **Dependencies that cross into v0.7.0:** EG0 measures Cursor's destinations
@@ -200,6 +201,77 @@ broker (B9) is the precedent. Several open items name it as their fix:
 | # | item | done when OBSERVED | depends on | size |
 |---|---|---|---|---|
 | CB1 | **The credential broker**, as recorded in `V060_MANAGER_CREDENTIALS.md` | not yet written: the note records an end state, not a done-when | — | design first; unsized |
+
+## Track SB12 — process environments readable across sandboxes
+
+**Robert's ruling, 2026-09-28, verbatim:** *"we do yoloAI fix, I nudge the
+author until he approves the PR and releases a new version then we do any
+actions on our end that are left. Log it for v0.8.0"*.
+
+**So this is NOT accepted-and-documented.** The cause is being fixed
+upstream first: rite contributes a pull request to yoloAI, and Robert pushes
+for it to be merged and released. rite's remaining work is sized once a
+yoloAI with the fix ships.
+
+### What was measured (SB12 note)
+
+`sysctl(KERN_PROCARGS2)` returns another process's environment to any
+process of the same user that is not an Apple platform binary. That includes
+a process inside a rite Manager's seatbelt profile or a yoloAI Worker's.
+- **Credentials rite hands a Worker:** delivered as `yoloai new --env K=V`,
+  so they are on `yoloai new`'s argv while it runs, and live in the
+  environment of the sandbox's yoloAI `tmux` server and session. Other
+  Workers' and Managers' sandboxes read them there. The secret FILES yoloAI
+  writes were refused from both.
+- **No rite seatbelt change stopped the read.** Six variants were tried,
+  including an explicit sysctl allowlist without `kern.procargs2`. That is
+  not exhaustive, and a Worker's profile is yoloAI's anyway.
+- **A process owned by a DIFFERENT user is refused by the kernel** (errno
+  22), from outside and from both sandboxes. This is the only thing measured
+  to close the read. It was measured against root-owned targets; between two
+  ordinary users it is inferred.
+
+### Already done on rite's side (v0.7.0)
+
+- **Workers receive GitHub and the engine's own credential only**
+  (`WORKER_SERVICES`, SPEC §5.3.4, 2026-09-29), no longer Slack or Jira, so
+  there is less in a Worker's environment for another sandbox to read.
+- **A Cursor key is read from a file straight into the one engine process**
+  (CU4). It is never on argv, and never in tmux's or the pane's environment.
+- **Cursor's `worker-server`, which inherits the engine's whole environment,
+  is ended with the turn** (CU7).
+
+### The upstream fix (yoloAI), in the pull request we contribute
+
+1. credentials off `yoloai new`'s argv;
+2. credentials out of the sandbox `tmux` server's environment, delivered to
+   the agent process alone;
+3. processes started inside a sandbox not outliving `yoloai stop` and
+   `yoloai destroy`.
+
+The technical note handed to yoloAI's author carries the measurement and the
+smallest change for each.
+
+### What remains on rite's side after a fixed yoloAI ships
+
+**Sized then, not now.** What is known already:
+- **The fix narrows; it does not close.** Once yoloAI stops placing
+  credentials in argv and the tmux server, the agent process itself still
+  holds its own credential in its environment (every engine reads its key
+  from the environment). Any process of the same user can still read that.
+- **Closing it needs OS-user separation**: an agent running as a user the
+  others are not. Agents that share one user still read each other, so it is
+  a user per Worker (or per project), not one "agent" user. Undesigned: it
+  needs privilege to start an agent as another user, file ownership for
+  working copies and credential files, and a git and gh identity per user.
+- **Pairing, proposed and NOT ruled:** it was proposed to Robert to do this
+  with the egress work (track EG), since both change how an agent process is
+  started and what it can reach. His ruling above does not say.
+- **To do on rite's side once yoloAI ships:** adopt the new credential
+  delivery in `sandbox.start_worker` (no `--env` for secrets), and re-run
+  SB12's measurement against it.
+
+---
 
 ## Track PB2 — `push_to_shared`
 
@@ -370,6 +442,7 @@ behaves as before §9.16.7, so every Manager opens a relay.
 |---|---|---|---|---|
 | LS1 | **Gate the Slack relay on the Owner lease** when `coordination.remote` is set (SPEC §9.16.7; `cli/main.py`, `_slack_listener`) | not yet written | MX2 (the lease has never run on two physical machines, MX-P4) | unsized |
 | LS2 | **A takeover's handover comment is exclusive only if the Owner lease is.** Filed 2026-09-28 from v0.7.0's handover work. On one machine, "only the process that released a Worker's claims posts its handover" now holds for every caller (the tick, `rite stop`, `rite stop --ticket`): measured, 6 racers on one Worker queued 6 handovers a round before and 1 after. Takeover cannot use that rule, because it releases nothing locally by design: it hands over ANOTHER machine's board state, and its `<machine>/<worker>` names match no local claim (`coordination/takeover.py`). So two processes taking over one stalled machine at once would each post a comment, and the only thing stopping that is that one Owner holds the lease at a time. | Two Owners contending for one stalled machine's takeover, on two physical machines, post one handover per ticket. Or, if the lease can be held twice, the takeover decides by a compare-and-set on the state layer instead | MX2, MX-P4 | unsized |
+| LS3 | **Two Owners when two machines' clocks disagree by more than `skew_tolerance_seconds`.** Filed 2026-09-29 from v0.7.0's split-brain investigation (SPEC §2.4.1a, #95). The Owner lease is judged by each Manager's OWN clock: a challenger promotes once the lease has expired by its clock plus the skew margin (§2.4.1), and an incumbent whose renewal is uncertain keeps the role until its own clock says the lease has expired. With the clocks further apart than the margin, a challenger can promote while the incumbent still believes it holds the role: two Owners, with every write on the state layer correct. **Not reachable on one machine** (one clock), and **not exercisable by the election tests**, whose processes share one accelerated clock by construction, which is why v0.7.0's investigation, which found no split brain in the lease, cannot speak to this. Observed today, not hypothetical: the Ubuntu VM's clock was hours out after a suspend and resume (2026-09-28). LS2's takeover exclusivity rests on this too | Two machines with clocks set further apart than `skew_tolerance_seconds` never both act as Owner: either by fencing (every Owner action carries the lease's generation, and a stale generation is refused where the action lands), or by a clock both read. A test that sets two machines' clocks apart and shows it, with a control that shows the current code does NOT hold it | MX2, LS2 | unsized |
 
 ---
 

@@ -30,6 +30,8 @@ from rite_ai.config.models import (
     TicketBackendConfig,
 )
 from rite_ai.credentials.store import make_namespace
+from rite_ai.tickets.scope import label_for
+from rite_ai.workspace.manage import description_from_readme
 
 from . import ui
 from .config_file import Preset
@@ -39,6 +41,8 @@ from .detect import (
     DetectionSummary,
     detect_repos,
     detect_root_branch,
+    holds_files_but_no_repository,
+    root_has_nothing_committed,
 )
 
 _KIND_OPTIONS = [
@@ -82,6 +86,14 @@ class InitAnswers:
     # "detected" or "--yes default". Populated by `run_questionnaire`; used
     # to say what a non-interactive run decided on the user's behalf.
     sources: dict[str, str] = field(default_factory=dict)
+    # A repository the person named when the path they gave held nothing
+    # (`ask_for_the_code`): `(module name, URL)`, registered and cloned by
+    # `run_init` once `.rite/` exists, exactly as `rite add module` does.
+    link: tuple[str, str] | None = None
+    # Whether the person was already asked where the code is (and so
+    # declined): `run_init`'s zero-module check then says so, and does not
+    # ask a second time.
+    asked_for_code: bool = False
 
 
 def _resolve_spec(
@@ -408,12 +420,20 @@ def run_questionnaire(
 
     # --- Section 1: Role ---
     ui.section("Role", 1, 7)
-    role = resolve_select(
-        "project.role",
-        "Is this the Owner machine or a Manager machine?",
-        ROLE_OPTIONS,
-        default_index=0,
-    )
+    if OWNER_ONLY_UNTIL_MULTI_MANAGER:
+        # ⚠ **Both routes now go through `_ask_role`**, which is the whole
+        # point: the defect was one question asked in two places, and a
+        # suppression in two places is the same defect wearing the fix's
+        # clothes. The `else` below is what 0.9.0 restores to.
+        role = _ask_role(preset, interactive)
+        sources["project.role"] = "owner-only until multi-manager (0.9.0)"
+    else:
+        role = resolve_select(
+            "project.role",
+            "Is this the Owner machine or a Manager machine?",
+            ROLE_OPTIONS,
+            default_index=0,
+        )
     borrowed_config: ProjectConfig | None = None
     if role == "manager":
         owner_ref = resolve_text(
@@ -452,7 +472,7 @@ def run_questionnaire(
 
     # --- Section 3: Modules ---
     ui.section("Modules", 3, 7)
-    modules = _resolve_modules(preset, interactive, detected.repos)
+    modules = _resolve_modules(preset, interactive, detected.repos, root)
 
     # --- Section 4: What's being built ---
     title = (
@@ -558,6 +578,10 @@ def run_questionnaire(
         site=jira_site,
         projects={},
         credential="jira_token" if ticket_type == "jira" else "",
+        # Scoped from the start, whatever the board (Robert, 2026-09-29): a
+        # board set up later with `rite credential set jira` is then already
+        # this project's alone (v0.7.0 dogfood S1, `tickets.scope`).
+        scope_label=label_for(name),
     )
     # Generated HERE, once, and committed with the rest of config.yaml
     # (§10.2). Doing it at init rather than lazily on the first
@@ -619,6 +643,8 @@ def run_questionnaire(
         config=config,
         kb=KbAnswers(links=kb_links, files=kb_files, commit=kb_commit),
         sources=sources,
+        # The "No repositories found. Add a module?" loop asked already.
+        asked_for_code=interactive and not preset.has_modules() and not detected.repos,
     )
 
 
@@ -635,8 +661,67 @@ def _resolve_kb_list(
     return ui.repeat_until_blank(question)
 
 
+DESCRIBE_A_MODULE = "What is '{name}'? One line for the brief's module table"
+
+
+def settle_module_descriptions(
+    preset: Preset, interactive: bool, modules: list[Module], root: Path | None
+) -> list[Module]:
+    """Give every module a description, the way `rite add module` can (C8).
+
+    `rite add module --description` sets one and it renders into the brief's
+    module table; every module `rite init` registered had `description: ''`,
+    because init wrote `modules.yaml` itself and passed nothing. Same shape as
+    C1 and C2: init's path was thinner than the CLI command.
+
+    The default is read out of the module's own README, which is where a
+    module already says what it is, and it is OFFERED rather than taken —
+    Enter accepts it, anything typed replaces it. `--yes` takes it silently,
+    which is the rule every other `--yes` answer follows; a derived default is
+    not a decision worth a line of its own, and `modules.yaml` shows what was
+    taken.
+
+    Only EMPTY descriptions are filled, so a `--config` that names one wins
+    and re-running over a described module changes nothing.
+    """
+    for module in modules:
+        if module.description:
+            continue
+        value = preset.get(f"modules.{module.name}.description")
+        if value is not None:
+            module.description = str(value).strip()
+            continue
+        default = (
+            description_from_readme(root / module.path) if root is not None else ""
+        )
+        if not interactive:
+            module.description = default
+            continue
+        module.description = ui.text(
+            DESCRIBE_A_MODULE.format(name=module.name), default=default
+        ).strip()
+    return modules
+
+
 def _resolve_modules(
-    preset: Preset, interactive: bool, detected_repos: list[DetectedRepo]
+    preset: Preset,
+    interactive: bool,
+    detected_repos: list[DetectedRepo],
+    root: Path | None = None,
+) -> list[Module]:
+    return settle_module_descriptions(
+        preset,
+        interactive,
+        _which_modules(preset, interactive, detected_repos, root),
+        root,
+    )
+
+
+def _which_modules(
+    preset: Preset,
+    interactive: bool,
+    detected_repos: list[DetectedRepo],
+    root: Path | None = None,
 ) -> list[Module]:
     if preset.has_modules():
         result: list[Module] = []
@@ -655,31 +740,16 @@ def _resolve_modules(
         return result
 
     if detected_repos:
-        plural = "y" if len(detected_repos) == 1 else "ies"
-        click.echo(f"Found {len(detected_repos)} repositor{plural}:")
-        click.echo()
-        for r in detected_repos:
-            origin = r.url if r.url else "local only"
-            click.echo(f"  ✓ {r.path:<14} ({origin})")
-        click.echo()
-
-        add_all = True
-        if interactive:
-            add_all = ui.confirm("Add all as modules?", default=True)
-
-        selected = detected_repos
-        if not add_all:
-            selected = [
-                r
+        return offer_modules(
+            [
+                Module(
+                    name=r.name, path=r.path, url=r.url, branch=r.branch, description=""
+                )
                 for r in detected_repos
-                if ui.confirm(f"  Add {r.path}?", default=True)
-            ]
-
-        return [
-            Module(name=r.name, path=r.path, url=r.url, branch=r.branch, description="")
-            for r in selected
-        ]
-
+            ],
+            interactive,
+        )
+    offer_modules([], interactive, root)  # says why an uncommitted root is not offered
     if not interactive:
         return []
 
@@ -758,9 +828,70 @@ ROLE_OPTIONS = [
     ("manager", "Manager  — receives work from an Owner, runs its own workers"),
 ]
 
+# C7 / multi-manager (0.9.0): a Manager MACHINE needs the multi-manager work
+# this release does not ship, so init does not offer one. RESTORE by deleting
+# this constant and the two guards that read it — `ROLE_OPTIONS`, `_ask_role`
+# and `_borrow_owner_config` are intact and unreferenced on purpose, so the
+# restore is a re-wire rather than a rewrite.
+#
+# A constant rather than two commented-out prompt blocks: the defect was that
+# the same question existed TWICE (here and in `run_questionnaire`), and
+# commenting out prompts invites fixing one site and missing the other, which
+# is how this ticket came to exist. A guard can also be asserted — "no init
+# path can produce `role != owner`" is a property, and there is no way to
+# write that against a comment.
+#
+# ⚠ This stops rite OFFERING a Manager machine. `brief.role` is still parsed
+# and still read by every consumer, so an older project or a hand-edited
+# `brief.yaml` saying `role: manager` keeps working.
+OWNER_ONLY_UNTIL_MULTI_MANAGER = True
+
+OWNER_ONLY = "owner"
+
+OWNER_ONLY_SAID = (
+    "This machine is the project's Owner — it owns the board and assigns the "
+    "work. A Manager machine, which takes work from another project's Owner, "
+    "needs the multi-manager work planned for 0.9.0 and is not offered yet."
+)
+
+MANAGER_MACHINE_REFUSED = (
+    "project.role: manager asks for a Manager machine, which needs the "
+    "multi-manager work this release does not ship (planned for 0.9.0). "
+    "Remove `project.role` from the config file, or set it to 'owner'."
+)
+
+
+def role_preset_problem(preset: Preset) -> str | None:
+    """Why this preset's `project.role` cannot be honoured, or None.
+
+    🔴 **Refused, never ignored.** Both role sites honour a preset, so
+    suppressing only the prompt would still build a Manager machine from
+    `--config`; coercing it to Owner instead would silently discard a key the
+    user wrote, which is the defect class rite refuses everywhere else
+    (unknown `config.yaml` keys are refused, not dropped). Checked before
+    `.rite/` is created, so a refusal leaves nothing behind.
+    """
+    if not OWNER_ONLY_UNTIL_MULTI_MANAGER:
+        return None
+    val = preset.get("project.role")
+    if val is not None and str(val) != OWNER_ONLY:
+        return MANAGER_MACHINE_REFUSED
+    return None
+
 
 def _ask_role(preset: Preset, interactive: bool) -> str:
-    """The role question, asked the same way on every path."""
+    """The role question, asked the same way on every path.
+
+    While `OWNER_ONLY_UNTIL_MULTI_MANAGER` holds it is not a question at all,
+    and that is SAID rather than left as an empty section heading: a question
+    that silently stopped being asked is indistinguishable from one nobody
+    noticed, and the reader needs to know which machine this became without
+    opening `brief.yaml`.
+    """
+    if OWNER_ONLY_UNTIL_MULTI_MANAGER:
+        if interactive:
+            ui.note(OWNER_ONLY_SAID)
+        return OWNER_ONLY
     val = preset.get("project.role")
     if val is not None and val in {v for v, _ in ROLE_OPTIONS}:
         return str(val)
@@ -800,6 +931,85 @@ def portable_source_path(root: Path, source: Path) -> str:
     return str(source)
 
 
+def holds_nothing(path: Path) -> bool:
+    """No code and no spec at `path`: a directory with nothing in it but what
+    rite itself left there (`detect.content_entries`). A file is a spec, so a
+    path to one never holds nothing.
+
+    ⚠ S13 (v0.7.0 dogfood, 0.7.0a3): "no visible entries" was the old test,
+    and the setup's own `install.sh`, or a prior init's CLAUDE.md, turned the
+    repository prompt off in the directories people actually have."""
+    if not path.is_dir():
+        return False
+    from .detect import content_entries
+
+    return not content_entries(path)
+
+
+def module_name_for(url: str) -> str:
+    """The module name a repository URL suggests: its last path part, without
+    `.git` (`https://github.com/o/yoloai.git` -> `yoloai`)."""
+    last = url.strip().rstrip("/").replace(":", "/").rsplit("/", 1)[-1]
+    return last.removesuffix(".git") or "code"
+
+
+def looks_like_a_repository(answer: str) -> bool:
+    """A URL (`https://…`, `ssh://…`, `file://…`), an scp-style `user@host:path`,
+    or a local path that is a git repository. Anything else is a sentence typed
+    into the wrong prompt, not a repository to clone."""
+    import re
+
+    answer = answer.strip()
+    if re.match(r"^[a-z][a-z0-9+.-]*://\S+$", answer):
+        return True
+    if re.match(r"^[\w.-]+@[\w.-]+:\S+$", answer):
+        return True
+    local = Path(answer).expanduser()
+    return local.is_dir() and ((local / ".git").exists() or (local / "HEAD").is_file())
+
+
+def ask_for_the_code(base: Path, interactive: bool) -> tuple[str, str] | None:
+    """The existing-code route found nothing at `base`: ask where the code is.
+
+    ⚠ **Not a silent empty shell** (v0.7.0 dogfood S11). Measured on 0.7.0a2:
+    `rite init` in an empty directory, "existing spec or code", path `.`,
+    printed that languages, structure and conventions "will be taken from
+    what's there", then wrote an empty brief, registered no module and said
+    "Ready". Robert's design: when the path holds no code and no spec, ask for
+    a repository and offer to add it as a module. Declining, or `--yes` with
+    nobody to ask, says what is missing and how to add it."""
+    ui.warn(
+        f"{base} has no code and no spec in it, so there is nothing to read "
+        "and nothing a Worker could work on."
+    )
+    if not interactive:
+        return None
+    return ask_for_a_repository()
+
+
+def ask_for_a_repository() -> tuple[str, str] | None:
+    """Ask for the repository to add as a module: `(name, URL)`, or None when
+    the person skips. Anything that is not a repository is asked again. What a
+    skip leaves the project with is said by `run_init`'s zero-module check,
+    once, whichever route got here."""
+    while True:
+        url = ui.text(
+            "Where is the code? A repository URL to add as a module (Enter to skip)",
+            default="",
+        ).strip()
+        if not url or looks_like_a_repository(url):
+            break
+        ui.warn(
+            f"{url!r} is not a repository URL (https://…, git@host:owner/repo.git, "
+            "or a local repository's path). Enter one, or Enter to skip."
+        )
+    if url:
+        name = module_name_for(url)
+        if ui.confirm(f"Add {url} as module '{name}'?", default=True):
+            return name, url
+    return None
+
+
 def source_answers(
     root: Path, preset: Preset, source: Path, changes: str, interactive: bool = True
 ) -> InitAnswers:
@@ -816,6 +1026,8 @@ def source_answers(
     """
     base = source if source.is_dir() else source.parent
     name = root.name or "my-project"
+    empty = holds_nothing(source)
+    link = ask_for_the_code(base, interactive) if empty else None
     role = _ask_role(preset, interactive)
     borrowed_config: ProjectConfig | None = None
     if role == "manager":
@@ -828,6 +1040,7 @@ def source_answers(
             borrowed_config = _borrow_owner_config(owner_ref)
     sandbox_enabled, sandbox_backend = _resolve_sandbox(preset, interactive, ui)
     config = ProjectConfig(
+        ticket_backend=TicketBackendConfig(scope_label=label_for(name)),
         credentials=CredentialsConfig(namespace=make_namespace(name)),
         sandbox=SandboxConfig(enabled=sandbox_enabled, backend=sandbox_backend),
     )
@@ -843,10 +1056,110 @@ def source_answers(
             source_path=portable_source_path(root, source),
             source_changes=changes,
         ),
-        modules=_source_modules(root, base),
+        modules=(
+            []
+            if holds_nothing(source)
+            # Described here too, not only on the from-scratch route: this is
+            # the route the run that reported C8 took.
+            else settle_module_descriptions(
+                preset,
+                interactive,
+                offer_modules(_source_modules(root, base), interactive, base),
+                root,
+            )
+        ),
         config=config,
         kb=KbAnswers(),
+        link=link,
+        asked_for_code=empty and interactive,
     )
+
+
+def _module_label(m: Module) -> str:
+    where = "this directory (./)" if m.path == ROOT_MODULE_PATH else m.path
+    return f"{where}  {m.url or 'local only'}"
+
+
+def doubling_as_root(m: Module) -> str:
+    """The warning for a repository that is about to be its own project root.
+
+    ⚠ **Said before the answer, while nothing is written.** Measured in the
+    v0.7.0 dogfood: `rite init` inside a clone of someone else's project (a
+    fork contributed from) registered it as its own module, `path: ./`, and
+    then rewrote its CLAUDE.md and `.gitignore` and added `.rite/`, `.claude/`
+    and a CI workflow, all as uncommitted changes in the repository the
+    contribution goes out from. Nothing said that the repository was doubling
+    as the project root. Only an empty `.rite/` exists when this is asked
+    (`run_init` writes the rest after the questions), so stopping here is
+    still clean."""
+    return (
+        "this repository is also becoming the project root. rite writes its own "
+        "files into it: CLAUDE.md (an existing one is moved aside), .gitignore, "
+        ".rite/, .claude/ and .github/workflows/publish-gate.yml, as uncommitted "
+        "changes in the same working tree Workers' work is delivered from, and "
+        "Workers share its claims. That is fine for a repository of yours that "
+        "should carry rite. For someone else's project, or a fork you "
+        "contribute from, stop now (Ctrl-C: only an empty .rite/ has been made) "
+        f"and use a separate root: `mkdir ../{m.name}-rite && cd "
+        f"../{m.name}-rite && rite init`, then `rite add module {m.name} "
+        f"{m.url or '<url>'}`."
+    )
+
+
+def offer_modules(
+    candidates: list[Module], interactive: bool, root: Path | None = None
+) -> list[Module]:
+    """Ask about each repository, and register the ones confirmed.
+
+    Asked one at a time, the project root first (Robert, 2026-09-29).
+
+    ⚠ **`--yes` means yes to these too, and says so, one line per module.**
+    Asking is meaningless with nobody there, and the other choice — add
+    nothing unless confirmed — is how a `--yes` run ends up with an empty
+    `modules.yaml` and Workers with nothing to clone (dogfood F2), with no
+    difference on screen from an interactive run that added them. Every
+    other `--yes` answer is the interactive default, and this one's default
+    is yes.
+    """
+    if not candidates:
+        if root is not None and root_has_nothing_committed(root):
+            ui.note(
+                "This directory is a git repository with nothing committed, so "
+                "it is not offered as a module: a Worker could not clone it. "
+                "Commit, then add it to .rite/modules.yaml as `path: ./`."
+            )
+        elif root is not None and holds_files_but_no_repository(root):
+            # ⚠ Said, not silent (0.7.0a2 dogfood assessment, beside S11):
+            # code with no repository registered nothing, and init went on to
+            # "Ready" with no word that a Worker would have nothing to clone.
+            ui.warn(
+                f"{root} has files in it but is not a git repository, so no "
+                "module is registered and a Worker would have nothing to work "
+                "on: a Worker's workspace is its modules' clones. Either `git "
+                "init` here, commit, and add it to .rite/modules.yaml as `path: "
+                "./`, or register the repository it comes from with `rite add "
+                "module <name> <repository URL>`."
+            )
+        return []
+    plural = "y" if len(candidates) == 1 else "ies"
+    click.echo(f"Found {len(candidates)} repositor{plural}:")
+    for m in candidates:
+        click.echo(f"  {_module_label(m)}")
+    click.echo()
+    chosen: list[Module] = []
+    for m in candidates:
+        where = "this directory (./)" if m.path == ROOT_MODULE_PATH else m.path
+        if m.path == ROOT_MODULE_PATH:
+            ui.warn(doubling_as_root(m))
+        if interactive:
+            if ui.confirm(f"Add {where} as module '{m.name}'?", default=True):
+                chosen.append(m)
+        else:
+            click.echo(
+                f"  --yes: added {where} as module '{m.name}' ({m.url or 'local only'})"
+            )
+            chosen.append(m)
+    return chosen
 
 
 def _source_modules(root: Path, base: Path) -> list[Module]:

@@ -30,6 +30,7 @@ from rite_ai.coordination.assignment import (
     choose_manager,
 )
 from rite_ai.coordination.heartbeat import Liveness
+from tests.refined_board import refined
 
 NOW = datetime(2026, 9, 18, 12, 0, tzinfo=UTC)
 
@@ -437,7 +438,7 @@ def test_the_owner_assigns_waiting_tickets_to_a_manager(tmp_path):
     layer, board = _pool_setup(tmp_path, ["ABC-1"], {"alpha": 0, "beta": 2})
     project = _project_for_pool(["alpha", "beta"])
     lines = _assign_the_pool(
-        layer, project.config.coordination, project, "alpha", board, NOW
+        layer, project.config.coordination, project, "alpha", board, NOW, refined
     )
     assert board.labelled == [("ABC-1", ["alpha"])], lines
     assert any("assigned ABC-1 to alpha" in line for line in lines)
@@ -452,7 +453,7 @@ def test_a_ticket_a_manager_already_holds_is_left_alone(tmp_path):
     board.tickets = [FakeTicket("ABC-1", ["scheduled", "beta"])]
     project = _project_for_pool(["alpha", "beta"])
     lines = _assign_the_pool(
-        layer, project.config.coordination, project, "alpha", board, NOW
+        layer, project.config.coordination, project, "alpha", board, NOW, refined
     )
     assert board.labelled == [] and lines == []
 
@@ -467,7 +468,9 @@ def test_five_tickets_do_not_all_land_on_the_idlest_manager(tmp_path):
         tmp_path, ["ABC-1", "ABC-2", "ABC-3", "ABC-4"], {"alpha": 0, "beta": 0}
     )
     project = _project_for_pool(["alpha", "beta"])
-    _assign_the_pool(layer, project.config.coordination, project, "alpha", board, NOW)
+    _assign_the_pool(
+        layer, project.config.coordination, project, "alpha", board, NOW, refined
+    )
 
     went_to = [labels[0] for _, labels in board.labelled]
     assert went_to.count("alpha") == 2 and went_to.count("beta") == 2, went_to
@@ -503,7 +506,9 @@ def test_rule_2_a_manager_does_not_get_back_the_ticket_it_refused(tmp_path):
     layer, board = _pool_setup(tmp_path, ["ABC-1"], {"alpha": 0, "beta": 5})
     _refuse(layer, "ABC-1", "alpha", "this machine does not have module 'router'")
     project = _project_for_pool(["alpha", "beta"])
-    _assign_the_pool(layer, project.config.coordination, project, "alpha", board, NOW)
+    _assign_the_pool(
+        layer, project.config.coordination, project, "alpha", board, NOW, refined
+    )
 
     assert board.labelled == [("ABC-1", ["beta"])]
 
@@ -517,7 +522,9 @@ def test_rule_2_forgets_a_refusal_whose_reason_has_passed(tmp_path):
     layer, board = _pool_setup(tmp_path, ["ABC-1"], {"alpha": 0, "beta": 5})
     _refuse(layer, "ABC-1", "alpha", "shutting down: reboot")
     project = _project_for_pool(["alpha", "beta"])
-    _assign_the_pool(layer, project.config.coordination, project, "alpha", board, NOW)
+    _assign_the_pool(
+        layer, project.config.coordination, project, "alpha", board, NOW, refined
+    )
 
     # alpha is publishing heartbeats again, so it is not shutting down now.
     assert board.labelled == [("ABC-1", ["alpha"])]
@@ -533,7 +540,7 @@ def test_a_ticket_everyone_refused_does_not_stop_the_next_one(tmp_path):
         _refuse(layer, "ABC-1", manager, "this machine does not have module 'x'")
     project = _project_for_pool(["alpha", "beta"])
     lines = _assign_the_pool(
-        layer, project.config.coordination, project, "alpha", board, NOW
+        layer, project.config.coordination, project, "alpha", board, NOW, refined
     )
 
     assert [t for t, _ in board.labelled] == ["ABC-2"]
@@ -552,7 +559,7 @@ def test_rule_3_does_not_assign_past_the_schedule(tmp_path):
         timezone="UTC", windows=[ScheduleWindow(hours="00:00-23:59", workers=2)]
     )
     lines = _assign_the_pool(
-        layer, project.config.coordination, project, "alpha", board, NOW
+        layer, project.config.coordination, project, "alpha", board, NOW, refined
     )
 
     assert board.labelled == []

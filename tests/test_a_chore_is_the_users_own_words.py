@@ -43,6 +43,13 @@ class Board:
         self.created.append((title, description, labels))
         return self.result or Ticket(id="RT-99", title=title)
 
+    def read(self, ticket_id):
+        """What the host reads back before starting the Worker."""
+        title, description, labels = self.created[-1]
+        return Ticket(
+            id=ticket_id, title=title, description=description, labels=labels or []
+        )
+
 
 def _deliver(tmp_path, manager, *texts):
     for text in texts:
@@ -115,11 +122,17 @@ class TestTheManagerChoosesMessagesAndNothingElse:
         assert chores.create_asked_for(tmp_path, "lead", board, said.append) == 1
         ((title, description, labels),) = board.created
         assert title == "chore: fix the timeout thing"
-        assert description.startswith("fix the timeout thing\nthe http one\n\n---")
+        # TR2: rite's line says it is unrefined, first; then his words,
+        # unaltered, before anything rite says about them.
+        first, rest = description.split("\n\n", 1)
+        assert first.startswith("**Unrefined when rite created it (")
+        assert rest.startswith("fix the timeout thing\nthe http one\n\n---")
         assert ids[DM] in description and "no Manager wrote it" in description
         assert labels == ["chore", "scheduled"]
         (told,) = _notes(tmp_path, "lead")
-        assert "chore RT-99 created" in told and told.startswith("[rite · chores")
+        # rite's one note header (`telling`).
+        assert "chore RT-99 created" in told
+        assert told.startswith("[from rite · about chores · ")
         assert not list(chores._chores_dir(tmp_path, "lead").iterdir())
 
     def test_a_route_named_as_a_chore_is_refused_and_the_manager_is_told(
@@ -263,16 +276,21 @@ def test_every_manager_is_told_how_to_make_a_chore(tmp_path):
 
 class TestAPromptTypedAtThisMachine:
     """`rite sandbox start <worker> --prompt "…"`: the person's words, filed as
-    a chore before the Worker starts, and the Worker started on that ticket."""
+    a chore, explicitly unrefined (TRQ11, Robert, 2026-09-29). No Worker
+    starts on it until it is refined (TR4)."""
 
-    def test_the_chore_is_the_prompt_labelled_for_that_worker_not_scheduled(self):
+    def test_the_chore_is_the_prompt_labelled_as_a_chat_chore_is(self):
         board = Board()
         made, refusal = chores.create_for_prompt(board, "alpha", "add a CSV export\n")
         assert (made, refusal) == ("RT-99", "")
         ((title, description, labels),) = board.created
         assert title == "chore: add a CSV export"
-        assert description.startswith("add a CSV export\n\n---")
-        assert labels == ["chore", "alpha"]
+        first, rest = description.split("\n\n", 1)
+        assert first.startswith("**Unrefined when rite created it (")
+        assert rest.startswith("add a CSV export\n\n---")
+        # Not the Worker's label: nothing runs on it, and a Worker's label
+        # reads as that Worker's work in progress.
+        assert labels == ["chore", "scheduled"]
 
     def test_no_board_or_a_refused_create_is_a_refusal(self):
         assert chores.create_for_prompt(None, "alpha", "x")[1]
@@ -325,7 +343,7 @@ class TestAPromptTypedAtThisMachine:
             )
         return result, seen
 
-    def test_the_worker_is_started_on_the_chore(self, tmp_path, monkeypatch):
+    def test_the_chore_is_filed_and_no_worker_starts(self, tmp_path, monkeypatch):
         import rite_ai.cli.main as main_mod
 
         self._project(tmp_path, monkeypatch, "github")
@@ -334,9 +352,11 @@ class TestAPromptTypedAtThisMachine:
         monkeypatch.setattr(main_mod, "_worker_cannot_deliver", lambda *a, **k: "")
         board = Board()
         result, seen = self._start(board)
-        assert result.exit_code == 0, result.output
-        assert seen["prompt"] == "Work ticket RT-99.\n"
+        assert result.exit_code == 1
         assert board.created[0][0] == "chore: add a CSV export"
+        assert "filed chore RT-99" in result.output
+        assert "rite refine accept RT-99" in result.output
+        assert "prompt" not in seen
 
     def test_a_start_refused_for_another_reason_files_no_chore(
         self, tmp_path, monkeypatch

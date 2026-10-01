@@ -274,7 +274,14 @@ the question's own thread: a message elsewhere cannot be matched to it.
 A Manager can also **defer** a question to your next check-in, but only by
 naming what it will do meanwhile:
 
-    rite ask --defer "rename --out to --output?" --while "tickets 8 and 9, which do not touch the CLI"
+    rite ask --defer --while "tickets 8 and 9, which do not touch the CLI" - <<'RITE_TEXT_1f2e3d'
+    rename --out to --output?
+    RITE_TEXT_1f2e3d
+
+A Manager's text always goes on stdin like this, never in double quotes on
+the command line: there the shell runs anything in backticks or `$( )`, and
+the text often quotes a ticket someone else wrote. rite refuses text given as
+an argument.
 
 ⚠ **The rule every Manager is given, in these words: ask now unless the
 question is clearly deferrable; if you are unsure whether it blocks you, it
@@ -406,7 +413,7 @@ loop worth running:
 
 | | |
 |---|---|
-| `idle` | nothing on the board is waiting. **Stops the loop** |
+| `idle` | the board listed nothing waiting, as of the time it says. **Stops the loop**. A ticket rite itself just filed or labelled is always seen; one a person created shortly before that time may not be in the read, and `rite start` again reads afresh |
 | `saturated` | work is waiting and every worker is busy. A queue, not a fault |
 | `blocked` | work is waiting, a worker is free, and the paths it needs are held by someone still working |
 | `deadlocked` | same, except the holders look gone. **This will not clear on its own**, so the loop **stops** and prints what to release |
@@ -530,14 +537,14 @@ doctor` names the typo and says the window was dropped.
    Homebrew and system locations. A `rite` in a virtualenv anywhere else fails
    inside the sandbox with a permission error (measured with a virtualenv
    under the home directory).
-3. **Give it a way to push.** A worker's work leaves the sandbox by being pushed
-   (below), so store a GitHub credential for the project with
-   `rite credential set github` — a token with Contents and Pull requests
-   read/write on the module repositories — and install GitHub's `gh` CLI. rite
-   passes the credential in as `GITHUB_TOKEN` and tells git inside the sandbox
-   to authenticate github.com through `gh auth git-credential`, which reads
-   that variable, so `gh` needs no login of its own; the keychain helper git
-   would otherwise use is unreadable there. Commits made in a sandbox are not
+3. **Give rite a way to push.** A worker's work leaves the sandbox through
+   `rite deliver`, which collects its commits and pushes and opens the pull
+   request **on your machine, not in the sandbox**. So store a GitHub
+   credential for the project with `rite credential set github` — a token
+   with Contents and Pull requests read/write on the module repositories —
+   and install GitHub's `gh` CLI. **The worker never receives that token**
+   (since 0.7.0): rite keeps it on the host, and refuses to start a sandbox
+   that would receive one. Commits made in a sandbox are not
    signed: rite turns signing off inside it, because they are the agent's
    commits, not yours. A module whose origin is a local directory cannot be
    pushed from a sandbox; start names each one. `rite sandbox start` refuses,
@@ -571,12 +578,15 @@ rite sandbox start alpha --ticket 42        # a GitHub issue, by its number
 rite sandbox start alpha --prompt "Add a CSV export to the invoices page."
 ```
 
-`--ticket` is for work on your board, by its key there. `--prompt` is for work
-that is not a ticket yet: every piece of Worker work carries one, so rite first
-files your text, exactly as typed, as a chore ticket labelled `chore` and the
-Worker's name, and starts the Worker on that ticket. With no board, or a board
-that refuses the ticket, nothing starts. With neither flag, the session starts
-idle until someone attaches.
+`--ticket` is for work on your board, by its key there, and it starts only on a
+ticket rite reports REFINED (`rite refine status <ID>`): the Worker is handed
+the agreed definition of done in `TICKET.md`, from the same read as the
+ticket's text. Any other state refuses and says which. `--prompt` is for work
+that is not a ticket yet: rite files your text, exactly as typed, as a chore
+labelled `chore` and `scheduled`, and starts nothing, because the chore has no
+agreed definition of done yet. It prints the `rite refine accept` and
+`rite sandbox start --ticket` to run next. With neither flag, the session
+starts idle until someone attaches.
 After the prepare summary, start prints:
 
 ```text
@@ -590,7 +600,8 @@ can watch it or type to it; yoloAI's own hint for leaving it running is
 
 **Its first screen shows your credentials in plain text.** On macOS, yoloAI
 launches the agent by typing a command into the session's shell, and that
-command carries every credential rite passed in (`export GITHUB_TOKEN='…'`).
+command carries every credential rite passed in (`export …='…'`: the Claude
+login; a sandbox started by rite before 0.7.0 also carried `GITHUB_TOKEN`).
 Don't share, record or screenshot a terminal attached with `yoloai attach`.
 `rite sandbox pane` prints the same screen with those values replaced by
 `[redacted]`, so a Claude session reading it never receives them.
@@ -671,9 +682,10 @@ coordination:
   must hold it: only that one reads Slack and routes work, and `rite doctor`
   says so when none or several do.
 - `engine` defaults to `claude`. A `local:<class>` engine must also give
-  `endpoint`, `model` and `agent`; `goose` is the agent rite supports. A
-  Goose Manager must give `context_window` too, and `rite start` refuses it
-  without one (see *A local model needs a context window you have to set*).
+  `endpoint`, `model` and `agent`; `goose` is the agent rite supports. Every
+  local Manager must give `context_window` too, whatever its agent, and `rite
+  start` refuses it without one (see *A local model needs a context window
+  you have to set*).
   Presets: `lead`, `pm`, `planner`, `executor`.
 - **Each Manager names its own model.** A local one gives `model` with its
   endpoint. A Claude one may give `model` too, as an alias (`sonnet`,
@@ -683,7 +695,7 @@ coordination:
 
 Before the first start:
 
-1. For `lead`: `claude setup-token`, then `rite credential set claude_token`
+1. For `lead`: `claude setup-token`, then `rite credential set claude`
    (next section).
 2. For `helper`: install Goose and Ollama, and `ollama pull qwen3:8b`. Its
    `context_window` is set in its role, not in Ollama (see *A local model
@@ -702,7 +714,7 @@ rite start lead --sessions 3 --minutes 90
 rite start helper --sessions 3 --minutes 90
 ```
 
-The Owner hands work down with `rite route --ticket RT-12 helper "…"`, and
+The Owner hands work down with `rite route --ticket RT-12 helper -` (the text on stdin), and
 `helper` answers with `rite reply`. Every route names the ticket the work is
 for, and rite refuses one whose ticket it cannot read on the board; work you
 asked for in a message becomes a chore ticket first (`rite chore`). The Owner cannot wait inside a session, so its
@@ -726,7 +738,7 @@ sandbox**, so it cannot ask you to log in and cannot read your keychain
 login. Give each project with a Claude Manager a token of its own, once:
 
     claude setup-token                  # prints a one-year token
-    rite credential set claude_token    # paste it
+    rite credential set claude          # paste it
 
     rite start <manager> --sessions 3 --minutes 90
 
@@ -941,7 +953,8 @@ from that run's start line, and replies already in the mailbox stay in
 ## What rite does to ticket text, and what it does not
 
 When an agent reads a ticket through rite (`rite board show`, `list`,
-`query`), or a Slack message through the relay, rite does two things.
+`query`, or the `TICKET.md` a sandboxed worker is given), or a Slack message
+through the relay, rite does two things.
 
 **It shows what the tracker hides.** Invisible characters are removed. Tag
 characters, which spell text that renders as nothing, are decoded in place.

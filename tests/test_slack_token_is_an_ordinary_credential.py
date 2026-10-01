@@ -95,18 +95,16 @@ class TestTheSecretNeverBecomesAnArgument:
             _on_tmux_argv("SLACK_BOT_TOKEN", TOKEN)
 
 
-class TestTheConsequenceIsNamedNotDiscovered:
-    def test_every_worker_receives_it_because_every_worker_receives_everything(
-        self, monkeypatch
-    ):
-        """⚠ **Slack is the first credential in that set a Worker cannot
-        use** — the relay runs in the supervisor, on the host. §5.3.4 decided
-        Workers are fungible and get everything, and accepted the blast
-        radius; this is the first case where that rule costs without buying.
-        Pinned so it is a known consequence rather than a surprise."""
+class TestWorkersDoNotReceiveIt:
+    def test_a_worker_is_not_given_the_slack_token(self, monkeypatch):
+        """Until 2026-09-29 every Worker received every credential, so the
+        bot token sat in every Worker's environment although the relay runs
+        on the host. The pingr Worker proof's launch line showed it, and
+        Robert ruled "Narrow it down" (§5.3.4)."""
         monkeypatch.setenv(f"RITE_{KEY.upper()}", TOKEN)
-        assert worker_environment(None).get("SLACK_BOT_TOKEN") == TOKEN
+        assert "SLACK_BOT_TOKEN" not in worker_environment(None)
+        assert TOKEN not in worker_environment(None).values()
 
     def test_the_service_note_says_so(self):
         note = SERVICES["slack"].note.lower()
-        assert "workers" in note and "no use for it" in note
+        assert "workers do not receive it" in note

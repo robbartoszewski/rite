@@ -991,3 +991,105 @@ def test_a_linux_manager_creates_a_new_top_level_file_in_its_project(
     assert can(lambda: (root / "newtopdir").mkdir())
     assert can(lambda: (root / "src" / "a.py").write_text("x")), "control"
     assert not can(lambda: (theirs / "routes" / "forged.json").write_text("{}"))
+
+
+@NO_LANDLOCK
+class TestNoManagerReadsTheRefinementKey:
+    """The key that signs refinement records, from inside a Linux Manager.
+
+    What stops a Manager writing its own "agreed definition of done" is that
+    it cannot read this key (`refinement/key.py`). Measured on macOS for a
+    Manager and a yoloAI Worker on 2026-09-29; this is the Landlock half, run
+    by CI's "Landlock probes" step on a kernel we do not own.
+
+    SB12's method: a FAKE key where production puts it (beside the
+    credential root, relative to the same HOME the policy is composed with),
+    the boundary shown active, and a control proving the probe would have
+    found the key had it been readable: the same bytes in a file the
+    Manager IS granted, read by the same function.
+    """
+
+    FAKE = b"FAKEKEY-TR0-LINUX-PROBE-NOT-KEY!"
+
+    def _laid_out(self, tmp_path, monkeypatch):
+        from rite_ai.managers import github_access
+        from rite_ai.refinement import key as refinement_key
+
+        root = tmp_path / "proj"
+        (root / "src").mkdir(parents=True)
+        (root / ".rite" / "user").mkdir(parents=True)
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.delenv(refinement_key.KEY_DIR_ENV, raising=False)
+        real = github_access._credential_root
+        monkeypatch.setattr(
+            github_access, "_credential_root", lambda h=None: real(h or home)
+        )
+        key = refinement_key.key_path()
+        assert key.is_relative_to(home), "the key is not where production puts it"
+        key.parent.mkdir(parents=True, mode=0o700)
+        key.write_bytes(self.FAKE)
+        key.chmod(0o600)
+        control = root / "src" / "control-key"
+        control.write_bytes(self.FAKE)
+        return root, home, key, control
+
+    @staticmethod
+    def _inside(policy, fn) -> int:
+        def child():
+            landlock.apply(policy)
+            return fn()
+
+        return _in_child(child)
+
+    @staticmethod
+    def _reads(path) -> bool:
+        try:
+            return Path(path).read_bytes() == TestNoManagerReadsTheRefinementKey.FAKE
+        except OSError:
+            return False
+
+    def test_the_control_proves_the_probe_would_find_a_readable_key(
+        self, tmp_path, monkeypatch
+    ):
+        root, home, key, control = self._laid_out(tmp_path, monkeypatch)
+        policy = landlock.compose_policy(root, "lead", home)
+        assert self._reads(key), "control: the key is readable outside the boundary"
+        outcome = self._inside(policy, lambda: 0 if self._reads(control) else 1)
+        assert outcome == 0, (
+            "the same bytes in a granted file could not be read, so a refusal "
+            "below would prove nothing"
+        )
+
+    def test_the_boundary_is_active(self, tmp_path, monkeypatch):
+        root, home, key, control = self._laid_out(tmp_path, monkeypatch)
+        policy = landlock.compose_policy(root, "lead", home)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        outcome = self._inside(policy, lambda: 1 if _can_write(outside) else 0)
+        assert outcome == 0, "a write outside the Manager's boundary succeeded"
+
+    def test_a_manager_cannot_read_the_key(self, tmp_path, monkeypatch):
+        root, home, key, control = self._laid_out(tmp_path, monkeypatch)
+        policy = landlock.compose_policy(root, "lead", home)
+        outcome = self._inside(policy, lambda: 1 if self._reads(key) else 0)
+        assert outcome == 0, (
+            "a Manager can read the refinement key, so it can sign its own "
+            "definition of done: the design's central property does not hold"
+        )
+
+    def test_a_manager_cannot_list_or_plant_beside_the_key(self, tmp_path, monkeypatch):
+        root, home, key, control = self._laid_out(tmp_path, monkeypatch)
+        policy = landlock.compose_policy(root, "lead", home)
+
+        def attempt():
+            try:
+                os.listdir(key.parent)
+                return 1
+            except OSError:
+                pass
+            return 2 if _can_write(key.parent) else 0
+
+        outcome = self._inside(policy, attempt)
+        assert outcome != 1, "a Manager can list the key's directory"
+        assert outcome != 2, "a Manager can write beside the key"

@@ -17,6 +17,8 @@ from pathlib import Path
 from .interface import (
     PAGE_LIMIT,
     BackendError,
+    Comment,
+    Thread,
     Ticket,
     TicketBackend,
     TicketFilter,
@@ -25,6 +27,26 @@ from .interface import (
 )
 
 _ISSUE_FIELDS = "number,title,state,body,labels,assignees,url,createdAt,updatedAt"
+
+_THREAD_QUERY = """
+query($owner: String!, $name: String!, $number: Int!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    issue(number: $number) {
+      number title state body url createdAt updatedAt
+      labels(first: 100) { nodes { name } }
+      comments(first: 100, after: $after) {
+        totalCount
+        pageInfo { hasNextPage endCursor }
+        nodes { databaseId body createdAt author { login } }
+      }
+    }
+  }
+}
+"""
+
+_THREAD_PAGES_MAX = 50
+"""5000 comments. A ticket beyond that is not complete, and says so, rather
+than being read for ever."""
 
 
 def _find_gh() -> str | None:
@@ -189,6 +211,103 @@ class GitHubBackend(TicketBackend):
             return BackendError(f"could not parse gh output for issue {ticket_id}")
         return _issue_to_ticket(data)
 
+    def read_thread(self, ticket_id: str) -> Thread | BackendError:
+        """The issue and every comment, through GraphQL, with the count checked.
+
+        ⚠ **Complete is established here, never assumed from `gh`.** Measured
+        2026-09-28 with gh 2.98.0: `gh issue view --json comments` returned all
+        148 comments of cli/cli#13840, so it pages internally. Nothing promises
+        it will keep doing so, and a truncated list would read as "no record"
+        when the record is on the page not fetched. So the pages are fetched
+        here, and the thread is complete only when the comments collected equal
+        the `totalCount` GitHub reported on the last page.
+
+        The title and body come from the first page, so the text a record is
+        checked against is one reading. A comment posted between pages arrives
+        on a later page and moves `totalCount` with it; one deleted between
+        pages leaves the counts unequal, and the thread is then NOT complete
+        (fail closed; the next read settles it).
+        """
+        owner, _, name = self.repo.partition("/")
+        if not ticket_id.isdigit() or not owner or not name:
+            return BackendError(
+                f"{ticket_id!r} on {self.repo!r} is not an issue number on a repository"
+            )
+        comments: list[Comment] = []
+        ticket: Ticket | None = None
+        total = -1
+        after = ""
+        for _ in range(_THREAD_PAGES_MAX):
+            args = [
+                "api",
+                "graphql",
+                "-f",
+                f"query={_THREAD_QUERY}",
+                # `-f`, raw strings: `-F` would turn a repository named
+                # with digits into an integer and fail the query.
+                "-f",
+                f"owner={owner}",
+                "-f",
+                f"name={name}",
+                "-F",
+                f"number={int(ticket_id)}",
+            ]
+            if after:
+                args += ["-f", f"after={after}"]
+            result = self._gh(args)
+            if isinstance(result, BackendError):
+                return result
+            try:
+                issue = json.loads(result)["data"]["repository"]["issue"]
+            except (json.JSONDecodeError, KeyError, TypeError):
+                return BackendError(f"could not parse gh output for issue {ticket_id}")
+            if issue is None:
+                return BackendError(f"issue {ticket_id} not found on {self.repo}")
+            if ticket is None:
+                ticket = _issue_to_ticket(
+                    {
+                        "number": issue.get("number"),
+                        "title": issue.get("title"),
+                        "state": issue.get("state"),
+                        "body": issue.get("body"),
+                        "url": issue.get("url"),
+                        "createdAt": issue.get("createdAt"),
+                        "updatedAt": issue.get("updatedAt"),
+                        "labels": (issue.get("labels") or {}).get("nodes") or [],
+                    }
+                )
+            page = issue.get("comments") or {}
+            total = page.get("totalCount", -1)
+            for node in page.get("nodes") or []:
+                comments.append(
+                    Comment(
+                        id=str(node.get("databaseId", "")),
+                        body=node.get("body") or "",
+                        author=((node.get("author") or {}).get("login")) or "",
+                        created_at=_parse_iso(node.get("createdAt") or ""),
+                    )
+                )
+            info = page.get("pageInfo") or {}
+            if not info.get("hasNextPage"):
+                break
+            after = info.get("endCursor") or ""
+            if not after:
+                break
+        else:
+            return Thread(
+                ticket,
+                comments,
+                False,
+                f"stopped after {_THREAD_PAGES_MAX} pages of comments",
+            )
+        complete = total == len(comments)
+        note = (
+            ""
+            if complete
+            else f"GitHub counted {total} comments and {len(comments)} were read"
+        )
+        return Thread(ticket, comments, complete, note)
+
     def update(self, ticket_id: str, **fields: str) -> None | BackendError:
         args = ["issue", "edit", ticket_id, "--repo", self.repo]
         if "title" in fields:
@@ -324,6 +443,76 @@ class GitHubBackend(TicketBackend):
             if isinstance(result, BackendError):
                 return result
         return None
+
+    def describe_label(
+        self, name: str, description: str, color: str
+    ) -> None | BackendError:
+        """Create `name` with a description, if the repo has no such label.
+
+        `label()` would create it grey and blank (the POST above). An
+        existing label is left exactly as it is: its colour and description
+        may be a person's (TR7, the note's part 3.10). Asked once per
+        backend; a lost race to create it is success.
+        """
+        done = getattr(self, "_described", set())
+        if name in done:
+            return None
+        from urllib.parse import quote
+
+        found = self._gh(["api", f"repos/{self.repo}/labels/{quote(name)}"])
+        if isinstance(found, BackendError):
+            if "404" not in found.message and "Not Found" not in found.message:
+                return found
+            made = self._gh(
+                [
+                    "api",
+                    "-X",
+                    "POST",
+                    f"repos/{self.repo}/labels",
+                    "-f",
+                    f"name={name}",
+                    "-f",
+                    f"description={description}",
+                    "-f",
+                    f"color={color}",
+                ]
+            )
+            if isinstance(made, BackendError):
+                # Someone created it between the two calls: read it again
+                # rather than trust the wording of gh's error.
+                again = self._gh(["api", f"repos/{self.repo}/labels/{quote(name)}"])
+                if isinstance(again, BackendError):
+                    return made
+        done.add(name)
+        self._described = done
+        return None
+
+    def matches(self, ticket: Ticket, filters: TicketFilter | None) -> bool | None:
+        """`gh issue list`'s own filter, applied to one issue as read."""
+        f = filters or TicketFilter()
+        want = self._state_flag(f.status) if f.status else "open"
+        if isinstance(want, BackendError):
+            return None
+        if want != "all" and (ticket.status or "").lower() != want:
+            return False
+        if f.assignee:
+            logins = {
+                a.get("login", "")
+                for a in (ticket.metadata or {}).get("assignees") or []
+                if isinstance(a, dict)
+            }
+            if f.assignee not in logins:
+                return False
+        have = {lbl.casefold() for lbl in ticket.labels or []}
+        wanted = [f.label] if f.label else []
+        wanted += list(f.labels or [])
+        return all(lbl.casefold() in have for lbl in wanted)
+
+    def missing(self, error: BackendError) -> bool:
+        # `gh issue view` on a number that is not an issue here (measured,
+        # gh 2.98.0): "GraphQL: Could not resolve to an issue or pull request
+        # with the number of 999999."
+        return "Could not resolve to an issue" in error.message
 
     def list_tickets(
         self, filters: TicketFilter | None = None

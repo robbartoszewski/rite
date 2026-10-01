@@ -73,6 +73,44 @@ class Field:
     and `--value` would put it on argv, so it is set only with
     `rite credential set <key> --stdin`."""
 
+    optional: bool = False
+    """Enter skips it, leaving whatever is already there. For a field the
+    integration works without: Slack posts to a default channel when none is
+    named, so demanding one would make the prompt a wall in front of a
+    perfectly good setup."""
+
+    normalize: str = ""
+    """Name of the cleaner applied to what the user typed, before it is
+    validated or stored. `slack_channel` turns a bare `all-rite` into
+    `#all-rite` (v0.7.0 dogfood S19) — a name is what Slack's own sidebar
+    shows, so typing it without the `#` is not a mistake to refuse."""
+
+    def problem(self, value: str) -> str:
+        """Why this answer cannot be stored, or "".
+
+        ⚠ **Checked HERE because this command writes config.yaml.** A
+        `slack.owner_user` the parser refuses would be written by the very
+        command meant to set Slack up, and every later `rite` run would then
+        answer with that parse error (v0.7.0 dogfood S19's blocking shape,
+        created by S14's own fix). The parser's rules are reused rather than
+        restated, so the two cannot drift.
+        """
+        if not value:
+            return ""
+        from rite_ai.config.parse import slack_field_problem
+
+        if self.config_path.startswith("slack."):
+            return slack_field_problem(self.config_path.split(".", 1)[1], value)
+        return ""
+
+    def clean(self, value: str) -> str:
+        """What the user typed, as rite stores it."""
+        if self.normalize == "slack_channel":
+            from rite_ai.config.parse import normalize_slack_channel
+
+            return normalize_slack_channel(value)
+        return value.strip() if isinstance(value, str) else value
+
 
 @dataclass(frozen=True)
 class Service:
@@ -82,6 +120,11 @@ class Service:
     label: str
     fields: tuple[Field, ...]
     note: str = ""
+    board_type: str = ""
+    """The `ticket_backend.type` this service is, when it is a ticket board.
+    Setting its config fields on a project with no board (`type: none`) makes
+    it the board: recording the site and the project key while leaving `none`
+    configured a board rite never reads (v0.7.0 dogfood)."""
 
     @property
     def secrets(self) -> tuple[Field, ...]:
@@ -96,6 +139,7 @@ SERVICES: dict[str, Service] = {
     "jira": Service(
         name="jira",
         label="JIRA (Atlassian) — the ticket board",
+        board_type="jira",
         fields=(
             Field(
                 "site",
@@ -147,10 +191,15 @@ SERVICES: dict[str, Service] = {
     "slack": Service(
         name="slack",
         label="Slack — the relay that reads and writes a Manager's mailbox",
-        # ONE field. A bot token carries the workspace and the identity, so
-        # there is nothing else to ask for — the same shape as GitHub's PAT
-        # and for the same reason. The channel is configuration rather than a
-        # credential and belongs with the Slack settings.
+        # The token is the only SECRET, and the channel really is
+        # configuration rather than a credential — but "not a credential" was
+        # read as "not this command's business", and the result was a Slack
+        # integration this command could not finish. v0.7.0 dogfood S14:
+        # `rite credential set slack` stored the token and stopped, leaving
+        # `slack.owner_user` to be hand-edited into config.yaml, and a
+        # refinement DM with nowhere to go until it was. `config_path` already
+        # carries the non-secret half of JIRA into the committed config; Slack
+        # takes the same route, so one command sets the integration up (§10.5).
         fields=(
             Field(
                 "bot_token",
@@ -158,26 +207,37 @@ SERVICES: dict[str, Service] = {
                 secret=True,
                 env="SLACK_BOT_TOKEN",
             ),
+            Field(
+                "owner_user",
+                "Your Slack member id (U…, profile → ⋮ → Copy member ID) "
+                "— its DM with the app is where a Manager takes instructions; "
+                "Enter to skip, leaving Slack broadcast-only",
+                secret=False,
+                optional=True,
+                config_path="slack.owner_user",
+            ),
+            Field(
+                "broadcast_channel",
+                "Channel for status anyone may read (#all-rite, or a C… id) "
+                "— Enter for the default",
+                secret=False,
+                optional=True,
+                normalize="slack_channel",
+                config_path="slack.broadcast_channel",
+            ),
         ),
         note=(
-            # ⚠ Named rather than discovered later. §5.3.4 decided every
-            # Worker gets every credential the project holds, and
-            # `worker_environment`'s own docstring records that a larger
-            # return is "a real increase in blast radius, which is the cost
-            # the decision accepted". Slack is the first credential in that
-            # set a Worker has no use for — the relay runs in the
-            # supervisor, on the host — so it is the first case where the
-            # accepted cost buys nothing.
-            "Read by the relay inside `rite start`, on the host. Workers "
-            "receive it too, because every Worker receives every credential "
-            "(§5.3.4) — they have no use for it, which makes this the first "
-            "credential where that rule costs without buying."
+            # Read by the relay inside `rite start`, on the host. Workers do
+            # not receive it (§5.3.4, `WORKER_SERVICES`): until 2026-09-29
+            # they did, because every Worker got every credential, and this
+            # was the first credential where that rule cost without buying.
+            "Read by the relay inside `rite start`, on the host. Workers do "
+            "not receive it (§5.3.4)."
         ),
     ),
     # ⚠ C6/C26: a credential that exists ONLY outside a Manager's sandbox.
-    # No `env`, deliberately: `worker_environment` skips a field without one,
-    # so it is never handed to a Worker (§5.3.4 would otherwise give every
-    # Worker every credential the project holds). See
+    # No `env`, deliberately, and not in `WORKER_SERVICES`: it is never
+    # handed to a Worker. See
     # `managers/github_access.py` for the path each takes.
     "github_app": Service(
         name="github_app",
@@ -270,3 +330,20 @@ def describe_services() -> list[str]:
         fields = ", ".join(f.name for f in svc.fields)
         lines.append(f"  {svc.name:<10} {svc.label}  [{fields}]")
     return lines
+
+
+def how_to_set(key: str) -> str:
+    """The argument to `rite credential set` that sets `key`: its service when
+    one owns it and a prompt can take it, otherwise the key itself.
+
+    ⚠ **The one answer, for every hint rite prints.** Hints named the key
+    (`set github_token`) while the listing named the service (`set github`),
+    so one `rite doctor` report told a person two different commands for one
+    gap (v0.7.0 dogfood). A multi-line field stays the key: `set <service>`
+    refuses it and sends the person to `set <key> --stdin`. A per-Worker
+    sandbox token is not a service and never will be."""
+    for svc in SERVICES.values():
+        for f in svc.fields:
+            if service_key(svc.name, f.name) == key:
+                return key if f.multiline else svc.name
+    return key

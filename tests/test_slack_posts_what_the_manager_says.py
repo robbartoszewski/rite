@@ -85,11 +85,15 @@ class TestAReplyIsPostedAndItsIdentityKept:
         assert notes["channel"] == "D1" and "notes for" in notes["text"]
         assert "thread_ts" not in notes
         notes_ts = f"{len(slack.posts) + 99}.0"
+        shown = reply.pop("blocks")
         assert reply == {
             "channel": "D1",
             "text": "*lead*: RT-14 is merged",
             "thread_ts": notes_ts,
         }
+        # S29: shown as muted status, by its author, ending in a divider.
+        assert shown[0]["elements"][0]["text"] == "ℹ️ *Status* · lead"
+        assert shown[-1] == {"type": "divider"}
         record = listener.posted()[path.name]
         assert (
             record["channel"] == "D1" and record["ts"] == f"{len(slack.posts) + 100}.0"

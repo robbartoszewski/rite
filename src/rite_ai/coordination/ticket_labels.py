@@ -14,6 +14,11 @@ from __future__ import annotations
 SCHEDULED = "scheduled"
 """In the backlog and available. §9.10's orientation table routes on it."""
 
+READY_TO_WORK = "ready-to-work"
+"""TR7: `scheduled`, REFINED and not yet assigned. A VIEW rite writes
+(`refinement.view`), never read by any gate. Here so that assignment removes
+it in the same write that removes `scheduled`."""
+
 MODULE = "module:"
 """⚠ PROPOSAL, not settled spec. `modules.yaml` names a project's modules
 and §2.3 says assignment is by label, but nothing maps a TICKET to a module

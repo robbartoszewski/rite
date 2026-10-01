@@ -1,4 +1,5 @@
 import subprocess
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -654,7 +655,9 @@ def test_add_worker_sandbox_disabled_skips_token_provisioning(tmp_path, monkeypa
     assert "sandbox" not in result.output.lower()
 
 
-def test_sandbox_start_passes_provisioned_token_through(tmp_path, monkeypatch):
+def test_sandbox_start_keeps_the_provisioned_token_on_the_host(tmp_path, monkeypatch):
+    """The token is provisioned and resolved (rite pushes with it on the
+    host), and never handed to the Worker (Robert, 2026-09-29)."""
     rite_dir = tmp_path / ".rite"
     rite_dir.mkdir()
     # Declares a PROJECT, not just a `.rite/`. `_find_project_root` keys on
@@ -702,7 +705,34 @@ def test_sandbox_start_passes_provisioned_token_through(tmp_path, monkeypatch):
     assert "--backend" in args
     assert args[args.index("--backend") + 1] == "seatbelt"
     env_values = [args[i + 1] for i, a in enumerate(args) if a == "--env"]
-    assert "GITHUB_TOKEN=the-stored-token" in env_values
+    assert not [v for v in env_values if v.startswith(("GITHUB_TOKEN=", "GH_TOKEN="))]
+    assert not [a for a in args if "the-stored-token" in a]
+
+
+class _ReadableBoard:
+    """A board the host can read a ticket from: `rite sandbox start` reads
+    the ticket and delivers it into the Worker's workspace (§5.3.4)."""
+
+    def read(self, ticket_id):
+        from rite_ai.tickets.interface import Ticket
+
+        return Ticket(id=ticket_id, title="the ticket", description="do the thing")
+
+
+@contextmanager
+def _with_a_board():
+    """A board whose every ticket is REFINED (TR4 starts a Worker only on
+    one), through the real predicate; tests that use it are about something
+    else."""
+    from tests.refined_board import any_ticket_refined
+
+    with (
+        patch(
+            "rite_ai.cli.main._ticket_backend", return_value=(_ReadableBoard(), None)
+        ),
+        any_ticket_refined(),
+    ):
+        yield
 
 
 def _sandbox_project(tmp_path, monkeypatch):
@@ -740,6 +770,7 @@ def test_sandbox_start_ticket_becomes_the_opening_prompt(tmp_path, monkeypatch):
         return MagicMock(returncode=0, stdout=stdout, stderr="")
 
     with (
+        _with_a_board(),
         patch("keyring.get_password", return_value=None),
         patch("rite_ai.sandbox.shutil.which", return_value="/usr/local/bin/yoloai"),
         patch("rite_ai.sandbox.subprocess.run", side_effect=_run),
@@ -748,7 +779,13 @@ def test_sandbox_start_ticket_becomes_the_opening_prompt(tmp_path, monkeypatch):
             cli, ["sandbox", "start", "alpha", "--ticket", "ABC-12"]
         )
     assert result.exit_code == 0, result.output
-    assert seen["prompt"] == "Work ticket ABC-12.\n"
+    assert seen["prompt"].startswith(
+        "Work ticket ABC-12 to its agreed definition of done, refinement record "
+    )
+    delivered = (tmp_path / "workers" / "alpha" / "TICKET.md").read_text()
+    # The ticket text is the refinement read's (TR4), not a second read.
+    assert "ABC-12" in delivered and "its text" in delivered
+    assert "## Agreed definition of done" in delivered
     assert "yoloai attach rite-" in result.output
 
 
@@ -817,6 +854,7 @@ def test_sandbox_start_prepares_before_it_starts(tmp_path, monkeypatch):
         return MagicMock(returncode=0, stdout=stdout, stderr="")
 
     with (
+        _with_a_board(),
         patch("keyring.get_password", return_value=None),
         patch("rite_ai.workspace.prepare_workspace", side_effect=prep),
         patch("rite_ai.sandbox.shutil.which", return_value="/usr/local/bin/yoloai"),
@@ -837,6 +875,7 @@ def test_sandbox_start_allow_dirty_skips_prepare_and_says_so(tmp_path, monkeypat
         return MagicMock(returncode=0, stdout=stdout, stderr="")
 
     with (
+        _with_a_board(),
         patch("keyring.get_password", return_value=None),
         patch("rite_ai.workspace.prepare_workspace") as mock_prep,
         patch("rite_ai.sandbox.shutil.which", return_value="/usr/local/bin/yoloai"),

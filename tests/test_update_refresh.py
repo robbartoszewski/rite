@@ -432,10 +432,14 @@ class TestASectionAReleaseWrote:
         if not tags:
             pytest.skip("no release tags in this checkout")
 
-        def version(tag: str) -> tuple[int, ...]:
+        def version(tag: str):
             # Not string order: "v0.10.0" sorts before "v0.4.0" that way, and
-            # the answer would quietly become some older release.
-            return tuple(int(part) for part in tag.lstrip("v").split("."))
+            # the answer would quietly become some older release. And not an
+            # int per dotted part either: `v0.7.0a1`, the first pre-release,
+            # made that raise, so the tripwire itself crashed.
+            from packaging.version import Version
+
+            return Version(tag.lstrip("v"))
 
         newest = max(tags, key=version)
 

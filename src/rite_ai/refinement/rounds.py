@@ -1,0 +1,478 @@
+"""The rounds of refining one ticket with the User, and what that makes it (TR2).
+
+`refinement.status` answers from the board whether a ticket is REFINED. It
+cannot say what happens to a ticket that is not: whether a question is out,
+whether the User was silent past the deadline, whether a person must restart
+it. That is this ledger's, and only that: **it holds rounds, and it never
+decides REFINED** (the note's part 4, race 11). The board is the truth; a
+ledger lost or deleted costs the rounds' history, never a wrong state.
+
+## Where it lives, and who writes it
+
+In the Owner's `routing/` directory, beside the delivered-message ledger,
+which the Manager's sandbox profile does not grant (`routing._ledger_dir`). A
+Manager asks for a round with `rite refine ask`, which writes a request into
+its own directory, and the supervisor, outside the boundary, decides and
+records it: the same shape as `rite route` and `rite chore`. So a Manager
+cannot mark its own question answered, move a deadline, or unpark a ticket.
+
+One file per ticket, each written under a kernel `flock` on its own lock
+file (race 11, the scheduler lock's fix): the supervisor, a person's
+`rite refine reopen` and the relay can all write, from different processes.
+
+## What a ticket's state is
+
+`state_of` combines the board's answer (one read, `status.Status`) with this
+ledger, in that order, so the board always wins:
+
+* REFINED, CONFLICT and UNREADABLE come from the board, whatever the ledger
+  says;
+* NOT REFINED or STALE on the board, with an attempt here made against the
+  ticket's CURRENT text, is that attempt's state: ASKING, PROPOSED,
+  WAITING FOR YOU or PARKED;
+* an attempt made against OTHER text is over: the ticket was edited, and a
+  User who fixes the ticket himself has resumed it (part 3.4 step 7). The
+  board's own state stands.
+
+Robert's rulings this encodes. TRQ11: silence past the deadline is WAITING
+FOR YOU, and he is not asked again while he is away; when he is back the
+same question comes back. His correction to TRQ2 (2026-09-29): "This limit
+should apply to nudging without a reply, not to a discussion. A topic may be
+complex and need many rounds to resolve. As long as the User is responsive,
+the limit shouldn't apply". So rounds are uncapped; what is counted is
+consecutive messages that reached their deadline unanswered, any reply
+resets the count, and that many park the ticket. PARKED is only "not
+answered after N messages", "thread unreadable" or "not started by the
+Manager".
+"""
+
+from __future__ import annotations
+
+import fcntl
+import json
+import os
+from contextlib import contextmanager
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from urllib.parse import quote
+
+from rite_ai.refinement import record as rec
+from rite_ai.refinement import status as st
+
+ASKING = "ASKING"
+PROPOSED = "PROPOSED"
+WAITING = "WAITING FOR YOU"
+PARKED = "PARKED"
+
+NOT_ANSWERED = "not answered after N messages"
+"""Robert's correction to TRQ2: the cap is on nudging without a reply, never
+on a discussion he is taking part in."""
+THREAD_UNREADABLE = "thread unreadable"
+NOT_STARTED = "not started by the Manager"
+NO_PROGRESS = "blocked: the same proposal round after round"
+"""Robert, 2026-09-29: if the Owner loops without converging, "it says so
+loudly and escalates it as a blocker on the board and in the checkpoint
+status updates". Detected by the proposal not changing, never by a count
+of rounds."""
+PARK_REASONS = (NOT_ANSWERED, THREAD_UNREADABLE, NOT_STARTED, NO_PROGRESS)
+ESCALATE_AT = 3
+"""The round that would carry the same proposal a third time in a row is
+not sent: the ticket is escalated instead (the second says so in the
+message, `ask.unchanged_line`)."""
+
+MISSES_TO_PARK = 2
+"""Consecutive sessions a ticket was handed to the Owner without a round
+being started, before it is PARKED (not started by the Manager). A Manager
+that cannot or will not start a ticket's refinement costs two sessions, not
+a session a minute (part 3.4 step 0)."""
+
+DIRNAME = "refinement"
+
+
+@dataclass
+class Round:
+    """One message to the User about one ticket."""
+
+    k: int
+    sent_at: float
+    deadline: float
+    proposal: bool
+    """Whether it carries a definition of done the User can accept in a word."""
+    where: str = ""
+    """Where it went: the outbox message's name, which the relay maps to the
+    Slack thread it posted it in."""
+    read_past_deadline: bool = False
+    """The thread was read after the deadline, and nothing sent before it
+    answered (race 6). Only then is silence WAITING FOR YOU."""
+    presented_again_at: float = 0.0
+    """When it was re-presented after the User came back. Once only."""
+    answered_at: float = 0.0
+    """When an attributed reply answered it, by Slack's send time. 0: not."""
+    items: list[str] = field(default_factory=list)
+    """The proposal's items as the User was shown them: what an accept word
+    makes the definition of done, and nothing else."""
+    host_items: list[int] = field(default_factory=list)
+    """S31: indexes into `items` of the ones tagged `[host]`, as the User was
+    shown them; an accept word makes them the record's host-measured items."""
+    questions: list[str] = field(default_factory=list)
+    """The numbered questions it asked: what is still open, as asked, for a
+    blocker that has to say so."""
+    body: str = ""
+    """The message as the User was shown it, so it can be put in front of
+    him again, unchanged, when he is back."""
+
+    @property
+    def answered(self) -> bool:
+        return self.answered_at > 0
+
+
+@dataclass
+class Attempt:
+    """Refinement of one ticket's text, from its first round to its end."""
+
+    ticket: str
+    text_sha256: str
+    """The ticket's title and description the attempt is refining. Another
+    text is another attempt (the ticket was edited)."""
+    rounds: list[Round] = field(default_factory=list)
+    parked: str = ""
+    misses: int = 0
+    blocker: str = ""
+    """What rite wrote when it escalated this ticket (NO_PROGRESS): the
+    proposal, what he said, what is still open. Kept for the check-in."""
+    unanswered: int = 0
+    """Consecutive messages about this ticket that reached their deadline
+    with no reply. Any reply resets it; `refinement.unanswered` of them
+    parks the ticket (Robert's correction to TRQ2)."""
+    answers: list[dict] = field(default_factory=list)
+    """Every reply attributed to this attempt: `{"id", "words", "at"}`. A
+    proposal may quote only these, or the ticket (`ask.check`)."""
+    accepted: dict = field(default_factory=dict)
+    """An accept word whose record is not yet written (`{"id", "at", "k"}`):
+    PROPOSED (accepted, not yet written), retried and said each cycle."""
+    filing: float = 0.0
+    """For an attempt about a chat instruction: when rite began creating its
+    chore. Set, under the lock, BEFORE the board is asked, so a crash between
+    the two is seen as "may already exist" and never as "not yet", which
+    would file it twice (the note's part 3.14, race 11)."""
+
+    @property
+    def latest(self) -> Round | None:
+        return self.rounds[-1] if self.rounds else None
+
+
+@dataclass(frozen=True)
+class State:
+    """What a ticket is, for the Owner and the loop."""
+
+    name: str
+    detail: str
+    attempt: Attempt | None = None
+
+    @property
+    def open(self) -> bool:
+        """Counts against K: a round inside its deadline (TRQ11: tickets
+        waiting for the User never crowd out new ones)."""
+        return self.name in (ASKING, PROPOSED)
+
+    @property
+    def uses_sessions(self) -> bool:
+        """WAITING FOR YOU, PARKED, CONFLICT and UNREADABLE never cause a
+        session (part 3.4 step 0)."""
+        return self.name in (ASKING, PROPOSED, st.NOT_REFINED, st.STALE)
+
+
+def text_of(ticket) -> str:
+    """The hash an attempt is keyed by: title and description together, so
+    an edit to either starts a new attempt, as either makes a record STALE."""
+    return rec.text_sha256(f"{ticket.title}\n{ticket.description}")
+
+
+def state_of(board: st.Status, attempt: Attempt | None, *, now: float) -> State:
+    """The ticket's state, from one board read and this ledger. The board
+    wins: the ledger only says what an unrefined ticket is waiting for."""
+    if board.state in (st.REFINED, st.CONFLICT, st.UNREADABLE):
+        return State(board.state, board.detail)
+    if (
+        attempt is None
+        or board.ticket is None
+        or attempt.text_sha256 != text_of(board.ticket)
+    ):
+        return State(board.state, board.detail)
+    if attempt.parked:
+        return State(PARKED, attempt.parked, attempt)
+    if attempt.accepted:
+        return State(PROPOSED, "accepted, not yet written", attempt)
+    latest = attempt.latest
+    if latest is None:
+        return State(board.state, board.detail, attempt)
+    of = f"round {latest.k}"
+    if not latest.answered and now >= latest.deadline:
+        if latest.read_past_deadline:
+            return State(WAITING, f"{of}: no answer by its deadline", attempt)
+        return State(
+            ASKING,
+            f"{of}: deadline passed, thread not yet read past it",
+            attempt,
+        )
+    if latest.answered:
+        # Answered and not yet followed by a new round: the Owner's move.
+        return State(ASKING, f"{of} answered; the next round is due", attempt)
+    return State(PROPOSED if latest.proposal else ASKING, of, attempt)
+
+
+# --- the ledger -------------------------------------------------------------
+
+
+def _dir(root: Path, owner: str) -> Path:
+    from rite_ai.managers.routing import _ledger_dir
+
+    return _ledger_dir(root, owner) / DIRNAME
+
+
+def _path(root: Path, owner: str, ticket: str) -> Path:
+    # A ticket id may carry '/' or '#' (`routing.ticket_problem`), so it is
+    # quoted into one file name rather than trusted as a path.
+    return _dir(root, owner) / f"{quote(ticket, safe='-_.')}.json"
+
+
+def _from(data: dict) -> Attempt | None:
+    try:
+        return Attempt(
+            ticket=data["ticket"],
+            text_sha256=data["text_sha256"],
+            rounds=[Round(**r) for r in data.get("rounds", [])],
+            parked=data.get("parked", ""),
+            misses=int(data.get("misses", 0)),
+            unanswered=int(data.get("unanswered", 0)),
+            blocker=str(data.get("blocker", "")),
+            answers=list(data.get("answers", [])),
+            accepted=dict(data.get("accepted", {})),
+            filing=float(data.get("filing", 0.0)),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def load(root: Path, owner: str, ticket: str) -> Attempt | None:
+    """The ticket's attempt, or None. A file that does not parse is None:
+    the board still decides REFINED, so a lost ledger costs history only."""
+    try:
+        data = json.loads(_path(root, owner, ticket).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return _from(data) if isinstance(data, dict) else None
+
+
+@contextmanager
+def locked(root: Path, owner: str, ticket: str):
+    """The ticket's attempt, under its lock, and a `save` to call before
+    leaving. Yields `(attempt or None, save)`."""
+    from rite_ai.state import write_atomic
+
+    path = _path(root, owner, ticket)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(
+        path.with_suffix(".lock"), os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600
+    )
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+
+        def save(attempt: Attempt) -> None:
+            write_atomic(path, json.dumps(asdict(attempt), indent=1) + "\n")
+
+        yield load(root, owner, ticket), save
+    finally:
+        os.close(fd)
+
+
+PACING_FILE = "pacing.json"
+
+
+def last_session(root: Path, owner: str) -> float | None:
+    """When a session last started for refinement, or None if never.
+    Written by the supervisor when it starts one (`record_session`)."""
+    try:
+        data = json.loads((_dir(root, owner) / PACING_FILE).read_text("utf-8"))
+        return float(data["last_session"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def record_session(root: Path, owner: str, at: float) -> None:
+    from rite_ai.state import write_atomic
+
+    where = _dir(root, owner)
+    where.mkdir(parents=True, exist_ok=True)
+    write_atomic(where / PACING_FILE, json.dumps({"last_session": at}) + "\n")
+
+
+@dataclass(frozen=True)
+class Events:
+    """What the User did since the last refinement session: the only things
+    that may start another one (part 3.4 step 0)."""
+
+    first_look: bool
+    replies: int
+    deadlines: int
+    owed: int = 0
+    """Rounds he answered whose next round the Owner has not sent. Owed
+    whatever the clock says: a session that was meant to send it may have
+    failed or been killed (found in the TR2 live run, 2026-09-29)."""
+
+
+def events_since(
+    attempts: dict[str, Attempt], last: float | None, *, now: float
+) -> Events:
+    since = last if last is not None else float("-inf")
+    replies = deadlines = owed = 0
+    for attempt in attempts.values():
+        if attempt.parked:
+            continue
+        latest = attempt.latest
+        if latest is not None and latest.answered and not attempt.accepted:
+            owed += 1
+        for r in attempt.rounds:
+            if r.answered and r.answered_at > since:
+                replies += 1
+            elif not r.answered and since < r.deadline <= now:
+                deadlines += 1
+    return Events(
+        first_look=last is None, replies=replies, deadlines=deadlines, owed=owed
+    )
+
+
+def all_questions(root: Path, owner: str) -> set[str]:
+    """Every question id a round was ever sent as: how the relay tells a
+    refinement round from any other question it posts."""
+    return {
+        r.where
+        for attempt in all_attempts(root, owner).values()
+        for r in attempt.rounds
+        if r.where
+    }
+
+
+def open_questions(root: Path, owner: str) -> dict[str, float]:
+    """Every round still waiting for an answer, by its question id, with its
+    deadline. The Slack relay keeps these threads read, past the 24-hour
+    horizon and outside its ten-thread limit, until they are answered (race
+    7): a reaction confirms a question was SEEN (RP1), not that it was
+    answered, so RP1's pin alone is not enough here."""
+    found: dict[str, float] = {}
+    for attempt in all_attempts(root, owner).values():
+        if attempt.parked:
+            continue
+        latest = attempt.latest
+        if latest is not None and latest.where and not latest.answered:
+            found[latest.where] = latest.deadline
+    return found
+
+
+def read_past_deadline(root: Path, owner: str, question: str, *, at: float) -> bool:
+    """The relay read `question`'s thread at `at`, after its deadline, and
+    found nothing new in it. Only then is silence WAITING FOR YOU (race 6):
+    a reply sent a minute before the deadline and read after it is found by
+    this same read, and answers the round. True if a round was marked."""
+    for ticket, attempt in all_attempts(root, owner).items():
+        latest = attempt.latest
+        if latest is None or latest.where != question:
+            continue
+        with locked(root, owner, ticket) as (current, save):
+            if current is None or current.latest is None:
+                return False
+            r = current.latest
+            if r.where != question or r.answered or at < r.deadline:
+                return False
+            if r.read_past_deadline:
+                return False  # marked already: said once, not every read
+            r.read_past_deadline = True
+            current.unanswered += 1
+            save(current)
+            return True
+    return False
+
+
+def count_misses(
+    root: Path, owner: str, handed: dict[str, str], *, since: float
+) -> list[str]:
+    """The no-progress guard (part 3.4 step 0), at the end of a session that
+    was handed `handed` (ticket -> text hash) to start refining at `since`.
+
+    A ticket with no round sent since then counts a miss; one with a round
+    has its count cleared. `MISSES_TO_PARK` consecutive misses park it (not
+    started by the Manager): a Manager that cannot or will not start a
+    ticket's refinement costs two sessions, not a session a minute. Returns
+    a line for each ticket parked."""
+    parked: list[str] = []
+    for ticket, text in handed.items():
+        with locked(root, owner, ticket) as (attempt, save):
+            if attempt is None or attempt.text_sha256 != text:
+                attempt = Attempt(ticket=ticket, text_sha256=text)
+            if attempt.parked:
+                continue
+            if any(r.sent_at >= since for r in attempt.rounds):
+                if attempt.misses:
+                    attempt.misses = 0
+                    save(attempt)
+                continue
+            attempt.misses += 1
+            if attempt.misses >= MISSES_TO_PARK:
+                attempt.parked = NOT_STARTED
+                parked.append(
+                    f"{ticket} is PARKED (not started by the Manager): it was "
+                    f"handed over {attempt.misses} times and no round was sent. "
+                    f"`rite refine reopen {ticket}` tries again"
+                )
+            save(attempt)
+    return parked
+
+
+def reopen(root: Path, owner: str, ticket: str) -> str:
+    """A person restarts a ticket's refinement (`rite refine reopen`). Its
+    rounds start again from 1 and its misses from 0; his answers are kept,
+    so a new proposal can still quote them. Returns what was done."""
+    with locked(root, owner, ticket) as (attempt, save):
+        if attempt is None:
+            return f"{ticket} has no refinement to reopen; the Owner starts one"
+        was = attempt.parked or ("waiting for you" if attempt.rounds else "not started")
+        attempt.parked = ""
+        attempt.misses = 0
+        attempt.unanswered = 0
+        attempt.accepted = {}
+        attempt.rounds = []
+        attempt.filing = 0.0
+        save(attempt)
+    return (
+        f"{ticket} reopened (it was {was}): the Owner refines it again from "
+        "round 1, and your earlier answers are kept"
+    )
+
+
+def move(root: Path, owner: str, old: str, attempt: Attempt) -> None:
+    """An attempt about a chat instruction becomes one about the chore rite
+    filed for it: saved under the ticket, then the old one removed. Its
+    rounds go with it, so a reply in a thread already asked still lands."""
+    with locked(root, owner, attempt.ticket) as (_existing, save):
+        save(attempt)
+    try:
+        _path(root, owner, old).unlink()
+    except OSError:
+        pass
+
+
+def all_attempts(root: Path, owner: str) -> dict[str, Attempt]:
+    """Every attempt this Owner holds, by ticket."""
+    found: dict[str, Attempt] = {}
+    where = _dir(root, owner)
+    if not where.is_dir():
+        return found
+    for path in sorted(where.glob("*.json")):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        attempt = _from(data) if isinstance(data, dict) else None
+        if attempt is not None:
+            found[attempt.ticket] = attempt
+    return found

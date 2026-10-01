@@ -151,6 +151,7 @@ def digest(
     notes: list[str] = []
     replies: dict[str, list[int]] = {}
     verdicts: dict[str, int] = {}
+    verifications: list[dict] = []
     for e in checkins.ledger(root, manager):
         if float(e.get("at") or 0) <= start:
             continue
@@ -162,6 +163,7 @@ def digest(
             continue
         if kind == "verification":
             verdicts[str(e.get("verdict"))] = verdicts.get(str(e.get("verdict")), 0) + 1
+            verifications.append(e)
             continue
         if kind == "cycle":
             observed.append(
@@ -203,6 +205,11 @@ def digest(
             )
             + " (rite's own sessions, not the Owner's)"
         )
+        from rite_ai.managers.verifier import guard_counts
+
+        guards = guard_counts(verifications)
+        if guards:
+            observed.append(f"- {guards}")
     lines = [head, "", "Observed by rite:"]
     if observed:
         lines.extend(observed)

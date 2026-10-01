@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .github import GitHubBackend
 from .interface import (
     PAGE_LIMIT,
     BackendError,
+    Comment,
+    Thread,
     Ticket,
     TicketBackend,
     TicketFilter,
@@ -22,6 +25,7 @@ if TYPE_CHECKING:
 __all__ = [
     "PAGE_LIMIT",
     "BackendError",
+    "Comment",
     "GitHubBackend",
     "JiraBackend",
     "JiraConfig",
@@ -29,6 +33,7 @@ __all__ = [
     "TicketBackend",
     "TicketFilter",
     "TicketPage",
+    "Thread",
     "create_backend",
     "create_backend_from_config",
     "paginate",
@@ -52,6 +57,7 @@ def _missing_credential(key: str, credentials: object | None) -> str:
     from the key is a thing that command explains and a one-line error
     cannot.
     """
+    from rite_ai.credentials.services import how_to_set
     from rite_ai.credentials.store import project_account, service_env_name
 
     env = f"RITE_{key.upper()}"
@@ -68,8 +74,8 @@ def _missing_credential(key: str, credentials: object | None) -> str:
 
     return (
         f"{key} not found — looked in: {', '.join(looked)}.\n"
-        f"  Set it for this project:  rite credential set {key}\n"
-        f"  Or machine-wide:          rite credential set {key} --global\n"
+        f"  Set it for this project:  rite credential set {how_to_set(key)}\n"
+        f"  Or machine-wide:          rite credential set {how_to_set(key)} --global\n"
         f"  Or in the environment:    export {env}=...\n"
         f"  What this project needs:  rite credential list"
     )
@@ -117,11 +123,23 @@ def create_backend(
         for _key in ("jira_email", credential_name or "jira_token"):
             warn_if_global(_key, credentials)
 
-        email = get_scoped("jira_email", credentials)
+        # ⚠ An unreadable credential store is a board that cannot be built
+        # HERE, not a crash. Measured in the live yoloAI run (finding S25):
+        # inside a Manager's sandbox the store is denied by design (a Manager
+        # is not given rite's credentials), and `rite status`, `rite board
+        # list` and `rite loop run` all died with a traceback from this
+        # read. Every caller already reports a BackendError as the board
+        # being unavailable and carries on; that is what this is.
+        from rite_ai.credentials.file_store import CredentialStoreError
+
+        token_key = credential_name or "jira_token"
+        try:
+            email = get_scoped("jira_email", credentials)
+            token = get_scoped(token_key, credentials) if email else None
+        except CredentialStoreError as e:
+            return BackendError(f"the Jira credentials cannot be read here: {e}")
         if not email:
             return BackendError(_missing_credential("jira_email", credentials))
-        token_key = credential_name or "jira_token"
-        token = get_scoped(token_key, credentials)
         if not token:
             return BackendError(_missing_credential(token_key, credentials))
         resolved_key = (projects or {}).get(board_role) or project_key
@@ -161,6 +179,7 @@ def create_backend_from_config(
     tb: TicketBackendConfig,
     board_role: str = "workers",
     credentials: object | None = None,
+    root: Path | None = None,
 ) -> TicketBackend | BackendError:
     """The single config→backend builder — call this, not `create_backend`
     directly, from anything that has a `TicketBackendConfig` (the CLI's
@@ -169,7 +188,7 @@ def create_backend_from_config(
     exactly the kind of divergence this package's own pre-push-hook fix
     just closed elsewhere — one builder here instead, so it can't happen
     again in this module)."""
-    return create_backend(
+    backend = create_backend(
         tb.type,
         site=tb.site,
         repo=tb.repo,
@@ -178,3 +197,23 @@ def create_backend_from_config(
         credential_name=tb.credential,
         credentials=credentials,
     )
+    if isinstance(backend, BackendError):
+        return backend
+    # ⚠ Named from the board itself, before any wrapper: the identity reads
+    # the board's own repo or site, which a wrapper does not carry.
+    from rite_ai.tickets.own_writes import ReadsItsOwnWrites, board_identity
+
+    identity = board_identity(backend)
+    # ⚠ Scoped HERE, the one place every board is built, and whether or not
+    # there is a root: a project's board reads only its own tickets, and no
+    # caller can build one that does not (v0.7.0 dogfood S1, `tickets.scope`).
+    if tb.scope_label:
+        from rite_ai.tickets.scope import Scoped
+
+        backend = Scoped(backend, tb.scope_label)
+    if root is None:
+        return backend
+    # ⚠ With a project root, the board reads back what rite itself wrote
+    # (DF4, `own_writes`): its lists lag writes by seconds on both GitHub
+    # and Jira, and "nothing ready" was being concluded from that lag.
+    return ReadsItsOwnWrites(backend, Path(root), identity)

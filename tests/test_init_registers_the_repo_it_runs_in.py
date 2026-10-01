@@ -8,6 +8,12 @@ in that run did code work end to end.
 
 Pre-registered test: after `rite init` in a repo with code, a module is
 listed and a Worker has the repo checked out, without `rite add module`.
+
+Robert, 2026-09-29: "If there is a git repo in the root folder - it should
+ask if that's a module and add it if User confirms. If there are repos in
+the root directory, it should ask about those as well." So each repository
+is offered, root first, and registered only when confirmed; `--yes` answers
+yes and prints a line per module it added.
 """
 
 from __future__ import annotations
@@ -64,8 +70,11 @@ def _init(app: Path, *args: str, input: str | None = None):
 
 def test_the_existing_code_answer_registers_the_repo(tmp_path: Path, monkeypatch):
     app, remote = _repo_with_code(tmp_path)
-    # spec or existing code? y · path [.] · changes Enter · role Enter
-    _init(app, input="y\n\n\n\n")
+    # spec or existing code? y · path [.] · changes · role · add ./? Enter ·
+    # declare a Worker? n (S20)
+    result = _init(app, input="y\n\n\n\n\n\nn\n")
+
+    assert "Add this directory (./) as module 'app'? [Y/n]" in result.output
 
     assert _modules(app) == {
         "app": {
@@ -88,7 +97,7 @@ def test_yes_registers_the_repo(tmp_path: Path):
 def test_a_worker_then_has_the_code_checked_out(tmp_path: Path, monkeypatch):
     """The half of the pre-registered test that matters: the clone exists."""
     app, _ = _repo_with_code(tmp_path)
-    _init(app, input="y\n\n\n\n")
+    _init(app, input="y\n\n\n\n\n\nn\n")
     monkeypatch.chdir(app)
 
     added = CliRunner().invoke(cli, ["add", "worker", "alpha"])
@@ -122,7 +131,7 @@ def test_a_repo_with_nothing_committed_is_not_a_module(tmp_path: Path):
     assert not _modules(root)
 
 
-def test_a_workspace_of_repos_registers_those_and_not_itself(tmp_path: Path):
+def _workspace_with_a_repo_inside(tmp_path: Path) -> Path:
     root = tmp_path / "ws"
     root.mkdir()
     _git(root, "init", "-q")
@@ -135,9 +144,53 @@ def test_a_workspace_of_repos_registers_those_and_not_itself(tmp_path: Path):
     (api / "a.py").write_text("x\n")
     _git(api, "add", "-A")
     _git(api, "commit", "-qm", "api")
-    _init(root, input="y\n\n\n\n")
+    return root
 
+
+def test_the_root_and_each_repo_inside_are_each_asked_about(tmp_path: Path):
+    root = _workspace_with_a_repo_inside(tmp_path)
+    # … add ./? n · add api/? Enter · what is 'api'? Enter · Manager? Enter ·
+    # declare a Worker? n (S20). No role question (C7); one description
+    # question per module registered (C8).
+    result = _init(root, input="y\n\n\nn\n\n\n\nn\n")
+
+    assert "Add this directory (./) as module 'ws'? [Y/n]" in result.output
+    assert "Add api/ as module 'api'? [Y/n]" in result.output
     assert {n: m["path"] for n, m in _modules(root).items()} == {"api": "api/"}
+
+
+def test_declining_every_repo_registers_none(tmp_path: Path):
+    root = _workspace_with_a_repo_inside(tmp_path)
+    # … add ./? n · add api/? n · (S13) the repository? Enter. Nothing
+    # registered, so nothing is asked to describe.
+    _init(root, input="y\n\n\nn\nn\n\n\n")
+
+    assert not _modules(root)
+
+
+def test_yes_adds_each_repo_and_says_so(tmp_path: Path):
+    """Asking is meaningless with nobody there. `--yes` takes the default,
+    yes, and prints it: an interactive run and a --yes run that differ in
+    what they registered must differ on screen."""
+    root = _workspace_with_a_repo_inside(tmp_path)
+    result = _init(root, "--yes")
+
+    assert "--yes: added this directory (./) as module 'ws'" in result.output
+    assert "--yes: added api/ as module 'api'" in result.output
+    assert set(_modules(root)) == {"ws", "api"}
+
+
+def test_a_root_with_nothing_committed_is_explained_not_offered(tmp_path: Path):
+    root = tmp_path / "ws"
+    root.mkdir()
+    _git(root, "init", "-q")
+    (root / "main.py").write_text("x\n")
+    # … role · (S13) the repository? Enter
+    result = _init(root, input="y\n\n\n\n\n\n")
+
+    assert "nothing committed" in result.output
+    assert "as module" not in result.output
+    assert not _modules(root)
 
 
 def test_a_source_subdirectory_is_registered_by_its_path(tmp_path: Path):
@@ -149,7 +202,8 @@ def test_a_source_subdirectory_is_registered_by_its_path(tmp_path: Path):
     (code / "a.py").write_text("x\n")
     _git(code, "add", "-A")
     _git(code, "commit", "-qm", "c")
-    _init(root, input="y\ncode\n\n\n")
+    # … add code/? Enter · declare a Worker? n (S20)
+    _init(root, input="y\ncode\n\n\n\n\nn\n")
 
     assert {n: m["path"] for n, m in _modules(root).items()} == {"code": "code/"}
 
