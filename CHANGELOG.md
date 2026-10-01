@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### `--help` no longer points at documents you do not have
+
+Command help carried rite's own internal section numbers — "Is this healthy?
+(SPEC §9.8)", "The standup a check-in opens with (plan § K4)". Those are
+references into design documents that do not ship with rite, in the one text
+you read at the moment you are stuck. They are gone from every command's
+`--help`; the design notes they came from are unchanged for anyone reading the
+source.
+
+
 ### In Slack, a post that needs your answer stands out
 
 Each post from a Manager now opens with what it is (❓ Needs your answer, with
