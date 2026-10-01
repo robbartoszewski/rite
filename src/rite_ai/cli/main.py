@@ -4660,8 +4660,7 @@ def refine() -> None:
 
     A ticket is refined only by a record rite signed on the board, which
     matches the ticket's current title and description. Nothing else counts:
-    not a label, and not a model saying so
-    (docs/design/V070_TICKET_REFINEMENT.md).
+    not a label, and not a model saying so.
     """
 
 
@@ -5257,7 +5256,7 @@ def schedule_set(hours: str, workers: int) -> None:
 @click.argument("tz")
 def schedule_set_timezone(tz: str) -> None:
     """Set the schedule's timezone — required before any window is
-    meaningful (D-48).
+    meaningful.
 
     Examples:
       rite schedule set-timezone Europe/Warsaw
@@ -5605,7 +5604,7 @@ def handover_show() -> None:
 def scheduler_tick() -> None:
     """One scheduler cycle: the watchdog check, plus the schedule
     window-boundary check that hands over any active Worker when the
-    schedule drops to zero (D-46). No LLM call; safe to run
+    schedule drops to zero. No LLM call; safe to run
     unattended from cron/launchd every few minutes. This is what
     `rite scheduler install` wires up — running it directly is mostly for
     testing that wiring.
@@ -6138,7 +6137,7 @@ def pool_history(limit: int) -> None:
 @cli.command("budget")
 def budget_report() -> None:
     """Current burn rate and week-end projection from real Claude Code
-    transcripts — reporting only (D-38): no Worker-count recommendation,
+    transcripts — reporting only: no Worker-count recommendation,
     no path back into concurrency anywhere in this command. Also shown in
     `rite status`.
 
@@ -7077,7 +7076,7 @@ def sandbox_start(
     """Launch WORKER's session inside a fresh sandbox. If a token was
     provisioned for this Worker (`rite add worker`'s sandbox step, or
     `rite credential set sandbox_token_<worker>`), delivers it via
-    `--env` (D-31) — never a file, never a CLI argument.
+    `--env` — never a file, never a CLI argument.
 
     Give it its work when you start it: nothing in rite can type into a
     sandbox afterwards. The sandbox name is printed on start; `yoloai
@@ -7466,7 +7465,7 @@ def sandbox_stop(worker: str) -> None:
 
     \b
     PRESERVED STATE CAN INCLUDE THE WORKER'S GITHUB TOKEN.
-    rite delivers it with `--env` and nothing else (D-31), and
+    rite delivers it with `--env` and nothing else, and
     what the sandbox does with it afterwards is outside that guarantee — a
     dogfood session reported yoloAI 0.11.0 persisting it inside the sandbox,
     cleared by `destroy` and not by `stop`. That report is unverified here and
@@ -9868,7 +9867,7 @@ def manager_stop(name: str) -> None:
     `rite stop [DIRECTORY]` already exists, resolves registered aliases,
     and has side effects on the board. A command meaning two different
     things depending on whether its argument happens to match a Manager
-    name is the ambiguity rite refuses elsewhere (D-78).
+    name is the ambiguity rite refuses elsewhere.
 
     Examples:
       rite manager stop planner
@@ -9907,7 +9906,7 @@ def manager_stop(name: str) -> None:
     type=int,
     default=None,
     help="Ceiling on provider sessions this run may start. Required when "
-    "starting a Manager; a COUNT, not spend (D-69). With several Managers in "
+    "starting a Manager; a COUNT, not spend. With several Managers in "
     "one project it is SOFT while routed work is outstanding: a session "
     "started by routed mail can pass it, and each one is said.",
 )
@@ -9917,7 +9916,7 @@ def manager_stop(name: str) -> None:
     default=None,
     help="Ceiling on how long this run may keep starting sessions. Required "
     "when starting a Manager: the two bounds catch different runaways and "
-    "neither suffices alone (D-82).",
+    "neither suffices alone.",
 )
 @click.option(
     "--fresh",
@@ -10534,8 +10533,8 @@ def journal() -> None:
     """Record a process issue to this Manager's journal (BETA).
 
     ⚠ WHY THIS COMMAND EXISTS AT ALL, since a Manager is an agent that can
-    write a file by itself. D-87 requires that an entry with no anchor is
-    REFUSED on the writing path, before any file is created. A Manager
+    write a file by itself. An entry with no anchor must be REFUSED on the
+    writing path, before any file is created. A Manager
     writing markdown with its own tools puts rite nowhere near that path,
     and the requirement collapses back into asking the agent nicely —
     which, as rite has already found, beats nothing.

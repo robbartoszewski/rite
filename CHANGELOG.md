@@ -8,8 +8,10 @@ Command help carried rite's own internal section numbers — "Is this healthy?
 (SPEC §9.8)", "The standup a check-in opens with (plan § K4)". Those are
 references into design documents that do not ship with rite, in the one text
 you read at the moment you are stuck. They are gone from every command's
-`--help`; the design notes they came from are unchanged for anyone reading the
-source.
+`--help`, and so are rite's internal decision numbers ("(D-46)") and the paths
+of its design notes; the notes themselves are unchanged for anyone reading the
+source. `rite spec slice D-12` still shows `D-12`: there it is how you name a
+decision in your own spec.
 
 
 ### In Slack, a post that needs your answer stands out
