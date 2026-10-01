@@ -2526,7 +2526,6 @@ def _engine_model_env(root: Path, manager: str, agent: str):
     from urllib.parse import urlsplit
 
     from rite_ai.config.parse import ParseError, parse_config
-    from rite_ai.local.goose_agent import goose_environment
 
     parsed = parse_config(root / ".rite" / "config.yaml")
     if isinstance(parsed, ParseError):
@@ -2580,7 +2579,17 @@ def _engine_model_env(root: Path, manager: str, agent: str):
             ),
             "",
         )
+    # ⚠ **PER AGENT, NOT GOOSE-SHAPED (S35).** This ended in
+    # `goose_environment(...)` unconditionally, so a Manager declaring another
+    # agent started and was served Ollama's server-wide default — 4,096 on an
+    # unconfigured server, smaller than the agents' own prompts (RL-T0). An
+    # agent rite cannot enforce is refused rather than run unenforced.
     from rite_ai.local.context_window import pin_window
+    from rite_ai.local.enforcement import for_agent, refusal
+
+    enforcement = for_agent(role.agent)
+    if enforcement is None:
+        return {}, refusal(role.agent), ""
 
     pinned = pin_window(role.endpoint, role.model, role.context_window)
     if pinned.problem:
@@ -2596,9 +2605,7 @@ def _engine_model_env(root: Path, manager: str, agent: str):
     # `context_window.py`'s rule is that rite names anything it puts there
     # and says how to remove it.
     return (
-        goose_environment(
-            role.endpoint, pinned.model, context_limit=role.context_window
-        ),
+        enforcement.environment(role.endpoint, pinned.model, role.context_window),
         "",
         pinned.detail if pinned.created else "",
     )

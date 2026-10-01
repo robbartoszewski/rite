@@ -69,6 +69,18 @@ class AgentReport:
     claimed_success: bool
     summary: str = ""
     touched: tuple[str, ...] = ()
+    infrastructure_fault: bool = False
+    """The turn did not happen: an endpoint that was down, a model that is not
+    there, a binary that is missing.
+
+    ⚠ **A FIELD, because this was carried in the summary's wording.** RL-47 is
+    that only work counts — "an endpoint that was down is not an attempt" —
+    and `goose_agent`'s own docstring says "infrastructure faults are not
+    attempts". But the only trace of it was the prefix "infrastructure fault
+    before the turn:" on a free-text summary, so the one caller that has to
+    act on it would have had to match a sentence. Measured: the first real run
+    of the wired pipeline was refused before the turn and still counted as an
+    attempt."""
 
 
 @dataclass(frozen=True)
@@ -117,6 +129,20 @@ class Outcome:
     commit: str = ""
     verify_output: str = ""
     notes: list[str] = field(default_factory=list)
+    infrastructure_fault: bool = False
+    """Carried from the agent's report, for `counts_as_attempt`."""
+
+    @property
+    def counts_as_attempt(self) -> bool:
+        """Whether this run is an ATTEMPT at the subtask (RL-47).
+
+        The rule lives here rather than in the caller, so every caller gets
+        the same answer: work counts, and a turn that never happened does
+        not. A `FAILED` subtask whose agent never ran is not a failing
+        subtask — it is a machine that was not ready, and counting it would
+        retire a subtask nobody tried.
+        """
+        return not self.infrastructure_fault
 
     @property
     def accepted(self) -> bool:
@@ -179,6 +205,7 @@ def run_subtask(
             workspace,
         )
         outcome.agent_claimed = report.claimed_success
+        outcome.infrastructure_fault = report.infrastructure_fault
 
         # rite runs the verify itself. The agent's report is not consulted to
         # decide whether to run it: a verify skipped because the agent said it

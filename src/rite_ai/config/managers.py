@@ -628,12 +628,20 @@ def effective_model(role: ManagerRole) -> str:
     if role.engine == HUMAN:
         return f"manager {role.name}: a person, no model"
     if role.is_local:
+        # ⚠ S35: an agent rite cannot hold to a window is REFUSED, so this no
+        # longer says "the server's default window" for one — that sentence
+        # described a Manager rite started and could not enforce.
+        from rite_ai.local.enforcement import for_agent
+
         window = (
-            f"a {role.context_window}-token window pinned into the model"
-            if role.context_window
-            else "NO context_window declared, so `rite start` refuses it"
-            if role.agent == "goose"
-            else "the server's default window"
+            "NO context_window declared, so `rite start` refuses it"
+            if not role.context_window
+            else f"a {role.context_window}-token window pinned into the model"
+            if for_agent(role.agent) is not None
+            else (
+                f"a window rite cannot enforce for agent {role.agent!r}, so "
+                "`rite start` refuses it"
+            )
         )
         return (
             f"manager {role.name}: {role.model} at {role.endpoint}, "

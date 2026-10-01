@@ -146,7 +146,10 @@ class GooseAgent:
     def run(self, context: Context, workspace: str) -> AgentReport:
         blocked = self._preflight()
         if blocked:
-            return AgentReport(claimed_success=False, summary=blocked)
+            # The turn did not happen, so it is not an attempt (RL-47).
+            return AgentReport(
+                claimed_success=False, summary=blocked, infrastructure_fault=True
+            )
 
         instruction = _instruction(context)
         handle = session_name(context.ticket, context.subtask.id)
@@ -185,6 +188,7 @@ class GooseAgent:
             return AgentReport(
                 claimed_success=False,
                 summary=f"infrastructure fault during the turn: {fault}",
+                infrastructure_fault=True,
             )
         return AgentReport(claimed_success=True, summary=_tail(said))
 
