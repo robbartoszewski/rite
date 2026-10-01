@@ -2443,6 +2443,54 @@ def _say_how_slack_stands(root: Path, config, app) -> None:
     )
 
 
+def _offer_to_retarget(backend, svc, current: str) -> list[tuple[str, str]]:
+    """Offer to point this project's board at `svc` instead, and report what
+    that changed — or say, when there is nobody to ask, that it did not.
+
+    Returns the `(config path, value)` rows for what was written, so the
+    caller's own summary names them and `write_config` is reached by the one
+    `if configured` it already has.
+    """
+    from rite_ai.config.models import leave_the_old_board
+
+    if not module_docs_step.somebody_is_there():
+        # 🔴 **Never unattended.** `credential set` runs in scripts — the
+        # fields can come down a pipe — and silently moving which board every
+        # ticket command reads is not a thing to do to somebody who is not
+        # watching. The same lesson as S23's no-tty guard, and today's note is
+        # exactly the right thing to print here.
+        click.echo(
+            f"  note: ticket_backend.type is {current!r}, so rite still reads "
+            f"that board. Nobody is attached to ask, and rite does not change "
+            f"which board a project reads unasked — re-run this with a "
+            f"terminal to point it at {svc.name} instead.",
+            err=True,
+        )
+        return []
+    if not click.confirm(
+        f"  this project's board is {current!r}. Point it at "
+        f"{svc.board_type!r} instead? Every ticket command would then read "
+        f"{svc.name}",
+        default=False,
+        err=True,
+    ):
+        click.echo(
+            f"  left as it is: rite still reads the {current} board. What you "
+            f"just entered for {svc.name} is recorded, so answering yes to "
+            f"this next time is all it takes.",
+            err=True,
+        )
+        return []
+    backend.type = svc.board_type
+    rows = [("ticket_backend.type", svc.board_type)]
+    # The outgoing board's own fields: the incoming board re-prompts for
+    # everything it needs in this same run, so only the leftovers are stale.
+    rows += [
+        (name, "(cleared)") for name in leave_the_old_board(backend, svc.board_type)
+    ]
+    return rows
+
+
 def _set_service(
     service_name: str, global_: bool, root, config, config_writable: bool = True
 ) -> None:
@@ -2559,12 +2607,16 @@ def _set_service(
             config.ticket_backend.type = svc.board_type
             configured.append(("ticket_backend.type", svc.board_type))
         elif current != svc.board_type:
-            click.echo(
-                f"  note: ticket_backend.type is {current!r}, so rite still reads "
-                f"that board. Set it to {svc.board_type!r} in .rite/config.yaml "
-                f"to use {svc.name} instead.",
-                err=True,
-            )
+            # ⚠ **Asked, not refused** — and asked rather than done. This
+            # printed a note telling the user to edit `.rite/config.yaml`,
+            # which is the one path left in setup that says "edit the file"
+            # for something rite has a command for. Refusing to retarget a
+            # board SILENTLY was right; refusing to retarget it at all was
+            # the part that was wrong.
+            #
+            # 🔴 Default NO. Retargeting changes which board every ticket
+            # command reads, and a mistyped service name must not move it.
+            configured.extend(_offer_to_retarget(config.ticket_backend, svc, current))
 
     if configured:
         from rite_ai.cli.init.scaffold import write_config
