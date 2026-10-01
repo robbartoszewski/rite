@@ -39,12 +39,13 @@ def _init_cmd(config: str | None, yes: bool, directory: str) -> None:
     click.echo(f"STATUS:{result.status}")
 
 
-# All-defaults interactive answer sequence: no existing spec or code, role,
-# name, root_branch, module name (blank = no repos found), kind, features,
+# All-defaults interactive answer sequence: no existing spec or code, name,
+# root_branch, module name (blank = no repos found), kind, features,
 # platform, languages, frameworks, architecture, ticket backend ("3" = None for
 # now, to skip the extra JIRA-site prompt), sandbox, kb link, kb file, kb commit.
 # … kb commit, then (S15) declare Manager 'lead'? Enter
-_ALL_BLANK = "n\n" + "\n".join([""] * 10 + ["3"] + [""] * 5) + "\n"
+# No role answer: C7 made init Owner-only, so that question is not put.
+_ALL_BLANK = "n\n" + "\n".join([""] * 9 + ["3"] + [""] * 5) + "\n"
 
 
 def test_interactive_all_defaults_creates_every_file(tmp_path: Path):
@@ -106,7 +107,6 @@ def test_interactive_custom_answers_are_used(tmp_path: Path):
         "\n".join(
             [
                 "n",  # no existing spec or code
-                "",  # role default owner
                 "myapp",  # project name
                 "develop",  # root branch
                 "",  # no module
@@ -305,37 +305,17 @@ def test_config_file_not_found_is_a_clean_error(tmp_path: Path):
     assert result.exit_code != 0
 
 
-def test_manager_role_prompts_for_owner_ref(tmp_path: Path):
-    answers = (
-        "\n".join(
-            [
-                "n",  # no existing spec or code
-                "manager",  # role, typed value rather than arrow selection
-                "",  # owner ref, skipped
-                "",  # name
-                "",  # root branch
-                "",  # no module
-                "",  # kind
-                "",  # features
-                "",  # platform
-                "",  # languages
-                "",  # frameworks
-                "",  # architecture
-                "3",  # ticket backend
-                "",  # sandbox: accept the default
-                "",  # kb link
-                "",  # kb file
-                "",  # kb commit
-                "",  # declare Manager 'executor'? default yes (S15)
-            ]
-        )
-        + "\n"
-    )
+def test_the_role_is_owner_and_no_owner_ref_is_asked_for(tmp_path: Path):
+    """C7: a Manager MACHINE needs multi-manager (0.9.0), so neither the role
+    nor the Owner's-project question that followed it is put. The Manager
+    branch and `_borrow_owner_config` are kept, unreferenced, for the restore
+    — `test_init_is_owner_only_until_multi_manager.py` asserts both, and
+    rehearses the restore by flipping the constant."""
     runner = CliRunner()
-    result = runner.invoke(_init_cmd, [str(tmp_path)], input=answers)
+    result = runner.invoke(_init_cmd, [str(tmp_path)], input=_ALL_BLANK)
     assert result.exit_code == 0, result.output
 
+    assert "Owner's project URL or config path?" not in result.output
     brief = yaml.safe_load((tmp_path / ".rite" / "brief.yaml").read_text())
-    assert brief["project"]["role"] == "manager"
-    claude_md = (tmp_path / "CLAUDE.md").read_text()
-    assert "Role: Manager" in claude_md
+    assert brief["project"]["role"] == "owner"
+    assert "Role: Owner" in (tmp_path / "CLAUDE.md").read_text()

@@ -210,7 +210,7 @@ def add_module(
         if any(m.name == name for m in latest):
             return AddModuleResult(False, f"module '{name}' already registered")
         latest.append(module)
-        _write_modules(modules_path, latest)
+        write_modules_file(modules_path, latest)
 
     return AddModuleResult(True, f"module '{name}' registered", module=module)
 
@@ -232,7 +232,7 @@ def remove_module(root: Path, name: str) -> RemoveModuleResult:
         if not found:
             return RemoveModuleResult(False, f"module '{name}' not registered")
 
-        _write_modules(modules_path, [m for m in existing if m.name != name])
+        write_modules_file(modules_path, [m for m in existing if m.name != name])
 
     return RemoveModuleResult(
         True,
@@ -371,6 +371,100 @@ def _refresh_after_recording(root: Path, result: SetCommandResult) -> None:
 # the list is closed so a Worker is never told to follow a file nobody
 # decided about.
 MODULE_DOC_NAMES: tuple[str, ...] = ("CLAUDE.md", "AGENTS.md", "CONTRIBUTING.md")
+
+# Where a module says what it is, in the order a reader would look. Closed,
+# for `MODULE_DOC_NAMES`' reason.
+README_NAMES: tuple[str, ...] = ("README.md", "README.rst", "README.txt", "README")
+
+# How long a description may be before it stops being one. The brief renders
+# it as a line under the module's heading, so a wrapped paragraph there reads
+# as prose about the project rather than as a label for a module.
+DESCRIPTION_LIMIT = 120
+
+# Lines a README opens with that say nothing about the module: its own title,
+# setext underlines and front-matter fences, badge rows, images, HTML, table
+# rules, blockquotes, and list items.
+#
+# ⚠ Bullets are matched WITH their space. A bare `*` also opens `**bold**`,
+# which is prose — measured: "**The** `case` service." was skipped entirely
+# and the module got no description.
+_NOT_PROSE = (
+    "#",
+    "=",
+    "---",
+    ":::",
+    "|",
+    ">",
+    "<",
+    "[!",
+    "![",
+    "- ",
+    "* ",
+    "+ ",
+)
+
+
+def description_from_readme(module_dir: Path) -> str:
+    """One line describing this module, read out of its own README, or "".
+
+    ⚠ **A DEFAULT, never an answer.** It is offered to be accepted or typed
+    over; nothing writes it unprompted. A README's first sentence is usually
+    what a module would say about itself and is sometimes a slogan, so
+    "probably right, shown before it is kept" is the only honest status for
+    it.
+
+    Returns "" rather than guessing whenever the file is absent, unreadable,
+    or opens with nothing that is prose — a wrong description in the one file
+    an agent reads to find out what it is working on is worse than none.
+    """
+    for name in README_NAMES:
+        path = module_dir / name
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(errors="replace")
+        except OSError:
+            return ""
+        for raw in text.splitlines():
+            line = raw.strip()
+            if not line or line.startswith(_NOT_PROSE):
+                continue
+            # The first SENTENCE, not the first paragraph: READMEs run long,
+            # and the rest of the paragraph is detail the brief has no room
+            # for.
+            sentence = line.split(". ")[0].rstrip(".").strip()
+            sentence = " ".join(sentence.split())
+            # Markdown emphasis and code ticks are formatting for a reader of
+            # that file, and read as noise in a YAML value.
+            sentence = sentence.replace("**", "").replace("`", "").strip("*_ ")
+            if not sentence:
+                continue
+            if len(sentence) > DESCRIPTION_LIMIT:
+                sentence = sentence[: DESCRIPTION_LIMIT - 1].rstrip() + "…"
+            return sentence
+        return ""
+    return ""
+
+
+def write_modules_file(path: Path, modules: list[Module]) -> None:
+    """The one writer of `modules.yaml`.
+
+    🔴 **There were two, and they wrote differently.** `add_module` and
+    `remove_module` went through this one — atomic, under
+    `_locked_modules` — while `rite init` and `rite module set-command` went
+    through `scaffold.write_modules`, a plain truncating `write_text`. That
+    is precisely the half `_locked_modules`' own docstring calls the worse
+    one: a process killed between the truncate and the write leaves a torn
+    `modules.yaml`, and `load_project` then fails on it. They also agreed on
+    every field only by coincidence, which is the C1/C2 shape — a field added
+    to one writer reaches one caller.
+
+    `scaffold.write_modules` now calls this, so there is one serialiser and
+    one write mechanism.
+    """
+    from rite_ai.cli.init.scaffold import modules_to_yaml
+
+    write_atomic(path, modules_to_yaml(modules))
 
 
 def module_docs(root: Path, modules: list[Module]) -> list[str]:
@@ -705,12 +799,6 @@ def _clone_local(src: Path, dest: Path, branch: str) -> str:
     if proc.returncode != 0:
         return _git_detail(proc) or f"git clone exited {proc.returncode}"
     return ""
-
-
-def _write_modules(path: Path, modules: list[Module]) -> None:
-    from rite_ai.cli.init.scaffold import modules_to_yaml
-
-    write_atomic(path, modules_to_yaml(modules))
 
 
 def _locked_modules(path: Path):

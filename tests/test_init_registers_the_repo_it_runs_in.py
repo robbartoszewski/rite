@@ -149,8 +149,10 @@ def _workspace_with_a_repo_inside(tmp_path: Path) -> Path:
 
 def test_the_root_and_each_repo_inside_are_each_asked_about(tmp_path: Path):
     root = _workspace_with_a_repo_inside(tmp_path)
-    # … role · add ./? n · add api/? Enter · declare a Worker? n (S20)
-    result = _init(root, input="y\n\n\n\nn\n\n\nn\n")
+    # … add ./? n · add api/? Enter · what is 'api'? Enter · Manager? Enter ·
+    # declare a Worker? n (S20). No role question (C7); one description
+    # question per module registered (C8).
+    result = _init(root, input="y\n\n\nn\n\n\n\nn\n")
 
     assert "Add this directory (./) as module 'ws'? [Y/n]" in result.output
     assert "Add api/ as module 'api'? [Y/n]" in result.output
@@ -159,8 +161,9 @@ def test_the_root_and_each_repo_inside_are_each_asked_about(tmp_path: Path):
 
 def test_declining_every_repo_registers_none(tmp_path: Path):
     root = _workspace_with_a_repo_inside(tmp_path)
-    # … add ./? n · add api/? n · (S13) the repository? Enter
-    _init(root, input="y\n\n\n\nn\nn\n\n\n")
+    # … add ./? n · add api/? n · (S13) the repository? Enter. Nothing
+    # registered, so nothing is asked to describe.
+    _init(root, input="y\n\n\nn\nn\n\n\n")
 
     assert not _modules(root)
 

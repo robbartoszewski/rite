@@ -31,6 +31,7 @@ from rite_ai.config.models import (
 )
 from rite_ai.credentials.store import make_namespace
 from rite_ai.tickets.scope import label_for
+from rite_ai.workspace.manage import description_from_readme
 
 from . import ui
 from .config_file import Preset
@@ -660,7 +661,63 @@ def _resolve_kb_list(
     return ui.repeat_until_blank(question)
 
 
+DESCRIBE_A_MODULE = "What is '{name}'? One line for the brief's module table"
+
+
+def settle_module_descriptions(
+    preset: Preset, interactive: bool, modules: list[Module], root: Path | None
+) -> list[Module]:
+    """Give every module a description, the way `rite add module` can (C8).
+
+    `rite add module --description` sets one and it renders into the brief's
+    module table; every module `rite init` registered had `description: ''`,
+    because init wrote `modules.yaml` itself and passed nothing. Same shape as
+    C1 and C2: init's path was thinner than the CLI command.
+
+    The default is read out of the module's own README, which is where a
+    module already says what it is, and it is OFFERED rather than taken —
+    Enter accepts it, anything typed replaces it. `--yes` takes it silently,
+    which is the rule every other `--yes` answer follows; a derived default is
+    not a decision worth a line of its own, and `modules.yaml` shows what was
+    taken.
+
+    Only EMPTY descriptions are filled, so a `--config` that names one wins
+    and re-running over a described module changes nothing.
+    """
+    for module in modules:
+        if module.description:
+            continue
+        value = preset.get(f"modules.{module.name}.description")
+        if value is not None:
+            module.description = str(value).strip()
+            continue
+        default = (
+            description_from_readme(root / module.path) if root is not None else ""
+        )
+        if not interactive:
+            module.description = default
+            continue
+        module.description = ui.text(
+            DESCRIBE_A_MODULE.format(name=module.name), default=default
+        ).strip()
+    return modules
+
+
 def _resolve_modules(
+    preset: Preset,
+    interactive: bool,
+    detected_repos: list[DetectedRepo],
+    root: Path | None = None,
+) -> list[Module]:
+    return settle_module_descriptions(
+        preset,
+        interactive,
+        _which_modules(preset, interactive, detected_repos, root),
+        root,
+    )
+
+
+def _which_modules(
     preset: Preset,
     interactive: bool,
     detected_repos: list[DetectedRepo],
@@ -1002,7 +1059,14 @@ def source_answers(
         modules=(
             []
             if holds_nothing(source)
-            else offer_modules(_source_modules(root, base), interactive, base)
+            # Described here too, not only on the from-scratch route: this is
+            # the route the run that reported C8 took.
+            else settle_module_descriptions(
+                preset,
+                interactive,
+                offer_modules(_source_modules(root, base), interactive, base),
+                root,
+            )
         ),
         config=config,
         kb=KbAnswers(),

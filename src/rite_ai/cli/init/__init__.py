@@ -40,6 +40,7 @@ from . import claude_gen, scaffold, setup, ui
 from .config_file import ConfigFileError, load_preset
 from .detect import run_detection
 from .questionnaire import (
+    DESCRIBE_A_MODULE,
     holds_nothing,
     portable_source_path,
     role_preset_problem,
@@ -153,7 +154,7 @@ def run_init(
     write_modules_path = scaffold.write_modules(rite_dir, answers.modules)
     created.append(str(write_modules_path.relative_to(root)))
     if answers.link is not None:
-        _add_the_linked_module(root, answers)
+        _add_the_linked_module(root, answers, interactive)
     setup.settle_namespace(root, answers, interactive)
 
     write_config_path = scaffold.write_config(rite_dir, answers.config)
@@ -429,14 +430,26 @@ def _existing_source(root: Path, preset, interactive: bool) -> Path | InitResult
         ui.warn(f"Nothing at {_display(path)} — check the path and enter it again.")
 
 
-def _add_the_linked_module(root: Path, answers) -> None:
+def _add_the_linked_module(root: Path, answers, interactive: bool) -> None:
     """Register and clone the repository the person named for an empty path,
     through the same `add_module` as `rite add module`, and carry it into the
-    answers so the hooks and CLAUDE.md written after this include it."""
+    answers so the hooks and CLAUDE.md written after this include it.
+
+    C8: with `description=`, which `rite add module` takes and this omitted —
+    so every module init registered this way rendered into the brief's module
+    table with no line saying what it is. ⚠ Asked BEFORE the clone, so there
+    is no README to derive a default from yet; the other routes register a
+    module that is already on disk and offer its README's first sentence.
+    """
     from rite_ai.workspace import add_module
 
     name, url = answers.link
-    result = add_module(root, name, url=url)
+    description = (
+        ui.text(DESCRIBE_A_MODULE.format(name=name), default="").strip()
+        if interactive
+        else ""
+    )
+    result = add_module(root, name, url=url, description=description)
     if result.ok and result.module is not None:
         answers.modules.append(result.module)
         ui.created(f"module '{name}' ({url}), cloned to {name}/")

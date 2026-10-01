@@ -219,8 +219,15 @@ def write_brief(rite_dir: Path, brief: ProjectBrief) -> Path:
 
 
 def write_modules(rite_dir: Path, modules: list[Module]) -> Path:
+    """Through `manage.write_modules_file`, the ONE writer of modules.yaml.
+
+    This used to be a second one: `path.write_text(...)`, not atomic and not
+    under the lock `add_module` and `remove_module` take. See that function.
+    """
+    from rite_ai.workspace.manage import write_modules_file
+
     path = rite_dir / "modules.yaml"
-    path.write_text(modules_to_yaml(modules))
+    write_modules_file(path, modules)
     return path
 
 
