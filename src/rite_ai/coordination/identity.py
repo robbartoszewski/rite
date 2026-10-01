@@ -112,6 +112,20 @@ def enrolment(root: Path, config: CoordinationConfig) -> str | None:
         return None  # not coordinating at all, which is Phase 1
     hosted = hosted_managers(root)
     if not hosted:
+        if not config.remote:
+            # ⚠ **A SINGLE-MACHINE project is not un-enrolled** (v0.7.0a4
+            # S32). Enrolment is how several machines tell each other apart;
+            # without `coordination.remote` there is no other machine, so
+            # there is nothing to enrol into and every clause of the warning
+            # below is false — there is no heartbeat anyone reads, no Owner
+            # to stand for, and no other machine's work to take over.
+            #
+            # It began firing the moment declaring a Manager became ordinary:
+            # `managers` alone defeats the Phase-1 return above, so a solo
+            # project that declared `lead` was told it was not coordinating,
+            # which reads as "your setup is broken" about a setup that is
+            # exactly right. Lane 4 found it.
+            return None
         return (
             "coordination: this machine has no usable `.rite/machine`, so it "
             "is not enrolled — it will not publish a heartbeat, stand for "
