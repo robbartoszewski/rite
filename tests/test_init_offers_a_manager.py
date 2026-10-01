@@ -84,17 +84,17 @@ def test_yes_declares_none_and_says_how(tmp_path):
 
 def test_accepting_the_default_declares_it_with_no_hand_edit(tmp_path):
     root = _repo(tmp_path / "app")
-    # existing code? y · path · changes · add ./? · Manager? Enter · Worker? n
-    # (C7: no role question — this machine is the Owner, and init says so.)
-    out = _init(root, input="y\n\n\n\n\nn\n")
+    # existing code? y · path · changes · add ./? · what is 'app'? ·
+    # Manager? Enter · Worker? n  (C7: no role question. C8: one description.)
+    out = _init(root, input="y\n\n\n\n\n\nn\n")
     assert "Declare Manager 'lead' (preset lead:" in out
     assert _found_by_start(root) == ["lead"]
 
 
 def test_declining_leaves_both_keys_empty_and_says_how(tmp_path):
     root = _repo(tmp_path / "app")
-    # … add ./? · Manager? n · another name? Enter · Worker? n
-    out = _init(root, input="y\n\n\n\nn\n\nn\n")
+    # … add ./? · what is 'app'? · Manager? n · another name? Enter · Worker? n
+    out = _init(root, input="y\n\n\n\n\nn\n\nn\n")
     names, roles = _keys(root)
     assert names == [] and roles == []
     assert "no Manager is declared" in out
@@ -104,9 +104,9 @@ def test_declining_leaves_both_keys_empty_and_says_how(tmp_path):
 
 def test_another_name_and_preset(tmp_path):
     root = _repo(tmp_path / "app")
-    # … add ./? · Manager? n · name planner · preset nonsense (asked again) ·
-    # planner · Worker? n
-    out = _init(root, input="y\n\n\n\nn\nplanner\nnonsense\nplanner\nn\n")
+    # … add ./? · what is 'app'? · Manager? n · name planner · preset nonsense
+    # (asked again) · planner · Worker? n
+    out = _init(root, input="y\n\n\n\n\nn\nplanner\nnonsense\nplanner\nn\n")
     assert "'nonsense' is not a preset" in out
     assert _found_by_start(root) == ["planner"]
     _, roles = _keys(root)
@@ -119,8 +119,8 @@ def test_an_owner_machine_is_offered_a_lead(tmp_path):
     reach. The `manager` entry is kept and asserted below, unreached, because
     0.9.0 restores the route to it."""
     root = _repo(tmp_path / "app")
-    # … add ./? · Manager? Enter · Worker? n
-    _init(root, input="y\n\n\n\n\nn\n")
+    # … add ./? · what is 'app'? · Manager? Enter · Worker? n
+    _init(root, input="y\n\n\n\n\n\nn\n")
     _, roles = _keys(root)
     assert [(r.name, r.preset) for r in roles] == [("lead", "lead")]
 
@@ -183,12 +183,13 @@ def test_it_goes_through_add_managers_own_writer(tmp_path, monkeypatch):
 
 ROUTES = {
     "yes": (["--yes"], None),
-    # y · path · changes · add ./? · Manager … · Worker? n
-    "existing-code": ([], "y\n\n\n\n{manager}n\n"),
-    # n · name, branch, add ./?, kind, features, platform, languages,
-    # frameworks, architecture · board 3 (none) · link, file, commit ·
-    # Manager … · Worker? n
-    "scratch": ([], "n\n" + "\n" * 9 + "3\n" + "\n" * 3 + "{manager}n\n"),
+    # y · path · changes · add ./? · what is 'app'? · Manager … · Worker? n
+    # (C8 asks once per module registered, right after the confirmation)
+    "existing-code": ([], "y\n\n\n\n\n{manager}n\n"),
+    # n · name, branch, add ./?, what is 'app'?, kind, features, platform,
+    # languages, frameworks, architecture · board 3 (none) · link, file,
+    # commit · Manager … · Worker? n
+    "scratch": ([], "n\n" + "\n" * 10 + "3\n" + "\n" * 3 + "{manager}n\n"),
 }
 # C7: the machine role is no longer an axis — init produces an Owner machine
 # on every route, so there is one value here rather than two. Restored to

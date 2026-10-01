@@ -40,11 +40,13 @@ from rite_ai.cli.main import cli
 from rite_ai.config.parse import ParseError, parse_worker
 from rite_ai.workspace.manage import MODULE_DOC_NAMES
 
-# existing code? y · path · changes · add mod/? · Manager? · Worker? · name
-# (no role question — C7; no sandbox question — the fixture below)
-INTERACTIVE = "y\n\n\n\n\n\n\n"
+# existing code? y · path · changes · add mod/? · what is 'mod'? · Manager? ·
+# Worker? · name
+# (no role question — C7; no sandbox question — the fixture below; the module
+# description is C8's, asked once per module registered)
+INTERACTIVE = "y\n\n\n\n\n\n\n\n"
 # … and the same with the Manager declined: Manager? n · another name? Enter
-DECLINING_THE_MANAGER = "y\n\n\n\nn\n\n\n\n"
+DECLINING_THE_MANAGER = "y\n\n\n\n\nn\n\n\n\n"
 
 
 @pytest.fixture(autouse=True)

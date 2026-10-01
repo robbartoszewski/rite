@@ -69,13 +69,15 @@ def _role(root: Path) -> str:
 
 # Every route into the role, with the answers that follow it. Named so a
 # failure says which route asked.
+# ⚠ One answer per module registered for C8's "What is '<module>'?", which is
+# asked after the module confirmations.
 ROUTES = {
-    # y · path · changes · add ./? · Manager? Enter · Worker? n
-    "existing-code": ([], "y\n\n\n\n\nn\n"),
-    # n · name, branch, add ./?, kind, features, platform, languages,
-    # frameworks, architecture · board 3 (none) · link, file, commit ·
-    # Manager? Enter · Worker? n
-    "scratch": ([], "n\n" + "\n" * 9 + "3\n" + "\n" * 3 + "\nn\n"),
+    # y · path · changes · add ./? · what is 'app'? · Manager? Enter · Worker? n
+    "existing-code": ([], "y\n\n\n\n\n\nn\n"),
+    # n · name, branch, add ./?, what is 'app'?, kind, features, platform,
+    # languages, frameworks, architecture · board 3 (none) · link, file,
+    # commit · Manager? Enter · Worker? n
+    "scratch": ([], "n\n" + "\n" * 10 + "3\n" + "\n" * 3 + "\nn\n"),
     "yes": (["--yes"], None),
 }
 
@@ -209,8 +211,8 @@ class TestTheRestoreIsAReWireNotARewrite:
         root = _repo(tmp_path / "app")
 
         # y · path · changes · role 2 (Manager) · Owner's project? Enter ·
-        # add ./? · Manager? Enter · Worker? n
-        result = _init(root, input="y\n\n\n2\n\n\n\nn\n")
+        # add ./? · what is 'app'? · Manager? Enter · Worker? n
+        result = _init(root, input="y\n\n\n2\n\n\n\n\nn\n")
 
         assert result.exit_code == 0, result.output
         assert ROLE_QUESTION in result.output
