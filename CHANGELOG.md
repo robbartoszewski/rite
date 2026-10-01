@@ -2,6 +2,82 @@
 
 ## Unreleased
 
+### `rite init` finishes the job it starts
+
+Seven things `rite init` left for you to do by hand, found by setting up a real
+project with 0.7.0a4.
+
+**A Worker it created is now a whole Worker.** It was linked to no Manager —
+even when you had just declared one in the same run — so its instructions said
+"No Manager assigned yet." on line 7 and "Tell your Manager you are free" on
+line 112. And it was never asked about the modules' own `CLAUDE.md`,
+`AGENTS.md` or `CONTRIBUTING.md`, a question `rite add worker` has asked since
+0.7.0a4. Both because init built its Worker with two of the five things that
+command can set.
+
+**It no longer says "Ready." about a project with no board.** A project whose
+ticket backend is still `none` has nothing for `rite start` to work on, and the
+last line now says so and names `rite credential set jira` and the fields it
+records for you. Same for a project whose refinement questions go to a Slack DM
+with no member id set: `rite credential set slack`, and meanwhile `rite replies`
+and `rite refine answer` at your terminal.
+
+**It asks what each module is**, offering a line read out of that module's own
+README, which you accept with Enter or type over. That line renders into the
+module table in the project's instructions; before, every module init registered
+had none, while `rite add module --description` could set one.
+
+**It no longer asks whether this is an Owner or a Manager machine.** A Manager
+machine needs multi-manager coordination, which this release does not ship, so
+the question offered an answer that did not work. Your project is the Owner, and
+init says so. A `--config` naming `project.role: manager` is refused rather than
+quietly turned into an Owner. Separate from "Declare Manager 'lead'?", which is
+unchanged.
+
+### The publish gate runs even when git reads hooks from somewhere else
+
+⚠ **Security fix, and it touches a security control that may not be rite's.**
+
+If `git config --global core.hooksPath` points somewhere — some tools and
+companies set it, to install one hook for every repository you own — rite's
+publish gate was installed **nowhere**, in any project, and said so in a line
+that was easy to lose. The gate is the thing standing between a secret and a
+remote.
+
+rite now installs a `pre-push` hook that runs **the hook git would have run
+first**, and the publish gate second, and points only *this repository's*
+`core.hooksPath` at its own hooks. Your global git config is not touched and
+neither is the hook it names. If that hook refuses a push, the push is refused
+and rite's gate is not consulted — a gate asked after the decision is not a
+gate. Both hooks see the list of refs git is pushing.
+
+That hook's path is read through git's own `~` expansion. git stores
+`core.hooksPath` exactly as written, so a path written `~/hooks` came back with
+a literal `~`, which no shell expands — and the chain would have run rite's gate
+alone while reporting that it had run both. Found in review before release; it
+needed only for that line to be written in `~` form.
+
+If rite cannot build that chain it **refuses and says so** rather than
+installing half of it, because half of it would mean git reading a directory
+where the other hook is not — silently dropping a control somebody installed on
+purpose. A `core.hooksPath` you set on the repository itself is left alone, with
+the reason and what to do about it.
+
+**And a git worktree gets the hook at all.** rite looked for a `.git`
+directory, and in a worktree `.git` is a file, so no worktree has ever had the
+publish gate installed — a separate bug that the message about `core.hooksPath`
+was taking the blame for. `rite doctor` also stops reporting a redirect in a
+worktree where there is none.
+
+### `rite credential set` offers to move the board instead of telling you to edit a file
+
+Setting up JIRA on a project already pointed at another board printed a note
+telling you to edit `.rite/config.yaml`. It now asks, defaulting to **no**,
+since moving the board changes what every ticket command reads. With nothing
+attached to answer it does not ask and does not move. Accepting it clears the
+fields that described the old board, and names each one, so `config.yaml` does
+not go on describing two.
+
 ### A local Manager works one subtask at a time: `rite local step`
 
 A Manager running on a local model is given one subtask and the slice of the

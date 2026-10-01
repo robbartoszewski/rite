@@ -84,8 +84,8 @@ def test_yes_declares_none_and_says_how(tmp_path):
 
 def test_accepting_the_default_declares_it_with_no_hand_edit(tmp_path):
     root = _repo(tmp_path / "app")
-    # existing code? y · path · changes · role · add ./? · Manager? Enter ·
-    # Worker? n
+    # existing code? y · path · changes · add ./? · what is 'app'? ·
+    # Manager? Enter · Worker? n  (C7: no role question. C8: one description.)
     out = _init(root, input="y\n\n\n\n\n\nn\n")
     assert "Declare Manager 'lead' (preset lead:" in out
     assert _found_by_start(root) == ["lead"]
@@ -93,7 +93,7 @@ def test_accepting_the_default_declares_it_with_no_hand_edit(tmp_path):
 
 def test_declining_leaves_both_keys_empty_and_says_how(tmp_path):
     root = _repo(tmp_path / "app")
-    # … add ./? · Manager? n · another name? Enter · Worker? n
+    # … add ./? · what is 'app'? · Manager? n · another name? Enter · Worker? n
     out = _init(root, input="y\n\n\n\n\nn\n\nn\n")
     names, roles = _keys(root)
     assert names == [] and roles == []
@@ -104,8 +104,8 @@ def test_declining_leaves_both_keys_empty_and_says_how(tmp_path):
 
 def test_another_name_and_preset(tmp_path):
     root = _repo(tmp_path / "app")
-    # … add ./? · Manager? n · name planner · preset nonsense (asked again) ·
-    # planner · Worker? n
+    # … add ./? · what is 'app'? · Manager? n · name planner · preset nonsense
+    # (asked again) · planner · Worker? n
     out = _init(root, input="y\n\n\n\n\nn\nplanner\nnonsense\nplanner\nn\n")
     assert "'nonsense' is not a preset" in out
     assert _found_by_start(root) == ["planner"]
@@ -113,13 +113,27 @@ def test_another_name_and_preset(tmp_path):
     assert roles[0].preset == "planner"
 
 
-def test_a_manager_machine_is_offered_an_executor(tmp_path):
+def test_an_owner_machine_is_offered_a_lead(tmp_path):
+    """C7 made this the only reachable case: init no longer offers a Manager
+    MACHINE, so `DEFAULT_MANAGER["owner"]` is the only entry a route can
+    reach. The `manager` entry is kept and asserted below, unreached, because
+    0.9.0 restores the route to it."""
     root = _repo(tmp_path / "app")
-    # … role 2 (Manager) · Owner's project? Enter · add ./? · Manager? Enter ·
-    # Worker? n
-    _init(root, input="y\n\n\n2\n\n\n\nn\n")
+    # … add ./? · what is 'app'? · Manager? Enter · Worker? n
+    _init(root, input="y\n\n\n\n\n\nn\n")
     _, roles = _keys(root)
-    assert [(r.name, r.preset) for r in roles] == [("executor", "executor")]
+    assert [(r.name, r.preset) for r in roles] == [("lead", "lead")]
+
+
+def test_the_manager_machine_default_is_kept_for_when_the_route_returns(
+    tmp_path,
+):
+    """Unreachable, not deleted: `setup.DEFAULT_MANAGER` is what a Manager
+    machine will be offered again when multi-manager ships, and deleting it
+    would make that a rewrite rather than a re-wire."""
+    from rite_ai.cli.init.setup import DEFAULT_MANAGER
+
+    assert DEFAULT_MANAGER["manager"] == ("executor", "executor")
 
 
 def test_the_config_names_it_or_declines_it(tmp_path):
@@ -169,14 +183,18 @@ def test_it_goes_through_add_managers_own_writer(tmp_path, monkeypatch):
 
 ROUTES = {
     "yes": (["--yes"], None),
-    # y · path · changes · role · add ./? · Manager … · Worker? n
-    "existing-code": ([], "y\n\n\n{role}\n{manager}n\n"),
-    # n · role · name, branch, add ./?, kind, features, platform, languages,
-    # frameworks, architecture · board 3 (none) · link, file, commit ·
-    # Manager … · Worker? n
-    "scratch": ([], "n\n{role}" + "\n" * 9 + "3\n" + "\n" * 3 + "{manager}n\n"),
+    # y · path · changes · add ./? · what is 'app'? · Manager … · Worker? n
+    # (C8 asks once per module registered, right after the confirmation)
+    "existing-code": ([], "y\n\n\n\n\n{manager}n\n"),
+    # n · name, branch, add ./?, what is 'app'?, kind, features, platform,
+    # languages, frameworks, architecture · board 3 (none) · link, file,
+    # commit · Manager … · Worker? n
+    "scratch": ([], "n\n" + "\n" * 10 + "3\n" + "\n" * 3 + "{manager}n\n"),
 }
-ROLES = {"owner": "\n", "manager": "2\n\n"}
+# C7: the machine role is no longer an axis — init produces an Owner machine
+# on every route, so there is one value here rather than two. Restored to
+# {"owner": …, "manager": …} when multi-manager ships (0.9.0).
+ROLES = {"owner": ""}
 ANSWERS = {"accept": "\n", "decline": "n\n\n", "other": "n\nplanner\nplanner\n"}
 
 
@@ -185,7 +203,7 @@ ANSWERS = {"accept": "\n", "decline": "n\n\n", "other": "n\nplanner\nplanner\n"}
     [
         (r, ro, a)
         for r, ro, a in itertools.product(ROUTES, ROLES, ANSWERS)
-        if r != "yes" or (ro, a) == ("owner", "decline")
+        if r != "yes" or a == "decline"
     ],
 )
 def test_whatever_is_declared_rite_start_finds_and_the_keys_agree(
@@ -197,17 +215,13 @@ def test_whatever_is_declared_rite_start_finds_and_the_keys_agree(
     and the last line says so exactly then."""
     args, template = ROUTES[route]
     root = _repo(tmp_path / "app")
-    text = (
-        None
-        if template is None
-        else template.format(role=ROLES[role], manager=ANSWERS[answer])
-    )
+    text = None if template is None else template.format(manager=ANSWERS[answer])
     out = _init(root, *args, input=text)
     names, roles = _keys(root)
     assert names == [r.name for r in roles]
     assert configuration_problems(roles, names) == []
     expected = {
-        "accept": ["lead" if role == "owner" else "executor"],
+        "accept": ["lead"],
         "decline": [],
         "other": ["planner"],
     }[answer]

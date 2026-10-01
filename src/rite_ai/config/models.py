@@ -115,6 +115,48 @@ class TicketBackendConfig:
     creates. Empty reads the whole board, as before it existed."""
 
 
+BOARD_ONLY_FIELDS: dict[str, tuple[str, ...]] = {
+    "jira": ("site", "projects"),
+    "github": ("repo",),
+}
+"""Which `TicketBackendConfig` fields belong to one board and nothing else.
+
+`scope_label` is deliberately absent: it marks a ticket as this project's and
+is backend-agnostic (§6.1.1), so it survives a change of board.
+"""
+
+
+def leave_the_old_board(backend: TicketBackendConfig, for_board: str) -> list[str]:
+    """Clear what described the board being left behind, and name what was
+    cleared.
+
+    A retarget re-prompts for everything the INCOMING board needs in the same
+    run, so nothing needed is ever stale — only the outgoing board's
+    leftovers, and a `config.yaml` describing two boards invites a reader to
+    believe a `site:` that nothing uses.
+
+    `credential` goes too: it RENAMES the outgoing board's token key, so it is
+    the old board's field by definition. It is cleared rather than replaced —
+    an empty one falls back to the new board's default key
+    (`credential_name or "jira_token"`), and inventing a name here is a
+    separate question.
+    """
+    cleared: list[str] = []
+    for board, fields in BOARD_ONLY_FIELDS.items():
+        if board == for_board:
+            continue
+        for name in fields:
+            current = getattr(backend, name)
+            if not current:
+                continue
+            setattr(backend, name, {} if isinstance(current, dict) else "")
+            cleared.append(f"ticket_backend.{name}")
+    if backend.credential:
+        backend.credential = ""
+        cleared.append("ticket_backend.credential")
+    return cleared
+
+
 @dataclass
 class HeartbeatConfig:
     interval_minutes: int = 10

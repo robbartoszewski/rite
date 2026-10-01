@@ -23,8 +23,11 @@ from rite_ai.cli.main import cli
 EXISTING = "Do you have a spec or existing code for this project? [y/N]"
 PATH = "Path: [.]"
 CHANGES = "Anything stale, or that you'd like changed? Free text, or Enter to skip."
-# Asked on EVERY path: it is about this machine, not about the source.
+# Asked on NO path while C7's `OWNER_ONLY_UNTIL_MULTI_MANAGER` holds: a
+# Manager machine needs the multi-manager work 0.9.0 ships. Kept as a constant
+# so the "it is not asked" assertions name the same string the prompt used.
 ROLE = "Is this the Owner machine or a Manager machine?"
+OWNER_SAID = "This machine is the project's Owner"
 # Asked only by the from-scratch questionnaire.
 FROM_SCRATCH = "Project name?"
 
@@ -54,7 +57,8 @@ def test_no_is_the_default_and_leads_to_the_questionnaire(tmp_path: Path):
     result = CliRunner().invoke(_init_cmd, [str(tmp_path)], input=answers)
     assert result.exit_code == 0, result.output
     assert EXISTING in result.output
-    assert ROLE in result.output
+    assert ROLE not in result.output
+    assert OWNER_SAID in result.output
     assert PATH not in result.output
     assert "STATUS:created" in result.output
     assert "source" not in _brief(tmp_path)
@@ -74,13 +78,15 @@ def test_yes_mode_without_a_preset_asks_nothing_and_records_no_source(
 
 def test_yes_then_enter_twice_is_four_prompts_and_done(tmp_path: Path):
     (tmp_path / "main.py").write_text("print('hi')\n")
-    # The four, then (S13) the repository: code in no repository registers no
-    # module, so init asks where the code's repository is. Enter skips.
+    # The three, then (S13) the repository: code in no repository registers no
+    # module, so init asks where the code's repository is. Enter skips. The
+    # role is no longer among them (C7) — it is said, not asked.
     result = CliRunner().invoke(_init_cmd, [str(tmp_path)], input="y\n\n\n\n\n\n")
     assert result.exit_code == 0, result.output
     assert "STATUS:created" in result.output
-    for prompt in (EXISTING, PATH, CHANGES, ROLE):
+    for prompt in (EXISTING, PATH, CHANGES):
         assert prompt in result.output
+    assert ROLE not in result.output
     assert "languages, structure and conventions will be taken" in result.output
     assert FROM_SCRATCH not in result.output, "reached the questionnaire"
 
@@ -208,27 +214,27 @@ def test_a_preset_path_that_does_not_exist_is_an_error(tmp_path: Path):
     assert not (tmp_path / ".rite").exists()
 
 
-class TestTheRoleIsAskedOnEveryPath:
-    """The role is about this person and this machine — no spec or codebase
-    answers it. Measured on a tester's machine: a copied `.rite/` plus the
-    existing-source path never asked, and that session believed it owned the
-    board."""
+class TestTheRoleIsNotAskedOnAnyPath:
+    """C7: the role question is no longer put, on either route, and every
+    route produces an Owner machine.
 
-    def test_the_source_path_asks_it(self, tmp_path: Path):
+    It WAS asked on both — and had to be, because no spec or codebase answers
+    it (measured: a copied `.rite/` plus the existing-source path never asked,
+    and that session believed it owned the board). What changed is that the
+    only other answer, a Manager machine, needs the multi-manager work this
+    release does not ship, so offering it was offering a path that does not
+    work. `_ask_role` is the one suppression point; see
+    `test_init_is_owner_only_until_multi_manager.py` for the property.
+    """
+
+    def test_the_source_path_does_not_ask_and_says_what_it_took(self, tmp_path: Path):
         (tmp_path / "main.py").write_text("print('hi')\n")
         # … and the repository, Enter (S13: code in no repository).
-        result = CliRunner().invoke(_init_cmd, [str(tmp_path)], input="y\n\n\n\n\n\n")
+        result = CliRunner().invoke(_init_cmd, [str(tmp_path)], input="y\n\n\n\n\n")
         assert result.exit_code == 0, result.output
-        assert ROLE in result.output
+        assert ROLE not in result.output
+        assert OWNER_SAID in result.output
         assert _brief(tmp_path)["project"]["role"] == "owner"
-
-    def test_manager_is_recorded_not_assumed(self, tmp_path: Path):
-        (tmp_path / "main.py").write_text("print('hi')\n")
-        result = CliRunner().invoke(
-            _init_cmd, [str(tmp_path)], input="y\n\n\n2\n\n\n\n"
-        )
-        assert result.exit_code == 0, result.output
-        assert _brief(tmp_path)["project"]["role"] == "manager"
 
     def test_yes_mode_takes_owner_without_asking(self, tmp_path: Path):
         (tmp_path / "main.py").write_text("print('hi')\n")

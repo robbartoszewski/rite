@@ -7,6 +7,7 @@ from pathlib import Path
 import click
 
 from rite_ai import __version__
+from rite_ai.cli import module_docs as module_docs_step
 from rite_ai.cli.help import RiteGroup
 from rite_ai.config.managers import CLAUDE, DUTIES, PRESETS, effective_duties
 from rite_ai.credentials.store import STORED
@@ -2442,6 +2443,54 @@ def _say_how_slack_stands(root: Path, config, app) -> None:
     )
 
 
+def _offer_to_retarget(backend, svc, current: str) -> list[tuple[str, str]]:
+    """Offer to point this project's board at `svc` instead, and report what
+    that changed — or say, when there is nobody to ask, that it did not.
+
+    Returns the `(config path, value)` rows for what was written, so the
+    caller's own summary names them and `write_config` is reached by the one
+    `if configured` it already has.
+    """
+    from rite_ai.config.models import leave_the_old_board
+
+    if not module_docs_step.somebody_is_there():
+        # 🔴 **Never unattended.** `credential set` runs in scripts — the
+        # fields can come down a pipe — and silently moving which board every
+        # ticket command reads is not a thing to do to somebody who is not
+        # watching. The same lesson as S23's no-tty guard, and today's note is
+        # exactly the right thing to print here.
+        click.echo(
+            f"  note: ticket_backend.type is {current!r}, so rite still reads "
+            f"that board. Nobody is attached to ask, and rite does not change "
+            f"which board a project reads unasked — re-run this with a "
+            f"terminal to point it at {svc.name} instead.",
+            err=True,
+        )
+        return []
+    if not click.confirm(
+        f"  this project's board is {current!r}. Point it at "
+        f"{svc.board_type!r} instead? Every ticket command would then read "
+        f"{svc.name}",
+        default=False,
+        err=True,
+    ):
+        click.echo(
+            f"  left as it is: rite still reads the {current} board. What you "
+            f"just entered for {svc.name} is recorded, so answering yes to "
+            f"this next time is all it takes.",
+            err=True,
+        )
+        return []
+    backend.type = svc.board_type
+    rows = [("ticket_backend.type", svc.board_type)]
+    # The outgoing board's own fields: the incoming board re-prompts for
+    # everything it needs in this same run, so only the leftovers are stale.
+    rows += [
+        (name, "(cleared)") for name in leave_the_old_board(backend, svc.board_type)
+    ]
+    return rows
+
+
 def _set_service(
     service_name: str, global_: bool, root, config, config_writable: bool = True
 ) -> None:
@@ -2558,12 +2607,16 @@ def _set_service(
             config.ticket_backend.type = svc.board_type
             configured.append(("ticket_backend.type", svc.board_type))
         elif current != svc.board_type:
-            click.echo(
-                f"  note: ticket_backend.type is {current!r}, so rite still reads "
-                f"that board. Set it to {svc.board_type!r} in .rite/config.yaml "
-                f"to use {svc.name} instead.",
-                err=True,
-            )
+            # ⚠ **Asked, not refused** — and asked rather than done. This
+            # printed a note telling the user to edit `.rite/config.yaml`,
+            # which is the one path left in setup that says "edit the file"
+            # for something rite has a command for. Refusing to retarget a
+            # board SILENTLY was right; refusing to retarget it at all was
+            # the part that was wrong.
+            #
+            # 🔴 Default NO. Retargeting changes which board every ticket
+            # command reads, and a mistyped service name must not move it.
+            configured.extend(_offer_to_retarget(config.ticket_backend, svc, current))
 
     if configured:
         from rite_ai.cli.init.scaffold import write_config
@@ -3454,73 +3507,6 @@ def add_module_cmd(name: str, url: str, branch: str, description: str) -> None:
         raise SystemExit(1)
 
 
-def _somebody_is_there() -> bool:
-    """Whether there is a person at the terminal to answer a question.
-
-    Separate and tiny so a test can flip it: what it guards is a prompt,
-    and a prompt cannot be exercised by a test that has already answered
-    it.
-    """
-    try:
-        return bool(sys.stdin.isatty())
-    except (AttributeError, ValueError):  # a closed or replaced stream
-        return False
-
-
-def _ask_about_module_docs(
-    root: Path, module_subset: list[str] | None, answer: bool | None
-) -> list[str]:
-    """Which of the modules' own instruction files this Worker follows (S23).
-
-    ⚠ **Asked, not assumed, in either direction.** A module's
-    `CONTRIBUTING.md` is written for people and may contradict how rite
-    drives a Worker. Following it silently would put instructions nobody
-    chose into a Worker's brief; ignoring it silently loses the conventions
-    the module actually has. So the files are found, named, and the
-    question is put.
-
-    Nothing found means nothing asked — a question with no subject is
-    noise, and answering it changes nothing.
-    """
-    from rite_ai.workspace.manage import module_docs, modules_for_worker
-
-    modules = modules_for_worker(root, module_subset)
-    if isinstance(modules, str):
-        # Whatever is wrong with the subset, `add_worker` refuses on it a
-        # moment later with the same words. Saying it twice, or refusing
-        # here, would put the error in two places.
-        return []
-    found = module_docs(root, modules)
-    if not found:
-        return []
-
-    click.echo("these modules keep instructions of their own:")
-    for path in found:
-        click.echo(f"  {path}")
-    if answer is None and not _somebody_is_there():
-        # 🔴 **A prompt is not an exception, it is the absence of an answer**
-        # (defect class 15). `click.confirm` on an empty stdin ABORTS, so
-        # asking unconditionally turned `rite add worker` in a script into a
-        # command that creates no Worker — found by an existing test going
-        # red. Not asked, not followed, and BOTH said, with the flag that
-        # answers it: a default taken in silence is the other half of the
-        # same defect.
-        click.echo(
-            "  not asked — nothing is attached to answer. Not followed; pass "
-            "--follow-module-docs to follow them, or --no-follow-module-docs "
-            "to say so explicitly",
-            err=True,
-        )
-        return []
-    if answer is None:
-        answer = click.confirm("  should this Worker follow them?", default=True)
-    if not answer:
-        click.echo("  not followed — the Worker is not told to read them")
-        return []
-    click.echo("  followed — named in the Worker's CLAUDE.md, under rite's own")
-    return found
-
-
 @add.command("manager")
 @click.argument("name")
 @click.option(
@@ -3711,7 +3697,9 @@ def add_worker_cmd(
     module_subset = (
         [m.strip() for m in modules.split(",") if m.strip()] if modules else None
     )
-    follow = _ask_about_module_docs(root, module_subset, follow_module_docs)
+    follow = module_docs_step.settle_module_docs(
+        root, module_subset, follow_module_docs
+    )
     result = add_worker(
         root,
         name,
@@ -4325,7 +4313,6 @@ def publish_pre_push() -> None:
     keeps this "seconds to run"), and exits nonzero if any range
     fails.
     """
-    import sys
 
     from rite_ai.gate import EXIT_CLEAN, run_gate
     from rite_ai.gate.gate import format_report
@@ -10534,7 +10521,6 @@ def _hand_off_refresh(take: tuple[str, ...]) -> bool:
     import os
     import shutil
     import subprocess
-    import sys
 
     if os.environ.get("RITE_UPDATE_CHILD"):
         return False

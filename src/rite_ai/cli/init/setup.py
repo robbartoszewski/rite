@@ -210,6 +210,19 @@ def _workers_declared(root: Path) -> list[str]:
     return sorted(p.name for p in workers.iterdir() if (p / "worker.yml").is_file())
 
 
+def the_declared_manager(answers) -> str:
+    """The Manager an init-created Worker reports to, or "" when none was
+    declared (`--yes` declares none by design, S15).
+
+    ⚠ **Not `managers[0]` unguarded.** `offer_a_manager` returns None on
+    every path that declines, presets `managers.add: false`, or hits the
+    parser's refusal, and `coordination.managers` is then an empty list.
+    Where more than one is declared the first is the project's priority
+    order (§2.4) — the same one `rite start` takes."""
+    managers = answers.config.coordination.managers
+    return str(managers[0]) if managers else ""
+
+
 def offer_a_worker(root: Path, answers, preset, interactive: bool) -> str | None:
     """Offer to declare a Worker for the modules registered, and return its
     name, or the name of one already declared, or None. With no module there
@@ -218,7 +231,19 @@ def offer_a_worker(root: Path, answers, preset, interactive: bool) -> str | None
     ⚠ `--yes` does NOT declare one. A Worker clones every module, and an
     unattended init doing that by default would be the one `--yes` answer that
     reaches out over the network on its own; it is said instead, and
-    `--config` with `workers.add: <name>` declares one."""
+    `--config` with `workers.add: <name>` declares one.
+
+    🔴 **Declared with everything `rite add worker` would declare it with.**
+    This called `add_worker(root, name)` — two of its five parameters — so an
+    init-created Worker was linked to no Manager (C1) and was never offered
+    the modules' own instruction files (C2, S23). The first produced a brief
+    whose line 7 said "No Manager assigned yet." and whose line 112 said
+    "Tell your Manager you are free": a Worker handed instructions that
+    repeatedly name an authority it was told does not exist. Both halves are
+    one defect — init's path was thinner than the CLI command it stands in
+    for — so both are fixed by routing through the same code, not by adding
+    two arguments here."""
+    from rite_ai.cli.module_docs import how_init_says_it, settle_module_docs
     from rite_ai.workspace import add_worker
 
     declared = _workers_declared(root)
@@ -241,12 +266,27 @@ def offer_a_worker(root: Path, answers, preset, interactive: bool) -> str | None
         return None
     if not name:
         return None
-    result = add_worker(root, name)
+    # S23, through the one helper `rite add worker` uses — including its
+    # no-tty guard, which `--yes` also trips. A bare `click.confirm` here
+    # would abort an unattended init on an empty stdin (defect class 15).
+    follow = settle_module_docs(
+        root,
+        None,
+        None,
+        interactive=interactive,
+        how_to_answer=how_init_says_it(name),
+    )
+    manager = the_declared_manager(answers)
+    result = add_worker(root, name, manager=manager, follow_docs=follow)
     if not result.ok:
         ui.warn(f"Worker '{name}' was NOT declared: {result.message}")
         return None
+    # The Manager is named here because it is the thing that was silently
+    # missing: a line saying how many modules were cloned looked complete.
+    reports_to = f", reports to Manager '{manager}'" if manager else ""
     ui.created(
-        f"workers/{name}/ (Worker '{name}', {len(result.cloned_modules)} module(s))"
+        f"workers/{name}/ (Worker '{name}', "
+        f"{len(result.cloned_modules)} module(s){reports_to})"
     )
     for module, why in result.failed_modules:
         ui.warn(f"  {module} was not cloned into workers/{name}/: {why}")
@@ -331,7 +371,40 @@ def _ask_preset() -> str:
 # --- the last line ------------------------------------------------------------
 
 
+NO_BOARD = (
+    "no ticket board is configured (`ticket_backend.type: none`), so `rite "
+    "start` will find nothing to work on: `rite credential set jira` asks for "
+    "the site, your account email, an API token and the project key, and "
+    "records `ticket_backend.type`, `ticket_backend.site` and "
+    "`ticket_backend.projects.workers` from your answers"
+)
+
+NO_ROUTE_FOR_QUESTIONS = (
+    "refinement questions go to your Slack DM (`refinement.questions_to: "
+    "dm`) but `slack.owner_user` is empty, so a round has nowhere to be "
+    "delivered: `rite credential set slack` asks for a bot token and your "
+    "member id (U…) and records `slack.owner_user`. Until then a round "
+    "reaches you only through `rite replies`, and you answer it at the host "
+    "with `rite refine answer`"
+)
+
+
 def what_is_missing(root: Path, answers, worker: str | None) -> list[str]:
+    """Everything that would stop this project working, as rows for the last
+    line. No rows means "Ready.", so a row missing here is a project told it
+    is ready and is not.
+
+    ⚠ **The workspace is not the work.** This checked that a Manager, a module
+    and a Worker existed and stopped there, so a project whose
+    `ticket_backend.type` was still `none` finished init with "Ready. Start a
+    Dispatch session" — measured in the v0.7.0 dogfood, where a4's changelog
+    already claimed init "no longer says 'Ready.' about a project with
+    nothing to work on". The board is where the work comes from.
+
+    🔴 **Rows point at the command that does the wiring, never at a file to
+    edit.** init does not write backend config — `rite credential set` does,
+    from `Field.config_path` — and a row saying "set this in config.yaml"
+    would be rite telling someone to hand-edit what it has a command for."""
     missing = []
     if not answers.config.coordination.managers:
         missing.append(
@@ -345,6 +418,16 @@ def what_is_missing(root: Path, answers, worker: str | None) -> list[str]:
             f"no Worker is declared, so `rite start` would wait for one forever: "
             f"`rite add worker {DEFAULT_WORKER_NAME}`"
         )
+    config = answers.config
+    if config.ticket_backend.type == "none":
+        missing.append(NO_BOARD)
+    elif config.refinement.questions_to == "dm" and not config.slack.owner_user:
+        # ⚠ `elif`, following `rite doctor`'s own rule: a project with no
+        # board refines nothing, so the route for refinement questions is not
+        # a problem it has yet — the board row above is. Two rows describing
+        # one unconfigured project would make the second read as noise, which
+        # is how a row stops being read at all.
+        missing.append(NO_ROUTE_FOR_QUESTIONS)
     return missing
 
 

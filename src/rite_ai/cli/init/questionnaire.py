@@ -31,6 +31,7 @@ from rite_ai.config.models import (
 )
 from rite_ai.credentials.store import make_namespace
 from rite_ai.tickets.scope import label_for
+from rite_ai.workspace.manage import description_from_readme
 
 from . import ui
 from .config_file import Preset
@@ -419,12 +420,20 @@ def run_questionnaire(
 
     # --- Section 1: Role ---
     ui.section("Role", 1, 7)
-    role = resolve_select(
-        "project.role",
-        "Is this the Owner machine or a Manager machine?",
-        ROLE_OPTIONS,
-        default_index=0,
-    )
+    if OWNER_ONLY_UNTIL_MULTI_MANAGER:
+        # ⚠ **Both routes now go through `_ask_role`**, which is the whole
+        # point: the defect was one question asked in two places, and a
+        # suppression in two places is the same defect wearing the fix's
+        # clothes. The `else` below is what 0.9.0 restores to.
+        role = _ask_role(preset, interactive)
+        sources["project.role"] = "owner-only until multi-manager (0.9.0)"
+    else:
+        role = resolve_select(
+            "project.role",
+            "Is this the Owner machine or a Manager machine?",
+            ROLE_OPTIONS,
+            default_index=0,
+        )
     borrowed_config: ProjectConfig | None = None
     if role == "manager":
         owner_ref = resolve_text(
@@ -652,7 +661,63 @@ def _resolve_kb_list(
     return ui.repeat_until_blank(question)
 
 
+DESCRIBE_A_MODULE = "What is '{name}'? One line for the brief's module table"
+
+
+def settle_module_descriptions(
+    preset: Preset, interactive: bool, modules: list[Module], root: Path | None
+) -> list[Module]:
+    """Give every module a description, the way `rite add module` can (C8).
+
+    `rite add module --description` sets one and it renders into the brief's
+    module table; every module `rite init` registered had `description: ''`,
+    because init wrote `modules.yaml` itself and passed nothing. Same shape as
+    C1 and C2: init's path was thinner than the CLI command.
+
+    The default is read out of the module's own README, which is where a
+    module already says what it is, and it is OFFERED rather than taken —
+    Enter accepts it, anything typed replaces it. `--yes` takes it silently,
+    which is the rule every other `--yes` answer follows; a derived default is
+    not a decision worth a line of its own, and `modules.yaml` shows what was
+    taken.
+
+    Only EMPTY descriptions are filled, so a `--config` that names one wins
+    and re-running over a described module changes nothing.
+    """
+    for module in modules:
+        if module.description:
+            continue
+        value = preset.get(f"modules.{module.name}.description")
+        if value is not None:
+            module.description = str(value).strip()
+            continue
+        default = (
+            description_from_readme(root / module.path) if root is not None else ""
+        )
+        if not interactive:
+            module.description = default
+            continue
+        module.description = ui.text(
+            DESCRIBE_A_MODULE.format(name=module.name), default=default
+        ).strip()
+    return modules
+
+
 def _resolve_modules(
+    preset: Preset,
+    interactive: bool,
+    detected_repos: list[DetectedRepo],
+    root: Path | None = None,
+) -> list[Module]:
+    return settle_module_descriptions(
+        preset,
+        interactive,
+        _which_modules(preset, interactive, detected_repos, root),
+        root,
+    )
+
+
+def _which_modules(
     preset: Preset,
     interactive: bool,
     detected_repos: list[DetectedRepo],
@@ -763,9 +828,70 @@ ROLE_OPTIONS = [
     ("manager", "Manager  — receives work from an Owner, runs its own workers"),
 ]
 
+# C7 / multi-manager (0.9.0): a Manager MACHINE needs the multi-manager work
+# this release does not ship, so init does not offer one. RESTORE by deleting
+# this constant and the two guards that read it — `ROLE_OPTIONS`, `_ask_role`
+# and `_borrow_owner_config` are intact and unreferenced on purpose, so the
+# restore is a re-wire rather than a rewrite.
+#
+# A constant rather than two commented-out prompt blocks: the defect was that
+# the same question existed TWICE (here and in `run_questionnaire`), and
+# commenting out prompts invites fixing one site and missing the other, which
+# is how this ticket came to exist. A guard can also be asserted — "no init
+# path can produce `role != owner`" is a property, and there is no way to
+# write that against a comment.
+#
+# ⚠ This stops rite OFFERING a Manager machine. `brief.role` is still parsed
+# and still read by every consumer, so an older project or a hand-edited
+# `brief.yaml` saying `role: manager` keeps working.
+OWNER_ONLY_UNTIL_MULTI_MANAGER = True
+
+OWNER_ONLY = "owner"
+
+OWNER_ONLY_SAID = (
+    "This machine is the project's Owner — it owns the board and assigns the "
+    "work. A Manager machine, which takes work from another project's Owner, "
+    "needs the multi-manager work planned for 0.9.0 and is not offered yet."
+)
+
+MANAGER_MACHINE_REFUSED = (
+    "project.role: manager asks for a Manager machine, which needs the "
+    "multi-manager work this release does not ship (planned for 0.9.0). "
+    "Remove `project.role` from the config file, or set it to 'owner'."
+)
+
+
+def role_preset_problem(preset: Preset) -> str | None:
+    """Why this preset's `project.role` cannot be honoured, or None.
+
+    🔴 **Refused, never ignored.** Both role sites honour a preset, so
+    suppressing only the prompt would still build a Manager machine from
+    `--config`; coercing it to Owner instead would silently discard a key the
+    user wrote, which is the defect class rite refuses everywhere else
+    (unknown `config.yaml` keys are refused, not dropped). Checked before
+    `.rite/` is created, so a refusal leaves nothing behind.
+    """
+    if not OWNER_ONLY_UNTIL_MULTI_MANAGER:
+        return None
+    val = preset.get("project.role")
+    if val is not None and str(val) != OWNER_ONLY:
+        return MANAGER_MACHINE_REFUSED
+    return None
+
 
 def _ask_role(preset: Preset, interactive: bool) -> str:
-    """The role question, asked the same way on every path."""
+    """The role question, asked the same way on every path.
+
+    While `OWNER_ONLY_UNTIL_MULTI_MANAGER` holds it is not a question at all,
+    and that is SAID rather than left as an empty section heading: a question
+    that silently stopped being asked is indistinguishable from one nobody
+    noticed, and the reader needs to know which machine this became without
+    opening `brief.yaml`.
+    """
+    if OWNER_ONLY_UNTIL_MULTI_MANAGER:
+        if interactive:
+            ui.note(OWNER_ONLY_SAID)
+        return OWNER_ONLY
     val = preset.get("project.role")
     if val is not None and val in {v for v, _ in ROLE_OPTIONS}:
         return str(val)
@@ -933,7 +1059,14 @@ def source_answers(
         modules=(
             []
             if holds_nothing(source)
-            else offer_modules(_source_modules(root, base), interactive, base)
+            # Described here too, not only on the from-scratch route: this is
+            # the route the run that reported C8 took.
+            else settle_module_descriptions(
+                preset,
+                interactive,
+                offer_modules(_source_modules(root, base), interactive, base),
+                root,
+            )
         ),
         config=config,
         kb=KbAnswers(),

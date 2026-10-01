@@ -226,11 +226,15 @@ def test_no_route_leaves_the_schedule_empty_or_unsaid(
 
 def test_accepting_the_offer_declares_a_worker_with_the_module(tmp_path):
     root = _repo(tmp_path / "app")
-    # existing code? y · path · changes · role · add ./? · Worker? Enter · name
+    # existing code? y · path · changes · add ./? · what is 'app'? · Manager? ·
+    # Worker? Enter · name   (no role question — C7; the description is C8's)
     out = _init(root, input="y\n\n\n\n\n\n\n\n")
     assert (root / "workers" / "w1" / "worker.yml").is_file()
     assert (root / "workers" / "w1" / "app" / "main.go").is_file()
-    assert "Ready. Start a Dispatch session" in out
+    # C3: the workspace is whole, and the BOARD is what is left — this said
+    # "Ready." about a project with `ticket_backend.type: none`.
+    assert "Ready. Start a Dispatch session" not in out
+    assert "no ticket board is configured" in out
 
 
 def test_declining_says_a_worker_is_needed(tmp_path):
@@ -255,7 +259,8 @@ def test_the_config_can_declare_one(tmp_path):
     preset.write_text("workers:\n  add: bob\nmanagers:\n  add: lead\n  preset: lead\n")
     out = _init(root, "--yes", "--config", str(preset))
     assert (root / "workers" / "bob" / "app" / "main.go").is_file()
-    assert "Ready. Start a Dispatch session" in out
+    # C3: still not "Ready." — this project has no board to work from.
+    assert "no ticket board is configured" in out
 
 
 def test_no_module_means_no_offer(tmp_path):
@@ -325,9 +330,11 @@ def test_a_reinit_offers_the_namespace_exactly_when_it_is_this_repos_and_held(
     if answer == "--yes":
         out = _init(root, "--yes")
     else:
-        # existing code? y · path · changes · role · add ./? · [reuse?] · Worker? n
+        # existing code? y · path · changes · add ./? · what is 'yoloai'? ·
+        # [reuse?] · Manager? · Worker? n   (C7: no role; C8: one description)
         out = _init(
-            root, input="y\n\n\n\n\n\n" + (f"{answer}\n" if offered else "") + "n\n"
+            root,
+            input="y\n\n\n\n\n\n" + (f"{answer}\n" if offered else "") + "n\n",
         )
     assert (f"namespace {old}" in out) == offered
     reused = _config(root).credentials.namespace == old
