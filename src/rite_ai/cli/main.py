@@ -7,6 +7,7 @@ from pathlib import Path
 import click
 
 from rite_ai import __version__
+from rite_ai.cli import module_docs as module_docs_step
 from rite_ai.cli.help import RiteGroup
 from rite_ai.config.managers import CLAUDE, DUTIES, PRESETS, effective_duties
 from rite_ai.credentials.store import STORED
@@ -3454,73 +3455,6 @@ def add_module_cmd(name: str, url: str, branch: str, description: str) -> None:
         raise SystemExit(1)
 
 
-def _somebody_is_there() -> bool:
-    """Whether there is a person at the terminal to answer a question.
-
-    Separate and tiny so a test can flip it: what it guards is a prompt,
-    and a prompt cannot be exercised by a test that has already answered
-    it.
-    """
-    try:
-        return bool(sys.stdin.isatty())
-    except (AttributeError, ValueError):  # a closed or replaced stream
-        return False
-
-
-def _ask_about_module_docs(
-    root: Path, module_subset: list[str] | None, answer: bool | None
-) -> list[str]:
-    """Which of the modules' own instruction files this Worker follows (S23).
-
-    ⚠ **Asked, not assumed, in either direction.** A module's
-    `CONTRIBUTING.md` is written for people and may contradict how rite
-    drives a Worker. Following it silently would put instructions nobody
-    chose into a Worker's brief; ignoring it silently loses the conventions
-    the module actually has. So the files are found, named, and the
-    question is put.
-
-    Nothing found means nothing asked — a question with no subject is
-    noise, and answering it changes nothing.
-    """
-    from rite_ai.workspace.manage import module_docs, modules_for_worker
-
-    modules = modules_for_worker(root, module_subset)
-    if isinstance(modules, str):
-        # Whatever is wrong with the subset, `add_worker` refuses on it a
-        # moment later with the same words. Saying it twice, or refusing
-        # here, would put the error in two places.
-        return []
-    found = module_docs(root, modules)
-    if not found:
-        return []
-
-    click.echo("these modules keep instructions of their own:")
-    for path in found:
-        click.echo(f"  {path}")
-    if answer is None and not _somebody_is_there():
-        # 🔴 **A prompt is not an exception, it is the absence of an answer**
-        # (defect class 15). `click.confirm` on an empty stdin ABORTS, so
-        # asking unconditionally turned `rite add worker` in a script into a
-        # command that creates no Worker — found by an existing test going
-        # red. Not asked, not followed, and BOTH said, with the flag that
-        # answers it: a default taken in silence is the other half of the
-        # same defect.
-        click.echo(
-            "  not asked — nothing is attached to answer. Not followed; pass "
-            "--follow-module-docs to follow them, or --no-follow-module-docs "
-            "to say so explicitly",
-            err=True,
-        )
-        return []
-    if answer is None:
-        answer = click.confirm("  should this Worker follow them?", default=True)
-    if not answer:
-        click.echo("  not followed — the Worker is not told to read them")
-        return []
-    click.echo("  followed — named in the Worker's CLAUDE.md, under rite's own")
-    return found
-
-
 @add.command("manager")
 @click.argument("name")
 @click.option(
@@ -3711,7 +3645,9 @@ def add_worker_cmd(
     module_subset = (
         [m.strip() for m in modules.split(",") if m.strip()] if modules else None
     )
-    follow = _ask_about_module_docs(root, module_subset, follow_module_docs)
+    follow = module_docs_step.settle_module_docs(
+        root, module_subset, follow_module_docs
+    )
     result = add_worker(
         root,
         name,
@@ -4325,7 +4261,6 @@ def publish_pre_push() -> None:
     keeps this "seconds to run"), and exits nonzero if any range
     fails.
     """
-    import sys
 
     from rite_ai.gate import EXIT_CLEAN, run_gate
     from rite_ai.gate.gate import format_report
@@ -10534,7 +10469,6 @@ def _hand_off_refresh(take: tuple[str, ...]) -> bool:
     import os
     import shutil
     import subprocess
-    import sys
 
     if os.environ.get("RITE_UPDATE_CHILD"):
         return False

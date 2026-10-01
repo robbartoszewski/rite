@@ -210,6 +210,19 @@ def _workers_declared(root: Path) -> list[str]:
     return sorted(p.name for p in workers.iterdir() if (p / "worker.yml").is_file())
 
 
+def the_declared_manager(answers) -> str:
+    """The Manager an init-created Worker reports to, or "" when none was
+    declared (`--yes` declares none by design, S15).
+
+    ⚠ **Not `managers[0]` unguarded.** `offer_a_manager` returns None on
+    every path that declines, presets `managers.add: false`, or hits the
+    parser's refusal, and `coordination.managers` is then an empty list.
+    Where more than one is declared the first is the project's priority
+    order (§2.4) — the same one `rite start` takes."""
+    managers = answers.config.coordination.managers
+    return str(managers[0]) if managers else ""
+
+
 def offer_a_worker(root: Path, answers, preset, interactive: bool) -> str | None:
     """Offer to declare a Worker for the modules registered, and return its
     name, or the name of one already declared, or None. With no module there
@@ -218,7 +231,19 @@ def offer_a_worker(root: Path, answers, preset, interactive: bool) -> str | None
     ⚠ `--yes` does NOT declare one. A Worker clones every module, and an
     unattended init doing that by default would be the one `--yes` answer that
     reaches out over the network on its own; it is said instead, and
-    `--config` with `workers.add: <name>` declares one."""
+    `--config` with `workers.add: <name>` declares one.
+
+    🔴 **Declared with everything `rite add worker` would declare it with.**
+    This called `add_worker(root, name)` — two of its five parameters — so an
+    init-created Worker was linked to no Manager (C1) and was never offered
+    the modules' own instruction files (C2, S23). The first produced a brief
+    whose line 7 said "No Manager assigned yet." and whose line 112 said
+    "Tell your Manager you are free": a Worker handed instructions that
+    repeatedly name an authority it was told does not exist. Both halves are
+    one defect — init's path was thinner than the CLI command it stands in
+    for — so both are fixed by routing through the same code, not by adding
+    two arguments here."""
+    from rite_ai.cli.module_docs import how_init_says_it, settle_module_docs
     from rite_ai.workspace import add_worker
 
     declared = _workers_declared(root)
@@ -241,12 +266,27 @@ def offer_a_worker(root: Path, answers, preset, interactive: bool) -> str | None
         return None
     if not name:
         return None
-    result = add_worker(root, name)
+    # S23, through the one helper `rite add worker` uses — including its
+    # no-tty guard, which `--yes` also trips. A bare `click.confirm` here
+    # would abort an unattended init on an empty stdin (defect class 15).
+    follow = settle_module_docs(
+        root,
+        None,
+        None,
+        interactive=interactive,
+        how_to_answer=how_init_says_it(name),
+    )
+    manager = the_declared_manager(answers)
+    result = add_worker(root, name, manager=manager, follow_docs=follow)
     if not result.ok:
         ui.warn(f"Worker '{name}' was NOT declared: {result.message}")
         return None
+    # The Manager is named here because it is the thing that was silently
+    # missing: a line saying how many modules were cloned looked complete.
+    reports_to = f", reports to Manager '{manager}'" if manager else ""
     ui.created(
-        f"workers/{name}/ (Worker '{name}', {len(result.cloned_modules)} module(s))"
+        f"workers/{name}/ (Worker '{name}', "
+        f"{len(result.cloned_modules)} module(s){reports_to})"
     )
     for module, why in result.failed_modules:
         ui.warn(f"  {module} was not cloned into workers/{name}/: {why}")

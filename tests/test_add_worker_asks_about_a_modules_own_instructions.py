@@ -56,8 +56,13 @@ def at_a_terminal(monkeypatch):
     that answers a question is, by construction, not the case the guard is
     for. Flipped here so the asking path and the not-asking path are both
     reachable.
+
+    Patched where the guard LIVES (`cli.module_docs`), which is where both
+    `rite add worker` and `rite init` now read it. Patching a re-export in
+    `cli.main` would leave the real probe running and this fixture quietly
+    doing nothing.
     """
-    monkeypatch.setattr("rite_ai.cli.main._somebody_is_there", lambda: True)
+    monkeypatch.setattr("rite_ai.cli.module_docs.somebody_is_there", lambda: True)
 
 
 def _add(*args, answer: str | None = None):
