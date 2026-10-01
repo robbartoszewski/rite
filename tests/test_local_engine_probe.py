@@ -25,6 +25,11 @@ ROLE = ManagerRole(
     endpoint="http://localhost:11434/v1",
     model="qwen3:70b",
     agent="opencode",
+    # Declared (S33): a local role with none is a problem of its own, whatever
+    # its agent, and these tests are about the endpoint, the model and the
+    # agent's binary. `tests/test_every_local_agent_declares_its_window.py`
+    # holds the undeclared case.
+    context_window=32768,
 )
 
 

@@ -13,11 +13,19 @@ system prompt and tool schemas before the task is added, Goose ~19 KB, and
 called that default "the finding that reframes every other number". A local
 Manager running there does bad work and reports success, which is W19.
 
-**So an agent rite cannot enforce is REFUSED, not run.** The alternative is a
-silent 4,096, and SPEC §5.1.1's rule is that a safety property may fail closed
-and never open. Adding an agent is one entry here plus the measurement behind
-it, and the refusal names what is missing — so the next person extending this
-is told what to go and measure rather than guessing.
+⚠ **BUT AN UNMAPPED AGENT IS NOT REFUSED, and getting that wrong is the
+history of this module.** A first version refused one, on the premise that
+without the agent-specific env the window is not enforced. That premise is
+false: `context_window.pin_window` gives "a model that is served with exactly
+`window` tokens, whatever the server's default" — the pin goes INTO THE MODEL
+on the server, so Ollama serves that window to ANY client. The env only tells
+the agent the NUMBER, so it can compact before the limit rather than hit it.
+
+So the window is enforced for everyone, and what an entry here buys is the
+agent being TOLD. Missing that is a degradation worth saying out loud
+(`not_told`), not a refusal — refusing would have turned away a Manager that
+works. S33 is the rule that does refuse, and it refuses the thing that
+genuinely is unenforceable: a local Manager declaring no window at all.
 
 ⚠ **An entry is a claim that somebody RAN it.** `GOOSE` is here because
 2026-09-28 measured the pin being what Ollama serves Goose and
@@ -71,20 +79,21 @@ def for_agent(agent: str) -> Enforcement | None:
     return _BY_AGENT.get(agent)
 
 
-def refusal(agent: str) -> str:
-    """Why a local Manager on `agent` will not be started.
+def not_told(agent: str, window: int) -> str:
+    """What is lost when `agent` has no entry here — said, never refused.
 
-    Names the measurement that is missing, because the next person here needs
-    to know what to run, not only that something is absent.
+    The window IS served to it: the pin is in the model, server-side. What it
+    does not get is being told the number, so it cannot compact before the
+    limit and will meet it instead. A person reading `rite start` should know
+    which of those two they have, and the next person extending this should be
+    told what to measure rather than only that something is absent.
     """
     known = ", ".join(enforced_agents())
     return (
-        f"rite cannot hold agent {agent!r} to a context window, so it will not "
-        f"start a local Manager on it: an unenforced window means Ollama's "
-        f"server-wide default, which is 4,096 tokens unless the server was "
-        f"configured otherwise — smaller than the agents' own prompts, so the "
-        f"Manager would do bad work and report success (W19). Enforced today: "
-        f"{known}. To add one, measure that the pinned window is what the "
-        f"server serves it AND that it reads the window from its environment, "
-        f"then add an entry to rite_ai.local.enforcement"
+        f"the {window}-token window is pinned into the model, so the server "
+        f"serves it to any client — but rite has no way to TELL agent "
+        f"{agent!r} that number, so it cannot compact before the limit and "
+        f"will run into it instead. Agents rite can tell: {known}. To add "
+        f"one, measure that it reads a window from its environment, then add "
+        f"an entry to rite_ai.local.enforcement"
     )

@@ -2509,6 +2509,47 @@ def _declared_claude_model(root: Path, manager: str, engine: str) -> str:
     return role.model if role else ""
 
 
+def _undeclared_window(manager: str) -> str:
+    """The refusal for a local Manager with no `context_window` (S33): one
+    sentence, whatever its agent."""
+    return (
+        f"{manager!r} declares no context_window, so the window its model "
+        "is served with would be whatever its server defaults to, which rite "
+        "cannot read before the model loads, and its agent would not be told "
+        f"it. Add this line to its entry (`- name: {manager}`) under "
+        "coordination.manager_roles in .rite/config.yaml:\n"
+        "      context_window: 32768\n"
+        "32768 is the least rite accepts; use the model's own window if it is "
+        "larger and the machine has the memory"
+    )
+
+
+def _window_refusal(root: Path, manager: str, agent: str) -> str:
+    """Why this Manager must not start for its window, or "" (S33).
+
+    ⚠ **Asked of EVERY local agent, and asked FIRST**, before anything that
+    depends on which agent it is. The rule used to live inside the Goose
+    launch path (`_engine_model_env`), so any other local agent reached a
+    launch on the server's default window; and `permission_placement` refuses
+    an agent rite has no spelling for, which, asked first, would have told
+    that Manager the wrong thing. A Manager with no agent is a Claude one and
+    is not read here, so its path is exactly what it was."""
+    if not agent:
+        return ""
+    from rite_ai.config.managers import window_undeclared
+    from rite_ai.config.parse import ParseError, parse_config
+
+    parsed = parse_config(root / ".rite" / "config.yaml")
+    if isinstance(parsed, ParseError):
+        return ""  # said by `_engine_model_env`, which reads the same file
+    role = next(
+        (r for r in parsed.coordination.manager_roles if r.name == manager), None
+    )
+    if role is not None and window_undeclared(role):
+        return _undeclared_window(manager)
+    return ""
+
+
 def _engine_model_env(root: Path, manager: str, agent: str):
     """WHICH model a local Manager's engine runs, from its declared role.
 
@@ -2521,7 +2562,18 @@ def _engine_model_env(root: Path, manager: str, agent: str):
     the operator's GLOBAL config instead, silently. Measured 2026-09-25:
     declared `qwen3:8b`, ran `qwen3-vl:8b-instruct`.
     """
-    if agent != "goose":
+    # ⚠ **EVERY LOCAL AGENT, NOT GOOSE (S35).** This read `agent != "goose"`,
+    # and it is the FIRST line of the function — so for any other local agent
+    # it returned before `pin_window` below ever ran. S33 made the window
+    # DECLARATION required of every agent, and that is right, but the
+    # declaration was then honoured for Goose alone: a Manager on another
+    # agent passed S33's check and launched with nothing pinned, on the
+    # server's default. Declaring a window you do not get is worse than being
+    # refused for not declaring one.
+    #
+    # An empty `agent` is a CLAUDE Manager (S33's `_window_refusal` says so
+    # too), and its path is exactly what it was.
+    if not agent:
         return {}, "", ""
     from urllib.parse import urlsplit
 
@@ -2565,31 +2617,22 @@ def _engine_model_env(root: Path, manager: str, agent: str):
     # serves Goose; a prompt over it is cut to half the window from the front
     # with no error, and only Ollama's log says so (plan, Track MS).
     if not role.context_window:
-        return (
-            {},
-            (
-                f"{manager!r} declares no context_window, so the window its model "
-                "is served with would be whatever this Ollama server defaults to, "
-                "which rite cannot read before the model loads, and Goose would "
-                f"not know it. Add this line to its entry (`- name: {manager}`) "
-                "under coordination.manager_roles in .rite/config.yaml:\n"
-                "      context_window: 32768\n"
-                "32768 is the least rite accepts; use the model's own window if "
-                "it is larger and the machine has the memory"
-            ),
-            "",
-        )
-    # ⚠ **PER AGENT, NOT GOOSE-SHAPED (S35).** This ended in
-    # `goose_environment(...)` unconditionally, so a Manager declaring another
-    # agent started and was served Ollama's server-wide default — 4,096 on an
-    # unconfigured server, smaller than the agents' own prompts (RL-T0). An
-    # agent rite cannot enforce is refused rather than run unenforced.
+        return {}, _undeclared_window(manager), ""
+    # ⚠ **A DISPATCH, NOT A REFUSAL (S35, corrected against S33).** An
+    # earlier version of this refused an agent rite has no env mapping for,
+    # even with a window declared. That was wrong, and the reason is
+    # `pin_window`'s own contract: it gives "a model that is served with
+    # exactly `window` tokens, whatever the server's default" — the pin goes
+    # INTO THE MODEL on the server, so Ollama serves that window to ANY
+    # client. `GOOSE_CONTEXT_LIMIT` only tells Goose the number so it can
+    # compact at 80%; it is not the enforcement. So an unmapped agent is
+    # enforced too, and refusing it would have refused a Manager that works.
+    #
+    # What an unmapped agent does NOT get is being TOLD its window, and that
+    # is said rather than hidden: an agent that does not know will run into
+    # the limit instead of compacting before it.
     from rite_ai.local.context_window import pin_window
-    from rite_ai.local.enforcement import for_agent, refusal
-
-    enforcement = for_agent(role.agent)
-    if enforcement is None:
-        return {}, refusal(role.agent), ""
+    from rite_ai.local.enforcement import for_agent, not_told
 
     pinned = pin_window(role.endpoint, role.model, role.context_window)
     if pinned.problem:
@@ -2604,10 +2647,19 @@ def _engine_model_env(root: Path, manager: str, agent: str):
     # What pinning wrote to the operator's model library, said at the start:
     # `context_window.py`'s rule is that rite names anything it puts there
     # and says how to remove it.
+    note = pinned.detail if pinned.created else ""
+    enforcement = for_agent(role.agent)
+    if enforcement is None:
+        # Pinned for everyone; only the agent-specific env is skipped. Handing
+        # an agent `GOOSE_CONTEXT_LIMIT` it does not read would be worse than
+        # handing it nothing, and pretending it had been told would be worse
+        # than both.
+        said = not_told(role.agent, role.context_window)
+        return {}, "", f"{note} {said}".strip() if note else said
     return (
         enforcement.environment(role.endpoint, pinned.model, role.context_window),
         "",
-        pinned.detail if pinned.created else "",
+        note,
     )
 
 
@@ -2667,6 +2719,9 @@ def _default_starter(
         )
     from rite_ai.managers.engines import permission_placement
 
+    window = _window_refusal(root, manager, agent)
+    if window:
+        return StartResult(False, f"refusing to start Manager {manager!r}: {window}")
     placement = permission_placement(engine, agent, permission)
     model_env, refused, created_note = _engine_model_env(root, manager, agent)
     if refused:

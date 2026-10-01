@@ -618,6 +618,24 @@ def configuration_problems(
     return problems
 
 
+def window_undeclared(role) -> bool:
+    """A local Manager that declares no `context_window`, which `rite start`
+    refuses and `rite doctor` warns about (S33).
+
+    ⚠ **Every local agent, not Goose alone.** The rule came with `f340103`
+    gated on `agent == "goose"`, the only agent then; nothing about it is
+    Goose's. A model served by an endpoint takes that server's default window
+    unless rite sets one, the default cannot be read before the model loads,
+    and a prompt over it is cut from the front with no error (S34: 4096 on
+    this Mac, `truncating input prompt limit=2050 prompt=5583`). Gated on the
+    agent, the next local agent would have started on exactly that default,
+    silently. The one predicate `rite start`, `rite doctor` and
+    `effective_model` all ask, so they cannot disagree about it."""
+    return bool(getattr(role, "is_local", False)) and not getattr(
+        role, "context_window", 0
+    )
+
+
 def effective_model(role: ManagerRole) -> str:
     """What model a Manager runs, and where that comes from, in one line.
 
@@ -628,9 +646,10 @@ def effective_model(role: ManagerRole) -> str:
     if role.engine == HUMAN:
         return f"manager {role.name}: a person, no model"
     if role.is_local:
-        # ⚠ S35: an agent rite cannot hold to a window is REFUSED, so this no
-        # longer says "the server's default window" for one — that sentence
-        # described a Manager rite started and could not enforce.
+        # ⚠ S35, as a NOTE and not a refusal. The window is pinned into the
+        # model, so the server serves it to any client; an agent rite has no
+        # env mapping for is simply not TOLD the number. S33 owns the refusal,
+        # and it refuses the genuinely unenforceable case: no window declared.
         from rite_ai.local.enforcement import for_agent
 
         window = (
@@ -639,8 +658,8 @@ def effective_model(role: ManagerRole) -> str:
             else f"a {role.context_window}-token window pinned into the model"
             if for_agent(role.agent) is not None
             else (
-                f"a window rite cannot enforce for agent {role.agent!r}, so "
-                "`rite start` refuses it"
+                f"a {role.context_window}-token window pinned into the model, "
+                f"which agent {role.agent!r} is not told"
             )
         )
         return (

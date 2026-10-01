@@ -262,7 +262,7 @@ def _has_project_in_scope() -> bool:
     back to cwd), this distinguishes "found a real .rite/" from "found
     nothing" — the distinction `rite status`'s aggregation mode needs to
     decide whether to show one project's detail or the cross-project
-    summary (SPEC §8.9). Same marker as `_find_project_root`, and for the
+    summary. Same marker as `_find_project_root`, and for the
     same reason — a directory with a `.rite/` in it is not necessarily a
     project."""
     if os.environ.get(PROJECT_ROOT_ENV):
@@ -289,7 +289,7 @@ def cli() -> None:
     "config_file",
     default=None,
     type=click.Path(exists=True),
-    help="Preset file answering some or all questions (SPEC §9.3).",
+    help="Preset file answering some or all questions.",
 )
 @click.option(
     "--yes",
@@ -461,7 +461,7 @@ def _doctor_check(label: str, problems: list[str]):
     ),
 )
 def doctor(network: bool) -> None:
-    """Is this healthy? (SPEC §9.8) Token presence, external tool
+    """Is this healthy? Token presence, external tool
     availability, `.rite/` integrity, module sync state, git remote
     reachability, and schedule validation — as distinct from `rite
     status`'s "what's happening?".
@@ -1730,7 +1730,7 @@ def claim(paths: tuple[str, ...], worker: str, ticket: str) -> None:
     "--force", "force_flag", is_flag=True, help="Force-release another session's paths"
 )
 @click.option("--by", default=None, help="Attribution — required with --force")
-@click.option("--reason", default=None, help="Why — required with --force (SPEC §5.2)")
+@click.option("--reason", default=None, help="Why — required with --force")
 @click.option(
     "--history",
     "show_history",
@@ -1789,7 +1789,7 @@ def release(
             click.echo("--force requires explicit paths", err=True)
             raise SystemExit(2)
         if not by or not reason:
-            click.echo("--force requires both --by and --reason (SPEC §5.2)", err=True)
+            click.echo("--force requires both --by and --reason", err=True)
             raise SystemExit(2)
         layer, machine = claims_channel(_find_project_root())
         # `current_manager()` is "" from a human's own shell, and `manager=None`
@@ -1862,13 +1862,13 @@ def release(
 )
 def status(no_board: bool) -> None:
     """What's happening? Workers, claims, the handover snapshot, and the
-    coordination-cost counters (SPEC §9.8) — as distinct from `rite
+    coordination-cost counters — as distinct from `rite
     doctor`'s "is this healthy?". Run outside any project with a Dispatch
     directory present, aggregates across all registered projects instead
-    (SPEC §8.9) — a new rendering path in the same command, not a second
+    — a new rendering path in the same command, not a second
     command.
 
-    Queries the ticket backend for board state (§9.8's counts by column).
+    Queries the ticket backend for board state (its counts by column).
     That is the one part of this command that leaves the machine; pass
     --no-board to skip it. The aggregate view across registered projects
     never queries, so it stays one round trip per machine rather than one
@@ -1912,7 +1912,7 @@ def _short_error(error: str) -> str:
 
 
 def _aggregate_line(entry) -> str:
-    """One registered project's line in the cross-project view (§8.9).
+    """One registered project's line in the cross-project view.
 
     This was `"no .rite/ found" if s.errors else "ok"` followed by the
     claim and stalled-worker counts, unconditionally. Three different
@@ -2598,7 +2598,7 @@ def credential_set(
 
     Run inside a project, this stores THIS PROJECT's credential: the
     secret goes to the keychain under a scoped name, and the name is
-    recorded in `.rite/config.yaml` (§10.2). That is the default because
+    recorded in `.rite/config.yaml`. That is the default because
     the point of scoping is that a worker only ever gets a token you
     gave for the project it is working on.
 
@@ -3101,8 +3101,8 @@ def credential_list() -> None:
 def credential_migrate(name: str, yes: bool) -> None:
     """Copy a machine-global credential into THIS project's namespace.
 
-    The migration path for a setup that predates §10.2: `jira_token` set
-    globally keeps working through the fallback tier, and this moves it
+    The migration path for a setup that predates per-project namespaces:
+    `jira_token` set globally keeps working through the fallback tier, and this moves it
     under `<namespace>/jira_token` so the project stops depending on a
     shared entry.
 
@@ -3273,8 +3273,8 @@ def credential_remove(name: str, yes: bool) -> None:
 
 @credential.command("rotate")
 def credential_rotate() -> None:
-    """Guided rotation of every credential rite has ever stored (SPEC
-    §10): shows each one's age and current source, and prompts for a
+    """Guided rotation of every credential rite has ever stored:
+    shows each one's age and current source, and prompts for a
     replacement — or skip. Only covers credentials `rite credential set`
     (or a provisioning flow that stored one the same way) has actually
     written; a credential satisfied only by an env var was never
@@ -3615,7 +3615,7 @@ def _undeclared_in(error: str, config, candidate: str = "") -> list[str]:
     "--instructions",
     default="",
     help="Standing direction for this one Worker — stored as worker.yml's "
-    "`claude_instructions` (SPEC §8.4) and rendered into its CLAUDE.md.",
+    "`claude_instructions` and rendered into its CLAUDE.md.",
 )
 @click.option(
     "--scoped-token",
@@ -3642,7 +3642,7 @@ def add_worker_cmd(
     """Create a new worker workspace.
 
     With `--scoped-token`, also walks through provisioning a GitHub token
-    for this one Worker, scoped to the project's repos (§5.3.3, §5.3.4) —
+    for this one Worker, scoped to the project's repos —
     never displayed in this project's chat, only typed directly into this
     terminal prompt. Without it, Workers share the credentials the project
     already holds.
@@ -3732,7 +3732,7 @@ def _token_permission_line(permissions: list[str]) -> str:
 
 
 def _provision_worker_token(root, worker, config) -> None:
-    """Guided sandbox-token provisioning for one Worker (§5.3.3, §5.3.4).
+    """Guided sandbox-token provisioning for one Worker.
     Prints the exact repos and permissions the token should be scoped to,
     then — only on explicit confirmation — prompts for the value directly
     (never collected any other way) and stores it under the naming
@@ -4062,12 +4062,12 @@ def publish_install_ci(force: bool) -> None:
     """Install the GitHub Actions workflow that runs the gate in CI.
 
     The exact analogue of `install-hook`, and it exists for the same reason
-    SPEC §11.5 gives for that one: `rite init` does this already, and
+    as that one: `rite init` does this already, and
     re-running `rite init` is not the remedy for a project that is already
     initialised — it offers to wipe the project's config rather than touch
     the workflow.
 
-    §11.5.1 is why it matters more than the hook: `core.hooksPath` can
+    It matters more than the hook because: `core.hooksPath` can
     disarm the local gate without the developer doing anything and with no
     signal that it happened, "which makes [CI] the load-bearing one, not
     the backup". A project with no workflow has no layer that a local git
@@ -4270,7 +4270,7 @@ def publish_pre_push() -> None:
     Not meant to be typed by a human — this is what the installed
     `.git/hooks/pre-push` execs (Stage 2 #3). Reads git's pre-push protocol
     from stdin, scans each pushed range (not full history — that's what
-    keeps this "seconds to run" per §11), and exits nonzero if any range
+    keeps this "seconds to run"), and exits nonzero if any range
     fails.
     """
     import sys
@@ -4449,7 +4449,7 @@ def board_move(ticket_id: str, status: str, role: str) -> None:
         raise SystemExit(1)
     _say_unrecorded(backend)
     # Recorded where rite saw the backend accept it, with where the ticket
-    # actually LANDED — the standup cites this (plan § K4).
+    # actually LANDED — the standup cites this.
     if _has_project_in_scope():
         from rite_ai.managers import current_manager
         from rite_ai.reporting import events
@@ -4636,7 +4636,7 @@ def board_show(ticket_id: str, role: str) -> None:
 def board_label(
     ticket_id: str, labels: tuple[str, ...], remove: tuple[str, ...], role: str
 ) -> None:
-    """Add worker-name labels — the assignment mechanism (SPEC §9.10).
+    """Add worker-name labels — the assignment mechanism.
 
     LABELS are ADDED to whatever the ticket already carries; nothing is
     replaced. Reassigning therefore takes both halves — add the new
@@ -4675,12 +4675,12 @@ def board_label(
 @click.argument("worker")
 @click.option("--role", default="workers", help="board | workers | testing")
 def board_assign(ticket_id: str, worker: str, role: str) -> None:
-    """Set the backend's own assignee field (SPEC §6.1's `assign`).
+    """Set the backend's own assignee field (its own `assign`).
 
     This is the backend's native assignee — a GitHub issue assignee, a
     JIRA assignee — which is what a human sees on the board. It is NOT
     how rite decides who owns a ticket: that is the worker-name label
-    (`rite board label`, SPEC §9.10), which is what every rite query
+    (`rite board label`), which is what every rite query
     filters on. Set both if you want the board to read the way rite does.
 
     Takes a person, not a rite worker name: a display name, an email
@@ -4777,8 +4777,7 @@ def refine() -> None:
 
     A ticket is refined only by a record rite signed on the board, which
     matches the ticket's current title and description. Nothing else counts:
-    not a label, and not a model saying so
-    (docs/design/V070_TICKET_REFINEMENT.md).
+    not a label, and not a model saying so.
     """
 
 
@@ -5299,7 +5298,7 @@ def refine_measured(ticket_id: str, item: int, result: str, output, role: str) -
 
 @cli.group()
 def schedule() -> None:
-    """This project's worker schedule (SPEC §2.7)."""
+    """This project's worker schedule."""
 
 
 @schedule.command("show")
@@ -5374,7 +5373,7 @@ def schedule_set(hours: str, workers: int) -> None:
 @click.argument("tz")
 def schedule_set_timezone(tz: str) -> None:
     """Set the schedule's timezone — required before any window is
-    meaningful (D-48).
+    meaningful.
 
     Examples:
       rite schedule set-timezone Europe/Warsaw
@@ -5394,7 +5393,7 @@ def schedule_set_timezone(tz: str) -> None:
     click.echo(f"timezone set to {tz}")
 
 
-# --- Workspace preparation (SPEC §2.1) ---
+# --- Workspace preparation ---
 
 
 def _worker_modules_or_exit(root, worker: str):
@@ -5434,7 +5433,7 @@ def _worker_modules_or_exit(root, worker: str):
 )
 def prepare(worker: str, branch: str | None) -> None:
     """Prepare a worker's workspace before a task — right repos, right
-    branches, no residue from the previous task (SPEC §2.1). Idempotent;
+    branches, no residue from the previous task. Idempotent;
     a dirty tree fails loudly rather than being discarded.
 
     Examples:
@@ -5468,7 +5467,7 @@ def prepare(worker: str, branch: str | None) -> None:
         raise SystemExit(1)
 
 
-# --- Heartbeat (SPEC §9.8) ---
+# --- Heartbeat ---
 
 
 @cli.command()
@@ -5476,7 +5475,7 @@ def prepare(worker: str, branch: str | None) -> None:
 @click.option("--ticket", "-t", default="", help="Ticket the worker is on")
 @click.option("--message", "-m", default="", help="One line on what it's doing")
 def heartbeat(worker: str, ticket: str, message: str) -> None:
-    """Record a Worker's "still alive" beat (SPEC §9.8).
+    """Record a Worker's "still alive" beat.
 
     Call it every `heartbeat.interval_minutes` (config.yaml, default 10)
     for as long as a Worker is working. This is what `rite status` and
@@ -5506,7 +5505,7 @@ def heartbeat(worker: str, ticket: str, message: str) -> None:
 
 @cli.command()
 def watchdog() -> None:
-    """Cheap liveness check — no LLM (SPEC §3.5). Meant to run every ~5
+    """Cheap liveness check — no LLM. Meant to run every ~5
     minutes from a scheduler (cron, launchd), and by a Manager on its own
     polling cadence. Zero tokens.
 
@@ -5722,7 +5721,7 @@ def handover_show() -> None:
 def scheduler_tick() -> None:
     """One scheduler cycle: the watchdog check, plus the schedule
     window-boundary check that hands over any active Worker when the
-    schedule drops to zero (§2.7.3, D-46). No LLM call; safe to run
+    schedule drops to zero. No LLM call; safe to run
     unattended from cron/launchd every few minutes. This is what
     `rite scheduler install` wires up — running it directly is mostly for
     testing that wiring.
@@ -5776,7 +5775,7 @@ def loop() -> None:
     spend anything.
 
     Nothing here starts a session, writes to a board, or spends quota, so
-    SPEC §9.12 is untouched. The layer that dispatches is a separate
+    nothing rite budgets is touched. The layer that dispatches is a separate
     decision and is not built.
     """
 
@@ -5957,7 +5956,7 @@ def loop_stop(reason: str) -> None:
     """Ask the loop to stop after the cycle it is in. Kills nothing.
 
     A killed loop can leave a claim held by a process that no longer exists —
-    the failure §2.6 exists for, caused by the stop command. Asking costs at
+    the failure claim expiry exists for, caused by the stop command. Asking costs at
     most one cycle. `pool/` has no kill path either, for the same reason.
     """
     from rite_ai.loop.session import stop
@@ -6070,7 +6069,7 @@ def scheduler_status(backend: str | None) -> None:
 @cli.group()
 def pool() -> None:
     """A small pool of standby coordinator (Manager/Owner) sessions, so a
-    dead one has a warm replacement ready (§2.5). Managers/Owner still
+    dead one has a warm replacement ready. Managers/Owner still
     need a human to start — `rite pool fill` is that explicit action;
     nothing spawns a session automatically."""
 
@@ -6123,7 +6122,7 @@ def pool_fill(count: int | None, command: str) -> None:
 @pool.command("status")
 def pool_status() -> None:
     """Live/stale split for the coordinator pool — the same read-only,
-    zero-token probe `rite status` runs (§2.5.2/§2.5.3): no session is
+    zero-token probe `rite status` runs: no session is
     spawned by this command.
 
     Examples:
@@ -6255,13 +6254,13 @@ def pool_history(limit: int) -> None:
 @cli.command("budget")
 def budget_report() -> None:
     """Current burn rate and week-end projection from real Claude Code
-    transcripts — reporting only (D-38): no Worker-count recommendation,
+    transcripts — reporting only: no Worker-count recommendation,
     no path back into concurrency anywhere in this command. Also shown in
     `rite status`.
 
     This is your WHOLE MACHINE's usage across every project, not just
     this one — Anthropic's weekly quota is account-wide, and there is no
-    local way to attribute usage back to one project (SPEC §2.6.1). For
+    local way to attribute usage back to one project. For
     the same reason it reports no percentage: `budget.weekly_token_budget`
     is one project's target, and these figures are not one project's
     usage, so the two cannot be compared.
@@ -7212,7 +7211,7 @@ def sandbox_start(
     """Launch WORKER's session inside a fresh sandbox. If a token was
     provisioned for this Worker (`rite add worker`'s sandbox step, or
     `rite credential set sandbox_token_<worker>`), delivers it via
-    `--env` (D-31) — never a file, never a CLI argument.
+    `--env` — never a file, never a CLI argument.
 
     Give it its work when you start it: nothing in rite can type into a
     sandbox afterwards. The sandbox name is printed on start; `yoloai
@@ -7601,7 +7600,7 @@ def sandbox_stop(worker: str) -> None:
 
     \b
     PRESERVED STATE CAN INCLUDE THE WORKER'S GITHUB TOKEN.
-    rite delivers it with `--env` and nothing else (SPEC §5.3.3, D-31), and
+    rite delivers it with `--env` and nothing else, and
     what the sandbox does with it afterwards is outside that guarantee — a
     dogfood session reported yoloAI 0.11.0 persisting it inside the sandbox,
     cleared by `destroy` and not by `stop`. That report is unverified here and
@@ -9605,7 +9604,7 @@ def reply(text: str, manager: str) -> None:
     "defaults to that Manager and can be left out.",
 )
 def ask(question: str, defer: bool, meanwhile: str, manager: str) -> None:
-    """Ask the User a question, now or at their next check-in (plan § K2).
+    """Ask the User a question, now or at their next check-in.
 
     ⚠ **ASK NOW UNLESS THE QUESTION IS CLEARLY DEFERRABLE; IF YOU ARE UNSURE
     WHETHER IT BLOCKS YOU, IT BLOCKS YOU.** Deferring a blocking question
@@ -9737,7 +9736,7 @@ def ask(question: str, defer: bool, meanwhile: str, manager: str) -> None:
 
 @cli.group()
 def checkin() -> None:
-    """The standup a check-in opens with (plan § K4)."""
+    """The standup a check-in opens with."""
 
 
 @checkin.command("note")
@@ -9804,7 +9803,7 @@ def checkin_note(anchor: str, observed: str, manager: str) -> None:
 
 @cli.group()
 def question() -> None:
-    """Questions a Manager deferred to a check-in (plan § K3)."""
+    """Questions a Manager deferred to a check-in."""
 
 
 @question.command("withdraw")
@@ -10023,7 +10022,7 @@ def manager_stop(name: str) -> None:
     the ordinary way to stop one.
 
     Ctrl-C on `rite start <manager>` stops the supervisor AND the session,
-    which is the normal case and takes one action (§9.14.12). This is for
+    which is the normal case and takes one action. This is for
     the ORPHAN: the supervising process died — a crash, a closed laptop, a
     killed terminal — and the session is still running with nothing
     watching it.
@@ -10033,7 +10032,7 @@ def manager_stop(name: str) -> None:
     `rite stop [DIRECTORY]` already exists, resolves registered aliases,
     and has side effects on the board. A command meaning two different
     things depending on whether its argument happens to match a Manager
-    name is the ambiguity rite refuses elsewhere (§9.14.7a, D-78).
+    name is the ambiguity rite refuses elsewhere.
 
     Examples:
       rite manager stop planner
@@ -10072,7 +10071,7 @@ def manager_stop(name: str) -> None:
     type=int,
     default=None,
     help="Ceiling on provider sessions this run may start. Required when "
-    "starting a Manager; a COUNT, not spend (D-69). With several Managers in "
+    "starting a Manager; a COUNT, not spend. With several Managers in "
     "one project it is SOFT while routed work is outstanding: a session "
     "started by routed mail can pass it, and each one is said.",
 )
@@ -10082,7 +10081,7 @@ def manager_stop(name: str) -> None:
     default=None,
     help="Ceiling on how long this run may keep starting sessions. Required "
     "when starting a Manager: the two bounds catch different runaways and "
-    "neither suffices alone (D-82).",
+    "neither suffices alone.",
 )
 @click.option(
     "--fresh",
@@ -10131,7 +10130,7 @@ def start_cmd(
       rite start
       rite start planner --sessions 3 --minutes 90   # a declared Manager
       rite start /path/to/project
-      rite start acme               # resolves a registered alias (§8.9)
+      rite start acme               # resolves a registered alias
     """
     from rite_ai.lifecycle import start
 
@@ -10302,7 +10301,7 @@ def _echo_phase(phase, err: bool = False) -> None:
     "-t",
     default="",
     help="Ticket ID to comment/label on handover (default: resolved from the "
-    "released claims' own ticket, per SPEC §9.10 step 1)",
+    "released claims' own ticket, per the release's own first step)",
 )
 @click.option(
     "--skip-handover",
@@ -10332,7 +10331,7 @@ def stop_cmd(
       rite stop --worker alpha --reason "lunch break"
       rite stop --worker alpha --ticket ABC-12
       rite stop --worker alpha --ticket ABC-12 --skip-handover
-      rite stop acme                # resolves a registered alias (§8.9)
+      rite stop acme                # resolves a registered alias
     """
     from rite_ai.lifecycle import stop
 
@@ -10354,12 +10353,11 @@ def stop_cmd(
     "--module", "-m", default=None, help="Module name — appends its own checklist"
 )
 def review(module: str | None) -> None:
-    """Load and print the merged review checklist (SPEC §7).
+    """Load and print the merged review checklist.
 
     Prints the checklist a Dispatch session hands to review agents when
     running the review convention — this command does not spawn agents
-    itself (that needs judgement; the CLI's charter is the non-AI surface,
-    §9).
+    itself (that needs judgement; the CLI's charter is the non-AI surface).
 
     `--module` takes a name from `.rite/modules.yaml`, or the exact path
     registered there. Anything else is refused, not ignored.
@@ -10533,7 +10531,7 @@ def _hand_off_refresh(take: tuple[str, ...]) -> bool:
 )
 def update(yes: bool, files_only: bool, dry_run: bool, take: tuple[str, ...]) -> None:
     """Update rite itself, migrate `.rite/` config files, and refresh the files
-    rite generated in this project (SPEC §9.9).
+    rite generated in this project.
 
     Refreshing never overwrites your edits. Each generated section of
     CLAUDE.md records a hash of what rite wrote: a section still matching it is
@@ -10697,19 +10695,19 @@ def help() -> None:  # noqa: A001 - deliberately shadows builtin, it's the comma
 
 @cli.group()
 def journal() -> None:
-    """Record a process issue to this Manager's journal (BETA, §9.15).
+    """Record a process issue to this Manager's journal (BETA).
 
     ⚠ WHY THIS COMMAND EXISTS AT ALL, since a Manager is an agent that can
-    write a file by itself. D-87 requires that an entry with no anchor is
-    REFUSED on the writing path, before any file is created. A Manager
+    write a file by itself. An entry with no anchor must be REFUSED on the
+    writing path, before any file is created. A Manager
     writing markdown with its own tools puts rite nowhere near that path,
     and the requirement collapses back into asking the agent nicely —
-    which §9.15.3 closes by saying beats nothing.
+    which, as rite has already found, beats nothing.
 
     So rite owns the writing path. That is what makes the anchor rule a
     rule rather than an instruction.
 
-    A process issue, not a work issue (§9.15.0): a failing ticket goes to
+    A process issue, not a work issue: a failing ticket goes to
     the board. "The gate reported clean on a file it could not open" goes
     here. Where it could plausibly be either, it is work.
     """
@@ -10826,7 +10824,7 @@ def journal_retrospective(
     """Record what a boundary cost and what it changed — with NO verdict.
 
     ⚠ There is deliberately nowhere to put "that round was a waste"
-    (§9.15.4). The obvious measure is inverted: a round ending "fix these
+   . The obvious measure is inverted: a round ending "fix these
     three things" produces a commit, a round ending "this design would
     force-release live Workers" produces nothing, so judging by output
     ranks bad reviewing above good. "Round 2 cost 150k and changed
