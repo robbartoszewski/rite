@@ -610,9 +610,7 @@ def _doctor_worker_push_access(
                 f"{got.repository} ({got.why}) — `rite sandbox start` will "
                 f"refuse it. Give the token Contents: read and write there"
             )
-            problems.append(
-                f"worker {worker}: token cannot push to {got.repository}"
-            )
+            problems.append(f"worker {worker}: token cannot push to {got.repository}")
         else:
             # Said, never counted: a report must not call a token bad
             # because a network was unreachable.
@@ -8686,9 +8684,7 @@ def _doctor_slack(root: Path, problems: list[str], *, network: bool = False) -> 
                     },
                 )
             except Exception as e:  # noqa: BLE001 - could not ask, not a fault
-                click.echo(
-                    f"slack delivery: could not check — {type(e).__name__}"
-                )
+                click.echo(f"slack delivery: could not check — {type(e).__name__}")
                 return
             if (got or {}).get("ok"):
                 click.echo(
