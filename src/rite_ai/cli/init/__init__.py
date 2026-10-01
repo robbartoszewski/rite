@@ -42,6 +42,7 @@ from .detect import run_detection
 from .questionnaire import (
     holds_nothing,
     portable_source_path,
+    role_preset_problem,
     run_questionnaire,
     source_answers,
 )
@@ -68,6 +69,13 @@ def run_init(
             status="error",
             message=f"Could not read config file {preset.file}: {preset.message}",
         )
+
+    # C7: a Manager machine is 0.9.0's. Refused here — before `.rite/` is
+    # created — rather than coerced to Owner, so a declared key is never
+    # silently discarded and a refusal leaves nothing behind.
+    role_problem = role_preset_problem(preset)
+    if role_problem is not None:
+        return InitResult(status="error", message=role_problem)
 
     source = _existing_source(root, preset, interactive)
     if isinstance(source, InitResult):
