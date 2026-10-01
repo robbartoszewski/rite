@@ -107,9 +107,17 @@ trap 'rm -f "$refs_file"' EXIT
 cat > "$refs_file"
 
 own_hooks='__OWN_HOOKS__'
-upstream_dir=$(git config --global --get core.hooksPath 2>/dev/null)
+# 🔴 `--type=path`, NOT a bare --get. git stores core.hooksPath verbatim, so a
+# value written as `~/…` comes back with a literal tilde, which no shell
+# expands inside quotes: `[ -x "~/…/pre-push" ]` is then FALSE for a hook that
+# exists, this script falls through to the gate alone, and the upstream hook is
+# silently disarmed while the installer reports a chain. The Python half
+# already expanduser()s, so the two halves disagreed about the same value —
+# which is the defect, not the tilde. Measured: `--type=path` expands `~` and
+# leaves absolute and relative values exactly as they are.
+upstream_dir=$(git config --global --type=path --get core.hooksPath 2>/dev/null)
 if [ -z "$upstream_dir" ]; then
-	upstream_dir=$(git config --system --get core.hooksPath 2>/dev/null)
+	upstream_dir=$(git config --system --type=path --get core.hooksPath 2>/dev/null)
 fi
 if [ -n "$upstream_dir" ] && [ "$upstream_dir" != "$own_hooks" ] &&
 	[ -z "$RITE_PRE_PUSH_CHAINED" ] && [ -x "$upstream_dir/pre-push" ]; then

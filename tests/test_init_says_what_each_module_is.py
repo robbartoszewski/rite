@@ -375,3 +375,77 @@ class TestModulesYamlHasOneWriter:
 
         assert [m.name for m in parsed] == ["api"]
         assert parsed[0].description == "The case service"
+
+
+class TestADescriptionAlreadySetIsNeverReplaced:
+    """`settle_module_descriptions` fills EMPTY descriptions only, and that
+    guard was load-bearing and unpinned: mutating `if module.description:
+    continue` to `if False: continue` left every test in this file green.
+
+    It looks redundant — the next branch re-reads the preset — and for a plain
+    module name it is, because `Preset.get("modules.<name>.description")` finds
+    the same value again. It stops being redundant the moment the name is one
+    `Preset.get`'s dotted walk cannot follow, and a module name may contain a
+    dot (`name_problem` allows it). Then the preset lookup returns None, the
+    README-derived default wins, and a description the user wrote in
+    `--config` is replaced by one read out of a file — silently, in the one
+    place the project records what each module is.
+    """
+
+    def test_a_description_already_on_the_module_survives(self, tmp_path):
+        """The contract, stated at the function. Nothing else in the call has
+        to be reachable for this to be the rule it follows."""
+        from rite_ai.cli.init.config_file import Preset
+        from rite_ai.cli.init.questionnaire import settle_module_descriptions
+        from rite_ai.config.models import Module
+
+        root = _project(tmp_path, A_README)
+        module = Module(name="api", path="api/", description="Ours, hand-written")
+
+        settle_module_descriptions(Preset({}), False, [module], root)
+
+        assert module.description == "Ours, hand-written"
+
+    def test_even_with_a_readme_offering_something_else(self, tmp_path):
+        """⚠ The control for the one above: the README really does say
+        something different, so a replacement would be visible."""
+        from rite_ai.cli.init.config_file import Preset
+        from rite_ai.cli.init.questionnaire import settle_module_descriptions
+        from rite_ai.config.models import Module
+
+        root = _project(tmp_path, A_README)
+        empty = Module(name="api", path="api/", description="")
+
+        settle_module_descriptions(Preset({}), False, [empty], root)
+
+        assert empty.description == "The case service", "the README default works"
+
+    def test_a_config_description_survives_a_name_the_dotted_lookup_cannot_follow(
+        self, tmp_path
+    ):
+        """🔴 The reachable case. `Preset.get("modules.api.v2.description")`
+        walks `modules` → `api`, which is not there, and answers None — so the
+        guard is the only thing standing between a declared description and the
+        README's."""
+        root = tmp_path / "proj"
+        root.mkdir()
+        _module_repo(root / "api.v2", A_README)
+        preset = tmp_path / "p.yaml"
+        preset.write_text(
+            "modules:\n  api.v2:\n    path: api.v2/\n"
+            "    description: Ours, not the README's\n"
+        )
+
+        _init(root, "--yes", "--config", str(preset))
+
+        assert _modules(root)["api.v2"]["description"] == "Ours, not the README's"
+
+    def test_and_the_dotted_lookup_really_cannot_follow_it(self, tmp_path):
+        """The premise of the test above, asserted rather than assumed — if
+        `Preset.get` ever learns to handle this, that test stops covering the
+        guard and should be read again."""
+        from rite_ai.cli.init.config_file import Preset
+
+        preset = Preset({"modules": {"api.v2": {"description": "X"}}})
+
+        assert preset.get("modules.api.v2.description") is None

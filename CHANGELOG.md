@@ -51,6 +51,12 @@ neither is the hook it names. If that hook refuses a push, the push is refused
 and rite's gate is not consulted — a gate asked after the decision is not a
 gate. Both hooks see the list of refs git is pushing.
 
+That hook's path is read through git's own `~` expansion. git stores
+`core.hooksPath` exactly as written, so a path written `~/hooks` came back with
+a literal `~`, which no shell expands — and the chain would have run rite's gate
+alone while reporting that it had run both. Found in review before release; it
+needed only for that line to be written in `~` form.
+
 If rite cannot build that chain it **refuses and says so** rather than
 installing half of it, because half of it would mean git reading a directory
 where the other hook is not — silently dropping a control somebody installed on

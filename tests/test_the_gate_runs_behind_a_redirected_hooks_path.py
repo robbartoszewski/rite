@@ -784,3 +784,133 @@ class TestInitSaysWhatItInstalled:
         scaffold.install_pre_push_hooks(root, [])
 
         assert calls == [root]
+
+
+class TestATildeInTheRedirectIsStillTheSameDirectory:
+    """🔴 **The whole chain hangs on both halves reading one value the same
+    way, and they did not.**
+
+    git stores `core.hooksPath` verbatim. A value written `~/…` — which is how
+    a person or an installer naturally writes a path under `$HOME` — comes back
+    from a bare `git config --get` with a literal tilde, and no shell expands a
+    tilde inside quotes. So `[ -x "~/…/pre-push" ]` is FALSE for a hook that is
+    there, the script falls through to `rite publish pre-push` alone, and the
+    upstream hook is **silently disarmed while the installer reports a chain**
+    — the exact failure the loud refusal was replaced to avoid, reintroduced
+    one layer down.
+
+    The Python half always expanduser()d, so it saw the hook, decided to chain,
+    and said so. The disagreement between the two halves is the defect; the
+    tilde is only what exposes it. `git config --type=path` is git's own
+    expansion, measured to expand `~` and to leave absolute and relative values
+    untouched, so both halves now read the value through the same rule.
+
+    ⚠ Latent rather than live on the machine this was found on, whose value is
+    absolute — and latent is the point: anything that rewrites that line in `~`
+    form turns the gate off with no output anywhere.
+    """
+
+    def _with_a_tilde_redirect(self, tmp_path, monkeypatch):
+        """A redirect written `~/…`, with `$HOME` this test's own so the tilde
+        resolves somewhere it can be checked."""
+        home = tmp_path / "home"
+        (home / "other-project-hooks").mkdir(parents=True)
+        monkeypatch.setenv("HOME", str(home))
+        hook = home / "other-project-hooks" / "pre-push"
+        hook.write_text(
+            "#!/bin/sh\n"
+            f'echo "{UPSTREAM_RAN} argv=[$*]" >&2\n'
+            'while read -r line; do echo "' + UPSTREAM_RAN + ' ref=$line" >&2; done\n'
+            "exit 0\n"
+        )
+        hook.chmod(0o755)
+        repo = _repo(tmp_path / "app")
+        _remote(tmp_path, repo)
+        # The tilde FORM, not the expanded path: that is the condition.
+        _git(repo, "config", "--global", "core.hooksPath", "~/other-project-hooks")
+        assert (
+            _git(repo, "config", "--global", "--get", "core.hooksPath")
+            == "~/other-project-hooks"
+        ), "the premise: git stores it verbatim"
+        return repo, home
+
+    def test_the_installer_still_sees_it_and_chains(self, tmp_path, monkeypatch):
+        repo, home = self._with_a_tilde_redirect(tmp_path, monkeypatch)
+
+        result = install_pre_push_hook(repo)
+
+        assert result.ok, result.message
+        assert "chained behind" in result.message
+
+    def test_and_the_upstream_hook_RUNS(self, tmp_path, monkeypatch):
+        """🔴 The assertion the defect would fail. Everything else about the
+        install reported success while this was false."""
+        repo, _home = self._with_a_tilde_redirect(tmp_path, monkeypatch)
+        assert install_pre_push_hook(repo).ok
+
+        out = _push(repo, _a_fake_rite(tmp_path)).stderr
+
+        assert out.count(UPSTREAM_RAN + " argv=") == 1, out
+
+    def test_and_it_saw_the_refs(self, tmp_path, monkeypatch):
+        repo, _home = self._with_a_tilde_redirect(tmp_path, monkeypatch)
+        install_pre_push_hook(repo)
+
+        out = _push(repo, _a_fake_rite(tmp_path)).stderr
+
+        refs = [ln for ln in out.splitlines() if f"{UPSTREAM_RAN} ref=" in ln]
+        assert refs, out
+        for ref in refs:
+            assert len(ref.split("ref=", 1)[1].split()) == 4, ref
+
+    def test_the_gate_runs_after_it_as_usual(self, tmp_path, monkeypatch):
+        repo, _home = self._with_a_tilde_redirect(tmp_path, monkeypatch)
+        install_pre_push_hook(repo)
+
+        out = _push(repo, _a_fake_rite(tmp_path)).stderr
+
+        assert UPSTREAM_RAN in out and GATE_RAN in out
+        assert out.index(UPSTREAM_RAN) < out.index(GATE_RAN)
+
+    def test_a_tilde_upstream_refusal_is_still_final(self, tmp_path, monkeypatch):
+        """The consequence that matters: not just that it ran, but that it can
+        still stop a push."""
+        repo, home = self._with_a_tilde_redirect(tmp_path, monkeypatch)
+        hook = home / "other-project-hooks" / "pre-push"
+        hook.write_text(hook.read_text().replace("exit 0", "exit 9"))
+        hook.chmod(0o755)
+        install_pre_push_hook(repo)
+
+        pushed = _push(repo, _a_fake_rite(tmp_path))
+
+        assert pushed.returncode != 0
+        assert GATE_RAN not in pushed.stderr
+
+    def test_the_hook_reads_the_value_through_gits_own_expansion(self, tmp_path):
+        """⚠ Pinned as TEXT as well as behaviour, because the behavioural test
+        above passes for an absolute value too: the script must not go back to a
+        bare `--get`, which is what made the two halves disagree."""
+        repo = _repo(tmp_path / "app")
+        _redirect_globally(repo, _an_upstream_hook(tmp_path))
+        install_pre_push_hook(repo)
+
+        script = (own_hooks_dir(repo) / "pre-push").read_text()
+
+        assert "--type=path --get core.hooksPath" in script
+        assert "--global --get core.hooksPath" not in script
+        assert "--system --get core.hooksPath" not in script
+
+    def test_an_absolute_redirect_is_unaffected_by_the_expansion(
+        self, tmp_path, monkeypatch
+    ):
+        """⚠ The control. `--type=path` leaves an absolute value alone —
+        measured — so the machine this was found on keeps working exactly as
+        it did."""
+        repo = _repo(tmp_path / "app")
+        _remote(tmp_path, repo)
+        _redirect_globally(repo, _an_upstream_hook(tmp_path))
+        install_pre_push_hook(repo)
+
+        out = _push(repo, _a_fake_rite(tmp_path)).stderr
+
+        assert UPSTREAM_RAN in out and GATE_RAN in out
