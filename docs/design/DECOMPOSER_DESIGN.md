@@ -497,15 +497,43 @@ What must be recorded:
 - **validation outcome on the first attempt** for Level 1, and **whether rejection reasons changed on retry** (RL-69).
 - **the report produced by rite's verify, not by the model.** 1a's came from rite's own verify and commit; this one must too.
 
-### 4.5. ⚠ Two corrections to what the 1a numbers actually measured
+### 4.5. The 1a re-run on `qwen3.8:latest` — and two corrections it forced
 
-**Found while re-running 1a on `qwen3.8:latest`, by reading the code rather
-than trusting the earlier report — including my own.**
+**Run 2026-10-01, the same hand-authored plan, one subtask at a time, pinned to
+32,768 via `rite-ctx32768-qwen3.8-latest` (created for this run — the model had
+never been pinned).** Both subtasks **accepted**, both commits written by rite's
+own committer, acceptance from rite's verify.
 
-1. ⚠ **The 1a run was NOT window-pinned.** `local/step.py` never calls `pin_window` and never passes `context_limit` to `goose_environment`, so no `GOOSE_CONTEXT_LIMIT` was set and no pinned twin was used — the run2 log records the session as plain `ollama qwen3:8b`. The "32,768" the numbers were quoted against is the window the role **declares**, not one that was enforced. The token counts stand as token counts; "against a 32,768 window" was wrong and is withdrawn.
-2. ⚠ **A pinned twin fails rite's own probe.** `context_window.derived_name` produces an untagged name (`rite-ctx32768-qwen3.8-latest`); Ollama stores it tagged (`…:latest`); `engine_probe` matches `name == role.model or name.startswith(role.model + "-")`, which fits neither. So the preflight refuses the model rite itself just created — measured, and it is why the first re-run attempt returned an infrastructure fault. ⚠ **This is a defect in landed code and it blocks the window enforcement the local tier is built on**, since the enforced path is the pinned one.
+| | s1 | s2 |
+|---|---|---|
+| verdict | accepted (`13f6e5f`) | accepted (`e1273e3`) |
+| turns | 8 | 5 |
+| prompt tokens | 5,204 → 6,259 | 5,084 → 5,328 |
+| **peak vs the 32,768 pin** | **19%** | **17%** |
+| `truncated` | **0** | **0** |
+| wall clock | 6 m 47 s | 5 m 13 s |
+| speed | ~3.6–4.0 t/s | ~3.6–4.0 t/s (vs **~22 t/s** for `qwen3:8b`) |
 
-Both are listed here because they change what the next run has to do, not only what the last one meant.
+**What this establishes for the decomposer:** a trivial subtask already costs
+**a fifth of the window** on the shipping model, and it **grows within a
+subtask** (~+150 tokens/turn). It does **not** carry across subtasks — s2 opened
+at 5,084, below s1's peak — which is the property §1.2's Level-2 step must not
+break. ⚠ `truncated = 0` across all 13 turns is the first direct evidence the
+pin holds end to end.
+
+**Two corrections this forced, both to claims I had made:**
+
+1. ⚠ **The 1a run was NOT window-pinned.** `local/step.py` never calls `pin_window` and never passes `context_limit` to `goose_environment`, so no `GOOSE_CONTEXT_LIMIT` was set and no twin was used — run2's log records the session as plain `ollama qwen3:8b`. The "32,768" the earlier numbers were quoted against is the window the role **declares**, not one that was enforced. The token counts stand; "against a 32,768 window" is withdrawn. My summary of them as "flat, no accumulation" was true across subtasks and **wrong across turns**.
+2. ⚠ **A pinned twin fails rite's own probe.** `derived_name` produces an untagged name; Ollama stores it tagged (`…:latest`); `engine_probe` matches `name == role.model or name.startswith(role.model + "-")`, which fits neither. rite refuses the model it just created — measured, and it cost this re-run its first attempt as an infrastructure fault. ⚠ **It reaches the real Manager path**, since `supervise._local_environment` pins and hands `pinned.model` to `GOOSE_MODEL`, so any local Manager needing a pin gets a model `rite doctor` calls missing. **This blocks the enforced path the local tier is built on.**
+
+⚠ **One qualitative finding that bears directly on §1.3.** The model did careful
+work — it caught a "no trailing newline" requirement and proved the result with
+`od -c` — and in the same run **invented a confident, false explanation** for a
+config diff it had not caused (*"a runtime model-name swap goose applies at
+startup"*; goose does nothing of the kind), with no hedging. **Right about what
+it did, wrong about why the world looked that way.** A model like that must not
+be the one writing the verify its own work is judged by, which is §1.3's
+argument arriving as evidence rather than as principle.
 
 ## 5. Model-reliability risks, named with what would show each one
 
@@ -528,6 +556,7 @@ tokens inside **the same 32,768-token window** it must then execute in. The
 plan is not free context — it is context taken from the work.
 
 - **Shows up as:** prompt tokens per turn rising with the approach step in front, and — the bad case — a unit that compacts mid-subtask because its own plan pushed it over.
+- ⚠ **The headroom is now measured, and it is smaller than it looks.** §4.5: a *trivial* one-file subtask already peaks at 19% of the 32,768 window and grows ~150 tokens/turn. A real subtask plus an approach step written by the same model is the case that has to fit, and nothing yet says it does.
 - **Why it is sharper for the GPU worker than the Claude one:** a Claude Worker's Opus plan and its implementation model are different context windows, so Level 2 costs it nothing it has to execute in. A local worker using one model for both pays twice out of one window. **The two defaults are not symmetric, and the GPU one is where this bites.**
 - **Measured by:** §4.4's run B against its no-Level-2 control.
 - **If true:** Level 2 is for the Claude worker and off by default for the GPU one, which is a configuration change and not a design change — the attribute is per-unit precisely so this can differ.
