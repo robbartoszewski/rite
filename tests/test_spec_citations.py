@@ -111,6 +111,53 @@ def test_specs_version_header_matches_its_newest_revision_entry():
     )
 
 
+def test_the_revision_history_is_single_valued():
+    """One version, one entry — a revision history is a lookup table.
+
+    ⚠ **Measured, not hypothetical.** Two entries shared 0.24.67 on `main`.
+    Three v0.7.0a4 lanes were in flight at once, each branching before the
+    one before it merged, so each picked "the next free number" from a
+    different `main` — and one merge resolution kept BOTH sides of the
+    conflict, leaving the superseded copy of an entry that had already been
+    renumbered. Nothing caught it: the header test above only looks at
+    `entries[0]`, so a duplicate anywhere below the newest is invisible to
+    it.
+
+    What it costs is the thing §14 exists for. "What changed in 0.24.67?" has
+    two answers, and a reader deciding how much to trust a section cannot
+    tell which one the section came from.
+    """
+    entries = re.findall(r"(?m)^\*\*Changes in (\d+\.\d+\.\d+)", SPEC.read_text())
+    assert entries, "no revision-history entries parsed — test is stale"
+
+    seen: dict[str, int] = {}
+    for version in entries:
+        seen[version] = seen.get(version, 0) + 1
+    repeated = sorted(v for v, n in seen.items() if n > 1)
+
+    assert not repeated, (
+        f"these versions have more than one revision entry: {repeated}. "
+        "Renumber one to a free version and fix the mentions inside it — a "
+        "history that answers a version twice cannot be looked up."
+    )
+
+
+def test_the_revision_history_is_in_descending_order():
+    """A duplicate is one way the history stops being a table; an entry
+    filed in the wrong place is the other, and it hides the duplicate — the
+    superseded 0.24.67 sat below 0.24.69 and read as ordinary history."""
+    entries = re.findall(r"(?m)^\*\*Changes in (\d+\.\d+\.\d+)", SPEC.read_text())
+    keys = [tuple(int(part) for part in v.split(".")) for v in entries]
+
+    out_of_order = [
+        (entries[i], entries[i + 1])
+        for i in range(len(keys) - 1)
+        if keys[i] <= keys[i + 1]
+    ]
+
+    assert not out_of_order, f"revision entries are not newest-first: {out_of_order}"
+
+
 def test_the_citation_scan_actually_reads_the_repository():
     """⚠ The floor under every check in this file.
 

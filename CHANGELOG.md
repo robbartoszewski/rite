@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### `--help` no longer points at documents you do not have
+
+Command help carried rite's own internal section numbers — "Is this healthy?
+(SPEC §9.8)", "The standup a check-in opens with (plan § K4)". Those are
+references into design documents that do not ship with rite, in the one text
+you read at the moment you are stuck. They are gone from every command's
+`--help`, and so are rite's internal decision numbers ("(D-46)") and the paths
+of its design notes; the notes themselves are unchanged for anyone reading the
+source. `rite spec slice D-12` still shows `D-12`: there it is how you name a
+decision in your own spec.
+
 ### `rite doctor --network` checks what only a live call can
 
 A plain `rite doctor` still makes no call that can hang — it is read by people
@@ -31,8 +42,6 @@ and separately that there were "manager(s) listed but no `remote` … no
 election can ever happen", even with no second machine anywhere. A project
 with one Manager and no coordination remote is now left alone; one that lists
 several, or that has other machines, is warned exactly as before.
-Every part of that is about other machines. A project with no coordination
-
 
 
 ### In Slack, a post that needs your answer stands out
