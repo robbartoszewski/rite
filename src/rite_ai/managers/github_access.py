@@ -220,6 +220,28 @@ def profile_lines(root: Path, manager: str, home: Path | None = None) -> list[st
             f'(allow file-read* file-write* (subpath "{claude}"))',
             f'(deny file-write* (literal "{login}"))',
         ]
+    cursor = cdir / "cursor"
+    if cursor.is_dir():
+        # ⚠ READ AND WRITE, for a stated reason (CU4): Cursor writes its
+        # config (`cli-config.json`), its chats (`chats/`, which rite's
+        # continuation check reads) and its per-workspace state and trust
+        # marker (`projects/`, via CURSOR_DATA_DIR) here on every turn
+        # (measured, CU1 section 7). Without it a turn exits 1, "Failed to
+        # trust workspace". It replaces a grant of `~/.cursor`, which holds
+        # every project's Cursor transcripts and is granted to nobody.
+        # ⚠ CU8: the allowlist Cursor reads (`cli-config.json`) is in this
+        # directory and is NOT denied. Cursor creates a temp file beside it
+        # and renames it over it on every turn, and exits 1 when it cannot
+        # (measured, `spikes/CU1c-cursor-authenticated-measurements.md`), so
+        # any rule that protects it stops Cursor. The Manager can therefore
+        # write it; the supervisor rewrites it before every launch and stops
+        # the run if it changed during a cycle (`cursor_login.config_problem`).
+        lines.append(f'(allow file-read* file-write* (subpath "{cursor}"))')
+    # ⚠ The Cursor key's copy is granted to NO profile: tmux's shell reads it
+    # outside the boundary (`cursor_login.launch_prefix`). Denied by name as
+    # well, last, so a later grant of the credential directory cannot
+    # reach it by accident.
+    lines.append(f'(deny file-read* file-write* (literal "{cdir / "cursor.key"}"))')
     return lines
 
 

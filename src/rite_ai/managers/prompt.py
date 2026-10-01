@@ -27,6 +27,7 @@ from __future__ import annotations
 import subprocess
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 from rite_ai import own_command
 from rite_ai.managers.broker import REQUESTS_DIRNAME
@@ -37,7 +38,7 @@ CONFIRM_TRIES = 20
 CONFIRM_PAUSE = 0.2
 
 
-def for_manager(manager: str, *, extra: str = "") -> str:
+def for_manager(manager: str, *, root: Path, extra: str = "") -> str:
     """The text a Manager is given at start.
 
     ⚠ **The Worker instructions changed shape in B9**: a Manager no longer
@@ -51,10 +52,15 @@ def for_manager(manager: str, *, extra: str = "") -> str:
     same contract `journal.instructions` and `journal.start_notice` use for
     their disabled case.
     """
-    # Relative to the project root, which is the pane's working directory —
-    # this function has the Manager's name and nothing else, and the request
-    # directory is a function of exactly that.
-    requests = f".rite/managers/{manager}/{REQUESTS_DIRNAME}"
+    # ABSOLUTE, and derived from the one place the directory is spelled
+    # (`manager_dir`). It was a path relative to the project,
+    # `.rite/managers/<name>/requests`, and since MM8 the directory is
+    # outside the project: a relative path would send requests where nothing
+    # reads them. `root` is required for that reason; a default would be a
+    # wrong path nobody notices.
+    from rite_ai.managers import manager_dir
+
+    requests = str(manager_dir(root, manager) / REQUESTS_DIRNAME)
     # ⚠ **Absolute, for the reason `mailbox.how_to_reply` gives**: a bare
     # `rite` names whatever is first on the Manager's PATH, which was
     # measured to be an older release than the one writing this text.
@@ -105,7 +111,59 @@ def for_manager(manager: str, *, extra: str = "") -> str:
         "authentication error, every time. If a request is refused, report "
         "the refusal and stop — do not work around it.\n"
     )
-    return base + extra
+    from rite_ai.publishing.requests import instructions as delivering
+
+    return base + delivering(root, manager) + extra
+
+
+TICKET_WORK = (
+    "\n\n## You do not implement tickets yourself\n\n"
+    "A ticket is worked by a Worker you request (above), or by a Manager you "
+    "route it to. Do not change a module's code and commit it yourself, "
+    "however small the ticket looks. A Worker's path is what gives the work a "
+    "claim, a review and a pull request; a commit you make directly skips all "
+    "three, and nothing rite reports shows that it happened. If no Worker can "
+    "take a ticket, say so and leave it on the board.\n"
+)
+"""⚠ **TR3, from the dogfood's F22.** An Owner did a ticket itself — "Done
+directly, committed as 818d1ab" — with no Worker, no review and no PR, and
+none of rite's gates saw it: they sit on the Worker launch, the broker and the
+route. This is ADVICE until PB1's publish step can refuse such a commit
+(TR10). Given to every Manager except a secondary under a single Owner, whose
+work is what the Owner routes to it (see `ticket_work`)."""
+
+
+ROUTED_TICKET_WORK = (
+    "\n\n## Routed work you do yourself\n\n"
+    "Work routed to you names its ticket. Do it yourself only when it is a "
+    "chore or a trivial ticket, and then only on a branch named for the "
+    "ticket and through a pull request: never a commit to a default branch. "
+    "Anything more is a Worker's: request one (above) for it. If you are "
+    "unsure whether a ticket is trivial, it is not. A commit made straight to "
+    "a default branch skips the review a pull request gets, and nothing rite "
+    "reports shows that it happened.\n"
+)
+"""⚠ **Robert, 2026-09-29 (Q4):** close the bypass, and keep the executor's
+own path for chores and trivial tickets, with real work routed to a Worker.
+F22's Owner committed a ticket directly; an `executor` secondary doing routed
+work could do the same one level down. Advice until PB1's publish step can
+refuse such a commit (TR10)."""
+
+
+def ticket_work(manager: str, owner: str, *, one_root: bool) -> str:
+    """`TICKET_WORK` for this Manager, or `ROUTED_TICKET_WORK` for a secondary.
+
+    A SECONDARY is a Manager in a root with one Owner that is someone else:
+    its work is routed to it, and it may do chores and trivial tickets itself
+    through a pull request (`ROUTED_TICKET_WORK`). Everyone else — a lone
+    Manager (its own Owner), the Owner, and any Manager whose Owner cannot be
+    named here (a `remote`, or no single `route` holder) — is told not to
+    implement tickets at all, because the failure is silent and the text
+    costs one paragraph.
+    """
+    if one_root and owner and owner != manager:
+        return ROUTED_TICKET_WORK
+    return TICKET_WORK
 
 
 @dataclass(frozen=True)

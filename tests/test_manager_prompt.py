@@ -24,12 +24,16 @@ from __future__ import annotations
 import subprocess
 import time
 import uuid
+from pathlib import Path
 
 import pytest
 
 from rite_ai.managers.prompt import deliver, for_manager
 from rite_ai.managers.session import StartResult, Stopped
 from rite_ai.managers.supervise import supervise
+
+PROJECT = Path("/projects/acme")  # for_manager needs the root: MM8
+
 
 tmux_only = pytest.mark.skipif(
     subprocess.run(["which", "tmux"], capture_output=True).returncode != 0,
@@ -39,17 +43,21 @@ tmux_only = pytest.mark.skipif(
 
 class TestComposition:
     def test_the_manager_knows_which_manager_it_is(self):
-        assert "planner" in for_manager("planner")
+        assert "planner" in for_manager("planner", root=PROJECT)
 
     def test_extra_is_appended_verbatim(self):
         """`journal.instructions` owns its own wording; this module must not
         paraphrase it, or the two drift."""
-        assert for_manager("p", extra="\n\nJOURNAL TEXT").endswith("JOURNAL TEXT")
+        assert for_manager("p", root=PROJECT, extra="\n\nJOURNAL TEXT").endswith(
+            "JOURNAL TEXT"
+        )
 
     def test_no_extra_is_the_empty_string_not_a_branch(self):
         """Same contract as `journal.start_notice`: the disabled case is one
         shape, so the caller concatenates unconditionally."""
-        assert for_manager("p") == for_manager("p", extra="")
+        assert for_manager("p", root=PROJECT) == for_manager(
+            "p", root=PROJECT, extra=""
+        )
 
 
 class TestOnlyTheFirstSessionGetsTheOpeningPrompt:

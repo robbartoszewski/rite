@@ -54,7 +54,20 @@ def coordination_problems(config: CoordinationConfig) -> list[str]:
         )
     )
 
-    if config.managers and not config.remote:
+    # ⚠ **ONE Manager with no `remote` is not a fault** (v0.7.0a4 S32). This
+    # fired for any number of Managers, and for one it is simply false: there
+    # is nobody to hold an election against, so nothing is missing. It made
+    # `rite doctor` exit 1 on a project whose only sin was running `rite add
+    # manager lead`, which is the command rite tells people to run.
+    #
+    # Two or more with no remote is still reported, and still means what it
+    # said: a reader who listed several Managers is describing a fleet, and a
+    # fleet with nowhere to coordinate through cannot elect. (Several
+    # Managers sharing ONE root is a rite-local shape — see the comment above
+    # — but whether that should also go quiet is a separate question nobody
+    # has asked, and widening this to cover it broke
+    # `test_managers_without_a_remote_is_reported`, correctly.)
+    if len(config.managers) > 1 and not config.remote:
         problems.append(
             f"coordination: {len(config.managers)} manager(s) listed but no "
             "`remote` — there is nowhere to coordinate through, so no "
@@ -93,6 +106,12 @@ def coordination_problems(config: CoordinationConfig) -> list[str]:
         problems.append(
             "coordination: `state_branch` is empty — the state layer needs a "
             "branch to force-push (§3.3.1)"
+        )
+    if not isinstance(config.sweep_minutes, int) or config.sweep_minutes <= 0:
+        problems.append(
+            f"coordination: `sweep_minutes` is {config.sweep_minutes!r} — it is "
+            "how often an Owner checks whether a Manager it routed work to has "
+            "died, and must be a whole number of minutes above 0"
         )
     if config.owner_lease_minutes <= 0:
         problems.append(

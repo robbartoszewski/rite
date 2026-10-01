@@ -41,6 +41,7 @@ from rite_ai.label import project_name
 from rite_ai.pool import PoolStatus
 from rite_ai.pool import probe as probe_pool
 from rite_ai.reporting.heartbeat import StallReport, detect_stalls, not_started
+from rite_ai.sandbox.questions import WorkerQuestion
 from rite_ai.state import CorruptStateError
 
 
@@ -75,6 +76,12 @@ class ProjectStatus:
     it". Never released automatically — see `claims/suspect.py`."""
     stalled_workers: list[StallReport] = field(default_factory=list)
     not_started_workers: list[str] = field(default_factory=list)
+    worker_sandboxes: dict = field(default_factory=dict)
+    """worker -> `SandboxActivity`: what yoloAI says of its sandbox, and the
+    question pending in it (dogfood Q2), in the sentence `rite sandbox
+    status` and `rite loop run` print too (S1). Absent only when nothing was
+    asked; `sandbox_unchecked` then says why."""
+    sandbox_unchecked: str = ""
     handovers: list[HandoverSnapshot] = field(default_factory=list)
     coordination_cost: CoordinationCostCounts = field(
         default_factory=CoordinationCostCounts
@@ -249,6 +256,7 @@ def collect_status(root: Path, board: bool = False) -> ProjectStatus:
     if project.workers:
         status.stalled_workers = detect_stalls(root, names, threshold_seconds=threshold)
         status.not_started_workers = not_started(root, names)
+        _sandbox_facts(root, names, status, project.config.sandbox.enabled)
 
     # Outside the `if`, deliberately: this walks the LEDGER rather than the
     # roster, and the case it exists for is a claim held by a name nobody
@@ -311,6 +319,26 @@ def collect_status(root: Path, board: bool = False) -> ProjectStatus:
 # from five minutes ago. A file on a live repo sat claimed since 09-06 by a
 # session that never committed anything, and nothing in this output said so.
 _STALE_AFTER_HOURS = 12
+
+
+def _sandbox_facts(
+    root: Path, names: list[str], status: ProjectStatus, enabled: bool
+) -> None:
+    """Each Worker's sandbox, observed once, into `status`.
+
+    Asked whatever `sandbox.enabled` says: that setting governs setup, and
+    `rite sandbox start` runs without it, so a project with it off can still
+    have a Worker running in a sandbox. Only a project with it off AND no
+    yoloAI on the machine is not asked, and the report says so rather than
+    reading the silence as "no sandbox"."""
+    from rite_ai.sandbox import _yoloai_binary
+    from rite_ai.sandbox.activity import observe
+
+    if not enabled and _yoloai_binary() is None:
+        status.sandbox_unchecked = "yoloai is not installed"
+        return
+    for name in names:
+        status.worker_sandboxes[name] = observe(name, root)
 
 
 def format_claim_age(claim: Claim) -> str:
@@ -451,20 +479,22 @@ def _loop_line(root: Path) -> str:
     subprocess call at all"). Asking tmux here put a process spawn into the
     command people run most often, and the test caught it.
 
-    So this reads the loop's lock file and checks the pid with a signal, which
-    is a syscall rather than a process. The cost is a few seconds of lag at
-    startup — `start` releases its own lock before spawning, and the loop
-    takes it once running — during which this says "not running" and `rite
-    loop status` says the truth. That is the right way round: the cheap
-    overview may be briefly behind, the authoritative command never is.
+    So this asks the loop's kernel lock (`rite_ai.loop.lock.holder`), which
+    is a few syscalls rather than a process, and is exact about whether a
+    loop process holds it and which pid. It lags tmux for a moment at
+    startup, while tmux has started the loop and the loop has not yet taken
+    the lock. Then this says "not running" and `rite loop status` says the
+    truth. That is the right way round: the cheap overview may be briefly
+    behind, the authoritative command never is. It says "cannot tell" rather
+    than "not running" when the lock cannot be asked.
     """
-    from rite_ai.loop.session import draining, running_pid
+    from rite_ai.loop.session import describe_holder, draining, loop_holder
 
-    pid = running_pid(root)
-    if not pid:
-        return "not running"
+    held = loop_holder(root)
+    if not (held.known and held.running):
+        return describe_holder(held)
     drain = " (draining)" if draining(root) else ""
-    return f"running (pid {pid}){drain} — `rite loop status` for detail"
+    return f"running (pid {held.pid}){drain} — `rite loop status` for detail"
 
 
 def format_status(status: ProjectStatus) -> str:
@@ -497,14 +527,48 @@ def format_status(status: ProjectStatus) -> str:
     if status.workers:
         lines.append(f"\nworkers ({len(status.workers)}):")
         for w in status.workers:
-            mods = ", ".join(w.modules) if w.modules else "all"
+            # A Worker's modules are the ones cloned into it when it was
+            # added; an empty list is none, never "all" (dogfood S1:
+            # `modules=[all]` for a Worker created with 0 modules).
+            mods = ", ".join(w.modules) or (
+                "none" if status.modules else "none — no modules are registered"
+            )
+            seen = status.worker_sandboxes.get(w.name)
+            asked = seen.question if seen is not None else None
+            quiet = w.name in status.not_started_workers
+            said: list[str] = []
             if w.name in stalled_names:
-                marker = " — STALLED"
-            elif w.name in status.not_started_workers:
-                marker = " — not started (no heartbeat or claims yet)"
+                said.append("STALLED")
+            if isinstance(asked, WorkerQuestion):
+                # A Worker that read its ticket and asked has started, and is
+                # blocked on a person (Q2); the question says the sandbox.
+                said.append(
+                    f"WAITING ON A QUESTION since {asked.since()}: "
+                    f"{asked.headline(120)}"
+                )
             else:
-                marker = ""
+                # ⚠ Never "not started" (dogfood S1: said of a Worker whose
+                # sandbox had read its ticket). What was observed is said as
+                # observed: no heartbeat and no claim, and the sandbox in the
+                # sentence every other view prints.
+                if quiet:
+                    said.append("no heartbeat or claims yet")
+                if seen is None:
+                    if quiet:
+                        said.append(f"no sandbox checked ({status.sandbox_unchecked})")
+                elif quiet or seen.exists is not False:
+                    said.append(seen.describe())
+                if quiet and (seen is None or seen.exists is not True):
+                    said.append(
+                        "a session opened by hand shows only once it beats or claims"
+                    )
+            marker = f" — {'; '.join(said)}" if said else ""
             lines.append(f"  {w.name}: modules=[{mods}]{marker}")
+            if isinstance(asked, WorkerQuestion):
+                lines.append(
+                    f"    read it: `rite sandbox status {w.name}`; answer it by "
+                    "attaching. `rite sandbox destroy` refuses until it is."
+                )
     else:
         lines.append("\nno workers")
 

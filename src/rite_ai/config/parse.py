@@ -12,6 +12,7 @@ import yaml
 
 from .managers import parse_managers
 from .models import (
+    STRATEGIES,
     BudgetConfig,
     CheckinsConfig,
     CheckinWindow,
@@ -21,11 +22,14 @@ from .models import (
     GithubAppConfig,
     HeartbeatConfig,
     Module,
+    ModulePublish,
     PoolConfig,
     ProjectBrief,
     ProjectConfig,
+    PublishConfig,
     PublishGateConfig,
     RecordedCommands,
+    RefinementConfig,
     RiteProject,
     SandboxConfig,
     ScanPattern,
@@ -170,8 +174,10 @@ _CONFIG_SECTIONS = {
     "budget": _fields(BudgetConfig),
     "schedule": _fields(ScheduleConfig),
     "checkins": _fields(CheckinsConfig),
+    "refinement": _fields(RefinementConfig),
     "spec": _fields(SpecConfig),
     "coordination": _fields(CoordinationConfig),
+    "publish": _fields(PublishConfig),
 }
 _CONFIG_KEYS = _fields(ProjectConfig)
 _EXPERTISE_KEYS = _fields(ExpertiseEntry, without=frozenset({"name"}))
@@ -248,6 +254,98 @@ def _parse_recorded_commands(raw: object) -> RecordedCommands | str:
     return RecordedCommands(**{key: value.strip() for key, value in raw.items()})
 
 
+_MODULE_PUBLISH_KEYS = _fields(ModulePublish)
+
+
+def _parse_publish(raw: object, *, module: bool) -> PublishConfig | ModulePublish | str:
+    """A `publish:` block, the project's or a module's, or what is wrong
+    with it (PB1).
+
+    ⚠ **Refused, never narrowed to the default.** A misspelt strategy read as
+    `pull_request` would open PRs for a project that asked for `commit`, and
+    `commit` is the setting a team chooses precisely so nothing leaves the
+    machine unreviewed. That outweighs the reason other blocks narrow (a
+    refused config.yaml stops every command): the fix is one line in a file,
+    and the refusal names it.
+
+    A module's keys are all optional; a project's absent keys take the
+    defaults. `auto_merge: true` beside a `strategy` other than
+    `pull_request` IN THE SAME BLOCK is refused: that pair was written
+    together and cannot mean anything. One inherited from the project is
+    not refused; `rite doctor` shows it as not applying to that module.
+    """
+    where = "publish"
+    if raw is None:
+        return ModulePublish() if module else PublishConfig()
+    if not isinstance(raw, dict):
+        return f"'{where}' must be a mapping of strategy, squash and auto_merge"
+    known = _MODULE_PUBLISH_KEYS if module else _fields(PublishConfig)
+    unknown = _unknown_key(raw, known)
+    if unknown:
+        return f"{where}: {unknown}"
+    strategy = raw.get("strategy")
+    if strategy is not None and strategy not in STRATEGIES:
+        close = difflib.get_close_matches(str(strategy), STRATEGIES, n=1)
+        hint = f" — did you mean '{close[0]}'?" if close else ""
+        return (
+            f"{where}.strategy {strategy!r} is not one of {', '.join(STRATEGIES)}{hint}"
+        )
+    for key in ("squash", "auto_merge"):
+        value = raw.get(key)
+        # `is not True/False`, not truthiness: YAML reads `squash: "no"` as a
+        # string, which is truthy, and would squash a project that said no.
+        if value is not None and not isinstance(value, bool):
+            return f"{where}.{key} must be true or false, not {value!r}"
+    if raw.get("auto_merge") is True and strategy not in (None, "pull_request"):
+        return (
+            f"{where}.auto_merge is true beside strategy {strategy!r}: only a "
+            "pull request is ever merged by rite. Remove auto_merge, or use "
+            "strategy: pull_request"
+        )
+    shared = raw.get("shared_repo")
+    if shared is not None and (not isinstance(shared, str) or not shared.strip()):
+        return f"{where}.shared_repo must be a remote URL or name"
+    if module:
+        return ModulePublish(
+            strategy=strategy,
+            squash=raw.get("squash"),
+            auto_merge=raw.get("auto_merge"),
+            shared_repo=shared.strip() if isinstance(shared, str) else None,
+        )
+    defaults = PublishConfig()
+    return PublishConfig(
+        strategy=strategy if strategy is not None else defaults.strategy,
+        squash=raw.get("squash", defaults.squash),
+        auto_merge=raw.get("auto_merge", defaults.auto_merge),
+    )
+
+
+def home_relative(url: str | None) -> str | None:
+    """A module URL as it is written into a committed file.
+
+    A local path under home is written `~/…`: `modules.yaml` and the
+    generated CLAUDE.md are committed, and the publish gate's built-in rule
+    refuses a `/Users/<name>/` or `/home/<name>/` path in a pushed file —
+    the dogfood F1 failure, reached by a different file once `rite init`
+    started registering the repository it runs in, whose origin can be a
+    local directory. A network URL is left exactly as it is."""
+    if not url or "://" in url or re.match(r"^[^/]+:", url):
+        return url
+    path = Path(url)
+    home = Path.home()
+    if path.is_absolute() and path.is_relative_to(home):
+        return f"~/{path.relative_to(home).as_posix()}"
+    return url
+
+
+def expand_home(url: str | None) -> str | None:
+    """The inverse of `home_relative`, applied on every read: git and the
+    shell-free subprocess calls that clone and fetch do not expand `~`."""
+    if url and url.startswith("~/"):
+        return str(Path(url).expanduser())
+    return url
+
+
 def parse_modules(path: Path) -> list[Module] | ParseError:
     if not path.exists():
         return []
@@ -284,14 +382,19 @@ def parse_modules(path: Path) -> list[Module] | ParseError:
         if isinstance(commands, str):
             return ParseError(str(path), f"module '{name}': {commands}")
 
+        publish = _parse_publish(entry.get("publish"), module=True)
+        if isinstance(publish, str):
+            return ParseError(str(path), f"module '{name}': {publish}")
+
         modules.append(
             Module(
                 name=name,
                 path=mod_path,
-                url=entry.get("url"),
+                url=expand_home(entry.get("url")),
                 branch=entry.get("branch", "main"),
                 description=entry.get("description", ""),
                 commands=commands,
+                publish=publish,
             )
         )
     return modules
@@ -365,9 +468,17 @@ def parse_config(path: Path) -> ProjectConfig | ParseError:
     if app_problem:
         return ParseError(str(path), app_problem)
 
+    refinement_problem = _refinement_problem(raw.get("refinement"))
+    if refinement_problem:
+        return ParseError(str(path), refinement_problem)
+
     unknown = _unknown_config_key(raw)
     if unknown:
         return ParseError(str(path), unknown)
+
+    publish = _parse_publish(raw.get("publish"), module=False)
+    if isinstance(publish, str):
+        return ParseError(str(path), publish)
 
     tb_raw = raw.get("ticket_backend", {})
     ticket_backend = (
@@ -377,10 +488,19 @@ def parse_config(path: Path) -> ProjectConfig | ParseError:
             repo=tb_raw.get("repo", ""),
             projects=tb_raw.get("projects", {}),
             credential=tb_raw.get("credential", ""),
+            scope_label=str(tb_raw.get("scope_label", "") or "").strip(),
         )
         if isinstance(tb_raw, dict)
         else TicketBackendConfig()
     )
+    # ⚠ Refused, not narrowed to "unscoped": a project whose scope label
+    # cannot be used and is quietly dropped reads every other project's
+    # tickets while its owner believes it is scoped (v0.7.0 dogfood S1).
+    from rite_ai.tickets.scope import label_problem
+
+    scope_problem = label_problem(ticket_backend.scope_label)
+    if scope_problem:
+        return ParseError(str(path), scope_problem)
 
     # A malformed `credentials` block narrows to the default (no
     # namespace -> bare keys -> the pre-namespacing layout) rather than
@@ -422,6 +542,7 @@ def parse_config(path: Path) -> ProjectConfig | ParseError:
             owner_lease_minutes=coord_raw.get("owner_lease_minutes", 15),
             skew_tolerance_seconds=coord_raw.get("skew_tolerance_seconds", 60),
             assign_unattended=bool(coord_raw.get("assign_unattended", False)),
+            sweep_minutes=coord_raw.get("sweep_minutes", 30),
         )
     else:
         coordination = CoordinationConfig()
@@ -469,7 +590,9 @@ def parse_config(path: Path) -> ProjectConfig | ParseError:
     slack_raw = raw.get("slack") or {}
     slack = SlackConfig(
         owner_user=str(slack_raw.get("owner_user") or ""),
-        broadcast_channel=str(slack_raw.get("broadcast_channel") or ""),
+        broadcast_channel=normalize_slack_channel(
+            slack_raw.get("broadcast_channel") or ""
+        ),
     )
 
     wd_raw = raw.get("watchdog", {})
@@ -580,6 +703,7 @@ def parse_config(path: Path) -> ProjectConfig | ParseError:
                 CheckinWindow(hours=str(hours), days=str(w.get("days", "") or ""))
             )
     checkins = CheckinsConfig(windows=checkin_windows)
+    refinement = _refinement_of(raw.get("refinement"))
 
     return ProjectConfig(
         ticket_backend=ticket_backend,
@@ -601,12 +725,75 @@ def parse_config(path: Path) -> ProjectConfig | ParseError:
         budget=budget,
         schedule=schedule,
         checkins=checkins,
+        refinement=refinement,
         spec=spec,
+        publish=publish,
     )
 
 
 _SLACK_USER = re.compile(r"^[UW][A-Z0-9]{2,}$")
 _SLACK_CHANNEL = re.compile(r"^(#[a-z0-9][a-z0-9._-]*|[CG][A-Z0-9]{2,})$")
+_SLACK_CHANNEL_ID = re.compile(r"^[CG][A-Z0-9]{2,}$")
+
+
+def slack_field_problem(key: str, value: str) -> str:
+    """Why one `slack:` value cannot be stored, or "" — the same rules
+    `_slack_problem` applies to the file, reusable before the file is written
+    so a setup command cannot create a config.yaml that will not parse."""
+    return _slack_problem({key: value})
+
+
+def credentials_despite_config_error(path: Path) -> CredentialsConfig | None:
+    """This project's credential namespace, read on its own when the rest of
+    `config.yaml` will not parse — or None when even this cannot be read.
+
+    v0.7.0 dogfood S19. A `slack.broadcast_channel` rite could not name made
+    `parse_config` return a `ParseError`, and `rite credential set` answered
+    every invocation with it and exited 1 — so the one command that repairs a
+    project's credentials was unusable until an unrelated line was hand-edited.
+    The same reasoning `coordination` already carries (a malformed block
+    narrows rather than failing the parse, because a raising parse "takes out
+    every command that reads config.yaml, including the ones that would repair
+    it"), applied to the credential commands.
+
+    ⚠ **Scoping, not silence.** Reading nothing here would leave
+    `rite credential set` writing to the machine-wide store while the project
+    has a namespace, which is the wrong entry written under a "stored" —
+    worse than the refusal. So the namespace is recovered, the caller says
+    what is still broken, and only the namespace is trusted.
+    """
+    try:
+        raw = yaml.safe_load(path.read_text()) or {}
+    except (OSError, yaml.YAMLError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    cred_raw = raw.get("credentials", {})
+    if not isinstance(cred_raw, dict):
+        return CredentialsConfig()
+    return CredentialsConfig(namespace=str(cred_raw.get("namespace", "") or ""))
+
+
+def normalize_slack_channel(value: object) -> str:
+    """A channel as rite stores it: `all-rite` and `#all-rite` are the same
+    channel, so the one the user typed without Slack's `#` is not an error.
+
+    v0.7.0 dogfood S19. Slack's own UI writes a channel as `#all-rite` and its
+    API takes it either way, so a person copying the name out of the sidebar
+    types the bare word and met "neither a channel name starting with '#' nor
+    a channel id" — a rejection for a channel rite could name exactly. An id
+    (`C…`, `G…`) is returned untouched: `#` in front of one would be a channel
+    named after an id, which is not the same conversation.
+
+    Only the shape is settled here. Whether the channel EXISTS is Slack's
+    answer, at the first post, and `rite doctor` asks it.
+    """
+    if not isinstance(value, str):
+        return ""
+    text = value.strip()
+    if not text or text.startswith("#") or _SLACK_CHANNEL_ID.match(text):
+        return text
+    return f"#{text}"
 
 
 def _github_app_problem(raw: object) -> str:
@@ -632,6 +819,98 @@ def _github_app_problem(raw: object) -> str:
         )
     if repo and (repo.count("/") != 1 or not all(repo.split("/"))):
         return f"github_app.repository {repo!r} is not owner/name"
+    return ""
+
+
+def _refinement_of(raw: object) -> RefinementConfig:
+    """`refinement:` as the config, after `_refinement_problem` passed it."""
+    if not isinstance(raw, dict):
+        return RefinementConfig()
+    default = RefinementConfig()
+    words = raw.get("accept_words")
+    return RefinementConfig(
+        unanswered=raw.get("unanswered", default.unanswered),
+        deadline_hours=raw.get("deadline_hours", default.deadline_hours),
+        open_max=raw.get("open_max", default.open_max),
+        start_per_session=raw.get("start_per_session", default.start_per_session),
+        accept_words=(
+            [str(w).casefold() for w in words]
+            if words is not None
+            else default.accept_words
+        ),
+        chore_after_minutes=raw.get("chore_after_minutes", default.chore_after_minutes),
+        questions_to=raw.get("questions_to", default.questions_to),
+        channel=str(raw.get("channel", "") or ""),
+    )
+
+
+def _whole(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _refinement_problem(raw: object) -> str:
+    """What is wrong with `refinement:`, or "" (TR2; the note's part 3.11).
+
+    **Refused, never clamped.** A limit rite quietly changed is one the User
+    believes they set, and the accept words are the one list where a typo
+    turns a refusal into consent.
+    """
+    from rite_ai.config.models import NEVER_ACCEPT
+
+    if raw is None:
+        return ""
+    if not isinstance(raw, dict):
+        return "'refinement' must be a mapping"
+    config = _refinement_of(raw)
+    for key in ("unanswered", "open_max", "start_per_session", "chore_after_minutes"):
+        value = raw.get(key)
+        if value is not None and (not _whole(value) or value < 1):
+            return f"refinement.{key} is {value!r}: it must be a whole number above 0"
+    if config.start_per_session > config.open_max:
+        return (
+            f"refinement.start_per_session ({config.start_per_session}) is more "
+            f"than refinement.open_max ({config.open_max}): no session could "
+            "start that many without passing the cap on open refinements"
+        )
+    hours = raw.get("deadline_hours")
+    if hours is not None and (
+        isinstance(hours, bool) or not isinstance(hours, int | float) or hours <= 0
+    ):
+        return f"refinement.deadline_hours is {hours!r}: it must be a number above 0"
+    words = raw.get("accept_words")
+    if words is not None:
+        if not isinstance(words, list) or not words:
+            return "refinement.accept_words must be a list of at least one word"
+        for word in words:
+            if not isinstance(word, str) or not word.strip():
+                return f"refinement.accept_words has an empty entry ({word!r})"
+            if any(c.isspace() for c in word):
+                return (
+                    f"refinement.accept_words entry {word!r} has a space in it: "
+                    "each entry is one word, matched exactly"
+                )
+            if word.casefold() in NEVER_ACCEPT:
+                return (
+                    f"refinement.accept_words may not contain {word!r}: it is "
+                    "a word people type to refuse, and this list turns a reply "
+                    "into consent"
+                )
+    if config.questions_to not in ("dm", "channel"):
+        return (
+            f"refinement.questions_to is {config.questions_to!r}: it is `dm` "
+            "(the default) or `channel`"
+        )
+    if config.questions_to == "channel":
+        if not config.channel:
+            return (
+                "refinement.questions_to is `channel` and refinement.channel is "
+                "empty: name the private channel rite is invited to, by its id"
+            )
+        if not _SLACK_CHANNEL.match(config.channel):
+            return (
+                f"refinement.channel {config.channel!r} is not a Slack channel "
+                "id (C… or G…) or #name"
+            )
     return ""
 
 
@@ -662,7 +941,9 @@ def _slack_problem(raw: object) -> str:
             f"slack.owner_user {owner!r} is not a Slack user id — it looks like "
             "U0123ABCD (profile → ⋮ → Copy member ID), not a name or an email"
         )
-    broadcast = raw.get("broadcast_channel") or ""
+    # NORMALISED first: a bare `all-rite` is the channel `#all-rite`, not a
+    # mistake (S19). What is left after that really is unnameable.
+    broadcast = normalize_slack_channel(raw.get("broadcast_channel") or "")
     if broadcast and not (
         isinstance(broadcast, str) and _SLACK_CHANNEL.match(broadcast)
     ):
@@ -740,6 +1021,7 @@ def parse_worker(path: Path) -> WorkerManifest | ParseError:
         manager=worker.get("manager", ""),
         modules=_str_list(worker.get("modules", [])),
         claude_instructions=worker.get("claude_instructions", ""),
+        follow_module_docs=_str_list(worker.get("follow_module_docs", [])),
     )
 
 

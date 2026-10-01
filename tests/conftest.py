@@ -65,6 +65,20 @@ smaller is used so a path that works here works there."""
 
 
 @pytest.fixture(autouse=True)
+def _not_inside_the_callers_tmux(monkeypatch):
+    """No test sees the tmux session the suite was started from.
+
+    Inside a tmux session `$TMUX` names the enclosing server, and tmux obeys
+    it before `TMUX_TMPDIR` or a default socket. So a test that set up a
+    private server with `TMUX_TMPDIR`, then froze and killed "its" server,
+    froze and killed the caller's instead: found 2026-09-29, when a suite run
+    from tmux took down a live supervisor and every session on that server
+    (`test_the_suite_never_touches_the_enclosing_tmux`)."""
+    monkeypatch.delenv("TMUX", raising=False)
+    monkeypatch.delenv("TMUX_PANE", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _isolated_claude_projects_dir(tmp_path_factory, monkeypatch):
     empty_dir = tmp_path_factory.mktemp("empty-claude-projects")
     monkeypatch.setenv("RITE_CLAUDE_PROJECTS_DIR", str(empty_dir))
@@ -148,6 +162,11 @@ def pytest_configure(config):
         "claude_login: run `rite start`'s real Claude sign-in step (C6/C26) "
         "instead of the suite's default of skipping it",
     )
+    config.addinivalue_line(
+        "markers",
+        "yoloai_installer: call the real `install_yoloai` (with its subprocess "
+        "mocked by the test) instead of the suite's refusal",
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -171,6 +190,53 @@ def _no_claude_login_step(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_ollama(monkeypatch):
+    """No test reaches a real Ollama server or reads its real log.
+
+    `local.truncation` asks the server its version and reads its log after
+    every Goose Manager cycle. On a machine running Ollama that made the
+    supervisor's tests read the operator's own server and log, and take a
+    different path on CI, where none runs. Tests of the module pass their own
+    `get` and `log`."""
+    import rite_ai.local.truncation as truncation
+
+    def refuse(url):
+        raise ConnectionError("the test suite does not reach a real Ollama")
+
+    monkeypatch.setattr(truncation, "_default_get", refuse)
+    monkeypatch.setenv("RITE_OLLAMA_LOG", "/nonexistent/rite-test/ollama.log")
+
+
+@pytest.fixture(autouse=True)
+def _no_real_yoloai_install(request, monkeypatch):
+    """No test runs the real yoloAI installer.
+
+    🔴 Measured on the first whole-suite macOS CI run (PR #90): with no
+    yoloAI on the runner, `rite init`'s interactive tests reached the install
+    offer, took its default "yes", and ran `brew install --cask yoloai` for
+    real. So the suite would install software on any Mac with Homebrew and
+    without yoloAI. It never failed on a developer's Mac (yoloAI present)
+    or on Linux (no installer offered), which is why nobody saw it.
+
+    `pytest.fail`, not an exception: `Failed` is a BaseException, so no
+    `except Exception` on the way can turn this into a quiet "install
+    failed". Tests of the install path patch `install_yoloai` themselves.
+    In-process only: a `rite` started as a subprocess is not covered.
+    A test of `install_yoloai` itself mocks its subprocess and is marked
+    `yoloai_installer`."""
+    if request.node.get_closest_marker("yoloai_installer"):
+        yield
+        return
+    import rite_ai.sandbox as sandbox
+
+    def refuse(*args, **kwargs):
+        pytest.fail("a test reached the real yoloAI installer; patch it")
+
+    monkeypatch.setattr(sandbox, "install_yoloai", refuse)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _no_real_credential_file(tmp_path_factory, monkeypatch):
     """rite's credential FILE store, per test, never the real one.
 
@@ -187,6 +253,11 @@ def _no_real_credential_file(tmp_path_factory, monkeypatch):
     #
     # ⚠ A directory of its OWN, not inside `d`: `github_access` denies the
     # credential store's parent (here `d`) to every Manager.
+    # And which project each Slack app is bound to (`managers.slack_app`),
+    # which lives in the same data directory as the mail.
+    monkeypatch.setenv(
+        "RITE_SLACK_APPS_DIR", str(tmp_path_factory.mktemp("slackapps") / "apps")
+    )
     if "RITE_HOME_DIR" not in os.environ:
         monkeypatch.setenv(
             "RITE_HOME_DIR", str(tmp_path_factory.mktemp("ritehome") / "rite-home")

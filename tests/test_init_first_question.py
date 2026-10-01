@@ -23,8 +23,11 @@ from rite_ai.cli.main import cli
 EXISTING = "Do you have a spec or existing code for this project? [y/N]"
 PATH = "Path: [.]"
 CHANGES = "Anything stale, or that you'd like changed? Free text, or Enter to skip."
-# Asked on EVERY path: it is about this machine, not about the source.
+# Asked on NO path while C7's `OWNER_ONLY_UNTIL_MULTI_MANAGER` holds: a
+# Manager machine needs the multi-manager work 0.9.0 ships. Kept as a constant
+# so the "it is not asked" assertions name the same string the prompt used.
 ROLE = "Is this the Owner machine or a Manager machine?"
+OWNER_SAID = "This machine is the project's Owner"
 # Asked only by the from-scratch questionnaire.
 FROM_SCRATCH = "Project name?"
 
@@ -54,7 +57,8 @@ def test_no_is_the_default_and_leads_to_the_questionnaire(tmp_path: Path):
     result = CliRunner().invoke(_init_cmd, [str(tmp_path)], input=answers)
     assert result.exit_code == 0, result.output
     assert EXISTING in result.output
-    assert ROLE in result.output
+    assert ROLE not in result.output
+    assert OWNER_SAID in result.output
     assert PATH not in result.output
     assert "STATUS:created" in result.output
     assert "source" not in _brief(tmp_path)
@@ -74,23 +78,30 @@ def test_yes_mode_without_a_preset_asks_nothing_and_records_no_source(
 
 def test_yes_then_enter_twice_is_four_prompts_and_done(tmp_path: Path):
     (tmp_path / "main.py").write_text("print('hi')\n")
-    result = CliRunner().invoke(_init_cmd, [str(tmp_path)], input="y\n\n\n\n")
+    # The three, then (S13) the repository: code in no repository registers no
+    # module, so init asks where the code's repository is. Enter skips. The
+    # role is no longer among them (C7) — it is said, not asked.
+    result = CliRunner().invoke(_init_cmd, [str(tmp_path)], input="y\n\n\n\n\n\n")
     assert result.exit_code == 0, result.output
     assert "STATUS:created" in result.output
-    for prompt in (EXISTING, PATH, CHANGES, ROLE):
+    for prompt in (EXISTING, PATH, CHANGES):
         assert prompt in result.output
+    assert ROLE not in result.output
     assert "languages, structure and conventions will be taken" in result.output
     assert FROM_SCRATCH not in result.output, "reached the questionnaire"
 
 
 def test_the_brief_holds_the_path_and_the_answer(tmp_path: Path):
+    # A path that holds something: an empty one is now asked where the code
+    # is instead (dogfood S11, `test_init_asks_for_the_code_when_the_path_is_empty`).
+    (tmp_path / "notes.md").write_text("# the feed poller\n")
     result = CliRunner().invoke(
-        _init_cmd, [str(tmp_path)], input="y\n\nThe feed poller is stale\n\n"
+        _init_cmd, [str(tmp_path)], input="y\n\nThe feed poller is stale\n\n\n\n"
     )
     assert result.exit_code == 0, result.output
     brief = _brief(tmp_path)
     assert brief["source"] == {
-        "path": str(tmp_path.resolve()),
+        "path": ".",
         "changes": "The feed poller is stale",
     }
     assert brief["what"] == {"kind": "", "features": ""}
@@ -100,27 +111,27 @@ def test_the_brief_holds_the_path_and_the_answer(tmp_path: Path):
 
 def test_the_path_can_point_elsewhere(tmp_path: Path):
     (tmp_path / "code").mkdir()
-    result = CliRunner().invoke(_init_cmd, [str(tmp_path)], input="y\ncode\n\n\n")
+    result = CliRunner().invoke(_init_cmd, [str(tmp_path)], input="y\ncode\n\n\n\n")
     assert result.exit_code == 0, result.output
-    assert _brief(tmp_path)["source"]["path"] == str((tmp_path / "code").resolve())
+    assert _brief(tmp_path)["source"]["path"] == "code"
 
 
 def test_a_mistyped_path_is_asked_again_and_never_falls_through(tmp_path: Path):
     result = CliRunner().invoke(
-        _init_cmd, [str(tmp_path)], input="y\nno-such-dir\n\n\n\n"
+        _init_cmd, [str(tmp_path)], input="y\nno-such-dir\n\n\n\n\n"
     )
     assert result.exit_code == 0, result.output
     assert "Nothing at" in result.output
     assert result.output.count(PATH) == 2
     assert FROM_SCRATCH not in result.output, "fell through to the from-scratch flow"
-    assert _brief(tmp_path)["source"]["path"] == str(tmp_path.resolve())
+    assert _brief(tmp_path)["source"]["path"] == "."
 
 
 def test_the_root_branch_is_the_one_the_source_is_on(tmp_path: Path):
     code = tmp_path / "code"
     code.mkdir()
     subprocess.run(["git", "init", "-q", "-b", "phase-2"], cwd=code, check=True)
-    CliRunner().invoke(_init_cmd, [str(tmp_path)], input="y\ncode\n\n\n")
+    CliRunner().invoke(_init_cmd, [str(tmp_path)], input="y\ncode\n\n\n\n")
     assert _brief(tmp_path)["project"]["root_branch"] == "phase-2"
 
 
@@ -138,12 +149,15 @@ def _existing_project(root: Path) -> dict[str, str]:
 def test_an_existing_project_gets_the_changes_recorded_not_rebuilt(tmp_path: Path):
     before = _existing_project(tmp_path)
     result = CliRunner().invoke(
-        cli, ["init", str(tmp_path)], input="y\n\nRename the backend module\n"
+        cli, ["init", str(tmp_path)], input="y\n\nRename the backend module\n\n"
     )
     assert result.exit_code == 0, result.output
     assert ALREADY_A_PROJECT in result.output
     assert "Wipe and start over" not in result.output
-    assert _brief(tmp_path)["source"]["changes"] == "Rename the backend module"
+    assert _brief(tmp_path)["source"] == {
+        "changes": "Rename the backend module",
+        "path": ".",
+    }
     after = {rel: (tmp_path / rel).read_text() for rel in before}
     assert after == before, "an existing project was rebuilt"
 
@@ -151,7 +165,7 @@ def test_an_existing_project_gets_the_changes_recorded_not_rebuilt(tmp_path: Pat
 def test_enter_on_an_existing_project_changes_nothing(tmp_path: Path):
     _existing_project(tmp_path)
     brief_before = (tmp_path / ".rite" / "brief.yaml").read_text()
-    result = CliRunner().invoke(cli, ["init", str(tmp_path)], input="y\n\n\n")
+    result = CliRunner().invoke(cli, ["init", str(tmp_path)], input="y\n\n\n\n")
     assert result.exit_code == 0, result.output
     assert "Nothing to apply" in result.output
     assert (tmp_path / ".rite" / "brief.yaml").read_text() == brief_before
@@ -159,8 +173,8 @@ def test_enter_on_an_existing_project_changes_nothing(tmp_path: Path):
 
 def test_a_second_request_is_kept_beside_the_first(tmp_path: Path):
     _existing_project(tmp_path)
-    CliRunner().invoke(cli, ["init", str(tmp_path)], input="y\n\nFirst change\n")
-    CliRunner().invoke(cli, ["init", str(tmp_path)], input="y\n\nSecond change\n")
+    CliRunner().invoke(cli, ["init", str(tmp_path)], input="y\n\nFirst change\n\n")
+    CliRunner().invoke(cli, ["init", str(tmp_path)], input="y\n\nSecond change\n\n")
     changes = _brief(tmp_path)["source"]["changes"]
     assert "First change" in changes and "Second change" in changes
 
@@ -169,7 +183,7 @@ def test_sections_init_does_not_write_survive(tmp_path: Path):
     _existing_project(tmp_path)
     brief_path = tmp_path / ".rite" / "brief.yaml"
     brief_path.write_text(brief_path.read_text() + "enriched:\n  note: kept\n")
-    CliRunner().invoke(cli, ["init", str(tmp_path)], input="y\n\nA change\n")
+    CliRunner().invoke(cli, ["init", str(tmp_path)], input="y\n\nA change\n\n")
     assert _brief(tmp_path)["enriched"] == {"note": "kept"}
 
 
@@ -184,7 +198,7 @@ def test_a_preset_can_answer_the_first_question(tmp_path: Path):
     )
     assert result.exit_code == 0, result.output
     assert _brief(tmp_path)["source"] == {
-        "path": str(tmp_path.resolve()),
+        "path": ".",
         "changes": "Split the API",
     }
 
@@ -200,24 +214,27 @@ def test_a_preset_path_that_does_not_exist_is_an_error(tmp_path: Path):
     assert not (tmp_path / ".rite").exists()
 
 
-class TestTheRoleIsAskedOnEveryPath:
-    """The role is about this person and this machine — no spec or codebase
-    answers it. Measured on a tester's machine: a copied `.rite/` plus the
-    existing-source path never asked, and that session believed it owned the
-    board."""
+class TestTheRoleIsNotAskedOnAnyPath:
+    """C7: the role question is no longer put, on either route, and every
+    route produces an Owner machine.
 
-    def test_the_source_path_asks_it(self, tmp_path: Path):
+    It WAS asked on both — and had to be, because no spec or codebase answers
+    it (measured: a copied `.rite/` plus the existing-source path never asked,
+    and that session believed it owned the board). What changed is that the
+    only other answer, a Manager machine, needs the multi-manager work this
+    release does not ship, so offering it was offering a path that does not
+    work. `_ask_role` is the one suppression point; see
+    `test_init_is_owner_only_until_multi_manager.py` for the property.
+    """
+
+    def test_the_source_path_does_not_ask_and_says_what_it_took(self, tmp_path: Path):
         (tmp_path / "main.py").write_text("print('hi')\n")
-        result = CliRunner().invoke(_init_cmd, [str(tmp_path)], input="y\n\n\n\n")
+        # … and the repository, Enter (S13: code in no repository).
+        result = CliRunner().invoke(_init_cmd, [str(tmp_path)], input="y\n\n\n\n\n")
         assert result.exit_code == 0, result.output
-        assert ROLE in result.output
+        assert ROLE not in result.output
+        assert OWNER_SAID in result.output
         assert _brief(tmp_path)["project"]["role"] == "owner"
-
-    def test_manager_is_recorded_not_assumed(self, tmp_path: Path):
-        (tmp_path / "main.py").write_text("print('hi')\n")
-        result = CliRunner().invoke(_init_cmd, [str(tmp_path)], input="y\n\n\n2\n\n")
-        assert result.exit_code == 0, result.output
-        assert _brief(tmp_path)["project"]["role"] == "manager"
 
     def test_yes_mode_takes_owner_without_asking(self, tmp_path: Path):
         (tmp_path / "main.py").write_text("print('hi')\n")

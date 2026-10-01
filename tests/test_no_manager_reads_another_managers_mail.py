@@ -30,9 +30,11 @@ import pytest
 from rite_ai.managers.enclosure import write_profile
 from rite_ai.managers.mailbox import INBOX, OUTBOX, mail_root, mailbox_dir, send
 
-pytestmark = pytest.mark.skipif(
-    sys.platform != "darwin", reason="seatbelt is macOS only"
-)
+# ⚠ The macOS gate is on the `machine` fixture, not the module. It was a
+# module-wide `pytestmark`, which also skipped `TestABoxUnderRiteHomeIsMovedOut`
+# on Linux: three tests of `adopt_legacy` that run no `sandbox-exec` and so ran
+# nowhere in CI. Every test that needs seatbelt takes `machine`; one that
+# forgets it fails on Linux, loudly, rather than skipping.
 
 
 def _under(profile: Path, command: str, cwd: Path) -> subprocess.CompletedProcess:
@@ -49,6 +51,8 @@ def _under(profile: Path, command: str, cwd: Path) -> subprocess.CompletedProces
 def machine(tmp_path, monkeypatch):
     """Two projects on one machine, each with a `lead`; project one also has
     a `helper`. Mail is where production puts it, not an override."""
+    if sys.platform != "darwin":
+        pytest.skip("seatbelt is macOS only")
     import rite_ai.managers.github_access as ga
 
     home = (tmp_path / "home").resolve()
@@ -143,24 +147,41 @@ def test_rite_home_is_not_readable_at_all(machine):
     assert f'(deny file-read* file-write* (subpath "{home / ".rite"}"))' in profile
 
 
-def test_a_manager_cannot_read_a_siblings_in_tree_state(machine):
-    """The macOS half of the same family: `.rite/managers/<other>/` holds
-    the other Manager's whole instruction (`prompt.txt`, mail included) and
-    its routes. The Landlock policy never granted it."""
+def test_a_manager_cannot_read_a_siblings_state(machine):
+    """The macOS half of the same family: a Manager's own directory holds its
+    whole instruction (`prompt.txt`, mail included) and its routes. Since MM8
+    it is outside the project (`managers.manager_dir`), granted to its own
+    Manager by path and to no other. Measured inside the real profile."""
+    from rite_ai.managers import manager_dir
+
     one, helper = machine["one"], machine["helper"]
-    theirs = one / ".rite" / "managers" / "lead"
+    theirs = manager_dir(one, "lead")
     (theirs / "routes").mkdir(parents=True, exist_ok=True)
     (theirs / "prompt.txt").write_text("the lead's instruction")
     (theirs / "routes" / "r.json").write_text("{}")
     assert _under(helper, f"cat '{theirs / 'prompt.txt'}'", one).returncode
     assert _under(helper, f"cat '{theirs / 'routes' / 'r.json'}'", one).returncode
     assert _under(helper, f"ls '{theirs}'", one).returncode
-    own = one / ".rite" / "managers" / "helper"
-    own.mkdir(parents=True, exist_ok=True)
+    assert _under(
+        helper, f"echo x > '{theirs / 'routes' / 'forged.json'}'", one
+    ).returncode
+    own = manager_dir(one, "helper")
     (own / "prompt.txt").write_text("mine")
     assert _under(helper, f"cat '{own / 'prompt.txt'}'", one).returncode == 0, (
         "control: a Manager must still read its own directory"
     )
+    assert _under(helper, f"echo x > '{own / 'written'}'", one).returncode == 0, (
+        "control: a Manager must still write its own directory"
+    )
+
+
+def test_a_siblings_legacy_in_tree_directory_stays_unreadable(machine):
+    """What an older rite left in `.rite/managers/<other>/` is still denied."""
+    one, helper = machine["one"], machine["helper"]
+    theirs = one / ".rite" / "managers" / "lead"
+    theirs.mkdir(parents=True, exist_ok=True)
+    (theirs / "prompt.txt").write_text("an old instruction")
+    assert _under(helper, f"cat '{theirs / 'prompt.txt'}'", one).returncode
 
 
 class TestABoxUnderRiteHomeIsMovedOut:
@@ -202,7 +223,9 @@ class TestABoxUnderRiteHomeIsMovedOut:
         assert [m.text for m in read(root, "lead", INBOX)] == ["waiting"]
         assert unread(root, "lead", OUTBOX, "slack") == [], "the reader lost its place"
         assert (mail_root(root, "lead") / ADOPTED_MARKER).exists()
-        assert "out of ~/.rite" in " ".join(adoption_notes(adoption, "lead"))
+        moved = " ".join(adoption_notes(adoption, "lead"))
+        assert "out of ~/.rite" in moved
+        assert "every Manager's sandbox can read" not in moved
 
     def test_a_file_that_cannot_move_is_said_to_be_still_exposed(self, old):
         from rite_ai.managers.mailbox import adopt_legacy, adoption_notes
@@ -214,7 +237,10 @@ class TestABoxUnderRiteHomeIsMovedOut:
         adoption = adopt_legacy(root, "lead")
         assert adoption.kept_in_rite_home == (box / "in" / "1_1_1.json",)
         said = " ".join(adoption_notes(adoption, "lead"))
-        assert "still READABLE by every Manager" in said
+        assert "NOT delivered" in said and "old location" in said
+        # ⚠ The false wording, gone: `~/.rite` is not granted to any Manager
+        # since DF3, so "readable by every Manager" would be a false alarm.
+        assert "READABLE by every" not in said and "every Manager" not in said
 
     def test_another_projects_box_left_there_is_said(self, old, tmp_path):
         from rite_ai.managers.mailbox import (
@@ -232,5 +258,8 @@ class TestABoxUnderRiteHomeIsMovedOut:
         (theirs.parent.parent.parent / "project").write_text(str(other))
         adopt_legacy(root, "lead")
         said = " ".join(still_under_rite_home())
-        assert "EVERY Manager" in said and str(other) in said
+        assert "old location" in said and str(other) in said
+        # ⚠ The false wording, gone (see above).
+        assert "EVERY Manager" not in said
+        assert "No Manager started by this rite can read it" in said
         assert str(root) not in said, "this project's own mail was not moved"

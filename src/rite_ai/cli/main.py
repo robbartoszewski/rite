@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -6,7 +7,9 @@ from pathlib import Path
 import click
 
 from rite_ai import __version__
+from rite_ai.cli import module_docs as module_docs_step
 from rite_ai.cli.help import RiteGroup
+from rite_ai.config.managers import CLAUDE, DUTIES, PRESETS, effective_duties
 from rite_ai.credentials.store import STORED
 from rite_ai.state import exclusion_holds
 
@@ -260,7 +263,7 @@ def _has_project_in_scope() -> bool:
     back to cwd), this distinguishes "found a real .rite/" from "found
     nothing" — the distinction `rite status`'s aggregation mode needs to
     decide whether to show one project's detail or the cross-project
-    summary (SPEC §8.9). Same marker as `_find_project_root`, and for the
+    summary. Same marker as `_find_project_root`, and for the
     same reason — a directory with a `.rite/` in it is not necessarily a
     project."""
     if os.environ.get(PROJECT_ROOT_ENV):
@@ -287,7 +290,7 @@ def cli() -> None:
     "config_file",
     default=None,
     type=click.Path(exists=True),
-    help="Preset file answering some or all questions (SPEC §9.3).",
+    help="Preset file answering some or all questions.",
 )
 @click.option(
     "--yes",
@@ -448,21 +451,231 @@ def _doctor_check(label: str, problems: list[str]):
 
 
 @cli.command()
-def doctor() -> None:
-    """Is this healthy? (SPEC §9.8) Token presence, external tool
+@click.option(
+    "--network",
+    is_flag=True,
+    help=(
+        "Also run the checks that talk to a service: whether each Worker's "
+        "GitHub token can PUSH, and a test message to the Slack channel. Off "
+        "by default, so a plain run adds no network call of its own and needs "
+        "no connection for these two."
+    ),
+)
+def doctor(network: bool) -> None:
+    """Is this healthy? Token presence, external tool
     availability, `.rite/` integrity, module sync state, git remote
     reachability, and schedule validation — as distinct from `rite
-    status`'s "what's happening?"."""
+    status`'s "what's happening?".
+
+    \b
+    The live checks are opt-in:
+      rite doctor              # adds no network call of its own
+      rite doctor --network    # also asks GitHub, and posts to Slack
+    """
     problems: list[str] = []
     # Structural, not one call site: each section runs inside a guard, and
     # this outer one catches whatever a future check adds outside them, so
     # the command cannot end in a traceback.
     with _doctor_check("doctor", problems):
-        _doctor_report(problems)
+        _doctor_report(problems, network=network)
     if problems:
         click.echo(f"\n{len(problems)} problem(s) found")
         raise SystemExit(1)
     click.echo("\nok")
+
+
+def _workers_without_github_token(
+    root: Path, modules: list, creds
+) -> tuple[list[str], list[str]]:
+    """`(modules on GitHub, Workers that would have no token for them)`.
+
+    ⚠ **The one answer to "is a GitHub token missing for Workers?"**, read
+    by both `rite doctor` and `rite credential list`. They used to answer it
+    separately and disagreed: on a sandboxed project with a GitHub module
+    and no token, doctor reported a problem while `credential list` said
+    "nothing missing" — so a user who checked the list was told they were
+    ready, then watched `rite sandbox start` refuse the Worker.
+
+    With no Worker yet, the one every future Worker would fall back to
+    (`github_token`) is what counts. Callers check `store_is_readable()`
+    first: an unreadable store is "cannot check", not "missing"."""
+    from rite_ai.credentials.store import get_scoped
+    from rite_ai.sandbox import (
+        GLOBAL_TOKEN_CREDENTIAL,
+        owner_repo_from_url,
+        resolve_worker_token,
+    )
+
+    on_github = [m.name for m in modules if m.url and owner_repo_from_url(m.url)]
+    if not on_github:
+        return on_github, []
+    workers_dir = root / "workers"
+    workers = (
+        sorted(p.name for p in workers_dir.iterdir() if (p / "worker.yml").is_file())
+        if workers_dir.is_dir()
+        else []
+    )
+    lacking = [w for w in workers if resolve_worker_token(w, creds)[0] is None]
+    if not workers and not get_scoped(GLOBAL_TOKEN_CREDENTIAL, creds):
+        lacking = ["(any new Worker)"]
+    return on_github, lacking
+
+
+def _doctor_worker_github_token(root: Path, modules: list, problems: list) -> None:
+    from rite_ai.credentials.store import store_is_readable
+
+    if not store_is_readable():
+        return  # reported above as the store being unreadable, not as missing
+    on_github, lacking = _workers_without_github_token(
+        root, modules, _project_credentials()
+    )
+    if lacking:
+        click.echo(
+            f"workers: no GitHub token for {_first_few(lacking)}, so sandboxed "
+            f"work on {_first_few(on_github)} could never be pushed — `rite "
+            f"credential set {_how_to_set('github_token')}`"
+        )
+        problems.append(
+            f"no GitHub token for sandboxed Worker(s) {_first_few(lacking)}"
+        )
+
+
+def _doctor_worker_push_access(
+    root: Path, modules: list, config, problems: list, network: bool
+) -> None:
+    """Whether each Worker's token can actually PUSH (v0.7.0 dogfood S28).
+
+    ⚠ **Presence is not permission.** `_doctor_worker_github_token` answers
+    "is there a token?", and a read-only fine-grained PAT passes it — then
+    `rite sandbox start` refuses the Worker, because a token that cannot write
+    the repository is a Worker that works and delivers nothing. The report a
+    person reads BEFORE starting said nothing about it.
+
+    ⚠ **Three answers, and `unknown` is not one of the problems.**
+    `push_access_refusal` collapses "could not ask" into a refusal, which is
+    right for a START and wrong here: reported as a refusal, an unreachable
+    network tells someone to reissue a credential that was fine. So the probe
+    is `push_access`, which keeps them apart.
+
+    ⚠ **Off unless asked for.** The probe is one HTTPS round trip per remote
+    per Worker. On every `rite doctor` that is a slower, more
+    network-dependent report — and offline, a wall of "could not check" that
+    says nothing. So it runs under `--network`, and without it doctor says the
+    check exists rather than pretending it passed.
+
+    ⚠ It does NOT make `rite doctor` fast: other checks that predate this one
+    (git remote reachability, the Slack target probes, the engine probes) go
+    to the network on every run, and a doctor sweep takes minutes because of
+    them. The flag keeps THIS probe off the default path; it is not a promise
+    about the command.
+    """
+    from rite_ai.credentials.store import store_is_readable
+
+    if not store_is_readable():
+        return  # reported as an unreadable store, not as a missing permission
+    workers_dir = root / "workers"
+    if not workers_dir.is_dir():
+        return
+    from rite_ai.sandbox import clone_remotes, push_access, resolve_worker_token
+
+    creds = _project_credentials()
+    workers = sorted(
+        p.name for p in workers_dir.iterdir() if (p / "worker.yml").is_file()
+    )
+    if not workers:
+        return
+    if not network:
+        click.echo(
+            "workers: GitHub push access not checked (no network calls) — "
+            "`rite doctor --network` asks GitHub whether each Worker's token "
+            "can push, which is what `rite sandbox start` refuses on"
+        )
+        return
+    for worker in workers:
+        token, _tier = resolve_worker_token(worker, creds)
+        if token is None:
+            continue  # the missing-token check above already says so
+        remotes = clone_remotes(workers_dir / worker)
+        if config is not None:
+            # A module published by `strategy: commit` never pushes, so
+            # asking about push access to it would be a fault invented here.
+            from rite_ai.publishing.settings import effective
+
+            local = {
+                m.name
+                for m in modules
+                if effective(config.publish, m).strategy == "commit"
+            }
+            remotes = [r for r in remotes if Path(r.clone).name not in local]
+        if not remotes:
+            continue
+        got = push_access(remotes, token)
+        if got.kind == "ok":
+            click.echo(f"workers: {worker}'s GitHub token can push")
+        elif got.kind == "cannot_push":
+            click.echo(
+                f"workers: {worker}'s GitHub token CANNOT push to "
+                f"{got.repository} ({got.why}) — `rite sandbox start` will "
+                f"refuse it. Give the token Contents: read and write there"
+            )
+            problems.append(f"worker {worker}: token cannot push to {got.repository}")
+        else:
+            # Said, never counted: a report must not call a token bad
+            # because a network was unreachable.
+            click.echo(
+                f"workers: could not check whether {worker}'s GitHub token "
+                f"can push to {got.repository} ({got.reason})"
+            )
+
+
+def _doctor_publishing(project, problems: list[str]) -> None:
+    """Each module's EFFECTIVE publish settings, and where each came from.
+
+    ⚠ **Per module, never "the project's strategy".** A module override that
+    silently does not apply is the failure PB1's resolution exists to
+    prevent, so the line printed is `effective`'s, the same function the
+    publish step reads."""
+    from rite_ai.publishing.settings import effective, refusals
+
+    for module in project.modules:
+        click.echo(f"publish: {effective(project.config.publish, module).describe()}")
+    for refusal in refusals(project.config, project.modules):
+        click.echo(f"publish: REFUSED — {refusal}")
+        problems.append(f"publish: {refusal}")
+
+
+def _refuse_unavailable_publishing(root: Path) -> None:
+    """Refuse to start when a publish setting cannot run (PB1).
+
+    At START, so a Worker never spends a session on work that then cannot
+    leave.
+
+    ⚠ **Reads config.yaml and modules.yaml only, and an unreadable one
+    REFUSES.** `load_project` would also fail on any Worker's broken
+    `worker.yml`, and a draft that returned quietly on that failure let
+    `push_to_shared` through whenever an unrelated file was broken:
+    "could not read the settings" answered as "no setting is refused"."""
+    from rite_ai.config.parse import ParseError, parse_config, parse_modules
+    from rite_ai.publishing.settings import refusals
+
+    config = parse_config(root / ".rite" / "config.yaml")
+    modules = parse_modules(root / ".rite" / "modules.yaml")
+    unreadable = [p for p in (config, modules) if isinstance(p, ParseError)]
+    if unreadable:
+        click.echo(
+            "refusing to start: rite cannot read which publish settings are in "
+            "force, so it cannot tell whether they can run",
+            err=True,
+        )
+        for problem in unreadable:
+            click.echo(f"  {problem.file}: {problem.message}", err=True)
+        raise SystemExit(1)
+    found = refusals(config, modules)
+    if found:
+        click.echo("refusing to start: a publish setting cannot run here", err=True)
+        for refusal in found:
+            click.echo(f"  {refusal}", err=True)
+        raise SystemExit(1)
 
 
 def _first_few(names: list[str], limit: int = 5) -> str:
@@ -472,7 +685,7 @@ def _first_few(names: list[str], limit: int = 5) -> str:
     return ", ".join(names[:limit]) + f" and {len(names) - limit} more"
 
 
-def _doctor_report(problems: list[str]) -> None:
+def _doctor_report(problems: list[str], *, network: bool = False) -> None:
     """Every check doctor runs, appending to `problems`."""
     import shutil
 
@@ -656,10 +869,23 @@ def _doctor_report(problems: list[str]) -> None:
         # modules.yaml by design, because `scaffold.AUTHORED_CONFIG`
         # re-includes them. Only the explicit override answers it, and
         # nothing else tells anyone — which is what this row is for.
-        if _is_project(module_dir):
+        is_the_root = module_dir.resolve() == root.resolve()
+        if is_the_root and module_sandbox.enabled:
+            # A single-repository project (dogfood F2): the module IS the
+            # project, so every clone of it carries the project's own
+            # `.rite/`. A sandboxed Worker is given RITE_PROJECT_ROOT by
+            # `rite sandbox start`, which wins over that marker, so its claims
+            # reach this project's ledger. Only an unsandboxed session started
+            # in the clone would miss it, which is the branch below.
+            click.echo(
+                f"module {m.name}: is the project itself; sandboxed Workers "
+                "are pointed at this project, so their claims are shared"
+            )
+        elif _is_project(module_dir):
             click.echo(
                 f"module {m.name}: is itself a rite project "
-                f"({m.path}/.rite/). A session started inside it resolves to "
+                f"({m.path.rstrip('/')}/.rite/). A session started inside it "
+                f"resolves to "
                 f"IT, not to this project, so its claims go to a private "
                 f"ledger and never collide with anyone else's. Set "
                 f"{PROJECT_ROOT_ENV}={root} in that session's environment."
@@ -704,6 +930,27 @@ def _doctor_report(problems: list[str]) -> None:
                 "        test: <the command that runs this module's tests>"
             )
             problems.append(f"module {m.name} has no test command")
+
+    # A sandboxed Worker pushes to GitHub with the token rite gives it and
+    # nothing else (§5.3.3), so a GitHub module with no token for Workers is
+    # a Worker that works and cannot deliver. Dogfood #28: doctor printed
+    # `github_token: not set` and counted nothing, and KAN-7's Worker hit
+    # `could not read Username`. `rite sandbox start` refuses the same state.
+    if module_sandbox.enabled:
+        _doctor_worker_github_token(root, modules, problems)
+        # And whether the token that IS there can write, which is the half
+        # that let a read-only PAT reach `rite sandbox start` (S28).
+        with _doctor_check("worker push access", problems):
+            from rite_ai.config.parse import parse_config as _parse_config
+
+            _cfg = _parse_config(rite_dir / "config.yaml")
+            _doctor_worker_push_access(
+                root,
+                modules,
+                None if isinstance(_cfg, ParseError) else _cfg,
+                problems,
+                network,
+            )
 
     # The WORKERS' checkouts, which the loop above never looked at. Every
     # module line it prints is about `<root>/<module>` — the project's own
@@ -849,6 +1096,7 @@ def _doctor_report(problems: list[str]) -> None:
             click.echo(f"config: {err.file}: {err.message}")
             problems.append(f"config {err.file}: {err.message}")
     else:
+        _doctor_publishing(project, problems)
         from rite_ai.coordination.config_check import coordination_problems
         from rite_ai.coordination.identity import (
             enrolment,
@@ -1087,17 +1335,30 @@ def _doctor_report(problems: list[str]) -> None:
                         "start as many as every project's cap allows "
                         '(set "max_sandboxes" in ~/.rite/machine.json)'
                     )
+                    # ⚠ A QUESTION IS NOT "NO CHANGES" (dogfood Q3). This
+                    # line used to recommend destroying any sandbox without
+                    # unapplied code, which is the documented way the v0.6.0
+                    # dogfood's one Worker question would have been deleted.
+                    from rite_ai.sandbox.questions import (
+                        WorkerQuestion,
+                        pending_question,
+                    )
+
+                    for entry in mine:
+                        asked = pending_question(entry.name)
+                        if isinstance(asked, WorkerQuestion):
+                            line = (
+                                f"sandboxes:   {entry.name} — its Worker is WAITING "
+                                f"ON A QUESTION since {asked.since()}, unanswered: "
+                                f"{asked.headline(120)} (`rite status` names the "
+                                "Worker; do NOT destroy it)"
+                            )
+                            click.echo(line)
+                            problems.append(line)
                     for entry in others:
                         where = f" ({entry.workdir})" if entry.workdir else ""
-                        click.echo(
-                            f"sandboxes:   {entry.name}{where} — "
-                            + (
-                                "holds unapplied changes, do NOT destroy"
-                                if entry.has_changes
-                                else "no changes; `yoloai destroy "
-                                f"{entry.name}` frees it"
-                            )
-                        )
+                        said = _other_sandbox_note(entry, pending_question(entry.name))
+                        click.echo(f"sandboxes:   {entry.name}{where} — {said}")
 
         # Phase 2. Settings that cannot work are reported whether or not a
         # remote is set: half a `coordination:` block does not fail, it
@@ -1151,6 +1412,12 @@ def _doctor_report(problems: list[str]) -> None:
         # than assumed. An engine that is not there fails every subtask routed
         # to it as infrastructure (RL-47): honest reports, all night, and no
         # progress.
+        if coordination.manager_roles:
+            from rite_ai.config.managers import effective_model
+
+            for role in coordination.manager_roles:
+                click.echo(effective_model(role))
+
         local_roles = [r for r in coordination.manager_roles if r.is_local]
         if local_roles:
             with _doctor_check("local engines", problems):
@@ -1242,10 +1509,95 @@ def _doctor_report(problems: list[str]) -> None:
             click.echo(f"checkins: {p}")
             problems.append(f"checkins: {p}")
 
+        with _doctor_check("board", problems):
+            _doctor_board_can_create(root, problems)
+
         with _doctor_check("slack", problems):
-            _doctor_slack(root, problems)
+            _doctor_slack(root, problems, network=network)
+
+        with _doctor_check("refinement", problems):
+            _doctor_refinement_reaches_you(root, problems)
+
+        with _doctor_check("board scope", problems):
+            for problem in _scope_problems(root):
+                click.echo(f"board scope: {problem}")
+                problems.append(f"board scope: {problem}")
 
     return
+
+
+def _doctor_refinement_reaches_you(root: Path, problems: list[str]) -> None:
+    """Can a refinement round reach the person where the config says it goes?
+
+    ⚠ **Not "a feature nobody turned on".** `_doctor_slack` stays silent for a
+    project without Slack, and that was right for Slack; but refinement is on
+    for every project with a board, `refinement.questions_to` defaults to
+    `dm`, and no Worker starts on a ticket until it is refined. Measured in
+    the v0.7.0 dogfood: `questions_to: dm`, no `slack.owner_user`, no Slack
+    token, and `rite doctor` said nothing about it — the round would have
+    reached Robert only through `rite replies`, and an answer only through
+    `rite refine accept` at the host.
+
+    A project with no board refines nothing, so it is not checked; the board
+    line says what that project is missing."""
+    from rite_ai.config.parse import ParseError, parse_config
+    from rite_ai.credentials.store import get_scoped, store_is_readable
+
+    parsed = parse_config(root / ".rite" / "config.yaml")
+    if isinstance(parsed, ParseError) or parsed.ticket_backend.type == "none":
+        return
+    missing = []
+    to_dm = parsed.refinement.questions_to == "dm"
+    if to_dm and not parsed.slack.owner_user:
+        missing.append("slack.owner_user is empty")
+    if not store_is_readable():
+        pass  # "cannot check" is not "missing"; the store line says why
+    elif not get_scoped("slack_bot_token", parsed.credentials):
+        missing.append("no Slack bot token is stored for this project")
+    if not missing:
+        return
+    where = (
+        "your Slack DM (`refinement.questions_to: dm`)"
+        if to_dm
+        else f"Slack channel {parsed.refinement.channel}"
+    )
+    click.echo(
+        f"refinement: questions go to {where}, but {' and '.join(missing)}. No "
+        "Worker starts on a ticket until it is refined, so a round would reach "
+        "you only through `rite replies`, and you could agree it only with "
+        "`rite refine accept` at the host. Make a Slack app for this project "
+        "only, then `rite credential set slack`"
+        + (" and set slack.owner_user to your Slack user id (U…)" if to_dm else "")
+    )
+    problems.append(f"refinement cannot reach you in Slack: {'; '.join(missing)}")
+
+
+def _doctor_board_can_create(root: Path, problems: list[str]) -> None:
+    """Can rite file a ticket on this project's board? Read-only (TR9).
+
+    Every piece of Worker work carries a ticket, so a board rite cannot
+    create on refuses every chore and every `--prompt` start. Found here
+    rather than at the first one. "Could not tell" is a problem too: it is
+    not a yes.
+    """
+    board, why = _ticket_backend("workers", root=root)
+    if board is None:
+        # No board configured is already the project's stated shape; a board
+        # that failed to build is said by the checks that read it.
+        click.echo(f"board: no ticket can be filed ({why})")
+        return
+    able, detail = board.can_create()
+    if able is True:
+        click.echo(f"board: {detail}")
+        return
+    said = (
+        f"board: {detail}. Work that is not already a ticket (a chore, or "
+        "`rite sandbox start --prompt`) will be refused"
+        if able is False
+        else f"board: could not confirm that rite can file a ticket: {detail}"
+    )
+    click.echo(said)
+    problems.append(said)
 
 
 def _warn_if_unregistered(worker: str) -> None:
@@ -1265,7 +1617,16 @@ def _warn_if_unregistered(worker: str) -> None:
     cannot corrupt anything parsing stdout."""
     root = _find_project_root()
     manifest = root / "workers" / worker / "worker.yml"
-    if manifest.is_file():
+    try:
+        manifest.stat()
+        return
+    except FileNotFoundError:
+        pass
+    except OSError:
+        # "Could not look" is not "not registered". Inside a Worker's
+        # sandbox `workers/` is unreadable by design; Python 3.13's
+        # `is_file` raised there after the claim was recorded, and 3.14's
+        # returned False, which printed a false "not registered" warning.
         return
     from rite_ai.watchdog import _pool_slot_workers
 
@@ -1315,13 +1676,24 @@ def claim(paths: tuple[str, ...], worker: str, ticket: str) -> None:
     """Claim file/directory paths for a worker."""
     from rite_ai.claims.ledger import ClaimsLedger
     from rite_ai.coordination.identity import claims_channel
+    from rite_ai.managers import current_manager
 
     _require_project_root()
     ledger = ClaimsLedger(_claims_path())
     # P2-5a/P2-5b: with a fleet, a claim is checked against and published to
     # the other machines. Without one, both are None and nothing changes.
     layer, machine = claims_channel(_find_project_root())
-    result = ledger.claim(list(paths), worker, ticket, layer=layer, machine=machine)
+    # The Manager this claim is made under, so a force-release can be scoped
+    # to one (MM3). "" outside a Manager session, which is the common case and
+    # a real answer — see `Claim.manager`.
+    result = ledger.claim(
+        list(paths),
+        worker,
+        ticket,
+        manager=current_manager(),
+        layer=layer,
+        machine=machine,
+    )
     if result.ok:
         scope = "across the fleet" if layer is not None else "on this machine only"
         # WHICH MODE, every time. The same success line for both is correct
@@ -1359,7 +1731,7 @@ def claim(paths: tuple[str, ...], worker: str, ticket: str) -> None:
     "--force", "force_flag", is_flag=True, help="Force-release another session's paths"
 )
 @click.option("--by", default=None, help="Attribution — required with --force")
-@click.option("--reason", default=None, help="Why — required with --force (SPEC §5.2)")
+@click.option("--reason", default=None, help="Why — required with --force")
 @click.option(
     "--history",
     "show_history",
@@ -1389,6 +1761,7 @@ def release(
     """
     from rite_ai.claims.ledger import ClaimsLedger
     from rite_ai.coordination.identity import claims_channel
+    from rite_ai.managers import current_manager
 
     _require_project_root()
     ledger = ClaimsLedger(_claims_path())
@@ -1417,13 +1790,33 @@ def release(
             click.echo("--force requires explicit paths", err=True)
             raise SystemExit(2)
         if not by or not reason:
-            click.echo("--force requires both --by and --reason (SPEC §5.2)", err=True)
+            click.echo("--force requires both --by and --reason", err=True)
             raise SystemExit(2)
         layer, machine = claims_channel(_find_project_root())
+        # `current_manager()` is "" from a human's own shell, and `manager=None`
+        # is what keeps today's reach for them: a Manager says its name and is
+        # held to its own claims, nobody says nothing and clears the path
+        # (MM3 — `force_release`'s `manager` parameter says why).
         released = ledger.force_release(
-            list(paths), by=by, reason=reason, layer=layer, machine=machine
+            list(paths),
+            by=by,
+            reason=reason,
+            manager=current_manager() or None,
+            layer=layer,
+            machine=machine,
         )
         click.echo(f"force-released {released} claim(s), by {by}: {reason}")
+
+        # Named before the overlap notes below: "it is not yours" is the
+        # reason a release did nothing, and an overlap note printed first
+        # reads as though naming the path directly would work.
+        for holder_manager, holder, path in ledger.last_refused_other_managers:
+            click.echo(
+                f"  not yours: {path} (held by {holder}, under Manager "
+                f"{holder_manager!r}) was left alone. A Manager force-releases "
+                f"its own claims and unowned ones; ask {holder_manager!r} to "
+                "release it, or run this from outside a Manager session"
+            )
 
         # The exact/overlap gap, said out loud. `--force` matches paths
         # exactly; `claim()` refuses on overlap. So clearing `users/src` can
@@ -1470,13 +1863,13 @@ def release(
 )
 def status(no_board: bool) -> None:
     """What's happening? Workers, claims, the handover snapshot, and the
-    coordination-cost counters (SPEC §9.8) — as distinct from `rite
+    coordination-cost counters — as distinct from `rite
     doctor`'s "is this healthy?". Run outside any project with a Dispatch
     directory present, aggregates across all registered projects instead
-    (SPEC §8.9) — a new rendering path in the same command, not a second
+    — a new rendering path in the same command, not a second
     command.
 
-    Queries the ticket backend for board state (§9.8's counts by column).
+    Queries the ticket backend for board state (its counts by column).
     That is the one part of this command that leaves the machine; pass
     --no-board to skip it. The aggregate view across registered projects
     never queries, so it stays one round trip per machine rather than one
@@ -1520,7 +1913,7 @@ def _short_error(error: str) -> str:
 
 
 def _aggregate_line(entry) -> str:
-    """One registered project's line in the cross-project view (§8.9).
+    """One registered project's line in the cross-project view.
 
     This was `"no .rite/ found" if s.errors else "ok"` followed by the
     claim and stalled-worker counts, unconditionally. Three different
@@ -1632,6 +2025,58 @@ def _partial_reads(status) -> list[tuple[str, str]]:
 
 
 @cli.group()
+def local() -> None:
+    """Run a local-model Manager's work, one subtask at a time."""
+
+
+@local.command("step")
+@click.argument("manager")
+@click.argument("ticket")
+def local_step(manager: str, ticket: str) -> None:
+    """Run the next planned subtask of TICKET as local Manager MANAGER.
+
+    \b
+    ⚠ **One subtask, not the ticket.** The agent is given that subtask and
+    its spec slice and nothing else; rite runs the verify itself, commits the
+    branch itself, and records the outcome itself. Two real runs of a
+    `qwen3:8b` Manager on a whole ticket spent their whole window on detours
+    and reported nothing, which is what this replaces.
+
+    \b
+    ⚠ A plan arrives approved or nothing runs. rite has no decomposer yet, so
+    a decomposition is authored by hand and approved by a plan-review holder.
+
+    Examples:
+      rite local step small KAN-7
+    """
+    from rite_ai.local.step import take_one_step
+
+    root = _require_project_root()
+    step = take_one_step(root, manager, ticket)
+    if step.problem:
+        click.echo(f"nothing ran: {step.problem}", err=True)
+        raise SystemExit(1)
+    verdict = "accepted" if step.accepted else step.status
+    click.echo(f"{step.ticket} {step.subtask}: {verdict}")
+    if step.branch:
+        at = f" @ {step.commit[:8]}" if step.commit else ""
+        click.echo(f"  branch {step.branch}{at}")
+    if step.claim_disagreed:
+        # The honesty signal, said out loud rather than buried in a record:
+        # the agent reported one thing and rite's own verify found another.
+        click.echo(
+            "  ⚠ the agent's claim disagreed with the verify — kept as "
+            "evidence about the agent, not about the work"
+        )
+    for line in step.lines:
+        click.echo(f"  {line}")
+    if step.verify_output and not step.accepted:
+        click.echo("  verify said:")
+        for line in step.verify_output.splitlines()[:20]:
+            click.echo(f"    {line}")
+
+
+@cli.group()
 def credential() -> None:
     """Manage credentials."""
 
@@ -1712,6 +2157,21 @@ def _keys_this_project_needs(config=None) -> list[str]:
         # The login a sandboxed session needs: it cannot read the keychain.
         keys.append("claude_token")
         root = _find_project_root()
+        # The push credential, by the SAME rule `rite doctor` and `rite
+        # sandbox start` apply (`_workers_without_github_token`): listed as
+        # missing exactly when doctor calls it a problem. Listed when set,
+        # too, so its status and rotation are shown.
+        if "github_token" not in keys:
+            from rite_ai.config.parse import ParseError, parse_modules
+            from rite_ai.credentials.store import resolve as _resolve
+            from rite_ai.credentials.store import store_is_readable as _readable
+
+            modules = parse_modules(root / ".rite" / "modules.yaml")
+            creds = getattr(config, "credentials", None)
+            if not isinstance(modules, ParseError) and _readable():
+                on_github, lacking = _workers_without_github_token(root, modules, creds)
+                if lacking or (on_github and _resolve("github_token", creds).found):
+                    keys.append("github_token")
         workers_dir = root / "workers"
         if workers_dir.is_dir():
             from rite_ai.credentials.store import resolve, store_is_readable
@@ -1789,15 +2249,10 @@ def _echo_known_credentials(extra: tuple[str, ...]) -> None:
 
 
 def _how_to_set(key: str) -> str:
-    """The argument to suggest for a missing key: its service when one
-    owns it, otherwise the key itself (a per-worker sandbox token is not
-    a service and never will be)."""
-    from rite_ai.credentials.services import SERVICES, service_key
+    """The argument to suggest for a missing key (`services.how_to_set`)."""
+    from rite_ai.credentials.services import how_to_set
 
-    for svc in SERVICES.values():
-        if any(service_key(svc.name, f.name) == key for f in svc.fields):
-            return svc.name
-    return key
+    return how_to_set(key)
 
 
 def _echo_credential_status(extra: tuple[str, ...], just_set: str = "") -> None:
@@ -1883,7 +2338,24 @@ def _store_one(name: str, value: str, global_: bool, root, config) -> str:
         )
         click.echo(f"set RITE_{name.upper()} as an environment variable instead")
         raise SystemExit(1)
+    if not global_ and config is not None:
+        _remember_the_namespace(root, config)
     return account
+
+
+def _remember_the_namespace(root, config) -> None:
+    """S18: note which namespace this project's repositories use, so a re-init
+    after a reset (or `rm -rf` and a fresh clone) can offer these credentials
+    back. Never fails the store it follows."""
+    from rite_ai.config.parse import ParseError, parse_modules
+    from rite_ai.credentials.store import remember_namespace
+
+    if root is None:
+        return
+    modules = parse_modules(Path(root) / ".rite" / "modules.yaml")
+    if isinstance(modules, ParseError):
+        return
+    remember_namespace(config.credentials.namespace, [m.url for m in modules if m.url])
 
 
 def _apply_config_field(config, dotted: str, value: str) -> None:
@@ -1908,7 +2380,120 @@ def _apply_config_field(config, dotted: str, value: str) -> None:
         setattr(target, last, value)
 
 
-def _set_service(service_name: str, global_: bool, root, config) -> None:
+def _say_how_slack_stands(root: Path, config, app) -> None:
+    """The one summary `rite credential set slack` ends on: whose app it is,
+    and whether Slack is now ON.
+
+    Two things had been said in passing, and they are one question — "did that
+    work?" — whose answer was spread over a shared-app warning, a line saying
+    the token was stored, and nothing at all about whether Slack would now do
+    anything.
+
+    ⚠ Nothing here posts. The app was named by `auth.test` during the prompt,
+    one read for the whole run, and the binding is read from disk. A live post
+    to prove delivery belongs in `rite doctor`, where the person asked for a
+    check — a setup command that posts spams a workspace every time it is
+    re-run.
+    """
+    if (root / ".rite").is_dir():
+        if app is not None:
+            from rite_ai.managers.slack_app import sharing_for
+
+            shared = sharing_for(app, root)
+            if shared.kind == "shared":
+                click.echo(f"\n⚠ {shared.message}", err=True)
+        else:
+            # `auth.test` could not be asked, so which app this is cannot be
+            # told, so the binding cannot be looked up. Said, not guessed
+            # either way, and never counted as a collision.
+            click.echo(
+                "\n  could not check whether another project already uses "
+                "this Slack app, because Slack could not be asked which app "
+                "the token belongs to.",
+                err=True,
+            )
+    if config is None:
+        return
+    # ⚠ **Read off the RESULTING config, not off what this run answered**, so
+    # rotating a token on an already-configured project stays quiet. Slack is
+    # on only if it has a TARGET: `SlackConfig.enabled` is `owner_user or
+    # broadcast_channel`, so a token with both skipped stores a real
+    # credential and turns nothing on, under lines that say "stored" and
+    # "recorded" — and the next thing that happens is a refinement round with
+    # nowhere to go, far from here.
+    slack = config.slack
+    if slack.enabled:
+        who = (
+            f", and takes instructions from {slack.owner_user}'s DM"
+            if slack.owner_user
+            else " (broadcast-only: no owner set, so nothing typed in Slack "
+            "instructs a Manager)"
+        )
+        click.echo(
+            f"\nSlack is ACTIVE for this project: posts to {slack.broadcast}{who}."
+        )
+        return
+    click.echo(
+        "\n⚠ Slack is INACTIVE: the token is stored, but it has no target, "
+        "so nothing is posted and nothing is read. Add one and it is on — a "
+        "channel for status (`slack.broadcast_channel`), your member id for a "
+        "command channel (`slack.owner_user`), or both — by running this "
+        "again and answering, or in .rite/config.yaml.",
+        err=True,
+    )
+
+
+def _offer_to_retarget(backend, svc, current: str) -> list[tuple[str, str]]:
+    """Offer to point this project's board at `svc` instead, and report what
+    that changed — or say, when there is nobody to ask, that it did not.
+
+    Returns the `(config path, value)` rows for what was written, so the
+    caller's own summary names them and `write_config` is reached by the one
+    `if configured` it already has.
+    """
+    from rite_ai.config.models import leave_the_old_board
+
+    if not module_docs_step.somebody_is_there():
+        # 🔴 **Never unattended.** `credential set` runs in scripts — the
+        # fields can come down a pipe — and silently moving which board every
+        # ticket command reads is not a thing to do to somebody who is not
+        # watching. The same lesson as S23's no-tty guard, and today's note is
+        # exactly the right thing to print here.
+        click.echo(
+            f"  note: ticket_backend.type is {current!r}, so rite still reads "
+            f"that board. Nobody is attached to ask, and rite does not change "
+            f"which board a project reads unasked — re-run this with a "
+            f"terminal to point it at {svc.name} instead.",
+            err=True,
+        )
+        return []
+    if not click.confirm(
+        f"  this project's board is {current!r}. Point it at "
+        f"{svc.board_type!r} instead? Every ticket command would then read "
+        f"{svc.name}",
+        default=False,
+        err=True,
+    ):
+        click.echo(
+            f"  left as it is: rite still reads the {current} board. What you "
+            f"just entered for {svc.name} is recorded, so answering yes to "
+            f"this next time is all it takes.",
+            err=True,
+        )
+        return []
+    backend.type = svc.board_type
+    rows = [("ticket_backend.type", svc.board_type)]
+    # The outgoing board's own fields: the incoming board re-prompts for
+    # everything it needs in this same run, so only the leftovers are stale.
+    rows += [
+        (name, "(cleared)") for name in leave_the_old_board(backend, svc.board_type)
+    ]
+    return rows
+
+
+def _set_service(
+    service_name: str, global_: bool, root, config, config_writable: bool = True
+) -> None:
     """Ask for every field a service has, in order, and store each.
 
     The prompts are the service's own words. Nothing here asks the user
@@ -1930,19 +2515,67 @@ def _set_service(service_name: str, global_: bool, root, config) -> None:
                 err=True,
             )
         raise SystemExit(2)
+    if svc.name == "slack":
+        click.echo(f"Setting up Slack for {_project_label()}.")
     click.echo(f"{svc.label}")
     if svc.note:
         click.echo(f"  note: {svc.note}")
 
     stored: list[tuple[str, str]] = []
     configured: list[tuple[str, str]] = []
+    secrets: dict[str, str] = {}
+    app = None  # the Slack app `auth.test` named, when it could be asked
     for field in svc.fields:
-        value = click.prompt(
-            f"  {field.prompt}",
-            hide_input=field.secret,
-            confirmation_prompt=field.secret,
-            err=True,
-        )
+        if field.config_path and not config_writable:
+            # config.yaml is not in a state this command may rewrite (an
+            # unrelated parse error, recovered for its namespace only). Asking
+            # for a value rite would then drop is worse than not asking.
+            click.echo(
+                f"  (skipped {field.name}: .rite/config.yaml has an unrelated "
+                f"problem, so rite will not rewrite it. Set {field.config_path} "
+                f"by hand, or re-run this once the file parses.)",
+                err=True,
+            )
+            continue
+        while True:
+            value = field.clean(
+                click.prompt(
+                    f"  {field.prompt}",
+                    hide_input=field.secret,
+                    confirmation_prompt=field.secret,
+                    default="" if field.optional else None,
+                    show_default=False,
+                    err=True,
+                )
+            )
+            problem = field.problem(value)
+            if not problem and svc.name == "slack" and field.name == "bot_token":
+                # ⚠ A READ, never a post (`auth.test`). Setting a credential
+                # must not put a message in anyone's channel: a person setting
+                # rite up is not announcing it, and a setup that posts spams a
+                # workspace every time it is re-run. A live POST belongs in
+                # `rite doctor`, where the person asked for a check.
+                from rite_ai.managers.slack_app import check_token
+
+                checked = check_token(value)
+                if checked.kind == "bad":
+                    # Slack ANSWERED and said no, so asking again is useful.
+                    click.echo(f"  {checked.message}", err=True)
+                    continue
+                if checked.kind == "unknown":
+                    # Could not ask ≠ refused. Storing it is right: the token
+                    # is probably fine, and refusing on an unreachable network
+                    # would leave the person unable to record it at all.
+                    click.echo(f"  {checked.message} — storing it anyway", err=True)
+                app = checked.identity
+            if not problem:
+                break
+            # Asked again rather than stored: this command writes config.yaml,
+            # and a value the parser refuses would make every later `rite` run
+            # fail on the file this run created (S14/S19).
+            click.echo(f"  {problem}", err=True)
+        if field.optional and not value:
+            continue
         if field.config_path:
             # CONFIGURATION, not a credential. It is the same for everyone
             # on the team, it is not a secret, and putting it in the
@@ -1960,6 +2593,30 @@ def _set_service(service_name: str, global_: bool, root, config) -> None:
             continue
         key = service_key(svc.name, field.name)
         stored.append((key, _store_one(key, value, global_, root, config)))
+        secrets[field.name] = value
+
+    if configured and svc.board_type:
+        # ⚠ **The site and the project key alone are not a board.** Measured
+        # in the v0.7.0 dogfood: `rite init` answered `none`, then `rite
+        # credential set jira` recorded the site and `projects.workers`, and
+        # `type` stayed `none`, so rite read no board at all and every ticket
+        # command said none was configured. A project with no board gets this
+        # one; a project already on another board keeps it, and is told.
+        current = config.ticket_backend.type
+        if current == "none":
+            config.ticket_backend.type = svc.board_type
+            configured.append(("ticket_backend.type", svc.board_type))
+        elif current != svc.board_type:
+            # ⚠ **Asked, not refused** — and asked rather than done. This
+            # printed a note telling the user to edit `.rite/config.yaml`,
+            # which is the one path left in setup that says "edit the file"
+            # for something rite has a command for. Refusing to retarget a
+            # board SILENTLY was right; refusing to retarget it at all was
+            # the part that was wrong.
+            #
+            # 🔴 Default NO. Retargeting changes which board every ticket
+            # command reads, and a mistyped service name must not move it.
+            configured.extend(_offer_to_retarget(config.ticket_backend, svc, current))
 
     if configured:
         from rite_ai.cli.init.scaffold import write_config
@@ -1983,6 +2640,9 @@ def _set_service(service_name: str, global_: bool, root, config) -> None:
         )
         for path, value in configured:
             click.echo(f"  {path:<32} {value}")
+
+    if svc.name == "slack" and secrets.get("bot_token"):
+        _say_how_slack_stands(root, config, app)
 
 
 @credential.command("set")
@@ -2043,7 +2703,7 @@ def credential_set(
 
     Run inside a project, this stores THIS PROJECT's credential: the
     secret goes to the keychain under a scoped name, and the name is
-    recorded in `.rite/config.yaml` (§10.2). That is the default because
+    recorded in `.rite/config.yaml`. That is the default because
     the point of scoping is that a worker only ever gets a token you
     gave for the project it is working on.
 
@@ -2074,20 +2734,52 @@ def credential_set(
     # `--global` means, so it is what happens rather than an error.
     root_for_scope = _find_project_root()
     config_for_scope = None
+    config_writable = True
     if not global_ and (root_for_scope / ".rite").is_dir():
         from rite_ai.config.models import ProjectConfig
         from rite_ai.config.parse import ParseError, parse_config
 
         parsed = parse_config(root_for_scope / ".rite" / "config.yaml")
         if isinstance(parsed, ParseError):
+            # ⚠ **A problem elsewhere in config.yaml does not take this
+            # command out** (v0.7.0 dogfood S19). A channel name rite could
+            # not read used to answer every `rite credential set` with the
+            # parse error and exit 1 — including the runs that would have
+            # repaired the project's credentials. The namespace is recovered
+            # on its own so the secret still lands in THIS project's scope,
+            # and the unrelated problem is said rather than swallowed.
+            from rite_ai.config.parse import credentials_despite_config_error
+            from rite_ai.credentials.store import is_valid_namespace
+
+            recovered = credentials_despite_config_error(
+                root_for_scope / ".rite" / "config.yaml"
+            )
             click.echo(f"config error: {parsed.message}", err=True)
+            # ⚠ Only a namespace ALREADY RECORDED lets this go on. Generating
+            # one here would make `_ensure_namespace` write a config.yaml
+            # rebuilt from a near-empty `ProjectConfig`, destroying the file
+            # the user still has to repair — a far worse outcome than the
+            # refusal this replaces.
+            if recovered is None or not is_valid_namespace(recovered.namespace):
+                click.echo(
+                    "  this project has no credential namespace recorded yet, "
+                    "so there is nothing to scope a secret to until the line "
+                    "above is fixed. Fix it, or use --global to store "
+                    "machine-wide without it.",
+                    err=True,
+                )
+                raise SystemExit(1)
             click.echo(
-                "  fix .rite/config.yaml, or use --global to store "
-                "machine-wide without it",
+                "  continuing anyway: that is not a credential setting, and "
+                f"this project's namespace ({recovered.namespace}) was read on "
+                "its own, so the secret still lands in this project's scope. "
+                "Fix the line above before running a Manager.",
                 err=True,
             )
-            raise SystemExit(1)
-        config_for_scope = parsed if isinstance(parsed, ProjectConfig) else None
+            config_for_scope = ProjectConfig(credentials=recovered)
+            config_writable = False
+        else:
+            config_for_scope = parsed if isinstance(parsed, ProjectConfig) else None
 
     service = canonical_service(name)
     if service is not None:
@@ -2102,7 +2794,13 @@ def credential_set(
                 err=True,
             )
             raise SystemExit(2)
-        _set_service(service, global_, root_for_scope, config_for_scope)
+        _set_service(
+            service,
+            global_,
+            root_for_scope,
+            config_for_scope,
+            config_writable=config_writable,
+        )
         _echo_credential_status(extra)
         return
 
@@ -2321,7 +3019,7 @@ def credential_check(name: str) -> None:
             )
         else:
             click.echo(
-                f"  run `rite credential set {name}`, "
+                f"  run `rite credential set {_how_to_set(name)}`, "
                 f"or set RITE_{name.upper()} in the environment",
                 err=True,
             )
@@ -2336,7 +3034,7 @@ def credential_list() -> None:
     question that had no discoverable answer, because the only place that
     ever asked for one was a prompt buried inside `rite add worker`.
 
-    The ACCOUNT column is the keychain entry each key lives under,
+    The ACCOUNT column is the store entry each key lives under,
     composed from the namespace recorded in `.rite/config.yaml`. That
     file is committed on purpose and holds a name, never a value: a fresh
     clone runs this command and sees exactly what to set, without a
@@ -2508,8 +3206,8 @@ def credential_list() -> None:
 def credential_migrate(name: str, yes: bool) -> None:
     """Copy a machine-global credential into THIS project's namespace.
 
-    The migration path for a setup that predates §10.2: `jira_token` set
-    globally keeps working through the fallback tier, and this moves it
+    The migration path for a setup that predates per-project namespaces:
+    `jira_token` set globally keeps working through the fallback tier, and this moves it
     under `<namespace>/jira_token` so the project stops depending on a
     shared entry.
 
@@ -2552,7 +3250,9 @@ def credential_migrate(name: str, yes: bool) -> None:
     # being changed.
     value = get_account(r.global_account)
     if not value:
-        click.echo(f"could not read '{r.global_account}' from the keychain", err=True)
+        click.echo(
+            f"could not read '{r.global_account}' from the credential store", err=True
+        )
         raise SystemExit(1)
 
     # ⚠ Nothing is WRITTEN before the confirm that authorises it. This
@@ -2599,11 +3299,11 @@ def credential_migrate(name: str, yes: bool) -> None:
 @click.argument("name")
 @click.option("--yes", is_flag=True, default=False, help="Skip the confirmation.")
 def credential_remove(name: str, yes: bool) -> None:
-    """Delete a stored credential from the keychain and rite's registry.
+    """Delete a stored credential from rite's credential file and registry.
 
     The counterpart to `set`. Without it, a key stored by mistake — an
     email address typed where `jira_email` belonged, say — stayed in the
-    keychain permanently, since `set` could create entries that no rite
+    store permanently, since `set` could create entries that no rite
     command could remove.
 
     Examples:
@@ -2678,8 +3378,8 @@ def credential_remove(name: str, yes: bool) -> None:
 
 @credential.command("rotate")
 def credential_rotate() -> None:
-    """Guided rotation of every credential rite has ever stored (SPEC
-    §10): shows each one's age and current source, and prompts for a
+    """Guided rotation of every credential rite has ever stored:
+    shows each one's age and current source, and prompts for a
     replacement — or skip. Only covers credentials `rite credential set`
     (or a provisioning flow that stored one the same way) has actually
     written; a credential satisfied only by an env var was never
@@ -2709,6 +3409,64 @@ def credential_rotate() -> None:
             click.echo("  failed to store — credential store not writable", err=True)
             continue
         click.echo(f"  {entry.name} rotated")
+
+
+@cli.group()
+def module() -> None:
+    """A registered module's settings."""
+
+
+@module.command("set-command")
+@click.argument("name")
+@click.argument("key")
+@click.argument("command")
+def module_set_command_cmd(name: str, key: str, command: str) -> None:
+    """Record how to build, test or lint a module, and refresh the
+    instructions that quote it.
+
+    Detection derives these from a module's own manifests. It is right for
+    most modules and wrong for some — a scheme it cannot see, a test target
+    that needs a flag — and this is how the correction is made without
+    opening `.rite/modules.yaml`.
+
+    ⚠ The correction also reaches the project's `CLAUDE.md` and every
+    Worker's, which quote these commands. Before this, `modules.yaml` was
+    the only thing a correction reached, and the agent kept reading the old
+    command out of its instructions.
+
+    An empty command UNRECORDS the key, so detection decides it again.
+
+    Examples:
+      rite module set-command backend test "pytest -q"
+      rite module set-command frontend build "npm run build -- --prod"
+      rite module set-command backend test ""
+    """
+    from rite_ai.workspace.manage import set_module_command
+
+    root = _find_project_root()
+    result = set_module_command(root, name, key, command)
+    if not result.ok:
+        click.echo(result.message, err=True)
+        raise SystemExit(1)
+
+    click.echo(result.message)
+    for where in result.refreshed:
+        click.echo(f"  refreshed {where}")
+    # ⚠ Said, not swallowed. A section somebody edited is KEPT — that is the
+    # right rule — but silence here would leave them believing a command they
+    # just recorded had reached instructions it never did.
+    for where in result.kept:
+        click.echo(f"  NOT refreshed {where}", err=True)
+    if result.kept:
+        click.echo(
+            "  those sections were edited by hand, so rite left them alone — "
+            "`rite update --take <section>` takes rite's version",
+            err=True,
+        )
+    # ⚠ A file rite could not write at all is NOT an edited section, and
+    # saying so would send someone looking for an edit they never made.
+    for note in result.notes:
+        click.echo(f"  NOT refreshed {note}", err=True)
 
 
 # --- Add / Remove ---
@@ -2749,6 +3507,142 @@ def add_module_cmd(name: str, url: str, branch: str, description: str) -> None:
         raise SystemExit(1)
 
 
+@add.command("manager")
+@click.argument("name")
+@click.option(
+    "--preset",
+    default="",
+    help="A named set of duties rite ships: " + ", ".join(sorted(PRESETS)) + ".",
+)
+@click.option(
+    "--duties",
+    default="",
+    help="Comma-separated duties, instead of a preset: " + ", ".join(DUTIES) + ".",
+)
+@click.option(
+    "--engine",
+    default=CLAUDE,
+    help="What does the work: 'claude', 'human', or 'local:<class>'.",
+)
+@click.option("--model", default="", help="Model name, for a claude or local engine.")
+@click.option("--endpoint", default="", help="Endpoint URL, for a local engine.")
+@click.option("--agent", default="", help="Agent runtime, for a local engine.")
+@click.option(
+    "--credential",
+    default="",
+    help="A credential NAME this Manager's endpoint needs — never a value.",
+)
+@click.option(
+    "--context-window",
+    type=int,
+    default=0,
+    help="Tokens a local Manager's model is served with.",
+)
+def add_manager_cmd(
+    name: str,
+    preset: str,
+    duties: str,
+    engine: str,
+    model: str,
+    endpoint: str,
+    agent: str,
+    credential: str,
+    context_window: int,
+) -> None:
+    """Declare a Manager in config.yaml, without editing the file.
+
+    Writes BOTH keys the file has: the name into `coordination.managers`,
+    which is priority order, and the declaration into `manager_roles`,
+    which is what the Manager is FOR. Writing one and not the other is
+    exactly the disagreement `rite doctor` reports.
+
+    A new Manager is appended, because the order is priority and the first
+    active one is Owner — adding one must not change who that is.
+
+    ⚠ Naming a Manager that is already listed CHANGES its declaration
+    rather than adding a second. That is deliberate: once any Manager
+    declares a preset, every Manager must, so declaring your second one
+    fails on your first until the first is declared too — and this is the
+    command that declares it.
+
+    Examples:
+      rite add manager lead --preset lead
+      rite add manager planner --preset planner
+      rite add manager scribe --duties spec,plan-review
+      rite add manager small --engine local:small --endpoint http://localhost:11434 \
+          --model qwen3.8:latest --agent goose --context-window 32768
+    """
+    from rite_ai.cli.init.scaffold import write_config
+    from rite_ai.config.managers import declare_manager
+
+    root, config = _load_config_for_write()
+    wanted = tuple(d.strip() for d in duties.split(",") if d.strip())
+    declared = declare_manager(
+        config.coordination.managers,
+        config.coordination.manager_roles,
+        name.strip(),
+        preset=preset.strip(),
+        duties=wanted,
+        engine=engine.strip() or CLAUDE,
+        model=model.strip(),
+        endpoint=endpoint.strip(),
+        agent=agent.strip(),
+        credential=credential.strip(),
+        context_window=context_window,
+    )
+    if declared.error:
+        click.echo(f"refusing to declare: {declared.error}", err=True)
+        # ⚠ The parser's refusal names the Managers that declare nothing; it
+        # cannot know there is now a command for that. Without this line the
+        # only route left is hand-editing config.yaml, which is what this
+        # command exists to avoid.
+        for undeclared in _undeclared_in(declared.error, config, name.strip()):
+            click.echo(
+                f"  declare it first: rite add manager {undeclared} --preset "
+                f"<{'|'.join(sorted(PRESETS))}>",
+                err=True,
+            )
+        raise SystemExit(1)
+
+    config.coordination.managers = declared.names
+    config.coordination.manager_roles = declared.roles
+    rite_dir = root / ".rite"
+    rite_dir.mkdir(parents=True, exist_ok=True)
+    write_config(rite_dir, config)
+
+    role = next(r for r in declared.roles if r.name == name.strip())
+    held = sorted(effective_duties(role, len(declared.roles)))
+    click.echo(
+        f"{'updated' if declared.updated else 'declared'} manager "
+        f"'{role.name}' in .rite/config.yaml"
+    )
+    click.echo(f"  engine: {role.engine}")
+    click.echo(f"  duties: {', '.join(held) if held else '(none)'}")
+    click.echo(
+        f"  priority: {declared.names.index(role.name) + 1} of {len(declared.names)}"
+    )
+
+
+def _undeclared_in(error: str, config, candidate: str = "") -> list[str]:
+    """The Managers a parser refusal is complaining are undeclared.
+
+    Read back out of the message rather than recomputed, so this can never
+    name a Manager the refusal did not — the two would drift, and a remedy
+    printed for the wrong name is worse than none.
+
+    ⚠ `candidate` is the Manager being declared right now, which is NOT yet
+    in the config and is the one named when someone gives `--engine` and no
+    duties. Without it that user gets the refusal and no way out, which is
+    the whole failure this command exists to end.
+    """
+    if "declare no preset and no duties" not in error:
+        return []
+    known = {r.name for r in config.coordination.manager_roles}
+    if candidate:
+        known.add(candidate)
+    return sorted(n for n in known if f"{n}," in error or f"{n} declare" in error)
+
+
 @add.command("worker")
 @click.argument("name")
 @click.option("--manager", "-m", default="", help="Manager name")
@@ -2759,7 +3653,7 @@ def add_module_cmd(name: str, url: str, branch: str, description: str) -> None:
     "--instructions",
     default="",
     help="Standing direction for this one Worker — stored as worker.yml's "
-    "`claude_instructions` (SPEC §8.4) and rendered into its CLAUDE.md.",
+    "`claude_instructions` and rendered into its CLAUDE.md.",
 )
 @click.option(
     "--scoped-token",
@@ -2769,13 +3663,24 @@ def add_module_cmd(name: str, url: str, branch: str, description: str) -> None:
     "project's repos. Off by default: Workers share the project's "
     "credentials.",
 )
+@click.option(
+    "--follow-module-docs/--no-follow-module-docs",
+    default=None,
+    help="Answer the question about the modules' own CLAUDE.md / AGENTS.md / "
+    "CONTRIBUTING.md without being asked. Unset means ask.",
+)
 def add_worker_cmd(
-    name: str, manager: str, modules: str, instructions: str, scoped_token: bool
+    name: str,
+    manager: str,
+    modules: str,
+    instructions: str,
+    scoped_token: bool,
+    follow_module_docs: bool | None,
 ) -> None:
     """Create a new worker workspace.
 
     With `--scoped-token`, also walks through provisioning a GitHub token
-    for this one Worker, scoped to the project's repos (§5.3.3, §5.3.4) —
+    for this one Worker, scoped to the project's repos —
     never displayed in this project's chat, only typed directly into this
     terminal prompt. Without it, Workers share the credentials the project
     already holds.
@@ -2792,12 +3697,16 @@ def add_worker_cmd(
     module_subset = (
         [m.strip() for m in modules.split(",") if m.strip()] if modules else None
     )
+    follow = module_docs_step.settle_module_docs(
+        root, module_subset, follow_module_docs
+    )
     result = add_worker(
         root,
         name,
         manager=manager,
         module_subset=module_subset,
         instructions=instructions,
+        follow_docs=follow,
     )
     if not result.ok:
         click.echo(result.message, err=True)
@@ -2863,7 +3772,7 @@ def _token_permission_line(permissions: list[str]) -> str:
 
 
 def _provision_worker_token(root, worker, config) -> None:
-    """Guided sandbox-token provisioning for one Worker (§5.3.3, §5.3.4).
+    """Guided sandbox-token provisioning for one Worker.
     Prints the exact repos and permissions the token should be scoped to,
     then — only on explicit confirmation — prompts for the value directly
     (never collected any other way) and stores it under the naming
@@ -2916,7 +3825,7 @@ def _provision_worker_token(root, worker, config) -> None:
     click.echo(_token_permission_line(config.sandbox.token_permissions))
     click.echo("  create one at https://github.com/settings/personal-access-tokens/new")
     if not click.confirm("  store the token now?", default=False):
-        click.echo(f"  skipped — run `rite credential set {key}` later")
+        click.echo(f"  skipped — run `rite credential set {_how_to_set(key)}` later")
         return
 
     value = click.prompt("  token", hide_input=True, confirmation_prompt=True)
@@ -3193,12 +4102,12 @@ def publish_install_ci(force: bool) -> None:
     """Install the GitHub Actions workflow that runs the gate in CI.
 
     The exact analogue of `install-hook`, and it exists for the same reason
-    SPEC §11.5 gives for that one: `rite init` does this already, and
+    as that one: `rite init` does this already, and
     re-running `rite init` is not the remedy for a project that is already
     initialised — it offers to wipe the project's config rather than touch
     the workflow.
 
-    §11.5.1 is why it matters more than the hook: `core.hooksPath` can
+    It matters more than the hook because: `core.hooksPath` can
     disarm the local gate without the developer doing anything and with no
     signal that it happened, "which makes [CI] the load-bearing one, not
     the backup". A project with no workflow has no layer that a local git
@@ -3401,10 +4310,9 @@ def publish_pre_push() -> None:
     Not meant to be typed by a human — this is what the installed
     `.git/hooks/pre-push` execs (Stage 2 #3). Reads git's pre-push protocol
     from stdin, scans each pushed range (not full history — that's what
-    keeps this "seconds to run" per §11), and exits nonzero if any range
+    keeps this "seconds to run"), and exits nonzero if any range
     fails.
     """
-    import sys
 
     from rite_ai.gate import EXIT_CLEAN, run_gate
     from rite_ai.gate.gate import format_report
@@ -3467,7 +4375,7 @@ def _ticket_backend(board_role: str = "workers", root: Path | None = None, confi
         )
 
     backend = create_backend_from_config(
-        tb, board_role=board_role, credentials=config.credentials
+        tb, board_role=board_role, credentials=config.credentials, root=root
     )
 
     if isinstance(backend, BackendError):
@@ -3539,6 +4447,18 @@ def board_create(
         click.echo(result.message, err=True)
         raise SystemExit(1)
     click.echo(f"created {result.id}: {result.url or result.title}")
+    _say_unrecorded(backend)
+
+
+def _say_unrecorded(backend) -> None:
+    """A write rite could not note for reading back (DF4, `own_writes`):
+    the board has it, and a list straight after may not show it yet."""
+    for problem in getattr(backend, "notes", None) or []:
+        click.echo(
+            f"{problem}; a read of the board in the next few seconds may not "
+            "show this write",
+            err=True,
+        )
 
 
 @board.command("move")
@@ -3566,8 +4486,9 @@ def board_move(ticket_id: str, status: str, role: str) -> None:
     if isinstance(result, BackendError):
         click.echo(result.message, err=True)
         raise SystemExit(1)
+    _say_unrecorded(backend)
     # Recorded where rite saw the backend accept it, with where the ticket
-    # actually LANDED — the standup cites this (plan § K4).
+    # actually LANDED — the standup cites this.
     if _has_project_in_scope():
         from rite_ai.managers import current_manager
         from rite_ai.reporting import events
@@ -3592,14 +4513,38 @@ def board_move(ticket_id: str, status: str, role: str) -> None:
 @click.option("--status", default=None)
 @click.option("--assignee", default=None)
 @click.option("--label", default=None)
+@click.option(
+    "--ready",
+    "ready",
+    is_flag=True,
+    help="Only queued tickets with an agreed definition of done and no "
+    "Manager yet, from a fresh read of each (not from the label).",
+)
+@click.option(
+    "--needs-refinement",
+    "needs_refinement",
+    is_flag=True,
+    help="Only queued tickets that are not ready, each with its state.",
+)
 @click.option("--role", default="workers", help="board | workers | testing")
 def board_list(
-    status: str | None, assignee: str | None, label: str | None, role: str
+    status: str | None,
+    assignee: str | None,
+    label: str | None,
+    ready: bool,
+    needs_refinement: bool,
+    role: str,
 ) -> None:
     """List tickets, optionally filtered.
 
+    --ready and --needs-refinement compute the answer from a fresh read of
+    every `scheduled` ticket, so they are right even when the board's
+    `ready-to-work` label is stale (TR7).
+
     Examples:
       rite board list --status "In Progress"
+      rite board list --ready
+      rite board list --needs-refinement
     """
     from rite_ai.tickets import BackendError, TicketFilter
 
@@ -3607,6 +4552,19 @@ def board_list(
     if err:
         click.echo(err, err=True)
         raise SystemExit(1)
+    if ready or needs_refinement:
+        if ready and needs_refinement:
+            click.echo("give --ready or --needs-refinement, not both", err=True)
+            raise SystemExit(1)
+        if status or assignee or label:
+            click.echo(
+                "--ready and --needs-refinement read every `scheduled` ticket; "
+                "they take no other filter",
+                err=True,
+            )
+            raise SystemExit(1)
+        _board_list_by_refinement(backend, ready=ready)
+        return
     filters = TicketFilter(status=status, assignee=assignee, label=label)
     result = backend.list_tickets(filters)
     if isinstance(result, BackendError):
@@ -3616,6 +4574,30 @@ def board_list(
         click.echo("no tickets")
         return
     _render_tickets(result)
+
+
+def _board_list_by_refinement(backend, *, ready: bool) -> None:
+    """`rite board list --ready` / `--needs-refinement` (TR7)."""
+    from rite_ai.config.parse import ParseError, parse_config
+    from rite_ai.normalise import normalise
+    from rite_ai.refinement import view
+
+    config = parse_config(_find_project_root() / ".rite" / "config.yaml")
+    managers = [] if isinstance(config, ParseError) else view.managers_of(config)
+    rows, cut = view.truth(backend, managers)
+    shown = [r for r in rows if r.ready == ready]
+    if not shown:
+        click.echo("no tickets")
+    for row in shown:
+        title = normalise(row.ticket.title).text
+        if ready:
+            click.echo(f"  {row.ticket.id}  {title}")
+        elif row.status.refined:
+            click.echo(f"  {row.ticket.id}  [assigned]  {title}")
+        else:
+            click.echo(f"  {row.ticket.id}  [{row.status.state}]  {title}")
+    if cut:
+        click.echo(f"  … {cut}")
 
 
 @board.command("query")
@@ -3666,31 +4648,16 @@ def board_show(ticket_id: str, role: str) -> None:
     if isinstance(ticket, BackendError):
         click.echo(ticket.message, err=True)
         raise SystemExit(1)
-    from rite_ai.normalise import normalise
+    from rite_ai import phrases
+    from rite_ai.sandbox.delivery import render_ticket
 
-    # N1, SPEC §6.6.1: what an agent reads here is what the tracker's own UI
-    # shows a reviewer. Every change is said, in a line rite writes, and none
-    # of it is a safety check (§6.6.3).
-    title = normalise(ticket.title)
-    body = normalise(ticket.description.strip())
+    # The one rendering, shared with what `rite sandbox start` delivers into
+    # a Worker's workspace, so the two cannot drift apart.
+    rendered = render_ticket(ticket)
     # N2: phrases are REPORTED at the next check-in, never blocked. The text
     # below is printed whole whatever the scan finds.
-    from rite_ai import phrases
-
-    phrases.report(
-        _find_project_root(), f"ticket {ticket.id}", f"{title.text}\n{body.text}"
-    )
-    click.echo(f"{ticket.id}  [{ticket.status}]  {title.text}")
-    if ticket.labels:
-        click.echo(f"labels: {', '.join(ticket.labels)}")
-    if ticket.url:
-        click.echo(ticket.url)
-    click.echo("")
-    click.echo(body.text or "(no description)")
-    for part, what in ((title, "this title"), (body, "this description")):
-        if part.changed:
-            click.echo("")
-            click.echo(part.note(what))
+    phrases.report(_find_project_root(), f"ticket {ticket.id}", rendered.scanned)
+    click.echo(rendered.text)
 
 
 @board.command("label")
@@ -3708,7 +4675,7 @@ def board_show(ticket_id: str, role: str) -> None:
 def board_label(
     ticket_id: str, labels: tuple[str, ...], remove: tuple[str, ...], role: str
 ) -> None:
-    """Add worker-name labels — the assignment mechanism (SPEC §9.10).
+    """Add worker-name labels — the assignment mechanism.
 
     LABELS are ADDED to whatever the ticket already carries; nothing is
     replaced. Reassigning therefore takes both halves — add the new
@@ -3739,6 +4706,7 @@ def board_label(
     if remove:
         parts.append(f"removed {', '.join(remove)}")
     click.echo(f"{ticket_id}: {'; '.join(parts)}")
+    _say_unrecorded(backend)
 
 
 @board.command("assign")
@@ -3746,12 +4714,12 @@ def board_label(
 @click.argument("worker")
 @click.option("--role", default="workers", help="board | workers | testing")
 def board_assign(ticket_id: str, worker: str, role: str) -> None:
-    """Set the backend's own assignee field (SPEC §6.1's `assign`).
+    """Set the backend's own assignee field (its own `assign`).
 
     This is the backend's native assignee — a GitHub issue assignee, a
     JIRA assignee — which is what a human sees on the board. It is NOT
     how rite decides who owns a ticket: that is the worker-name label
-    (`rite board label`, SPEC §9.10), which is what every rite query
+    (`rite board label`), which is what every rite query
     filters on. Set both if you want the board to read the way rite does.
 
     Takes a person, not a rite worker name: a display name, an email
@@ -3773,6 +4741,7 @@ def board_assign(ticket_id: str, worker: str, role: str) -> None:
     if isinstance(result, BackendError):
         click.echo(result.message, err=True)
         raise SystemExit(1)
+    _say_unrecorded(backend)
     click.echo(f"{ticket_id}: assigned to {worker}")
 
 
@@ -3842,8 +4811,533 @@ def _load_config_for_write():
 
 
 @cli.group()
+def refine() -> None:
+    """Ticket refinement: whether a ticket has an agreed definition of done.
+
+    A ticket is refined only by a record rite signed on the board, which
+    matches the ticket's current title and description. Nothing else counts:
+    not a label, and not a model saying so.
+    """
+
+
+@refine.command("status")
+@click.argument("ticket_id")
+@click.option("--role", default="workers", help="board | workers | testing")
+def refine_status(ticket_id: str, role: str) -> None:
+    """Say whether TICKET_ID has an agreed definition of done, and why.
+
+    One read of the ticket and its comments, and no writes. Exits 0 only
+    when the ticket is REFINED, so a script can gate on it. Every other state
+    exits 1 and names itself: NOT REFINED, STALE, CONFLICT or UNREADABLE,
+    each needing something different.
+
+    Examples:
+      rite refine status KAN-7
+      rite refine status 42
+    """
+    from rite_ai.refinement import status as refinement_status
+
+    result = refinement_status.of(_find_project_root(), None, ticket_id, role=role)
+    click.echo(f"{ticket_id}: {result.state} — {result.detail}")
+    if result.record is not None and result.state == refinement_status.REFINED:
+        click.echo(_provenance_line(result.record.provenance))
+        click.echo(refinement_status.render_for_worker(result.record))
+    raise SystemExit(0 if result.refined else 1)
+
+
+def _provenance_line(provenance: dict) -> str:
+    """How the definition of done was agreed, said so that an attested one is
+    never shown looking like one the User confirmed (TRQ10)."""
+    from rite_ai.refinement import record as refinement_record
+
+    if provenance.get("kind") == refinement_record.ACCEPTED:
+        return "agreed: " + refinement_record.how_agreed(provenance)
+    return (
+        f"agreed: {refinement_record.ATTESTED_TOKEN} — attested by a session "
+        f"running as the person at {provenance.get('at', '?')}; not confirmed "
+        "through the User's channel"
+    )
+
+
+@refine.command("ask")
+@click.argument("ticket_id")
+@click.argument("text")
+@click.option(
+    "--message",
+    "is_message",
+    is_flag=True,
+    help="TICKET_ID is the id of the User's message, as shown beside it in "
+    "your instruction: an instruction that is not a ticket yet. rite files "
+    "it as a chore with exactly his words when he accepts, or, unrefined, "
+    "if he does not reply in time.",
+)
+def refine_ask(ticket_id: str, text: str, is_message: bool) -> None:
+    """Ask the User about a ticket — the Owner Manager only (TR2).
+
+    One round: at most three numbered questions under `Questions:`, and from
+    round 2 a proposal under `Proposal:` he can accept in one word, each item
+    ending `[ticket: "…"]`, `[answer: "…"]` (exact quotes) or `[proposed]`.
+    rite checks it against the ticket and his answers, puts it in front of
+    him, and posts it on the ticket. His reply comes to you as a message;
+    an accept word writes the agreed definition of done, and you never write
+    it yourself.
+
+    ⚠ This only ASKS. The round is checked and sent by your supervisor,
+    outside your sandbox; whether it went, or why not, is in your next
+    instruction. **The text is `-`, on stdin (F14).**
+
+    An instruction he gave in chat is refined straight away too, before it
+    is a ticket: `--message <message-id>`. If he accepts, rite files it as a
+    chore with exactly his words and the agreed definition of done; if he
+    has not replied after `refinement.chore_after_minutes`, rite files it
+    unrefined, so nothing he asked for is lost, and refinement goes on.
+
+    Examples:
+      rite refine ask KAN-7 - <<'RITE_TEXT_1f2e3d'
+      Questions:
+      1. Which timeout: a file's, or the HTTP call's?
+      2. A flag, an environment variable, or a config key?
+      RITE_TEXT_1f2e3d
+    """
+    from rite_ai.config.managers import routing_owner
+    from rite_ai.managers import current_manager, stdin_text
+    from rite_ai.managers.routing import ticket_problem
+    from rite_ai.refinement import ask as refinement_ask
+    from rite_ai.refinement import protocol
+
+    root = _require_project_root()
+    speaking = current_manager()
+    if not speaking:
+        click.echo(
+            "refusing: `rite refine ask` is how the Owner Manager asks the User "
+            "about a ticket. From your own shell, agree it yourself with `rite "
+            f'refine accept {ticket_id} --item "…"`, or `/refine {ticket_id}`.',
+            err=True,
+        )
+        raise SystemExit(1)
+    roles, problems = _manager_roles(root)
+    if problems:
+        click.echo("cannot read this project's Managers:", err=True)
+        for problem in problems[:3]:
+            click.echo(f"  {problem}", err=True)
+        raise SystemExit(1)
+    owner = routing_owner(list(roles)) if roles else speaking
+    if speaking != owner:
+        click.echo(
+            f"refusing: refinement is the Owner's, and {speaking!r} is not it"
+            + (f" ({owner!r} is)" if owner else "")
+            + ". If a ticket you were given needs the User, say so to the "
+            "Owner with `rite reply`.",
+            err=True,
+        )
+        raise SystemExit(1)
+    try:
+        text = stdin_text.read(text)
+    except stdin_text.OnTheCommandLine:
+        click.echo(
+            stdin_text.refusal(f"rite refine ask {ticket_id}", "<your round>"),
+            err=True,
+        )
+        raise SystemExit(1)
+    problem = ticket_problem(ticket_id)
+    if problem:
+        click.echo(f"refusing: {problem}.", err=True)
+        raise SystemExit(1)
+    if not text.strip():
+        click.echo("refusing to send an empty round.", err=True)
+        raise SystemExit(1)
+    target = ticket_id.strip()
+    if is_message:
+        target = protocol.MESSAGE + target
+    # The shape, checked here so a mistake costs no turn. The quotes and the
+    # round number are checked by the supervisor, against the ticket and his
+    # answers, which this side of the boundary cannot be trusted to hold.
+    checked = refinement_ask.check(text, k=1, ticket_text="", answers=[])
+    shape = [p for p in checked.problems if "Quote exactly" not in p]
+    if shape:
+        click.echo("refusing: the round is not in the shape rite sends:", err=True)
+        for p in shape:
+            click.echo(f"  - {p}", err=True)
+        raise SystemExit(1)
+    protocol.request(root, speaking, target, text)
+    click.echo(
+        f"round queued for {target}: rite checks it against the "
+        "ticket and the User's answers, then puts it in front of him and on "
+        "the ticket. Whether it went, or why not, is in your next instruction."
+    )
+
+
+@refine.command("reopen")
+@click.argument("ticket_id")
+@click.option(
+    "--manager",
+    default="",
+    help="The Manager that refines, when rite cannot tell: the one holding "
+    "`route`, or the project's only Manager, is used otherwise.",
+)
+def refine_reopen(ticket_id: str, manager: str) -> None:
+    """Restart a ticket's refinement — a person, at the host (TR2).
+
+    For a ticket PARKED (unanswered too many times in a row, its thread unreadable,
+    or not started by the Manager), or one you want asked again from the
+    start. Its rounds begin again at 1, and your earlier answers are kept.
+    Replying about it in your DM, starting with its id, resumes it too, and
+    so does editing the ticket.
+
+    Examples:
+      rite refine reopen KAN-7
+    """
+    from rite_ai.config.managers import routing_owner
+    from rite_ai.managers import current_manager
+    from rite_ai.refinement import rounds
+
+    root = _require_project_root()
+    if current_manager():
+        click.echo(
+            "refusing: reopening a ticket's refinement is a person's decision, "
+            "and this is a Manager's session. Tell the User what is parked and "
+            "why; he can reply about it, or run this himself.",
+            err=True,
+        )
+        raise SystemExit(1)
+    roles, problems = _manager_roles(root)
+    if problems:
+        click.echo("cannot read this project's Managers:", err=True)
+        for problem in problems[:3]:
+            click.echo(f"  {problem}", err=True)
+        raise SystemExit(1)
+    owner = manager.strip() or (routing_owner(list(roles)) if roles else "")
+    if not owner:
+        from rite_ai.config.parse import ParseError, parse_config
+
+        parsed = parse_config(root / ".rite" / "config.yaml")
+        names = [r.name for r in roles] or (
+            list(parsed.coordination.managers)
+            if not isinstance(parsed, ParseError)
+            else []
+        )
+        if len(names) != 1:
+            click.echo(
+                "refusing: rite cannot tell which Manager refines here (none "
+                "holds `route`). Name it: `rite refine reopen "
+                f"{ticket_id} --manager <name>`.",
+                err=True,
+            )
+            raise SystemExit(1)
+        owner = names[0]
+    click.echo(rounds.reopen(root, owner, ticket_id.strip()))
+    from rite_ai.refinement import status as refinement_status
+    from rite_ai.refinement import view
+
+    # TR7: the ticket reopened is re-labelled from a fresh read at once.
+    board = refinement_status.board_for(root, None)
+    if not isinstance(board, refinement_status.Status):
+        labelled = view.settle(board, ticket_id.strip(), view.managers_at(root))
+        if labelled:
+            click.echo(labelled)
+
+
+@refine.command("sync")
+@click.option("--role", default="workers", help="board | workers | testing")
+def refine_sync(role: str) -> None:
+    """Correct the `ready-to-work` label on this board, now (TR7).
+
+    The label is rite's view of the refinement records: on a ticket exactly
+    when it is `scheduled`, REFINED and not yet assigned. Nothing reads it to
+    decide anything. The Owner's supervisor corrects it every cycle; this
+    does the same with no Manager running, from one read of every ticket
+    that is `scheduled` or carries the label. A label added by hand to a
+    ticket that is not REFINED is removed, with one comment on the ticket
+    per record state; one removed from a REFINED ticket is put back.
+
+    Run it on the host: a Manager's or Worker's sandbox cannot read the key
+    the records are checked with.
+
+    Examples:
+      rite refine sync
+    """
+    from rite_ai.managers import current_manager
+    from rite_ai.refinement import view
+
+    if current_manager():
+        click.echo(
+            "refusing: the label is corrected by the Owner's supervisor every "
+            "cycle, and a Manager's session cannot read the refinement records",
+            err=True,
+        )
+        raise SystemExit(1)
+    root = _require_project_root()
+    board, err = _ticket_backend(role, root=root)
+    if err:
+        click.echo(err, err=True)
+        raise SystemExit(1)
+    done = view.reconcile(board, view.managers_at(root))
+    for change in done.changes:
+        verb = "added" if change.added else "removed"
+        click.echo(f"  {change.ticket}: {verb} ({change.state})")
+    click.echo(done.line() or f"{view.READY}: every label already right")
+    raise SystemExit(0 if done.complete and not done.problems else 1)
+
+
+@refine.command("accept")
+@click.argument("ticket_id")
+@click.option(
+    "--item", "items", multiple=True, help="A definition-of-done item (repeatable)"
+)
+@click.option(
+    "--as-written",
+    "use_ticket_text",
+    is_flag=True,
+    help="Accept the items under the ticket's own 'Definition of done' heading",
+)
+@click.option(
+    "--verify", "verify", multiple=True, help="A command that proves it (repeatable)"
+)
+@click.option("--in-scope", "scope_in", multiple=True, help="In scope (repeatable)")
+@click.option("--out-of-scope", "scope_out", multiple=True, help="Out of scope")
+@click.option(
+    "--host-item",
+    "host_items",
+    multiple=True,
+    help="A definition-of-done item the HOST measures, because a Worker cannot "
+    "take that measurement in its sandbox (repeatable; listed after the others)",
+)
+@click.option("--role", default="workers", help="board | workers | testing")
+def refine_accept(
+    ticket_id: str,
+    items: tuple[str, ...],
+    use_ticket_text: bool,
+    verify: tuple[str, ...],
+    scope_in: tuple[str, ...],
+    scope_out: tuple[str, ...],
+    host_items: tuple[str, ...],
+    role: str,
+) -> None:
+    """Attest a definition of done for TICKET_ID, as the person, at this host.
+
+    Writes a record signed with rite's refinement key as a comment on the
+    ticket, then reads the ticket back and reports REFINED only if the read
+    agrees. The record says it was ATTESTED by a session running as you, not
+    confirmed through your channel: rite cannot tell you from a model running
+    as you, and does not pretend to. It cannot be run from inside a Manager's
+    or Worker's sandbox, which cannot read the key.
+
+    With no --verify, the record says "none agreed", and a Worker is told to
+    report how it checked each item.
+
+    A --host-item is one the Worker is told is not its to run: the host
+    measures it and records the result with `rite refine measured`, and rite
+    holds publishing the work until that result is a pass.
+
+    Examples:
+      rite refine accept KAN-7 --item "the HTTP timeout in main.py is a flag" \\
+        --item "with no flag, the timeout is unchanged"
+      rite refine accept 42 --as-written
+    """
+    from rite_ai.refinement import accept as refinement_accept
+
+    outcome = refinement_accept.accept(
+        _find_project_root(),
+        None,
+        ticket_id,
+        items=list(items),
+        verify=list(verify),
+        scope_in=list(scope_in),
+        scope_out=list(scope_out),
+        host_items=list(host_items),
+        use_ticket_text=use_ticket_text,
+        role=role,
+    )
+    click.echo(outcome.message, err=not outcome.ok)
+    raise SystemExit(0 if outcome.ok else 1)
+
+
+def _refuse_in_a_manager(what: str) -> None:
+    from rite_ai.managers import current_manager
+
+    if current_manager():
+        click.echo(
+            f"refusing: {what} is the person's, at the host, and this is a "
+            "Manager's session",
+            err=True,
+        )
+        raise SystemExit(1)
+
+
+@refine.command("answer")
+@click.argument("ticket_id")
+@click.argument("words", nargs=-1, required=True)
+@click.option(
+    "--round",
+    "k",
+    type=int,
+    default=None,
+    help="The round answered (default: the latest)",
+)
+def refine_answer(ticket_id: str, words: tuple[str, ...], k: int | None) -> None:
+    """Answer a refinement round from this terminal, as the owner (S22b).
+
+    For when Slack cannot reach you, or you are at the terminal anyway. The
+    answer is the same as a reply in the round's Slack thread: attributed to
+    this project's owner (`slack.owner_user`), kept in the same place, and an
+    accept word writes the same signed record. The record says it came from
+    the terminal, because rite cannot tell you from a session running as you.
+
+    Examples:
+      rite refine answer KAN-7 the http one, in main.py
+      rite refine answer KAN-7 ok
+    """
+    import time as _time
+
+    from rite_ai.config.managers import routing_owner
+    from rite_ai.config.parse import ParseError, parse_config
+    from rite_ai.managers.telling import tell_manager
+    from rite_ai.refinement import attribution, protocol, rounds
+    from rite_ai.refinement import status as refinement_status
+
+    _refuse_in_a_manager("answering a refinement round")
+    root = _require_project_root()
+    config = parse_config(root / ".rite" / "config.yaml")
+    if isinstance(config, ParseError):
+        click.echo(f"config error: {config.message}", err=True)
+        raise SystemExit(1)
+    roles = list(config.coordination.manager_roles)
+    names = list(config.coordination.managers)
+    owner = routing_owner(roles) if roles else (names[0] if len(names) == 1 else "")
+    if not owner:
+        click.echo("refusing: rite cannot tell which Manager refines here", err=True)
+        raise SystemExit(1)
+    ticket_id = ticket_id.strip()
+    attempt = rounds.load(root, owner, ticket_id)
+    if attempt is None or not attempt.rounds:
+        click.echo(f"{ticket_id} has no refinement round to answer", err=True)
+        raise SystemExit(1)
+    k = attempt.latest.k if k is None else k
+    if not any(r.k == k for r in attempt.rounds):
+        click.echo(f"{ticket_id} has no round {k}", err=True)
+        raise SystemExit(1)
+    board = refinement_status.board_for(root, config)
+    if isinstance(board, refinement_status.Status):
+        click.echo(f"{ticket_id}: {board.detail}", err=True)
+        raise SystemExit(1)
+    now = _time.time()
+    reply = protocol.Reply(
+        ticket=ticket_id,
+        k=k,
+        words=" ".join(words).strip(),
+        message=f"terminal-{_time.time_ns()}",
+        sent_at=now,
+        by=attribution.answered_by(config.slack.owner_user, attribution.TERMINAL),
+    )
+    notes = protocol.handle(root, owner, board, reply, limits=config.refinement)
+    for note in notes:
+        click.echo(note)
+        try:
+            tell_manager(root, owner, "refinement", note)
+        except OSError as e:
+            click.echo(f"could not tell {owner!r}: {e}", err=True)
+    if not config.slack.owner_user:
+        click.echo(
+            "note: no slack.owner_user is set, so this answer is recorded as the "
+            "owner's with no Slack id to name"
+        )
+
+
+@refine.command("measured")
+@click.argument("ticket_id")
+@click.option("--item", "item", type=int, required=True, help="The item, from 1")
+@click.option(
+    "--result", type=click.Choice(["pass", "fail"]), required=True, help="pass | fail"
+)
+@click.option(
+    "--output",
+    "output",
+    type=click.File("rb"),
+    required=True,
+    help="The measurement's output, as evidence ('-' for stdin); rite keeps "
+    "its SHA-256",
+)
+@click.option("--role", default="workers", help="board | workers | testing")
+def refine_measured(ticket_id: str, item: int, result: str, output, role: str) -> None:
+    """Record the host's measurement of a host-measured item (S31).
+
+    For a definition-of-done item agreed as the host's to measure, because a
+    Worker cannot take it in its sandbox. rite signs the result (who, when,
+    pass or fail, and the output's SHA-256), binds it to the ticket's current
+    refinement record and that item's text, posts it on the ticket, reads it
+    back, and appends it to its audit log. Publishing the Worker's work waits
+    until every such item has a PASS.
+
+    Examples:
+      rite refine measured KAN-29 --item 3 --result pass --output measured.txt
+    """
+    from rite_ai.refinement import attribution, measurement
+    from rite_ai.refinement import key as refinement_key
+    from rite_ai.refinement import status as refinement_status
+
+    _refuse_in_a_manager("recording a host measurement")
+    root = _require_project_root()
+    board = refinement_status.board_for(root, None, role=role)
+    if isinstance(board, refinement_status.Status):
+        click.echo(f"{ticket_id}: {board.detail}", err=True)
+        raise SystemExit(1)
+    now = refinement_status.status(board, ticket_id)
+    if not now.refined or now.record is None:
+        click.echo(
+            f"{ticket_id}: {now.state} — {now.detail}. A host measurement is "
+            "recorded only against an agreed definition of done",
+            err=True,
+        )
+        raise SystemExit(1)
+    try:
+        key = refinement_key.ensure()
+        made = measurement.build(
+            record=now.record,
+            item=item - 1,
+            result=result,
+            output=output.read(),
+            by=attribution.answered_by(
+                attribution.owner_user_of(root), attribution.TERMINAL
+            ),
+            key=key,
+        )
+    except (OSError, ValueError) as e:
+        click.echo(f"{ticket_id}: not recorded: {e}", err=True)
+        raise SystemExit(1) from e
+    posted = board.comment(ticket_id, measurement.render(made, now.record))
+    if posted is not None:
+        click.echo(f"{ticket_id}: not recorded: {posted.message}", err=True)
+        raise SystemExit(1)
+    back = refinement_status.status_and_thread(board, ticket_id)[1]
+    from rite_ai.tickets import Thread
+
+    read_back = [
+        measurement.rec.extract_kind(c.body, measurement.MARKER) or {}
+        for c in (back.comments if isinstance(back, Thread) else [])
+    ]
+    seen = any(
+        p.get("measurement_id") == made.payload["measurement_id"]
+        and measurement.verifies(p, key, now.record, item - 1)
+        for p in read_back
+    )
+    if not seen:
+        click.echo(
+            f"{ticket_id}: the result was posted, but reading the ticket back did "
+            "not find it intact; NOT recorded",
+            err=True,
+        )
+        raise SystemExit(1)
+    measurement.append(root, made)
+    click.echo(
+        f"{ticket_id}: item {item} measured on the host: {result.upper()} "
+        f"(measurement {made.payload['measurement_id']}, output sha256 "
+        f"{made.payload['output_sha256'][:12]}…), for record {now.record.record_id}"
+    )
+
+
+@cli.group()
 def schedule() -> None:
-    """This project's worker schedule (SPEC §2.7)."""
+    """This project's worker schedule."""
 
 
 @schedule.command("show")
@@ -3918,7 +5412,7 @@ def schedule_set(hours: str, workers: int) -> None:
 @click.argument("tz")
 def schedule_set_timezone(tz: str) -> None:
     """Set the schedule's timezone — required before any window is
-    meaningful (D-48).
+    meaningful.
 
     Examples:
       rite schedule set-timezone Europe/Warsaw
@@ -3938,7 +5432,7 @@ def schedule_set_timezone(tz: str) -> None:
     click.echo(f"timezone set to {tz}")
 
 
-# --- Workspace preparation (SPEC §2.1) ---
+# --- Workspace preparation ---
 
 
 def _worker_modules_or_exit(root, worker: str):
@@ -3978,7 +5472,7 @@ def _worker_modules_or_exit(root, worker: str):
 )
 def prepare(worker: str, branch: str | None) -> None:
     """Prepare a worker's workspace before a task — right repos, right
-    branches, no residue from the previous task (SPEC §2.1). Idempotent;
+    branches, no residue from the previous task. Idempotent;
     a dirty tree fails loudly rather than being discarded.
 
     Examples:
@@ -4012,7 +5506,7 @@ def prepare(worker: str, branch: str | None) -> None:
         raise SystemExit(1)
 
 
-# --- Heartbeat (SPEC §9.8) ---
+# --- Heartbeat ---
 
 
 @cli.command()
@@ -4020,7 +5514,7 @@ def prepare(worker: str, branch: str | None) -> None:
 @click.option("--ticket", "-t", default="", help="Ticket the worker is on")
 @click.option("--message", "-m", default="", help="One line on what it's doing")
 def heartbeat(worker: str, ticket: str, message: str) -> None:
-    """Record a Worker's "still alive" beat (SPEC §9.8).
+    """Record a Worker's "still alive" beat.
 
     Call it every `heartbeat.interval_minutes` (config.yaml, default 10)
     for as long as a Worker is working. This is what `rite status` and
@@ -4050,7 +5544,7 @@ def heartbeat(worker: str, ticket: str, message: str) -> None:
 
 @cli.command()
 def watchdog() -> None:
-    """Cheap liveness check — no LLM (SPEC §3.5). Meant to run every ~5
+    """Cheap liveness check — no LLM. Meant to run every ~5
     minutes from a scheduler (cron, launchd), and by a Manager on its own
     polling cadence. Zero tokens.
 
@@ -4266,7 +5760,7 @@ def handover_show() -> None:
 def scheduler_tick() -> None:
     """One scheduler cycle: the watchdog check, plus the schedule
     window-boundary check that hands over any active Worker when the
-    schedule drops to zero (§2.7.3, D-46). No LLM call; safe to run
+    schedule drops to zero. No LLM call; safe to run
     unattended from cron/launchd every few minutes. This is what
     `rite scheduler install` wires up — running it directly is mostly for
     testing that wiring.
@@ -4320,7 +5814,7 @@ def loop() -> None:
     spend anything.
 
     Nothing here starts a session, writes to a board, or spends quota, so
-    SPEC §9.12 is untouched. The layer that dispatches is a separate
+    nothing rite budgets is touched. The layer that dispatches is a separate
     decision and is not built.
     """
 
@@ -4348,7 +5842,7 @@ def loop_run(dry_run: bool, watch: bool, interval: float) -> None:
 
     Exit code carries the verdict, so a caller can branch without parsing
     prose: 0 when there is work or work is in flight, 1 when something could
-    not be established, 2 when the board is genuinely empty. "Empty" is the
+    not be established, 2 when the board listed nothing ready. "Empty" is the
     only one of the three that is a reason to stop, and it is given its own
     code for exactly that reason.
     """
@@ -4368,7 +5862,7 @@ def loop_run(dry_run: bool, watch: bool, interval: float) -> None:
         )
         raise SystemExit(1)
 
-    board, _ = _ticket_backend("workers")
+    board, board_problem = _ticket_backend("workers")
     from rite_ai.sandbox import worker_sandbox_status
 
     if watch:
@@ -4380,6 +5874,7 @@ def loop_run(dry_run: bool, watch: bool, interval: float) -> None:
             emit=click.echo,
             board=board,
             sandbox_status=worker_sandbox_status,
+            board_problem=board_problem or "",
         )
         # The drain is the only exit a human asked for, so it is the only one
         # that is a success. "Stopped because it could not tell" must not read
@@ -4393,7 +5888,12 @@ def loop_run(dry_run: bool, watch: bool, interval: float) -> None:
             return
         raise SystemExit(3 if why == DEADLOCKED else 1)
 
-    cycle = plan_cycle(root, board=board, sandbox_status=worker_sandbox_status)
+    cycle = plan_cycle(
+        root,
+        board=board,
+        sandbox_status=worker_sandbox_status,
+        board_problem=board_problem or "",
+    )
     for line in format_cycle(cycle):
         click.echo(line)
 
@@ -4495,7 +5995,7 @@ def loop_stop(reason: str) -> None:
     """Ask the loop to stop after the cycle it is in. Kills nothing.
 
     A killed loop can leave a claim held by a process that no longer exists —
-    the failure §2.6 exists for, caused by the stop command. Asking costs at
+    the failure claim expiry exists for, caused by the stop command. Asking costs at
     most one cycle. `pool/` has no kill path either, for the same reason.
     """
     from rite_ai.loop.session import stop
@@ -4608,7 +6108,7 @@ def scheduler_status(backend: str | None) -> None:
 @cli.group()
 def pool() -> None:
     """A small pool of standby coordinator (Manager/Owner) sessions, so a
-    dead one has a warm replacement ready (§2.5). Managers/Owner still
+    dead one has a warm replacement ready. Managers/Owner still
     need a human to start — `rite pool fill` is that explicit action;
     nothing spawns a session automatically."""
 
@@ -4661,7 +6161,7 @@ def pool_fill(count: int | None, command: str) -> None:
 @pool.command("status")
 def pool_status() -> None:
     """Live/stale split for the coordinator pool — the same read-only,
-    zero-token probe `rite status` runs (§2.5.2/§2.5.3): no session is
+    zero-token probe `rite status` runs: no session is
     spawned by this command.
 
     Examples:
@@ -4793,13 +6293,13 @@ def pool_history(limit: int) -> None:
 @cli.command("budget")
 def budget_report() -> None:
     """Current burn rate and week-end projection from real Claude Code
-    transcripts — reporting only (D-38): no Worker-count recommendation,
+    transcripts — reporting only: no Worker-count recommendation,
     no path back into concurrency anywhere in this command. Also shown in
     `rite status`.
 
     This is your WHOLE MACHINE's usage across every project, not just
     this one — Anthropic's weekly quota is account-wide, and there is no
-    local way to attribute usage back to one project (SPEC §2.6.1). For
+    local way to attribute usage back to one project. For
     the same reason it reports no percentage: `budget.weekly_token_budget`
     is one project's target, and these figures are not one project's
     usage, so the two cannot be compared.
@@ -5540,6 +7040,24 @@ def spec_stamp(units: tuple[str, ...], all_: bool) -> None:
                 continue
             targets.append(read)
 
+    if not targets and not failed:
+        # ⚠ **SAID, because silence read as success.** `--all` over a project
+        # with no derived files printed NOTHING and exited 0, so a person who
+        # had just run `rite spec index` believed their units were stamped and
+        # had none. Naming a unit has always refused clearly ("no derived file
+        # at … — write it first"); `--all` now answers in the same voice.
+        # Non-zero, because nothing was stamped and the caller asked for
+        # stamping — `rite spec verify` is the command that reports.
+        where = units_dir(root).relative_to(root)
+        click.echo(
+            f"nothing to stamp: no derived unit text in {where}. `rite spec "
+            "index` writes the index; the derived text for each unit is "
+            "written by hand (or by a session) and stamped after. "
+            "`rite spec status` lists which units have none.",
+            err=True,
+        )
+        raise SystemExit(1)
+
     for target in targets:
         result = stamp(target, by_id)
         if isinstance(result, str):
@@ -5718,8 +7236,9 @@ def sandbox() -> None:
     "--prompt",
     "prompt_text",
     default=None,
-    help="Opening prompt for the Worker, sent verbatim. For work that is not "
-    "a ticket on your board; use instead of --ticket.",
+    help="Work that is not a ticket on your board yet: rite files it as a "
+    "chore ticket first, from exactly this text, and starts the Worker on "
+    "that ticket. Use instead of --ticket.",
 )
 def sandbox_start(
     worker: str,
@@ -5731,7 +7250,7 @@ def sandbox_start(
     """Launch WORKER's session inside a fresh sandbox. If a token was
     provisioned for this Worker (`rite add worker`'s sandbox step, or
     `rite credential set sandbox_token_<worker>`), delivers it via
-    `--env` (D-31) — never a file, never a CLI argument.
+    `--env` — never a file, never a CLI argument.
 
     Give it its work when you start it: nothing in rite can type into a
     sandbox afterwards. The sandbox name is printed on start; `yoloai
@@ -5749,7 +7268,8 @@ def sandbox_start(
         raise click.UsageError("give --ticket or --prompt, not both")
     if ticket is not None and not ticket.strip():
         raise click.UsageError("--ticket needs a ticket ID")
-    prompt = f"Work ticket {ticket}." if ticket is not None else prompt_text
+    if prompt_text is not None and not prompt_text.strip():
+        raise click.UsageError("--prompt needs the work to do")
     from rite_ai.credentials.store import worker_environment
     from rite_ai.sandbox import (
         GLOBAL_TOKEN_CREDENTIAL,
@@ -5758,6 +7278,7 @@ def sandbox_start(
     )
 
     root, config = _load_config_for_write()
+    _refuse_unavailable_publishing(root)
 
     # Prepare first, outside the sandbox. The sandbox works on a copy of the
     # workspace and cannot run `rite prepare` itself, so a Worker started on
@@ -5801,8 +7322,9 @@ def sandbox_start(
             raise SystemExit(1)
 
     token, tier = resolve_worker_token(worker, config.credentials)
-    # Every credential this project holds, not just the git token (§5.3.4).
-    env = worker_environment(config.credentials, worker_token=token)
+    # What a Worker receives (§5.3.4): its engine's login, and no GitHub
+    # token — `token` stays on the host, for `rite deliver` to push with.
+    env = worker_environment(config.credentials)
     if tier == "global":
         # Loud, every time — but ONLY for a token belonging to the whole
         # machine. It used to fire for this project's own `github_token`
@@ -5827,15 +7349,72 @@ def sandbox_start(
             # someone is starting work.
             f"Give the project its own: `rite credential migrate "
             f"{GLOBAL_TOKEN_CREDENTIAL}` moves the one you have, or `rite "
-            f"credential set {GLOBAL_TOKEN_CREDENTIAL}` from inside the "
+            f"credential set {_how_to_set(GLOBAL_TOKEN_CREDENTIAL)}` from inside the "
             f"project sets a new one.",
             err=True,
+        )
+    # Refused BEFORE a sandbox is spent (dogfood KAN-7): a Worker with nothing
+    # cloned, or whose work cannot leave the sandbox, otherwise starts,
+    # works, and fails only at the push — and the one thing it can then do
+    # is ask for a credential through a side channel.
+    refusal = _worker_cannot_deliver(worker, worker_dir, modules, token, config)
+    if refusal:
+        click.echo(refusal, err=True)
+        raise SystemExit(1)
+    # ⚠ TR9 and TRQ11 (Robert, 2026-09-29): `--prompt` files the person's
+    # words as a chore, explicitly unrefined, and starts NOTHING on it. A
+    # Worker starts only on a REFINED ticket (TR4, below), and a chore filed a
+    # moment ago has no agreed definition of done by construction. Filed HERE,
+    # after every refusal above, so a start refused for another reason leaves
+    # nothing on the board.
+    if prompt_text is not None:
+        from rite_ai.managers.chores import create_for_prompt
+
+        chore_board, board_problem = _ticket_backend(
+            "workers", root=root, config=config
+        )
+        made, refusal = create_for_prompt(chore_board, worker, prompt_text)
+        if refusal:
+            click.echo(
+                f"not starting '{worker}': {refusal}."
+                + (f" ({board_problem})" if board_problem else "")
+                + " Give it a ticket that is on the board with --ticket instead.",
+                err=True,
+            )
+            raise SystemExit(1)
+        click.echo(
+            f"filed chore {made} from the prompt, labelled chore and scheduled. "
+            f"not starting '{worker}': the chore has no agreed definition of done "
+            f"yet, and a Worker starts only on one that has. Agree it with "
+            f'`rite refine accept {made} --item "…"`, then `rite sandbox start '
+            f"{worker} --ticket {made}`.",
+            err=True,
+        )
+        raise SystemExit(1)
+    from rite_ai.sandbox.delivery import DELIVERY_FILE, clear_delivery
+
+    if ticket is None:
+        clear_delivery(worker_dir)
+        prompt = None
+    else:
+        read_at, started_on = _deliver_ticket(
+            worker, worker_dir, ticket, root, config, modules
+        )
+        record_id = started_on.record_id
+        _record_publish_settings(
+            root, worker, ticket, config, modules, started_on.payload()
+        )
+        prompt = (
+            f"Work ticket {ticket} to its agreed definition of done, refinement "
+            f"record {record_id}. The ticket and that definition of done, as rite "
+            f"read them from the board at {read_at} UTC, are in {DELIVERY_FILE} "
+            "in your working directory, with what to do with your commits under "
+            "Publishing. Cite the record id in your last commit message."
         )
     result = start_worker(
         root,
         worker,
         config.sandbox,
-        token=token,
         agent_args=list(agent_args) or None,
         env=env,
         allow_dirty=allow_dirty,
@@ -5843,6 +7422,211 @@ def sandbox_start(
         ticket=ticket or "",
     )
     click.echo(result.message)
+    if not result.ok:
+        raise SystemExit(1)
+
+
+def _how_to_register(root: Path) -> str:
+    """The step that gives this project a module, for the one-line refusal.
+
+    `rite add module <name> <url>` clones into `<root>/<name>/`. For a
+    project that IS one repository (dogfood F2's pingr, created by a rite
+    older than the fix, so its committed `modules.yaml` is empty) that is a
+    second copy nested inside the first, one `git add -A` from being
+    committed. There the module is the root itself, so name the entry."""
+    from rite_ai.cli.init.detect import ROOT_MODULE_PATH, detect_repos
+    from rite_ai.config.parse import home_relative
+
+    repos = detect_repos(root)
+    if len(repos) == 1 and repos[0].path == ROOT_MODULE_PATH:
+        r = repos[0]
+        url = f", url: {home_relative(r.url)}" if r.url else ""
+        return (
+            "This project is itself the repository: add it to "
+            f".rite/modules.yaml as `{r.name}: {{path: ./{url}, branch: "
+            f"{r.branch}}}`"
+        )
+    return "Register the repository with `rite add module <name> <url>`"
+
+
+def _board_source(config, role: str = "workers") -> str:
+    """Which board a ticket was read from, in words for the delivery header."""
+    tb = config.ticket_backend
+    if tb.type == "jira":
+        key = (tb.projects or {}).get(role) or ""
+        return f"Jira {tb.site}" + (f", project {key}" if key else "")
+    if tb.type == "github":
+        return f"GitHub Issues {tb.repo}"
+    return tb.type
+
+
+def refused_for_refinement(state: str, ticket: str) -> str:
+    """The one line a refused start ends with. It lives beside the check in
+    `refinement.status.refusal`, so a refused route (TR5) says exactly what a
+    refused Worker start says."""
+    from rite_ai.refinement import status as st
+
+    return st.refusal(state, ticket)
+
+
+def _record_publish_settings(
+    root: Path, worker: str, ticket: str, config, modules, refinement=None
+):
+    """Record what this Worker is started under (PB1, read once), or exit.
+
+    From the SAME parse that wrote TICKET.md's Publishing section, so what
+    the Worker was told and what `rite deliver` compares against are one
+    read. A record that cannot be written refuses the start: without it the
+    delivery could only ever be commit-only, and nothing would say why."""
+    from rite_ai.publishing import record
+
+    try:
+        record.write(root, worker, ticket, config, modules, refinement=refinement)
+    except (OSError, ValueError) as e:
+        click.echo(
+            f"not starting '{worker}': rite could not record which publish "
+            f"settings it starts under ({e})",
+            err=True,
+        )
+        raise SystemExit(1) from e
+
+
+def _deliver_ticket(
+    worker: str, worker_dir: Path, ticket: str, root, config, modules=()
+) -> tuple[str, str]:
+    """Check TICKET is refined and write it, with its agreed definition of
+    done, into the Worker's workspace, or exit. Returns the UTC time of the
+    read and the signed record.
+
+    A sandboxed Worker holds no board credential (§5.3.4), so this is the
+    only way it learns what its ticket says and what counts as done.
+
+    ⚠ **ONE read (TR4, the note's part 4, race 4).** `refinement.status.of`
+    reads the board once and returns the state, the signed record and the
+    ticket from that read. The ticket text written here is that read's, never
+    a second one: an edit landing between two reads would hand the Worker
+    ticket text that does not match the record rite checked.
+
+    ⚠ **Only REFINED starts a Worker** (TRQ1, enforcement is the standard).
+    Every other state refuses and names itself, and the previous ticket's copy
+    is removed, so nothing stale is left for a later start to trust. UNREADABLE
+    is said as rite could not check, never as "no definition of done"."""
+    from rite_ai import phrases
+    from rite_ai.publishing.instructions import for_worker
+    from rite_ai.refinement.status import of, render_for_worker
+    from rite_ai.sandbox.delivery import (
+        clear_delivery,
+        read_at_now,
+        render_ticket,
+        write_delivery,
+    )
+
+    checked = of(root, config, ticket)
+    if not checked.refined or checked.record is None or checked.ticket is None:
+        clear_delivery(worker_dir)
+        # ⚠ TWO lines, and the LAST one is the one that matters. A Manager's
+        # Worker request reaches its next instruction as the last line of
+        # this command's stderr, cut to 200 characters (`broker.honour`, then
+        # DF13's `tell_manager`). So the last line carries the state and what
+        # to do, and fits for any ticket id; the detail, which can be long,
+        # comes first, for the terminal.
+        click.echo(
+            f"not starting '{worker}': ticket {ticket}: {checked.state}: "
+            f"{checked.detail}",
+            err=True,
+        )
+        click.echo(refused_for_refinement(checked.state, ticket), err=True)
+        raise SystemExit(1)
+    read_at = read_at_now()
+    rendered = render_ticket(checked.ticket)
+    phrases.report(root, f"ticket {checked.ticket.id}", rendered.scanned)
+    path = write_delivery(
+        worker_dir,
+        rendered,
+        read_at,
+        _board_source(config),
+        sections=(
+            ("Agreed definition of done", render_for_worker(checked.record)),
+            ("Publishing", for_worker(config, list(modules), ticket)),
+        ),
+    )
+    record_id = checked.record.record_id
+    click.echo(
+        f"delivered ticket {ticket} and its agreed definition of done (record "
+        f"{record_id}) as read at {read_at} UTC to {path}"
+    )
+    return read_at, checked.record
+
+
+def _worker_cannot_deliver(
+    worker: str, worker_dir: Path, modules: list, token: str | None, config=None
+) -> str | None:
+    """Why this Worker could do no work that reaches anyone, or None.
+
+    ⚠ **Remote access is asked only for modules whose work leaves by a
+    push** (PB1). Under `strategy: commit` nothing is pushed, by design, and
+    `rite deliver` collects the commits on the host: an on-premise project
+    with no reachable remote, or no token, must still be able to run it."""
+    import shutil
+
+    from rite_ai.sandbox import (
+        clone_remotes,
+        push_access_refusal,
+        remote_access_refusal,
+    )
+
+    if not modules:
+        return (
+            f"not starting '{worker}': it has no module, so its workspace holds "
+            f"no code to work on. {_how_to_register(worker_dir.parent.parent)}, "
+            f"then `rite remove worker {worker}` and `rite add worker {worker}`"
+        )
+    gh = shutil.which("gh")
+    remotes = clone_remotes(worker_dir)
+    if config is not None:
+        from rite_ai.publishing.settings import effective
+
+        local = {
+            m.name for m in modules if effective(config.publish, m).strategy == "commit"
+        }
+        remotes = [r for r in remotes if Path(r.clone).name not in local]
+    refusal = remote_access_refusal(worker, remotes, token, gh)
+    if refusal or not remotes:
+        return refusal
+    assert token  # remote_access_refusal refuses without one
+    return push_access_refusal(worker, remotes, token)
+
+
+@cli.command("deliver")
+@click.argument("worker")
+@click.option(
+    "--ticket",
+    default=None,
+    help="The ticket the Worker was started on; by default, the one rite recorded.",
+)
+def deliver_cmd(worker: str, ticket: str | None) -> None:
+    """Deliver WORKER's finished ticket under the project's publish strategy.
+
+    Collects each module's ticket branch from the Worker's sandbox into the
+    project's own checkout of that module (adding a branch, nothing else),
+    squashes it when `publish.squash` is on, and removes the sandbox once
+    every module is delivered. Uncommitted work is refused, never committed
+    for the Worker. Run by you, it uses the config as it is now.
+
+    Examples:
+      rite deliver alpha
+      rite deliver alpha --ticket KAN-8
+    """
+    from rite_ai.publishing.deliver import Refused, deliver
+
+    root = _find_project_root()
+    result = deliver(root, worker, ticket, by_user=True)
+    if isinstance(result, Refused):
+        click.echo(f"not delivered: {result.why}", err=True)
+        raise SystemExit(1)
+    for outcome in result.outcomes:
+        click.echo(outcome.note())
+    click.echo(result.sandbox)
     if not result.ok:
         raise SystemExit(1)
 
@@ -5855,7 +7639,7 @@ def sandbox_stop(worker: str) -> None:
 
     \b
     PRESERVED STATE CAN INCLUDE THE WORKER'S GITHUB TOKEN.
-    rite delivers it with `--env` and nothing else (SPEC §5.3.3, D-31), and
+    rite delivers it with `--env` and nothing else, and
     what the sandbox does with it afterwards is outside that guarantee — a
     dogfood session reported yoloAI 0.11.0 persisting it inside the sandbox,
     cleared by `destroy` and not by `stop`. That report is unverified here and
@@ -5921,8 +7705,10 @@ def _injected_secret_values(root: Path | None, worker: str) -> list[str]:
         if not isinstance(project, list):
             credentials = project.config.credentials
     token, _tier = resolve_worker_token(worker, credentials)
-    injected = worker_environment(credentials, worker_token=token)
-    return [value for value in injected.values() if value]
+    injected = worker_environment(credentials)
+    # The GitHub token is no longer given to a Worker, but a sandbox started
+    # by an earlier rite may still show it: keep masking it.
+    return [value for value in [*injected.values(), token] if value]
 
 
 @sandbox.command("pane")
@@ -5963,15 +7749,35 @@ def sandbox_status(worker: str) -> None:
     Examples:
       rite sandbox status alpha
     """
-    from rite_ai.sandbox import worker_sandbox_status
+    from rite_ai.sandbox.activity import observe
+    from rite_ai.sandbox.questions import WorkerQuestion
 
-    status = worker_sandbox_status(worker, _find_project_root())
-    click.echo(status.value)
-    if not status.known:
+    root = _find_project_root()
+    seen = observe(worker, root)
+    if seen.exists is None:
+        click.echo(seen.describe())
         # The status could not be determined. Exiting 0 would report that
         # as an answer, which is how "yoloai is broken" came to look
         # exactly like "this worker has no sandbox".
         raise SystemExit(1)
+    # ⚠ NOT "idle" for a Worker that is waiting on a question (dogfood Q2):
+    # yoloAI's word describes the agent process, and an agent that asked and
+    # is waiting is idle only in that sense. The question is said first.
+    asked = seen.question
+    if isinstance(asked, WorkerQuestion):
+        where = (
+            str(asked.path)
+            if str(seen.status) == "stopped"
+            else f"`rite sandbox pane {worker}`"
+        )
+        click.echo(
+            f"waiting on a question since {asked.since()} (sandbox "
+            f"{seen.status}): {asked.headline()}\n"
+            f"  read it in full: {where}; answer it by attaching"
+        )
+    else:
+        # The sentence `rite status` and `rite loop run` print too (S1).
+        click.echo(seen.describe())
 
 
 # --- Multi-project registry (SPEC §8.9, D-34) ---
@@ -6340,7 +8146,114 @@ def _setup_prompt(root: Path, manager: str) -> str:
     )
 
 
-def _loop_verdict(root: Path, board=None) -> str:
+class LoopAnswer(str):
+    """The loop's verdict, which IS a string (every caller compares it with
+    one), carrying `basis`: what the board looked like behind it.
+
+    ⚠ **Why a basis travels with the verdict (F22).** The supervisor has to
+    tell "the board still says `ready`" from "the board says `ready` about
+    the same tickets as last time". Only the second means a session that
+    just did nothing would be repeated. The ready tickets, and those the loop
+    last saw refused, are what a session would act on; a Worker's own state
+    is not in it, because a Worker finishing moves the claims ledger, which
+    `progress.footprint` reads."""
+
+    basis: tuple | None = ()
+    detail: str = ""
+    starting: dict | None = None
+    read_at: float | None = None
+    """When the board read behind this verdict came back, so a stop on
+    `idle` can say what it saw AS OF when (DF4)."""
+
+    @classmethod
+    def of(cls, cycle) -> "LoopAnswer":
+        answer = cls(str(getattr(cycle, "verdict", "unknown") or "unknown"))
+        answer.detail = str(getattr(cycle, "detail", "") or "")
+        answer.read_at = getattr(cycle, "board_read_at", None)
+        answer.basis = (
+            str(answer),
+            tuple(sorted(getattr(cycle, "ready", []) or [])),
+            tuple(sorted((getattr(cycle, "blocked", {}) or {}).items())),
+        )
+        if str(answer) == "refining":
+            # ⚠ No basis for F22's guard to compare (TR2). `refining` is
+            # given only when the User answered or a deadline passed since
+            # the last refinement session, so two in a row are two events,
+            # not one session repeated; the pacing is the guard here.
+            answer.basis = None
+            # What the session is handed to start, for the no-progress guard.
+            answer.starting = dict(getattr(cycle.refinement, "texts", {}) or {})
+        return answer
+
+
+def _other_sandbox_note(entry, asked) -> str:
+    """What `rite doctor` says about another project's `rite-` sandbox.
+
+    ⚠ It used to say "`yoloai destroy <name>` frees it" for every sandbox
+    without unapplied code, which is the documented way the v0.6.0
+    dogfood's one Worker question would have been deleted (Q3). A question
+    outranks everything, and "could not check" never reads as safe.
+    """
+    from rite_ai.sandbox.questions import Unknown, WorkerQuestion
+
+    if isinstance(asked, WorkerQuestion):
+        return (
+            f"its Worker is waiting on a question since {asked.since()}, "
+            "unanswered; do NOT destroy"
+        )
+    if entry.has_changes:
+        return "holds unapplied changes, do NOT destroy"
+    if isinstance(asked, Unknown):
+        return (
+            "no changes, but whether it holds an unanswered question could "
+            f"not be checked ({asked.reason})"
+        )
+    return f"no changes; `yoloai destroy {entry.name}` frees it"
+
+
+WORKER_QUESTION_EVERY = 30.0
+"""How often the Owner's supervisor looks at its Workers for a question: a
+`yoloai` call per Worker, so not at the poll rate."""
+
+
+def _worker_question_watch(root: Path, manager: str):
+    """The Owner's watcher for Workers waiting on a question (dogfood Q1–Q4,
+    part B), or None for a Manager that should not tell the person.
+
+    The Manager that tells is the one holding 'route', which is the one that
+    reads and posts Slack; with no roles declared, the lone Manager. A
+    secondary does not: two Managers telling the person the same question is
+    the noise that trains people to ignore both."""
+    from rite_ai.config.managers import routing_owner
+    from rite_ai.config.models import ProjectConfig
+    from rite_ai.config.parse import ParseError, parse_config
+    from rite_ai.managers.worker_questions import relay, surface
+
+    parsed = parse_config(root / ".rite" / "config.yaml")
+    config = parsed if not isinstance(parsed, ParseError) else ProjectConfig()
+    if not config.sandbox.enabled:
+        return None
+    roles = list(config.coordination.manager_roles)
+    if roles and routing_owner(roles) != manager:
+        return None
+    last = {"at": None}
+
+    def watch(say) -> None:
+        now = time.monotonic()
+        if last["at"] is not None and now - last["at"] < WORKER_QUESTION_EVERY:
+            return
+        last["at"] = now
+        # ⚠ RELAY FIRST, then surface (S30). An answer that has arrived
+        # settles its question, so relaying first means `surface` does not
+        # re-raise a question in the same tick that answered it. The other
+        # order tells the person about a question rite is about to resolve.
+        relay(root, manager, say)
+        surface(root, manager, say)
+
+    return watch
+
+
+def _loop_verdict(root: Path, board=None, manager: str | None = None) -> str:
     """The loop's own answer to "should this continue" (§9.14.4).
 
     `unknown` when it cannot be established, which is a STOP — the loop's
@@ -6359,8 +8272,13 @@ def _loop_verdict(root: Path, board=None) -> str:
         from rite_ai.loop import plan_cycle
         from rite_ai.sandbox import worker_sandbox_status
 
-        cycle = plan_cycle(root, board=board, sandbox_status=worker_sandbox_status)
-        return str(getattr(cycle, "verdict", "unknown") or "unknown")
+        cycle = plan_cycle(
+            root,
+            board=board,
+            sandbox_status=worker_sandbox_status,
+            refiner=manager,
+        )
+        return LoopAnswer.of(cycle)
     except Exception:  # noqa: BLE001 - an unreadable project is `unknown`
         return "unknown"
 
@@ -6384,7 +8302,51 @@ def _other_managers_briefing(root: Path, manager: str) -> str:
     return briefing(manager, routing_owner(roles), roles)
 
 
-def _router_for(root: Path, manager: str):
+def _ticket_work_rule(root: Path, manager: str) -> str:
+    """The start prompt's rule that a Manager does not implement tickets
+    itself (TR3), or "" for a secondary (`prompt.ticket_work`)."""
+    from rite_ai.config.managers import routing_owner, shares_one_root
+    from rite_ai.config.models import ProjectConfig
+    from rite_ai.config.parse import ParseError, parse_config
+    from rite_ai.managers.prompt import ticket_work
+
+    parsed = parse_config(root / ".rite" / "config.yaml")
+    config = parsed if not isinstance(parsed, ParseError) else ProjectConfig()
+    one_root = shares_one_root(config.coordination.remote)
+    owner = routing_owner(list(config.coordination.manager_roles))
+    return ticket_work(manager, owner, one_root=one_root)
+
+
+def _refinement_briefing(root: Path, manager: str, board, say=None) -> str:
+    """`refinement.instructions` then `refinement.brief`, for `manager`."""
+    from rite_ai.config.parse import ParseError, parse_config
+    from rite_ai.refinement import instructions as refinement_instructions
+
+    config = parse_config(root / ".rite" / "config.yaml")
+    if isinstance(config, ParseError):
+        return ""
+    return refinement_instructions.instructions(
+        root, manager, config
+    ) + refinement_instructions.brief(root, manager, board, config, say=say)
+
+
+def _with_refinement(router, refine):
+    """`router`, then `refine`, as one step. Either may be None."""
+    if router is None and refine is None:
+        return None
+
+    def step(say) -> None:
+        if callable(router):
+            router(say)
+        if callable(refine):
+            from rite_ai.managers.supervise import _refinement_step
+
+            _refinement_step(refine, say)
+
+    return step
+
+
+def _router_for(root: Path, manager: str, board=None):
     """The routing step for this Manager's supervisor, or None: route the
     Owner's requests down (MM-3), and bring the others' replies up (MM-4).
 
@@ -6398,6 +8360,7 @@ def _router_for(root: Path, manager: str):
     from rite_ai.config.models import ProjectConfig
     from rite_ai.config.parse import ParseError, parse_config
     from rite_ai.managers.routing import collect_reports, deliver_routes
+    from rite_ai.managers.verifier import verify
 
     parsed = parse_config(root / ".rite" / "config.yaml")
     config = parsed if not isinstance(parsed, ParseError) else ProjectConfig()
@@ -6407,10 +8370,59 @@ def _router_for(root: Path, manager: str):
     owner = routing_owner(roles)
     names = [r.name for r in roles]
 
+    # ⚠ Found by the independent verification: a quoted `sweep_minutes`
+    # ("30") crashed the router on every tick, and only `rite doctor` checked
+    # it. A value that is not a whole positive number falls back, and says so.
+    sweep_minutes = config.coordination.sweep_minutes
+    if (
+        isinstance(sweep_minutes, bool)
+        or not isinstance(sweep_minutes, int)
+        or (sweep_minutes <= 0)
+    ):
+        import click
+
+        click.echo(
+            f"coordination.sweep_minutes is {sweep_minutes!r}, not a whole "
+            "number of minutes above 0; using 30. `rite doctor` names it.",
+            err=True,
+        )
+        sweep_minutes = 30
+
+    # ⚠ TR9: a route's ticket is checked with ONE single-issue read of the
+    # board the broker is given. None (no board) refuses every route.
+    read_ticket = getattr(board, "read", None)
+    # ⚠ TR5: and it must be REFINED, checked on that same board. None (no
+    # board) refuses every route, as it does above.
+    refinement = None
+    if board is not None:
+        from rite_ai.refinement import status as refinement_status
+
+        def refinement(ticket: str):
+            return refinement_status.status(board, ticket)
+
     def step(say) -> None:
-        deliver_routes(root, manager, owner, names, say)
+        deliver_routes(
+            root,
+            manager,
+            owner,
+            names,
+            say,
+            read_ticket=read_ticket,
+            refinement=refinement,
+        )
         if owner and manager == owner:
-            collect_reports(root, owner, names, say)
+            # ⚠ Every reply is checked by rite before the Owner reads it, in a
+            # fresh session given only the reply and the workspace (A6
+            # hardening, Robert 2026-09-27). Fails closed: a reply that
+            # cannot be checked is delivered marked NOT VERIFIED.
+            collect_reports(
+                root,
+                owner,
+                names,
+                say,
+                verify=lambda sender, text: verify(root, owner, text, claimant=sender),
+                sweep_seconds=60.0 * sweep_minutes,
+            )
 
     return step
 
@@ -6445,7 +8457,7 @@ def _claude_login(root: Path, role) -> bool:
     the pane is told the directory's path (`claude_login`). A local engine
     needs none of this.
     """
-    if role.is_local:
+    if role.is_local or role.engine == "cursor":
         return False
     from rite_ai.credentials.store import get_scoped
     from rite_ai.managers.claude_login import prepare
@@ -6464,6 +8476,39 @@ def _claude_login(root: Path, role) -> bool:
         "claude_token (user:inference), in a 0600 file only its sandbox can "
         "read. Your keychain login is not used, and your personal Claude "
         "settings and hooks do not load into it.",
+        err=True,
+    )
+    return True
+
+
+def _cursor_login(root: Path, role) -> bool:
+    """Give a Cursor Manager its key, as a file no profile grants, or refuse
+    to start it (CU4, `cursor_login`).
+
+    The key is read from rite's file store and copied to this Manager's
+    credential directory at 0600. Each cycle's pane command reads that file
+    in tmux's shell, OUTSIDE the boundary, into the engine's own environment.
+    Nothing prints the key or puts it on argv.
+    """
+    if role.engine != "cursor":
+        return False
+    from rite_ai.credentials.store import get_scoped
+    from rite_ai.managers.cursor_login import prepare
+
+    refusal = prepare(
+        root,
+        role.name,
+        get_scoped("cursor_api_key", _project_credentials()),
+        say=lambda line: click.echo(line, err=True),
+    )
+    if refusal:
+        click.echo(f"refusing to start Manager {role.name!r}: {refusal}", err=True)
+        raise SystemExit(1)
+    click.echo(
+        f"cursor: Manager {role.name!r} signs in with its own copy of "
+        "cursor_api_key, in a 0600 file its sandbox cannot read; tmux's shell "
+        "hands it to the engine's environment alone, never to argv or the "
+        "pane's environment.",
         err=True,
     )
     return True
@@ -6602,19 +8647,41 @@ def _slack_listener(root: Path, manager: str):
             err=True,
         )
         return None
+    # ⚠ **ONE APP, ONE PROJECT, REFUSED BEFORE A LISTENER EXISTS.** Two
+    # projects on one app share the Owner's DM: each takes the other's
+    # instructions and reads the other's messages (`slack_app`). No listener
+    # means nothing is read, delivered or posted, with no per-call guard to
+    # forget.
+    from rite_ai.managers.slack_app import Refused, bind, identity_of
+
+    who = identity_of(token)
+    bound = who if isinstance(who, Refused) else bind(who, root)
+    if isinstance(bound, Refused):
+        click.echo(
+            f"slack: NOT reading or posting for this run — {bound.reason}.",
+            err=True,
+        )
+        return None
     listener = Listener(
         token=token,
         manager=manager,
         owner=config.slack.owner_user,
         broadcast=config.slack.broadcast,
         project=root,
+        # TR2 (TRQ8): refinement rounds to a private channel, when configured
+        # and when rite can both post and read there; the DM otherwise.
+        refinement_channel=(
+            config.refinement.channel
+            if config.refinement.questions_to == "channel"
+            else ""
+        ),
     )
     for line in listener.open():
         click.echo(line)
     return listener
 
 
-def _doctor_slack(root: Path, problems: list[str]) -> None:
+def _doctor_slack(root: Path, problems: list[str], *, network: bool = False) -> None:
     """Probe both Slack targets, naming Slack's own error (A6).
 
     Nothing is printed for a project without Slack: a check for a feature
@@ -6638,6 +8705,20 @@ def _doctor_slack(root: Path, problems: list[str]) -> None:
         click.echo("slack: NO TOKEN — `rite credential set slack` stores one")
         problems.append("slack is configured and slack_bot_token is not set")
         return
+    # Before the targets are probed: a shared app is not a target that fails,
+    # it is two projects reading one DM, and the probe would say "ok" (S22a).
+    from rite_ai.managers.slack_app import sharing
+
+    shared = sharing(token, root)
+    if shared.kind == "shared":
+        click.echo(f"slack: SHARED APP — {shared.message}")
+        problems.append(f"slack app shared with another project: {shared.message}")
+    elif shared.kind == "unknown":
+        # Said, not counted. An unreachable Slack is a gap in this report,
+        # not a fault in the project being reported on.
+        click.echo(
+            f"slack: could not check whether the app is shared — {shared.message}"
+        )
     for checked in probe(slack.owner_user, slack.broadcast, token):
         click.echo(
             f"slack {checked.target}: {'ok' if checked.ok else 'FAILED'} — "
@@ -6645,6 +8726,36 @@ def _doctor_slack(root: Path, problems: list[str]) -> None:
         )
         if not checked.ok:
             problems.append(f"slack {checked.target}: {checked.detail}")
+
+    # ⚠ **Posting is allowed HERE and nowhere else in setup.** `rite
+    # credential set slack` must never put a message in a channel — someone
+    # setting rite up is not announcing it. `rite doctor --network` is the
+    # opposite case: the person ASKED whether Slack works, and the only
+    # answer that settles it is a message that arrives. Still opt-in, because
+    # a plain `rite doctor` must not post every time it is run.
+    #
+    # ⚠ Through `slack._post`, which is the path a Manager posts on: a JSON
+    # POST. A first draft passed the message to `_call` as `params`, which
+    # sends a GET with the text in the query string — nothing says Slack
+    # honours `chat.postMessage` that way, so the check could have reported a
+    # delivery that never happened. Using the production helper also means
+    # this check cannot drift from what rite really does.
+    if network and slack.broadcast:
+        with _doctor_check("slack delivery", problems):
+            from rite_ai.managers.slack import _post
+
+            posted = _post(
+                slack.broadcast, token, "rite doctor: this channel is reachable."
+            )
+            if posted.ok and posted.ts:
+                click.echo(
+                    f"slack delivery: ok — posted to {slack.broadcast} "
+                    f"(channel {posted.channel or '?'})"
+                )
+            else:
+                detail = posted.problem or "Slack accepted it but returned no message"
+                click.echo(f"slack delivery: FAILED — {detail}")
+                problems.append(f"slack delivery to {slack.broadcast}: {detail}")
 
 
 def _engine_ready_for(role):
@@ -6666,6 +8777,50 @@ def _engine_ready_for(role):
             return [f"the engine could not be checked before starting: {e}."]
 
     return ready
+
+
+def _scope_problems(root: Path) -> list[str]:
+    """Why this project's board reads may take another project's tickets
+    (`tickets.scope`), one line each; [] when it cannot say (an unreadable
+    config is reported by what reads it, not as a collision)."""
+    from rite_ai.config.parse import ParseError, parse_config
+    from rite_ai.machine_projects import note
+    from rite_ai.tickets.scope import name_problems, sharing_problems
+
+    note(root)
+    config = parse_config(root / ".rite" / "config.yaml")
+    if isinstance(config, ParseError):
+        return []
+    workers_dir = root / "workers"
+    names = [r.name for r in config.coordination.manager_roles]
+    names += list(config.coordination.managers)
+    if workers_dir.is_dir():
+        names += [p.name for p in workers_dir.iterdir() if (p / "worker.yml").is_file()]
+    scope = config.ticket_backend.scope_label
+    return name_problems(scope, sorted(set(names))) + sharing_problems(root, config)
+
+
+def _refuse_a_shared_board(root: Path, manager: str) -> None:
+    """Refuse a Manager whose board another project on this machine also reads
+    unscoped (Robert, 2026-09-29: refused, not warned — the window is designed
+    out, not watched for). Before anything is started or printed as starting."""
+    problems = _scope_problems(root)
+    if not problems:
+        return
+    click.echo(
+        f"refusing to start Manager {manager!r}: it could take another "
+        "project's tickets as its own.",
+        err=True,
+    )
+    for problem in problems:
+        click.echo(f"  - {problem}", err=True)
+    click.echo(
+        "  rite can see only projects on this machine that have run `rite "
+        "init`, `rite start` or `rite doctor`; a project elsewhere sharing the "
+        "board is not checked. Nothing was started.",
+        err=True,
+    )
+    raise SystemExit(1)
 
 
 def _start_a_manager(
@@ -6705,6 +8860,8 @@ def _start_a_manager(
         )
         raise SystemExit(1)
 
+    _refuse_a_shared_board(root, role.name)
+
     # `supervise`, not a single `start`: the feature is KEEPING the Manager
     # working. This runs in the FOREGROUND — it is the human's own process,
     # which is the whole of §9.12's compliance argument — so it does not
@@ -6732,6 +8889,13 @@ def _start_a_manager(
         "ends the run. Ctrl-C ends it too; a session already started keeps "
         "running."
     )
+    # Track MS: the effective model and its source, the same line `rite
+    # doctor` prints. `role` is None for an undeclared lone Manager, which
+    # runs Claude Code's default.
+    if role is not None and hasattr(role, "engine"):
+        from rite_ai.config.managers import effective_model
+
+        click.echo(effective_model(role))
     # Composed HERE because this layer is the one that knows what the user
     # asked for. `for_manager` takes an `extra` that the journal's
     # instructions fill when `--record-issues` is on (D-93); it is the empty
@@ -6757,6 +8921,9 @@ def _start_a_manager(
     # "stopped on 'unknown' after 0 session(s) — this is a fault, not a
     # completion", which was neither true nor actionable for either.
     from rite_ai.managers.broker import for_project
+    from rite_ai.managers.chores import create_asked_for
+    from rite_ai.managers.chores import instructions as chore_instructions
+    from rite_ai.refinement.protocol import step as refinement_step
 
     board, board_state, board_problem, composed_under = _board_for_manager(root)
     if board_state == "unreachable":
@@ -6837,11 +9004,27 @@ def _start_a_manager(
     if run_lock is None:
         click.echo(
             f"refusing to start Manager {role.name!r}: another `rite start` "
-            "for it is still running in this project. Nothing was changed. "
-            f"Stop that one first (`rite manager stop {role.name}`).",
+            "holds its run lock, either one running it or, for a moment, one "
+            "moving this project's Managers' state out of the tree (rite "
+            "0.7.0). Nothing was changed. If it is running, stop it first "
+            f"(`rite manager stop {role.name}`); otherwise try again.",
             err=True,
         )
         raise SystemExit(1)
+    # ⚠ UNDER THE RUN LOCK, before anything reads a Manager's state: what an
+    # older rite left in `.rite/managers/` moves out of the tree, for EVERY
+    # Manager, each under its own run lock (`relocate`, MM8). A running one
+    # refuses the start, by name.
+    from rite_ai.managers import relocate
+
+    moved = relocate.move_out(root, role.name)
+    if moved.refused:
+        click.echo(
+            f"refusing to start Manager {role.name!r}: {moved.refused}.", err=True
+        )
+        raise SystemExit(1)
+    for note in relocate.notes(moved):
+        click.echo(note, err=True)
     # ⚠ UNDER THE RUN LOCK, before anything reads mail: the pre-0.6.0 in-tree
     # mailbox is moved once and never read again (`mailbox.adopt_legacy`).
     from rite_ai.managers.mailbox import (
@@ -6857,8 +9040,10 @@ def _start_a_manager(
     github = _github_access(root, role.name)
     _say_git_findings(root, role.name)
     claude_signed_in = _claude_login(root, role)
+    cursor_signed_in = _cursor_login(root, role)
     listener = _slack_listener(root, role.name)
     waiting = _waiting_for(root, role.name)
+    outcome = None
     try:
         outcome = supervise(
             root,
@@ -6878,7 +9063,31 @@ def _start_a_manager(
             # itself reads, so "is this a real ticket" has one answer in one
             # place; `for_project` refuses everything when there is none.
             broker=for_project(root, board),
-            router=_router_for(root, role.name),
+            # TR9: a User's instruction becomes a chore, written by rite
+            # outside the boundary, on the same board the broker checks.
+            chores=lambda say: create_asked_for(root, role.name, board, say),
+            # TR2: the rounds this Manager asks for, and what the User's
+            # replies to them do, decided outside the boundary on this board.
+            # Only the Manager that refines does anything (TRQ7).
+            refine=lambda say, messages=(): refinement_step(
+                root, role.name, board, say, messages=messages
+            ),
+            # TR2/TR3: how the Owner refines, and this cycle's refinement
+            # work, from one read of each scheduled ticket; "" for a Manager
+            # that does not refine.
+            # TR7: it reconciles the `ready-to-work` view first, and says
+            # how many labels it corrected.
+            refinement_brief=lambda say: _refinement_briefing(
+                root, role.name, board, say
+            ),
+            # TR2: refinement runs wherever routing runs (before, during and
+            # after a cycle, and in every wait), so a round the Owner asks
+            # for goes out in seconds and a chat instruction he left
+            # unanswered is filed without a session being spent on it.
+            router=_with_refinement(
+                _router_for(root, role.name, board),
+                lambda say: refinement_step(root, role.name, board, say),
+            ),
             # ⚠ DF2: a cycle can be CAUSED by mail. None for a lone Manager,
             # whose runs are exactly what they were.
             waiting=waiting,
@@ -6899,8 +9108,11 @@ def _start_a_manager(
                 if setting_up
                 else for_manager(
                     role.name,
+                    root=root,
                     extra=instructions(root, role.name, enabled=record_issues)
-                    + _other_managers_briefing(root, role.name),
+                    + chore_instructions(root, role.name)
+                    + _other_managers_briefing(root, role.name)
+                    + _ticket_work_rule(root, role.name),
                 )
             ),
             fresh=fresh,
@@ -6922,8 +9134,9 @@ def _start_a_manager(
                 else (lambda _r: "ready")
             )
             if setting_up
-            else (lambda r: _loop_verdict(r, board)),
+            else (lambda r: _loop_verdict(r, board, role.name)),
             note=lambda m: click.echo(m, err=True),
+            watch=_worker_question_watch(root, role.name),
         )
     finally:
         # Both credential copies go however the run ENDS. A KILLED run skips
@@ -6932,6 +9145,14 @@ def _start_a_manager(
         # `open_access` clears a leftover GitHub token (one hour at most).
         if github is not None:
             github.close()
+        if cursor_signed_in:
+            from rite_ai.managers.cursor_login import remove_login as remove_key
+
+            remove_key(root, role.name)
+            click.echo(
+                f"cursor: removed {role.name}'s key copy now the run has ended.",
+                err=True,
+            )
         if claude_signed_in:
             from rite_ai.managers.claude_login import remove_login
 
@@ -6958,7 +9179,20 @@ def _start_a_manager(
             # at the very end reaches the next start by THE ONE HOOK.
             for heard in listener.drain():
                 send(root, role.name, INBOX, heard, sent_at=heard.sent_at)
-            for line in listener.close():
+        # ⚠ A MESSAGE IS DELIVERED, OR THE PERSON IS TOLD IT WAS NOT, however
+        # the run ended, an interrupted one included. After the drain, so what
+        # Slack held at the end is counted.
+        from rite_ai.managers.supervise import undelivered_line
+
+        undelivered = undelivered_line(
+            root,
+            role.name,
+            outcome.reason if outcome is not None else "the run was interrupted",
+        )
+        if undelivered:
+            click.echo(undelivered, err=True)
+        if listener is not None:
+            for line in listener.close(undelivered=undelivered):
                 click.echo(line)
     click.echo(outcome.reason)
     if not outcome.ok:
@@ -7049,7 +9283,14 @@ def replies(manager_name: str, reader: str, peek: bool) -> None:
       rite replies planner --reader slack   # as the relay
       rite replies planner --peek           # look without consuming
     """
-    from rite_ai.managers.mailbox import OUTBOX, full_warning, mark_read, prune, unread
+    from rite_ai.managers.mailbox import (
+        OUTBOX,
+        action_label,
+        full_warning,
+        mark_read,
+        prune,
+        unread,
+    )
     from rite_ai.names import UnsafeName
 
     root = _require_project_root()
@@ -7071,12 +9312,32 @@ def replies(manager_name: str, reader: str, peek: bool) -> None:
         click.echo(f"{e}", err=True)
         raise SystemExit(1) from None
 
+    from rite_ai.managers import pending
+
+    said = pending.sync(root, manager_name)
+    if said:
+        click.echo(said, err=True)
     if not waiting_for_reader:
         click.echo(f"nothing new from {manager_name!r} for reader {reader!r}.")
     for message in waiting_for_reader:
-        click.echo(message.text.strip())
+        label = action_label(message)
+        click.echo((f"[{label}]\n" if label else "") + message.text.strip())
     if waiting_for_reader and not peek:
         mark_read(root, manager_name, OUTBOX, reader, waiting_for_reader)
+        # RP1 piece 2: shown to a person at the terminal is "reached a human"
+        # for what needs one. Not for a machine's reader (the Slack relay, an
+        # Owner's collector), and not for --peek, which marks nothing.
+        if reader != "slack" and not reader.startswith("owner-"):
+            import time as _time
+
+            for message in waiting_for_reader:
+                pending.confirm(
+                    root,
+                    manager_name,
+                    message.path.name,
+                    pending.BY_TERMINAL,
+                    at=_time.time(),
+                )
     # C23: retention runs on every read, and a box full of unread messages is
     # SAID — rite will not delete one to make room.
     warning = full_warning(prune(root, manager_name, OUTBOX), manager_name)
@@ -7097,9 +9358,18 @@ def replies(manager_name: str, reader: str, peek: bool) -> None:
 
 
 @cli.command("route")
+@click.option(
+    "--ticket",
+    default="",
+    help="The ticket this work is for. Required: every piece of routed work "
+    "carries a ticket, and rite refuses the route if the board does not "
+    "return it or it is not REFINED (you are told why in your next "
+    "instruction). For work the User asked for in a message, make the ticket "
+    "first with `rite chore <message-id>`.",
+)
 @click.argument("manager_name")
 @click.argument("text")
-def route(manager_name: str, text: str) -> None:
+def route(manager_name: str, text: str, ticket: str) -> None:
     """Hand work to another Manager in this root — the Owner only.
 
     One project root may run several Managers; the one holding `route` is the
@@ -7112,11 +9382,16 @@ def route(manager_name: str, text: str) -> None:
     and the Owner's supervisor delivers it — and delivers only for the
     Manager holding `route`, whatever the request says.
 
+    ⚠ **TEXT IS `-`, AND THE TEXT COMES ON STDIN (F14)**, as for `rite
+    reply`. Routed work quotes tickets more than anything else does.
+
     Examples:
-      rite route helper "run the test suite on branch fix-12 and report"
+      rite route --ticket RT-12 helper - <<'RITE_TEXT_1f2e3d'
+      run the test suite on branch fix-12 and report
+      RITE_TEXT_1f2e3d
     """
     from rite_ai.config.managers import routing_owner
-    from rite_ai.managers import current_manager
+    from rite_ai.managers import current_manager, stdin_text
     from rite_ai.managers.routing import request
 
     root = _require_project_root()
@@ -7140,7 +9415,8 @@ def route(manager_name: str, text: str) -> None:
         click.echo(
             f"refusing: {speaking!r} does not hold 'route'"
             + (f" — {owner!r} does" if owner else " — no Manager here does")
-            + ". Report to the Owner with `rite reply` instead.",
+            + ". Report to the Owner with `rite reply` instead, or `rite ask` "
+            "for a question.",
             err=True,
         )
         raise SystemExit(1)
@@ -7153,13 +9429,82 @@ def route(manager_name: str, text: str) -> None:
             err=True,
         )
         raise SystemExit(1)
+    try:
+        text = stdin_text.read(text)
+    except stdin_text.OnTheCommandLine:
+        click.echo(
+            stdin_text.refusal(
+                f"rite route --ticket {ticket.strip() or '<ID>'} {manager_name}",
+                "<what to do>",
+            ),
+            err=True,
+        )
+        raise SystemExit(1)
     if not text.strip():
         click.echo("refusing to route an empty message.", err=True)
         raise SystemExit(1)
-    request(root, speaking, manager_name, text)
+    from rite_ai.managers.routing import ticket_problem
+
+    problem = ticket_problem(ticket)
+    if problem:
+        click.echo(
+            f"refusing: {problem}. Every route names the ticket the work is "
+            "for: `rite route --ticket <ID> <manager> -`, the text on stdin. "
+            "If the User asked for it in a message, make it a ticket first "
+            "with `rite chore <message-id>`.",
+            err=True,
+        )
+        raise SystemExit(1)
+    request(root, speaking, manager_name, text, ticket.strip())
     click.echo(
-        f"route queued: {manager_name!r} receives it at its next turn, marked "
-        f"as routed by {speaking!r}."
+        f"route queued for ticket {ticket.strip()}: rite checks the ticket on "
+        f"the board, and {manager_name!r} receives it at its next turn, marked "
+        f"as routed by {speaking!r}. A refusal is in your next instruction."
+    )
+
+
+@cli.command("chore")
+@click.argument("message_ids", nargs=-1, required=True)
+def chore(message_ids: tuple[str, ...]) -> None:
+    """Have rite make a chore ticket from the User's own message(s) — a Manager only.
+
+    Every piece of work a Worker or another Manager does carries a ticket.
+    When the User asks for work in a message and it is not a ticket
+    yet, the Manager names the message by the id shown beside it in its
+    instruction, and rite writes the ticket: the User's words as they were
+    delivered, labelled `chore` and `scheduled`. The Manager cannot give it a
+    title or text.
+
+    ⚠ This only ASKS. The ticket is created by the Manager's supervisor,
+    outside its sandbox, when the Manager's current turn ends, and its next
+    instruction says the ticket's id or why it was refused.
+
+    Examples:
+      rite chore 1759068000123-4521-0
+    """
+    from rite_ai.managers import current_manager
+    from rite_ai.managers.chores import MAX_MESSAGES, request
+
+    root = _require_project_root()
+    speaking = current_manager()
+    if not speaking:
+        click.echo(
+            "refusing: `rite chore` is how a Manager asks rite to ticket a "
+            "User's instruction. From your own shell, file the ticket "
+            "directly with `rite board create`.",
+            err=True,
+        )
+        raise SystemExit(1)
+    ids = [i.strip() for i in message_ids if i.strip()]
+    if not ids or len(set(ids)) != len(ids) or len(ids) > MAX_MESSAGES:
+        click.echo(
+            f"refusing: name 1 to {MAX_MESSAGES} different message ids.", err=True
+        )
+        raise SystemExit(1)
+    request(root, speaking, ids)
+    click.echo(
+        f"chore requested from message(s) {', '.join(ids)}: rite creates it "
+        "when this turn ends, and your next instruction says its id."
     )
 
 
@@ -7183,11 +9528,24 @@ def reply(text: str, manager: str) -> None:
     never sees is the channel failing silently. One command, the same
     validated writer, no shape to get wrong.
 
+    ⚠ **FOR READING ONLY (RP1).** What `rite reply` sends goes where the
+    person reads, not where they act: a question, a blocker or a decision
+    goes with `rite ask`. Anything that reads as one is refused here and
+    redirected, erring toward refusing too much (`reads_as_action`).
+
+    ⚠ **TEXT IS `-`, AND THE TEXT COMES ON STDIN (F14).** Text on the
+    command line is refused: in double quotes the shell runs whatever is in
+    backticks first, and a Manager's text often quotes a ticket someone else
+    wrote (`managers/stdin_text`).
+
     Examples:
-      rite reply --manager planner "ticket 12 needs an API key — skip it?"
+      rite reply --manager planner - <<'RITE_TEXT_1f2e3d'
+      tickets 12 and 13 merged; CI green on a1b2c3d
+      RITE_TEXT_1f2e3d
     """
-    from rite_ai.managers import current_manager
-    from rite_ai.managers.mailbox import OUTBOX, full_warning, prune, send
+    from rite_ai.managers import current_manager, stdin_text
+    from rite_ai.managers.mailbox import OUTBOX, REPLY, full_warning, prune, send
+    from rite_ai.managers.reads_as_action import sign_of_action
 
     root = _require_project_root()
     speaking = (manager or "").strip() or current_manager()
@@ -7210,13 +9568,36 @@ def reply(text: str, manager: str) -> None:
         known = ", ".join(sorted(r.name for r in roles)) or "none declared"
         click.echo(f"no Manager named {speaking!r} in this project — {known}", err=True)
         raise SystemExit(1)
+    try:
+        text = stdin_text.read(text)
+    except stdin_text.OnTheCommandLine:
+        click.echo(
+            stdin_text.refusal(f"rite reply --manager {speaking}", "<your message>"),
+            err=True,
+        )
+        raise SystemExit(1)
     if not text.strip():
         # Refused for the reason `rite message` refuses: `read` skips blank
         # text, so the file would be written and never shown.
         click.echo("refusing to send an empty reply.", err=True)
         raise SystemExit(1)
+    sign = sign_of_action(text)
+    if sign:
+        # ⚠ Refused, and NOTHING is sent: a question sent as a reply lands
+        # where nobody is asked to answer it. No flag overrides this.
+        click.echo(
+            f"refusing to send this as a reply: it contains {sign}, so it may "
+            "ask the User for something, and a reply is filed for reading, "
+            "where nobody is asked to answer. Ask it instead:\n"
+            + stdin_text.heredoc(f"rite ask --manager {speaking} -", "<the same text>")
+            + "\n"
+            "If it asks for nothing, say it again without that. When unsure, "
+            "it is a question.",
+            err=True,
+        )
+        raise SystemExit(1)
 
-    send(root, speaking, OUTBOX, text)
+    send(root, speaking, OUTBOX, text, kind=REPLY)
     from rite_ai.config.managers import routing_owner, shares_one_root
     from rite_ai.config.parse import ParseError, parse_config
 
@@ -7262,7 +9643,7 @@ def reply(text: str, manager: str) -> None:
     "defaults to that Manager and can be left out.",
 )
 def ask(question: str, defer: bool, meanwhile: str, manager: str) -> None:
-    """Ask the User a question, now or at their next check-in (plan § K2).
+    """Ask the User a question, now or at their next check-in.
 
     ⚠ **ASK NOW UNLESS THE QUESTION IS CLEARLY DEFERRABLE; IF YOU ARE UNSURE
     WHETHER IT BLOCKS YOU, IT BLOCKS YOU.** Deferring a blocking question
@@ -7271,13 +9652,19 @@ def ask(question: str, defer: bool, meanwhile: str, manager: str) -> None:
     this asks now, exactly as `rite reply` does, and every case where a
     deferral cannot be honoured safely asks now too and says why.
 
+    ⚠ **QUESTION IS `-`, AND THE QUESTION COMES ON STDIN (F14)**, as for
+    `rite reply`.
+
     Examples:
-      rite ask --manager planner "which of the two schemas should ticket 12 use?"
-      rite ask --manager planner --defer "rename the CLI flag to --out?" \\
-          --while "implementing tickets 14 and 15, which do not touch the CLI"
+      rite ask --manager planner - <<'RITE_TEXT_1f2e3d'
+      which of the two schemas should ticket 12 use?
+      RITE_TEXT_1f2e3d
+      rite ask --manager planner --defer --while "tickets 14, 15" - <<'RITE_TEXT_1f2e3d'
+      rename the CLI flag to --out?
+      RITE_TEXT_1f2e3d
     """
-    from rite_ai.managers import checkins, current_manager
-    from rite_ai.managers.mailbox import OUTBOX, full_warning, prune, send
+    from rite_ai.managers import checkins, current_manager, stdin_text
+    from rite_ai.managers.mailbox import OUTBOX, QUESTION, full_warning, prune, send
 
     root = _require_project_root()
     asking = (manager or "").strip() or current_manager()
@@ -7300,6 +9687,14 @@ def ask(question: str, defer: bool, meanwhile: str, manager: str) -> None:
         known = ", ".join(sorted(r.name for r in roles)) or "none declared"
         click.echo(f"no Manager named {asking!r} in this project — {known}", err=True)
         raise SystemExit(1)
+    try:
+        question = stdin_text.read(question)
+    except stdin_text.OnTheCommandLine:
+        click.echo(
+            stdin_text.refusal(f"rite ask --manager {asking}", "<your question>"),
+            err=True,
+        )
+        raise SystemExit(1)
     if not question.strip():
         click.echo("refusing to send an empty question.", err=True)
         raise SystemExit(1)
@@ -7311,13 +9706,13 @@ def ask(question: str, defer: bool, meanwhile: str, manager: str) -> None:
         click.echo(
             f"refusing to defer: no --while. If you cannot say what you will "
             f"do meanwhile, {checkins.REFUSED_WITHOUT_WHILE}:\n"
-            f'  rite reply --manager {asking} "<question>"',
+            + stdin_text.heredoc(f"rite ask --manager {asking} -", "<question>"),
             err=True,
         )
         raise SystemExit(1)
 
     if not defer:
-        send(root, asking, OUTBOX, question)
+        send(root, asking, OUTBOX, question, kind=QUESTION)
         if meanwhile.strip():
             # A --while with no --defer is most likely a forgotten --defer.
             # Asking now is the safe reading, and it is said.
@@ -7380,7 +9775,7 @@ def ask(question: str, defer: bool, meanwhile: str, manager: str) -> None:
 
 @cli.group()
 def checkin() -> None:
-    """The standup a check-in opens with (plan § K4)."""
+    """The standup a check-in opens with."""
 
 
 @checkin.command("note")
@@ -7447,7 +9842,7 @@ def checkin_note(anchor: str, observed: str, manager: str) -> None:
 
 @cli.group()
 def question() -> None:
-    """Questions a Manager deferred to a check-in (plan § K3)."""
+    """Questions a Manager deferred to a check-in."""
 
 
 @question.command("withdraw")
@@ -7560,7 +9955,8 @@ def message(manager_name: str, text: str) -> None:
             f"refusing: this is Manager {speaking_as!r}, and a Manager does "
             f"not write a Manager's inbox — a message there is delivered as "
             f"the Owner's instruction. To answer the person, use `rite reply "
-            f'--manager {speaking_as} "…"`.',
+            f"--manager {speaking_as} -` with the text on stdin, or `rite ask` "
+            "for a question.",
             err=True,
         )
         raise SystemExit(1)
@@ -7579,10 +9975,21 @@ def message(manager_name: str, text: str) -> None:
             err=True,
         )
         raise SystemExit(1) from None
-    click.echo(
-        f"message queued for {manager_name!r} — delivered at the start of its "
-        f"next turn. `rite connect {manager_name}` reads its replies."
-    )
+    from rite_ai.managers.routing import RUNNING, supervisor_state
+
+    if supervisor_state(root, manager_name) == RUNNING:
+        click.echo(
+            f"message queued for {manager_name!r} — delivered at the start of "
+            f"its next turn. `rite connect {manager_name}` reads its replies."
+        )
+    else:
+        # ⚠ SAID AT SEND TIME: "delivered at its next turn" read as "soon"
+        # when no run was going to take a next turn at all.
+        click.echo(
+            f"message queued for {manager_name!r}, which is NOT running, so "
+            f"nothing reads it until `rite start {manager_name}`; it is "
+            "delivered at the start of that run's first session."
+        )
 
 
 @cli.command()
@@ -7654,7 +10061,7 @@ def manager_stop(name: str) -> None:
     the ordinary way to stop one.
 
     Ctrl-C on `rite start <manager>` stops the supervisor AND the session,
-    which is the normal case and takes one action (§9.14.12). This is for
+    which is the normal case and takes one action. This is for
     the ORPHAN: the supervising process died — a crash, a closed laptop, a
     killed terminal — and the session is still running with nothing
     watching it.
@@ -7664,7 +10071,7 @@ def manager_stop(name: str) -> None:
     `rite stop [DIRECTORY]` already exists, resolves registered aliases,
     and has side effects on the board. A command meaning two different
     things depending on whether its argument happens to match a Manager
-    name is the ambiguity rite refuses elsewhere (§9.14.7a, D-78).
+    name is the ambiguity rite refuses elsewhere.
 
     Examples:
       rite manager stop planner
@@ -7703,7 +10110,7 @@ def manager_stop(name: str) -> None:
     type=int,
     default=None,
     help="Ceiling on provider sessions this run may start. Required when "
-    "starting a Manager; a COUNT, not spend (D-69). With several Managers in "
+    "starting a Manager; a COUNT, not spend. With several Managers in "
     "one project it is SOFT while routed work is outstanding: a session "
     "started by routed mail can pass it, and each one is said.",
 )
@@ -7713,7 +10120,7 @@ def manager_stop(name: str) -> None:
     default=None,
     help="Ceiling on how long this run may keep starting sessions. Required "
     "when starting a Manager: the two bounds catch different runaways and "
-    "neither suffices alone (D-82).",
+    "neither suffices alone.",
 )
 @click.option(
     "--fresh",
@@ -7762,7 +10169,7 @@ def start_cmd(
       rite start
       rite start planner --sessions 3 --minutes 90   # a declared Manager
       rite start /path/to/project
-      rite start acme               # resolves a registered alias (§8.9)
+      rite start acme               # resolves a registered alias
     """
     from rite_ai.lifecycle import start
 
@@ -7793,6 +10200,8 @@ def start_cmd(
             click.echo(f"  {problem}", err=True)
         click.echo("  `rite doctor` shows the full picture.", err=True)
         raise SystemExit(1)
+    if here_is_a_project:
+        _refuse_unavailable_publishing(here)
 
     # D-78/D-80. A draft gated this on `directory != "."`, so bare
     # `rite start` never reached it and "one works bare" / "2+ refuses and
@@ -7864,6 +10273,7 @@ def start_cmd(
         raise SystemExit(1)
 
     root = _resolve_directory_or_alias(directory)
+    _refuse_unavailable_publishing(root)
     result = start(root)
     if not result.ok:
         click.echo(result.message, err=True)
@@ -7930,21 +10340,44 @@ def _echo_phase(phase, err: bool = False) -> None:
     "-t",
     default="",
     help="Ticket ID to comment/label on handover (default: resolved from the "
-    "released claims' own ticket, per SPEC §9.10 step 1)",
+    "released claims' own ticket, per the release's own first step)",
 )
-def stop_cmd(directory: str, worker: str | None, reason: str, ticket: str) -> None:
+@click.option(
+    "--skip-handover",
+    is_flag=True,
+    default=False,
+    help="Release the claims and leave the board alone: no comment, no label "
+    "change. Handover is on by default.",
+)
+def stop_cmd(
+    directory: str,
+    worker: str | None,
+    reason: str,
+    ticket: str,
+    skip_handover: bool,
+) -> None:
     """Shut down with handover — release claims, update board.
+
+    Handover is ON by default (Robert, 2026-09-28); `--skip-handover` turns it
+    off. ⚠ **The flag decides whether to post, not what happened.** When a
+    named `--ticket` had nothing to release, rite cannot tell "another
+    handover already took these claims" from "the worker held none": inside
+    the ledger's lock they look the same. So the comment it posts then says
+    that, names both, and asserts no handover. It changes no label.
 
     Examples:
       rite stop
       rite stop --worker alpha --reason "lunch break"
       rite stop --worker alpha --ticket ABC-12
-      rite stop acme                # resolves a registered alias (§8.9)
+      rite stop --worker alpha --ticket ABC-12 --skip-handover
+      rite stop acme                # resolves a registered alias
     """
     from rite_ai.lifecycle import stop
 
     root = _resolve_directory_or_alias(directory)
-    result = stop(root, worker=worker, reason=reason, ticket=ticket)
+    result = stop(
+        root, worker=worker, reason=reason, ticket=ticket, skip_handover=skip_handover
+    )
     if not result.ok:
         click.echo(result.message, err=True)
         raise SystemExit(1)
@@ -7959,12 +10392,11 @@ def stop_cmd(directory: str, worker: str | None, reason: str, ticket: str) -> No
     "--module", "-m", default=None, help="Module name — appends its own checklist"
 )
 def review(module: str | None) -> None:
-    """Load and print the merged review checklist (SPEC §7).
+    """Load and print the merged review checklist.
 
     Prints the checklist a Dispatch session hands to review agents when
     running the review convention — this command does not spawn agents
-    itself (that needs judgement; the CLI's charter is the non-AI surface,
-    §9).
+    itself (that needs judgement; the CLI's charter is the non-AI surface).
 
     `--module` takes a name from `.rite/modules.yaml`, or the exact path
     registered there. Anything else is refused, not ignored.
@@ -8089,7 +10521,6 @@ def _hand_off_refresh(take: tuple[str, ...]) -> bool:
     import os
     import shutil
     import subprocess
-    import sys
 
     if os.environ.get("RITE_UPDATE_CHILD"):
         return False
@@ -8138,7 +10569,7 @@ def _hand_off_refresh(take: tuple[str, ...]) -> bool:
 )
 def update(yes: bool, files_only: bool, dry_run: bool, take: tuple[str, ...]) -> None:
     """Update rite itself, migrate `.rite/` config files, and refresh the files
-    rite generated in this project (SPEC §9.9).
+    rite generated in this project.
 
     Refreshing never overwrites your edits. Each generated section of
     CLAUDE.md records a hash of what rite wrote: a section still matching it is
@@ -8248,6 +10679,11 @@ rite — multi-session Claude coordination for teams.
 Getting started:
   rite init                         Set up a new project (interactive)
   rite add module backend <git-url> Register a repo as a module
+  rite add manager lead --preset lead
+                                    Declare a Manager (no config.yaml editing)
+  rite module set-command backend test "pytest -q"
+                                    Fix a module's test command, and the
+                                    instructions that quote it
   rite add worker alpha             Create a worker workspace
 
 Day to day:
@@ -8297,19 +10733,19 @@ def help() -> None:  # noqa: A001 - deliberately shadows builtin, it's the comma
 
 @cli.group()
 def journal() -> None:
-    """Record a process issue to this Manager's journal (BETA, §9.15).
+    """Record a process issue to this Manager's journal (BETA).
 
     ⚠ WHY THIS COMMAND EXISTS AT ALL, since a Manager is an agent that can
-    write a file by itself. D-87 requires that an entry with no anchor is
-    REFUSED on the writing path, before any file is created. A Manager
+    write a file by itself. An entry with no anchor must be REFUSED on the
+    writing path, before any file is created. A Manager
     writing markdown with its own tools puts rite nowhere near that path,
     and the requirement collapses back into asking the agent nicely —
-    which §9.15.3 closes by saying beats nothing.
+    which, as rite has already found, beats nothing.
 
     So rite owns the writing path. That is what makes the anchor rule a
     rule rather than an instruction.
 
-    A process issue, not a work issue (§9.15.0): a failing ticket goes to
+    A process issue, not a work issue: a failing ticket goes to
     the board. "The gate reported clean on a file it could not open" goes
     here. Where it could plausibly be either, it is work.
     """
@@ -8426,7 +10862,7 @@ def journal_retrospective(
     """Record what a boundary cost and what it changed — with NO verdict.
 
     ⚠ There is deliberately nowhere to put "that round was a waste"
-    (§9.15.4). The obvious measure is inverted: a round ending "fix these
+   . The obvious measure is inverted: a round ending "fix these
     three things" produces a commit, a round ending "this design would
     force-release live Workers" produces nothing, so judging by output
     ranks bad reviewing above good. "Round 2 cost 150k and changed
@@ -8453,6 +10889,46 @@ def journal_retrospective(
         click.echo(result.message, err=True)
         raise SystemExit(1)
     click.echo(f"recorded: {result.path}")
+
+
+@journal.command("export")
+@click.argument("manager")
+@click.option(
+    "--to",
+    "destination",
+    required=True,
+    type=click.Path(file_okay=False, path_type=Path),
+    help="Directory to copy the entries into, e.g. one in the project to commit.",
+)
+def journal_export(manager: str, destination: Path) -> None:
+    """Copy a Manager's journal entries somewhere to share or commit them.
+
+    Since 0.7.0 the journal lives outside the project, beside the Manager's
+    other state, so that one Manager cannot write another's. Exporting is how
+    entries reach the project's history, by a person's choice. It never
+    overwrites a different file.
+
+    Examples:
+      rite journal export lead --to docs/journal/lead
+    """
+    from rite_ai.managers.journal import export
+
+    root = _require_project_root()
+    result = export(root, manager, destination)
+    if result.refused:
+        click.echo(f"refusing to export: {result.refused}.", err=True)
+        raise SystemExit(1)
+    if not result.copied and not result.already_there:
+        click.echo(f"no entries to export in {result.source}")
+        return
+    click.echo(
+        f"exported {len(result.copied)} entr(ies) to {destination}"
+        + (
+            f"; {len(result.already_there)} already there, identical"
+            if result.already_there
+            else ""
+        )
+    )
 
 
 if __name__ == "__main__":  # pragma: no cover - see tests/test_module_entry_point.py

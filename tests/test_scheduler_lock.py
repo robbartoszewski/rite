@@ -14,6 +14,7 @@ import subprocess
 import time
 from pathlib import Path
 
+from rite_ai import kernel_lock
 from rite_ai.scheduler import lock, run_tick
 from rite_ai.scheduler.logfile import (
     KEEP,
@@ -56,8 +57,8 @@ class TestOnlyOneTickAtATime:
     def test_the_lock_is_released_when_the_tick_finishes(self, tmp_path):
         root = _project(tmp_path)
         run_tick(root)
-        assert not lock.lock_path(root).exists()
         assert run_tick(root).skipped is False
+        assert isinstance(lock.acquire(root), lock.LockAcquired)
 
     def test_the_lock_is_released_even_if_the_tick_raises(self, tmp_path):
         root = _project(tmp_path)
@@ -66,83 +67,222 @@ class TestOnlyOneTickAtATime:
                 raise RuntimeError("tick blew up")
         except RuntimeError:
             pass
-        assert not lock.lock_path(root).exists()
+        assert isinstance(lock.acquire(root), lock.LockAcquired)
 
-
-class TestAStaleLockNeverWedgesTheScheduler:
-    """A tick killed with SIGKILL leaves its lockfile behind. If that could
-    hold the scheduler forever it would be the same permanent wedge the lock
-    exists to prevent."""
-
-    def test_a_lock_from_a_dead_process_is_reclaimed(self, tmp_path):
+    def test_the_lock_file_is_never_deleted(self, tmp_path):
+        """Deleting a lock file lets the next opener lock a fresh inode while
+        the old one is still held. So releasing must leave it in place."""
         root = _project(tmp_path)
-        dead = _a_definitely_dead_pid()
-        lock.lock_path(root).write_text(
-            json.dumps({"pid": dead, "acquired_at": time.time()})
-        )
+        with lock.held(root) as outcome:
+            assert isinstance(outcome, lock.LockAcquired)
+            inode = lock.lock_path(root).stat().st_ino
+        assert lock.lock_path(root).stat().st_ino == inode
+
+
+class TestAKilledTickNeverWedgesTheScheduler:
+    """A tick killed with SIGKILL runs no cleanup. If its lock could outlive
+    it, that would be the permanent wedge the lock exists to prevent. The
+    kernel drops an flock when its holder exits, so there is nothing to
+    reclaim and nothing to decide."""
+
+    def test_a_killed_holder_frees_the_lock(self, tmp_path):
+        root = _project(tmp_path)
+        holder = _hold_in_another_process(root)
+        assert isinstance(lock.acquire(root), lock.LockBusy)
+
+        holder.kill()
+        holder.wait()
 
         outcome = lock.acquire(root)
-
         assert isinstance(outcome, lock.LockAcquired)
-        assert outcome.reclaimed_from == dead
 
-    def test_reclaiming_is_reported_not_silent(self, tmp_path):
-        root = _project(tmp_path)
-        lock.lock_path(root).write_text(
-            json.dumps({"pid": _a_definitely_dead_pid(), "acquired_at": time.time()})
-        )
-        result = run_tick(root)
-        assert any("reclaimed stale scheduler lock" in m for m in result.messages)
-
-    def test_a_live_process_keeps_its_lock(self, tmp_path):
-        """The inverse: liveness must actually be checked, or the lock is
-        decorative."""
+    def test_a_record_left_by_a_killed_holder_is_not_a_holder(self, tmp_path):
+        """The pid in the file is for messages only. A leftover record, even
+        one naming a live process, must not make the lock busy. That was
+        the old design's proxy for "held"."""
         root = _project(tmp_path)
         lock.lock_path(root).write_text(
             json.dumps({"pid": os.getpid(), "acquired_at": time.time()})
         )
-        assert isinstance(lock.acquire(root), lock.LockBusy)
-
-    def test_an_unreadable_lock_is_reclaimed_rather_than_wedging(self, tmp_path):
-        """Opposite rule to claims.json on purpose — see `_read_holder`. A
-        corrupt lock read as "held" needs a human with `rm` to recover."""
-        root = _project(tmp_path)
-        lock.lock_path(root).write_text("{ not json")
         assert isinstance(lock.acquire(root), lock.LockAcquired)
 
-    def test_release_does_not_steal_a_lock_another_tick_now_owns(self, tmp_path):
+    def test_a_0_6_0_lockfile_is_ignored(self, tmp_path):
         root = _project(tmp_path)
-        lock.lock_path(root).write_text(
-            json.dumps({"pid": _a_definitely_dead_pid(), "acquired_at": time.time()})
+        (root / ".rite" / "scheduler.lock").write_text(
+            json.dumps({"pid": os.getpid(), "acquired_at": time.time()})
         )
-        lock.release(root)
-        assert lock.lock_path(root).exists(), (
-            "release must only remove a lock this process owns"
-        )
+        assert isinstance(lock.acquire(root), lock.LockAcquired)
 
-    def test_the_pid_reuse_backstop_exceeds_every_bounded_wait_in_the_package(self):
-        """The one time-based rule, asserted as a relationship rather than
-        restated as a number. It must never be able to fire on a tick that is
-        merely slow, so it has to sit above the longest thing any code here
-        can legitimately wait for."""
+    def test_a_subprocess_of_the_tick_does_not_inherit_the_lock(self, tmp_path):
+        """A tick starts subprocesses. One that inherited the descriptor
+        would keep the lock after the tick ended, for as long as it lived.
+        `close_fds=False` so the descriptor's own close-on-exec flag is what
+        is being tested."""
+        root = _project(tmp_path)
+        with lock.held(root) as outcome:
+            assert isinstance(outcome, lock.LockAcquired)
+            child = subprocess.Popen(["sleep", "30"], close_fds=False)
+        try:
+            assert isinstance(lock.acquire(root), lock.LockAcquired)
+        finally:
+            child.kill()
+            child.wait()
+
+
+class TestALiveHolderIsNeverRobbed:
+    """0.6.0 took the lock from a live holder after 900 s in case its pid had
+    been recycled. That is two ticks running at once by design."""
+
+    def test_an_old_lock_held_by_a_live_process_stays_held(self, tmp_path):
+        root = _project(tmp_path)
+        holder = _hold_in_another_process(root)
+        try:
+            # Make the record say it has been held for a day.
+            lock.lock_path(root).write_text(
+                json.dumps({"pid": holder.pid, "acquired_at": time.time() - 86400})
+            )
+            outcome = lock.acquire(root)
+            assert isinstance(outcome, lock.LockBusy)
+            assert outcome.holder_pid == holder.pid
+            assert "longer than any tick should take" in outcome.summary
+            assert f"pid {holder.pid}" in outcome.summary
+        finally:
+            holder.kill()
+            holder.wait()
+
+    def test_a_holder_that_has_not_recorded_itself_is_still_a_holder(self, tmp_path):
+        """The record is written just after the lock is taken. A tick refused
+        in between finds no record, and must say so, not guess a pid."""
+        root = _project(tmp_path)
+        with lock.held(root):
+            os.truncate(lock.lock_path(root), 0)
+            outcome = lock.acquire(root)
+        assert isinstance(outcome, lock.LockBusy)
+        assert outcome.holder_pid is None
+        assert "has not recorded its pid yet" in outcome.summary
+
+    def test_the_held_too_long_notice_exceeds_every_bounded_wait_in_the_package(
+        self,
+    ):
+        """It only changes the wording of a skip, but a merely slow tick must
+        never be described as stuck, so it sits above the longest thing any
+        code here can legitimately wait for. Asserted as a relationship
+        rather than restated as a number."""
         timeouts = [
             int(m)
             for p in SRC.rglob("*.py")
             for m in re.findall(r"timeout=(\d+)", p.read_text())
         ]
         assert timeouts, "found no timeouts to compare against — test is not testing"
-        assert lock._PID_REUSE_BACKSTOP_SECONDS > max(timeouts)
+        assert lock._HELD_TOO_LONG_SECONDS > max(timeouts)
 
 
-def _a_definitely_dead_pid() -> int:
-    """A pid that has certainly exited — spawned, waited on, and reaped, so
-    the kernel is not holding it as a zombie that `kill(pid, 0)` would still
-    find. Real rather than a made-up high number, which a busy machine could
-    legitimately have assigned to something."""
-    proc = subprocess.Popen(["true"])
-    proc.wait()
-    assert not lock.process_is_running(proc.pid)
-    return proc.pid
+class TestNoExclusionMeansNoTick:
+    """Where rite cannot establish exclusion, the tick does not run, and it
+    says why. Running anyway is the race."""
+
+    def test_a_filesystem_where_flock_is_a_no_op_is_refused(
+        self, tmp_path, monkeypatch
+    ):
+        """What some network and VM-shared filesystems do: every flock is
+        granted. The self-test on the held file must catch it."""
+        root = _project(tmp_path)
+        monkeypatch.setattr(kernel_lock.fcntl, "flock", lambda fd, op: None)
+
+        outcome = lock.acquire(root)
+
+        assert isinstance(outcome, lock.LockUnavailable)
+        assert "does not exclude" in outcome.reason
+
+    def test_a_refused_tick_does_no_work_and_is_not_ok(self, tmp_path, monkeypatch):
+        from rite_ai.scheduler import LAST_TICK_FILENAME
+
+        root = _project(tmp_path)
+        monkeypatch.setattr(kernel_lock.fcntl, "flock", lambda fd, op: None)
+
+        result = run_tick(root)
+
+        assert result.ok is False
+        assert result.skipped is True
+        assert "did not run" in " ".join(result.messages)
+        assert not (root / ".rite" / LAST_TICK_FILENAME).exists()
+
+    def test_a_filesystem_without_flock_is_refused(self, tmp_path, monkeypatch):
+        import errno
+
+        def unsupported(fd, op):
+            raise OSError(errno.ENOLCK, "No locks available")
+
+        root = _project(tmp_path)
+        monkeypatch.setattr(kernel_lock.fcntl, "flock", unsupported)
+
+        outcome = lock.acquire(root)
+
+        assert isinstance(outcome, lock.LockUnavailable)
+        assert "does not support flock" in outcome.reason
+
+    def test_a_symlink_at_the_lock_path_is_refused(self, tmp_path):
+        root = _project(tmp_path)
+        elsewhere = tmp_path / "elsewhere.lock"
+        elsewhere.write_text("")
+        lock.lock_path(root).symlink_to(elsewhere)
+
+        assert isinstance(lock.acquire(root), lock.LockUnavailable)
+
+    def test_a_lock_file_replaced_while_being_taken_is_refused(
+        self, tmp_path, monkeypatch
+    ):
+        root = _project(tmp_path)
+        real_flock = kernel_lock.fcntl.flock
+
+        def flock_then_replace(fd, op):
+            real_flock(fd, op)
+            path = lock.lock_path(root)
+            if os.fstat(fd).st_ino == path.stat().st_ino:
+                path.unlink()
+                path.write_text("")
+
+        monkeypatch.setattr(kernel_lock.fcntl, "flock", flock_then_replace)
+
+        outcome = lock.acquire(root)
+
+        assert isinstance(outcome, lock.LockUnavailable)
+        assert "replaced" in outcome.reason
+
+    def test_a_lock_file_deleted_during_a_tick_is_reported(self, tmp_path):
+        """Nothing in rite deletes it, but if something else does, a tick
+        that started meanwhile may have run alongside this one. That cannot
+        be undone. It must not be silent."""
+        root = _project(tmp_path)
+        with lock.held(root) as outcome:
+            lock.lock_path(root).unlink()
+        assert isinstance(outcome, lock.LockAcquired)
+        assert any("deleted or replaced" in w for w in outcome.warnings)
+
+
+def _hold_in_another_process(root: Path) -> subprocess.Popen:
+    """A real second process holding the lock until it is killed. It prints
+    once it holds it, so the caller never races its startup."""
+    import sys
+
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import sys, time\n"
+            "from pathlib import Path\n"
+            "from rite_ai.scheduler import lock\n"
+            "o = lock.acquire(Path(sys.argv[1]))\n"
+            "print(type(o).__name__, flush=True)\n"
+            "time.sleep(600)\n",
+            str(root),
+        ],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    assert proc.stdout is not None
+    assert proc.stdout.readline().strip() == "LockAcquired"
+    return proc
 
 
 class TestTheSchedulerLogIsBounded:
@@ -197,28 +337,9 @@ class TestTheSchedulerLogIsBounded:
         assert rotate_if_needed(tmp_path / "nope" / "scheduler.log") is None
 
 
-class TestTheLockIsNeverObservedHalfMade:
-    """Found by running twenty real ticks at once, not by the suite: with
-    `O_CREAT | O_EXCL` the lockfile exists before its contents are written,
-    so a concurrent tick could read zero bytes, call it unreadable and take
-    a lock that was legitimately held."""
-
-    def test_a_concurrent_reader_never_sees_an_empty_lockfile(self, tmp_path):
-        root = _project(tmp_path)
-        outcome = lock.acquire(root)
-        assert isinstance(outcome, lock.LockAcquired)
-        # The instant the path exists it must already identify its owner.
-        assert lock._read_holder(lock.lock_path(root)) is not None
-
-    def test_no_temp_files_are_left_behind(self, tmp_path):
-        root = _project(tmp_path)
-        lock.acquire(root)
-        lock.release(root)
-        assert list((root / ".rite").glob(".scheduler.lock*")) == []
-
+class TestContentionYieldsOneHolder:
     def test_twenty_concurrent_acquires_yield_exactly_one_holder(self, tmp_path):
-        """The property the real-world run demonstrated: contention may not
-        produce two winners."""
+        """Contention may not produce two winners."""
         import multiprocessing
 
         root = _project(tmp_path)
@@ -229,6 +350,39 @@ class TestTheLockIsNeverObservedHalfMade:
         assert sum(1 for got in outcomes if got) == 1, (
             f"expected exactly one holder, got {sum(1 for g in outcomes if g)}"
         )
+
+    def test_sustained_contention_never_overlaps_two_holders(self, tmp_path):
+        """The measurement that found the 0.6.0 lock admitting 1,352–1,617
+        overlapping holders in 20 s, shortened: processes acquire and release
+        as fast as they can, each records when it held the lock, and no two
+        of those intervals may intersect. A single overlap fails it."""
+        import multiprocessing
+
+        root = _project(tmp_path)
+        with multiprocessing.Pool(4) as pool:
+            runs = pool.map(_hold_repeatedly, [(str(root), 2.0)] * 4)
+
+        unavailable = [reason for _, reasons in runs for reason in reasons]
+        assert not unavailable, unavailable
+        intervals = sorted(i for held, _ in runs for i in held)
+        assert len(intervals) > 100, "too few acquisitions to mean anything"
+        overlaps = [(a, b) for a, b in zip(intervals, intervals[1:]) if b[0] < a[1]]
+        assert not overlaps, f"{len(overlaps)} overlapping holders"
+
+
+def _hold_repeatedly(args: tuple[str, float]) -> tuple[list, list]:
+    root, seconds = Path(args[0]), args[1]
+    held, unavailable = [], []
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        with lock.held(root) as outcome:
+            if isinstance(outcome, lock.LockUnavailable):
+                unavailable.append(outcome.reason)
+            elif isinstance(outcome, lock.LockAcquired):
+                start = time.monotonic_ns()
+                time.sleep(0.0005)
+                held.append((start, time.monotonic_ns()))
+    return held, unavailable
 
 
 def _try_acquire(root_str: str) -> bool:

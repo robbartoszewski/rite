@@ -53,6 +53,12 @@ def test_the_next_start_continues_a_run_that_ended_on_its_ceiling():
     root = work / "proj"
     (root / ".rite").mkdir(parents=True)
     log = root / "launches.log"
+    # ⚠ Created BEFORE the Manager starts. On Linux the boundary grants the
+    # project root's existing entries one by one, so a Manager cannot create
+    # a new top-level file there (readiness D17). This test passed on Linux
+    # only because its project sat under `/tmp`, which was granted wholesale
+    # until SB11 removed that grant.
+    log.write_text("")
     engine = root / "engine"
     # Behaves like `claude -p` that knows the conversation: reads its prompt,
     # works for a moment, finishes cleanly.

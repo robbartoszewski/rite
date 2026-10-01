@@ -192,6 +192,10 @@ class TestPerformHandoverReachesTicketBackend:
         self, mock_create, tmp_path: Path
     ):
         root = _setup(tmp_path, ticket_backend_type="jira")
+        # A handover hands over what it RELEASES, so alpha holds ABC-1.
+        ClaimsLedger(root / ".rite" / "claims.json").claim(
+            ["src/app.py"], "alpha", "ABC-1"
+        )
         backend = mock_create.return_value
         backend.comment.return_value = None
         backend.label.return_value = None
@@ -218,6 +222,10 @@ class TestPerformHandoverReachesTicketBackend:
         label failure is instead surfaced (`label_failed`) and its own
         retryable `handover-label` message is queued — not silently lost."""
         root = _setup(tmp_path, ticket_backend_type="jira")
+        # A handover hands over what it RELEASES, so alpha holds ABC-1.
+        ClaimsLedger(root / ".rite" / "claims.json").claim(
+            ["src/app.py"], "alpha", "ABC-1"
+        )
         backend = mock_create.return_value
         backend.comment.return_value = None
         backend.label.return_value = BackendError("label does not exist on project")
@@ -243,6 +251,10 @@ class TestPerformHandoverReachesTicketBackend:
         self, mock_create, tmp_path: Path
     ):
         root = _setup(tmp_path, ticket_backend_type="jira")
+        # A handover hands over what it RELEASES, so alpha holds ABC-1.
+        ClaimsLedger(root / ".rite" / "claims.json").claim(
+            ["src/app.py"], "alpha", "ABC-1"
+        )
         backend = mock_create.return_value
         backend.comment.return_value = BackendError("JIRA unreachable")
 
@@ -311,6 +323,10 @@ class TestPerformHandoverReachesTicketBackend:
 
     def test_falls_back_to_outbox_when_no_backend_configured(self, tmp_path: Path):
         root = _setup(tmp_path, ticket_backend_type="none")
+        # A handover hands over what it RELEASES, so alpha holds ABC-1.
+        ClaimsLedger(root / ".rite" / "claims.json").claim(
+            ["src/app.py"], "alpha", "ABC-1"
+        )
         result = perform_handover(root, worker="alpha", reason="stall", ticket="ABC-1")
         assert result.ticket_commented is False
         assert result.outbox_path

@@ -75,6 +75,12 @@ class Tick:
     detail: str = ""
     promoted_from: str = ""
     handed_over_to: str = ""
+    released_at: str = ""
+    """On a handover, when the role ended: the release's own stamp. ⚠ NOT the
+    tick's end. Everything the tick does after the release landed (the
+    write's housekeeping, the return, a descheduled process) is time this
+    Manager is no longer Owner, and a record that closes the role at the
+    tick's end reports two Owners where there was one (§2.4.1a)."""
     asked_for_promotion: bool = False
     asked_to_hand_over: bool = False
     handover: ToldTheBoard | None = None
@@ -114,6 +120,7 @@ class ManagerMonitor:
         modules: set[str] | None = None,
         draining: str = "",
         distribution_off: str = "",
+        refinement=None,
     ) -> None:
         self.holder = holder
         self.root = root
@@ -138,6 +145,9 @@ class ManagerMonitor:
         # and "nobody wired a board" are different facts, and a reader who is
         # told the second while the first is true goes looking for a bug.
         self.distribution_off = distribution_off
+        # TR5: whether a ticket is REFINED before it is handed to a Worker.
+        # None asks the predicate about `backend` itself; tests inject one.
+        self.refinement = refinement
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self.last: Tick | None = None
@@ -181,6 +191,7 @@ class ManagerMonitor:
                     result.owner = False
                     result.action = "handed over"
                     result.handed_over_to = handed.to
+                    result.released_at = handed.released_at
                     return result
                 result.problems.append(getattr(handed, "reason", "handover refused"))
 
@@ -278,6 +289,7 @@ class ManagerMonitor:
             # So a refusal lands where the Owner can read it (Q9 rule 2), not
             # only as a board comment nothing reads back.
             layer=self.holder.layer,
+            refinement=self.refinement,
         )
         if not isinstance(handed, Distributed):
             result.problems.append(handed.reason)

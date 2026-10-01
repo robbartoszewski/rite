@@ -33,6 +33,9 @@ class Module:
     description: str = ""
     # A lambda so `RecordedCommands` can be defined after this class.
     commands: RecordedCommands = field(default_factory=lambda: RecordedCommands())
+    # This module's override of the project's `publish:` block, key by key
+    # (PB1). Every key None means "no override".
+    publish: ModulePublish = field(default_factory=lambda: ModulePublish())
 
 
 @dataclass
@@ -52,6 +55,38 @@ class RecordedCommands:
     test: str | None = None
     lint: str | None = None
     format: str | None = None
+
+
+STRATEGIES = ("commit", "push", "pull_request", "push_to_shared")
+"""What rite does with a finished task's commits (PB1). Named verbs, never
+numbers. `push_to_shared` parses and is refused at start until v0.8.0 (PB2)."""
+
+
+@dataclass
+class PublishConfig:
+    """The project's `publish:` block (PB1, `V070_RELEASE_PLAN.md` Track PB).
+
+    `pull_request` is the default by Robert's decision: with `auto_merge` off
+    it is strictly safer than `push`, and the team that inspects every line is
+    the team that will not have changed it."""
+
+    strategy: str = "pull_request"
+    squash: bool = False
+    auto_merge: bool = False
+
+
+@dataclass
+class ModulePublish:
+    """A module's `publish:` override. `None` means "not overridden", never
+    "off": resolution falls back to the project's value for that key only,
+    the way `RecordedCommands` does."""
+
+    strategy: str | None = None
+    squash: bool | None = None
+    auto_merge: bool | None = None
+    # PB2 (v0.8.0). Parsed so a config written for it is refused at start by
+    # name rather than as an unknown key; nothing reads it for publishing.
+    shared_repo: str | None = None
 
 
 @dataclass
@@ -74,6 +109,52 @@ class TicketBackendConfig:
     repo: str = ""  # GitHub "owner/name" — unused for jira
     projects: dict[str, str] = field(default_factory=dict)
     credential: str = ""
+    scope_label: str = ""
+    """The label that marks a ticket as THIS project's (`tickets.scope`): ANDed
+    into every list rite makes of the board and stamped on every ticket rite
+    creates. Empty reads the whole board, as before it existed."""
+
+
+BOARD_ONLY_FIELDS: dict[str, tuple[str, ...]] = {
+    "jira": ("site", "projects"),
+    "github": ("repo",),
+}
+"""Which `TicketBackendConfig` fields belong to one board and nothing else.
+
+`scope_label` is deliberately absent: it marks a ticket as this project's and
+is backend-agnostic (§6.1.1), so it survives a change of board.
+"""
+
+
+def leave_the_old_board(backend: TicketBackendConfig, for_board: str) -> list[str]:
+    """Clear what described the board being left behind, and name what was
+    cleared.
+
+    A retarget re-prompts for everything the INCOMING board needs in the same
+    run, so nothing needed is ever stale — only the outgoing board's
+    leftovers, and a `config.yaml` describing two boards invites a reader to
+    believe a `site:` that nothing uses.
+
+    `credential` goes too: it RENAMES the outgoing board's token key, so it is
+    the old board's field by definition. It is cleared rather than replaced —
+    an empty one falls back to the new board's default key
+    (`credential_name or "jira_token"`), and inventing a name here is a
+    separate question.
+    """
+    cleared: list[str] = []
+    for board, fields in BOARD_ONLY_FIELDS.items():
+        if board == for_board:
+            continue
+        for name in fields:
+            current = getattr(backend, name)
+            if not current:
+                continue
+            setattr(backend, name, {} if isinstance(current, dict) else "")
+            cleared.append(f"ticket_backend.{name}")
+    if backend.credential:
+        backend.credential = ""
+        cleared.append("ticket_backend.credential")
+    return cleared
 
 
 @dataclass
@@ -270,6 +351,51 @@ class CheckinsConfig:
     windows: list[CheckinWindow] = field(default_factory=list)
 
 
+ACCEPT_WORDS = ("ok", "yes", "accept", "lgtm", "proceed")
+"""TRQ3, decided: the words that accept a proposal. Robert added `proceed`."""
+
+NEVER_ACCEPT = frozenset({"no", "not", "stop", "wait", "cancel", "don't"})
+"""Refused in `accept_words`: a mistake in that list turns a refusal into
+consent, so the words most likely typed as the opposite of yes cannot be in
+it (the note's part 3.11)."""
+
+
+@dataclass
+class RefinementConfig:
+    """The limits on refining a ticket with the User (TR2; TRQ2, TRQ3, TRQ8,
+    TRQ11, decided; `V070_TICKET_REFINEMENT.md` part 3.11).
+
+    Every key is optional and these defaults are Robert's. **Whether
+    refinement is enforced is not here, and never will be (TRQ1).** A value
+    out of range is refused by the parser rather than clamped: a limit
+    silently changed is a limit the User believes they set."""
+
+    unanswered: int = 3
+    """N: consecutive messages about one ticket that reached their deadline
+    with no reply, before it is PARKED. **Not a cap on rounds** (Robert's
+    correction to TRQ2, 2026-09-29: "This limit should apply to nudging
+    without a reply, not to a discussion. A topic may be complex and need
+    many rounds to resolve. As long as the User is responsive, the limit
+    shouldn't apply"). Any reply resets it to zero."""
+    deadline_hours: float = 24
+    """How long one message waits for a reply, or until the next check-in
+    closes if sooner. A message past it unanswered counts one toward
+    `unanswered`, and he is nudged with the same question when he is next
+    active."""
+    open_max: int = 5
+    """K: refinements open at once per Manager (inside their deadline)."""
+    start_per_session: int = 3
+    """S: new refinements started per Owner session."""
+    accept_words: list[str] = field(default_factory=lambda: list(ACCEPT_WORDS))
+    chore_after_minutes: int = 60
+    """A chat instruction the User has not answered about becomes an
+    unrefined chore carrying exactly his words, after this long (TRQ11)."""
+    questions_to: str = "dm"
+    """`dm`, or `channel` for a private channel rite is invited to (TRQ8)."""
+    channel: str = ""
+    """That channel's id, when `questions_to` is `channel`."""
+
+
 @dataclass
 class CredentialsConfig:
     """Which keychain accounts THIS project's credentials live under
@@ -401,6 +527,17 @@ class CoordinationConfig:
     # backend", which reads exactly like "there was nothing to hand out".
     assign_unattended: bool = False
 
+    # How often, in minutes, an Owner's supervisor checks whether a Manager
+    # it routed work to has DIED (DF2 decision 3, Robert 2026-09-27: every
+    # 30 minutes, configurable). ⚠ A LATENCY bound, not a correctness one:
+    # a secondary that FINISHES without replying is noticed at once, by the
+    # event of its session ending, and a death is also noticed at once when
+    # a wait would end on it. This sweep is the backstop for a death during
+    # a long Owner session. Lowering it buys latency on the died case only,
+    # and finding nothing costs nothing: it starts an Owner session only
+    # when it has something new to say.
+    sweep_minutes: int = 30
+
 
 @dataclass
 class ProjectConfig:
@@ -415,10 +552,12 @@ class ProjectConfig:
     budget: BudgetConfig = field(default_factory=BudgetConfig)
     schedule: ScheduleConfig = field(default_factory=ScheduleConfig)
     checkins: CheckinsConfig = field(default_factory=CheckinsConfig)
+    refinement: RefinementConfig = field(default_factory=RefinementConfig)
     spec: SpecConfig = field(default_factory=SpecConfig)
     coordination: CoordinationConfig = field(default_factory=CoordinationConfig)
     slack: SlackConfig = field(default_factory=SlackConfig)
     github_app: GithubAppConfig = field(default_factory=GithubAppConfig)
+    publish: PublishConfig = field(default_factory=PublishConfig)
 
 
 @dataclass
@@ -427,6 +566,13 @@ class WorkerManifest:
     manager: str = ""
     modules: list[str] = field(default_factory=list)
     claude_instructions: str = ""
+    # The module's OWN instructions this Worker was told to follow (S23):
+    # repo-relative paths to a module's `CLAUDE.md`, `AGENTS.md` or
+    # `CONTRIBUTING.md`. Empty means the question was asked and declined, or
+    # there was nothing to ask about — NOT "nobody has looked". A Worker
+    # follows what it was told to follow, and that is a decision somebody
+    # made rather than a file that happened to exist.
+    follow_module_docs: list[str] = field(default_factory=list)
 
 
 @dataclass

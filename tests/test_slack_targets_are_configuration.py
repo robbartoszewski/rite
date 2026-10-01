@@ -34,8 +34,16 @@ class TestTheCommandChannelIsNotConfigurable:
         assert isinstance(got, ParseError) and "user id" in got.message
 
     def test_a_broadcast_channel_is_a_name_or_an_id(self, tmp_path):
+        """A name, an id — or a bare name, which is the same channel.
+
+        v0.7.0 dogfood S19: `all-rite` was refused as "neither a channel name
+        starting with '#' nor a channel id", for a channel rite could name
+        exactly. Slack's own sidebar shows the bare word, so it is normalised
+        rather than rejected. Only what stays unnameable after that is refused.
+        """
         got = _config(tmp_path, "slack:\n  broadcast_channel: all-rite\n")
-        assert isinstance(got, ParseError) and "broadcast_channel" in got.message
+        assert not isinstance(got, ParseError), got
+        assert got.slack.broadcast_channel == "#all-rite"
         assert not isinstance(
             _config(tmp_path, "slack:\n  broadcast_channel: '#team-x'\n"), ParseError
         )
@@ -43,6 +51,17 @@ class TestTheCommandChannelIsNotConfigurable:
             _config(tmp_path, "slack:\n  broadcast_channel: C0C4KB709T6\n"),
             ParseError,
         )
+        # An id keeps its shape: '#C0C4KB709T6' is a channel NAMED after an
+        # id, which is a different conversation.
+        assert (
+            _config(
+                tmp_path, "slack:\n  broadcast_channel: C0C4KB709T6\n"
+            ).slack.broadcast_channel
+            == "C0C4KB709T6"
+        )
+        still_refused = _config(tmp_path, "slack:\n  broadcast_channel: 'Bad Chan!'\n")
+        assert isinstance(still_refused, ParseError)
+        assert "broadcast_channel" in still_refused.message
 
 
 class TestTheBroadcastDefault:

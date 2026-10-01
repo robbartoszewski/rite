@@ -33,11 +33,19 @@ import pytest
 import rite_ai.managers.supervise as sup
 from rite_ai.managers import mailbox, routing
 from rite_ai.managers.supervise import StartResult, supervise
+from tests.refined_board import refined
 
 OWNER, SECONDARY = "lead", "small"
 NAMES = [OWNER, SECONDARY]
 REPLY = "REPLY-FROM-SMALL"
 TASK = "write HELLO.txt"
+
+
+def _on_board(ticket_id):
+    """One single-issue read that finds the ticket (TR9: routes carry one)."""
+    from rite_ai.tickets.interface import Ticket
+
+    return Ticket(id=ticket_id, title="t")
 
 
 class _Ending:
@@ -76,7 +84,9 @@ def _router(root: Path, manager: str):
     """The real routing step `rite start` builds (`main._router_for`)."""
 
     def step(say):
-        routing.deliver_routes(root, manager, OWNER, NAMES, say)
+        routing.deliver_routes(
+            root, manager, OWNER, NAMES, say, read_ticket=_on_board, refinement=refined
+        )
         if manager == OWNER:
             routing.collect_reports(root, OWNER, NAMES, say)
 
@@ -123,7 +133,7 @@ def _run_owner(world, *, ceiling: int, cycle_secs: float, verdict="ready"):
         prompts.append(kw.get("prompt") or "")
         if len(starts) == 1:
             # The Owner's model routes in its first cycle, as `rite route` does.
-            routing.request(root, OWNER, SECONDARY, TASK)
+            routing.request(root, OWNER, SECONDARY, TASK, "RT-1")
         # The session runs; the secondary may act while it does.
         end = world["t"] + cycle_secs
         while world["t"] < end:
@@ -234,37 +244,149 @@ class TestAProgressReplyDoesNotEndTheWait:
 
 
 class TestTheWaitEndsForAStatedReason:
-    def test_a_secondary_that_is_provably_gone_ends_the_wait(self, world):
+    """Robert's decision 4, option (c): seen running then gone, plus the
+    recorded lifecycle. Each ending is named, because "finished", "died" and
+    "never started" need different responses from a person."""
+
+    def test_a_secondary_that_finished_its_run_ends_the_wait_and_says_finished(
+        self, world
+    ):
         root = world["root"]
         routing.record_supervisor(root, SECONDARY, os.getpid())
 
-        def dies():
+        def ends():
             if world["t"] >= 30:
                 routing.forget_supervisor(root, SECONDARY, os.getpid())
 
-        world["between"].append(dies)
-        result, starts, _prompts, _said = _run_owner(world, ceiling=2, cycle_secs=7)
-        assert len(starts) == 2
-        assert "has stopped" in result.reason and "small" in result.reason, result
+        world["between"].append(ends)
+        result, starts, prompts, _said = _run_owner(world, ceiling=2, cycle_secs=7)
+        # Decision 3: stopping with the work outstanding is TOLD to the Owner
+        # first, as a note that starts its session, so the person hears it.
+        assert len(starts) == 3, starts
+        assert "STOPPED WITH ROUTED WORK OUTSTANDING" in prompts[2]
+        assert "'small' finished its run" in result.reason, result
+        assert "DIED" not in result.reason and "never" not in result.reason
 
-    def test_a_secondary_never_seen_running_is_not_gone_and_it_is_said(
-        self, world, monkeypatch
+    def test_a_secondary_that_died_ends_the_wait_and_says_died(self, world):
+        root = world["root"]
+        routing.record_supervisor(root, SECONDARY, os.getpid())
+
+        def killed():
+            # A killed run never reaches its `finally`: the record still says
+            # running, and the recorded process is gone.
+            if world["t"] >= 30:
+                # It took the route into a session first, then was killed.
+                mailbox.take(root, SECONDARY, mailbox.INBOX)
+                path = routing._ledger_dir(root, SECONDARY) / routing.SUPERVISOR_FILE
+                data = routing._load(path)
+                if data.get("pid") == os.getpid():
+                    data["pid"] = 2**22 + 12345
+                    routing._store(path, data)
+
+        world["between"].append(killed)
+        result, _starts, _prompts, _said = _run_owner(world, ceiling=2, cycle_secs=7)
+        assert "'small' DIED" in result.reason, result
+        assert "may not have happened" in result.reason
+        # It had TAKEN the message: saying it waits in the inbox would be false.
+        assert "taken into a session that did not finish" in result.reason
+        assert "wait in its inbox" not in result.reason
+
+    def test_a_secondary_that_died_before_the_owner_ever_looked_is_still_died(
+        self, world
     ):
-        """⚠ Seen-then-absent, not merely absent: a secondary started a moment
-        after the Owner would otherwise end the Owner's wait by start order."""
-        said_lines: list[str] = []
+        """Found by observation through `rite start`: the secondary took the
+        route and was killed while the Owner's first session still ran, so the
+        Owner never saw it alive and waited out the window. Its record says
+        its run started during the Owner's run, which proves it ran."""
         root = world["root"]
 
+        def starts_then_is_killed():
+            path = routing._ledger_dir(root, SECONDARY) / routing.SUPERVISOR_FILE
+            if world["t"] >= 2 and not path.exists():
+                routing.record_supervisor(root, SECONDARY, os.getpid())
+                data = routing._load(path)
+                data["pid"] = 2**22 + 12345  # killed before the Owner looks
+                routing._store(path, data)
+
+        world["between"].append(starts_then_is_killed)
+        result, _starts, _prompts, _said = _run_owner(world, ceiling=2, cycle_secs=7)
+        assert "'small' DIED" in result.reason, result
+
+    def test_alive_when_handed_the_work_then_killed_is_died(self, world):
+        """The observed case exactly: the secondary started BEFORE the Owner
+        (so its record predates the Owner's run), was alive when the route was
+        delivered, and was killed before the Owner's first wait. The Owner's
+        supervisor saw it running at delivery, and recorded that."""
+        root = world["root"]
+        routing.record_supervisor(root, SECONDARY, os.getpid())
+        path = routing._ledger_dir(root, SECONDARY) / routing.SUPERVISOR_FILE
+        data = routing._load(path)
+        data["started_at"] = 1.0  # started before the Owner's run
+        routing._store(path, data)
+
+        def killed_after_delivery():
+            if world["t"] >= 10:
+                d = routing._load(path)
+                if d.get("pid") == os.getpid():
+                    d["pid"] = 2**22 + 12345
+                    routing._store(path, d)
+
+        world["between"].append(killed_after_delivery)
+        result, _starts, _prompts, _said = _run_owner(world, ceiling=2, cycle_secs=7)
+        assert "'small' DIED" in result.reason, result
+
+    def test_a_death_recorded_before_this_run_is_not_this_runs_death(self, world):
+        """The start-order protection holds for a stale record: killed in an
+        EARLIER run, it may be about to start now, so it is waited on."""
+        root = world["root"]
+        routing.record_supervisor(root, SECONDARY, 2**22 + 12345)
+        path = routing._ledger_dir(root, SECONDARY) / routing.SUPERVISOR_FILE
+        data = routing._load(path)
+        data["started_at"] = 1.0  # long before this run
+        routing._store(path, data)
+
         def arrives_late():
-            if world["t"] >= 700 and not routing._supervisor_running(root, SECONDARY):
+            if (
+                world["t"] >= 700
+                and routing._supervisor_state(root, SECONDARY) != routing.RUNNING
+            ):
                 _secondary_answers_at(world, 720)
 
         world["between"].append(arrives_late)
-        result, starts, prompts, said = _run_owner(world, ceiling=2, cycle_secs=7)
-        said_lines += said
+        result, _starts, prompts, _said = _run_owner(world, ceiling=2, cycle_secs=7)
         assert _carrying(prompts, REPLY), result.reason
-        assert any("NOT RUNNING" in line for line in said_lines), said_lines
-        assert any(line.startswith("⚠ still:") for line in said_lines), said_lines
+
+    def test_a_secondary_never_started_is_refused_at_once_not_waited_on(self, world):
+        """The hole in "seen running, then gone": a secondary that never ran
+        was never seen, so the Owner would have waited forever for it."""
+        result, starts, _prompts, _said = _run_owner(world, ceiling=2, cycle_secs=7)
+        assert "REFUSING TO WAIT" in result.reason, result
+        assert "never been started here" in result.reason
+        assert "rite start small" in result.reason
+        assert "wait in its inbox" in result.reason  # never taken: still there
+        assert len(starts) == 2, "refused when the wait began, not after one"
+
+    def test_a_secondary_that_ran_before_but_not_yet_now_is_waited_on_loudly(
+        self, world
+    ):
+        """⚠ Not gone: it has a recorded start, but this run has not seen it.
+        Ending here would end the wait by start order."""
+        root = world["root"]
+        routing.record_supervisor(root, SECONDARY, os.getpid())
+        routing.forget_supervisor(root, SECONDARY, os.getpid())  # an earlier run
+
+        def arrives_late():
+            if (
+                world["t"] >= 700
+                and routing._supervisor_state(root, SECONDARY) != routing.RUNNING
+            ):
+                _secondary_answers_at(world, 720)
+
+        world["between"].append(arrives_late)
+        result, _starts, prompts, said = _run_owner(world, ceiling=2, cycle_secs=7)
+        assert _carrying(prompts, REPLY), result.reason
+        assert any("NOT RUNNING" in line for line in said), said
+        assert any(line.startswith("⚠ still:") for line in said), said
 
 
 class TestTheSecondarySide:
@@ -282,8 +404,18 @@ class TestTheSecondarySide:
         def owner_routes():
             while pending and world["t"] >= pending[0]:
                 pending.pop(0)
-                routing.request(root, OWNER, SECONDARY, f"{TASK} #{len(starts)}")
-                routing.deliver_routes(root, OWNER, OWNER, NAMES, lambda _m: None)
+                routing.request(
+                    root, OWNER, SECONDARY, f"{TASK} #{len(starts)}", "RT-1"
+                )
+                routing.deliver_routes(
+                    root,
+                    OWNER,
+                    OWNER,
+                    NAMES,
+                    lambda _m: None,
+                    read_ticket=_on_board,
+                    refinement=refined,
+                )
 
         world["between"].append(owner_routes)
 
@@ -325,7 +457,7 @@ class TestTheSecondarySide:
         )
         assert starts and starts[0] >= 40, starts
         assert TASK in prompts[0]
-        assert "Owner 'lead' has stopped" in result.reason, result
+        assert "the Owner 'lead' finished its run" in result.reason, result
 
     def test_a_route_after_the_ceiling_still_starts_a_cycle(self, world):
         root = world["root"]
@@ -429,12 +561,72 @@ class TestTheWaitReadsHandledBeforeCollecting:
         assert _carrying(prompts, REPLY), (result.reason, starts, said)
 
 
+def _finishes_just_before_reason_is_read(world, monkeypatch):
+    """The secondary takes the route, replies and records it handled at the
+    instant BEFORE the Owner's supervisor reads `Waiting.reason()`, with no
+    collect after its last boundary. That is the sub-second gap between the
+    boundary's `router(say)` and the decision to stop."""
+    root = world["root"]
+    routing.record_supervisor(root, SECONDARY, os.getpid())
+    done = {"final": False}
+    real_reason = routing.Waiting.reason
+
+    def reason_after_the_secondary_finishes(self):
+        if not done["final"] and mailbox.read(root, SECONDARY, mailbox.INBOX):
+            taken = [m.path.name for m in mailbox.take(root, SECONDARY, mailbox.INBOX)]
+            mailbox.send(root, SECONDARY, mailbox.OUTBOX, REPLY)
+            routing._record_handled(root, SECONDARY, taken)
+            done.update(final=True, final_at=world["t"])
+        return real_reason(self)
+
+    monkeypatch.setattr(routing.Waiting, "reason", reason_after_the_secondary_finishes)
+    return done
+
+
+class TestTheStopDecisionCollectsFirst:
+    """⚠ Tag blocker 3. The ceiling check and the idle verdict read
+    `reason()` BEFORE anything collected from the secondaries' outboxes. A
+    reply (or rite's silent-finish note) written after the boundary's collect
+    and marked handled before that read made `reason()` say "nothing
+    outstanding, nothing waiting", and the Owner stopped with the reply
+    stranded until the next `rite start`. Pinned deterministically at both
+    reads."""
+
+    def test_at_the_ceiling(self, world, monkeypatch):
+        done = _finishes_just_before_reason_is_read(world, monkeypatch)
+        result, starts, prompts, said = _run_owner(world, ceiling=1, cycle_secs=7)
+        assert done["final"], said
+        assert _carrying(prompts, REPLY), (result.reason, starts, said)
+
+    def test_on_an_idle_board(self, world, monkeypatch):
+        done = _finishes_just_before_reason_is_read(world, monkeypatch)
+        asked = []
+
+        def board():
+            asked.append(1)
+            return "ready" if len(asked) == 1 else "idle"
+
+        result, starts, prompts, said = _run_owner(
+            world, ceiling=5, cycle_secs=7, verdict=board
+        )
+        assert done["final"], said
+        assert _carrying(prompts, REPLY), (result.reason, starts, said)
+
+
 class TestTheLedgerIsTheSupervisorsNotTheModels:
     def test_a_delivered_route_is_outstanding_until_its_cycle_is_handled(
         self, tmp_path
     ):
-        routing.request(tmp_path, OWNER, SECONDARY, TASK)
-        routing.deliver_routes(tmp_path, OWNER, OWNER, NAMES, lambda _m: None)
+        routing.request(tmp_path, OWNER, SECONDARY, TASK, "RT-1")
+        routing.deliver_routes(
+            tmp_path,
+            OWNER,
+            OWNER,
+            NAMES,
+            lambda _m: None,
+            read_ticket=_on_board,
+            refinement=refined,
+        )
         (name,) = routing._outstanding(tmp_path, OWNER)[SECONDARY]
         # A reply alone does not clear it: only the end of the cycle does.
         mailbox.send(tmp_path, SECONDARY, mailbox.OUTBOX, "PROGRESS")
@@ -450,18 +642,32 @@ class TestTheLedgerIsTheSupervisorsNotTheModels:
         assert where.parent == mail.parent and not where.is_relative_to(mail)
 
     def test_a_dead_supervisor_is_provably_gone(self, tmp_path):
-        assert not routing._supervisor_running(tmp_path, SECONDARY)  # no record
+        state = routing._supervisor_state
+        assert state(tmp_path, SECONDARY) == routing.NEVER  # no start recorded
         routing.record_supervisor(tmp_path, SECONDARY, os.getpid())
-        assert routing._supervisor_running(tmp_path, SECONDARY)
+        assert state(tmp_path, SECONDARY) == routing.RUNNING
+        routing.forget_supervisor(tmp_path, SECONDARY, os.getpid())
+        assert state(tmp_path, SECONDARY) == routing.ENDED  # kept, not deleted
         routing.record_supervisor(tmp_path, SECONDARY, 2**22 + 12345)  # no such pid
-        assert not routing._supervisor_running(tmp_path, SECONDARY)
+        assert state(tmp_path, SECONDARY) == routing.DIED
+
+    def test_a_recycled_pid_is_not_taken_for_the_recorded_process(self, tmp_path):
+        """⚠ Recorded identity, not a liveness poll: a live pid that started at
+        another time is a different process, so the recorded one DIED."""
+        routing.record_supervisor(tmp_path, SECONDARY, os.getpid())
+        path = routing._ledger_dir(tmp_path, SECONDARY) / routing.SUPERVISOR_FILE
+        data = routing._load(path)
+        assert data["process_start"], "the start time must be recorded"
+        data["process_start"] = "linux:1"
+        routing._store(path, data)
+        assert routing._supervisor_state(tmp_path, SECONDARY) == routing.DIED
 
     def test_supervise_records_itself_for_the_whole_run_and_removes_it(self, world):
         root = world["root"]
         seen: list[bool] = []
 
         def starter(r, m, *, engine, resume_id, max_sessions, window_seconds, **kw):
-            seen.append(routing._supervisor_running(root, OWNER))
+            seen.append(routing._supervisor_state(root, OWNER) == routing.RUNNING)
             return StartResult(True, "ok", session="s1", attach="a")
 
         supervise(
@@ -479,4 +685,119 @@ class TestTheLedgerIsTheSupervisorsNotTheModels:
             now=lambda: world["t"],
         )
         assert seen == [True]
-        assert not routing._supervisor_running(root, OWNER)
+        assert routing._supervisor_state(root, OWNER) == routing.ENDED
+
+
+def _secondary_replies(world, times_and_texts, *, handled_at):
+    """A running secondary that takes the route and replies at each (time,
+    text), then ends the cycle that carried it at `handled_at`."""
+    root = world["root"]
+    routing.record_supervisor(root, SECONDARY, os.getpid())
+    state = {"taken": [], "sent": 0, "handled": False}
+    pending = list(times_and_texts)
+
+    def step():
+        if not state["taken"]:
+            state["taken"] = [
+                m.path.name for m in mailbox.take(root, SECONDARY, mailbox.INBOX)
+            ]
+        if not state["taken"]:
+            return
+        while pending and world["t"] >= pending[0][0]:
+            mailbox.send(root, SECONDARY, mailbox.OUTBOX, pending.pop(0)[1])
+            state["sent"] += 1
+        if not state["handled"] and world["t"] >= handled_at:
+            routing._record_handled(root, SECONDARY, state["taken"])
+            state["handled"] = True
+
+    world["between"].append(step)
+    return state
+
+
+class TestTheMailStartedCap:
+    """W15 (a): past the ceiling, mail may start at most --sessions plus 2 per
+    message routed this run; one for the reply, one for a correction."""
+
+    def test_a_reply_and_its_correction_fit_inside_the_cap(self, world):
+        """The case the allowance is sized for must never hit it."""
+        _secondary_replies(
+            world,
+            [(30, "Created TOP.txt"), (90, "Correction: TOP.txt FAILED")],
+            handled_at=95,
+        )
+        result, starts, prompts, _said = _run_owner(world, ceiling=2, cycle_secs=7)
+        assert _carrying(prompts, "Created TOP.txt")
+        assert _carrying(prompts, "Correction: TOP.txt FAILED")
+        assert "CAP" not in result.reason, result
+        assert len(starts) <= 2 + 2 * 1
+
+    def test_a_secondary_repeating_itself_stops_at_the_cap_and_says_so(self, world):
+        """The observed W15 case: three replies drove five Owner sessions
+        against a ceiling of two. Now the fifth is refused, as the CAP."""
+        _secondary_replies(
+            world,
+            [(30, "written"), (90, "written again"), (150, "written, third")],
+            handled_at=200,
+        )
+        result, starts, _prompts, _said = _run_owner(world, ceiling=2, cycle_secs=7)
+        assert len(starts) == 4, starts
+        assert "MAIL-STARTED CAP, not the ceiling" in result.reason, result
+        assert "--sessions 2 plus 2 per message routed this run (1) = 4" in (
+            result.reason
+        )
+
+    def test_the_ceiling_message_is_still_the_ceilings_own(self, world):
+        """No routed work: the ceiling is reached and named as the ceiling."""
+        root = world["root"]
+        starts: list[float] = []
+
+        def starter(r, m, *, engine, resume_id, max_sessions, window_seconds, **kw):
+            starts.append(world["t"])
+            world["t"] += 5
+            return StartResult(True, "ok", session=f"s{len(starts)}", attach="a")
+
+        result = supervise(
+            root,
+            OWNER,
+            waiting=routing.Waiting(root, OWNER, OWNER),
+            engine="claude",
+            max_sessions=2,
+            window_seconds=0,
+            prompt="OPEN",
+            starter=starter,
+            verdict=lambda r: "ready",
+            resume_id_for=lambda r, m, since=0.0: "sess-1",
+            poll=0,
+            now=lambda: world["t"],
+        )
+        assert result.reason.startswith("ceiling reached: 2 session(s)"), result
+
+
+class TestRitesOwnNotesAreNotChargedToTheReplyAllowance:
+    """Audit finding: a budget sized for one kind of session, spent by
+    another. A reply and a correction use the reply allowance; a DIED note
+    after them must still start a session, or the person is never told."""
+
+    def test_a_death_after_a_reply_and_a_correction_is_still_told(self, world):
+        root = world["root"]
+        _secondary_replies(
+            world,
+            [(30, "Created TOP.txt"), (90, "Correction: FAILED")],
+            handled_at=10**9,
+        )
+
+        def killed_after_both():
+            if world["t"] >= 150:
+                path = routing._ledger_dir(root, SECONDARY) / routing.SUPERVISOR_FILE
+                d = routing._load(path)
+                if d.get("pid") == os.getpid():
+                    d["pid"] = 2**22 + 12345
+                    routing._store(path, d)
+
+        world["between"].append(killed_after_both)
+        result, starts, prompts, _said = _run_owner(world, ceiling=2, cycle_secs=7)
+        assert any("DIED WITH ROUTED WORK OUTSTANDING" in p for p in prompts), (
+            result.reason,
+            starts,
+        )
+        assert "MAIL-STARTED CAP" not in result.reason, result

@@ -61,32 +61,6 @@ def _policy(readable=(), writable=()):
     }
 
 
-def without_wholesale_temp_grants(policy):
-    """A policy with `/tmp` and `/var/tmp` removed from the writable set.
-
-    ⚠ **THIS IS A REAL HOLE, NOT A TEST CONVENIENCE, and it is wider than the
-    inbox.** `compose_policy` grants those two read+write to mirror seatbelt.
-    Seatbelt can place a deny AFTER a grant and win; Landlock takes the UNION
-    of its grants and has no deny, so a wholesale temp grant cannot be carved
-    and it overrides everything narrower.
-
-    Measured 2026-09-26: under a pytest `tmp_path`, which lives in `/tmp`, it
-    defeated the MM-2 inbox fence (no longer: the inbox left the tree, see
-    `test_a_project_under_tmp_no_longer_exposes_an_inbox`) AND the credential
-    narrowing — a third file in
-    the credential directory became readable, the Claude login became
-    overwritable, and `run.lock` became holdable. A real install is unaffected
-    because both the project and `_credential_root` sit under `$HOME`; what is
-    exposed is scratch projects.
-
-    So every test of a NARROW property has to drop these grants, or it measures
-    the hole instead of the property. `fix/landlock-no-wholesale-temp` removes
-    them; this helper goes when that lands.
-    """
-    temps = {"/tmp", "/var/tmp"}
-    return {**policy, "writable": [w for w in policy["writable"] if w not in temps]}
-
-
 def _in_child(fn) -> int:
     """Run `fn` behind a fork, because applying a ruleset is irreversible.
 
@@ -474,14 +448,6 @@ class TestTheInboxFenceOnLinux:
             (project / "shortcut").symlink_to(mailbox_dir(project, "helper", INBOX))
         return project
 
-    @staticmethod
-    def _without_the_wholesale_temp_grants(policy):
-        # ⚠ Also what makes the NEW inbox a real measurement: the suite's rite
-        # home is under `/tmp`, which the policy grants wholesale. Without
-        # this the inbox would be writable through that grant and the test
-        # would prove nothing about the fence.
-        return without_wholesale_temp_grants(policy)
-
     def _refused(self, policy, target) -> bool:
         def child():
             landlock.apply(policy)
@@ -501,9 +467,7 @@ class TestTheInboxFenceOnLinux:
         from rite_ai.managers.mailbox import INBOX, mailbox_dir
 
         project = self._project(tmp_path)
-        policy = self._without_the_wholesale_temp_grants(
-            landlock.compose_policy(project, "lead", tmp_path / "home")
-        )
+        policy = landlock.compose_policy(project, "lead", tmp_path / "home")
 
         assert self._refused(policy, mailbox_dir(project, "helper", INBOX)), (
             "another Manager's inbox is writable — an inbox write IS an "
@@ -521,9 +485,7 @@ class TestTheInboxFenceOnLinux:
         from rite_ai.managers.mailbox import OUTBOX, mailbox_dir
 
         project = self._project(tmp_path)
-        policy = self._without_the_wholesale_temp_grants(
-            landlock.compose_policy(project, "lead", tmp_path / "home")
-        )
+        policy = landlock.compose_policy(project, "lead", tmp_path / "home")
 
         assert not self._refused(policy, mailbox_dir(project, "lead", OUTBOX)), (
             "the Manager cannot write its own outbox, so it cannot reply"
@@ -542,10 +504,9 @@ class TestTheInboxFenceOnLinux:
         from rite_ai.managers.mailbox import INBOX, mailbox_dir
 
         project = self._project(tmp_path, symlink_in_root=True)
-        raw = landlock.compose_policy(project, "lead", tmp_path / "home")
-        policy = self._without_the_wholesale_temp_grants(raw)
+        policy = landlock.compose_policy(project, "lead", tmp_path / "home")
 
-        assert str(project / "shortcut") not in raw["writable"], (
+        assert str(project / "shortcut") not in policy["writable"], (
             "a symlink in the project root was granted; it names the inode of "
             "the inbox it points at"
         )
@@ -555,63 +516,56 @@ class TestTheInboxFenceOnLinux:
 
 
 @NO_LANDLOCK
-def test_a_project_under_tmp_no_longer_exposes_an_inbox(tmp_path, monkeypatch):
-    """The wholesale `/tmp` grant stays, and MM-2 no longer depends on it.
+def test_nothing_under_tmp_is_granted_wholesale(tmp_path, monkeypatch):
+    """SB11: `/tmp` and `/var/tmp` are not granted, so a project under them
+    is fenced by its own enumeration and nothing else.
 
-    ⚠ **THIS USED TO ASSERT THE OPPOSITE**, as a known hole: `compose_policy`
-    grants `/tmp` and `/var/tmp` read+write, Landlock has no deny, so for a
-    project under them — rite's own pool worktrees, every test project — the
-    in-tree inbox was writable through that grant. The inbox has left the
-    tree, and the old in-tree box is moved once and never read again, so the
-    grant now reaches nothing that is delivered.
+    ⚠ **THIS USED TO ASSERT THE OPPOSITE**: the grants existed to mirror
+    seatbelt, and because Landlock unions its grants and has no deny, they
+    overrode every narrower rule for anything under them. Measured
+    2026-09-26: the in-tree inbox was writable, a third file in the
+    credential directory was readable, and the Claude login was
+    overwritable. Every narrow test in this file had to strip the grants
+    (`without_wholesale_temp_grants`) to measure the property rather than
+    the hole. That helper is gone, so those tests now run the REAL policy.
 
-    Measured with the REAL policy, temp grants included, and rite's home
-    somewhere they do not cover — as it is in a real install. The control
-    shows the grant is still live: the project, under `/tmp`, is writable.
+    Measured with the real policy, against the kernel. The control shows
+    the project's own grant is live under `/tmp`.
     """
-    import shutil
-    import uuid
-
     from rite_ai.managers.mailbox import INBOX, OUTBOX, mailbox_dir
 
-    home = Path.home() / f".rite-landlock-test-{uuid.uuid4().hex[:8]}"
-    if str(home.resolve()).startswith(("/tmp", "/var/tmp")):
-        pytest.skip(f"HOME is under a temp grant ({home}), so nothing is measured")
-    monkeypatch.setenv("RITE_HOME_DIR", str(home))
-    # The mail's own location since DF3, placed where the temp grants do not
-    # reach — as it is in a real install, under the data directory.
-    monkeypatch.setenv("RITE_MAIL_DIR", str(home / "mail"))
-    try:
-        project = tmp_path / "proj"
-        (project / "src").mkdir(parents=True)
-        for name in ("lead", "helper"):
-            mailbox_dir(project, name, INBOX).mkdir(parents=True)
-            mailbox_dir(project, name, OUTBOX).mkdir(parents=True)
-        policy = landlock.compose_policy(project, "lead", tmp_path / "home")
-        assert any(w in ("/tmp", "/var/tmp") for w in policy["writable"]), (
-            "the temp grants are gone — this test's control no longer holds"
-        )
-        assert str(tmp_path).startswith(("/tmp", "/var/tmp")), (
-            f"tmp_path is {tmp_path}, not under a granted tree: nothing measured"
-        )
+    assert str(tmp_path).startswith(("/tmp", "/var/tmp")), (
+        f"tmp_path is {tmp_path}, not under a temp root: nothing measured"
+    )
+    monkeypatch.setenv("RITE_MAIL_DIR", str(tmp_path / "data" / "mail"))
+    project = tmp_path / "proj"
+    (project / "src").mkdir(parents=True)
+    for name in ("lead", "helper"):
+        mailbox_dir(project, name, INBOX).mkdir(parents=True)
+        mailbox_dir(project, name, OUTBOX).mkdir(parents=True)
+    elsewhere = tmp_path / "another-worktree"
+    elsewhere.mkdir()
+    policy = landlock.compose_policy(project, "lead", tmp_path / "home")
+    assert not any(w in ("/tmp", "/var/tmp") for w in policy["writable"]), (
+        "the wholesale temp grants are back; no fence holds under them"
+    )
 
-        def writes(target):
-            def child():
-                landlock.apply(policy)
-                try:
-                    (Path(target) / ".probe").write_text("x")
-                    return 0
-                except OSError:
-                    return 1
+    def writes(target):
+        def child():
+            landlock.apply(policy)
+            try:
+                (Path(target) / ".probe").write_text("x")
+                return 0
+            except OSError:
+                return 1
 
-            return _in_child(child) == 0
+        return _in_child(child) == 0
 
-        assert writes(project / "src"), "control: the /tmp grant is not live"
-        assert not writes(mailbox_dir(project, "helper", INBOX))
-        assert not writes(mailbox_dir(project, "lead", INBOX))
-        assert writes(mailbox_dir(project, "lead", OUTBOX)), "cannot reply"
-    finally:
-        shutil.rmtree(home, ignore_errors=True)
+    assert writes(project / "src"), "control: the project's own grant is not live"
+    assert not writes(elsewhere), "a directory under /tmp outside the project"
+    assert not writes(mailbox_dir(project, "helper", INBOX))
+    assert not writes(mailbox_dir(project, "lead", INBOX))
+    assert writes(mailbox_dir(project, "lead", OUTBOX)), "cannot reply"
 
 
 class TestP2BetweenTwoManagersSharingARoot:
@@ -752,12 +706,11 @@ class TestTheManagersCredentialsInsideTheBoundary:
 
     @staticmethod
     def _inside(policy, fn) -> int:
-        # ⚠ The credential directory lands under `/tmp` in a test, and the
-        # wholesale temp grant would override every narrow grant here — see
-        # `without_wholesale_temp_grants`. Measured: without this, a third file
-        # is readable and the login is overwritable.
+        # The credential directory lands under `/tmp` in a test. Before SB11
+        # the wholesale temp grant overrode every narrow grant here: measured,
+        # a third file was readable and the login overwritable.
         def child():
-            landlock.apply(without_wholesale_temp_grants(policy))
+            landlock.apply(policy)
             return fn()
 
         return _in_child(child)
@@ -862,6 +815,47 @@ class TestTheManagersCredentialsInsideTheBoundary:
             "next start refuses and reads as rite being broken"
         )
 
+    def test_no_manager_can_rewrite_a_policy_the_launcher_applies(self, tmp_path):
+        """⚠ The launcher reads the policy file and applies what it says, so
+        the file IS the boundary. It used to be written into `.rite/user/`,
+        which every Manager can write (measured on macOS: a secondary
+        replacing the Owner's took its verifier out of the sandbox, 19 of 20).
+        Now it is in the credential directory, which no policy grants: the
+        Owner cannot rewrite its own, and a secondary cannot rewrite the
+        Owner's. The control is the old location, which the secondary can."""
+        root, home, _cdir = self._laid_out(tmp_path)
+        own = landlock.policy_path(root, "lead", home)
+        own.parent.mkdir(parents=True, exist_ok=True)
+        own.write_text("{}")
+        old = root / ".rite" / "user" / landlock.PROFILE_DIRNAME / "lead.json"
+        old.parent.mkdir(parents=True, exist_ok=True)
+        old.write_text("{}")
+        assert not own.is_relative_to(root)
+
+        def writes(path):
+            def attempt():
+                try:
+                    Path(path).write_text("{}")
+                    return 1
+                except OSError:
+                    return 0
+
+            return attempt
+
+        owner_policy = landlock.compose_policy(root, "lead", home)
+        (root / ".rite" / "managers" / "small").mkdir(parents=True)
+        secondary_policy = landlock.compose_policy(root, "small", home)
+        assert self._inside(owner_policy, writes(own)) == 0, (
+            "a Manager can rewrite the policy its next launch applies"
+        )
+        assert self._inside(secondary_policy, writes(own)) == 0, (
+            "a secondary can rewrite the Owner's policy"
+        )
+        assert self._inside(secondary_policy, writes(old)) == 1, (
+            "the old location is not writable here, so this test no longer "
+            "shows why the policy moved"
+        )
+
 
 @NO_LANDLOCK
 def test_a_manager_cannot_read_another_managers_mail(tmp_path, monkeypatch):
@@ -872,9 +866,7 @@ def test_a_manager_cannot_read_another_managers_mail(tmp_path, monkeypatch):
 
     The HOME is laid out as a real one is, `.rite` included, and `~/.rite` is
     no longer granted at all — it lists every registered project's path. The
-    temp grants are dropped because `tmp_path` is under them
-    (`without_wholesale_temp_grants`). The control reads the Manager's own
-    mail under the same ruleset.
+    control reads the Manager's own mail under the same ruleset.
     """
     import rite_ai.managers.github_access as ga
     from rite_ai.managers.mailbox import INBOX, OUTBOX, mail_root, mailbox_dir, send
@@ -896,7 +888,7 @@ def test_a_manager_cannot_read_another_managers_mail(tmp_path, monkeypatch):
             send(root, name, INBOX, f"secret for {name}")
             (mailbox_dir(root, name, OUTBOX) / "1_1_1.json").write_text("{}")
     assert not mail_root(one, "lead").is_relative_to(home / ".rite")
-    policy = without_wholesale_temp_grants(landlock.compose_policy(one, "helper", home))
+    policy = landlock.compose_policy(one, "helper", home)
     assert str(home / ".rite") not in policy["readable"], "rite's home is granted"
 
     def reads(target):
@@ -923,3 +915,181 @@ def test_a_manager_cannot_read_another_managers_mail(tmp_path, monkeypatch):
     assert not reads(one_message(one, "lead", OUTBOX))
     assert not reads(one_message(two, "lead", INBOX))
     assert not reads(mail_root(two, "lead").parent.parent)
+
+
+@NO_LANDLOCK
+def test_a_managers_own_state_is_its_own_outside_the_project(tmp_path, monkeypatch):
+    """MM8, the Linux half, against the kernel. A Manager's own directory is
+    outside the project now (`managers.manager_dir`), granted by path: its
+    own is writable, a sibling's is neither writable nor readable. The
+    sibling's `routes/` carry the Owner's authority, which is why this is P1
+    and not tidiness."""
+    from rite_ai.managers import manager_dir
+
+    monkeypatch.setenv("RITE_MAIL_DIR", str(tmp_path / "data" / "mail"))
+    root = tmp_path / "proj"
+    (root / ".rite").mkdir(parents=True)
+    theirs = manager_dir(root, "lead")
+    (theirs / "routes").mkdir(parents=True)
+    (theirs / "routes" / "r.json").write_text("{}")
+    (theirs / "prompt.txt").write_text("the lead's instruction")
+    landlock.write_profile(root, "small", tmp_path / "home")
+    policy = landlock.compose_policy(root, "small", tmp_path / "home")
+    own = manager_dir(root, "small")
+
+    def can(action):
+        def child():
+            landlock.apply(policy)
+            try:
+                action()
+                return 0
+            except OSError:
+                return 1
+
+        return _in_child(child) == 0
+
+    assert can(lambda: (own / "written").write_text("x")), "control: own state"
+    assert not can(lambda: (theirs / "routes" / "forged.json").write_text("{}"))
+    assert not can(lambda: (theirs / "prompt.txt").read_text())
+    assert not own.is_relative_to(root)
+
+
+@NO_LANDLOCK
+def test_a_linux_manager_creates_a_new_top_level_file_in_its_project(
+    tmp_path, monkeypatch
+):
+    """D17's done-when, against the kernel (MM8 piece 2). Landlock has no deny
+    rule, so keeping one Manager out of another's in-tree directory meant
+    enumerating the project root, and a new top-level entry was refused
+    (measured 2026-09-26: `mkdir /proj/newtopdir` raised PermissionError).
+    Since piece 1 no Manager's state is in the tree, so the project is
+    granted as one tree, and one Manager still cannot write another's routes,
+    which are outside it now."""
+    from rite_ai.managers import manager_dir
+
+    monkeypatch.setenv("RITE_MAIL_DIR", str(tmp_path / "data" / "mail"))
+    root = tmp_path / "proj"
+    (root / "src").mkdir(parents=True)
+    (root / ".rite" / "managers" / "lead").mkdir(parents=True)  # an old layout
+    theirs = manager_dir(root, "lead")
+    (theirs / "routes").mkdir(parents=True)
+    landlock.write_profile(root, "small", tmp_path / "home")
+    policy = landlock.compose_policy(root, "small", tmp_path / "home")
+
+    def can(action):
+        def child():
+            landlock.apply(policy)
+            try:
+                action()
+                return 0
+            except OSError:
+                return 1
+
+        return _in_child(child) == 0
+
+    assert can(lambda: (root / "NEW_TOP_LEVEL.md").write_text("x"))
+    assert can(lambda: (root / "newtopdir").mkdir())
+    assert can(lambda: (root / "src" / "a.py").write_text("x")), "control"
+    assert not can(lambda: (theirs / "routes" / "forged.json").write_text("{}"))
+
+
+@NO_LANDLOCK
+class TestNoManagerReadsTheRefinementKey:
+    """The key that signs refinement records, from inside a Linux Manager.
+
+    What stops a Manager writing its own "agreed definition of done" is that
+    it cannot read this key (`refinement/key.py`). Measured on macOS for a
+    Manager and a yoloAI Worker on 2026-09-29; this is the Landlock half, run
+    by CI's "Landlock probes" step on a kernel we do not own.
+
+    SB12's method: a FAKE key where production puts it (beside the
+    credential root, relative to the same HOME the policy is composed with),
+    the boundary shown active, and a control proving the probe would have
+    found the key had it been readable: the same bytes in a file the
+    Manager IS granted, read by the same function.
+    """
+
+    FAKE = b"FAKEKEY-TR0-LINUX-PROBE-NOT-KEY!"
+
+    def _laid_out(self, tmp_path, monkeypatch):
+        from rite_ai.managers import github_access
+        from rite_ai.refinement import key as refinement_key
+
+        root = tmp_path / "proj"
+        (root / "src").mkdir(parents=True)
+        (root / ".rite" / "user").mkdir(parents=True)
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.delenv(refinement_key.KEY_DIR_ENV, raising=False)
+        real = github_access._credential_root
+        monkeypatch.setattr(
+            github_access, "_credential_root", lambda h=None: real(h or home)
+        )
+        key = refinement_key.key_path()
+        assert key.is_relative_to(home), "the key is not where production puts it"
+        key.parent.mkdir(parents=True, mode=0o700)
+        key.write_bytes(self.FAKE)
+        key.chmod(0o600)
+        control = root / "src" / "control-key"
+        control.write_bytes(self.FAKE)
+        return root, home, key, control
+
+    @staticmethod
+    def _inside(policy, fn) -> int:
+        def child():
+            landlock.apply(policy)
+            return fn()
+
+        return _in_child(child)
+
+    @staticmethod
+    def _reads(path) -> bool:
+        try:
+            return Path(path).read_bytes() == TestNoManagerReadsTheRefinementKey.FAKE
+        except OSError:
+            return False
+
+    def test_the_control_proves_the_probe_would_find_a_readable_key(
+        self, tmp_path, monkeypatch
+    ):
+        root, home, key, control = self._laid_out(tmp_path, monkeypatch)
+        policy = landlock.compose_policy(root, "lead", home)
+        assert self._reads(key), "control: the key is readable outside the boundary"
+        outcome = self._inside(policy, lambda: 0 if self._reads(control) else 1)
+        assert outcome == 0, (
+            "the same bytes in a granted file could not be read, so a refusal "
+            "below would prove nothing"
+        )
+
+    def test_the_boundary_is_active(self, tmp_path, monkeypatch):
+        root, home, key, control = self._laid_out(tmp_path, monkeypatch)
+        policy = landlock.compose_policy(root, "lead", home)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        outcome = self._inside(policy, lambda: 1 if _can_write(outside) else 0)
+        assert outcome == 0, "a write outside the Manager's boundary succeeded"
+
+    def test_a_manager_cannot_read_the_key(self, tmp_path, monkeypatch):
+        root, home, key, control = self._laid_out(tmp_path, monkeypatch)
+        policy = landlock.compose_policy(root, "lead", home)
+        outcome = self._inside(policy, lambda: 1 if self._reads(key) else 0)
+        assert outcome == 0, (
+            "a Manager can read the refinement key, so it can sign its own "
+            "definition of done: the design's central property does not hold"
+        )
+
+    def test_a_manager_cannot_list_or_plant_beside_the_key(self, tmp_path, monkeypatch):
+        root, home, key, control = self._laid_out(tmp_path, monkeypatch)
+        policy = landlock.compose_policy(root, "lead", home)
+
+        def attempt():
+            try:
+                os.listdir(key.parent)
+                return 1
+            except OSError:
+                pass
+            return 2 if _can_write(key.parent) else 0
+
+        outcome = self._inside(policy, attempt)
+        assert outcome != 1, "a Manager can list the key's directory"
+        assert outcome != 2, "a Manager can write beside the key"

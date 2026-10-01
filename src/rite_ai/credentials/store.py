@@ -80,6 +80,10 @@ KNOWN_CREDENTIALS: dict[str, str] = {
     "claude_token": (
         "Claude Code OAuth token — from `claude setup-token`, for sandboxed Workers"
     ),
+    "cursor_api_key": (
+        "Cursor API key — for a Cursor Manager or Worker; never put on a "
+        "Worker's command line"
+    ),
     "github_app_key": (
         "GitHub App private key (PEM) — mints a sandboxed Manager's one-hour, "
         "one-repository token; stays outside the sandbox. Set with --stdin"
@@ -445,12 +449,20 @@ def warn_if_global(key: str, credentials: object | None = None) -> str | None:
     """
     if key in _WARNED_GLOBAL:
         return None
-    r = resolve(key, credentials)
+    try:
+        r = resolve(key, credentials)
+    except CredentialStoreError:
+        # ⚠ Which tier a key resolves at cannot be told from a store that
+        # cannot be read, so there is nothing to warn about HERE; whoever
+        # reads the value meets the same store and says why (live run
+        # finding S25: inside a Manager's sandbox this raised out of every
+        # board, status and loop command as a traceback).
+        return None
     if r.tier != GLOBAL or r.project_account == r.global_account:
         return None
     _WARNED_GLOBAL.add(key)
     message = (
-        f"warning: '{key}' is resolving to the machine-global keychain entry "
+        f"warning: '{key}' is resolving to the machine-global credential entry "
         f"'{r.global_account}', which is shared with every other project on "
         f"this machine. This project expects '{r.project_account}'. "
         f"Move it with `rite credential migrate {key}`."
@@ -459,43 +471,53 @@ def warn_if_global(key: str, credentials: object | None = None) -> str | None:
     return message
 
 
-def worker_environment(
-    credentials: object | None = None, worker_token: str | None = None
-) -> dict[str, str]:
-    """Every credential a Worker receives, as env var -> value (§5.3.4).
+# The services whose credentials a Worker receives: Claude, the engine every
+# Worker runs (`start_worker` passes `--agent claude`). Nothing else.
+#
+# ⚠ **Not GitHub, since 2026-09-29 (Robert: "push and PR are the
+# deterministic code's job").** rite clones and fetches on the host before
+# the sandbox starts (`rite prepare`), and `rite deliver` collects the
+# Worker's commits and pushes and opens the pull request on the host, with a
+# token it resolves there (`publishing/deliver.py`). Nothing a Worker is told
+# to do needs GitHub, and in the two Worker transcripts on this machine no
+# Worker ran git fetch/pull/push/clone/remote or gh at all. A token in the
+# sandbox could only let a Worker push, open a pull request — upstream too —
+# or merge, which only instructions forbade.
+WORKER_SERVICES: tuple[str, ...] = ("claude",)
 
-    **Every Worker gets every credential the project holds.** Not a
-    subset: Workers are fungible, and a Worker that lacked a credential
-    another had would differ in capability, which forces whatever assigns
-    tickets to reason about which Worker CAN do a job rather than which
-    is free.
+
+def worker_environment(credentials: object | None = None) -> dict[str, str]:
+    """The credentials a Worker receives, as env var -> value (§5.3.4).
+
+    ⚠ **Only `WORKER_SERVICES`, never "every credential the project holds".**
+    That was the rule until 2026-09-29, when Robert reversed it ("Narrow it
+    down") on this evidence: the pingr Worker proof's launch line carried
+    `SLACK_BOT_TOKEN`, `JIRA_API_TOKEN` and `JIRA_EMAIL`, none of which a
+    Worker uses, and SB12 measured that a sandbox's environment is readable
+    from other sandboxes on the same machine. Each credential here is also
+    written by yoloAI into files inside the sandbox until `destroy`. So a
+    service is added to `WORKER_SERVICES` only when a Worker is shown to
+    need it — do not restore the old rule as a fix for a Worker that lacks
+    something.
+
+    Workers stay fungible: every Worker gets the same set, so assignment
+    still never asks which Worker CAN do a job.
 
     Each env var name comes from the service field's own `env`, so rite
-    delivers `JIRA_API_TOKEN` rather than a name of its own invention —
-    the §10.5 boundary: rite stores and injects, and does not interpret.
-
-    `worker_token` is that Worker's own git token and takes precedence
-    for `GITHUB_TOKEN`. It is still one credential per Worker (§5.3.3);
-    what the fungibility decision changed is the scope they share, not
-    the count.
-
-    ⚠ Every entry here is a secret yoloAI 0.11.0 writes into four files
-    inside the sandbox, surviving `stop` and cleared only by `destroy`
-    (measured; §5.3.4). This function returning more is a real increase
-    in blast radius, which is the cost the decision accepted.
+    delivers `GITHUB_TOKEN` rather than a name of its own invention — the
+    §10.5 boundary: rite stores and injects, and does not interpret.
     """
     from rite_ai.credentials.services import SERVICES, service_key
 
     env: dict[str, str] = {}
-    for svc in SERVICES.values():
+    for name in WORKER_SERVICES:
+        svc = SERVICES[name]
         for field in svc.secrets:
             if not field.env:
                 continue
             value = get_scoped(service_key(svc.name, field.name), credentials)
             if value:
                 env[field.env] = value
-    if worker_token:
-        env["GITHUB_TOKEN"] = worker_token
     return env
 
 
@@ -694,3 +716,112 @@ def list_for_rotation() -> list[RotationEntry]:
         for name, ts in registry.items()
     ]
     return sorted(entries, key=lambda e: e.name)
+
+
+# --- Which namespace belongs to which project (S18) ---
+#
+# A re-init (a reset, or `rm -rf` and a fresh clone) used to mint a fresh
+# namespace every time, orphaning every credential stored under the old one,
+# with nothing said (v0.7.0 dogfood S18). "The same project" is identified by
+# its modules' git remote URLs: the one identity that survives the project
+# directory being deleted and cloned again. The project's name does not
+# (renamed, or `my-project` twice), nor does its path (moved, re-cloned).
+#
+# `~/.rite/namespaces.json` records, for each namespace, the remotes of the
+# project that recorded it. It is written by `rite init` and `rite credential
+# set`; it holds no secret and no account name, only which namespace a
+# repository's project used. Machine-wide and advisory: init OFFERS a match,
+# and never reuses one silently.
+
+NAMESPACES_FILENAME = "namespaces.json"
+
+
+def _namespaces_path() -> Path:
+    return default_rite_home() / NAMESPACES_FILENAME
+
+
+def normalise_remote(url: str) -> str:
+    """A remote URL reduced to `host/owner/repo`, so the forms one repository
+    is cloned by compare equal: `https://github.com/O/r.git`,
+    `git@github.com:o/r`, `ssh://git@github.com/o/r/`. A local path stays a
+    path. "" for nothing."""
+    u = (url or "").strip()
+    if not u:
+        return ""
+    m = re.match(r"^[a-z][a-z0-9+.-]*://(?:[^@/]+@)?([^/:]+)(?::\d+)?/(.+)$", u, re.I)
+    if m is None:
+        m = re.match(r"^(?:[^@/]+@)?([^/:]+):(?!/)(.+)$", u)
+    if m is None:
+        return u.rstrip("/").removesuffix(".git")
+    host, path = m.group(1), m.group(2)
+    return f"{host}/{path}".rstrip("/").removesuffix(".git").lower()
+
+
+def remember_namespace(namespace: str, remotes: list[str], project: str = "") -> str:
+    """Record that `namespace` is the project whose modules are `remotes`.
+    Returns "" or why it could not be written (never raises: a record that
+    cannot be written must not fail the command writing it)."""
+    wanted = sorted({normalise_remote(r) for r in remotes if normalise_remote(r)})
+    if not namespace or not wanted:
+        return ""
+    path = _namespaces_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with locked(path):
+            try:
+                data = json.loads(path.read_text()) if path.is_file() else {}
+            except json.JSONDecodeError:
+                return f"{path} is not readable JSON; left as it is"
+            if not isinstance(data, dict):
+                return f"{path} is not a JSON object; left as it is"
+            entry = data.get(namespace) if isinstance(data.get(namespace), dict) else {}
+            known = set(entry.get("remotes") or [])
+            data[namespace] = {
+                "remotes": sorted(known | set(wanted)),
+                "project": project or entry.get("project", ""),
+                "noted_at": time.time(),
+            }
+            write_atomic(path, json.dumps(data, indent=1, sort_keys=True) + "\n")
+    except OSError as e:
+        return f"could not record the namespace in {path} ({e})"
+    return ""
+
+
+@dataclass(frozen=True)
+class NamespaceMatch:
+    namespace: str
+    project: str
+    keys: tuple[str, ...]
+    """The credentials stored under it, by key: what reusing it brings back."""
+
+
+def namespaces_for(remotes: list[str]) -> list[NamespaceMatch]:
+    """Namespaces recorded for a project sharing any of `remotes`, that still
+    hold at least one stored credential; newest first. An unreadable record
+    or registry reads as no match: this only ever feeds an offer."""
+    wanted = {normalise_remote(r) for r in remotes if normalise_remote(r)}
+    if not wanted:
+        return []
+    try:
+        data = json.loads(_namespaces_path().read_text())
+        registry = _read_registry()
+    except (OSError, json.JSONDecodeError, RegistryUnreadable):
+        return []
+    if not isinstance(data, dict):
+        return []
+    found = []
+    for ns, entry in data.items():
+        if not isinstance(entry, dict) or not is_valid_namespace(ns):
+            continue
+        if not wanted & set(entry.get("remotes") or []):
+            continue
+        prefix = f"{ns}{NAMESPACE_SEPARATOR}"
+        keys = tuple(sorted(a[len(prefix) :] for a in registry if a.startswith(prefix)))
+        if keys:
+            found.append(
+                (
+                    entry.get("noted_at", 0),
+                    NamespaceMatch(ns, str(entry.get("project", "")), keys),
+                )
+            )
+    return [m for _, m in sorted(found, key=lambda x: -float(x[0] or 0))]

@@ -32,22 +32,26 @@ def _resolves(mapping):
     )
 
 
-class TestEveryWorkerGetsEveryCredential:
-    def test_all_project_credentials_are_delivered(self):
+class TestEveryWorkerGetsTheSameNarrowSet:
+    def test_only_the_engine_is_delivered(self):
+        """Every Worker gets the SAME credentials (fungible), and since
+        2026-09-29 only what a Worker needs: its engine's login. Jira and
+        Slack are held by the project and never delivered (§5.3.4); nor,
+        since rite pushes and opens the pull request on the host, is GitHub
+        (Robert, 2026-09-29: "push and PR are the deterministic code's
+        job")."""
         with _resolves(
             {
                 "jira_email": "me@example.com",
                 "jira_token": "JT",
+                "slack_bot_token": "xoxb-S",
                 "github_token": "GT",
+                "claude_token": "CT",
             }
         ):
             env = worker_environment(CredentialsConfig(namespace=NS))
 
-        assert env == {
-            "JIRA_EMAIL": "me@example.com",
-            "JIRA_API_TOKEN": "JT",
-            "GITHUB_TOKEN": "GT",
-        }
+        assert env == {"CLAUDE_CODE_OAUTH_TOKEN": "CT"}
 
     def test_the_env_names_come_from_the_service_definition(self):
         """rite delivers `JIRA_API_TOKEN`, the name the service declares —
@@ -65,33 +69,26 @@ class TestEveryWorkerGetsEveryCredential:
         treat it as configured and fail somewhere further away."""
         with _resolves({"github_token": "GT"}):
             env = worker_environment(CredentialsConfig(namespace=NS))
-        assert env == {"GITHUB_TOKEN": "GT"}
+        assert env == {}
         assert "JIRA_API_TOKEN" not in env
-
-    def test_the_workers_own_git_token_wins_over_the_machine_global_one(self):
-        """Still one token per Worker (§5.3.3) — the fungibility decision
-        changed the SCOPE they share, not the count. A compromise stays
-        attributable to one Worker."""
-        with _resolves({"github_token": "MACHINE-GLOBAL"}):
-            env = worker_environment(
-                CredentialsConfig(namespace=NS), worker_token="THIS-WORKERS-OWN"
-            )
-        assert env["GITHUB_TOKEN"] == "THIS-WORKERS-OWN"
 
     def test_two_workers_on_one_project_receive_identical_sets(self):
         """THE PROPERTY. Fungibility means any worker can take any ticket, so
         their credential sets must not differ — if this ever fails, assignment
         has acquired a matching problem."""
         creds = CredentialsConfig(namespace=NS)
-        with _resolves({"jira_email": "e", "jira_token": "t", "github_token": "g"}):
-            w1 = worker_environment(creds, worker_token="w1-token")
-            w2 = worker_environment(creds, worker_token="w2-token")
-        assert set(w1) == set(w2)
-        # Identical in what they can REACH; distinct only in whose token it is.
-        assert w1["GITHUB_TOKEN"] != w2["GITHUB_TOKEN"]
-        assert {k: v for k, v in w1.items() if k != "GITHUB_TOKEN"} == {
-            k: v for k, v in w2.items() if k != "GITHUB_TOKEN"
-        }
+        with _resolves(
+            {
+                "jira_email": "e",
+                "jira_token": "t",
+                "github_token": "g",
+                "claude_token": "c",
+            }
+        ):
+            w1 = worker_environment(creds)
+            w2 = worker_environment(creds)
+        assert w1 == w2
+        assert "GITHUB_TOKEN" not in w1
 
 
 class TestTheProvisioningPromptAsksForProjectScope:

@@ -33,6 +33,8 @@ from rite_ai import own_command
 from rite_ai.managers.mailbox import OUTBOX, how_to_reply, read
 from rite_ai.managers.prompt import for_manager
 
+PROJECT = Path("/projects/acme")  # for_manager needs the root: MM8
+
 
 class TestItResolvesThisInstall:
     def test_it_is_an_absolute_path_that_exists(self):
@@ -66,7 +68,7 @@ class TestTheInstructionsNameIt:
         assert "  rite reply --manager" not in how_to_reply(tmp_path, "lead")
 
     def test_the_opening_prompt_does_too(self):
-        said = for_manager("lead")
+        said = for_manager("lead", root=PROJECT)
         assert own_command() in said
 
     def test_what_the_USER_runs_is_still_a_bare_name(self, tmp_path):
@@ -129,11 +131,10 @@ class TestAManagerWithAnOlderRiteOnPathStillSucceeds:
         assert "Usage: rite" in (bare.stdout or "") + (bare.stderr or "")
 
         # What rite writes now, against the SAME PATH.
-        line = next(
-            line.strip()
-            for line in how_to_reply(root, "lead").splitlines()
-            if "reply --manager" in line
-        )
+        # F14: a heredoc, three lines, the text on stdin.
+        said = how_to_reply(root, "lead").splitlines()
+        at = next(i for i, line in enumerate(said) if "reply --manager" in line)
+        line = "\n".join(said[at : at + 3])
         run = subprocess.run(
             ["sh", "-c", line.replace("<your message>", message)],
             capture_output=True,

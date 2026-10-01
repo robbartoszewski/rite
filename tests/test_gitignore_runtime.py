@@ -37,7 +37,8 @@ RUNTIME_PATHS = (
     ".rite/schedule-state.json",
     ".rite/scheduler.log",
     ".rite/scheduler.log.1",
-    ".rite/scheduler.lock",
+    ".rite/scheduler.lock",  # 0.6.0's tick lock, left behind by an upgrade
+    ".rite/scheduler-tick.lock",
     ".rite/scheduler-last-tick",  # added by a later commit; also missed
     ".rite/kb/.cache/example-com.md",
     "workers/alpha/worker.yml",  # this machine's clones of the modules

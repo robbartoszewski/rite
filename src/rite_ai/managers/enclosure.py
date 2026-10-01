@@ -42,20 +42,43 @@ from rite_ai.managers import github_access, user_dir
 from rite_ai.names import name_problem
 
 PROFILE_SUFFIX = ".sb"
+BOUNDARY_DIRNAME = "boundary"
+"""Where a Manager's boundary file lives, inside its credential directory."""
 ENGINE_TMP_DIRNAME = "enginetmp"
 
 
-def profile_path(root: Path, manager: str) -> Path:
-    """Where this Manager's profile is written.
+def profile_path(root: Path, manager: str, home: Path | None = None) -> Path:
+    """Where this Manager's profile is written: per-user, per-machine, never
+    committed. What a Manager may reach on THIS machine is a local fact, and
+    the absolute paths inside the profile make it meaningless anywhere else.
 
-    Under `user_dir` with the instance records and the permission list:
-    per-user, per-machine, never committed. What a Manager may reach on THIS
-    machine is a local fact, and the absolute paths inside the profile make
-    it meaningless anywhere else.
+    ⚠ **NOT UNDER `.rite/user/`, WHICH EVERY MANAGER CAN WRITE.** A boundary
+    must not be writable by anything it bounds, or by a peer. The file used to
+    be written to `.rite/user/`, which is writable across Managers on both
+    platforms (SPEC §5.4.8), and read by the launcher a moment later. So a
+    peer could replace a Manager's boundary between the two: measured on
+    macOS, a loop inside a SECONDARY's real profile replacing the Owner's
+    `.sb` with `(allow default)` took the Owner's verifier out of its sandbox
+    in 19 of 20 runs. A Manager's own launch reads its profile the same way
+    (read from the code, not run), and Linux's launcher reads its policy the
+    same way (not measured: no Linux box was reachable).
+    It now lives in the Manager's own credential directory, under no path any
+    Manager's profile grants, beside the login rite writes there. A copy left
+    in `.rite/user/` by an older build is removed when this is written, so
+    nothing mistakes it for the one in force.
     """
     problem = name_problem(manager, kind="manager name", must_be_a_tmux_target=True)
     if problem:
         raise ValueError(f"refusing to build a profile path: {problem}")
+    return (
+        github_access._credential_dir(root, manager, home)  # noqa: PLC2701
+        / BOUNDARY_DIRNAME
+        / f"{manager}{PROFILE_SUFFIX}"
+    )
+
+
+def _legacy_profile_path(root: Path, manager: str) -> Path:
+    """Where builds before the move wrote the profile (`profile_path`)."""
     return user_dir(root) / f"{manager}{PROFILE_SUFFIX}"
 
 
@@ -188,6 +211,12 @@ def _tool_paths(home: Path) -> tuple[Path, ...]:
             # Claude Manager now signs in from a config directory of its own
             # (`claude_login`), measured to work with no `~/.claude` grant.
             ".config/goose",
+            # Cursor's `agent` launcher and the `node` it runs live here; the
+            # symlink in `~/.local/bin` points into it. Measured (CU1 section
+            # 4): without it a launch exits 126, "Operation not permitted".
+            # Read-only, and it holds no credential: Cursor's login and state
+            # are per-Manager (`cursor_login`), and `~/.cursor` is NOT granted.
+            ".local/share/cursor-agent",
             # ⚠ **`~/.rite` is NOT granted any more (DF3).** It was granted
             # readable as a tree with B9, with no reason recorded, and it
             # holds `dispatch/projects.yaml` — every registered project's
@@ -315,18 +344,25 @@ def _manager_separation(project: Path, manager: str) -> list[str]:
     Manager could read every Manager's mail, for every project on the
     machine. `~/.rite` is no longer granted at all (`_tool_paths`).
     """
+    from rite_ai.managers import manager_dir
     from rite_ai.managers.mailbox import INBOX, OUTBOX, mail_root
 
     managers = project / ".rite" / "managers"
-    own = managers / manager
+    # ⚠ SINCE MM8 a Manager's own directory is OUTSIDE the project, beside its
+    # mail (`managers.manager_dir`), and granted by exact path: another
+    # Manager's is under no rule here, so `(deny default)` refuses it. The
+    # in-tree `.rite/managers/` is still denied, for whatever an older rite
+    # left there.
     # Resolved, because seatbelt matches the path the kernel resolved: a
     # rite home reached through a symlink would otherwise grant nothing.
+    own = manager_dir(project, manager).resolve()
     mail = mail_root(project, manager).resolve()
     return [
         "; ⚠ MANAGERS ARE SEPARATED, and no Manager writes an inbox — see",
         ";   enclosure._manager_separation. Named after the project grant so",
         ";   they win.",
         f"(deny file-read* file-write* (subpath {_quote(managers)}))",
+        "; This Manager's own directory, outside the project (MM8).",
         f"(allow file-read* file-write* (subpath {_quote(own)}))",
         "; This Manager's mailbox, outside the project: its outbox only.",
         f"(allow file-read* (subpath {_quote(mail)}))",
@@ -564,16 +600,21 @@ def write_profile(root: Path, manager: str, home: Path | None = None) -> Path:
     was created, so widening or narrowing the surface in a later release
     would reach new projects only.
     """
-    path = profile_path(root, manager)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path = profile_path(root, manager, home)
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    _legacy_profile_path(root, manager).unlink(missing_ok=True)
     engine_tmp(root, manager).mkdir(parents=True, exist_ok=True)
     # ⚠ The outbox is CREATED here, outside the boundary: the Manager is
     # granted the outbox and not its parents, so from inside it could not
     # make the directory it is allowed to write.
+    from rite_ai.managers import manager_dir
     from rite_ai.managers.mailbox import INBOX, OUTBOX, mailbox_dir
 
     for box in (OUTBOX, INBOX):
         mailbox_dir(root, manager, box).mkdir(parents=True, exist_ok=True)
+    # And its own directory (MM8), for the same reason: granted, not creatable
+    # from inside, since its parent is not granted.
+    manager_dir(root, manager).mkdir(parents=True, exist_ok=True)
     path.write_text(compose(root, manager, home) + "\n")
     return path
 

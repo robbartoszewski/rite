@@ -109,8 +109,17 @@ def test_force_release_persists_an_audit_record(tmp_path: Path):
     assert len(audit) == 1
     assert audit[0]["by"] == "admin"
     assert audit[0]["reason"] == "stale claim"
+    # `manager` since MM3: the audit trail answers "why did my claim
+    # disappear", and with two Managers in one checkout "who released it"
+    # is no longer answered by `by` alone — `by` is a string the caller
+    # chose, this is the Manager the claim was made under.
     assert audit[0]["released"] == [
-        {"worker": "worker-1", "paths": ["src/a.ts"], "ticket": "T-1"}
+        {
+            "worker": "worker-1",
+            "paths": ["src/a.ts"],
+            "ticket": "T-1",
+            "manager": "",
+        }
     ]
 
 

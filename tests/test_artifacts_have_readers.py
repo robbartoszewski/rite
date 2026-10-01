@@ -73,12 +73,18 @@ def test_a_worker_is_told_to_claim_beat_and_read_its_ticket_in_its_own_file(tmp_
     assert "rite heartbeat --worker alpha --ticket <id>" in md
     assert "refused" in md and "narrower or wider path" in md
     assert "## Your ticket" in md
-    assert "rite release --worker alpha" in md
-    # A sandboxed Worker's checkout is a copy thrown away with the sandbox:
-    # the only way its work survives is a push.
-    assert "git push -u origin" in md
+    # A sandboxed Worker's checkout is a copy thrown away with the sandbox.
+    # Its work used to survive only by the Worker pushing; since PB1 it
+    # survives by being committed on the ticket branch and collected by
+    # `rite deliver`, and whether anything is pushed is the project's
+    # strategy, told per start in TICKET.md, not the Worker's choice.
     assert "git checkout -b <ticket-id>" in md
-    assert "after every commit" in md
+    assert "Commit as you go" in md
+    assert "**Publishing**" in md and "TICKET.md" in md
+    assert "Never merge a pull request yourself" in md
+    # Claims are released by rite when the work lands (PB1), and the Worker
+    # is told so rather than told to release them itself.
+    assert "do not release it yourself" in md
 
 
 def test_the_worker_gets_every_agent_its_review_command_names(tmp_path):

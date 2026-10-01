@@ -23,6 +23,7 @@ from unittest.mock import patch
 import pytest
 from click.testing import CliRunner
 
+from rite_ai.claims.ledger import ClaimsLedger
 from rite_ai.cli.main import cli
 from rite_ai.lifecycle.commands import perform_handover, stop
 from rite_ai.reporting.outbox import list_pending
@@ -515,6 +516,10 @@ class TestHandoverActuallyUnassigns:
         workers → resume" — so the handover handed the work back to
         itself."""
         root = _project(tmp_path)
+        # A handover hands over what it RELEASES, so alpha holds ABC-1.
+        ClaimsLedger(root / ".rite" / "claims.json").claim(
+            ["src/app.py"], "alpha", "ABC-1"
+        )
         backend = mock_create.return_value
         backend.comment.return_value = None
         backend.label.return_value = None
@@ -527,6 +532,10 @@ class TestHandoverActuallyUnassigns:
     @patch("rite_ai.lifecycle.commands.create_backend_from_config")
     def test_the_queued_retry_carries_the_removal_too(self, mock_create, tmp_path):
         root = _project(tmp_path)
+        # A handover hands over what it RELEASES, so alpha holds ABC-1.
+        ClaimsLedger(root / ".rite" / "claims.json").claim(
+            ["src/app.py"], "alpha", "ABC-1"
+        )
         backend = mock_create.return_value
         backend.comment.return_value = None
         backend.label.return_value = BackendError("board unreachable")
@@ -562,6 +571,10 @@ class TestStopSaysWhenTheBoardWasNotUpdated:
         that would not parse produced `stopped (clean shutdown), released
         1 claim(s)`, exit 0, and a board nobody had touched."""
         root = _project(tmp_path)
+        # A handover hands over what it RELEASES, so alpha holds ABC-1.
+        ClaimsLedger(root / ".rite" / "claims.json").claim(
+            ["src/app.py"], "alpha", "ABC-1"
+        )
         (root / ".rite" / "modules.yaml").write_text("modules: []\n")
 
         result = stop(root, worker="alpha", ticket="ABC-1")
@@ -575,6 +588,10 @@ class TestStopSaysWhenTheBoardWasNotUpdated:
     @patch("rite_ai.lifecycle.commands.create_backend_from_config")
     def test_a_backend_that_refuses_the_comment_is_named(self, mock_create, tmp_path):
         root = _project(tmp_path)
+        # A handover hands over what it RELEASES, so alpha holds ABC-1.
+        ClaimsLedger(root / ".rite" / "claims.json").claim(
+            ["src/app.py"], "alpha", "ABC-1"
+        )
         backend = mock_create.return_value
         backend.comment.return_value = BackendError("JIRA rejected the credentials")
 
@@ -587,6 +604,10 @@ class TestStopSaysWhenTheBoardWasNotUpdated:
     @patch("rite_ai.lifecycle.commands.create_backend_from_config")
     def test_a_delivered_handover_says_which_ticket(self, mock_create, tmp_path):
         root = _project(tmp_path)
+        # A handover hands over what it RELEASES, so alpha holds ABC-1.
+        ClaimsLedger(root / ".rite" / "claims.json").claim(
+            ["src/app.py"], "alpha", "ABC-1"
+        )
         backend = mock_create.return_value
         backend.comment.return_value = None
         backend.label.return_value = None
@@ -594,7 +615,8 @@ class TestStopSaysWhenTheBoardWasNotUpdated:
         result = stop(root, worker="alpha", ticket="ABC-1")
 
         assert result.queued is False
-        assert "handover posted to ABC-1" in result.message
+        assert ", handover posted to ABC-1" in result.message
+        assert "no handover posted" not in result.message
         assert "NOT updated" not in result.message
 
 

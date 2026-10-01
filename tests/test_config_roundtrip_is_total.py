@@ -34,6 +34,7 @@ from rite_ai.config.models import (
     CoordinationConfig,
     ExpertiseEntry,
     ProjectConfig,
+    PublishConfig,
     PublishGateConfig,
     ScanPattern,
     ScheduleConfig,
@@ -62,6 +63,8 @@ _VALID_ALTERNATES = {
     "coordination.manager_roles[].preset": "planner",
     "coordination.manager_roles[].duties": ("decompose",),
     "coordination.manager_roles[].agent": "aider",
+    # At least the smallest window measured to work (engine_probe).
+    "coordination.manager_roles[].context_window": 65536,
     # Schema-validated (A6): a user id and a channel name or id, because each
     # mistake is otherwise a bare `channel_not_found` at a run's first poll.
     "slack.owner_user": "U0C4HK552HF",
@@ -71,6 +74,14 @@ _VALID_ALTERNATES = {
     "github_app.app_id": "123456",
     "github_app.installation_id": "7890123",
     "github_app.repository": "org/board",
+    # TR2: a closed vocabulary, and `channel` is required with it and
+    # schema-validated.
+    "refinement.questions_to": "channel",
+    "refinement.channel": "G012AB3CD",
+    # A closed vocabulary, and `auto_merge` (flipped to true) is refused beside
+    # any strategy but a pull request. `_populated` starts from `commit`, so
+    # this alternate is both distinct and valid with auto_merge on.
+    "publish.strategy": "pull_request",
 }
 
 
@@ -136,6 +147,7 @@ def _populated() -> ProjectConfig:
             windows=[ScheduleWindow(hours="09:00-17:00", workers=3)],
         ),
         budget=BudgetConfig(weekly_token_budget=12_000_000),
+        publish=PublishConfig(strategy="commit"),
         checkins=CheckinsConfig(
             windows=[CheckinWindow(hours="09:00-10:00", days="Mon-Fri")]
         ),

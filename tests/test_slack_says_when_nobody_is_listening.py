@@ -124,7 +124,9 @@ class TestTheStopIsSaidWhereThePersonIs:
 
         source = inspect.getsource(cli)
         body = source[source.index("listener = _slack_listener(root, role.name)") :]
-        assert body.index("finally:") < body.index("listener.close()")
+        assert body.index("finally:") < body.index("listener.close(")
+        # And the undelivered count goes with it, inside the same `finally`.
+        assert body.index("finally:") < body.index("undelivered_line(")
 
 
 class TestALongGapIsReadWhole:

@@ -19,19 +19,23 @@ release's defect a Manager that cannot start a Worker.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from rite_ai.managers.prompt import for_manager
+
+PROJECT = Path("/projects/acme")  # for_manager needs the root: MM8
 
 
 class TestItSaysWhatToRun:
     def test_the_command_is_named(self):
         """Not just a prohibition: a Manager told only what NOT to do has
         the same problem it started with."""
-        assert "rite sandbox start" in for_manager("lead")
+        assert "rite sandbox start" in for_manager("lead", root=PROJECT)
 
     def test_it_says_how_to_give_the_worker_its_work(self):
         """`rite sandbox start` cannot be typed into afterwards, so the
         ticket has to go in at launch or the Worker sits idle."""
-        text = for_manager("lead")
+        text = for_manager("lead", root=PROJECT)
         # ⚠ CHANGED BY B9: a Manager no longer runs `rite sandbox start` —
         # it is inside a sandbox, and a sandbox cannot create another one,
         # so the old command would fail every time. It writes a request.
@@ -39,7 +43,7 @@ class TestItSaysWhatToRun:
         assert "requests" in text
 
     def test_it_says_workers_must_exist_first(self):
-        assert "rite add worker" in for_manager("lead")
+        assert "rite add worker" in for_manager("lead", root=PROJECT)
 
 
 class TestItIsHardToMisreadUnderPressure:
@@ -48,14 +52,14 @@ class TestItIsHardToMisreadUnderPressure:
         phrasing leaves room for "I'll just run the engine directly", it
         eventually will — so the wrong thing is named explicitly rather
         than left to be inferred from the right one."""
-        text = for_manager("lead")
+        text = for_manager("lead", root=PROJECT)
         assert "claude" in text
         assert "never" in text.lower() or "do not" in text.lower()
 
     def test_the_consequence_is_stated_not_implied(self):
         """ "Because I said so" loses to a plausible shortcut at 3am. The
         reason it fails has to be in the text."""
-        text = for_manager("lead").lower()
+        text = for_manager("lead", root=PROJECT).lower()
         assert "credential" in text
         assert "die" in text or "fail" in text
 
@@ -75,20 +79,20 @@ class TestItNamesTheCommandThatAnswersTheQuestionAsked:
     class as the Worker defect this file is mostly about."""
 
     def test_the_queue_command_is_the_one_that_prints_the_queue(self):
-        text = for_manager("lead")
+        text = for_manager("lead", root=PROJECT)
         assert "rite loop run" in text
 
     def test_the_other_command_is_not_promised_to_answer_it(self):
         """`rite loop status` may still be mentioned — it must not be
         offered as the way to see what is ready."""
-        text = for_manager("lead")
+        text = for_manager("lead", root=PROJECT)
         if "rite loop status" in text:
             assert "different question" in text or "whether a loop" in text
 
 
 class TestTheRestOfTheInstructionStillHolds:
     def test_the_manager_still_knows_who_it_is(self):
-        assert "'planner'" in for_manager("planner")
+        assert "'planner'" in for_manager("planner", root=PROJECT)
 
     def test_extra_is_still_appended_verbatim(self):
-        assert for_manager("lead", extra="\n\nEXTRA").endswith("EXTRA")
+        assert for_manager("lead", root=PROJECT, extra="\n\nEXTRA").endswith("EXTRA")

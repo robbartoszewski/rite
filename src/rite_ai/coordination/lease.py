@@ -89,6 +89,10 @@ class LeaseLost:
 @dataclass
 class Released:
     version: str
+    released_at: str = ""
+    """The `expires` this release stamped: the moment, by this holder's
+    clock, it stopped holding the role. Stamped BEFORE the write, so it is
+    never later than the moment anyone could read the release."""
 
 
 @dataclass
@@ -265,7 +269,7 @@ class OwnerLeaseHolder:
             )
             if isinstance(result, Written):
                 self._our_expiry = None
-                return Released(result.version)
+                return Released(result.version, stood_down.expires)
             if isinstance(result, Unavailable):
                 # We have stopped acting as Owner either way; the lease will
                 # expire on its own. Say so rather than claiming a clean exit.

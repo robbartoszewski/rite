@@ -67,6 +67,15 @@ class HandoverResult:
     # delivered handover, is the one failure this project keeps finding:
     # reported success, nothing happened.
     queued_reason: str = ""
+    # An explicitly named ticket that got NO handover because this call
+    # released nothing. Inside the ledger's lock that is either "another
+    # handover already released them" or "there were none", and nothing here
+    # tells the two apart, so every word said about it names both. `stop`
+    # posts a note saying so (unless --skip-handover); other callers post
+    # nothing.
+    not_handed_over: str = ""
+    # `rite stop --skip-handover`: claims released, the board left alone.
+    skipped: bool = False
     # The ticket the handover actually landed on — resolved from the
     # released claims when the caller did not name one, so `stop` can
     # report which ticket it wrote to rather than the empty string it was
@@ -74,12 +83,14 @@ class HandoverResult:
     ticket: str = ""
 
 
-def _build_ticket_backend(config: ProjectConfig) -> TicketBackend | BackendError:
+def _build_ticket_backend(
+    config: ProjectConfig, root: Path | None = None
+) -> TicketBackend | BackendError:
     tb = config.ticket_backend
     if tb.type == "none":
         return BackendError("no ticket backend configured")
     return create_backend_from_config(
-        tb, board_role="workers", credentials=config.credentials
+        tb, board_role="workers", credentials=config.credentials, root=root
     )
 
 
@@ -116,6 +127,26 @@ def _deliver_via_backend(
             return True  # nothing to comment/label — drop, not a delivery failure
         reason = msg.payload.get("reason", "")
         worker = msg.payload.get("worker", "")
+        if msg.payload.get("released_nothing"):
+            # `rite stop --ticket` that released nothing, with handover on
+            # (Robert, 2026-09-28). It posts, because he asked for handover
+            # on by default, and it says only what is known. Inside the
+            # ledger's lock "another handover already released these" and
+            # "there were none" look the same, so the comment names both
+            # and asserts neither. NO LABEL CHANGE: returning the ticket to
+            # the pool is the handover itself, and this stop did not hand
+            # anything over.
+            origin = msg.project or project_name(root)
+            text = (
+                f"{DOT} {origin} — rite stop: {reason}"
+                + (f" (worker: {worker})" if worker else "")
+                + ". This stop released no claims, so it handed nothing over: "
+                "either another handover (a scheduled window boundary, or "
+                "another `rite stop`) already released them, or the worker "
+                "held none. rite cannot tell which. The ticket's labels were "
+                "not changed."
+            )
+            return not isinstance(backend.comment(ticket, text), BackendError)
         # A board can carry tickets from more than one project, and this
         # comment is read long after the session that queued it is gone —
         # so it names its project. `msg.project`, not the running
@@ -346,13 +377,15 @@ def start(root: Path) -> StartResult:
     # `/rite-start` is what a session is told to type. Printed together,
     # here, because this is where someone is looking when they have just
     # brought the project up and do not yet know what to do next.
-    from rite_ai.loop.session import running_pid
+    from rite_ai.loop.session import describe_holder, loop_holder
 
-    loop_pid = running_pid(root)
-    if loop_pid:
+    held = loop_holder(root)
+    if held.known and held.running:
         actions.append(
-            f"loop: running (pid {loop_pid}) — `rite loop status` for the last cycle"
+            f"loop: running (pid {held.pid}) — `rite loop status` for the last cycle"
         )
+    elif not held.known:
+        actions.append(f"loop: {describe_holder(held)}")
     else:
         actions.append(
             "loop: not running — `rite loop start` watches the queue and "
@@ -427,7 +460,7 @@ def start(root: Path) -> StartResult:
     if pending.is_dir():
         count = len(list(pending.glob("*.json")))
         if count:
-            backend = _build_ticket_backend(project.config)
+            backend = _build_ticket_backend(project.config, root)
             if isinstance(backend, BackendError):
                 actions.append(
                     f"{count} pending outbox message(s) — "
@@ -464,6 +497,10 @@ def perform_handover(
     worker: str | None = None,
     reason: str = "clean shutdown",
     ticket: str = "",
+    *,
+    comment_without_release: bool = False,
+    post_when_nothing_released: bool = False,
+    skip_board: bool = False,
 ) -> HandoverResult:
     """Single handover function — called by `stop` (clean shutdown), by the
     Owner on a stalled Manager's behalf (heartbeat timeout), by the
@@ -471,22 +508,23 @@ def perform_handover(
     and by a scheduled window boundary crossing into zero Workers (§2.7.3,
     built — `scheduler.run_tick`) — the first three must produce identical
     board state (SPEC §9.10); the fourth is exempt from that guarantee by
-    design."""
+    design.
+
+    `post_when_nothing_released` and `skip_board` are `rite stop`'s (Robert,
+    2026-09-28: handover on by default, `--skip-handover` to suppress). The
+    first posts to a NAMED ticket even when this call released nothing, in
+    words that say so rather than assert a handover (see the `released_nothing`
+    comment in `_deliver_via_backend`). ⚠ It does NOT give rite knowledge it
+    lacks: the flag decides whether to post, not what happened. The second
+    releases claims and writes the snapshot, and posts, labels and queues
+    nothing."""
     result = HandoverResult()
     rite_dir = root / ".rite"
 
-    about_to_release: list = []
+    released: list = []
     claims_path = rite_dir / "claims.json"
     if claims_path.exists():
         ledger = ClaimsLedger(claims_path)
-        # Read the claims BEFORE releasing them — this is the only place
-        # the ticket ID lives when a caller doesn't pass one explicitly
-        # (§9.10 step 1: "the ACTIVE ticket"). Every production caller
-        # (`stop_cmd`) resolves it this way; an explicit `ticket` argument
-        # still wins when given (e.g. a future Owner acting on a stalled
-        # Manager's behalf, which may already know the ticket without
-        # reading that Manager's claims file).
-        about_to_release = ledger.claims_for(worker) if worker else ledger.list_claims()
         # A handover releases claims, and a release that the fleet never
         # hears about leaves those paths blocked on every other machine —
         # they expire on a lapsed heartbeat, and a machine that merely
@@ -494,18 +532,38 @@ def perform_handover(
         from rite_ai.coordination.identity import claims_channel
 
         layer, machine = claims_channel(root)
-        if worker:
-            result.released_claims = ledger.release(
-                worker, layer=layer, machine=machine
-            )
-        else:
-            for claim in about_to_release:
-                result.released_claims += ledger.release(
-                    claim.worker, layer=layer, machine=machine
-                )
+        # ⚠ The claims are read and released in ONE locked step, and
+        # everything below acts only on what THIS call released. Reading
+        # first and releasing after let two handovers of one Worker (a
+        # window boundary and a `rite stop` at once) both find the ticket
+        # and both comment on it. The claims are still the only place the
+        # ticket lives when a caller does not pass one (§9.10 step 1: "the
+        # ACTIVE ticket"). An explicit `ticket` argument still wins.
+        released = ledger.release_claims(worker or None, layer=layer, machine=machine)
+        result.released_claims = len(released)
 
+    released_nothing = bool(ticket and not released and post_when_nothing_released)
+    if (
+        ticket
+        and not released
+        and not (comment_without_release or post_when_nothing_released)
+    ):
+        # ONLY THE RELEASER HANDS OVER, named ticket or not. Two handovers of
+        # one Worker at once (a window boundary and `rite stop --ticket`)
+        # both used to comment. This one released nothing, so another
+        # handover already has, and a second comment would read as a second
+        # handover. Reported, not swallowed: `stop` says so.
+        #
+        # `comment_without_release` is for takeover alone, which releases
+        # nothing locally BY DESIGN: it hands over another machine's board
+        # state, and its `<machine>/<worker>` names match no local claim. Who
+        # takes over is decided by the Owner lease, not here.
+        result.not_handed_over = ticket
+        ticket = ""
     if not ticket:
-        for claim in about_to_release:
+        # A handover that released nothing derives no ticket, so it posts
+        # nothing: whoever released the claims is the one that hands over.
+        for claim in released:
             if claim.ticket:
                 ticket = claim.ticket
                 break
@@ -526,9 +584,15 @@ def perform_handover(
         "ticket": ticket,
         "released_claims": result.released_claims,
     }
+    if released_nothing:
+        payload["released_nothing"] = True
+        result.not_handed_over = ticket
 
     result.ticket = ticket
     delivered = False
+    if skip_board:
+        result.skipped = True
+        return result
     if not ticket:
         # Nothing to queue. `_deliver_via_backend` DROPS a handover with
         # no ticket ("nothing to comment/label"), so enqueueing one only
@@ -544,7 +608,7 @@ def perform_handover(
                 f"{e.file}: {e.message}" for e in project
             )
         else:
-            backend = _build_ticket_backend(project.config)
+            backend = _build_ticket_backend(project.config, root)
             if isinstance(backend, BackendError):
                 result.queued_reason = backend.message
             else:
@@ -578,15 +642,38 @@ def stop(
     worker: str | None = None,
     reason: str = "clean shutdown",
     ticket: str = "",
+    *,
+    skip_handover: bool = False,
 ) -> StopResult:
     rite_dir = root / ".rite"
     if not rite_dir.is_dir():
         return StopResult(False, "no .rite/ directory")
 
-    handover = perform_handover(root, worker, reason, ticket)
+    handover = perform_handover(
+        root,
+        worker,
+        reason,
+        ticket,
+        post_when_nothing_released=True,
+        skip_board=skip_handover,
+    )
 
     message = f"stopped ({reason}), released {handover.released_claims} claim(s)"
-    if handover.ticket_commented:
+    if handover.skipped:
+        message += (
+            " — handover skipped (--skip-handover): nothing was posted to the "
+            "board and no label was changed"
+        )
+    elif handover.ticket_commented and handover.not_handed_over:
+        # Posted, and what was posted says what is known and no more.
+        message += (
+            f" — posted to {handover.ticket} that this stop released no "
+            "claims, so it handed nothing over: either another handover (a "
+            "scheduled window boundary, or another `rite stop`) already "
+            "released them, or the worker held none. Its labels were not "
+            "changed"
+        )
+    elif handover.ticket_commented:
         message += f", handover posted to {handover.ticket}"
     elif handover.outbox_path:
         # Say it out loud. The board was NOT updated, and the next person
@@ -596,6 +683,13 @@ def stop(
             f" — board NOT updated: {handover.queued_reason or 'backend unreachable'}"
             f"; handover queued at {handover.outbox_path}, delivered on the next "
             "`rite start`"
+        )
+    if handover.outbox_path and handover.not_handed_over:
+        # What was queued is the note, not a handover: say which.
+        message += (
+            ". What waits there is a note that this stop released no claims "
+            "(another handover already did, or the worker held none), not a "
+            "handover"
         )
     if handover.label_failed:
         message += " (WARNING: board label update failed — retry queued)"

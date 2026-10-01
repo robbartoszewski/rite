@@ -4,9 +4,29 @@ description: Work a ticket end to end — claim, implement, review, open a PR, r
 
 Work ticket `$ARGUMENTS` end to end.
 
-1. **Read the ticket.** Pull it from the configured ticket backend (see
-   `.rite/config.yaml`). If it isn't complete enough to start cold — no
-   definition of done, no clear scope — say so and stop rather than guessing.
+1. **Work to the ticket's agreed definition of done, and only that.** You do
+   not judge whether a ticket is complete enough; rite's record does.
+
+   - **A Worker started by rite:** the ticket and its agreed definition of
+     done are in `TICKET.md` in your working directory. Work to its section
+     "Agreed definition of done" (checklist, scope, Verify), not to the
+     title, and cite its record id in your pull request. There is nothing
+     for you to check: rite checked that record on the host, in the same
+     read that produced the ticket text, before this sandbox existed. You
+     hold no board credential and cannot read the refinement key, so do not
+     try `rite board show` or `rite refine status` from inside the sandbox.
+     No `TICKET.md`, or no such section: say so, and stop.
+   - **A person's session, outside any sandbox:** `rite refine status <ID>`.
+     REFINED prints the definition of done: work to it. Anything else: do not
+     start. If the person is here, agree one with them and record it with
+     `rite refine accept <ID> --item "…"`; otherwise say which state rite
+     reported, and stop. UNREADABLE means rite could not check, not that
+     there is no definition of done: it says why.
+
+   **One exit, and it is not "incomplete":** a definition of done that cannot
+   be met as written (a path it names does not exist, two items contradict)
+   is reported with exactly that, and you stop. Never invent the missing
+   piece.
 
    If it cites the project spec (`§5.3`, `D-31`), read those parts rather than
    the whole document:
@@ -51,6 +71,8 @@ Work ticket `$ARGUMENTS` end to end.
    module-wide claim blocks every other ticket touching that module even
    when the file sets don't overlap. If the claim is refused, another
    session is already on an overlapping path; do not proceed on those paths.
+   If `rite claim` fails any other way (an error, not a refusal), you hold
+   nothing: stop and report it rather than working unclaimed.
 
 4. **Do the work.** Follow this project's `CLAUDE.md` and the relevant files
    in `.rite/context/` — check `.rite/context/INDEX.md` for anything whose
@@ -94,17 +116,24 @@ Work ticket `$ARGUMENTS` end to end.
 
 7. **Run the review convention** (`/review`) before opening a PR.
 
-8. **Open the PR**, referencing the ticket. Run `rite publish check` by hand
+8. **Publish as the project's strategy says**, per module: `rite doctor`
+   prints each module's `publish:` line. Under `commit`, stop at the commit
+   on the ticket branch: nothing is pushed. Otherwise push the branch and
+   open the PR, referencing the ticket, and run `rite publish check` by hand
    before pushing. A pre-push hook and a CI workflow run the same scan, but
    neither is guaranteed to be armed in this project — `core.hooksPath` can
    disable the hook with no signal, and the workflow may never have been
    installed — so run it yourself rather than assuming.
 
-9. **Merge once reviewed.** Do not release your claims yet — a second
-   Worker claiming your paths while review is still open, or while comments
-   are being addressed, is exactly the collision claims exist to prevent.
+9. **Never merge a pull request yourself**, your own included. Merging after
+   checks is the User's, or rite's own gated step, which merges only on a
+   green matched to the exact head that contains the base's current tip.
+   Do not release your claims yet — a second Worker claiming your paths
+   while review is still open is exactly the collision claims exist to
+   prevent.
 
-10. **Release your claims after the merge lands, not before:**
+10. **Release your claims once the work has landed** — delivered under
+    `commit`, merged otherwise — not before:
 
     ```
     rite release --worker <your-name>

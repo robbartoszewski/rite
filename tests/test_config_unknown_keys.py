@@ -174,6 +174,10 @@ def test_a_refused_config_is_left_exactly_as_it_was(tmp_path, monkeypatch, args)
 
 
 def test_credential_set_does_not_rewrite_a_refused_config(tmp_path, monkeypatch):
+    """The file is left exactly as it was — and, since v0.7.0 dogfood S19, the
+    command still stores the secret instead of being taken out by a line that
+    has nothing to do with credentials. The config-writing fields are the ones
+    that are skipped, because those are the ones that would rewrite it."""
     path, text = _project_with(tmp_path, ".rite/config.yaml", "sandbox:\n  enable: 0\n")
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("keyring.set_password", lambda *a: None)
@@ -181,11 +185,35 @@ def test_credential_set_does_not_rewrite_a_refused_config(tmp_path, monkeypatch)
     result = CliRunner().invoke(
         cli,
         ["credential", "set", "jira"],
-        input="acme.atlassian.net\nRT\nme@acme.com\nTOK\nTOK\n",
+        input="me@acme.com\nTOK\nTOK\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "'enable'" in result.output, "the real problem is still named"
+    assert "will not rewrite it" in result.output
+    assert path.read_text() == text, "a refused config is never rewritten"
+    assert "jira_token" in result.output
+
+
+def test_credential_set_refuses_a_refused_config_with_no_namespace_to_scope_to(
+    tmp_path, monkeypatch
+):
+    """The one case that still refuses: recovering the namespace is what makes
+    continuing safe, so without one there is nothing to scope the secret to and
+    generating one would rewrite the very file the user has to repair."""
+    path = tmp_path / ".rite" / "config.yaml"
+    path.parent.mkdir(parents=True)
+    path.write_text("sandbox:\n  enable: 0\n")
+    text = path.read_text()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("keyring.set_password", lambda *a: None)
+
+    result = CliRunner().invoke(
+        cli, ["credential", "set", "jira"], input="me@acme.com\nTOK\nTOK\n"
     )
 
     assert result.exit_code != 0, result.output
-    assert "'enable'" in result.output
+    assert "no credential namespace recorded" in result.output
     assert path.read_text() == text
 
 

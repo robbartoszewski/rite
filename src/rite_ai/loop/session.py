@@ -19,9 +19,12 @@ caller.
 
 **One loop per project, enforced by two different mechanisms** — because they
 fail differently. tmux refuses a duplicate session name, which stops the
-ordinary `rite loop start` twice. A pid lock stops everything else: a loop
-started from a different terminal, from a script, or as `rite loop run
---watch` directly.
+ordinary `rite loop start` twice. A kernel lock that the loop process itself
+holds stops everything else: a loop started from a different terminal, from a
+script, or as `rite loop run --watch` directly. It is `rite_ai.loop.lock`,
+and it is the one that decides. `start`'s own check only saves a spawn: a
+loop that loses to another exits at once, and `start` reports its last
+words.
 
 **And a worktree is refused outright.** `.rite/` is tracked, so every git
 worktree is its own project root with its own `claims.json` while sharing one
@@ -38,11 +41,12 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from rite_ai.loop.lock import Holder
+from rite_ai.loop.lock import holder as loop_holder
 from rite_ai.managers.session import Liveness
 from rite_ai.state import write_atomic
 
 DRAIN_FILENAME = "loop-drain"
-LOCK_FILENAME = "loop.lock"
 LOG_FILENAME = "loop.log"
 DEFAULT_INTERVAL = 120.0
 """A Worker session takes minutes to tens of minutes. A five-second cycle
@@ -71,10 +75,6 @@ def _age(seconds: float) -> str:
 
 def _drain_path(root: Path) -> Path:
     return root / ".rite" / DRAIN_FILENAME
-
-
-def lock_path(root: Path) -> Path:
-    return root / ".rite" / LOCK_FILENAME
 
 
 def log_path(root: Path) -> Path:
@@ -110,9 +110,9 @@ class LoopStatus:
     pid: int = 0
     """The process tmux is running, from tmux. What a person would kill."""
     lock_holder: int = 0
-    """The pid in the lock file. Normally the same; different means something
-    else holds this project's loop lock, which is worth saying rather than
-    quietly preferring one of them."""
+    """The process holding the loop's kernel lock, exactly. Normally the
+    same; different means another process holds this project's loop lock,
+    which is worth saying rather than quietly preferring one of them."""
     uptime: float = 0.0
     draining: str = ""
     detail: str = ""
@@ -128,9 +128,8 @@ class LoopStatus:
         age = f", up {_age(self.uptime)}" if self.uptime else ""
         out = [f"loop: running as {self.session} (pid {self.pid or 'unknown'}){age}"]
         if self.lock_holder and self.pid and self.lock_holder != self.pid:
-            # Two processes think they are this project's loop, or one left a
-            # lock behind. Either way a reader deciding what to stop needs to
-            # know before they act, not after.
+            # Two processes think they are this project's loop. A reader
+            # deciding what to stop needs to know before they act, not after.
             out.append(
                 f"loop: ⚠ the loop lock is held by pid {self.lock_holder}, not "
                 f"by the session's {self.pid} — check for a second loop"
@@ -189,89 +188,16 @@ def clear_drain(root: Path) -> None:
 # --- one loop per project ----------------------------------------------------------
 
 
-def running_pid(root: Path) -> int:
-    """The pid of the loop running for `root`, or 0. NEVER spawns a process.
+def describe_holder(held: Holder) -> str:
+    """One phrase for `rite start`, `rite status` and `rite loop stop`.
 
-    Three callers needed this answer and two of them had written their own
-    copy of the lock-read — `hold_lock` here, and `_loop_line` in the status
-    report. A third (`rite start`) made it worth naming: three readings of one
-    file drift apart one bug at a time, and the first symptom is two commands
-    disagreeing about whether the loop is up.
-
-    The no-subprocess property is load-bearing rather than incidental.
-    `collect_status` is the read-only path and is pinned by a test that
-    patches `subprocess.run` and asserts nothing calls it; asking tmux here
-    once put a process spawn into the command people run most often. A signal
-    to a pid is a syscall, not a process.
-
-    So this is the cheap answer and `rite loop status` is the authoritative
-    one — tmux knows what it is running and a lock file only knows what was
-    written. They disagree for a few seconds at startup, while `start` has
-    released its own lock and the loop has not yet taken it, and during that
-    window this says "not running" and `loop status` says the truth. That is
-    the right way round.
-
-    THE LIVENESS CHECK IS INSIDE THE `try`, and that is not tidiness.
-    `os.kill` raises `OverflowError` — not `OSError`, not `ValueError` — when
-    the pid parses as an int but is too large for a C int, so a lock file
-    reading `99999999999` made this raise rather than answer. Every caller is
-    a command whose job is to tell you what is wrong with a project:
-    `rite status`, `rite start`, and `hold_lock` under `rite loop start`. A
-    corrupt file is precisely when they must still work, and a traceback is
-    the one output that helps nobody. Found in review, pre-existing, and only
-    dangerous once `start` began depending on it.
-    """
-    from rite_ai.scheduler.lock import process_is_running
-
-    try:
-        pid = int(lock_path(root).read_text().split()[0])
-        return pid if pid and process_is_running(pid) else 0
-    except (OSError, ValueError, IndexError, OverflowError):
-        return 0
-
-
-def hold_lock(root: Path) -> int | None:
-    """Take the loop lock, or return the pid of whoever holds it.
-
-    Deliberately NOT `scheduler.lock`: that one serialises ticks, which are
-    seconds long, and a loop holding it for hours would stop every tick in
-    the project. Same mechanism, separate file, different lifetime.
-
-    ⚠ TWO LIMITS, BOTH REPORTED RATHER THAN CLAIMED AWAY, because the module
-    docstring above overstated this lock and the overstatement is the kind
-    that gets a defect filed as impossible:
-
-    - **It is not atomic.** Read-then-`write_atomic` is `mkstemp` +
-      `os.replace`, which overwrites unconditionally, so two loops started in
-      the same instant both read "no holder" and both proceed.
-      `scheduler/lock.py` solved the identical race with `os.link` after
-      measuring it; this one has not been.
-    - **A pid is not an identity.** Nothing distinguishes the loop from an
-      unrelated process the OS gave the same number after a reboot, and this
-      file survives one. `scheduler/lock.py` carries a reuse backstop; a
-      simple age ceiling cannot work here, because a loop is meant to run for
-      days. Until that is designed, `start` and `stop` name the stale lock
-      and print the command that clears it, rather than wedging silently.
-    """
-    path = lock_path(root)
-    holder = running_pid(root)
-    if holder:
-        return holder
-    import os
-
-    write_atomic(path, f"{os.getpid()} {time.time()}\n")
-    return None
-
-
-def release_lock(root: Path) -> None:
-    import os
-
-    path = lock_path(root)
-    try:
-        if int(path.read_text().split()[0]) == os.getpid():
-            path.unlink(missing_ok=True)
-    except (OSError, ValueError, IndexError):
-        return
+    Three answers, because "could not tell" is not "not running": a start
+    told "not running" by a reader that could not tell would make two."""
+    if not held.known:
+        return f"cannot tell whether a loop is running — {held.detail}"
+    if held.running:
+        return f"running (pid {held.pid})"
+    return "not running"
 
 
 # --- tmux --------------------------------------------------------------------------
@@ -418,34 +344,27 @@ def start(root: Path, *, interval: float = DEFAULT_INTERVAL, command: str = ""):
             remedy=f"`rite loop status`, or `tmux attach -t {name}` to watch it",
         )
 
-    holder = hold_lock(root)
-    if holder is not None:
-        # TMUX HAS ALREADY SAID THERE IS NO SESSION, three lines up. So this
-        # is one of exactly two things, and the old remedy — "`rite loop
-        # stop`" — was right for neither: `stop` writes a drain file and
-        # never touches the lock, so it answers "no loop is running" and
-        # leaves the refusal in place. A user who rebooted with a loop
-        # running could not start another one again, ever, and nothing
-        # printed the one command that would fix it.
-        #
-        # Naming both cases rather than guessing between them: rite cannot
-        # tell a legitimate `rite loop run --watch` from a pid the OS
-        # recycled onto something unrelated after a reboot, and guessing
-        # wrong in one direction kills a running loop's lock while it works.
-        # Reporting with the escape is correct on both inputs.
+    # Only a courtesy, to refuse before spawning: the lock is taken by the
+    # loop process itself (`rite_ai.loop.lock`), so a loop that starts
+    # between this check and that one loses there, exits at once, and the
+    # "exited immediately" report below carries its words. A check that
+    # cannot tell refuses, as tmux's does above.
+    held = loop_holder(root)
+    if not held.known:
         return Refused(
-            f"this project's loop lock is held by pid {holder}, and tmux has "
-            "no session for it",
-            remedy=(
-                f"if that is a `rite loop run --watch` you started directly, "
-                f"stop it there. If pid {holder} is unrelated — a reboot can "
-                f"leave the lock behind and the number can be reused — the "
-                f"lock is stale: `rm {lock_path(root)}`"
-            ),
+            f"cannot tell whether a loop is already running for this project "
+            f"({held.detail}), so starting one could make two",
+            remedy="try again; if it persists, the detail above says what is wrong",
         )
-    # Released immediately: the lock belongs to the process that RUNS the
-    # loop, and that is the tmux child about to be started, not this command.
-    release_lock(root)
+    if held.running:
+        # TMUX HAS ALREADY SAID THERE IS NO SESSION, three lines up, so this
+        # is a `rite loop run --watch` started directly. The pid is exact:
+        # the kernel holds this lock for that process and nothing else, and
+        # there is no such thing as a stale one to remove any more.
+        return Refused(
+            f"this project's loop is already running as pid {held.pid}, outside tmux",
+            remedy="stop it where it was started, or `rite loop stop` to drain it",
+        )
     clear_drain(root)
 
     try:
@@ -572,22 +491,18 @@ def status(root: Path) -> LoopStatus:
             + (" (a drain was requested)" if drain else "")
         )
 
-    # The pid comes from TMUX, not from the lock file. `start` releases its
-    # own lock before spawning — the lock belongs to the process that runs
-    # the loop — so between the spawn and that process taking it there is a
-    # window where the lock says nothing, and `status` used to answer "(pid
-    # unknown)" for a loop that was plainly running. tmux knows what it is
-    # running; ask the thing that knows.
+    # The pid comes from TMUX, not from the lock. The lock is taken by the
+    # process that runs the loop, a moment after tmux starts it, so for that
+    # moment the lock has no holder while the session plainly runs. tmux
+    # knows what it is running; ask the thing that knows. The lock's holder
+    # is reported beside it, exact, and the two differing is worth seeing.
     pid = 0
     pane = _ask_tmux(name, "#{pane_pid}")
     if pane.isdigit():
         pid = int(pane)
 
-    holder = 0
-    try:
-        holder = int(lock_path(root).read_text().split()[0])
-    except (OSError, ValueError, IndexError):
-        holder = 0
+    held = loop_holder(root)
+    holder = held.pid if held.known and held.running else 0
 
     started = _ask_tmux(name, "#{session_created}")
     uptime = 0.0
@@ -630,14 +545,16 @@ def stop(root: Path, reason: str = "stop requested"):
         # commands, two true-sounding answers, and no way to reconcile them.
         # A held lock with no tmux session is the wedge; it is named here
         # because this is where somebody who has just been refused arrives.
-        holder = running_pid(root)
-        extra = (
-            f" A lock is still held by pid {holder}, which will refuse a new "
-            f"loop — if that process is not a `rite loop run --watch` you "
-            f"started, the lock is stale: `rm {lock_path(root)}`."
-            if holder
-            else ""
-        )
+        held = loop_holder(root)
+        if not held.known:
+            extra = f" But {describe_holder(held)}."
+        elif held.running:
+            extra = (
+                f" A loop is running outside tmux as pid {held.pid}; the drain "
+                "signal reaches it too, at the end of its current cycle."
+            )
+        else:
+            extra = ""
         return Started(
             name,
             detail=(

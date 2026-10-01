@@ -86,7 +86,9 @@ def session_name(ticket: str, subtask_id: str) -> str:
     return f"rite-{safe.strip('-').lower()}"
 
 
-def goose_environment(endpoint: str, model: str) -> dict[str, str]:
+def goose_environment(
+    endpoint: str, model: str, *, context_limit: int = 0
+) -> dict[str, str]:
     """What tells Goose WHICH model to run, and where.
 
     Shared by a Worker (`GooseAgent`) and a Manager's launch
@@ -96,11 +98,17 @@ def goose_environment(endpoint: str, model: str) -> dict[str, str]:
     `model: qwen3:8b` ran `qwen3-vl:8b-instruct`, because only the Worker path
     set them.
     """
-    return {
+    env = {
         "GOOSE_PROVIDER": "ollama",
         "GOOSE_MODEL": model,
         "OLLAMA_HOST": endpoint.rstrip("/").removesuffix("/v1"),
     }
+    if context_limit:
+        # The window the model is served with, so Goose is not left to assume
+        # one. Observed: Goose then compacts at 80% of it, which cannot rescue
+        # a single message larger than the window (plan, Track MS).
+        env["GOOSE_CONTEXT_LIMIT"] = str(context_limit)
+    return env
 
 
 @dataclass(frozen=True)
@@ -112,9 +120,31 @@ class GooseAgent:
     binary: str = "goose"
     mode: str = "auto"
     """`GOOSE_MODE`. ⚠ Goose expresses permission in the ENVIRONMENT, not on
-    argv — the second of the contract's three axes. B4d is measuring what
-    `auto` does with an operation that needs approval; the docs contradict
-    themselves and this is not yet settled."""
+    argv — the second of the contract's three axes.
+
+    **SETTLED (Robert, 2026-10-01): `auto` is the supported posture, and it is
+    supported because `approve` CANNOT WORK HEADLESS, not because `auto` is
+    safe.** B4d measured both in a headless run: `auto` exits 0 and ran `rm`
+    on a file unattended; `approve` exits 1 on the first tool call with
+    *"Tool approval required in non-interactive mode"*. So the choice is
+    between an unconstrained agent and a session that dies immediately, and
+    there is no third mode — `GOOSE_MODE` is whole-session, with no
+    per-command refusal to collect.
+
+    ⚠ **Nothing here is a boundary, and reading it as one is the mistake this
+    docstring exists to prevent.** `auto` means rite's containment for a local
+    Manager comes from WHERE it runs (the seatbelt profile
+    `managers/enclosure.py` composes, D-76 as superseded) and never from this
+    value. A local Manager host-run outside that profile is an unconstrained
+    agent with the operator's own file and network access, which is what B4d
+    said and is still true.
+
+    ⚠ **It is also why the value is placed rather than inherited.** Left to
+    the environment, a Manager takes whatever `GOOSE_MODE` the operator's
+    shell exported — an operator with `approve` exported would get a Manager
+    that dies on its first tool call — so `supervise` places `auto` on the
+    pane itself. `engines.GOOSE.permission_env` is the destination; a refusal
+    that left the value homeless was the earlier defect."""
     probe: Callable | None = None
     launch: Callable | None = None
     env: dict = field(default_factory=dict)
@@ -138,7 +168,10 @@ class GooseAgent:
     def run(self, context: Context, workspace: str) -> AgentReport:
         blocked = self._preflight()
         if blocked:
-            return AgentReport(claimed_success=False, summary=blocked)
+            # The turn did not happen, so it is not an attempt (RL-47).
+            return AgentReport(
+                claimed_success=False, summary=blocked, infrastructure_fault=True
+            )
 
         instruction = _instruction(context)
         handle = session_name(context.ticket, context.subtask.id)
@@ -177,6 +210,7 @@ class GooseAgent:
             return AgentReport(
                 claimed_success=False,
                 summary=f"infrastructure fault during the turn: {fault}",
+                infrastructure_fault=True,
             )
         return AgentReport(claimed_success=True, summary=_tail(said))
 

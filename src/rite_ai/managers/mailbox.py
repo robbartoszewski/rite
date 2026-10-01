@@ -79,7 +79,6 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from rite_ai.managers import manager_dir
 from rite_ai.names import UnsafeName, require_safe_name
 from rite_ai.state import write_atomic
 
@@ -96,6 +95,41 @@ class Message:
     text: str
     timestamp: float
     path: Path
+    kind: str = ""
+    """What produced it, for the outbox (RP1): one of `KINDS`, or "" when
+    nothing recorded one. Read with `_needs_action`, never compared to ""."""
+
+
+QUESTION = "question"
+"""`rite ask`, and a deferred question asked by rite (`checkins.ask_now`)."""
+CHECKIN = "checkin"
+"""The check-in message itself (`checkins._deliver_checkin`)."""
+REPLY = "reply"
+"""`rite reply`: free text for reading. The only kind that is not action."""
+KINDS = (QUESTION, CHECKIN, REPLY)
+
+
+def _needs_action(message: Message) -> bool:
+    """Does this message need the person (RP1)? Classed by the command that
+    wrote it, never by reading the text and never by the model's say-so.
+
+    ⚠ **A message with NO recorded kind, or one this rite does not know,
+    needs action.** It was written by an older rite, or by hand into the
+    outbox, and nothing says it is only for reading. Putting it in the
+    action pile costs the person a glance; putting a question in the reading
+    pile costs an answer nobody gives, which is the failure RP1 exists to
+    remove."""
+    return message.kind != REPLY
+
+
+def action_label(message: Message) -> str:
+    """How a reader marks a message that needs the person; "" for one that
+    does not, or that marks itself (a check-in opens with its own title)."""
+    if not _needs_action(message) or message.kind == CHECKIN:
+        return ""
+    if message.kind == QUESTION:
+        return "needs your answer"
+    return "needs you: not filed as reading, so shown as needing you"
 
 
 MAILBOXES_DIRNAME = "managers"
@@ -155,7 +189,9 @@ def mail_root(root: Path, manager: str) -> Path:
     (see the module docstring). Each profile grants this directory to its
     own Manager only: read, and its outbox write.
     """
-    manager_dir(root, manager)  # validates the name; the join is below
+    from rite_ai.managers import _checked
+
+    _checked(manager)  # validates the name; the join is below
     return _mail_home() / _checkout_key(root) / manager / "mail"
 
 
@@ -163,8 +199,9 @@ def _rite_home_mail_root(root: Path, manager: str) -> Path:
     """`~/.rite/managers/<checkout>/<manager>/mail/`, where the boxes lived
     before DF3. Moved from once by `adopt_legacy`, never read for delivery."""
     from rite_ai.credentials.store import default_rite_home
+    from rite_ai.managers import _checked
 
-    manager_dir(root, manager)
+    _checked(manager)
     return (
         default_rite_home() / MAILBOXES_DIRNAME / _checkout_key(root) / manager / "mail"
     )
@@ -175,7 +212,9 @@ def _legacy_mail_root(root: Path, manager: str) -> Path:
 
     Moved from once by `adopt_legacy`, and never read for delivery again.
     """
-    return manager_dir(root, manager) / "mail"
+    from rite_ai.managers import legacy_manager_dir
+
+    return legacy_manager_dir(root, manager) / "mail"
 
 
 def mailbox_dir(root: Path, manager: str, box: str) -> Path:
@@ -264,7 +303,13 @@ def mark_read(root: Path, manager: str, box: str, reader: str, messages) -> None
 
 
 def send(
-    root: Path, manager: str, box: str, text: str, *, sent_at: float | None = None
+    root: Path,
+    manager: str,
+    box: str,
+    text: str,
+    *,
+    sent_at: float | None = None,
+    kind: str = "",
 ) -> Path:
     """Put one message in a box. Returns the path written.
 
@@ -278,7 +323,13 @@ def send(
     cycle boundary, so a name in the past is simply sorted into place. A box
     read by CURSOR is different: a name behind a reader's cursor is never
     shown to that reader — loss, the failure the comment below records.
+
+    `kind` is what produced an outbox message (`KINDS`, RP1); one outside
+    `KINDS` is refused rather than written, so a typo cannot quietly file a
+    question as something else.
     """
+    if kind and kind not in KINDS:
+        raise ValueError(f"unknown message kind {kind!r}; one of {KINDS}")
     if sent_at is not None and box != INBOX:
         raise ValueError(
             "sent_at is for the inbox only: a box read by cursor would never "
@@ -297,8 +348,15 @@ def send(
     # a position the reader has already passed. Widths cover every pid Linux
     # and macOS issue (≤ 7 digits) and a counter no process reaches.
     path = where / f"{int(ts * 1000)}_{os.getpid():07d}_{next(_SEQUENCE):012d}.json"
-    write_atomic(path, json.dumps({"text": text, "timestamp": ts}) + "\n")
+    write_atomic(path, _encoded(text, ts, kind))
     return path
+
+
+def _encoded(text: str, timestamp: float, kind: str) -> str:
+    data: dict = {"text": text, "timestamp": timestamp}
+    if kind:
+        data["kind"] = kind
+    return json.dumps(data) + "\n"
 
 
 MAX_AGE_SECONDS = 30 * 24 * 3600
@@ -466,7 +524,15 @@ def read(root: Path, manager: str, box: str) -> list[Message]:
         text = str(data.get("text", "") or "")
         if not text.strip():
             continue
-        out.append(Message(text, _as_time(data.get("timestamp")), path))
+        kind = data.get("kind")
+        out.append(
+            Message(
+                text,
+                _as_time(data.get("timestamp")),
+                path,
+                kind if kind in KINDS else "",
+            )
+        )
     return out
 
 
@@ -506,9 +572,7 @@ def put_back(messages: list[Message]) -> int:
         try:
             message.path.parent.mkdir(parents=True, exist_ok=True)
             write_atomic(
-                message.path,
-                json.dumps({"text": message.text, "timestamp": message.timestamp})
-                + "\n",
+                message.path, _encoded(message.text, message.timestamp, message.kind)
             )
             restored += 1
         except OSError:
@@ -741,15 +805,15 @@ def adoption_notes(adoption: Adoption, manager: str) -> list[str]:
     if adoption.from_rite_home:
         notes.append(
             f"moved {adoption.from_rite_home} file(s) of the mail of Manager "
-            f"{manager!r} out of ~/.rite, which every Manager's sandbox can read, to "
-            f"{_mail_home()}, which none can except for its own mail"
+            f"{manager!r} out of ~/.rite, its old location, to {_mail_home()}, "
+            "where each Manager's sandbox reads only its own mail"
         )
     if adoption.kept_in_rite_home:
         notes.append(
             f"⚠ {len(adoption.kept_in_rite_home)} file(s) of the mail of "
-            f"Manager {manager!r} could not be moved out of ~/.rite and are "
-            "still READABLE by every Manager on this machine. They are not "
-            "delivered. Look at them and remove them: "
+            f"Manager {manager!r} could not be moved out of ~/.rite, its old "
+            "location, and are NOT delivered. No Manager started by this rite "
+            "can read ~/.rite. Look at them and remove them: "
             f"{', '.join(str(p) for p in adoption.kept_in_rite_home[:3])}"
         )
     if adoption.moved:
@@ -778,12 +842,21 @@ def adoption_notes(adoption: Adoption, manager: str) -> list[str]:
 
 def still_under_rite_home() -> list[str]:
     """What is still under `~/.rite/managers/` after this start's move, as
-    lines to say — readable by every Manager on the machine (DF3).
+    lines to say.
 
-    ⚠ **Reported, not moved.** Each box is moved by ITS Manager's next start,
+    ⚠ **Not exposed any more, and not said to be.** Development builds of
+    0.6.0 kept mail there, where every Manager could read it (DF3). Since
+    `~/.rite` stopped being granted (`enclosure._tool_paths`, denied by name
+    on macOS; observed refused on Linux, readiness A5), no Manager started
+    by this rite can read it. This used to say "EVERY Manager's sandbox …
+    can read it", which became false then: a false warning teaches a user
+    to discount the true ones. Only a Manager still running an older
+    development build can read it.
+
+    **Reported, not moved.** Each box is moved by ITS Manager's next start,
     under that Manager's run lock; moving another project's box from here
-    would race a supervisor that may be reading it. So the exposure is said
-    at every start until it is gone, with where to look.
+    would race a supervisor that may be reading it. So it is said at every
+    start until it is gone, with where to look.
     """
     from rite_ai.credentials.store import default_rite_home
 
@@ -811,11 +884,13 @@ def still_under_rite_home() -> list[str]:
     if not exposed:
         return []
     return [
-        f"⚠ mail is still under {base}, where EVERY Manager's sandbox on this "
-        f"machine can read it: {'; '.join(exposed[:5])}"
+        f"mail of other projects is still in its old location, {base}: "
+        f"{'; '.join(exposed[:5])}"
         + (f"; and {len(exposed) - 5} more" if len(exposed) > 5 else "")
-        + ". Each project's mail moves out the next time its Managers start; "
-        "until then it is exposed. Start them, or remove what is not needed."
+        + ". Each project's mail moves the next time its Managers start. No "
+        "Manager started by this rite can read it there; one still running "
+        "an older development build of 0.6.0 can. Start them, or remove what "
+        "is not needed."
     ]
 
 
@@ -875,6 +950,15 @@ def delivery_note(messages: list[Message]) -> str:
         first, *rest = m.text.strip().splitlines() or [""]
         lines.append(f"- {first}")
         lines.extend(f"  {line}" for line in rest)
+        # TR9: the id a chore is asked for by. Only on the User's own
+        # instructions, since only those can become one (`delivered`). Last,
+        # and outside the `> ` quote, so typed text cannot forge it.
+        path = getattr(m, "path", None)
+        if path is not None:
+            from rite_ai.managers.delivered import classify, message_id
+
+            if classify(m.text).users:
+                lines.append(f"  ↳ message id `{message_id(path)}`")
     return "\n".join(lines)
 
 
@@ -893,13 +977,28 @@ def how_to_reply(root: Path, manager: str) -> str:
     was 0.5.1, so `rite reply` — which 0.4.0 does not have — failed with a
     usage message naming neither the version nor the path. Naming the binary
     that composed the instruction removes that class.
+
+    ⚠ **Two commands since RP1**: `reply` is filed for reading and `ask` for
+    action, so the instruction names both and says which is which. It used to
+    say "to ask the User something … run reply", which is exactly the
+    question-in-the-reading-pile RP1 removes.
     """
     from rite_ai import own_command
+    from rite_ai.managers import stdin_text
 
+    rite = own_command()
     return (
         "\n\n## Talking to the User\n\n"
-        f"To ask the User something or tell them something, run:\n"
-        f'  {own_command()} reply --manager {manager} "<your message>"\n'
+        "To TELL the User something (progress, results, what you found), "
+        "run:\n"
+        + stdin_text.heredoc(f"{rite} reply --manager {manager} -", "<your message>")
+        + "\n"
+        "That is filed for them to read, not to act on. To ASK them anything, "
+        "or to say you are blocked or need a decision, run:\n"
+        + stdin_text.heredoc(f"{rite} ask --manager {manager} -", "<your question>")
+        + f"\n{stdin_text.RULE}\n"
+        "A reply that reads like a question is refused, and you are told to "
+        "ask it instead. When unsure, ask.\n"
         f"Do not write files into the mailbox yourself. They read your replies "
         f"with `rite connect {manager}`. Messages they send you arrive in your "
         f"instructions at the start of a turn.\n"

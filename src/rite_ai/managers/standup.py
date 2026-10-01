@@ -149,15 +149,36 @@ def digest(
     observed.extend(_sandbox_state(list(dict.fromkeys(started))))
 
     notes: list[str] = []
+    replies: dict[str, list[int]] = {}
+    verdicts: dict[str, int] = {}
+    verifications: list[dict] = []
     for e in checkins.ledger(root, manager):
         if float(e.get("at") or 0) <= start:
             continue
         kind = e.get("event")
+        if kind in ("reply", "duplicate_reply"):
+            # W15 (c): counted, so a repeating secondary shows here.
+            got = replies.setdefault(str(e.get("from")), [0, 0])
+            got[0 if kind == "reply" else 1] += 1
+            continue
+        if kind == "verification":
+            verdicts[str(e.get("verdict"))] = verdicts.get(str(e.get("verdict")), 0) + 1
+            verifications.append(e)
+            continue
         if kind == "cycle":
             observed.append(
                 f"- cycle {e.get('number')}, session {e.get('session')}: "
                 f"{e.get('ending')} ({_hhmm(float(e.get('started_at') or 0))}"
                 f"–{_hhmm(float(e.get('at') or 0))})"
+            )
+        elif kind == "ollama_cut":
+            # The SERVER'S, not this Manager's: Ollama's log does not say
+            # whose prompt it cut (`local.truncation`).
+            observed.append(
+                f"- Ollama's log records a prompt CUT on this Manager's model "
+                f"server during cycle {e.get('number')} ({e.get('sent'):,} "
+                f"tokens sent, {e.get('kept'):,} kept, the start dropped); the "
+                "log does not say whose prompt it was"
             )
         elif kind == "refusal":
             observed.append(
@@ -171,6 +192,24 @@ def digest(
             anchor = " ".join(str(e.get("anchor") or "").split())
             notes.append(f"- {said} [anchor: {anchor}]")
 
+    for sender, (delivered, dropped) in sorted(replies.items()):
+        observed.append(
+            f"- replies from {sender!r}: {delivered + dropped} received, "
+            f"{dropped} byte-identical duplicate(s) dropped"
+        )
+    if verdicts:
+        observed.append(
+            "- rite's verifier on those replies: "
+            + ", ".join(
+                f"{n} {k.replace('_', ' ')}" for k, n in sorted(verdicts.items())
+            )
+            + " (rite's own sessions, not the Owner's)"
+        )
+        from rite_ai.managers.verifier import guard_counts
+
+        guards = guard_counts(verifications)
+        if guards:
+            observed.append(f"- {guards}")
     lines = [head, "", "Observed by rite:"]
     if observed:
         lines.extend(observed)

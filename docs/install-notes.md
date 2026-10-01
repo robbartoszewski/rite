@@ -32,7 +32,7 @@ much you verify first:
   still pulls an unverified payload.
 - **Option 3** is the only one where you read the whole thing first. It is
   169 lines of `sh` and it is the honest answer if you would flag
-  `curl | sh` in someone else's project. Its `git checkout v0.5.1` is the
+  `curl | sh` in someone else's project. Its `git checkout v0.6.0` is the
   same movable pointer as option 1, so if the distinction matters to you,
   check out the **commit SHA** published in the release notes instead — that
   cannot be repointed.
@@ -75,16 +75,18 @@ Three ways, same result. Pick by how much you want to read first:
 
 ```bash
 # 1. one-liner
-curl -fsSL https://raw.githubusercontent.com/robbartoszewski/rite/v0.5.1/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/robbartoszewski/rite/v0.6.0/install.sh | sh
 
-# 2. download, check, then run
-curl -fsSLO https://raw.githubusercontent.com/robbartoszewski/rite/v0.5.1/install.sh
-shasum -a 256 install.sh          # compare against the v0.5.1 release notes
+# 2. download, check, then run (in a scratch directory, not your project:
+#    `rite init` ignores rite's own installer, but it is not your project's)
+cd "$(mktemp -d)"
+curl -fsSLO https://raw.githubusercontent.com/robbartoszewski/rite/v0.6.0/install.sh
+shasum -a 256 install.sh          # compare against the v0.6.0 release notes
 sh install.sh
 
 # 3. clone and read everything
 git clone https://github.com/robbartoszewski/rite.git
-cd rite && git checkout v0.5.1
+cd rite && git checkout v0.6.0
 less install.sh                   # 169 lines of sh
 uv tool install .                 # or: pipx install .
 ```

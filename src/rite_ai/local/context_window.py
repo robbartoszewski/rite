@@ -168,3 +168,141 @@ def ensure_window(
             "because that command sums shared layers."
         ),
     )
+
+
+def _base_url(endpoint: str) -> str:
+    return endpoint.rstrip("/").removesuffix("/v1")
+
+
+def pinned_window(endpoint: str, model: str, *, post=None) -> tuple[int | None, str]:
+    """The `num_ctx` written into `model`'s own parameters, or None and why.
+
+    Read from Ollama's `/api/show`, which answers from the model's manifest
+    and does NOT load it. That is the difference from `engine_probe`'s
+    served window, which only a loaded model can report: a pinned window is
+    known before the first token, and it does not depend on the server's
+    default (`OLLAMA_CONTEXT_LENGTH`, or the Mac app's setting), which is
+    one number for every model on the machine.
+    """
+    if post is None:
+        import httpx
+
+        def post(url: str, body: dict):
+            return httpx.post(url, json=body, timeout=10.0)
+
+    try:
+        response = post(_base_url(endpoint) + "/api/show", {"model": model})
+    except Exception as e:  # noqa: BLE001 - any failure is "cannot be asked"
+        return (
+            None,
+            f"the endpoint could not be asked about {model}: {type(e).__name__}",
+        )
+    if getattr(response, "status_code", 0) != 200:
+        return (
+            None,
+            f"the endpoint does not know {model} (it answered {response.status_code})",
+        )
+    try:
+        parameters = str(response.json().get("parameters") or "")
+    except Exception:  # noqa: BLE001
+        return None, f"the endpoint's description of {model} could not be read"
+    found = re.search(r"(?m)^\s*num_ctx\s+(\d+)\s*$", parameters)
+    if not found:
+        return None, f"{model} does not pin a context window of its own"
+    return int(found.group(1)), ""
+
+
+def pin_window(
+    endpoint: str, model: str, window: int, *, post=None, run=None
+) -> Ensured:
+    """A model that is served with exactly `window` tokens, whatever the
+    server's default, or the reason there is none. Never raises.
+
+    If `model` already pins `window`, it is used as it is. Otherwise a
+    derived model that pins it is created (see this module's docstring for
+    what that costs: about 136 bytes). Either way the result is CHECKED by
+    reading the pin back, not assumed from `ollama create` exiting 0.
+    """
+    have, _ = pinned_window(endpoint, model, post=post)
+    if have == window:
+        return Ensured(model, detail=f"{model} pins a {window}-token window")
+    name = derived_name(model, window)
+    existing, _ = pinned_window(endpoint, name, post=post)
+    created = False
+    if existing != window:
+        if existing is not None:
+            return Ensured(
+                model,
+                problem=(
+                    f"{name} exists and pins {existing} tokens, not {window}. "
+                    f"Remove it (`ollama rm {name}`) and start again"
+                ),
+            )
+        made = _create(name, model, window, endpoint, run)
+        if made:
+            return Ensured(model, problem=made)
+        created = True
+    check, why = pinned_window(endpoint, name, post=post)
+    if check != window:
+        return Ensured(
+            model,
+            problem=(
+                f"{name} was created but its window reads back as "
+                f"{check if check is not None else 'unknown'} ({why or 'mismatch'}), "
+                f"not {window}"
+            ),
+        )
+    return Ensured(
+        name,
+        created=created,
+        detail=(
+            f"{'created' if created else 'using'} {name}: {model} with a "
+            f"{window}-token window pinned into the model"
+            + (
+                f". It shares {model}'s weights and costs about 136 bytes; "
+                f"remove it with `ollama rm {name}`"
+                if created
+                else ""
+            )
+        ),
+    )
+
+
+def _create(name: str, model: str, window: int, endpoint: str, run) -> str:
+    """`ollama create` the derived model on the endpoint's server. "" or why not.
+
+    ⚠ `OLLAMA_HOST` is set to the Manager's endpoint: the `ollama` CLI
+    otherwise talks to localhost, and a Manager whose model lives on another
+    machine would get its twin created on the wrong one.
+    """
+    runner = run if callable(run) else subprocess.run
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".Modelfile", prefix="rite-ctx-", delete=False
+        ) as handle:
+            handle.write(f"FROM {model}\nPARAMETER num_ctx {window}\n")
+            path = handle.name
+    except OSError as e:
+        return f"could not write a Modelfile: {e}"
+    try:
+        done = runner(
+            ["ollama", "create", name, "-f", path],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=CREATE_TIMEOUT_SECONDS,
+            env={**os.environ, "OLLAMA_HOST": _base_url(endpoint)},
+        )
+    except FileNotFoundError:
+        return "ollama is not on PATH, so the window could not be pinned"
+    except Exception as e:  # noqa: BLE001 - any failure here is a result
+        return f"could not create {name}: {e}"
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+    if getattr(done, "returncode", 1) != 0:
+        said = (done.stderr or done.stdout or "").strip()[:200]
+        return f"`ollama create {name}` failed: {said}"
+    return ""

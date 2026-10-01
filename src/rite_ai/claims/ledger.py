@@ -99,6 +99,19 @@ class Claim:
     worker: str
     ticket: str = ""
     timestamp: float = 0.0
+    manager: str = ""
+    """The Manager this claim was made under, or "" for none (MM3, §5.4.8 P4).
+
+    ⚠ **"" is a real answer and the common one**, not a missing value: every
+    `rite claim` typed in a human's own shell is not a Manager's, and so is
+    every claim written by a rite older than 0.7.0. `force_release` treats it
+    as unowned rather than as a wildcard — see its `manager` parameter.
+
+    Defaulted here so a ledger written before this field existed still
+    parses; filled by the CALLER from `managers.current_manager()` rather
+    than read from the environment in here, because a ledger that consults
+    the environment cannot be tested against two Managers in one process.
+    """
 
     def __post_init__(self) -> None:
         if self.timestamp == 0.0:
@@ -180,6 +193,20 @@ class ClaimsLedger:
     caller tell a holder nesting with its own released claim — ordinary —
     from a different holder still standing in the way."""
 
+    last_refused_other_managers: list[tuple[str, str, str]]
+    """`(manager, worker, path)` for every claim the last `force_release`
+    left alone BECAUSE IT BELONGS TO ANOTHER MANAGER (MM3, SPEC §5.4.8 P4).
+
+    Separate from `last_skipped_overlaps`, which is about path shape, because
+    the two need different advice: an overlap is "name it directly and it
+    goes", and this one is "it is not yours, and here is whose it is". Merging
+    them would put a sibling Manager's live claim behind a message that reads
+    as an invitation to force it away.
+
+    Computed inside the same lock as the release, for `last_skipped_overlaps`'
+    reasons: a second query would reacquire the lock and could name a claim
+    made in the gap, which was never eligible."""
+
     last_skipped_overlaps: list[tuple[str, str]]
     """`(worker, path)` for every claim the last `force_release` left in place
     that nonetheless OVERLAPS what it was asked to clear.
@@ -197,6 +224,7 @@ class ClaimsLedger:
     claim as something to force away."""
 
     def __init__(self, path: Path) -> None:
+        self.last_refused_other_managers = []
         self.last_skipped_overlaps = []
         self.last_released_workers = set()
         self._path = path
@@ -223,6 +251,7 @@ class ClaimsLedger:
                 worker=entry.get("worker", ""),
                 ticket=entry.get("ticket", ""),
                 timestamp=entry.get("timestamp", 0.0),
+                manager=entry.get("manager", ""),
             )
             for entry in data
             if isinstance(entry, dict)
@@ -248,10 +277,18 @@ class ClaimsLedger:
         worker: str,
         ticket: str = "",
         *,
+        manager: str = "",
         layer=None,
         machine: str = "",
     ) -> ClaimResult:
         """Claim one or more paths for a worker. Fails on overlap.
+
+        `manager` records which Manager the claim was made under, so a
+        force-release can be scoped to one (MM3, SPEC §5.4.8 P4). It is
+        PASSED IN rather than read from the environment here: two Managers
+        cannot be put in one process otherwise, and a ledger that reads
+        `RITE_MANAGER` for itself makes every caller's test depend on it.
+        The CLI fills it from `managers.current_manager()`.
 
         With a state layer (P2-5b), claims published by OTHER machines are
         checked too, and the grant is published so those machines see it. The
@@ -315,7 +352,9 @@ class ClaimsLedger:
                 if c.worker != worker
                 or not all(normalise_path(cp) in normalised for cp in c.paths)
             ]
-            filtered.append(Claim(paths=normalised, worker=worker, ticket=ticket))
+            filtered.append(
+                Claim(paths=normalised, worker=worker, ticket=ticket, manager=manager)
+            )
             self._write(filtered)
             if layer is None:
                 return ClaimResult(ok=True)
@@ -342,7 +381,29 @@ class ClaimsLedger:
         layer=None,
         machine: str = "",
     ) -> int:
-        """Release claims. If paths is None, release all for worker.
+        """Release claims and return how many. See `release_claims`."""
+        return len(self.release_claims(worker, paths, layer=layer, machine=machine))
+
+    def release_claims(
+        self,
+        worker: str | None,
+        paths: list[str] | None = None,
+        *,
+        layer=None,
+        machine: str = "",
+    ) -> list[Claim]:
+        """Release claims and return exactly the ones THIS call removed.
+
+        `worker=None` releases every claim. If paths is None, release all for
+        the worker.
+
+        ⚠ **Read and release in one locked step, so a caller can act on what
+        it released.** `perform_handover` used to read a Worker's claims
+        under one lock and release them under another. Two handovers of one
+        Worker at once, a scheduled window boundary and a `rite stop`, both
+        read the same claims, both found the ticket, and both posted the
+        handover comment, though only one of them released anything. What
+        this returns is the only honest answer to "what did I hand over".
 
         **With a state layer, the release is PUBLISHED** (P2-5a). Releasing
         only locally leaves the path claimed as far as every other machine
@@ -364,23 +425,23 @@ class ClaimsLedger:
         """
         with self._locked():
             existing = self._read()
-            if paths is None:
-                after = [c for c in existing if c.worker != worker]
-            else:
+
+            def released(c: Claim) -> bool:
+                if worker is not None and c.worker != worker:
+                    return False
+                if paths is None:
+                    return True
                 normalised = {normalise_path(p) for p in paths}
-                after = [
-                    c
-                    for c in existing
-                    if c.worker != worker
-                    or not any(normalise_path(cp) in normalised for cp in c.paths)
-                ]
-            released = len(existing) - len(after)
+                return any(normalise_path(cp) in normalised for cp in c.paths)
+
+            gone = [c for c in existing if released(c)]
+            after = [c for c in existing if not released(c)]
             self._write(after)
             if layer is not None:
                 from rite_ai.coordination.claims_state import publish_claims
 
                 self.last_publish = publish_claims(layer, machine, after)
-            return released
+            return gone
 
     def _audit_path(self) -> Path:
         return self._path.parent / "force-releases.jsonl"
@@ -446,6 +507,7 @@ class ClaimsLedger:
         reason: str = "",
         *,
         worker: str | None = None,
+        manager: str | None = None,
         layer=None,
         machine: str = "",
     ) -> int:
@@ -472,6 +534,30 @@ class ClaimsLedger:
         of the two must be given: releasing everything, by nobody's request,
         is not a thing this should be able to express by omission.
 
+        **`manager` is the acting Manager, and it narrows the PATH-matched
+        release to claims that Manager may release (MM3, SPEC §5.4.8 P4).**
+        Two Managers in one checkout share one ledger, so "clear this path, I
+        do not care who has it" — right for a human, as above — becomes a
+        Manager taking a sibling's live claim while tidying what it believes
+        are its own orphans. With `manager="A"` this releases claims made
+        under A and claims made under no Manager, and leaves another
+        Manager's, reporting them in `last_refused_other_managers`.
+
+        ⚠ **`manager=None` means "the caller is not a Manager", NOT "match
+        every Manager".** That is the whole of MM3's "no default that matches
+        across Managers": the wildcard is what you get by saying you are
+        nobody, and a Manager says its name. The CLI fills it from
+        `managers.current_manager()`, which returns "" outside a session — so
+        a human's `rite release --force` keeps today's reach, and that is the
+        case this command mainly serves.
+
+        ⚠ **It does NOT narrow a `worker`-scoped release, deliberately.** A
+        caller passing `worker=` has named the holder, which is already exact
+        — `pool.archive` watched that slot die. Narrowing it by Manager too
+        would stop a Manager reaping a Worker that another Manager started,
+        which is cleanup, not a boundary crossing. The dangerous call is the
+        one that does not name a holder.
+
         ⚠ Path matching is EXACT, not nesting-aware — `engine/` does not
         release a claim on `engine/parser.py`, though `claim()` would have
         refused that claim as overlapping. Left as it is deliberately:
@@ -483,6 +569,7 @@ class ClaimsLedger:
         # otherwise read the PREVIOUS call's overlaps and believe them current
         # — the same trust-an-attribute-across-calls hazard the lock closed.
         self.last_skipped_overlaps = []
+        self.last_refused_other_managers = []
         if paths is not None and not paths:
             # An empty LIST is a caller that computed some paths and got none
             # of them, then asked to release "those" — true with or without a
@@ -498,17 +585,42 @@ class ClaimsLedger:
         with self._locked():
             existing = self._read()
             normalised = {normalise_path(p) for p in (paths or [])}
-            released_claims = [
-                c
-                for c in existing
-                if (worker is None or c.worker == worker)
-                and (
+
+            def _matches(c: Claim) -> bool:
+                return (worker is None or c.worker == worker) and (
                     paths is None
                     or any(normalise_path(cp) in normalised for cp in c.paths)
                 )
-            ]
+
+            def _may_release(c: Claim) -> bool:
+                """Whether the acting Manager may release this claim (MM3).
+
+                The narrowing is on the path-matched call only: `worker` names
+                the holder, so that caller is already exact and a Manager
+                reaping another Manager's dead Worker is cleanup. And `""` is
+                unowned, not a wildcard — a claim from a human's shell, or
+                from a rite older than 0.7.0.
+                """
+                if manager is None or worker is not None:
+                    return True
+                return c.manager in ("", manager)
+
+            released_claims = [c for c in existing if _matches(c) and _may_release(c)]
             after = [c for c in existing if c not in released_claims]
             self._write(after)
+
+            # What was matched and left BECAUSE it is somebody else's. Taken
+            # from `existing`, not from `after`: a claim can be matched and
+            # refused here while an identical-looking one elsewhere in the
+            # ledger was released, and reporting from `after` would lose the
+            # link between the path asked for and the Manager that holds it.
+            self.last_refused_other_managers = [
+                (c.manager, c.worker, cp)
+                for c in existing
+                if _matches(c) and not _may_release(c)
+                for cp in c.paths
+                if paths is None or normalise_path(cp) in normalised
+            ]
 
             # Only the paths that ACTUALLY overlap, not every path on a claim
             # that happens to contain one. A claim of
@@ -539,7 +651,12 @@ class ClaimsLedger:
                     "reason": reason,
                     "timestamp": time.time(),
                     "released": [
-                        {"worker": c.worker, "paths": c.paths, "ticket": c.ticket}
+                        {
+                            "worker": c.worker,
+                            "paths": c.paths,
+                            "ticket": c.ticket,
+                            "manager": c.manager,
+                        }
                         for c in released_claims
                     ],
                 }

@@ -7,7 +7,8 @@ background" — and the three properties that make it safe to leave running:
   held by a process that no longer exists, which is the failure §2.6 exists
   for, caused by the stop command;
 - **one loop per project**, by two mechanisms, because they fail differently:
-  tmux refuses a duplicate name, a pid lock catches everything else;
+  tmux refuses a duplicate name, a kernel lock the loop process holds
+  catches everything else (its own properties: `test_loop_lock.py`);
 - **it stops on the one verdict that is a reason to**, and keeps going on the
   three that are not — a loop that stopped on `saturated` would turn a busy
   fleet into a stopped one with a queue nobody can see.
@@ -18,11 +19,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from rite_ai.loop import IDLE, UNKNOWN, watch
+from rite_ai.loop import lock as loop_lock
 from rite_ai.loop.session import (
     clear_drain,
     draining,
-    hold_lock,
-    release_lock,
     request_drain,
     session_name,
 )
@@ -71,24 +71,17 @@ def test_start_clears_a_previous_drain_but_the_loop_never_does(tmp_path):
 
 
 def test_the_lock_names_the_holder_rather_than_failing_silently(tmp_path):
-    root = project(tmp_path)
-    assert hold_lock(root) is None
-
     import os
 
-    assert hold_lock(root) == os.getpid()
-    release_lock(root)
-
-
-def test_a_lock_from_a_dead_process_is_reclaimed(tmp_path):
-    """A loop killed by a reboot must not lock the project out for ever."""
-    from rite_ai.loop.session import lock_path
-
     root = project(tmp_path)
-    lock_path(root).write_text("999999 0\n")
-
-    assert hold_lock(root) is None
-    release_lock(root)
+    held = loop_lock.acquire(root)
+    assert isinstance(held, loop_lock.LockAcquired)
+    try:
+        again = loop_lock.acquire(root)
+        assert isinstance(again, loop_lock.LockBusy)
+        assert again.holder_pid == os.getpid()
+    finally:
+        loop_lock.release(held)
 
 
 def test_the_session_name_is_deterministic_and_readable(tmp_path):
@@ -104,14 +97,15 @@ def test_the_session_name_is_deterministic_and_readable(tmp_path):
 
 def test_watch_refuses_to_run_beside_another_loop(tmp_path):
     root = project(tmp_path)
-    hold_lock(root)
+    held = loop_lock.acquire(root)
     said: list[str] = []
-
-    why = watch(root, emit=said.append, board=FakeBoard("BEN-1"), clock=1.0)
+    try:
+        why = watch(root, emit=said.append, board=FakeBoard("BEN-1"), clock=1.0)
+    finally:
+        loop_lock.release(held)
 
     assert why == "locked"
     assert any("another loop holds" in line for line in said)
-    release_lock(root)
 
 
 def test_watch_releases_the_lock_when_it_finishes(tmp_path):
@@ -120,8 +114,10 @@ def test_watch_releases_the_lock_when_it_finishes(tmp_path):
     root = project(tmp_path)
     watch(root, emit=lambda _l: None, board=FakeBoard(), sandbox_status=_free)
 
-    assert hold_lock(root) is None
-    release_lock(root)
+    assert loop_lock.holder(root) == loop_lock.Holder(known=True, running=False)
+    held = loop_lock.acquire(root)
+    assert isinstance(held, loop_lock.LockAcquired)
+    loop_lock.release(held)
 
 
 # --- what it stops on, and what it does not ----------------------------------------

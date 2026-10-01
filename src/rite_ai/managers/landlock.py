@@ -255,7 +255,9 @@ def _path_beneath(allowed_access: int, parent_fd: int) -> ctypes.Array:
 # here. The PARENT is granted, not the file: a binary that loads anything from
 # beside itself needs its directory, and `.local/share/uv` is granted for
 # exactly that reason already.
-ENGINE_BINARIES = ("claude", "goose", "rite", "git", "gh", "tmux")
+ENGINE_BINARIES = ("claude", "goose", "agent", "rite", "git", "gh", "tmux")
+# `agent` is Cursor's launcher, a bash script in a versioned directory that
+# runs the `node` beside it; the parent grant covers both (CU4).
 
 
 def _engine_binary_paths() -> list[Path]:
@@ -274,14 +276,42 @@ def _engine_binary_paths() -> list[Path]:
     return list(dict.fromkeys(found))
 
 
-def policy_path(root: Path, manager: str) -> Path:
+def policy_path(root: Path, manager: str, home: Path | None = None) -> Path:
     """Where this Manager's path policy is written.
 
     A JSON document, not a Landlock artefact: Landlock has no profile file:
-    the rules are syscalls. The file exists so that the policy a Manager ran
-    under is inspectable afterwards, exactly as the `.sb` profile is on
-    macOS, and so `why_it_was_refused` can point somebody at it.
+    the rules are syscalls. But the LAUNCHER reads this file and applies what
+    it says, so it is the boundary, exactly as the `.sb` profile is on macOS,
+    and it is kept where `enclosure.profile_path` keeps that one, for the
+    same reason.
+
+    ⚠ **NOT UNDER `.rite/user/`, WHICH EVERY MANAGER CAN WRITE.** A boundary
+    must not be writable by anything it bounds, or by a peer. The file used to
+    be written to `.rite/user/`, which is writable across Managers on both
+    platforms (SPEC §5.4.8), and read by the launcher a moment later. So a
+    peer could replace a Manager's boundary between the two: measured on
+    macOS, a loop inside a SECONDARY's real profile replacing the Owner's
+    `.sb` with `(allow default)` took the Owner's verifier out of its sandbox
+    in 19 of 20 runs. A Manager's own launch reads its profile the same way
+    (read from the code, not run), and Linux's launcher reads its policy the
+    same way (not measured: no Linux box was reachable).
+    It now lives in the Manager's own credential directory, under no path any
+    Manager's profile grants, beside the login rite writes there. A copy left
+    in `.rite/user/` by an older build is removed when this is written, so
+    nothing mistakes it for the one in force.
     """
+    from rite_ai.managers import github_access
+    from rite_ai.managers.enclosure import BOUNDARY_DIRNAME
+
+    return (
+        github_access._credential_dir(root, manager, home)  # noqa: PLC2701
+        / BOUNDARY_DIRNAME
+        / f"{manager}.json"
+    )
+
+
+def _legacy_policy_path(root: Path, manager: str) -> Path:
+    """Where builds before the move wrote the policy (`policy_path`)."""
     return user_dir(root) / PROFILE_DIRNAME / f"{manager}.json"
 
 
@@ -341,10 +371,24 @@ def compose_policy(root: Path, manager: str, home: Path | None = None) -> dict:
     mail = mail_root(root, manager)
     readable.append(mail)
     writable.append(mail / OUTBOX)
+    # This Manager's own directory, AS A TREE (MM8): outside the project,
+    # beside its mail, so no other Manager's is reached by any grant here.
+    from rite_ai.managers import manager_dir
+
+    writable.append(manager_dir(root, manager))
     writable.append(engine_tmp(root, manager))
-    # Shared temporary space, mirroring seatbelt. ⚠ This is also where the
-    # socket hole lives: see the module docstring and `limitations`.
-    writable += [Path("/tmp"), Path("/var/tmp")]
+    # ⚠ **`/tmp` AND `/var/tmp` ARE NOT GRANTED, WHICH DIVERGES FROM SEATBELT
+    # ON PURPOSE.** The seatbelt profile grants them and then denies the inbox
+    # AFTER, which wins because seatbelt takes the last match — measured: a
+    # project under `/tmp` on macOS still refuses another Manager's inbox.
+    # Landlock has no deny rule and unions its grants, so a wholesale `/tmp`
+    # grant cannot be carved and it OVERRODE the MM-2 enumeration entirely:
+    # measured, every inbox was writable for a project under `/tmp`.
+    #
+    # So Linux is narrower than macOS here. The engine keeps its own writable
+    # temp space — `engine_tmp` above, which `TMPDIR` points at — so a tool
+    # that honours `TMPDIR` is unaffected. What breaks is anything that
+    # hardcodes `/tmp`, and that is the risk this change carries.
     writable += [p for p in _engine_state_paths(where) if p.exists()]
 
     # ⚠ **THIS MANAGER'S OWN CREDENTIALS (C6/C26), MATCHED TO SEATBELT FILE
@@ -374,6 +418,7 @@ def compose_policy(root: Path, manager: str, home: Path | None = None) -> dict:
     cdir = github_access._credential_dir(root, manager, where)  # noqa: PLC2701
     gh_dir = cdir / "gh"
     claude_dir = cdir / "claude"
+    cursor_dir = cdir / "cursor"
 
     # The two GitHub files, read-only, by exact path — not the directory.
     for name in ("hosts.yml", "config.yml"):
@@ -401,6 +446,13 @@ def compose_policy(root: Path, manager: str, home: Path | None = None) -> dict:
         # can already read — and in exchange Claude works. Seatbelt keeps the
         # deny because it has one to keep.
         writable.append(claude_dir)
+
+    if cursor_dir.is_dir() and not cursor_dir.is_symlink():
+        # A Cursor Manager's config, chats and project state (CU4), for the
+        # reason seatbelt grants it (`github_access.profile_lines`). The key's
+        # copy, `cursor.key`, sits beside it and is granted nothing: tmux's
+        # shell reads it outside the boundary. Not measured on Linux.
+        writable.append(cursor_dir)
 
     return {
         "manager": manager,
@@ -484,94 +536,33 @@ def _ensure_grantable(home: Path) -> None:
 
 
 def _fenced_project_paths(project: Path, manager: str) -> list[Path]:
-    """The project, granted so that no Manager writes another's directory (P1).
+    """The project, granted AS ONE TREE (MM8 piece 2, D17).
 
-    ⚠ **LANDLOCK HAS NO DENY RULE.** Seatbelt separates Managers with ordered
-    rules — deny `.rite/managers`, allow this Manager's own directory — and
-    takes the last match. Landlock rules only ever GRANT, and the effective
-    access is the UNION, so there is nothing to place last. A carve-out
-    therefore has to be an ENUMERATION: grant the siblings of the thing being
-    fenced, and never its parent.
+    ⚠ **LANDLOCK HAS NO DENY RULE**, so while a Manager's own directory was in
+    the tree (`.rite/managers/<name>/`, with the `routes/` the Owner's
+    supervisor delivers as INSTRUCTION, and the `prompt.txt` that IS the next
+    cycle's instruction), keeping one Manager out of another's meant
+    ENUMERATING the project root: granting each top-level entry, and never
+    the root. Measured 2026-09-26: then a Manager could not create a NEW
+    top-level entry in its project (`mkdir /proj/newtopdir` raised
+    PermissionError), and an entry that appeared mid-cycle was not covered
+    until the next launch. That was readiness D17.
 
-    Measured 2026-09-26 in a container, all three modes, as an ordinary user,
-    when the inboxes were still in the tree:
+    **Since MM8 piece 1 no Manager's state is in the tree** (`manager_dir` is
+    under rite's data directory, granted to its own Manager by path in
+    `compose_policy`), and nothing reads `.rite/managers/` any more except to
+    move out what an older rite left there, which `rite start` does before any
+    Manager launches (`relocate`). So nothing in the tree carries another
+    Manager's authority, and the enumeration is gone. Measured against the
+    kernel: `test_a_linux_manager_creates_a_new_top_level_file_in_its_project`
+    FAILED with the enumeration in place and passes without it, and one
+    Manager still cannot write another's routes.
 
-        granting the project as a tree   another's inbox WRITABLE, own WRITABLE
-        enumerating one level            another's refused, own still WRITABLE
-        enumerating two levels           both REFUSED, project source writable
-
-    ⚠ **THE INBOXES HAVE LEFT THE TREE, AND THIS ENUMERATION HAS NOT, ON
-    PURPOSE.** Since 0.6.0 the mailbox is under rite's data directory, fenced by
-    construction. But `.rite/managers/<name>/` still holds what a Manager's
-    supervisor acts on with that Manager's authority — `routes/`, which the
-    Owner's supervisor delivers as "routed by the Owner · INSTRUCTION", and
-    `prompt.txt`, which IS the next cycle's instruction. Granting the project
-    as a tree would let a secondary write the Owner's route requests. So the
-    tree is still enumerated. What changed is this Manager's own directory:
-    it is granted as a tree now, since there is no `mail/in` left in it to
-    carve out — the pre-0.6.0 box is moved once at start and never read again
-    (`mailbox.adopt_legacy`).
-
-    ⚠ **WHAT IT COSTS, because it is a real cost and not a theoretical one.**
-    The project root is not granted as a tree, so a Manager cannot create a
-    NEW TOP-LEVEL entry in its project during a cycle — measured:
-    `mkdir /proj/newtopdir` raises PermissionError. Everything inside an
-    existing top-level directory is unaffected, including new subdirectories:
-    `src/newpkg/` was created and written in the same run. So the limitation is
-    the project ROOT, not the project.
-
-    ⚠ **And it is a snapshot.** The enumeration happens when the policy is
-    written, which is every launch, so a directory that appears mid-cycle is
-    not covered until the next one. Seatbelt's subtree grant is dynamic and
-    this is not; that difference is the price of having no deny rule.
-
-    Removing both costs means moving the whole per-Manager directory out of
-    the project, as the mailbox was — not a better ruleset.
+    ⚠ `.rite/user/` was writable across Managers before this, on both
+    platforms, because the enumeration granted it too (SPEC §5.4.8). This
+    neither opens nor closes it.
     """
-    managers = project / ".rite" / "managers"
-    if not managers.is_dir():
-        # No Managers yet: nothing to fence, so the project is granted whole
-        # and a first cycle is not crippled before any inbox exists.
-        return [project]
-
-    # ⚠ **SYMLINKS ARE SKIPPED, AND THAT IS A FENCE PROPERTY.** Landlock rules
-    # name an INODE: a rule added for a symlink grants the inode it resolves
-    # to. Measured 2026-09-26 in review — granting ONLY a symlink that pointed
-    # at another Manager's `mail/in` made that inbox writable both through the
-    # link and directly. So an enumeration that included symlinks could hand
-    # back exactly what it is carving out, and one symlink anywhere in the
-    # project root would defeat MM-2.
-    #
-    # Skipped rather than resolved-and-checked: a link whose target moves
-    # between composing and applying would pass the check and grant the new
-    # target. Not granting a symlinked entry fails closed, and the cost is
-    # that a symlink in the project root is not writable — which is the
-    # correct trade for a boundary.
-    #
-    # ⚠ NOT applied to the system paths above: on Linux `/lib` and `/lib64`
-    # ARE symlinks into `/usr`, so refusing symlinks there would deny the
-    # loader and nothing would start.
-    def entries(directory: Path, skip) -> list[Path]:
-        return [
-            p
-            for p in sorted(directory.iterdir())
-            if p not in skip and not p.is_symlink()
-        ]
-
-    granted: list[Path] = []
-    rite_dir = project / ".rite"
-    # Every top-level entry except `.rite` — the parent must not be granted.
-    granted += entries(project, {rite_dir})
-    # Everything in `.rite` except `managers`.
-    granted += entries(rite_dir, {managers})
-    # This Manager's own directory, AS A TREE. It used to be granted by its
-    # children so `mail/in` could be left out; the inbox has left the tree
-    # and the old box is never read again, so there is nothing left to carve.
-    # Not granted if it is a symlink, for the reason above.
-    own = managers / manager
-    if own.is_dir() and not own.is_symlink():
-        granted.append(own)
-    return granted
+    return [project]
 
 
 def write_profile(root: Path, manager: str, home: Path | None = None) -> Path:
@@ -580,8 +571,9 @@ def write_profile(root: Path, manager: str, home: Path | None = None) -> Path:
     Rewritten every run, for the reason the seatbelt profile is: a write-once
     file pins a project to whatever shipped the day it was created.
     """
-    path = policy_path(root, manager)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path = policy_path(root, manager, home)
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    _legacy_policy_path(root, manager).unlink(missing_ok=True)
     engine_tmp(root, manager).mkdir(parents=True, exist_ok=True)
     # ⚠ **THE MANAGER'S OWN DIRECTORY AND MAIL BOXES ARE CREATED HERE, and
     # that is load-bearing rather than tidy.** A Landlock rule names an
@@ -643,8 +635,11 @@ def limitations() -> tuple[str, ...]:
         "tmux control socket is that shape, so the escape macOS closed by "
         "denying the socket's path is OPEN here. This is a known hole, not an "
         "unexamined one",
-        "/tmp and /var/tmp are readable and writable, so anything kept there "
-        "— including other rite worktrees — is reachable",
+        "/tmp and /var/tmp are NOT granted, unlike the macOS profile: "
+        "Landlock cannot carve a hole in a wholesale grant, and granting them "
+        "made every Manager's inbox writable for a project living under them. "
+        "A tool that hardcodes /tmp rather than honouring TMPDIR will fail "
+        "here where it works on macOS",
         "the network is NOT confined: a Manager can reach anything this machine can",
         "a Manager can run `rite`, which does whatever you can do to this "
         "project — the boundary bounds the filesystem, not that",
@@ -666,7 +661,7 @@ def limitations() -> tuple[str, ...]:
     else:
         holes.append(
             "what it DOES buy: your home outside the policy's paths, your SSH "
-            "keys, and other projects outside /tmp are not reachable, and "
+            "keys, and other projects, under /tmp included, are not reachable, and "
             "signals do not cross the boundary — measured before and after"
         )
     return tuple(holes)

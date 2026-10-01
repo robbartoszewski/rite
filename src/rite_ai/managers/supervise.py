@@ -41,6 +41,9 @@ from pathlib import Path
 from rite_ai.managers import (
     checkins,
     claude_login,
+    cursor_chat,
+    cursor_login,
+    delivered,
     designate,
     designated,
     designation_path,
@@ -48,6 +51,8 @@ from rite_ai.managers import (
     git_settings,
     github_access,
     manager_dir,
+    record_chat,
+    recorded_chat,
 )
 
 # ⚠ THE BOUNDARY IS RESOLVED, NOT IMPORTED. These six used to come straight
@@ -58,7 +63,7 @@ from rite_ai.managers import (
 from rite_ai.managers.board_context import board_now
 from rite_ai.managers.boundaries import UnsupportedPlatform, boundary_for
 from rite_ai.managers.broker import take_requests
-from rite_ai.managers.engines import spelling_for
+from rite_ai.managers.engines import handle_problem, new_handle, spelling_for
 from rite_ai.managers.mailbox import INBOX, delivery_note, how_to_reply, put_back, send
 from rite_ai.managers.mailbox import take as take_mail
 from rite_ai.managers.mailbox import waiting as mail_waiting
@@ -70,6 +75,7 @@ from rite_ai.managers.permissions import (
     settings_path,
     write_settings,
 )
+from rite_ai.managers.progress import Footprint, footprint
 from rite_ai.managers.session import (
     PROMPT_FILE,
     StartResult,
@@ -135,8 +141,10 @@ from.
 # Loop verdicts that end the lifecycle (§9.14.4). `closed` is here because a
 # window authorising zero Workers is the user saying "not now", and a Manager
 # that kept spending through it would be ignoring them.
-STOP_VERDICTS = frozenset({"idle", "deadlocked", "unknown", "closed"})
-CONTINUE_VERDICTS = frozenset({"ready", "saturated", "blocked"})
+STOP_VERDICTS = frozenset(
+    {"idle", "deadlocked", "unknown", "closed", "waiting-on-user"}
+)
+CONTINUE_VERDICTS = frozenset({"ready", "saturated", "blocked", "refining"})
 """⚠ **Stated, so that continuing is a DECISION rather than a fallthrough.**
 
 A draft had only `STOP_VERDICTS` and `if answer in STOP_VERDICTS: return` —
@@ -156,8 +164,13 @@ The asymmetry decides the default for anything in NEITHER set: an
 unrecognised verdict that stops costs a restart, and one that continues
 costs quota. §5.1.1 — a safety property may fail closed, never open.
 
-Together they are exhaustive over `loop`'s seven verdicts, and a test
-asserts it, so an eighth cannot be added without classifying it."""
+Together they are exhaustive over `loop`'s nine verdicts, and a test
+asserts it, so a tenth cannot be added without classifying it.
+
+⚠ **`waiting-on-user` stops only the SESSIONS, not the run (TR2).** It
+waits in `_wait_for_mail` and spends nothing until the User answers (a
+reply is mail) or a refinement round's deadline passes. Ending the run
+there would drop an Owner whose only work is waiting on him."""
 
 
 def launch_command(
@@ -167,6 +180,7 @@ def launch_command(
     permission: str = "",
     agent: str = "",
     start_handle: str = "",
+    model: str = "",
 ) -> str:
     """What to run in the pane, in the engine's OWN vocabulary (B3a).
 
@@ -240,6 +254,16 @@ def launch_command(
     # token is never an argument. (An earlier draft passed it through
     # `$RITE_PROMPT` in the inherited environment; the file is what ships,
     # and `session.PROMPT_FILE` records why.)
+    if permission and spelling.permission_in_file:
+        # ⚠ REFUSED, not written and not dropped. This engine reads its
+        # permission from a config file the supervisor writes before every
+        # launch (`cursor_login.write_config`). A flag here would be one the
+        # engine ignores, which reads as a permission that is in force.
+        raise ValueError(
+            f"{command!r} reads its permission mode from "
+            f"{spelling.permission_in_file}, which the supervisor writes; a "
+            "permission flag here would be ignored, so it is refused"
+        )
     if permission:
         # ⚠ **EVERY cycle, not just the first.** Resuming with `-p` does not
         # restore the mode a session was in — that restoration explicitly
@@ -256,6 +280,26 @@ def launch_command(
             pass
         else:
             parts.append(permission)
+    if model:
+        # A Claude Manager's declared model (`coordination.manager_roles`).
+        # Checked again HERE, at the boundary that reaches the shell, as the
+        # resume id is below: the parser's check is one caller's.
+        from rite_ai.config.managers import claude_model_problem
+        from rite_ai.managers.engines import CLAUDE as CLAUDE_SPELLING
+        from rite_ai.managers.engines import SUBSTITUTED
+
+        if spelling not in (CLAUDE_SPELLING, SUBSTITUTED):
+            raise ValueError(
+                f"{command!r} takes its model from its role's endpoint, not a "
+                "--model flag; refused rather than written where it is ignored"
+            )
+        problem = claude_model_problem(model)
+        if problem:
+            raise ValueError(f"refusing to launch with model {model!r}: {problem}")
+        # QUOTED: `claude-opus-5-5[1m]` is a valid id and `[1m]` is a shell
+        # glob, so unquoted, a file in the pane's directory named
+        # `claude-opus-5-51` would become the model.
+        parts.append(f"--model {shlex.quote(model)}")
     if resume_id:
         # ⚠ **REFUSES rather than escapes, and raises rather than drops the
         # flag.** This string is handed to `tmux new-session`, which runs it
@@ -278,6 +322,9 @@ def launch_command(
                 f"refusing to build a launch command with a resume id that "
                 f"{problem}. This string is run by a shell."
             )
+        problem = handle_problem(spelling, resume_id)
+        if problem:
+            raise ValueError(f"refusing to resume {resume_id!r}: it {problem}")
         if not spelling.resume:
             raise ValueError(
                 f"{command!r} has no resume spelling rite knows, so there is "
@@ -305,6 +352,9 @@ def launch_command(
                 f"refusing to build a launch command with a session handle "
                 f"that {problem}. This string is run by a shell."
             )
+        problem = handle_problem(spelling, start_handle)
+        if problem:
+            raise ValueError(f"refusing to start {start_handle!r}: it {problem}")
         if spelling.start:
             parts.append(spelling.start.format(handle=start_handle))
     base = " ".join(parts)
@@ -315,6 +365,59 @@ def launch_command(
     # Redirected, not an argument: `tmux new-session` puts its command on
     # tmux's argv where `ps` shows it to every local account.
     return f"{base} < {shlex.quote(str(prompt_path))}"
+
+
+def _say_if_the_window_was_cut(
+    root: Path,
+    manager: str,
+    agent: str,
+    started: float,
+    ended: float,
+    say,
+    told,
+    *,
+    monotonic_elapsed: float | None = None,
+) -> list:
+    """Say whether Ollama cut this local Manager's prompt during the cycle.
+
+    Observed (plan, Track MS): a prompt over the window is cut from the front
+    with no error, and the cycle then ends normally with work done on a
+    fragment. Only Ollama's log records it (`local.truncation`), and it does
+    not say whose prompt it was: a cut is the SERVER'S, reported with the
+    other Managers on the same endpoint named. Returns the cuts, for the
+    check-in record. A "cannot tell" is said once per reason per
+    run (`told`), because a line repeated every cycle is one nobody reads.
+    """
+    if agent != "goose":
+        return []
+    from rite_ai.config.parse import ParseError, parse_config
+    from rite_ai.local import truncation
+
+    parsed = parse_config(root / ".rite" / "config.yaml")
+    if isinstance(parsed, ParseError):
+        return []
+    role = next(
+        (r for r in parsed.coordination.manager_roles if r.name == manager), None
+    )
+    if role is None or not role.endpoint:
+        return []
+    verdict = truncation.check_cycle(
+        role.endpoint, started, ended, monotonic_elapsed=monotonic_elapsed
+    )
+
+    def base(endpoint: str) -> str:
+        return endpoint.rstrip("/").removesuffix("/v1")
+
+    sharing = tuple(
+        r.name
+        for r in parsed.coordination.manager_roles
+        if r.name != manager and r.is_local and base(r.endpoint) == base(role.endpoint)
+    )
+    line = truncation.describe(manager, role.context_window, verdict, sharing)
+    if line and (verdict.cut or line not in told):
+        told.add(line)
+        say(line)
+    return verdict.cuts
 
 
 def _say_if_the_sandbox_refused(root: Path, manager: str, pane: str, say) -> None:
@@ -367,21 +470,56 @@ def _honour_worker_requests(root: Path, manager: str, broker, say) -> None:
     ⚠ **Every outcome is SAID.** A refusal nobody sees is the defect C21
     exists for, and here it is worse: a Manager that asked for something it
     may not have is either confused or compromised.
+
+    ⚠ **And every outcome is TOLD to the Manager that asked** (`telling`).
+    `broker.instructions` promises it "reports the result in your next
+    instruction"; this used to reach only `say`, the operator's terminal, so a
+    Manager whose request was refused never heard and waited for a Worker that
+    was never coming. Nothing compared the promise, in the Manager's
+    instructions, with where the outcome went, a terminal, so nothing would
+    have noticed (dogfood DF13). The note is mail: at an idle board it starts a
+    session to deliver it, and at any other exit `rite start` says it is
+    undelivered.
     """
+    from rite_ai.managers.telling import tell_manager
+
     pending = take_requests(root, manager)
     if not pending:
         return
+
+    def tell(text: str) -> None:
+        try:
+            tell_manager(root, manager, "a Worker you asked for", text)
+        except OSError as e:
+            say(f"could not tell {manager!r} what happened to its request: {e}")
+
     if broker is None:
-        say(
+        said = (
             f"{manager!r} asked to start {len(pending)} Worker(s), and this "
             "run has no broker configured to do it. Nothing was started — "
             "the requests are discarded rather than queued, because nothing "
             "here would run them later."
         )
+        say(said)
+        tell(
+            f"You asked for {len(pending)} Worker(s). None was started: this "
+            "run has no way to start Workers, and the requests were discarded, "
+            "not queued. Do not wait for them; say so to the User."
+        )
         return
     for _, raw in pending:
         ok, message = broker(raw)
         say(("started: " if ok else "") + message)
+        tell(
+            ("Started: " if ok else "NOT started: ")
+            + message
+            + (
+                ""
+                if ok
+                else " Nothing is running for this request; do not wait for "
+                "it. Fix what it names, or say so to the User."
+            )
+        )
 
 
 def _say_refusals(
@@ -457,18 +595,81 @@ def _say_refusals(
     base = claude_login.projects_dir(root, manager) if manager else None
     refused = list(dict.fromkeys(refused_commands(root, since, base=base)))
     for command in refused:
-        if allowed(command):
+        if _substitutes(command):
+            # ⚠ W9 (v0.6.0 readiness). This used to fall to the branch below
+            # and blame the settings file. Claude Code asks approval for a
+            # substitution whose inner command is not on the allowlist, and
+            # runs it when it is (F14) — either way the text was being read
+            # as shell.
+            say(
+                f"refused: {command.strip()!r} — it runs a command inside "
+                "backticks or $( ), which the engine asks approval for. When "
+                "that is text for `rite reply`, `rite ask` or `rite route`, "
+                "the text goes on stdin through a quoted heredoc, as the "
+                "Manager's instructions show, never in double quotes."
+            )
+        elif allowed(command):
+            # ⚠ TWO CAUSES, and the transcript does not say which (SB11,
+            # observed on Linux 2026-09-28): `printf … > notes/x.txt` was
+            # refused while `echo`, `git status` and `ls` ran under the same
+            # allowlist in the same session, so the settings WERE applied.
+            # This used to say flatly that they were not. A command that
+            # writes a file through a redirection is the observed case, so it
+            # is named first when the command has one.
+            redirect = _writes_through_a_redirection(command)
             say(
                 f"refused: {command.strip()!r} — which rite's own allowlist "
-                f"DOES cover. The engine did not apply "
-                f"{settings_path(root)}; under `-p` a settings file that "
-                f"fails validation is ignored without a message. Check that "
-                f"file parses, and check `permissions.deny` in "
-                f"{Path('.claude') / 'settings.json'}."
+                "appears to cover. rite cannot tell from the transcript why: "
+                + (
+                    "most likely the engine asks approval for the file this "
+                    "command writes through `>`, whatever the rule for its "
+                    "program (observed on Linux, with other allowlisted "
+                    "commands running in the same session); or "
+                    if redirect
+                    else "either the engine refuses this form of the command "
+                    "despite the rule, or "
+                )
+                + f"it did not apply {settings_path(root)} (under `-p` a "
+                "settings file that fails validation is ignored without a "
+                "message). If other allowlisted commands ran in that session, "
+                "it is the first. Otherwise check that file parses, and "
+                f"`permissions.deny` in {Path('.claude') / 'settings.json'}."
             )
         else:
             say(refusal(command, root))
     return [c.strip() for c in refused]
+
+
+def _substitutes(command: str) -> bool:
+    """A backtick or `$(` outside single quotes, in the command's own line.
+    The body of a quoted heredoc (`<<'X'`) is text, not shell, so only what
+    comes before its first newline counts."""
+    head = command.split("\n", 1)[0] if "<<'" in command else command
+    # An apostrophe inside double quotes ("don't") opens nothing: prose is
+    # exactly where F14's backticks were.
+    quote, escaped = "", False
+    for i, char in enumerate(head):
+        if escaped:
+            escaped = False
+        elif char == "\\" and quote != "'":
+            escaped = True
+        elif quote != "'" and (char == "`" or head.startswith("$(", i)):
+            return True
+        elif char in "'\"" and quote in ("", char):
+            quote = "" if quote else char
+    return False
+
+
+def _writes_through_a_redirection(command: str) -> bool:
+    """A `>` or `>>` outside quotes. `2>&1` is not one: the lexer reads its
+    `>&` as one token, a descriptor duplication that writes no file."""
+    import shlex
+
+    try:
+        tokens = list(shlex.shlex(command, posix=True, punctuation_chars=True))
+    except ValueError:
+        return ">" in command
+    return any(token in (">", ">>", "&>", ">|") for token in tokens)
 
 
 def _resume_id_source(engine: str, agent: str = ""):
@@ -500,6 +701,16 @@ def _resume_id_source(engine: str, agent: str = ""):
     spelling = spelling_for(engine, agent)
     if not spelling.handle_is_ours:
         return _default_resume_id
+    if spelling.handle_is_uuid:
+        # ⚠ NOT `session_name`. Cursor spells start and continue alike, so a
+        # handle derived from the name would make `--fresh` continue the old
+        # chat. The handle is a UUID `_open_chat` recorded BEFORE the first
+        # launch, so the answer is whatever is recorded.
+        def recorded(root: Path, manager: str, since: float = 0.0) -> str:
+            chat = recorded_chat(root, manager)
+            return chat.handle if chat is not None else ""
+
+        return recorded
 
     def chosen(root: Path, manager: str, since: float = 0.0) -> str:
         # Deterministic, and the same string the tmux session carries — one
@@ -538,6 +749,80 @@ def _designation_is_ours(
     return belongs_to_project(
         root, designation, base=claude_login.projects_dir(root, manager)
     )
+
+
+@dataclass
+class _Chat:
+    """A Cursor Manager's conversation across one run (CU3)."""
+
+    handle: str
+    created_ms: int | None
+    config: Path
+    expected: int | None = None
+    """What `before_turn` found for the cycle now running: None for a first
+    turn, else the creation time it must keep."""
+
+
+def _open_chat(root: Path, manager: str, fresh: bool, say, spelling):
+    """The chat this run continues, or a refusal.
+
+    ⚠ **RECORDED BEFORE ANY LAUNCH.** A fresh handle is written to the
+    designation first; if that write fails, nothing runs. A launch before the
+    record would be a chat rite could not name afterwards.
+
+    ⚠ **`--fresh` rewrites the designation up front here, unlike Claude's
+    (C17).** Claude's id exists only once a cycle has run, so an interrupted
+    `--fresh` leaves the old designation; Cursor's handle is rite's before
+    the first launch, and recording it then is what rules the race out.
+    """
+    config = cursor_chat.config_dir(root, manager)
+    existing = None if fresh else recorded_chat(root, manager)
+    if existing is not None and existing.broken:
+        return (
+            f"refusing to continue Manager {manager!r}: its conversation is "
+            f"recorded as broken ({existing.broken}). Start a new one "
+            f"deliberately with `rite start {manager} --fresh`."
+        )
+    if existing is not None and existing.handle:
+        say(f"continuing Manager {manager!r}'s Cursor chat {existing.handle}")
+        return _Chat(existing.handle, existing.created_ms, config)
+    handle = new_handle(spelling)
+    try:
+        record_chat(root, manager, handle)
+    except OSError as err:
+        return (
+            f"refusing to start Manager {manager!r}: the new chat's handle "
+            f"could not be recorded ({err}), and a chat rite cannot name "
+            "afterwards could not be continued"
+        )
+    say(f"Manager {manager!r} starts a new Cursor chat, {handle}")
+    return _Chat(handle, None, config)
+
+
+def _check_chat_after(root: Path, manager: str, chat: _Chat, board, say) -> str:
+    """Record what the cycle that just ran did to the chat. Returns the
+    reason the conversation is now broken, or ""."""
+    after = cursor_chat.after_turn(
+        chat.expected, cursor_chat.observe(chat.config, chat.handle)
+    )
+    if after.outcome == cursor_chat.CONFIRMED:
+        record_chat(
+            root, manager, chat.handle, created_ms=after.created_at_ms, board=board
+        )
+        chat.created_ms = after.created_at_ms
+    elif after.outcome == cursor_chat.NO_CHAT:
+        say(f"{after.reason}; the next cycle is a first turn again")
+    elif after.outcome == cursor_chat.REPLACED:
+        record_chat(
+            root, manager, chat.handle, created_ms=chat.created_ms, broken=after.reason
+        )
+        say(f"⚠ Manager {manager!r}: {after.reason}")
+        return after.reason
+    elif chat.created_ms is None and after.created_at_ms is not None:
+        # CONTINUED on a chat adopted by `before_turn`: record it now.
+        record_chat(root, manager, chat.handle, created_ms=after.created_at_ms)
+        chat.created_ms = after.created_at_ms
+    return ""
 
 
 def _default_resume_id(root: Path, manager: str, since: float = 0.0) -> str:
@@ -642,10 +927,27 @@ def supervise(
     from rite_ai.managers.routing import forget_supervisor, record_supervisor
 
     record_supervisor(root, manager, os.getpid())
+    how = "stopped by an error"
     try:
-        return _supervise(root, manager, waiting=waiting, **options)
+        result = _supervise(root, manager, waiting=waiting, **options)
+        # Its own words, so the Owner can say HOW it ended, not only that it
+        # did: a Ctrl-C, a bound and a finished queue all end a run cleanly.
+        how = result.reason
+        if getattr(waiting, "is_owner", False):
+            from rite_ai.managers.routing import verification_summary
+
+            counted = verification_summary(root, manager, waiting.began)
+            if counted:
+                # BESIDE the session count, never inside it.
+                result = SuperviseResult(
+                    result.ok, f"{result.reason} · {counted}", result.cycles
+                )
+        return result
     finally:
-        forget_supervisor(root, manager, os.getpid())
+        # Recorded however the run ends, a Ctrl-C and an error included. Only
+        # a KILLED run skips it, and that is exactly what `supervisor_state`
+        # reads as DIED.
+        forget_supervisor(root, manager, os.getpid(), how)
 
 
 def _supervise(
@@ -669,8 +971,12 @@ def _supervise(
     broker: object = None,
     router: object = None,
     waiting: object = None,
+    chores: object = None,
     poll: float = POLL_SECONDS,
     now: object = None,
+    watch: object = None,
+    refine: object = None,
+    refinement_brief: object = None,
 ) -> SuperviseResult:
     """Run the Manager until a bound or a stop verdict ends it.
 
@@ -699,9 +1005,30 @@ def _supervise(
     know a ceiling bounds anything.
     """
     clock = now if callable(now) else time.time
+    # TR2's no-progress guard: what a refinement session was handed to start,
+    # and when. Set when one starts, counted when it ends.
+    handed: dict = {}
+    handed_at = 0.0
+    told: set[str] = set()
+    """"Cannot tell" lines about cut prompts already said in this run."""
     # Injectable so a test can read what a human would have been told,
     # and a no-op by default so nothing prints from a library call.
     say = note if callable(note) else (lambda _m: None)
+    if callable(watch):
+        # ⚠ `watch(say)` rides on the router, deliberately (dogfood Q1–Q4,
+        # part B): every place this supervisor does its file work with no
+        # engine to watch — each poll while a session runs, each cycle
+        # boundary, each tick of a wait — already calls `router(say)`. Joined
+        # here once, it runs at all of them, and a Worker's question is seen
+        # whether or not the Owner has a session. The watcher throttles
+        # itself; it is called at the poll rate.
+        routing_step = router
+
+        def router(say_):
+            if callable(routing_step):
+                routing_step(say_)
+            watch(say_)
+
     begin = clock()
     deadline = begin + window_seconds if window_seconds > 0 else None
     launch = starter if callable(starter) else _default_starter
@@ -741,6 +1068,11 @@ def _supervise(
             "allowlist a `claude` Manager gets does not exist here, and the "
             "sandbox below is the ONLY boundary this Manager has."
         )
+    elif spelling.permission_in_file:
+        # CU8: the allowlist is written to the engine's own config file before
+        # every launch (`cursor_login.write_config`), not passed on argv.
+        permission = ""
+        say(cursor_login.announcement(manager))
     else:
         permission = launch_arguments(write_settings(root))
         say(announcement(manager))
@@ -776,9 +1108,27 @@ def _supervise(
     # Settled, not emergent: skipping would orphan the new session — the
     # user starts over, works all day, and tomorrow's bare `rite start`
     # silently returns to the conversation they deliberately abandoned.
+    # ⚠ CU3: an engine whose handle is a UUID rite chooses (Cursor) takes its
+    # handle from `_open_chat`, recorded BEFORE any launch, and never reaches
+    # the discovery, foreign-designation or fresh-fallback paths below. Each
+    # of those is correct for an engine that assigns its own id and wrong
+    # here: a UUID is never `session_name`, so the foreign check would call
+    # every Cursor designation foreign and start fresh.
+    chat: _Chat | None = None
+    if spelling.handle_is_uuid:
+        opened = _open_chat(root, manager, fresh, say, spelling)
+        if isinstance(opened, str):
+            return SuperviseResult(False, opened, [])
+        chat = opened
     resume_from = "" if fresh else designated(root, manager)
-    foreign = bool(resume_from) and not _designation_is_ours(
-        root, manager, resume_from, spelling_for(engine, agent).handle_is_ours
+    if chat is not None:
+        resume_from = chat.handle
+    foreign = (
+        chat is None
+        and bool(resume_from)
+        and not _designation_is_ours(
+            root, manager, resume_from, spelling_for(engine, agent).handle_is_ours
+        )
     )
     if foreign:
         # ⚠ C8. Said in its own words, not `_could_not_continue`'s: "the
@@ -794,13 +1144,15 @@ def _supervise(
         )
         resume_from = ""
     continuing = bool(resume_from)
-    tried_designation = continuing
+    # Never for a chat: Cursor does not fail on an unknown chat (it creates
+    # one), and falling back to a NEW handle would orphan the recorded one.
+    tried_designation = continuing and chat is None
     # The board as it stood when the current cycle LAUNCHED (`board_context`).
     # Read at launch, not when the cycle is designated: a session started with
     # no board may configure one before it ends, and must still be recorded
     # as having begun without one.
     launched_under: dict | None = None
-    if not fresh and not continuing and not foreign:
+    if chat is None and not fresh and not continuing and not foreign:
         # ⚠ A DIFFERENT FACT from "the one you had is gone", and it reads
         # differently on purpose — the timezone precedent, where an unset
         # zone and a rejected one do not print the same line.
@@ -819,6 +1171,30 @@ def _supervise(
                 f"starts fresh."
             )
 
+    # RP1 piece 2: BEFORE the first session, so everything this Manager says
+    # from here is tracked until it reaches a person, and only what was
+    # already in its outbox is recorded as predating the tracking.
+    from rite_ai.managers import pending
+
+    tracking = pending.sync(root, manager)
+    if tracking:
+        say(tracking)
+
+    # ⚠ THE NO-PROGRESS GUARD (F22). Set when a session the BOARD started
+    # ended having changed nothing rite can see; cleared by anything that
+    # changes. While set, a board that still reads the same starts no
+    # session. See `progress` for what counts and why.
+    stalled: _Stalled | None = None
+    # ⚠ A PERSON'S MESSAGE IS DELIVERED, OR THE PERSON IS TOLD IT WAS NOT
+    # (coordinator, 2026-09-28). The inbox names a session was started to
+    # deliver: if the same ones are still there afterwards, that session
+    # could not take them, and they are reported rather than retried (F22's
+    # lesson: repeating a session with the same inputs is the loop).
+    delivering: set[str] = set()
+    # The board as the verdict last read it. A cycle mail started is judged
+    # against it too: mail is new INPUT, not progress, and a session handed a
+    # message that then changes nothing is as idle as one handed none.
+    last_basis = None
     while True:
         # ⚠ WHAT CAUSES THIS CYCLE. "" means the ordinary causes: the last
         # session ended cleanly and the board says continue. "mail" means a
@@ -829,21 +1205,35 @@ def _supervise(
         # rather than bounds, and the window is what limits cost because the
         # count does not (§9.14.5).
         if len(cycles) >= max_sessions:
-            why = waiting.reason() if waiting is not None else ""
+            why = _reason_to_wait(root, manager, waiting, router, slack, say)
             if not why:
+                extra = len(cycles) - max_sessions
                 return SuperviseResult(
                     True,
-                    f"ceiling reached: {max_sessions} session(s) started. This "
-                    f"is a COUNT, not a spend limit — a session may run for any "
-                    f"length of time inside it.",
+                    f"ceiling reached: {max_sessions} session(s) started"
+                    + (
+                        f", and {extra} more started by routed mail past it "
+                        f"({len(cycles)} in all)"
+                        if extra > 0
+                        else ""
+                    )
+                    + ". This is a COUNT, not a spend limit — a session may "
+                    "run for any length of time inside it.",
                     cycles,
                 )
             # ⚠ **THE CEILING IS SOFT WHILE ROUTES ARE OUTSTANDING (Robert,
-            # 2026-09-27), and that is said every time it bends.** It stops
-            # being a hard cap on sessions: each cycle past it is started by
-            # mail, never by the board, and waiting spends nothing — so the
-            # practical spend should fall — but it is no longer bounded by
-            # this number. The window still is.
+            # 2026-09-27), and that is said every time it bends.** Each cycle
+            # past it is started by mail, never by the board, and waiting
+            # spends nothing. ⚠ **But not without bound (W15 (a)):** observed,
+            # a secondary repeating itself drove five Owner sessions against a
+            # ceiling of two. So past the ceiling there is a second limit, the
+            # MAIL-STARTED CAP, derived from the work routed this run rather
+            # than from a second number, and reaching it is said as itself.
+            # ⚠ The cap is checked when a mail-started session would BEGIN,
+            # not before waiting: waiting spends nothing, and a note rite
+            # writes during the wait (DIED, FINISHED WITHOUT A REPLY) earns
+            # its own allowance. Checked before the wait, a death after a
+            # reply and a correction was refused before its note existed.
             stopped = _wait_for_mail(
                 root,
                 manager,
@@ -859,11 +1249,17 @@ def _supervise(
             )
             if stopped is not None:
                 return stopped
+            stopped = _at_the_cap(manager, waiting, max_sessions, cycles, why)
+            if stopped is not None:
+                return stopped
             cause = "mail"
+            # Recomputed: what was true when the wait began may not be now.
+            why = waiting.reason() or why
             say(
                 f"the ceiling ({max_sessions} session(s)) is reached, and it is "
                 f"SOFT while {why}: mail arrived, so this cycle starts because "
-                f"of it"
+                f"of it (session {len(cycles) + 1} of at most "
+                f"{waiting.cap(max_sessions)} under the mail-started cap)"
             )
         if deadline is not None and clock() >= deadline:
             return SuperviseResult(
@@ -901,7 +1297,7 @@ def _supervise(
         if callable(verdict) and not cause:
             answer = verdict(root)
             if answer in STOP_VERDICTS:
-                why = waiting.reason() if waiting is not None else ""
+                why = _reason_to_wait(root, manager, waiting, router, slack, say)
                 stopped = None
                 if why:
                     # ⚠ NOTHING ON THE BOARD IS NOT NOTHING TO DO when work is
@@ -924,6 +1320,63 @@ def _supervise(
                     )
                     if stopped is None:
                         cause = "mail"
+                if not cause and answer == "waiting-on-user" and stopped is None:
+                    # TR2: work is on the board and none of it can start
+                    # until the User answers. Wait, spending nothing; a reply
+                    # is mail, and a round's deadline passing wakes it too.
+                    say(
+                        f"{manager!r} waits on the User: "
+                        f"{getattr(answer, 'detail', '') or 'refinement'}"
+                    )
+                    stopped = _wait_for_mail(
+                        root,
+                        manager,
+                        None,
+                        router,
+                        slack,
+                        say,
+                        clock,
+                        deadline,
+                        poll,
+                        cycles,
+                        live,
+                        wake=_refinement_wake(root, manager, clock),
+                    )
+                    if stopped is not None:
+                        return stopped
+                    if mail_waiting(root, manager, INBOX):
+                        cause = "mail"
+                    else:
+                        continue
+                if not cause and answer == "idle" and stopped is None:
+                    # ⚠ AN IDLE BOARD IS NOT NOTHING TO DO WHILE A MESSAGE
+                    # WAITS. Found on Linux (SB11, 2026-09-28): `rite message`
+                    # said "delivered at the start of its next turn", and
+                    # `rite start` stopped on "the board has nothing ready"
+                    # with it undelivered and unsaid. Read as a STATE, now,
+                    # never as an event: whatever arrived while nothing was
+                    # watching is in the inbox, and that is what is asked.
+                    # Only `idle`: `closed` is the person's schedule, and the
+                    # other stop verdicts are faults; those runs end, and the
+                    # undelivered mail is SAID at the end of the run
+                    # (`undelivered_line`), as it is for every other exit.
+                    names = _inbox_names(root, manager)
+                    if names - delivering:
+                        delivering |= names
+                        cause = "mail"
+                        say(
+                            f"the board listed nothing ready, and {len(names)} "
+                            f"message(s) are waiting for {manager!r}: a session "
+                            "starts to deliver them"
+                        )
+                    elif names:
+                        say(
+                            f"{len(names)} message(s) are still waiting for "
+                            f"{manager!r} after a session was started to "
+                            "deliver them, so that session could not take them. "
+                            "Not retried: a session started again on the same "
+                            "mail would repeat the one that just could not."
+                        )
                 if not cause:
                     # ⚠ Before stopping: a check-in due in this window goes out
                     # rather than being skipped, and idle with questions queued
@@ -947,6 +1400,50 @@ def _supervise(
                     f"restart, one that continues costs quota.",
                     cycles,
                 )
+            elif (
+                stalled is not None
+                and _basis(answer) is not None
+                and _basis(answer) == stalled.basis
+            ):
+                # ⚠ F22: the board reads exactly as it did when a session that
+                # changed nothing began. Starting another would repeat it —
+                # observed, eight sessions in eighty seconds. Wait instead, in
+                # the one wait there is, spending nothing. Routed work keeps
+                # its own reasons to end the wait, so `waiting` goes in only
+                # when there is one (see `_wait_for_mail`).
+                why = _reason_to_wait(root, manager, waiting, router, slack, say)
+                stopped = _wait_for_mail(
+                    root,
+                    manager,
+                    waiting if why else None,
+                    router,
+                    slack,
+                    say,
+                    clock,
+                    deadline,
+                    poll,
+                    cycles,
+                    live,
+                    wake=_stalled_wake(root, manager, verdict, stalled, clock),
+                    idle_line=_idle_line(manager, stalled, clock),
+                )
+                if stopped is not None:
+                    return stopped
+                # Whatever woke it earns ONE session: the guard is set again
+                # only by another session that changes nothing.
+                stalled = None
+                if mail_waiting(root, manager, INBOX):
+                    cause = "mail"
+                else:
+                    # The board or the project changed: decide afresh, from
+                    # the top, bounds first.
+                    continue
+            if not cause:
+                last_basis = _basis(answer)
+                handed, handed_at = _record_refinement_session(
+                    root, manager, answer, clock, say
+                )
+        cycle_basis = last_basis
 
         try:
             # ⚠ **THE PREVIOUS SESSION IS ENDED HERE, and the position is the
@@ -997,6 +1494,26 @@ def _supervise(
             # carries a DIFFERENT instruction. See `CONTINUATION` for why
             # this amends D-90 rather than working around it.
             cycle_prompt = CONTINUATION if resume_from else prompt
+            if chat is not None:
+                # ⚠ BEFORE the mail is taken: a refusal here must not lose it.
+                before = cursor_chat.before_turn(
+                    chat.created_ms, cursor_chat.observe(chat.config, chat.handle)
+                )
+                if before.outcome == cursor_chat.REFUSE:
+                    return SuperviseResult(
+                        False,
+                        f"refusing to continue Manager {manager!r}: {before.reason}",
+                        cycles,
+                    )
+                chat.expected = before.created_at_ms
+                # CU8: rite's allowlist, written fresh before EVERY launch, from
+                # outside the boundary, and checked after the cycle. The
+                # Manager can write this file on every platform (Cursor must
+                # rewrite it each turn, CU8), so the check is the protection.
+                cursor_login.write_config(root, manager)
+                cycle_prompt = (
+                    CONTINUATION if before.outcome == cursor_chat.CONTINUE else prompt
+                )
             # ⚠ **THE ONE HOOK.** Messages are appended to the instruction
             # already composed for this cycle rather than delivered by a
             # second mechanism. The engine runs with `-p` and has read its
@@ -1022,11 +1539,25 @@ def _supervise(
             waiting_for_it = take_mail(root, manager, INBOX)
             if waiting_for_it:
                 say(f"delivering {len(waiting_for_it)} message(s) to {manager!r}")
+                # ⚠ TR9: `take_mail` has just deleted them, and a chore must
+                # quote the User's words as delivered, so they are kept here,
+                # outside the boundary, before the Manager ever sees an id.
+                try:
+                    delivered.record(root, manager, waiting_for_it)
+                except OSError as e:
+                    say(
+                        f"could not record the instructions delivered to "
+                        f"{manager!r} ({e}); a chore asked for from them will "
+                        "be refused"
+                    )
+            refined_now = _refinement_heard(refine, waiting_for_it, say)
             # Composed once, for both launches below: the fallback needs the
             # same mail and the same reply instructions, differing only in
             # which opening text it starts from.
             extras = (
                 delivery_note(waiting_for_it)
+                + refined_now
+                + _refinement_brief(refinement_brief, say)
                 + how_to_reply(root, manager)
                 + checkins.instructions(root, manager)
                 + boundary.instruction
@@ -1038,6 +1569,11 @@ def _supervise(
             # given that prompt, so that is the board its conversation began
             # under. Read here only for a caller that does not say.
             launched_under = began_under if began_under is not None else board_now(root)
+            before = footprint(root, manager) if cycle_basis is not None else None
+            # Taken BEFORE the launch: the engine talks to its model the moment
+            # tmux starts it, so a window opened after `launch` returns would
+            # miss a cut in its first request (`_say_if_the_window_was_cut`).
+            launched_wall, launched_mono = clock(), time.monotonic()
             result: StartResult = launch(
                 root,
                 manager,
@@ -1243,15 +1779,59 @@ def _supervise(
                 time.sleep(poll)
             cycle.ended_at = clock()
             cycle.attended = attended
+            # ⚠ BEFORE the Worker requests are honoured below, which removes
+            # them: a request is progress, and must still be here to count.
+            stalled = None
+            if before is not None:
+                after = footprint(root, manager)
+                if not after.differs_from(before):
+                    stalled = _Stalled(cycle.number, cycle_basis, after)
             refused = _say_refusals(
                 root, cycle.started_at, say, engine, agent, live_pane, manager
             )
+            # ⚠ Deliveries BEFORE Worker requests: "deliver alpha, then start
+            # alpha on its next ticket" in one cycle needs alpha's sandbox gone
+            # first, and a delivery removes it (PB1).
+            from rite_ai.publishing.requests import honour_deliveries
+
+            honour_deliveries(root, manager, say)
+            # And the PRs delivered earlier: merged ones release their
+            # claims, and `auto_merge` merges through its gate (PB1 piece 5).
+            from rite_ai.publishing.merging import tick as watch_pull_requests
+
+            watch_pull_requests(root, manager, say)
             _honour_worker_requests(root, manager, broker, say)
+            if callable(chores):
+                # TR9: at the boundary with the Worker requests, and for the
+                # same reason: it talks to the board, which the two-second
+                # poll must not wait on.
+                chores(say)
+            if callable(refine):
+                # TR2: the rounds the Owner asked for this turn go out, with
+                # the board, at the same boundary and for the same reason.
+                _refinement_step(refine, say)
+            # AFTER the rounds went out: a round sent this turn is progress.
+            _count_misses(root, manager, handed, handed_at, say)
+            handed, handed_at = {}, 0.0
             if callable(router):
                 # And once more at the boundary, for a request written in the
                 # cycle's last two seconds.
                 router(say)
             _say_if_the_sandbox_refused(root, manager, live_pane, say)
+            cuts = _say_if_the_window_was_cut(
+                root,
+                manager,
+                agent,
+                launched_wall,
+                cycle.ended_at,
+                say,
+                told,
+                # Only a real wall clock can be checked against a monotonic
+                # one; an injected clock is a test's.
+                monotonic_elapsed=(
+                    time.monotonic() - launched_mono if clock is time.time else None
+                ),
+            )
 
             how = ending(result.session, human_was_present=attended, pane=live_pane)
             cycle.ending = how.kind
@@ -1270,7 +1850,20 @@ def _supervise(
             # wants to pick up, which is the mechanic the design note left
             # open and warned about.
             observed = next_id(root, manager, cycle.started_at)
-            if observed:
+            chat_broken = ""
+            config_tampered = ""
+            if chat is not None:
+                chat_broken = _check_chat_after(
+                    root, manager, chat, launched_under, say
+                )
+                # CU8: the allowlist rite wrote must still be the one on disk.
+                # A change means something inside the boundary rewrote it, so
+                # the run stops rather than continuing under an allowlist rite
+                # did not choose.
+                config_tampered = cursor_login.config_problem(root, manager)
+                if config_tampered:
+                    say(f"⚠ Manager {manager!r}: {config_tampered}")
+            if observed and chat is None:
                 # A fresh cycle — including the fallback after a resume that
                 # did not take — records the board it began under; a continued
                 # one carries the recorded board forward.
@@ -1295,6 +1888,22 @@ def _supervise(
                     "ending": how.kind,
                 },
             )
+            for cut in cuts:
+                # For the standup, which renders it (`standup.digest`): printed
+                # lines are gone by the check-in. SERVER-scoped by name and by
+                # field, because the log does not say whose prompt it was.
+                checkins.record(
+                    root,
+                    manager,
+                    {
+                        "event": "ollama_cut",
+                        "scope": "server",
+                        "at": cut.at,
+                        "number": cycle.number,
+                        "sent": cut.sent,
+                        "kept": cut.kept,
+                    },
+                )
             for command in refused:
                 checkins.record(
                     root,
@@ -1315,6 +1924,23 @@ def _supervise(
             if said:
                 say(said)
 
+            if config_tampered:
+                return SuperviseResult(
+                    False,
+                    f"stopped after {len(cycles)} session(s): {config_tampered}. "
+                    "Nothing further runs on an allowlist rite did not write; "
+                    "the next `rite start` writes it afresh, and what changed "
+                    "it is worth finding first.",
+                    cycles,
+                )
+            if chat_broken:
+                return SuperviseResult(
+                    False,
+                    f"stopped after {len(cycles)} session(s): {chat_broken}. "
+                    f"No further cycle runs on it; `rite start {manager} "
+                    "--fresh` starts a new conversation deliberately.",
+                    cycles,
+                )
             if not how.resume:
                 return SuperviseResult(
                     how.kind != "crashed",
@@ -1377,7 +2003,7 @@ def _supervise(
             # cleared here, because clearing would lose that id for good, and
             # whether `--fresh` should drop it up front is a design decision
             # rather than a fix.
-            if cycles:
+            if cycles and chat is None:
                 interrupted_id = next_id(root, manager, cycles[-1].started_at)
                 if interrupted_id:
                     designate(
@@ -1397,6 +2023,31 @@ def _supervise(
             return _torn_down(
                 root, manager, live or session_name(root, manager), cycles, say
             )
+
+
+def _at_the_cap(manager, waiting, ceiling: int, cycles, why: str):
+    """A result that stops the run at the mail-started cap, or None.
+
+    ⚠ **Said as ITSELF, never as the ceiling.** "Reached the session ceiling"
+    and "reached the mail-started cap with routed work outstanding" need
+    different responses: the first is the number the person chose, the second
+    means a Manager kept sending mail past what its routed work explains."""
+    cap = waiting.cap(ceiling)
+    if len(cycles) < cap:
+        return None
+    routed = waiting.routed_this_run()
+    notes = waiting.notes_this_run()
+    return SuperviseResult(
+        True,
+        f"stopped at the MAIL-STARTED CAP, not the ceiling: {len(cycles)} "
+        f"session(s) started, and the cap is --sessions {ceiling} plus 2 per "
+        f"message routed this run ({routed})"
+        + (f" plus 1 per note rite wrote ({notes})" if notes else "")
+        + f" = {cap}. It was reached while "
+        f"{why}. Anything still arriving waits in the inbox for the next "
+        f"`rite start {manager}`.",
+        cycles,
+    )
 
 
 _sleep = time.sleep
@@ -1419,6 +2070,204 @@ def _relay_tick(root: Path, manager: str, router, slack, say) -> None:
             say(line)
 
 
+BOARD_RECHECK_SECONDS = 60.0
+"""How often a Manager waiting under the no-progress guard reads the board
+again. A read is a request to the backend, so not every poll tick."""
+PROJECT_RECHECK_SECONDS = 15.0
+"""How often it looks at the project again (two `git` calls)."""
+
+
+@dataclass(frozen=True)
+class _Stalled:
+    """A session the board started that changed nothing (F22)."""
+
+    number: int
+    basis: object
+    footprint: Footprint
+
+
+def _refinement_step(refine, say) -> None:
+    """`refine(say)`: send the rounds asked for, retry unwritten accepts.
+    Never ends a run: a refinement that could not run is said."""
+    try:
+        refine(say)
+    except Exception as e:  # noqa: BLE001 - said, and the cycle goes on
+        say(f"refinement could not run this cycle: {type(e).__name__}: {e}")
+
+
+def _refinement_brief(brief, say) -> str:
+    """How the Owner refines, and this cycle's refinement work (TR2), or "".
+    Never ends a run: a brief that could not be composed is said, and the
+    cycle goes on without it, which the Owner is told."""
+    if not callable(brief):
+        return ""
+    try:
+        return brief(say) or ""
+    except Exception as e:  # noqa: BLE001 - said, and the cycle goes on
+        say(f"the refinement brief could not be composed: {e}")
+        return (
+            "\n\n## Refinement: this cycle (rite)\n\nrite could not compose "
+            "this cycle's refinement list. Do not refine from memory.\n"
+        )
+
+
+def _refinement_heard(refine, messages, say) -> str:
+    """What the User's replies just delivered did to their rounds, as a
+    section of this cycle's instruction, or "" (TR2). rite's lines, in
+    rite's words: whether an accept was recorded is rite's to say."""
+    if not callable(refine) or not messages:
+        return ""
+    try:
+        lines = refine(say, messages=messages) or []
+    except Exception as e:  # noqa: BLE001 - said, and the cycle goes on
+        say(f"refinement could not read the delivered replies: {e}")
+        return ""
+    if not lines:
+        return ""
+    return (
+        "\n\n## Refinement: what the User's replies did (rite)\n\n"
+        + "\n".join(f"- {line}" for line in lines)
+        + "\n"
+    )
+
+
+def _refinement_wake(root: Path, manager: str, clock):
+    """`wake` for a wait on the User: a refinement round's deadline passed
+    since the wait began. Read from the round ledger alone, never the board,
+    so a long wait costs no board reads. A reply needs no wake: it is mail."""
+    from rite_ai.refinement import rounds
+
+    began = clock()
+
+    def wake() -> str:
+        now = clock()
+        events = rounds.events_since(rounds.all_attempts(root, manager), began, now=now)
+        if events.deadlines:
+            return f"{events.deadlines} refinement round(s) reached their deadline"
+        return ""
+
+    return wake
+
+
+def _record_refinement_session(
+    root: Path, manager: str, answer, clock, say
+) -> tuple[dict, float]:
+    """A session starting for refinement is recorded, so the next one needs
+    the User to have done something first (the note's part 3.4 step 0).
+    Returns what it was handed to start and when, for `_count_misses`."""
+    if str(answer) != "refining":
+        return {}, 0.0
+    from rite_ai.refinement import rounds
+
+    at = clock()
+    handed = dict(getattr(answer, "starting", None) or {})
+    try:
+        rounds.record_session(root, manager, at)
+    except OSError as e:
+        # Unrecorded, the next cycle reads a first look again and may start
+        # one more refinement session, still bounded by S and K. Said.
+        say(f"could not record the refinement session for {manager!r}: {e}")
+    return handed, at
+
+
+def _count_misses(root: Path, manager: str, handed: dict, since: float, say) -> None:
+    """At the end of a refinement session: the no-progress guard. Never ends
+    a run; a guard that could not run is said."""
+    if not handed:
+        return
+    from rite_ai.refinement import rounds
+
+    try:
+        for line in rounds.count_misses(root, manager, handed, since=since):
+            say(f"refinement: {line}")
+    except OSError as e:
+        say(f"could not count refinement misses for {manager!r}: {e}")
+
+
+def _basis(answer) -> object:
+    """What the board looked like behind a verdict, or None when the verdict
+    carries none. Then the guard never engages: it cannot tell "unchanged"."""
+    return getattr(answer, "basis", None)
+
+
+def _stalled_wake(root: Path, manager: str, verdict, stalled: _Stalled, clock):
+    """`wake` for the guard's wait: why a session should start now, or ""."""
+    marks = {"board": clock(), "project": clock()}
+
+    def wake() -> str:
+        now = clock()
+        if now - marks["project"] >= PROJECT_RECHECK_SECONDS:
+            marks["project"] = now
+            changed = footprint(root, manager).differs_from(stalled.footprint)
+            if changed:
+                return "the project changed (" + ", ".join(changed) + ")"
+        if now - marks["board"] >= BOARD_RECHECK_SECONDS:
+            marks["board"] = now
+            answer = verdict(root)
+            if answer not in CONTINUE_VERDICTS or _basis(answer) != stalled.basis:
+                return "the board changed"
+        return ""
+
+    return wake
+
+
+def _idle_line(manager: str, stalled: _Stalled, clock):
+    """`idle_line` for the guard's wait: said when it begins, then every
+    `STILL_WAITING_EVERY` with a ⚠, as a routed wait is."""
+    from rite_ai.managers.routing import STILL_WAITING_EVERY
+
+    said: dict[str, float | None] = {"at": None}
+
+    def line() -> str:
+        now = clock()
+        if said["at"] is not None and now - said["at"] < STILL_WAITING_EVERY:
+            return ""
+        mark = "" if said["at"] is None else "⚠ still: "
+        said["at"] = now
+        return (
+            f"{mark}{manager!r} is waiting, spending nothing: session "
+            f"{stalled.number} changed nothing rite can see (no commit or edit "
+            "in the project, claim, reply, route or Worker request), and the "
+            "board reads as it did when that session began, "
+            "so another would repeat it. Mail wakes it (a Slack DM, a routed "
+            f"reply, `rite message {manager} …`), and so does a change on the "
+            f"board (read every {int(BOARD_RECHECK_SECONDS)}s) or in the "
+            "project. The window still ends the run."
+        )
+
+    return line
+
+
+def _reason_to_wait(root: Path, manager: str, waiting, router, slack, say) -> str:
+    """Why to wait rather than stop, read so that a reply is never stranded.
+    "" means stop.
+
+    ⚠ **THE STOP DECISION COLLECTS BEFORE IT DECIDES (tag blocker 3).** The
+    ceiling check and the idle verdict read `reason()` straight after the
+    cycle, and the last collect was at the cycle's boundary. A secondary
+    that replied (or rite's silent-finish note, written on collecting) after
+    that collect and was marked handled before this read left nothing
+    outstanding and nothing in the Owner's inbox, so the Owner stopped with
+    the reply in the secondary's outbox until the next `rite start`.
+    Reproduced deterministically.
+
+    ⚠ **In the order `_wait_for_mail` documents: read, then collect, then
+    read again.** Collecting first is not enough: a reply written just after
+    an empty collect and then marked handled is still missed by a read that
+    follows. Reading first means "" can only come when every route was
+    already handled, so its reply was already in an outbox when the collect
+    below ran, and the second read sees it as a reply waiting. A reason
+    found the first time is kept, as before, and the wait collects on its
+    first tick."""
+    if waiting is None:
+        return ""
+    why = waiting.reason()
+    if why:
+        return why
+    _relay_tick(root, manager, router, slack, say)
+    return waiting.reason()
+
+
 def _wait_for_mail(
     root: Path,
     manager: str,
@@ -1431,9 +2280,21 @@ def _wait_for_mail(
     poll: float,
     cycles,
     live: str,
+    wake=None,
+    idle_line=None,
 ) -> SuperviseResult | None:
     """Wait, with no engine running, until mail is in this Manager's inbox.
     None means start a cycle now, BECAUSE of that mail; a result means stop.
+
+    ⚠ **`waiting` may be None, and `wake` may end the wait too (F22).** The
+    no-progress guard waits here as well rather than in a wait of its own:
+    one place decides when a Manager with nothing to do spends nothing. With
+    no routed work outstanding the guard passes no `waiting`, because
+    `Waiting.over()` then answers "every routed message was handled" and
+    would end the wait at once as a STOP. `wake()` returns why to start a
+    session now (the board or the project changed), or "". `idle_line()` is
+    what the wait says, when a line is due, if there is no `waiting` to say
+    it. None returned for a wake means the same as for mail: start a cycle.
 
     ⚠ **WAKE ON STATE, NOT ON AN EVENT.** Anything in the inbox starts the
     cycle — a routed instruction, a collected reply, a Slack DM — so nothing
@@ -1451,10 +2312,16 @@ def _wait_for_mail(
     the window, or on Ctrl-C, and a wait that cannot end by itself is SAID
     every `routing.STILL_WAITING_EVERY`.
     """
-    waiting.begin()
+    if waiting is not None:
+        waiting.begin()
     try:
         while True:
-            ended = waiting.over()
+            ended = waiting.over() if waiting is not None else ""
+            if ended:
+                # Decision 3: a wait ending because a Manager owing work is
+                # gone says so to the Owner FIRST. The note is mail, so the
+                # check below starts the Owner's session to tell the person.
+                waiting.notice_gone(say)
             _relay_tick(root, manager, router, slack, say)
             if mail_waiting(root, manager, INBOX):
                 return None
@@ -1471,7 +2338,14 @@ def _wait_for_mail(
                     f"{len(cycles)} session(s)",
                     cycles,
                 )
-            line = waiting.still_waiting()
+            woke = wake() if callable(wake) else ""
+            if woke:
+                say(f"{woke}: starting a session for {manager!r}")
+                return None
+            if waiting is not None:
+                line = waiting.still_waiting()
+            else:
+                line = idle_line() if callable(idle_line) else ""
             if line:
                 say(line)
             _sleep(poll)
@@ -1558,12 +2432,53 @@ def _torn_down(root, manager: str, session: str, cycles, say) -> SuperviseResult
     )
 
 
+def _inbox_names(root: Path, manager: str) -> set[str]:
+    from rite_ai.managers.mailbox import read
+
+    return {m.path.name for m in read(root, manager, INBOX)}
+
+
+def undelivered_line(root: Path, manager: str, why: str) -> str:
+    """What a run that ends with mail still in the inbox says, or "".
+
+    ⚠ **THE PROPERTY, CHECKED AT THE ONE PLACE EVERY RUN PASSES** (the end of
+    `rite start`), rather than at each way a run can stop: a message a person
+    sent is delivered, or the person is told it was not. Asked of the inbox as
+    it stands, so it covers exits added later too."""
+    names = _inbox_names(root, manager)
+    if not names:
+        return ""
+    return (
+        f"{len(names)} message(s) sent to {manager!r} were NOT delivered in "
+        f"this run ({why}). They stay in its inbox and are delivered at the "
+        f"start of its next session: `rite start {manager}`."
+    )
+
+
 def _why(answer: str, started: int) -> str:
     """`idle` is a completion; the rest are faults. A lifecycle that exits
     identically for all of them tells a human "finished" when it means
     "jammed" (§9.14.4)."""
     if answer == "idle":
-        return f"done: the board has nothing ready ({started} session(s))"
+        # A snapshot with its time (DF4, coordinator 2026-09-29): a person who
+        # created a ticket seconds ago can see why it was not picked up, rather
+        # than conclude rite is broken. A second read after a delay would only
+        # narrow that window, so rite stops and says when it looked.
+        read_at = getattr(answer, "read_at", None)
+        if read_at is None:
+            return (
+                f"done: the board listed nothing ready ({started} session(s)); "
+                "a ticket created outside rite shortly before may not have been "
+                "listed"
+            )
+        from rite_ai.loop import as_of
+
+        return (
+            f"done: the board listed nothing ready as of {as_of(read_at)} "
+            f"({started} session(s)); a ticket created outside rite shortly "
+            "before then, or since, is not in that read. `rite start` again "
+            "reads it afresh"
+        )
     if answer == "closed":
         return (
             f"stopped: the schedule authorises no Workers in this window "
@@ -1574,6 +2489,65 @@ def _why(answer: str, started: int) -> str:
         f"stopped on '{answer}' after {started} session(s) — this is a fault, "
         f"not a completion. `rite loop status` says what is stuck."
     )
+
+
+def _declared_claude_model(root: Path, manager: str, engine: str) -> str:
+    """The model a Claude Manager's role names, or "" for Claude's default.
+
+    Derived from the config at the launch, as `_engine_model_env` is, so
+    there is no argument for a caller to drop."""
+    if engine != "claude":
+        return ""
+    from rite_ai.config.parse import ParseError, parse_config
+
+    parsed = parse_config(root / ".rite" / "config.yaml")
+    if isinstance(parsed, ParseError):
+        return ""
+    role = next(
+        (r for r in parsed.coordination.manager_roles if r.name == manager), None
+    )
+    return role.model if role else ""
+
+
+def _undeclared_window(manager: str) -> str:
+    """The refusal for a local Manager with no `context_window` (S33): one
+    sentence, whatever its agent."""
+    return (
+        f"{manager!r} declares no context_window, so the window its model "
+        "is served with would be whatever its server defaults to, which rite "
+        "cannot read before the model loads, and its agent would not be told "
+        f"it. Add this line to its entry (`- name: {manager}`) under "
+        "coordination.manager_roles in .rite/config.yaml:\n"
+        "      context_window: 32768\n"
+        "32768 is the least rite accepts; use the model's own window if it is "
+        "larger and the machine has the memory"
+    )
+
+
+def _window_refusal(root: Path, manager: str, agent: str) -> str:
+    """Why this Manager must not start for its window, or "" (S33).
+
+    ⚠ **Asked of EVERY local agent, and asked FIRST**, before anything that
+    depends on which agent it is. The rule used to live inside the Goose
+    launch path (`_engine_model_env`), so any other local agent reached a
+    launch on the server's default window; and `permission_placement` refuses
+    an agent rite has no spelling for, which, asked first, would have told
+    that Manager the wrong thing. A Manager with no agent is a Claude one and
+    is not read here, so its path is exactly what it was."""
+    if not agent:
+        return ""
+    from rite_ai.config.managers import window_undeclared
+    from rite_ai.config.parse import ParseError, parse_config
+
+    parsed = parse_config(root / ".rite" / "config.yaml")
+    if isinstance(parsed, ParseError):
+        return ""  # said by `_engine_model_env`, which reads the same file
+    role = next(
+        (r for r in parsed.coordination.manager_roles if r.name == manager), None
+    )
+    if role is not None and window_undeclared(role):
+        return _undeclared_window(manager)
+    return ""
 
 
 def _engine_model_env(root: Path, manager: str, agent: str):
@@ -1588,35 +2562,105 @@ def _engine_model_env(root: Path, manager: str, agent: str):
     the operator's GLOBAL config instead, silently. Measured 2026-09-25:
     declared `qwen3:8b`, ran `qwen3-vl:8b-instruct`.
     """
-    if agent != "goose":
-        return {}, ""
+    # ⚠ **EVERY LOCAL AGENT, NOT GOOSE (S35).** This read `agent != "goose"`,
+    # and it is the FIRST line of the function — so for any other local agent
+    # it returned before `pin_window` below ever ran. S33 made the window
+    # DECLARATION required of every agent, and that is right, but the
+    # declaration was then honoured for Goose alone: a Manager on another
+    # agent passed S33's check and launched with nothing pinned, on the
+    # server's default. Declaring a window you do not get is worse than being
+    # refused for not declaring one.
+    #
+    # An empty `agent` is a CLAUDE Manager (S33's `_window_refusal` says so
+    # too), and its path is exactly what it was.
+    if not agent:
+        return {}, "", ""
     from urllib.parse import urlsplit
 
     from rite_ai.config.parse import ParseError, parse_config
-    from rite_ai.local.goose_agent import goose_environment
 
     parsed = parse_config(root / ".rite" / "config.yaml")
     if isinstance(parsed, ParseError):
-        return {}, f"config.yaml does not parse: {parsed.message}"
+        return {}, f"config.yaml does not parse: {parsed.message}", ""
     role = next(
         (r for r in parsed.coordination.manager_roles if r.name == manager), None
     )
     if role is None or not (role.model and role.endpoint):
-        return {}, (
-            "a goose Manager must declare its model and endpoint in "
-            "coordination.manager_roles, or Goose silently runs whatever the "
-            "operator's global goose config names"
+        return (
+            {},
+            (
+                "a goose Manager must declare its model and endpoint in "
+                "coordination.manager_roles, or Goose silently runs whatever the "
+                "operator's global goose config names"
+            ),
+            "",
         )
     parts = urlsplit(role.endpoint)
     if parts.username or parts.password:
         # These values travel on tmux's argv (ALLOWED_ON_TMUX_ARGV), where
         # `ps` shows them to every local account.
-        return {}, (
-            f"the endpoint for {manager!r} carries credentials in its URL, "
-            "which would appear on a process list. Put the secret in the "
-            "role's `credential` and the bare URL in `endpoint`"
+        return (
+            {},
+            (
+                f"the endpoint for {manager!r} carries credentials in its URL, "
+                "which would appear on a process list. Put the secret in the "
+                "role's `credential` and the bare URL in `endpoint`"
+            ),
+            "",
         )
-    return goose_environment(role.endpoint, role.model), ""
+    # ⚠ **THE WINDOW IS PINNED INTO THE MODEL, AND AN UNDECLARED ONE REFUSES.**
+    # Ollama serves every model at one server-wide default unless the model
+    # itself sets `num_ctx`, and that default cannot be read until a model is
+    # loaded. So "unknown" was the common case, and it let a Manager start.
+    # Goose was not told the window either (`GOOSE_CONTEXT_LIMIT`, which Goose
+    # 1.51 reads). Observed 2026-09-28 (Ollama 0.34.2): the pin IS what Ollama
+    # serves Goose; a prompt over it is cut to half the window from the front
+    # with no error, and only Ollama's log says so (plan, Track MS).
+    if not role.context_window:
+        return {}, _undeclared_window(manager), ""
+    # ⚠ **A DISPATCH, NOT A REFUSAL (S35, corrected against S33).** An
+    # earlier version of this refused an agent rite has no env mapping for,
+    # even with a window declared. That was wrong, and the reason is
+    # `pin_window`'s own contract: it gives "a model that is served with
+    # exactly `window` tokens, whatever the server's default" — the pin goes
+    # INTO THE MODEL on the server, so Ollama serves that window to ANY
+    # client. `GOOSE_CONTEXT_LIMIT` only tells Goose the number so it can
+    # compact at 80%; it is not the enforcement. So an unmapped agent is
+    # enforced too, and refusing it would have refused a Manager that works.
+    #
+    # What an unmapped agent does NOT get is being TOLD its window, and that
+    # is said rather than hidden: an agent that does not know will run into
+    # the limit instead of compacting before it.
+    from rite_ai.local.context_window import pin_window
+    from rite_ai.local.enforcement import for_agent, not_told
+
+    pinned = pin_window(role.endpoint, role.model, role.context_window)
+    if pinned.problem:
+        return (
+            {},
+            (
+                f"the {role.context_window}-token window for {manager!r} could not "
+                f"be pinned: {pinned.problem}"
+            ),
+            "",
+        )
+    # What pinning wrote to the operator's model library, said at the start:
+    # `context_window.py`'s rule is that rite names anything it puts there
+    # and says how to remove it.
+    note = pinned.detail if pinned.created else ""
+    enforcement = for_agent(role.agent)
+    if enforcement is None:
+        # Pinned for everyone; only the agent-specific env is skipped. Handing
+        # an agent `GOOSE_CONTEXT_LIMIT` it does not read would be worse than
+        # handing it nothing, and pretending it had been told would be worse
+        # than both.
+        said = not_told(role.agent, role.context_window)
+        return {}, "", f"{note} {said}".strip() if note else said
+    return (
+        enforcement.environment(role.endpoint, pinned.model, role.context_window),
+        "",
+        note,
+    )
 
 
 def _default_starter(
@@ -1675,8 +2719,11 @@ def _default_starter(
         )
     from rite_ai.managers.engines import permission_placement
 
+    window = _window_refusal(root, manager, agent)
+    if window:
+        return StartResult(False, f"refusing to start Manager {manager!r}: {window}")
     placement = permission_placement(engine, agent, permission)
-    model_env, refused = _engine_model_env(root, manager, agent)
+    model_env, refused, created_note = _engine_model_env(root, manager, agent)
     if refused:
         return StartResult(False, f"refusing to start Manager {manager!r}: {refused}")
     # ⚠ **DERIVED HERE rather than passed in, and that is the point.** This
@@ -1708,6 +2755,7 @@ def _default_starter(
     profile = confinement.write_profile(root, manager)
     github_env = github_access.pane_environment(root, manager)
     handle_spelling = spelling_for(engine, agent)
+    cursor = engine == "cursor"
     start_handle = (
         session_name(root, manager)
         if handle_spelling.handle_is_ours and not resume_id
@@ -1735,9 +2783,18 @@ def _default_starter(
             **git_settings.pane_environment(root, github_env),
             # And WHERE a Claude Manager's own login is (`claude_login`).
             **claude_login.pane_environment(root, manager),
+            # And WHERE a Cursor Manager's own state is (`cursor_login`):
+            # paths only. Its KEY is never passed with `tmux -e`.
+            **(cursor_login.pane_environment(root, manager) if cursor else {}),
         },
         engine=engine,
-        command=confinement.wrap(
+        # ⚠ CU4: a Cursor Manager's key is read by tmux's shell OUTSIDE the
+        # boundary, into the environment of the engine alone
+        # (`cursor_login.launch_prefix`). Gated on the ENGINE, not on the
+        # file: a copy a killed Cursor run left must never reach a Manager
+        # whose engine has since changed.
+        command=(cursor_login.launch_prefix(root, manager) if cursor else "")
+        + confinement.wrap(
             launch_command(
                 engine,
                 resume_id,
@@ -1745,13 +2802,22 @@ def _default_starter(
                 permission,
                 agent,
                 start_handle,
+                model=_declared_claude_model(root, manager, engine),
             ),
             profile,
-        ),
+        )
+        # ⚠ CU7: the pane's shell stays alive as its process group's leader,
+        # and after the engine exits it signals that group (Cursor's
+        # `worker-server` included) and exits with the engine's status. A
+        # live leader's group id cannot be recycled, so the signal cannot
+        # reach a stranger, which a lookup-then-kill by pid could.
+        + (cursor_login.REAP_SUFFIX if cursor else ""),
         prompt=prompt,
         max_sessions=max_sessions,
         window_seconds=window_seconds,
     )
+    if created_note and result.ok:
+        result.warning = "; ".join(w for w in (result.warning, created_note) if w)
     # ⚠ NO SECOND `record_instance` HERE. `start_session` has already
     # written the record, with tmux's pane pid and the command that
     # actually ran. This function used to re-record the same instance

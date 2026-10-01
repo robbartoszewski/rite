@@ -7,10 +7,25 @@ interface contract the CLI entry point wires up).
 from pathlib import Path
 
 import click
+import pytest
 import yaml
 from click.testing import CliRunner
 
+import rite_ai.sandbox as sb
 from rite_ai.cli.init import run_init
+
+
+@pytest.fixture(autouse=True)
+def _sandbox_branch_one(monkeypatch):
+    """The answer sequences below are written for init's branch 1: yoloAI
+    present and verified, so the sandbox question is asked once. Pinned,
+    because the host decided it before: Linux skips the question, a Mac
+    without yoloAI adds an install offer (which ran a real `brew install`
+    on the first macOS CI run), and a Mac with yoloAI asked the real binary.
+    The branches themselves are `test_init_sandbox_branches.py`'s."""
+    monkeypatch.setattr(sb, "platform_can_sandbox", lambda: True)
+    monkeypatch.setattr(sb, "is_installed", lambda: True)
+    monkeypatch.setattr(sb, "choose_backend", lambda: sb.BackendChoice("seatbelt"))
 
 
 @click.command()
@@ -24,11 +39,13 @@ def _init_cmd(config: str | None, yes: bool, directory: str) -> None:
     click.echo(f"STATUS:{result.status}")
 
 
-# All-defaults interactive answer sequence: no existing spec or code, role,
-# name, root_branch, module name (blank = no repos found), kind, features,
+# All-defaults interactive answer sequence: no existing spec or code, name,
+# root_branch, module name (blank = no repos found), kind, features,
 # platform, languages, frameworks, architecture, ticket backend ("3" = None for
 # now, to skip the extra JIRA-site prompt), sandbox, kb link, kb file, kb commit.
-_ALL_BLANK = "n\n" + "\n".join([""] * 10 + ["3"] + [""] * 4) + "\n"
+# … kb commit, then (S15) declare Manager 'lead'? Enter
+# No role answer: C7 made init Owner-only, so that question is not put.
+_ALL_BLANK = "n\n" + "\n".join([""] * 9 + ["3"] + [""] * 5) + "\n"
 
 
 def test_interactive_all_defaults_creates_every_file(tmp_path: Path):
@@ -69,7 +86,12 @@ def test_interactive_output_shows_progress_sections(tmp_path: Path):
     result = runner.invoke(_init_cmd, [str(tmp_path)], input=_ALL_BLANK)
     assert "[1/7]" in result.output
     assert "[7/7]" in result.output
-    assert "Ready. Start a Dispatch session" in result.output
+    # An empty directory, every question skipped: no module, so init says it
+    # is not ready rather than "Ready." (S13, the --yes gap's interactive twin).
+    assert "Initialised, but NOT ready for work: no module is registered" in (
+        result.output
+    )
+    assert "Ready. Start a Dispatch session" not in result.output
 
 
 def test_interactive_project_name_prompt_prefilled_with_dirname(tmp_path: Path):
@@ -85,7 +107,6 @@ def test_interactive_custom_answers_are_used(tmp_path: Path):
         "\n".join(
             [
                 "n",  # no existing spec or code
-                "",  # role default owner
                 "myapp",  # project name
                 "develop",  # root branch
                 "",  # no module
@@ -100,6 +121,7 @@ def test_interactive_custom_answers_are_used(tmp_path: Path):
                 "",  # kb link
                 "",  # kb file
                 "",  # kb commit default yes
+                "",  # declare Manager 'lead'? default yes (S15)
             ]
         )
         + "\n"
@@ -148,6 +170,8 @@ def test_interactive_detects_and_adds_repos(tmp_path: Path):
                 "",  # kb link
                 "",  # kb file
                 "",  # kb commit
+                "",  # declare Manager 'lead'? default yes (S15)
+                "n",  # declare a Worker? (S20)
             ]
         )
         + "\n"
@@ -281,36 +305,17 @@ def test_config_file_not_found_is_a_clean_error(tmp_path: Path):
     assert result.exit_code != 0
 
 
-def test_manager_role_prompts_for_owner_ref(tmp_path: Path):
-    answers = (
-        "\n".join(
-            [
-                "n",  # no existing spec or code
-                "manager",  # role, typed value rather than arrow selection
-                "",  # owner ref, skipped
-                "",  # name
-                "",  # root branch
-                "",  # no module
-                "",  # kind
-                "",  # features
-                "",  # platform
-                "",  # languages
-                "",  # frameworks
-                "",  # architecture
-                "3",  # ticket backend
-                "",  # sandbox: accept the default
-                "",  # kb link
-                "",  # kb file
-                "",  # kb commit
-            ]
-        )
-        + "\n"
-    )
+def test_the_role_is_owner_and_no_owner_ref_is_asked_for(tmp_path: Path):
+    """C7: a Manager MACHINE needs multi-manager (0.9.0), so neither the role
+    nor the Owner's-project question that followed it is put. The Manager
+    branch and `_borrow_owner_config` are kept, unreferenced, for the restore
+    — `test_init_is_owner_only_until_multi_manager.py` asserts both, and
+    rehearses the restore by flipping the constant."""
     runner = CliRunner()
-    result = runner.invoke(_init_cmd, [str(tmp_path)], input=answers)
+    result = runner.invoke(_init_cmd, [str(tmp_path)], input=_ALL_BLANK)
     assert result.exit_code == 0, result.output
 
+    assert "Owner's project URL or config path?" not in result.output
     brief = yaml.safe_load((tmp_path / ".rite" / "brief.yaml").read_text())
-    assert brief["project"]["role"] == "manager"
-    claude_md = (tmp_path / "CLAUDE.md").read_text()
-    assert "Role: Manager" in claude_md
+    assert brief["project"]["role"] == "owner"
+    assert "Role: Owner" in (tmp_path / "CLAUDE.md").read_text()

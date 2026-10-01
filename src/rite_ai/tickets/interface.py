@@ -26,6 +26,30 @@ class Ticket:
     metadata: dict = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class Comment:
+    id: str
+    body: str
+    author: str = ""
+    created_at: datetime | None = None
+
+
+@dataclass
+class Thread:
+    """One ticket and its comments, from one read (ticket refinement, TR1).
+
+    `complete` is True only when the backend showed the comment list is the
+    whole list: a count the backend reported, matched. A thread that is not
+    complete must never be read as "no record on this ticket", because the
+    record may be among the comments not returned.
+    """
+
+    ticket: Ticket
+    comments: list[Comment]
+    complete: bool
+    note: str = ""
+
+
 @dataclass
 class TicketFilter:
     status: str | None = None
@@ -118,6 +142,31 @@ class TicketBackend(ABC):
         self, filters: TicketFilter | None = None
     ) -> list[Ticket] | BackendError: ...
 
+    def matches(self, ticket: Ticket, filters: TicketFilter | None) -> bool | None:
+        """Whether `ticket`, as read, is one `list_tickets(filters)` returns
+        once the board's list has caught up (DF4, `tickets.own_writes`).
+
+        In the board's OWN semantics (GitHub lists open issues when no state
+        is given; Jira does not filter status). None when this backend cannot
+        decide it from a ticket, and the list's answer then stands."""
+        return None
+
+    def missing(self, error: BackendError) -> bool:
+        """Whether a failed read means the ticket does not exist, as opposed
+        to not being readable just now. Only the first is safe to forget."""
+        return False
+
+    def can_create(self) -> tuple[bool | None, str]:
+        """Whether rite could file a ticket here, read-only (TR9).
+
+        `(True, detail)`, `(False, why not)`, or `(None, why it could not
+        tell)`. **None is not True**: every caller reports it as a problem,
+        because work that cannot be ticketed is refused, and finding that out
+        at the first chore is later than `rite doctor`. A backend that has no
+        way to check answers None and says so.
+        """
+        return None, "this board type offers no read-only check"
+
     @abstractmethod
     def comment(self, ticket_id: str, text: str) -> None | BackendError:
         """Post a comment on the ticket.
@@ -127,6 +176,17 @@ class TicketBackend(ABC):
         comment per transition. A CLI verb with no caller is surface to
         maintain and a shape for a future divergence, so it waits for
         something that needs it."""
+
+    def read_thread(self, ticket_id: str) -> Thread | BackendError:
+        """The ticket and every comment on it, with completeness shown.
+
+        Not abstract, and failing closed by default: a backend that cannot
+        read comments says so, and refinement then reports the ticket
+        UNREADABLE rather than "no agreed definition of done"."""
+        return BackendError(
+            f"{type(self).__name__} cannot read a ticket's comments, so whether "
+            f"{ticket_id} has an agreed definition of done cannot be checked"
+        )
 
     @abstractmethod
     def query(self, raw_query: str) -> list[Ticket] | BackendError:

@@ -85,14 +85,17 @@ both commands carry exactly what they say.
 rite credential list
 ```
 
-It prints what this project needs, the keychain account each one lives under,
+It prints what this project needs, the entry each one is stored under,
 and what is missing — with the exact command to fix each gap. That is the
 answer to *"how do I give rite a GitHub token?"*; you do not have to know the
 key's name in advance.
 
-Credentials are **per project**. The secret goes in your OS keychain; the
-project's *namespace* is recorded in `.rite/config.yaml`, which is committed.
-The keychain account is `<namespace>/<key>`, so two projects on one machine can
+Credentials are **per project**. From 0.6.0 the secret goes in one file,
+`~/.config/rite/credential-store.json`, which rite refuses to read unless its
+mode is 0600; the OS keychain is no longer read (upgrading from 0.5.1, run
+`rite credential import-keychain` once). The project's *namespace* is
+recorded in `.rite/config.yaml`, which is committed. Each entry is named
+`<namespace>/<key>`, so two projects on one machine can
 hold two different JIRA identities — which a single shared `jira_token` could
 not.
 
@@ -111,17 +114,17 @@ silent — it says so and names the account it used — and
 `rite credential migrate jira_token` copies it into this project.
 
 **What this does and does not protect.** Per-project names stop *accidental*
-cross-project use. They are **not a security boundary**: keychain access is
-per-user, not per-process, so any unsandboxed process running as you can read
+cross-project use. They are **not a security boundary**: the file is
+readable by anything running as you, so any unsandboxed process can read
 every entry rite has stored, whatever it is named. A Worker you open yourself
 is unsandboxed whatever `sandbox.enabled` says — only `rite sandbox start`
 sandboxes one — so that is the default path.
 
-The sandbox is the only enforcement, and it is blunter than you might expect: a
-seatbelt-sandboxed Worker **cannot read the keychain at all** — not another
-project's entry, and not its own. That is measured, not assumed (SPEC §10.3),
-and it is *why* a sandboxed Worker's token is handed to it through `--env`
-rather than fetched. Inside a sandbox, "not found" means "cannot check".
+The sandbox is the only enforcement, and it is blunt: a sandboxed Worker
+does not read the store at all. rite hands it every credential the project
+holds through `--env` when it starts, and a Manager's sandbox is given only
+per-Manager copies of what it needs, never the store. Inside a sandbox,
+"not found" means "cannot check".
 
 ## The schedule — when Workers may run
 
@@ -244,11 +247,41 @@ Friday stops at midnight, as a schedule window with the same keys would.
 
 ### Questions that can wait for a check-in
 
-A Manager asks you things with `rite reply`, and that stays immediate. It can
-also **defer** a question to your next check-in, but only by naming what it
-will do meanwhile:
+A Manager asks you things with `rite ask`, and that is immediate. It tells
+you things with `rite reply`, which is for reading only: since 0.7.0 `rite
+reply` refuses anything that reads like a question, a blocker or a decision
+(a question mark, "should I", "blocked", "please", "your call" and similar)
+and tells the Manager to use `rite ask`. It errs toward refusing too much, on
+purpose: a statement caught costs the Manager one more command, and a
+question let through would sit where nobody is asked to answer it. `rite
+replies` and the Slack relay mark each question "needs your answer", and a
+message written without a kind (by an older rite, or by hand) is marked as
+needing you rather than passed as reading.
 
-    rite ask --defer "rename --out to --output?" --while "tickets 8 and 9, which do not touch the CLI"
+**In Slack, your DM is the list of what needs you.** Questions are posted on
+their own, at once. What a Manager tells you for reading goes into a thread:
+under the next check-in when check-in windows are configured (so nothing for
+reading arrives between scheduled reports), otherwise under one "notes for
+today" post a day. Reading is never held more than a day.
+
+**A question stays pending until it reaches you.** Posting it to Slack does
+not count. Your reply in its Slack thread does, and so does your reaction
+when the Slack app has `reactions:read`; without Slack, `rite replies`
+showing it to you does. Every check-in lists what is still waiting, and rite
+keeps reading a waiting question's thread for as long as it waits. Answer in
+the question's own thread: a message elsewhere cannot be matched to it.
+
+A Manager can also **defer** a question to your next check-in, but only by
+naming what it will do meanwhile:
+
+    rite ask --defer --while "tickets 8 and 9, which do not touch the CLI" - <<'RITE_TEXT_1f2e3d'
+    rename --out to --output?
+    RITE_TEXT_1f2e3d
+
+A Manager's text always goes on stdin like this, never in double quotes on
+the command line: there the shell runs anything in backticks or `$( )`, and
+the text often quotes a ticket someone else wrote. rite refuses text given as
+an argument.
 
 ⚠ **The rule every Manager is given, in these words: ask now unless the
 question is clearly deferrable; if you are unsure whether it blocks you, it
@@ -264,7 +297,10 @@ costs you thirty seconds. So every doubt ends in asking:
   blocking after all. They are asked at once, with a line saying the deferral
   was wrong, in the message and in `rite start`'s output.
 
-A deferred question waits in `.rite/managers/<name>/checkins/queue/`.
+A deferred question waits in the Manager's own directory, outside the
+project since 0.7.0 (`<data>/rite/mail/<checkout>/<name>/state/checkins/queue/`,
+where `<data>` is `~/Library/Application Support` on macOS and
+`~/.local/share` on Linux).
 
 **At the check-in it is re-read before it is asked.** At the first cycle
 boundary inside a window, the Manager's instruction carries what it deferred,
@@ -377,7 +413,7 @@ loop worth running:
 
 | | |
 |---|---|
-| `idle` | nothing on the board is waiting. **Stops the loop** |
+| `idle` | the board listed nothing waiting, as of the time it says. **Stops the loop**. A ticket rite itself just filed or labelled is always seen; one a person created shortly before that time may not be in the read, and `rite start` again reads afresh |
 | `saturated` | work is waiting and every worker is busy. A queue, not a fault |
 | `blocked` | work is waiting, a worker is free, and the paths it needs are held by someone still working |
 | `deadlocked` | same, except the holders look gone. **This will not clear on its own**, so the loop **stops** and prints what to release |
@@ -482,8 +518,8 @@ doctor` names the typo and says the window was dropped.
 
    `rite credential set claude` needs rite v0.2.0 or later (`rite --version`).
    An older rite does not know `claude` and offers `--allow-unknown`, which
-   stores a key that no worker is ever given. rite keeps the token in the
-   keychain for this project and passes it into each sandbox it
+   stores a key that no worker is ever given. rite keeps the token in its
+   credential file for this project and passes it into each sandbox it
    starts as `CLAUDE_CODE_OAUTH_TOKEN`, whichever shell you start it from;
    `rite doctor` reports it missing as a problem. Inside the sandbox, Claude
    Code's banner says "API Usage Billing" even with a subscription token:
@@ -501,17 +537,26 @@ doctor` names the typo and says the window was dropped.
    Homebrew and system locations. A `rite` in a virtualenv anywhere else fails
    inside the sandbox with a permission error (measured with a virtualenv
    under the home directory).
-3. **Give it a way to push.** A worker's work leaves the sandbox by being pushed
-   (below), so store a GitHub credential for the project with
-   `rite credential set github` — a token with Contents and Pull requests
-   read/write on the module repositories — and install GitHub's `gh` CLI. rite
-   passes the credential in as `GITHUB_TOKEN` and tells git inside the sandbox
-   to authenticate github.com through `gh auth git-credential`, which reads
-   that variable, so `gh` needs no login of its own; the keychain helper git
-   would otherwise use is unreadable there. Commits made in a sandbox are not
+3. **Give rite a way to push.** A worker's work leaves the sandbox through
+   `rite deliver`, which collects its commits and pushes and opens the pull
+   request **on your machine, not in the sandbox**. So store a GitHub
+   credential for the project with `rite credential set github` — a token
+   with Contents and Pull requests read/write on the module repositories —
+   and install GitHub's `gh` CLI. **The worker never receives that token**
+   (since 0.7.0): rite keeps it on the host, and refuses to start a sandbox
+   that would receive one. Commits made in a sandbox are not
    signed: rite turns signing off inside it, because they are the agent's
    commits, not yours. A module whose origin is a local directory cannot be
-   pushed from a sandbox; start names each one. A commit pushed from inside a sandbox this
+   pushed from a sandbox; start names each one. `rite sandbox start` refuses,
+   before creating the sandbox, a worker with no module, no GitHub token, no
+   `gh`, or a token that cannot push: it asks GitHub the permission question
+   a push asks first, and sends nothing. An `ssh` remote is used over HTTPS
+   inside. Through a fork, the worker pushes to your fork and you open the
+   pull request to the upstream yourself. That is deliberate: you read the
+   diff before the other project's maintainer does, and a fine-grained token
+   makes it structural, since GitHub will not let one open a pull request on
+   a repository you are not a member of. A classic token would remove the
+   step and widen what the sandbox holds to every repository you can write. A commit pushed from inside a sandbox this
    way has been measured reaching GitHub. Sandboxed pushes run the repository's own hooks, never your
    global ones: rite sets `core.hooksPath` to `.git/hooks` inside the sandbox,
    because a global hooks directory under your home directory cannot be read
@@ -533,8 +578,15 @@ rite sandbox start alpha --ticket 42        # a GitHub issue, by its number
 rite sandbox start alpha --prompt "Add a CSV export to the invoices page."
 ```
 
-`--ticket` is for work on your board, by its key there; `--prompt` sends its
-text as written. With neither, the session starts idle until someone attaches.
+`--ticket` is for work on your board, by its key there, and it starts only on a
+ticket rite reports REFINED (`rite refine status <ID>`): the Worker is handed
+the agreed definition of done in `TICKET.md`, from the same read as the
+ticket's text. Any other state refuses and says which. `--prompt` is for work
+that is not a ticket yet: rite files your text, exactly as typed, as a chore
+labelled `chore` and `scheduled`, and starts nothing, because the chore has no
+agreed definition of done yet. It prints the `rite refine accept` and
+`rite sandbox start --ticket` to run next. With neither flag, the session
+starts idle until someone attaches.
 After the prepare summary, start prints:
 
 ```text
@@ -548,7 +600,8 @@ can watch it or type to it; yoloAI's own hint for leaving it running is
 
 **Its first screen shows your credentials in plain text.** On macOS, yoloAI
 launches the agent by typing a command into the session's shell, and that
-command carries every credential rite passed in (`export GITHUB_TOKEN='…'`).
+command carries every credential rite passed in (`export …='…'`: the Claude
+login; a sandbox started by rite before 0.7.0 also carried `GITHUB_TOKEN`).
 Don't share, record or screenshot a terminal attached with `yoloai attach`.
 `rite sandbox pane` prints the same screen with those values replaced by
 `[redacted]`, so a Claude session reading it never receives them.
@@ -595,6 +648,89 @@ than inside a module is not visible to the worker. If a clone fetches from a
 directory that contains the worker's own, such as the project root itself,
 start says it cannot be mounted.
 
+## Declaring a Manager
+
+`rite init` does not ask about Managers yet, and there is no `rite manager
+add`. You declare them under `coordination` in `.rite/config.yaml`, and
+`rite doctor` reports anything that parses but cannot work.
+
+**One Manager.** A lone Manager runs on Claude and holds every duty:
+
+```yaml
+coordination:
+  managers: [lead]
+```
+
+**A Claude Owner with a local secondary**, on one machine in one project
+root, the configuration 0.6.0 is built around:
+
+```yaml
+coordination:
+  managers: [lead, helper]
+  manager_roles:
+    - {name: lead, preset: lead}          # Claude; the Owner, it holds 'route'
+    - {name: helper, engine: 'local:small', preset: executor,
+       endpoint: 'http://localhost:11434/v1', model: 'qwen3:8b', agent: goose,
+       context_window: 32768}
+```
+
+- `managers` is the list of names; `manager_roles` says what each is for.
+  Every role must name a listed Manager, and once one Manager has a role,
+  every Manager needs one.
+- **The Owner is the one Manager holding `route`.** The `lead` preset has
+  it and `executor` does not. With two Managers in one root, exactly one
+  must hold it: only that one reads Slack and routes work, and `rite doctor`
+  says so when none or several do.
+- `engine` defaults to `claude`. A `local:<class>` engine must also give
+  `endpoint`, `model` and `agent`; `goose` is the agent rite supports. Every
+  local Manager must give `context_window` too, whatever its agent, and `rite
+  start` refuses it without one (see *A local model needs a context window
+  you have to set*).
+  Presets: `lead`, `pm`, `planner`, `executor`.
+- **Each Manager names its own model.** A local one gives `model` with its
+  endpoint. A Claude one may give `model` too, as an alias (`sonnet`,
+  `opus`) or an id (`claude-opus-5-5`), and runs Claude's default without
+  it. A local model's name on a Claude Manager is refused, because `claude`
+  cannot run it.
+
+Before the first start:
+
+1. For `lead`: `claude setup-token`, then `rite credential set claude`
+   (next section).
+2. For `helper`: install Goose and Ollama, and `ollama pull qwen3:8b`. Its
+   `context_window` is set in its role, not in Ollama (see *A local model
+   needs a context window you have to set*). Pick a model that calls tools
+   reliably: a 1.7B model did not run `rite reply` when asked.
+3. A ticket backend, if a lone Manager should run more than one session
+   per start: without one, `rite start` runs a single setup session. Where
+   several Managers share the project, routed work can start more sessions
+   within `--minutes`.
+4. `rite doctor`.
+
+Then start each in its own terminal:
+
+```bash
+rite start lead --sessions 3 --minutes 90
+rite start helper --sessions 3 --minutes 90
+```
+
+The Owner hands work down with `rite route --ticket RT-12 helper -` (the text on stdin), and
+`helper` answers with `rite reply`. Every route names the ticket the work is
+for, and rite refuses one whose ticket it cannot read on the board; work you
+asked for in a message becomes a chore ticket first (`rite chore`). The Owner cannot wait inside a session, so its
+supervisor waits instead, spending nothing, and starts the Owner's next
+session when the answer arrives. While routed work is unfinished,
+`--sessions` bends to let that happen, by at most two sessions per routed
+message (rite says so each time); `--minutes` does not.
+
+**A local model's report is not trusted.** In testing, `qwen3:8b` often did
+not reply at all, and more than once reported a step as done straight after it had
+failed. rite checks every reply in a separate session before the Owner reads
+it and marks it CONFIRMED, CONTRADICTED or COULD NOT TELL; the Owner is also
+told to check. The checker is a model too and can be wrong. If a secondary
+finishes or dies without replying, rite tells the Owner. A Manager that is already running keeps its opening instructions
+until `rite start <manager> --fresh`.
+
 ## A Claude Manager needs a token of its own
 
 **`rite start <manager>` runs Claude Code non-interactively, inside a
@@ -602,7 +738,7 @@ sandbox**, so it cannot ask you to log in and cannot read your keychain
 login. Give each project with a Claude Manager a token of its own, once:
 
     claude setup-token                  # prints a one-year token
-    rite credential set claude_token    # paste it
+    rite credential set claude          # paste it
 
     rite start <manager> --sessions 3 --minutes 90
 
@@ -614,8 +750,9 @@ where `ps` would show it to every account on the machine. **You do not need
 `CLAUDE_CODE_OAUTH_TOKEN`; do not export it for rite.**
 
 Without a stored token, `rite start` refuses a Claude Manager before
-spending a session and prints the two commands above. A Claude Manager is
-supported on macOS in this release.
+spending a session and prints the two commands above. On Linux a Claude
+Manager starts the same way, but has had far less use than on macOS, and it
+can replace its own login file there (see the release notes).
 
 ## Naming a Manager
 
@@ -634,6 +771,61 @@ tool support, and you still get 4096. An agent's system prompt and tool
 schemas are bigger than that before your task is added — measured, opencode
 sends about 31KB on the wire and Goose about 19KB — so the window is full
 before the work starts.
+
+For a Manager, **set it in the Manager's role**, not in Ollama:
+
+```yaml
+    - {name: helper, engine: 'local:small', preset: executor,
+       endpoint: 'http://localhost:11434/v1', model: 'qwen3.8', agent: goose,
+       context_window: 65536}
+```
+
+At each start, rite makes sure the model it runs has that window **written
+into the model**, not left to the server. If `qwen3.8` does not already pin
+65536, rite creates `rite-ctx65536-qwen3.8`, a twin that shares its weights
+and costs about 136 bytes. It checks the window by reading it back, runs that
+twin, and gives Goose the same number (`GOOSE_CONTEXT_LIMIT`) rather than
+leaving it to assume one. `rite start` prints the twin's name and the `ollama
+rm` that removes it. Two Managers can run the same model with
+different windows. **A Goose Manager with no `context_window` does not
+start**: the server's default cannot be read until the model loads, so
+starting on it would be a guess.
+
+**What happens when a Manager's prompt outgrows the window** (measured with
+`qwen3:8b` pinned to 40,960): Ollama serves the pinned window to Goose,
+not its own default. A prompt that fits is sent whole. A prompt over the
+window is **cut to half the window, from the front, with no error**, and the
+model answers from what is left, so a Manager can reply confidently about
+instructions it never saw. Goose's exit status and output do not show it;
+only Ollama's own log does.
+
+So after each cycle of a Goose Manager, `rite start` reads that log
+(`~/.ollama/logs/server.log`, or the file `RITE_OLLAMA_LOG` names) and says
+one of three things:
+
+- **a cut**, loudly, with how many tokens were sent and how many were kept,
+  and it appears in the next check-in's standup. **It is the server's cut,
+  not necessarily this Manager's:** Ollama's log does not say whose prompt it
+  was, so rite names the project's other Managers on the same endpoint, and
+  anything else using that Ollama server is invisible to it. If the cut was
+  this Manager's, raise its `context_window` or give it less to read at once.
+- **nothing**, when the cycle is shown to be clean: the log is this server's,
+  covers the whole cycle, and records its requests.
+- **"cannot tell"**, and why, once per run: the endpoint is on another
+  machine, the log cannot be read or was rotated, it records none of the
+  cycle's requests (as when `ollama serve` runs in a terminal), or Ollama is a
+  version whose log wording rite has not verified, or the clock moved during
+  the cycle (a clock step, or a daylight-saving change: the log is stamped in
+  wall-clock time, and its request lines carry no zone). rite verified the
+  wording on Ollama 0.34.2; after an upgrade it says "cannot tell" rather than
+  falling quiet.
+
+⚠ **A bigger window costs memory.** The window's cache grows with it, on top
+of the model's weights. On a machine with little memory to spare, a window
+that does not fit shows up when the model loads, not in `rite doctor`.
+
+Outside a Manager (a Worker, or your own use), the server-wide setting still
+applies:
 
     export OLLAMA_CONTEXT_LENGTH=32768   # then restart the ollama server
 
@@ -665,6 +857,15 @@ llama.cpp or vLLM rather than Ollama, none of which expose this through the
 OpenAI-compatible API. rite works out why, but does not print it yet. So
 silence is not a clean bill of health: load the model (send it one request)
 and run `rite doctor` again.
+
+## A message you send is delivered, or you are told
+
+A message you send a Manager (`rite message`, or in its Slack DM) is delivered
+at the start of its next session. If the board has nothing ready, a session
+starts to deliver it; a closed check-in schedule and the session ceiling are
+still respected. If a run ends with a message undelivered, it says so, at the
+terminal and in your Slack DM, and the message waits for the next `rite
+start`. `rite message` says when the Manager is not running at all.
 
 ## Talking to a Manager over Slack
 
@@ -718,8 +919,16 @@ with its own channels. They must not share an app, for two reasons:
 So create an app per project. The manifest makes that a few clicks, and each
 project stores its own token (`rite credential set slack` in that project).
 ⚠ **A free workspace allows 10 custom apps**, so it holds about ten rite
-projects. rite cannot tell whether two projects share a token, so this is
-on you.
+projects.
+
+rite enforces this on one machine. The first project to start a Manager with
+Slack on an app owns that app, whichever token setting reached it. Any other
+project that starts with the same bot is refused before it reads or posts
+anything, and the message names the project that owns the app. It stays
+refused while the first project is stopped too, because a DM you send while
+one is stopped would otherwise reach the other. If the first project no longer
+uses the app, the message names the file to remove. Two machines sharing one
+app are not detected.
 
 **When no Manager is running**, a message you send waits in Slack. At the
 next `rite start` it is delivered at the Manager's first turn, with a line
@@ -744,7 +953,8 @@ from that run's start line, and replies already in the mailbox stay in
 ## What rite does to ticket text, and what it does not
 
 When an agent reads a ticket through rite (`rite board show`, `list`,
-`query`), or a Slack message through the relay, rite does two things.
+`query`, or the `TICKET.md` a sandboxed worker is given), or a Slack message
+through the relay, rite does two things.
 
 **It shows what the tracker hides.** Invisible characters are removed. Tag
 characters, which spell text that renders as nothing, are decoded in place.
@@ -969,10 +1179,13 @@ Three things live outside the project and survive all of the above:
   project directory you have emptied.
 - **`~/.rite/`** — the cross-project dispatch hub, and a registry of which
   credentials exist and when they were last set. The registry holds names and
-  timestamps, never values. The values are in your OS keychain, under the
-  service `rite`, with item names scoped to the project that owns them —
-  `<namespace>/jira_token` (see *Credentials* below). `rite credential list`
-  shows them and `rite credential remove <name>` deletes them.
+  timestamps, never values. The values are in
+  `~/.config/rite/credential-store.json` (from 0.6.0; before that, your OS
+  keychain), with names scoped to the project that owns them —
+  `<namespace>/jira_token` (see *Credentials* above). `rite credential list`
+  shows them and `rite credential remove <name>` deletes them. Copies an older rite
+  left in the keychain stay there after an import; remove them with your
+  keychain's own tool.
 - **The tool** — `uv tool uninstall rite-ai`, or `pipx uninstall rite-ai`.
 
 ## What's built
@@ -1006,12 +1219,12 @@ counts this project's sandboxes** rather than every one on the machine.
 What this doesn't do yet — being straight about it rather than implying
 otherwise:
 
-- **Claude-native, on purpose.** `CLAUDE.md`, `.claude/agents/`, and Claude
-  Code sessions are first-class concepts here, not hidden behind a provider
-  abstraction. rite does not coordinate any other AI tool, and there's no
-  plan to add one — an abstraction layer would weaken every integration
-  point to the lowest common denominator that Claude Code's actual session
-  and config model doesn't need.
+- **Claude-first, with named exceptions.** `CLAUDE.md`, `.claude/agents/`,
+  and Claude Code sessions are first-class concepts here, not hidden behind
+  a provider abstraction. The exceptions are added one tool at a time: from
+  0.6.0 a Manager can run on a local model through Goose, and a Cursor
+  adapter is planned for 0.7.0. A general abstraction layer is not planned:
+  it would weaken every integration point to the lowest common denominator.
 - **The loop watches; it does not work the queue yet.** `rite loop` reads the
   board, your workers and the schedule every couple of minutes and tells you
   what it would do. It starts nothing. Two layers would close that, and

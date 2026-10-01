@@ -26,8 +26,9 @@ permission settings). A third kind of file there would be the same defect
 again.
 
 **Asked means sent to the outbox**, through the validated writer `rite reply`
-uses. So `rite replies`, `rite connect` and the Slack relay all carry it, and
-nothing here knows which of them exist.
+uses, filed as a question (RP1: action, not reading). So `rite replies`, `rite
+connect` and the Slack relay all carry it, and nothing here knows which of them
+exist.
 """
 
 from __future__ import annotations
@@ -197,10 +198,10 @@ def ask_now(
     """
     if not questions:
         return None
-    from rite_ai.managers.mailbox import OUTBOX, send
+    from rite_ai.managers.mailbox import OUTBOX, QUESTION, send
 
     text = "\n".join([why, "", *_question_lines(questions)])
-    path = send(root, manager, OUTBOX, text)
+    path = send(root, manager, OUTBOX, text, kind=QUESTION)
     now = time.time()
     for q in questions:
         record(root, manager, {"event": "asked", "id": q.id, "at": now, "how": how})
@@ -568,6 +569,20 @@ def is_checkin(root: Path, manager: str, outbox_name: str) -> bool:
     )
 
 
+def held_questions(root: Path, manager: str, outbox_name: str) -> int:
+    """How many questions the check-in `outbox_name` asked (RP1: a check-in
+    holding questions needs the person, one without does not). A check-in
+    recorded before the count was kept is taken to hold one: unknown is
+    treated as needing the person, as everywhere in RP1."""
+    for e in ledger(root, manager):
+        if e.get("event") == "checkin" and e.get("outbox") == outbox_name:
+            try:
+                return int(e.get("questions", 1))
+            except (TypeError, ValueError):
+                return 1
+    return 0
+
+
 @dataclass(frozen=True)
 class Counts:
     """The filter's value, counted over one check-in period."""
@@ -620,7 +635,7 @@ def _deliver_checkin(root: Path, manager: str) -> str:
     filtered.
     """
     from rite_ai.managers import standup
-    from rite_ai.managers.mailbox import OUTBOX, send
+    from rite_ai.managers.mailbox import CHECKIN, OUTBOX, send
 
     survivors = _queued(root, manager)
     since = _last_checkin(root, manager)
@@ -630,19 +645,43 @@ def _deliver_checkin(root: Path, manager: str) -> str:
         for e in ledger(root, manager)
         if e.get("event") == "withdrawn" and float(e.get("at") or 0) > since
     ]
-    ledger_path = (_checkins_dir(root, manager) / LEDGER_FILENAME).relative_to(root)
+    # Since MM8 the ledger is outside the project (`managers.manager_dir`), so
+    # it cannot be shown relative to it. Shown from `~`, because this message
+    # goes to Slack and an absolute path carries the operator's user name.
+    full = _checkins_dir(root, manager) / LEDGER_FILENAME
+    home = Path.home()
+    ledger_path = f"~/{full.relative_to(home)}" if full.is_relative_to(home) else full
     lines = [f"Check-in — {manager}", "", *standup.digest(root, manager, since)]
     lines += ["", "Deferred questions:", f"- {counts.line()} (ledger: {ledger_path})"]
     for e in withdrawn:
         lines.append(f"- withdrawn {e.get('id')}: answered by {e.get('answered_by')}")
     if survivors:
         lines += ["", "Questions held for this check-in:", *_question_lines(survivors)]
-    path = send(root, manager, OUTBOX, "\n".join(lines))
+    # RP1 piece 2: what was asked and never confirmed to reach anyone comes
+    # back here, every check-in, until something confirms it.
+    from rite_ai.managers import pending
+
+    lines += pending.checkin_lines(root, manager, now=time.time())
+    # TR2: an escalated refinement is in every checkpoint until he decides it
+    # (Robert: "escalates it as a blocker ... in the checkpoint status updates").
+    from rite_ai.refinement import protocol as refinement_protocol
+
+    lines += refinement_protocol.checkin_lines(root, manager)
+    path = send(root, manager, OUTBOX, "\n".join(lines), kind=CHECKIN)
     now = time.time()
     # Which outbox file IS a check-in, kept here rather than in the message
     # (which stays identity-free, Decision 1a): the Slack relay roots the
     # answer thread on it and mirrors it to the broadcast channel (K5).
-    record(root, manager, {"event": "checkin", "at": now, "outbox": path.name})
+    record(
+        root,
+        manager,
+        {
+            "event": "checkin",
+            "at": now,
+            "outbox": path.name,
+            "questions": len(survivors),
+        },
+    )
     for q in survivors:
         record(
             root, manager, {"event": "asked", "id": q.id, "at": now, "how": "checkin"}
@@ -668,6 +707,7 @@ def instructions(root: Path, manager: str) -> str:
     of one text is how they drift.
     """
     from rite_ai import own_command
+    from rite_ai.managers import stdin_text
 
     rite = own_command()
     state = windows(root)
@@ -683,13 +723,18 @@ def instructions(root: Path, manager: str) -> str:
         "waited costs the User thirty seconds. So asking now is the "
         "default, and every doubt is resolved by asking now.",
         "",
-        f'To ask now: `{rite} reply --manager {manager} "<question>"`.',
+        "To ask now:",
+        stdin_text.heredoc(f"{rite} ask --manager {manager} -", "<question>"),
+        stdin_text.RULE,
         "",
         "Only when a question is CLEARLY deferrable, meaning you have real "
         "work to do meanwhile that does not depend on the answer, you may "
         "defer it to the User's next check-in:",
-        f'  {rite} ask --manager {manager} --defer "<question>" --while '
-        '"<what you will do meanwhile>"',
+        stdin_text.heredoc(
+            f"{rite} ask --manager {manager} --defer "
+            '--while "<what you will do meanwhile>" -',
+            "<question>",
+        ),
         "If you cannot name that work, the question blocks you: ask now. A "
         "deferral with no --while is refused.",
         "",

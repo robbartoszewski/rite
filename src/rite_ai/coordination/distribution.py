@@ -18,7 +18,7 @@ a second definition here would give two answers to one question the first time
 they disagreed.
 
 **WHICH Worker does not matter, and saying so is the point.** Workers are
-fungible (§5.3.4) — every one gets every project credential and there is
+fungible (§5.3.4) — every one gets the same credentials and there is
 nothing to match against a ticket — so the free Workers are taken in
 configured order. A pick that LOOKED clever here would be inventing a routing
 rule the spec does not have.
@@ -42,7 +42,11 @@ from pathlib import Path
 
 from rite_ai.config.models import ScheduleConfig
 from rite_ai.coordination.refusal import Refused, refusal_reason, refuse_assignment
-from rite_ai.coordination.ticket_labels import SCHEDULED, module_required_by
+from rite_ai.coordination.ticket_labels import (
+    READY_TO_WORK,
+    SCHEDULED,
+    module_required_by,
+)
 from rite_ai.schedule import current_moment, workers_at
 from rite_ai.tickets import BackendError, TicketFilter
 
@@ -85,6 +89,7 @@ def distribute(
     modules: set[str] | None = None,
     draining: str = "",
     layer=None,
+    refinement=None,
 ):
     """Hand this Manager's assigned tickets to its free Workers.
 
@@ -95,6 +100,14 @@ def distribute(
     `layer` records refusals where rite can read them back (Q9 rule 2).
     Without it a refusal exists only as a board comment, and the Owner hands
     the same ticket to the same Manager on its next tick, for ever.
+
+    ⚠ **Only a REFINED ticket is handed to a Worker (TR5).** The Owner assigns
+    only REFINED tickets, but a Manager's name can be put on a ticket by hand,
+    and a ticket can go STALE after it was assigned. Either one handed out
+    labels a Worker with work its start then refuses (TR4). Checked with the
+    one predicate, only for a ticket about to be handed out, so a full fleet
+    costs no reads; anything else is held and its state said. `refinement` is
+    injectable for tests; None checks `backend` itself.
     """
     # ⚠ ONE MOMENT, taken once. This read the minute from `now` and the
     # weekday from `current_moment(...)` with no `now` at all — so the two
@@ -160,8 +173,23 @@ def distribute(
                 else f"every Worker of {manager} is busy"
             )
             continue
+        answer = _refinement_of(refinement, backend, ticket.id)
+        if not answer.refined:
+            result.held_back[ticket.id] = (
+                f"{answer.state}: no agreed definition of done to start a Worker on"
+            )
+            continue
         worker = free[0]
-        written = backend.label(ticket.id, [worker], remove=[manager, SCHEDULED])
+        # TR7: `ready-to-work` leaves in the same write as `scheduled`, so
+        # the board never shows an assigned ticket as ready to be assigned.
+        # Only when the ticket carries it: `gh issue edit --remove-label`
+        # refuses a label the REPOSITORY lacks (measured, gh 2.98.0: "'…' not
+        # found", exit 1), which would fail every assignment on a repository
+        # rite has never labelled `ready-to-work`.
+        remove = [manager, SCHEDULED]
+        if READY_TO_WORK in (ticket.labels or []):
+            remove.append(READY_TO_WORK)
+        written = backend.label(ticket.id, [worker], remove=remove)
         if isinstance(written, BackendError):
             # The Worker stays free and the ticket stays put. An assignment
             # that did not land must not be reported as one.
@@ -174,6 +202,17 @@ def distribute(
         result.handouts.append((ticket.id, worker))
     result.free_workers = list(free)
     return result
+
+
+def _refinement_of(refinement, backend, ticket_id: str):
+    from rite_ai.refinement import status as refinement_status
+
+    if refinement is None:
+
+        def refinement(ticket: str):
+            return refinement_status.status(backend, ticket)
+
+    return refinement_status.checked(refinement, ticket_id)
 
 
 def _busy_workers(root: Path) -> set[str]:

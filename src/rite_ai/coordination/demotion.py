@@ -83,6 +83,9 @@ class HandedOver:
 
     to: str
     version: str
+    released_at: str = ""
+    """When the role ended, as the release stamped it (`Released`); "" when
+    the lease was already gone some other way, so nothing was released."""
 
 
 @dataclass
@@ -192,7 +195,7 @@ def hand_over(holder: OwnerLeaseHolder, *, now: datetime | None = None):
 
     released = holder.release()
     if isinstance(released, Released):
-        return HandedOver(requester, released.version)
+        return HandedOver(requester, released.version, released.released_at)
     if isinstance(released, Uncertain):
         return Unknown(f"the release did not complete: {released.reason}")
     # Already lost it some other way (expiry, a challenge). The request is

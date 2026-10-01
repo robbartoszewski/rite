@@ -69,6 +69,8 @@ from rite_ai.config.models import Module, SandboxConfig
 from rite_ai.machine import max_sandboxes
 
 TOKEN_ENV_VAR = "GITHUB_TOKEN"
+_GITHUB_TOKEN_ENV = frozenset({"GITHUB_TOKEN", "GH_TOKEN", "GH_ENTERPRISE_TOKEN"})
+"""Never passed into a Worker's sandbox (`start_worker`)."""
 CLAUDE_TOKEN_ENV_VAR = "CLAUDE_CODE_OAUTH_TOKEN"
 
 
@@ -1058,7 +1060,6 @@ def start_worker(
     root: str | os.PathLike[str],
     worker: str,
     config: SandboxConfig,
-    token: str | None = None,
     agent_args: list[str] | None = None,
     env: dict[str, str] | None = None,
     allow_dirty: bool = False,
@@ -1090,6 +1091,18 @@ def start_worker(
     workdir = root / "workers" / worker
     if not workdir.is_dir():
         return SandboxResult(False, f"no such worker workspace: {workdir}")
+    # Every commit the Worker makes credits rite and Claude, added by a hook
+    # rite installs now, before the sandbox copies the workspace — never a
+    # convention the Worker is asked to remember (`publishing.attribution`).
+    from rite_ai.publishing import attribution
+
+    uncredited = attribution.install_hooks(workdir)
+    if uncredited:
+        return SandboxResult(
+            False,
+            "not started: its commits could not be made to credit rite and "
+            "Claude (" + "; ".join(uncredited) + ")",
+        )
 
     from rite_ai.schedule import check_worker_cap
 
@@ -1170,21 +1183,38 @@ def start_worker(
                 f'("max_sandboxes") or unset it for no bound.',
             )
 
-    args = [binary, "new", "--backend", config.backend, "--agent", "claude"]
+    # ⚠ The operator's own Claude settings stay out (dogfood #27). yoloAI's
+    # claude agent copies `~/.claude/settings.json` from the home of the
+    # process running it into every sandbox, on every create, start and
+    # restart (`envsetup.CopySeedFiles`, not `agent_files`, and no option
+    # turns it off). So `yoloai new` runs with a home rite owns, and
+    # `--data-dir` keeps yoloAI's own state where it always is.
+    clean_home = config.backend == "seatbelt"
+    args = [binary]
+    if clean_home:
+        args += ["--data-dir", str(Path.home() / ".yoloai")]
+    args += ["new", "--backend", config.backend, "--agent", "claude"]
     if allow_dirty:
         # yoloAI refuses a workdir with uncommitted changes unless told
         # otherwise, and a Worker part-way through a task is exactly that.
         # Opt-in rather than always-on: its warning ("could be modified or
         # lost") is about the Worker's own unpushed work.
         args.append("--allow-dirty")
-    # Every credential the project holds, one `--env` each (§5.3.4).
-    # `token` remains for callers that have only the git token; when both
-    # are given `env` is authoritative and already carries it, because
-    # `worker_environment` puts the Worker's own token in GITHUB_TOKEN
-    # ahead of any machine-global one.
+    # The Worker's credentials, one `--env` each (§5.3.4): its engine's
+    # login, and never a GitHub token. rite pushes and opens the pull
+    # request on the host (`rite deliver`); a token in here would let the
+    # Worker push, open a pull request anywhere, or merge, forbidden only by
+    # its instructions. Refused here whatever the caller passed, so no
+    # future caller can hand one over by accident.
     delivered = dict(env or {})
-    if token and TOKEN_ENV_VAR not in delivered:
-        delivered[TOKEN_ENV_VAR] = token
+    github = sorted(k for k in delivered if k in _GITHUB_TOKEN_ENV)
+    if github:
+        return SandboxResult(
+            False,
+            f"not starting '{worker}': a GitHub token was about to be passed "
+            f"into its sandbox ({', '.join(github)}); Workers hold none, since "
+            "rite pushes and opens the pull request on the host",
+        )
     # The Claude login goes to yoloAI, not to `--env`. yoloAI treats
     # CLAUDE_CODE_OAUTH_TOKEN as the claude agent's own credential and reads
     # it from the environment `yoloai new` runs in (`yoloai system agents
@@ -1197,6 +1227,8 @@ def start_worker(
     # would compete with the one passed below. Both start GIT_CONFIG_.
     for inherited in [k for k in yoloai_env if k.startswith("GIT_CONFIG_")]:
         del yoloai_env[inherited]
+    if clean_home:
+        yoloai_env["HOME"] = str(worker_home())
     claude_login = delivered.pop(CLAUDE_TOKEN_ENV_VAR, None)
     if claude_login:
         yoloai_env[CLAUDE_TOKEN_ENV_VAR] = claude_login
@@ -1343,6 +1375,65 @@ def start_worker(
     return SandboxResult(True, "\n".join(lines))
 
 
+def worker_home(home: Path | None = None) -> Path:
+    """The home `yoloai new` runs with: rite's, holding only an empty
+    `.claude/settings.json` (dogfood #27).
+
+    ⚠ **Measured on yoloAI 0.11.0, seatbelt, 2026-09-29.** With the
+    operator's home, a Worker's settings were theirs: their hooks (here, a
+    coordination system of their own, run on every session start and stop),
+    their `env`, merged with yoloAI's. With this home, only yoloAI's own
+    hooks. yoloAI copies the file rather than linking it, so the directory
+    is only needed while `yoloai new` runs, and it is rewritten each time.
+
+    Under the credential root's parent, which no Manager's profile grants.
+    Nothing in it is secret; that is just where rite keeps its own files.
+
+    ⚠ **The home also decides what the sandbox may READ.** yoloAI's seatbelt
+    profile grants `<home>/.local` and a few Swift/Xcode paths, resolving
+    symlinks (`runtime/seatbelt/profile.go`, `writeProfileHomeDir`).
+    Measured with an empty home: `rite` inside the Worker was found but its
+    Python could not load (`Library not loaded: @rpath/libpython3.13.dylib`,
+    under `~/.local/share/uv/python`), so nothing rite does inside a Worker
+    worked. Those paths are linked to the operator's own, which gives the
+    grants yoloAI gives today. That includes `.gitconfig` and `.config/git`:
+    a Worker commits as the operator, exactly as before (Robert, 2026-09-29).
+    rite's `GIT_CONFIG_*` still override the parts of that config that cannot
+    work inside (credential helper, signing, hooks path).
+    """
+    from rite_ai.managers import github_access
+
+    real = Path.home()
+    path = github_access._credential_root(home).parent / "worker-home"  # noqa: SLF001
+    (path / ".claude").mkdir(parents=True, exist_ok=True)
+    (path / ".claude" / "settings.json").write_text("{}\n")
+    for granted in _HOME_GRANTS:
+        link, target = path / granted, real / granted
+        if link.is_symlink():
+            if link.readlink() == target:
+                continue
+            link.unlink()
+        elif link.exists():
+            continue  # not rite's link; leave it rather than delete it
+        if target.exists():
+            link.parent.mkdir(parents=True, exist_ok=True)
+            link.symlink_to(target)
+    return path
+
+
+_HOME_GRANTS = (
+    ".local",
+    ".gitconfig",
+    ".config/git",
+    "Library/Caches/org.swift.swiftpm",
+    "Library/Developer/Xcode",
+    "Library/Caches/swift-build",
+    "Library/org.swift.swiftpm",
+)
+"""What yoloAI 0.11.0's seatbelt profile grants under the home
+(`writeProfileHomeDir`). Linked from `worker_home` to the real ones."""
+
+
 def sandbox_git_environment(gh: str | None) -> dict[str, str]:
     """Git settings for inside a sandbox, as environment variables.
 
@@ -1358,6 +1449,8 @@ def sandbox_git_environment(gh: str | None) -> dict[str, str]:
       environment`), which rite injects. The path is shell-quoted because
       git runs a `!` helper through the shell. Without `gh` only the reset
       is set, and the caller says so.
+    - **SSH origins.** Rewritten to HTTPS for github.com, because nothing
+      under `~/.ssh` is readable inside.
     - **Signing off.** A Worker's commits are the agent's. Signing them with
       the host user's key would assert that person wrote them, and a
       signing key under `~/.ssh` is unreadable inside anyway, which made
@@ -1377,6 +1470,13 @@ def sandbox_git_environment(gh: str | None) -> dict[str, str]:
             )
         )
     settings += [
+        # An SSH origin can never authenticate inside: measured, git over ssh
+        # in a Worker's sandbox stops at `hostkeys_foreach failed for
+        # ~/.ssh/known_hosts: Operation not permitted`, before any key is
+        # tried. Rewritten, the same origin reaches the HTTPS helper above
+        # and the token rite injects. Both spellings git accepts for GitHub.
+        (GITHUB_REWRITE_KEY, "git@github.com:"),
+        (GITHUB_REWRITE_KEY, "ssh://git@github.com/"),
         ("commit.gpgsign", "false"),
         ("tag.gpgsign", "false"),
         ("core.hooksPath", ".git/hooks"),
@@ -1393,6 +1493,226 @@ def sandbox_git_environment(gh: str | None) -> dict[str, str]:
         # GITHUB_TOKEN.
         env["GH_CONFIG_DIR"] = str(Path(tempfile.gettempdir()) / "rite-sandbox-gh")
     return env
+
+
+GITHUB_REWRITE_KEY = "url.https://github.com/.insteadOf"
+
+
+@dataclass
+class CloneRemote:
+    """Where one of a Worker's clones pushes to, read from the clone."""
+
+    clone: Path
+    url: str
+    # `(owner, repo)` when the origin is on github.com, else None.
+    github: tuple[str, str] | None
+
+
+def clone_remotes(workdir: Path) -> list[CloneRemote]:
+    """Every clone in `workdir` whose origin is a network URL.
+
+    Read from each clone's own `origin`, not from `modules.yaml`: the clone
+    is what the Worker pushes from, and a module cloned from the project's
+    local checkout (no `url` recorded) has a local origin, not the URL."""
+    found: list[CloneRemote] = []
+    if not workdir.is_dir():
+        return found
+    for clone in sorted(p for p in workdir.iterdir() if (p / ".git").exists()):
+        try:
+            proc = subprocess.run(
+                ["git", "-C", str(clone), "remote", "get-url", "origin"],
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        url = proc.stdout.strip()
+        if proc.returncode != 0 or not url or url.startswith("file://"):
+            continue
+        if "://" in url or re.match(r"^[^/]+:", url):
+            found.append(CloneRemote(clone, url, owner_repo_from_url(url)))
+    return found
+
+
+def remote_access_refusal(
+    worker: str, remotes: list[CloneRemote], token: str | None, gh: str | None
+) -> str | None:
+    """Why a Worker with these remotes could not push from its sandbox, or
+    None. Decided before the sandbox starts, because afterwards the only
+    symptom is a session that works and then cannot deliver (dogfood KAN-7:
+    `could not read Username for 'https://github.com'`, and the Worker asked
+    for a token through a side channel).
+
+    One line, remedy included: `rite sandbox start` prints it last, and the
+    supervisor relays only the last line of a failed start."""
+    if not remotes:
+        return None
+    elsewhere = [r for r in remotes if r.github is None]
+    if elsewhere:
+        r = elsewhere[0]
+        return (
+            f"not starting '{worker}': {r.clone.name}/ pushes to {r.url}, and "
+            "rite gives a sandboxed Worker a credential for github.com only, "
+            "so its work could never leave the sandbox"
+        )
+    from rite_ai.credentials.services import how_to_set
+
+    first = "/".join(remotes[0].github or ())
+    if not token:
+        return (
+            f"not starting '{worker}': no GitHub token for Workers, so its work "
+            f"on {first} could never be pushed. Run `rite credential set "
+            f"{how_to_set('github_token')}` in this project, then start it again"
+        )
+    if not gh:
+        return (
+            f"not starting '{worker}': GitHub's `gh` CLI is not installed, and "
+            "git inside the sandbox authenticates to github.com through it. "
+            "Install gh, then start it again"
+        )
+    return None
+
+
+RECEIVE_PACK = "application/x-git-receive-pack-advertisement"
+
+
+@dataclass(frozen=True)
+class PushAccess:
+    """Whether a token can push, in THREE answers.
+
+    ⚠ **"Could not ask" is not "cannot push".** `push_access_refusal` collapses
+    the two, which is right where the choice is whether to START A WORKER: an
+    unchecked token is refused rather than trusted, because a Worker that runs
+    and cannot deliver costs a whole ticket. It is wrong in a REPORT, where
+    nothing is at stake but what the reader is told — there, an unreachable
+    network would be reported as a bad token, and the person would go and
+    reissue a credential that was fine (v0.7.0 dogfood S28).
+    """
+
+    kind: str
+    """`ok`, `cannot_push`, or `unknown`."""
+    owner: str = ""
+    repo: str = ""
+    why: str = ""
+    """For `cannot_push`: what GitHub's answer meant."""
+    reason: str = ""
+    """For `unknown`: the class of failure that stopped the check."""
+
+    @property
+    def repository(self) -> str:
+        return f"{self.owner}/{self.repo}"
+
+    @property
+    def is_a_problem(self) -> bool:
+        """Only a KNOWN refusal is a problem. Counting `unknown` would make
+        `rite doctor` report a fault for being offline."""
+        return self.kind == "cannot_push"
+
+
+def push_access(
+    remotes: list[CloneRemote], token: str, timeout: int = 30
+) -> PushAccess:
+    """Whether `token` can PUSH to each GitHub remote, asked of GitHub.
+
+    ⚠ **Push, not read.** `check_token_access` asks `GET repos/o/r`, which
+    any token — or none — passes for a public repository, such as a fork
+    being contributed from.
+
+    Asked the way a push asks first, and nothing more: `GET
+    <repo>.git/info/refs?service=git-receive-pack` with the token. GitHub
+    authorises receive-pack there, before any ref could be sent, and a GET
+    cannot send one — so rite still has no path that writes to a remote
+    (`test_blast_radius`). Measured 2026-09-28: a token that can write the
+    repository -> 200 with the receive-pack advertisement; the same token on
+    a public repository it can only read -> 403; a bogus token -> 401; no
+    token -> 401; a repository that does not exist -> 404. Only the first is
+    allowed.
+
+    The token is sent as the password, as `gh auth git-credential` gives it
+    to git inside the sandbox, and nothing of the host's is consulted.
+    """
+    import base64
+    import urllib.error
+    import urllib.request
+
+    basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+    for remote in remotes:
+        if remote.github is None:
+            continue
+        owner, repo = remote.github
+        request = urllib.request.Request(
+            f"https://github.com/{owner}/{repo}.git/info/refs?service=git-receive-pack",
+            headers={"Authorization": f"Basic {basic}"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                status = response.status
+                kind = response.headers.get("Content-Type", "")
+        except urllib.error.HTTPError as e:
+            status, kind = e.code, ""
+        except (OSError, ValueError) as e:
+            return PushAccess(
+                "unknown", owner=owner, repo=repo, reason=e.__class__.__name__
+            )
+        # ⚠ **Only these three are GitHub's VERDICT on the token.** Everything
+        # else that is not a receive-pack 200 means the question was not
+        # answered: a 500 or 503 is GitHub being down, a 429 is rate limiting,
+        # and a 200 carrying anything else is a proxy or captive portal, not
+        # GitHub saying yes. Sorted as `cannot_push`, an outage would have
+        # `rite doctor --network` report "token cannot push" for a token that
+        # is fine — the exact false accusation S28 exists to prevent — and
+        # send someone to reissue a working credential. They are `unknown`,
+        # which `push_access_refusal` still turns into a refusal for a START.
+        verdict = {
+            401: "GitHub does not accept the token",
+            403: "the token can read it but not write it",
+            404: "the repository does not exist, or the token cannot see it",
+        }
+        if status in verdict:
+            return PushAccess(
+                "cannot_push", owner=owner, repo=repo, why=verdict[status]
+            )
+        if status != 200 or not kind.startswith(RECEIVE_PACK):
+            reason = (
+                f"HTTP {status}"
+                if status != 200
+                else "a 200 that is not a receive-pack advertisement"
+            )
+            return PushAccess("unknown", owner=owner, repo=repo, reason=reason)
+    return PushAccess("ok")
+
+
+def push_access_refusal(
+    worker: str, remotes: list[CloneRemote], token: str, timeout: int = 30
+) -> str | None:
+    """Why `worker` must not start, or None — `push_access` collapsed to the
+    two answers a START needs.
+
+    A check that cannot finish REFUSES: "could not ask" is not "allowed" when
+    a Worker is about to run. `rite doctor` calls `push_access` directly,
+    because a report must keep the three apart (S28).
+    """
+    from rite_ai.credentials.services import how_to_set
+
+    got = push_access(remotes, token, timeout)
+    if got.kind == "ok":
+        return None
+    if got.kind == "unknown":
+        return (
+            f"not starting '{worker}': could not check that its GitHub "
+            f"token can push to {got.repository} ({got.reason}), "
+            "and an unchecked token is refused rather than trusted"
+        )
+    return (
+        f"not starting '{worker}': its GitHub token cannot push to "
+        f"{got.repository} ({got.why}). Give the token Contents: read and "
+        "write on that repository, or set another with `rite "
+        f"credential set {how_to_set('github_token')}` (or `rite "
+        f"credential set sandbox_token_{worker}`, if this Worker has "
+        "a token of its own)"
+    )
 
 
 def _local_origins(
@@ -1454,6 +1774,131 @@ def _local_origins(
 
 def _yoloai_sandboxes_dir() -> Path:
     return Path.home() / ".yoloai" / "library" / "sandboxes"
+
+
+def _unapplied_paths(binary: str, name: str) -> list[str] | None:
+    """What yoloAI calls unapplied in `name`, relative to the Worker's
+    copy, or None when it cannot say."""
+    try:
+        proc = subprocess.run(
+            [binary, "diff", name, "--name-only", "--json"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=60,
+        )
+        diff = json.loads(proc.stdout)["diff"]
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
+        return None
+    if proc.returncode != 0 or not isinstance(diff, str):
+        return None
+    return [line.strip() for line in diff.splitlines() if line.strip()]
+
+
+def _destroy_when_only_pushed_work_is_unapplied(
+    binary: str,
+    name: str,
+    worker: str,
+    root: str | os.PathLike[str] | None,
+    refused: subprocess.CompletedProcess,
+) -> tuple[subprocess.CompletedProcess | None, str]:
+    """Destroy a finished Worker that yoloAI refused only for pushed work.
+
+    ⚠ **yoloAI's "unapplied" measures a different property from the one
+    that matters here.** It means "not copied back to the host with `yoloai
+    apply`". A Worker's work never leaves that way: it leaves by being
+    pushed (§5.3). So every finished Worker is "unapplied" — measured on the
+    pingr proof, 2026-09-28: the only unapplied path was `pingr`, the clone
+    whose one commit was already on origin — and the ordinary path made the
+    user type `--force`, teaching that the guard is skippable (dogfood F1's
+    shape).
+
+    `--abandon-unapplied` is added here only when rite can show POSITIVELY
+    that nothing would be lost, and never on "could not check":
+
+    1. the sandbox is stopped first, so its agent cannot commit between the
+       check and the destroy;
+    2. yoloAI names what it calls unapplied, and every path is one of the
+       Worker's clones in a copy rite actually found;
+    3. each of those clones holds nothing uncommitted and no commit that is
+       on no remote (`unsaved_work`).
+
+    Otherwise yoloAI's refusal stands, with the paths named. Returns the
+    destroy's result and a note to add, or `(None, why)` when refusing."""
+    stopped = subprocess.run(
+        [binary, "stop", name],
+        capture_output=True,
+        text=True,
+        errors="replace",
+        timeout=120,
+    )
+    kept = f"refusing to destroy sandbox '{name}': " + (
+        refused.stderr.strip() or refused.stdout.strip()
+    )
+    if stopped.returncode != 0:
+        return None, f"{kept}\n  and rite could not stop it to check why"
+    kept += (
+        "\n  the sandbox is stopped, its work kept; "
+        f"`rite sandbox destroy {worker} --force` discards it"
+    )
+    if root is None:
+        return None, kept
+    copy = _sandbox_copy(name, Path(root) / "workers" / worker)
+    paths = _unapplied_paths(binary, name)
+    if copy is None or paths is None:
+        return None, f"{kept}\n  rite could not see what yoloAI calls unapplied"
+    clones = {p.name for p in copy.iterdir() if (p / ".git").exists()}
+    other = [p for p in paths if p.split("/", 1)[0] not in clones]
+    if not paths or other:
+        return None, f"{kept}\n  not a pushed clone: {', '.join(other or paths)}"
+    from rite_ai.workspace import unsaved_work
+
+    items = _not_collected(unsaved_work(copy), copy, root)
+    if items:
+        return None, f"{kept}\n  " + "\n  ".join(i.describe() for i in items)
+    try:
+        proc = subprocess.run(
+            [binary, "destroy", name, "--abandon-unapplied"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        return None, "yoloai destroy timed out after 120s"
+    touched = sorted({p.split("/", 1)[0] for p in paths})
+    return proc, (
+        f" — yoloAI counted {', '.join(touched)} as unapplied; rite stopped "
+        "the sandbox and found every commit there on a remote and nothing "
+        "uncommitted"
+    )
+
+
+def _not_collected(items: list, copy: Path, root: str | os.PathLike[str]) -> list:
+    """`items` without the modules whose commits `rite deliver` collected.
+
+    A commit is saved when it is on a remote OR reachable in the project's
+    own checkout of that module (PB1): under `strategy: commit` nothing is
+    pushed by design, so "on no remote" stopped meaning "only here".
+    Uncommitted files, and a checkout that could not be read, are never
+    dropped. An unreadable modules.yaml drops nothing: "could not check" is
+    not "collected".
+    """
+    from rite_ai.config.parse import ParseError, parse_modules
+    from rite_ai.publishing.deliver import collected
+
+    modules = parse_modules(Path(root) / ".rite" / "modules.yaml")
+    if isinstance(modules, ParseError):
+        return items
+    where = {m.name: Path(root) / m.path for m in modules}
+    return [
+        i
+        for i in items
+        if i.uncommitted
+        or i.unreadable
+        or i.module not in where
+        or not collected(copy / i.module, where[i.module])
+    ]
 
 
 def _sandbox_copy(name: str, workdir: Path) -> Path | None:
@@ -1521,7 +1966,7 @@ def _work_only_in_sandbox(
         )
     from rite_ai.workspace import unsaved_work
 
-    items = unsaved_work(copy)
+    items = _not_collected(unsaved_work(copy), copy, root)
     if not items:
         return ""
     lines = [
@@ -1582,6 +2027,39 @@ def destroy_worker(
             "  destroying it deletes the copy; push that work first, or "
             f"`rite sandbox destroy {worker} --force` to discard it",
         )
+    if not force:
+        # ⚠ A QUESTION IS WORK TOO (dogfood Q3). The guard above looks at
+        # code (and refuses without a project root before anything runs);
+        # the one thing the v0.6.0 dogfood's Worker produced was a question
+        # in yoloAI's exchange directory, which this command would have
+        # deleted without a word. "Could not check" refuses too: it is not
+        # "no question".
+        from rite_ai.sandbox.questions import (
+            Unknown,
+            WorkerQuestion,
+            pending_question,
+        )
+
+        asked = pending_question(name)
+        if isinstance(asked, WorkerQuestion):
+            return SandboxResult(
+                False,
+                f"refusing to destroy sandbox '{name}': its Worker is waiting "
+                f"on a question, asked at {asked.since()} and never answered:\n"
+                f"  {asked.headline()}\n"
+                f"  destroying it deletes the question. Read it in full with "
+                f"`rite sandbox pane {worker}` or {asked.path}; answer it in "
+                "the Slack thread rite raised it in, and the Owner relays it "
+                f"(S30), or `rite sandbox destroy {worker} --force` to "
+                "discard it",
+            )
+        if isinstance(asked, Unknown):
+            return SandboxResult(
+                False,
+                f"refusing to destroy sandbox '{name}': could not check whether "
+                f"its Worker is waiting on a question ({asked.reason}). "
+                f"`rite sandbox destroy {worker} --force` destroys it anyway",
+            )
     try:
         proc = subprocess.run(
             # `--abandon-unapplied` ONLY UNDER --force. It was passed
@@ -1599,13 +2077,24 @@ def destroy_worker(
         )
     except subprocess.TimeoutExpired:
         return SandboxResult(False, "yoloai destroy timed out after 120s")
+    note = ""
+    if (
+        proc.returncode != 0
+        and not force
+        and "unapplied" in (proc.stderr + proc.stdout)
+    ):
+        proc, note = _destroy_when_only_pushed_work_is_unapplied(
+            binary, name, worker, root, proc
+        )
+        if proc is None:
+            return SandboxResult(False, note)
     if proc.returncode != 0:
         return SandboxResult(False, proc.stderr.strip() or proc.stdout.strip())
     from rite_ai.reporting import events
 
     if root is not None:
         events.record(Path(root), "sandbox-destroyed", worker=worker, sandbox=name)
-    return SandboxResult(True, f"sandbox '{name}' destroyed")
+    return SandboxResult(True, f"sandbox '{name}' destroyed" + note)
 
 
 @dataclass

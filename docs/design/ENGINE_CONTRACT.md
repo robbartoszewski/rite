@@ -217,9 +217,33 @@ implemented twice is a guess, and B4a is the first real second
 implementation. Expect the registry to grow when it lands; the axes above are
 where to expect it.
 
-⚠ **A third handle direction is coming, and it is not built.** Cursor, as
-its documentation describes it, has the engine mint the id **before** the
-first turn, on request (`agent create-chat`). That is neither "rite
-chooses" nor "rite discovers", so `handle_is_ours` cannot carry it. Read, not
-measured. What it would cost this contract is in `V070_RELEASE_PLAN.md`,
-track CU. This document changes when the code does.
+**Cursor is NOT a third handle direction** (corrected; this said it was, from
+its documentation, before anyone measured it). Measured 2026-09-27 (CU1):
+rite generates a UUID and says it on every launch, the first included, which
+is Goose's shape (`handle_is_ours`). `agent create-chat` is not used: it never
+contacts Cursor, writes nothing, and can hang. The constraint is that the
+handle must be a UUID. ⚠ **What Cursor adds is a failure, not an axis:**
+resuming an id it has never seen exits 0, reports success and runs a fresh,
+empty chat. So whether a continuation continued is rite's to check, against
+the chat's `meta.json`, before AND after the turn (CU3, not built).
+
+**In the registry since CU2** (`engines.CURSOR`):
+`agent -p --trust --output-format json --resume <uuid> < prompt`. `start` and
+`resume` are the same spelling, which is Cursor's shape: it creates a chat for
+an unknown UUID and continues a known one. Two fields were added to `Spelling`
+for it:
+
+- **`handle_is_uuid`.** A chosen handle must be a canonical UUID
+  (`handle_problem`). A fresh one is random, never derived from the
+  session's name, because a derived handle would make `--fresh` continue the
+  old chat (CU3 generates and records it).
+- **`permission_unexpressed`.** This is a third destination for permission,
+  beside argv and the environment. Cursor keeps its allowlist in its own
+  config file (CU8), and until rite writes it there, a permission handed to
+  `launch_command` is refused.
+
+**What still refuses, deliberately:**
+- `config/managers.py` does not accept `engine: cursor` (CU4);
+- the supervisor will not pick a handle for it (CU3).
+
+This document changes when the code does.

@@ -37,7 +37,9 @@ CLOSED = "closed"
 sleep to the boundary, do not exit."""
 
 IDLE = "idle"
-"""The board has nothing ready. The ONE verdict that is a reason to stop."""
+"""The board LISTED nothing ready. The ONE verdict that is a reason to stop.
+rite's own writes are read back exactly (`tickets.own_writes`); a ticket a
+person created seconds ago may not be listed yet, and that is said (DF4)."""
 
 SATURATED = "saturated"
 """Work is ready and every Worker is busy. A queue, not a fault."""
@@ -60,6 +62,21 @@ of being wrong is two sessions on one path."""
 READY = "ready"
 """Work is ready and a Worker is free. A later layer dispatches here."""
 
+REFINING = "refining"
+"""Nothing is REFINED, and the Owner has refinement work it may start now
+(TR2; the note's part 3.4 step 0): a first look, a reply, or a deadline. A
+session starts, as for `ready`. Not `idle`: a board of unrefined tickets has
+work on it, and reading it as empty ended the run before anything could be
+refined (the defect the note's part 3.4 step 8 corrects)."""
+
+WAITING_ON_USER = "waiting-on-user"
+"""Work is on the board and none of it can start: every `scheduled` ticket
+is in refinement, waiting for the User, parked or unreadable, or queued
+behind the cap, and the User has done nothing since the last refinement
+session. Neither `idle` (there is work) nor `ready` (none of it can move).
+The supervisor waits and starts no session until he answers or a round's
+deadline passes (TR2; Robert's third verdict)."""
+
 UNKNOWN = "unknown"
 """Something could not be established. Never treated as any of the above:
 a loop's default on the unknown is to stop and say so."""
@@ -77,6 +94,13 @@ class WorkerView:
     conclusion with no evidence is the thing this module exists not to
     print."""
     held_paths: tuple[str, ...] = ()
+
+
+def as_of(moment: float | None) -> str:
+    """`HH:MM:SS` local time of a board read, for "nothing ready as of"."""
+    if moment is None:
+        return "an unrecorded time"
+    return time.strftime("%H:%M:%S", time.localtime(moment))
 
 
 @dataclass
@@ -102,6 +126,17 @@ class Cycle:
     OBSERVED refusals, never from a guess about which files a ticket needs."""
     capacity: int = 0
     problems: list[str] = field(default_factory=list)
+    scheduled: int = 0
+    """How many `scheduled` tickets the board listed, refined or not."""
+    board_read_at: float | None = None
+    """Wall-clock time the board's list came back. What "nothing ready" is
+    true AS OF: a list is a snapshot, and a ticket created outside rite just
+    before or after it is not in it (DF4). None when the board was not read."""
+    refinement: object = None
+    """The Owner's refinement work (`refinement.admit.Admission`), or None
+    when this Manager is not the one that refines (TRQ7)."""
+    refining: str = ""
+    """Why a session starts for refinement, or "" (`admit.reason_to_start`)."""
 
     @property
     def free_workers(self) -> list[str]:
@@ -127,6 +162,9 @@ def plan_cycle(
     board=None,
     sandbox_status=None,
     clock: float | None = None,
+    refiner: str | None = None,
+    refinement=None,
+    board_problem: str = "",
 ) -> Cycle:
     """Read everything, decide nothing that acts. Returns, never raises.
 
@@ -220,8 +258,16 @@ def plan_cycle(
         return cycle
 
     if board is None:
+        # ⚠ WHY there is no board, when the caller knows: "not configured"
+        # and "configured, and its credentials cannot be read here" need
+        # different people to act (live run finding S25: inside a Manager's
+        # sandbox this said "no ticket backend is configured" about a Jira
+        # board that was configured).
         cycle.verdict = UNKNOWN
-        cycle.detail = "no ticket backend is configured, so there is no queue to read"
+        cycle.detail = (
+            board_problem
+            or "no ticket backend is configured, so there is no queue to read"
+        )
         cycle.problems.append(cycle.detail)
         return cycle
 
@@ -229,26 +275,51 @@ def plan_cycle(
     # lost-intent reports by now, and a leaked dispatch is something to say
     # out loud — not a reason to call the whole cycle unknown.
     before = len(cycle.problems)
-    cycle.ready = _ready(board, cycle)
+    cycle.ready = _ready(root, project, board, cycle, clock, refiner, refinement)
+    cycle.board_read_at = time.time()
     if len(cycle.problems) > before:
         cycle.verdict = UNKNOWN
         cycle.detail = "the board could not be read"
         return cycle
 
     free = cycle.free_workers
+    if not cycle.ready and cycle.refinement is not None and cycle.scheduled:
+        work = cycle.refinement
+        if cycle.refining:
+            cycle.verdict = REFINING
+            cycle.detail = (
+                f"nothing is refined yet; {cycle.refining}, so a session "
+                f"refines {len(work.open) + len(work.start)} ticket(s)"
+            )
+        else:
+            cycle.verdict = WAITING_ON_USER
+            cycle.detail = _waiting_detail(work)
+        return cycle
     if not cycle.ready:
         cycle.verdict = IDLE
         cycle.detail = (
-            f"nothing on the board is waiting; {len(free)} of "
-            f"{len(cycle.workers)} Worker(s) free"
+            # A snapshot with its time, not "the board is empty": a list lags
+            # writes rite did not make itself (DF4); rite's own are read back
+            # in `own_writes`.
+            f"the board listed nothing waiting as of {as_of(cycle.board_read_at)} "
+            f"(a ticket created outside rite shortly before then, or since, is "
+            f"not in that read); {len(free)} of {len(cycle.workers)} Worker(s) free"
         )
         return cycle
 
     if not free:
         cycle.verdict = SATURATED
+        # "A queue" only of Workers seen working. One waiting on a question,
+        # or whose sandbox sits at its prompt, is not queued work (dogfood
+        # S1: a Worker blocked eight hours was counted as saturation).
+        stuck = [w.name for w in cycle.workers if not w.verdict.startswith("busy")]
         cycle.detail = (
             f"{len(cycle.ready)} ticket(s) waiting and no Worker free — a "
             "queue, not a fault, and NOT a reason to stop"
+            if not stuck
+            else f"{len(cycle.ready)} ticket(s) waiting and no Worker free, "
+            f"but {', '.join(stuck)} not seen working (see workers above) — "
+            "NOT a reason to stop, and not a queue that clears on its own"
         )
         return cycle
 
@@ -421,15 +492,97 @@ def _blocked(
     return blocked, blockers
 
 
-def _ready(board, cycle: Cycle) -> list[str]:
+def _ready(
+    root: Path, project, board, cycle: Cycle, clock: float, refiner, refinement=None
+) -> list[str]:
+    """The `scheduled` tickets a Worker may start: the REFINED ones (TR2).
+
+    ⚠ **Not every `scheduled` ticket any more.** Under Robert's semantics
+    scheduled + not refined is the Owner's to refine, and scheduled + refined
+    is work. So each listed ticket is read once through the refinement
+    predicate, and the Owner's unrefined ones become `cycle.refinement`.
+    Never gated alone: without the `refining` and `waiting-on-user` verdicts
+    a board of unrefined tickets would read `idle` and end the run.
+
+    `refinement` is injectable for tests; None asks the predicate about
+    `board` itself, one read per ticket.
+    """
     from rite_ai.coordination.ticket_labels import SCHEDULED
+    from rite_ai.refinement import admit, rounds
+    from rite_ai.refinement import status as refinement_status
     from rite_ai.tickets import BackendError, TicketFilter
 
     result = board.list_tickets(TicketFilter(label=SCHEDULED))
     if isinstance(result, BackendError):
         cycle.problems.append(f"the board could not be read: {result.message}")
         return []
-    return [t.id for t in result]
+    cycle.scheduled = len(result)
+    owner = _refiner_of(project, refiner)
+    attempts = rounds.all_attempts(root, owner) if owner else {}
+    states = []
+    if refinement is None:
+
+        def refinement(ticket_id: str):
+            return refinement_status.status(board, ticket_id)
+
+    for ticket in result:
+        answer = refinement_status.checked(refinement, ticket.id)
+        if answer.ticket is None:
+            answer = refinement_status.Status(
+                answer.state, answer.record, answer.detail, ticket
+            )
+        states.append(
+            (ticket, rounds.state_of(answer, attempts.get(ticket.id), now=clock))
+        )
+    limits = project.config.refinement
+    work = admit.admit(
+        states, open_max=limits.open_max, start_per_session=limits.start_per_session
+    )
+    if refiner is None or owner == refiner:
+        cycle.refinement = work
+        last = rounds.last_session(root, owner) if owner else None
+        events = rounds.events_since(attempts, last, now=clock)
+        cycle.refining = admit.reason_to_start(
+            work,
+            first_look=events.first_look,
+            replies=events.replies,
+            deadlines=events.deadlines,
+            owed=events.owed,
+        )
+    return work.ready
+
+
+def _refiner_of(project, refiner: str | None) -> str:
+    """Who refines in this project: the Manager holding `route` (TRQ7), or a
+    lone Manager itself. "" when that cannot be named (a `rite loop` with no
+    Manager roles): then there is no ledger to read, and nothing is assumed
+    about rounds."""
+    from rite_ai.config.managers import routing_owner
+
+    roles = list(project.config.coordination.manager_roles)
+    if roles:
+        return routing_owner(roles) or ""
+    return refiner or ""
+
+
+def _waiting_detail(work) -> str:
+    """Each ticket, and what it waits for: the line the wait repeats."""
+    parts = []
+    if work.open:
+        parts.append(f"in refinement, waiting for your answer: {', '.join(work.open)}")
+    if work.waiting:
+        parts.append(f"waiting for you since the deadline: {', '.join(work.waiting)}")
+    if work.queued:
+        parts.append(f"queued for refinement: {', '.join(work.queued)}")
+    if work.start:
+        parts.append(f"ready to refine, after your next reply: {', '.join(work.start)}")
+    for ticket, why in work.needs_person.items():
+        parts.append(f"{ticket} needs a person ({why})")
+    return (
+        "nothing can start: " + "; ".join(parts)
+        if parts
+        else "nothing can start, and nothing is in refinement"
+    )
 
 
 def _look_at_worker(root: Path, name: str, clock: float, sandbox_status) -> WorkerView:
@@ -477,15 +630,40 @@ def _look_at_worker(root: Path, name: str, clock: float, sandbox_status) -> Work
         view.evidence.append("no heartbeat recorded")
 
     if sandbox_status is not None:
-        status = sandbox_status(name, root)
-        view.evidence.append(f"sandbox: {status}")
-        if not getattr(status, "known", True):
+        from rite_ai.sandbox.activity import observe
+        from rite_ai.sandbox.questions import WorkerQuestion
+
+        # The same sentence `rite status` and `rite sandbox status` print
+        # (dogfood S1: these three views said "busy", "not started" and
+        # "idle" about one Worker at one moment).
+        seen = observe(name, root, sandbox_status)
+        view.evidence.append(seen.describe())
+        if seen.exists is None:
             # "Could not ask" is not "no sandbox", and only one of them is
             # safe to dispatch onto.
             view.verdict = "cannot tell — the sandbox could not be asked"
             return view
-        if str(status) not in ("not found", ""):
-            view.verdict = "busy — a sandbox is running for it"
+        if seen.exists:
+            # ⚠ A Worker waiting on a question is not "busy" in any sense a
+            # reader can act on (dogfood Q2). Still not free: it holds its
+            # ticket.
+            asked = seen.question
+            if isinstance(asked, WorkerQuestion):
+                view.evidence.append(f"question: {asked.headline(120)}")
+                view.verdict = (
+                    f"blocked — waiting on a question since {asked.since()}, "
+                    f"unanswered (`rite sandbox status {name}`)"
+                )
+                return view
+            # Not free while any sandbox exists for it: start refuses a
+            # second one. The verdict is that decision; the state is the
+            # shared sentence in the evidence, not a word of the loop's own
+            # ("busy" said working of an agent waiting at its prompt).
+            view.verdict = (
+                "busy — its sandbox's agent is working"
+                if str(seen.status) == "active"
+                else "not free — a sandbox exists for it"
+            )
             return view
 
     view.free = True
@@ -553,13 +731,22 @@ def watch(
     """
     import time as _time
 
-    from rite_ai.loop.session import draining, hold_lock, release_lock
+    from rite_ai.loop import lock as loop_lock
+    from rite_ai.loop.session import draining
 
     sleep = _time.sleep if sleep is None else sleep
 
-    holder = hold_lock(root)
-    if holder is not None:
-        emit(f"loop: another loop holds this project (pid {holder}) — not starting")
+    # THIS process holds the lock for as long as it runs the loop: the kernel
+    # frees it when the process exits, however it exits (`rite_ai.loop.lock`).
+    held = loop_lock.acquire(root)
+    if isinstance(held, loop_lock.LockBusy):
+        emit(
+            f"loop: another loop holds this project (pid {held.holder_pid}) "
+            "— not starting"
+        )
+        return "locked"
+    if isinstance(held, loop_lock.LockUnavailable):
+        emit(f"loop: not starting — {held.reason}")
         return "locked"
 
     try:
@@ -612,7 +799,7 @@ def watch(
             emit(f"loop: {cycle.verdict}; sleeping {int(interval)}s")
             sleep(interval)
     finally:
-        release_lock(root)
+        loop_lock.release(held)
 
 
 def format_cycle(cycle: Cycle) -> list[str]:
@@ -646,10 +833,15 @@ def format_cycle(cycle: Cycle) -> list[str]:
 
     lines.append("")
     takeable = [t for t in cycle.ready if t not in cycle.blocked]
-    lines.append(
-        f"waiting on the board: {len(cycle.ready)} "
-        f"({len(takeable)} takeable, {len(cycle.blocked)} blocked on held paths)"
-    )
+    if cycle.board_read_at is None:
+        # Not read is not "0 waiting" (S25): a count of nothing read out of an
+        # unreadable board reads as an empty queue.
+        lines.append("waiting on the board: not read this cycle")
+    else:
+        lines.append(
+            f"waiting on the board: {len(cycle.ready)} "
+            f"({len(takeable)} takeable, {len(cycle.blocked)} blocked on held paths)"
+        )
     if takeable:
         lines.append(
             f"  takeable: {', '.join(takeable[:12])}"
@@ -672,8 +864,11 @@ def format_cycle(cycle: Cycle) -> list[str]:
     if cycle.would_dispatch:
         lines.append("would start (DRY RUN — nothing was started):")
         lines.extend(f"  · {t} → {w}" for t, w in cycle.would_dispatch)
-    lines.append(
-        "a reason to stop: "
-        + ("yes" if cycle.is_reason_to_stop else "no — the work is there")
-    )
+    if cycle.is_reason_to_stop:
+        stop = "yes"
+    elif cycle.verdict == UNKNOWN:
+        stop = "no — whether there is work could not be established"
+    else:
+        stop = "no — the work is there"
+    lines.append(f"a reason to stop: {stop}")
     return lines

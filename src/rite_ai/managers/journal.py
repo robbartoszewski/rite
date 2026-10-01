@@ -77,6 +77,7 @@ from __future__ import annotations
 import os
 import string
 from dataclasses import dataclass
+from dataclasses import field as _field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -188,7 +189,12 @@ def journal_dir(root: Path, manager: str) -> Path:
     is not a guard.
     """
     require_safe_name(manager, kind="manager name", must_be_a_tmux_target=True)
-    return Path(root) / ".rite" / "managers" / manager / "journal"
+    # Through `manager_dir`, the one place the directory is spelled: since
+    # MM8 it is outside the project, and a second spelling here kept writing
+    # into the tree.
+    from rite_ai.managers import manager_dir
+
+    return manager_dir(Path(root), manager) / "journal"
 
 
 def start_notice(root: Path, manager: str, *, enabled: bool = True) -> str:
@@ -198,24 +204,20 @@ def start_notice(root: Path, manager: str, *, enabled: bool = True) -> str:
     off when off". A Manager running without the flag must not be told about
     a facility it will not use.
 
-    The `-f` is the load-bearing character and the reason this prints a
-    command rather than a path. `.gitignore`'s `.rite/*` excludes
-    `.rite/managers` as a DIRECTORY, and git does not descend into an
-    excluded directory, so a plain `git add` on a journal path refuses —
-    measured against this repository, on the directory form printed here,
-    which is what an operator will paste. Telling somebody where the files
-    are and leaving them to discover that the obvious command silently
-    fails is the kind of documentation that reads as helpful and is not.
+    ⚠ **The journal is outside the project since MM8** (Robert, 2026-09-28):
+    once Linux grants the project as one tree, a journal left in it would be
+    writable by every Manager. So there is nothing to `git add` any more,
+    and this no longer prints the `git add -f` it used to. It says where the
+    entries are, which is what a person needs to share them.
     """
     if not enabled:
         return ""
     directory = journal_dir(root, manager).resolve()
-    relative = Path(".rite") / "managers" / manager / "journal"
     return (
         f"recording issues to {directory}\n"
-        f"  copy that directory to share the entries; to commit them "
-        f"instead, `git add -f {relative}` is needed "
-        f"(a plain `git add` refuses here)"
+        f"  (outside the project, like every Manager's own state; copy that "
+        f"directory to share the entries, or `rite journal export {manager} "
+        f"--to <dir>` to bring them into the project to commit)"
     )
 
 
@@ -399,16 +401,22 @@ def _redacted(body: str) -> str:
     in a log line, an `Authorization:` header) is not recognised. No list of
     token formats was added for it — a list loses to the next format.
     """
-    from rite_ai.managers import claude_login, github_access
+    from rite_ai.managers import claude_login, cursor_login, github_access
     from rite_ai.sandbox import redact_assignments
 
     # ⚠ Plus the live GitHub token, by EXACT value (C6/C26). A Manager that
     # prints its gh config writes `oauth_token: <t>`, which the structural
     # rule does not recognise (measured). rite minted it, so the value is
     # known, and `GH_CONFIG_DIR` says where it is from inside the sandbox.
-    # The same for the Claude login, found through `CLAUDE_CONFIG_DIR`.
+    # The same for the Claude login, found through `CLAUDE_CONFIG_DIR`, and
+    # for a Cursor Manager's key, which is in the engine's own environment.
     return redact_assignments(
-        body, (*github_access.live_secrets(), *claude_login.live_secrets())
+        body,
+        (
+            *github_access.live_secrets(),
+            *claude_login.live_secrets(),
+            *cursor_login.live_secrets(),
+        ),
     )
 
 
@@ -598,3 +606,53 @@ def write_retrospective(
         + _section("caught_elsewhere", caught_elsewhere)
     )
     return _write(root, manager, RETROSPECTIVE, body)
+
+
+@dataclass
+class Exported:
+    copied: list[str] = _field(default_factory=list)
+    already_there: list[str] = _field(default_factory=list)
+    refused: str = ""
+    source: Path | None = None
+    """Where the entries were read from, for the message."""
+
+
+def export(root: Path, manager: str, destination: Path) -> Exported:
+    """Copy this Manager's entries into `destination`, for sharing or
+    committing (MM8 piece 3).
+
+    Since MM8 the journal lives outside the project (`journal_dir`), which is
+    what keeps one Manager from writing another's on Linux. A person who
+    wants the entries in the project's history copies them in with this.
+    The journal itself is left as it is.
+
+    Never overwrites: an entry whose name is already in `destination` with
+    different content refuses the whole export, naming it, so nothing
+    half-exported is left behind. An identical file is counted and skipped.
+    """
+    import filecmp
+    import shutil
+
+    source = journal_dir(root, manager)
+    entries = sorted(source.glob("*.md")) if source.is_dir() else []
+    for entry in entries:
+        there = destination / entry.name
+        if there.exists() and not filecmp.cmp(entry, there, shallow=False):
+            return Exported(
+                source=source,
+                refused=(
+                    f"{there} already exists with different content, so "
+                    f"nothing was exported. Move it aside, or export "
+                    f"somewhere else"
+                ),
+            )
+    destination.mkdir(parents=True, exist_ok=True)
+    out = Exported(source=source)
+    for entry in entries:
+        there = destination / entry.name
+        if there.exists():
+            out.already_there.append(entry.name)
+            continue
+        shutil.copy2(entry, there)
+        out.copied.append(entry.name)
+    return out

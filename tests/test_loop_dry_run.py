@@ -21,6 +21,7 @@ Two properties carry most of the weight, both from the live dogfood:
 from __future__ import annotations
 
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -32,10 +33,27 @@ from rite_ai.loop import (
     SATURATED,
     UNKNOWN,
     format_cycle,
-    plan_cycle,
 )
+from rite_ai.loop import plan_cycle as _plan_cycle
+from tests.refined_board import refined
 
 NOW = 1_759_000_000.0
+
+
+def plan_cycle(root: Path, **kwargs):
+    """`plan_cycle` with BOTH of its clocks pinned to the same instant.
+
+    ⚠ `clock` pins elapsed times, but the schedule window is read from `now`,
+    which defaults to the wall clock. The fixture's window is `00:00-23:59`,
+    so a run that reached these tests between 23:59 and 00:00 UTC saw the
+    window closed and 24 tests failed: CI run 36360306612, Python 3.11, at
+    23:59:08 UTC, on a PR that changed only a docstring.
+    """
+    kwargs.setdefault("now", datetime.fromtimestamp(kwargs.get("clock", NOW), UTC))
+    # These tests are about Workers, claims and the schedule, so every ticket
+    # is REFINED, through the real predicate (TR2 gates `ready` on it).
+    kwargs.setdefault("refinement", refined)
+    return _plan_cycle(root, **kwargs)
 
 
 class FakeTicket:
@@ -374,6 +392,9 @@ def test_the_exit_code_carries_the_verdict(tmp_path, monkeypatch, ids, code):
         "rite_ai.cli.main._ticket_backend", lambda _role: (FakeBoard(*ids), None)
     )
     monkeypatch.setattr(loop_mod, "_look_at_worker", _free_view)
+    # The command imports `plan_cycle` when it runs, so this pins its window
+    # clock too (see `plan_cycle` above).
+    monkeypatch.setattr(loop_mod, "plan_cycle", plan_cycle)
 
     result = CliRunner().invoke(cli, ["loop", "run"])
     assert result.exit_code == code, result.output

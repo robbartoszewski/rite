@@ -184,14 +184,14 @@ def test_a_second_start_leaves_a_RUNNING_managers_login_alone(tmp_path, monkeypa
     finally:
         os.close(running)
     assert result.exit_code == 1, result.output
-    assert "still running" in result.output
+    assert "holds its run lock" in result.output
     assert login.read_text().count(FAKE) == 1, "the running Manager's login stays"
 
 
 def test_no_claude_token_is_a_refusal_with_the_fix(project):
     refusal = cl.prepare(project, "lead", None)
     assert "claude setup-token" in refusal
-    assert "rite credential set claude_token" in refusal
+    assert "rite credential set claude`" in refusal
 
 
 def test_the_profile_no_longer_grants_the_users_claude_directory(project):
@@ -266,7 +266,7 @@ def test_rite_start_REFUSES_a_claude_manager_with_no_token(tmp_path, monkeypatch
         cli, ["start", "lead", "--sessions", "1", "--minutes", "5"]
     )
     assert result.exit_code == 1, result.output
-    assert "rite credential set claude_token" in result.output
+    assert "rite credential set claude`" in result.output
     assert starts == [], "nothing may be launched without the login"
 
 

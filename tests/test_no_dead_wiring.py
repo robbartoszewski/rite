@@ -43,6 +43,9 @@ COORDINATION = SRC / "rite_ai" / "coordination"
 WATCHED = (
     COORDINATION,
     SRC / "rite_ai" / "managers",
+    # PB1: publishing is built in pieces across several PRs, which is exactly
+    # when a finished-and-tested function waits for a caller that never comes.
+    SRC / "rite_ai" / "publishing",
 )
 
 # name -> why nothing calls it. A reason is required; "not yet" is not one.
@@ -52,6 +55,12 @@ UNCALLED_ON_PURPOSE = {
         "file. Public for the same reason: it IS the boundary — the set of "
         "paths the kernel will enforce — and the tests assert against the "
         "policy it returns rather than against JSON on disk."
+    ),
+    "profile_path": (
+        "Called by `write_profile` and `why_it_was_refused` in the same file. "
+        "Public because it is where rite decides WHERE a Manager's boundary "
+        "lives, which is a security property (no Manager may write it), and "
+        "the boundary tests assert that location directly."
     ),
     "policy_path": (
         "Landlock's half of `profile_path`, called by `write_profile` and "
@@ -67,12 +76,6 @@ UNCALLED_ON_PURPOSE = {
         "to what it does not buy. Inlining it would move those assertions "
         "onto bytes on disk, and this is the one function in rite whose "
         "output the kernel enforces."
-    ),
-    "requests_dir": (
-        "Called by `instructions` and `take_requests` in the same file. "
-        "Public because it is the one place rite decides WHERE a Manager "
-        "writes a Worker request — a directory of its own rather than the "
-        "mailbox outbox a human reads — and a test pins that by name."
     ),
     "launch_argv": (
         "Called by `honour` in the same file. Public because the exact argv "
