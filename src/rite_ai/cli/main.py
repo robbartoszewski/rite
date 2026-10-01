@@ -2023,12 +2023,12 @@ def _partial_reads(status) -> list[tuple[str, str]]:
 # --- Credentials ---
 
 
-@cli.group("local")
-def local_group() -> None:
+@cli.group()
+def local() -> None:
     """Run a local-model Manager's work, one subtask at a time."""
 
 
-@local_group.command("step")
+@local.command("step")
 @click.argument("manager")
 @click.argument("ticket")
 def local_step(manager: str, ticket: str) -> None:
