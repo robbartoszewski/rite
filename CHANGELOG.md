@@ -10,6 +10,48 @@ checked, so any other local agent would have run on its server's default
 window, which can be small enough to cut the Manager's instructions short
 without any error.
 
+### `--help` no longer points at documents you do not have
+
+Command help carried rite's own internal section numbers — "Is this healthy?
+(SPEC §9.8)", "The standup a check-in opens with (plan § K4)". Those are
+references into design documents that do not ship with rite, in the one text
+you read at the moment you are stuck. They are gone from every command's
+`--help`, and so are rite's internal decision numbers ("(D-46)") and the paths
+of its design notes; the notes themselves are unchanged for anyone reading the
+source. `rite spec slice D-12` still shows `D-12`: there it is how you name a
+decision in your own spec.
+
+### `rite doctor --network` checks what only a live call can
+
+A plain `rite doctor` still makes no call that can hang — it is read by people
+who are stuck, sometimes offline. Adding `--network` runs the two checks that
+need a real answer:
+
+- **Whether each Worker's GitHub token can actually push.** A token that
+  exists can still be read-only, which passed the old report and was then
+  refused by `rite sandbox start` — so the check you ran first told you
+  nothing about the thing that stopped you. Only GitHub actually refusing the
+  token counts against it: if GitHub is down, rate-limiting you, or
+  unreachable, rite says the check could not be made rather than telling you
+  your token is bad.
+- **Whether your Slack channel really delivers**, by posting one message to
+  it. (`rite credential set slack` still never posts — setting rite up is not
+  announcing it.)
+
+Without the flag, doctor says these were not checked rather than passing over
+them in silence.
+
+### Declaring a Manager on one machine no longer looks like a broken setup
+
+`rite doctor` used to exit 1 on a project whose only sin was running `rite add
+manager lead`: it reported that the machine "is not enrolled — it will not
+publish a heartbeat, stand for Owner, or take over another machine's work",
+and separately that there were "manager(s) listed but no `remote` … no
+election can ever happen", even with no second machine anywhere. A project
+with one Manager and no coordination remote is now left alone; one that lists
+several, or that has other machines, is warned exactly as before.
+
+
 ### In Slack, a post that needs your answer stands out
 
 Each post from a Manager now opens with what it is (❓ Needs your answer, with
