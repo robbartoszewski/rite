@@ -2509,6 +2509,47 @@ def _declared_claude_model(root: Path, manager: str, engine: str) -> str:
     return role.model if role else ""
 
 
+def _undeclared_window(manager: str) -> str:
+    """The refusal for a local Manager with no `context_window` (S33): one
+    sentence, whatever its agent."""
+    return (
+        f"{manager!r} declares no context_window, so the window its model "
+        "is served with would be whatever its server defaults to, which rite "
+        "cannot read before the model loads, and its agent would not be told "
+        f"it. Add this line to its entry (`- name: {manager}`) under "
+        "coordination.manager_roles in .rite/config.yaml:\n"
+        "      context_window: 32768\n"
+        "32768 is the least rite accepts; use the model's own window if it is "
+        "larger and the machine has the memory"
+    )
+
+
+def _window_refusal(root: Path, manager: str, agent: str) -> str:
+    """Why this Manager must not start for its window, or "" (S33).
+
+    ⚠ **Asked of EVERY local agent, and asked FIRST**, before anything that
+    depends on which agent it is. The rule used to live inside the Goose
+    launch path (`_engine_model_env`), so any other local agent reached a
+    launch on the server's default window; and `permission_placement` refuses
+    an agent rite has no spelling for, which, asked first, would have told
+    that Manager the wrong thing. A Manager with no agent is a Claude one and
+    is not read here, so its path is exactly what it was."""
+    if not agent:
+        return ""
+    from rite_ai.config.managers import window_undeclared
+    from rite_ai.config.parse import ParseError, parse_config
+
+    parsed = parse_config(root / ".rite" / "config.yaml")
+    if isinstance(parsed, ParseError):
+        return ""  # said by `_engine_model_env`, which reads the same file
+    role = next(
+        (r for r in parsed.coordination.manager_roles if r.name == manager), None
+    )
+    if role is not None and window_undeclared(role):
+        return _undeclared_window(manager)
+    return ""
+
+
 def _engine_model_env(root: Path, manager: str, agent: str):
     """WHICH model a local Manager's engine runs, from its declared role.
 
@@ -2566,20 +2607,7 @@ def _engine_model_env(root: Path, manager: str, agent: str):
     # serves Goose; a prompt over it is cut to half the window from the front
     # with no error, and only Ollama's log says so (plan, Track MS).
     if not role.context_window:
-        return (
-            {},
-            (
-                f"{manager!r} declares no context_window, so the window its model "
-                "is served with would be whatever this Ollama server defaults to, "
-                "which rite cannot read before the model loads, and Goose would "
-                f"not know it. Add this line to its entry (`- name: {manager}`) "
-                "under coordination.manager_roles in .rite/config.yaml:\n"
-                "      context_window: 32768\n"
-                "32768 is the least rite accepts; use the model's own window if "
-                "it is larger and the machine has the memory"
-            ),
-            "",
-        )
+        return {}, _undeclared_window(manager), ""
     from rite_ai.local.context_window import pin_window
 
     pinned = pin_window(role.endpoint, role.model, role.context_window)
@@ -2660,6 +2688,9 @@ def _default_starter(
         )
     from rite_ai.managers.engines import permission_placement
 
+    window = _window_refusal(root, manager, agent)
+    if window:
+        return StartResult(False, f"refusing to start Manager {manager!r}: {window}")
     placement = permission_placement(engine, agent, permission)
     model_env, refused, created_note = _engine_model_env(root, manager, agent)
     if refused:

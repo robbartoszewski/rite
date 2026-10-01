@@ -682,9 +682,10 @@ coordination:
   must hold it: only that one reads Slack and routes work, and `rite doctor`
   says so when none or several do.
 - `engine` defaults to `claude`. A `local:<class>` engine must also give
-  `endpoint`, `model` and `agent`; `goose` is the agent rite supports. A
-  Goose Manager must give `context_window` too, and `rite start` refuses it
-  without one (see *A local model needs a context window you have to set*).
+  `endpoint`, `model` and `agent`; `goose` is the agent rite supports. Every
+  local Manager must give `context_window` too, whatever its agent, and `rite
+  start` refuses it without one (see *A local model needs a context window
+  you have to set*).
   Presets: `lead`, `pm`, `planner`, `executor`.
 - **Each Manager names its own model.** A local one gives `model` with its
   endpoint. A Claude one may give `model` too, as an alias (`sonnet`,

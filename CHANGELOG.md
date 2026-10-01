@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Every local Manager must declare its context window, not only a Goose one
+
+`rite start` refuses, and `rite doctor` warns about, a local Manager with no
+`context_window` whatever agent it runs. Before, only Goose Managers were
+checked, so any other local agent would have run on its server's default
+window, which can be small enough to cut the Manager's instructions short
+without any error.
+
 ### `--help` no longer points at documents you do not have
 
 Command help carried rite's own internal section numbers — "Is this healthy?
