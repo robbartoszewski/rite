@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.75 · **Date:** 2026-10-01
+**Version:** 0.24.76 · **Date:** 2026-10-01
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -4289,20 +4289,34 @@ project? [y/N]"*, asked before anything else.
 
 ```
 ─── Role ───────────────────────────────────────────
-Is this the Owner machine or a Manager machine?
-
-  ▸ Owner    — owns the board, assigns work, one per project
-    Manager  — receives work from an Owner, runs its own workers
+  This machine is the project's Owner — it owns the board and assigns the
+  work. A Manager machine, which takes work from another project's Owner,
+  needs the multi-manager work planned for 0.9.0 and is not offered yet.
 ```
 
-Required. Not skippable — nothing downstream works without this. **In Phase 1
-(single machine), this only determines whether `rite init` fetches an existing
-Owner's `config.yaml` for alignment (§2.4) — it has no other effect until a
-second machine exists.** Answering "Manager" does not enrol in leader election;
-there is nothing to enrol in yet.
+⚠ **Not asked, and said rather than silent, until multi-manager ships (0.9.0).**
+A Manager MACHINE needs work this release does not ship, so offering it offered an
+answer that does not work. `brief.project.role` is still written (as `owner`),
+still parsed, and still read by every consumer, so a project already carrying
+`role: manager` keeps working — this stops rite **offering** one, not reading one.
+A question that silently stopped being asked is indistinguishable from one nobody
+noticed, which is why the section says what it took.
 
-If Manager: *"Owner's project URL or config path?"* — to pull the project's
-`config.yaml` and align on ticket backend, expertise tags, etc.
+⚠ **The question existed on BOTH routes** — the from-scratch questionnaire and
+the "existing spec or code" path — and suppressing one would have changed nothing
+for the run that reported it. One suppression point, asserted as a property: no
+init path can produce `role != "owner"`.
+
+`--config` with `project.role: manager` is **refused**, naming multi-manager, and
+refused before `.rite/` is created. Not coerced to `owner`: silently discarding a
+key the user wrote is the defect class rite refuses everywhere else, where an
+unknown `config.yaml` key is refused rather than dropped.
+
+**What 0.9.0 restores.** The question, and the *"Owner's project URL or config
+path?"* that followed a Manager answer — pulling that project's `config.yaml` to
+align on ticket backend and expertise tags (§2.4). The options, the prompt and
+the borrow are all still in the code, unreferenced on purpose, behind one named
+constant, so the restore is a re-wire rather than a rewrite.
 
 **Section 2 — Project** `[2/7]`
 
@@ -4351,6 +4365,24 @@ offer is made on the existing-code path (above).
 reading — add nothing unconfirmed — is how a `--yes` run ends up with an
 empty `modules.yaml` and Workers with nothing to clone (dogfood F2), looking
 on screen like an interactive run that added them.
+
+**Each registered module is then asked what it is**, with a default read out of
+that module's own README — its first prose line's first sentence, past the title,
+the badges and the lists, capped at a line. Enter accepts it, anything typed
+replaces it, `--config` naming one wins, and `--yes` takes the default silently,
+which is the rule every other `--yes` answer follows. The answer is the module's
+`description` (§8.2) and it renders into the brief's module table, under that
+module's own heading.
+
+⚠ **Offered, never taken unshown.** A README's first sentence is usually what a
+module would say about itself and is sometimes a slogan, so anything that is not
+prose yields nothing rather than a guess: a wrong description in the one file an
+agent reads to find out what it is working on is worse than none. Before this,
+`rite add module --description` could set it and `rite init` passed nothing, so
+every module init registered rendered with no line saying what it was — the same
+"init's path is thinner than the CLI command it stands in for" as §9.6's Worker.
+A module registered from a URL for an empty project root is asked before the
+clone, so it has no README to derive from and no default.
 
 A root with nothing committed is not offered, and init says why: it cannot
 be cloned, which is the one thing a module is for here. A single repository
@@ -4418,7 +4450,11 @@ however init was run (interactive, `--yes`, `--config`), `cli/init/setup.py`:
 - **A Worker is offered** (S20) once there is a module (default name `w1`,
   cloned through `add_worker`). `--yes` declares none, because a Worker clones
   every module over the network, and says one is needed; `--config`
-  `workers.add: <name>` declares one.
+  `workers.add: <name>` declares one. ⚠ **Declared with everything `rite add
+  worker` would declare it with** — the Manager declared above, and the
+  modules'-own-instructions question (§9.6). It passed two of `add_worker`'s
+  five parameters, and the two it dropped are the two a Worker's brief is built
+  out of.
 - **The credential namespace is offered back** (S18). `~/.rite/namespaces.json`
   records each namespace against its project's module remotes, normalised to
   `host/owner/repo` so every spelling of one repository matches; `rite init`,
@@ -4441,6 +4477,23 @@ however init was run (interactive, `--yes`, `--config`), `cli/init/setup.py`:
   Owner/Manager question itself: the config it writes into is built only
   then, on either route. With none declared the last line says so and gives
   the command.
+- **The board is part of being ready** (0.24.76). The last line also says when
+  `ticket_backend.type` is `none` — `rite start` would find nothing to work on
+  — naming `rite credential set jira` and the three fields it records
+  (`ticket_backend.type`, `.site`, `.projects.workers`), because the dogfood's
+  actual failure was believing the site and the project key were a board while
+  `type` stayed `none` (§10.5). On a project that HAS a board it says when
+  `refinement.questions_to` is `dm` with no `slack.owner_user`, so a refinement
+  round has no delivery route: `rite credential set slack`, and meanwhile `rite
+  replies` and `rite refine answer` at the host. ⚠ Rows point at the command
+  that does the wiring, **never at a file to edit** — init does not write
+  backend config, and a row saying "set this in config.yaml" would be rite
+  sending someone to hand-edit what it has a command for. The board row and the
+  Slack row are exclusive, following `rite doctor`'s rule that a project with no
+  board refines nothing: two rows describing one unconfigured project is how a
+  row stops being read. This check covered the workspace and stopped short of
+  the thing the work comes from, so a ticket-driven project with no board was
+  told "Ready."
 
 If no repos found:
 
@@ -4785,6 +4838,28 @@ and asks whether the Worker should follow them; the answer is recorded as
 `follow_module_docs` in that Worker's `worker.yml` and rendered into its
 `CLAUDE.md`. `--follow-module-docs` / `--no-follow-module-docs` answer it
 without a prompt, and nothing found means nothing asked.
+
+⚠ **That step belongs to every entry point that creates a Worker, not to this
+command.** It shipped inside the command, reachable from nowhere else, so a
+Worker `rite init` created was never offered its module's conventions at all —
+the module carried all three files and `worker.yml` had no `follow_module_docs`
+key to show the question had been considered. One helper now, which `rite init`
+also calls, with the no-tty guard INSIDE it: a caller that got to decide whether
+`--yes` counts as somebody being there is a caller that can reintroduce the
+abort below. Init's own way out of the guard is named in init's words, since
+`--follow-module-docs` is this command's.
+
+⚠ **A Worker init creates is linked to the Manager init declared.** `--manager`
+is this command's; init passed none, so an init-created Worker recorded
+`manager: ''` and got a brief whose line 7 said "No Manager assigned yet." and
+whose line 112 said "Tell your Manager you are free" — instructions that
+repeatedly name an authority the Worker was told does not exist, because only
+that one line is conditional. Nothing detected it: §9.3's readiness check asks
+that a Manager, a module and a Worker each exist, never that they are
+connected. The link is None-safe — `--yes` declares no Manager by design (§9.3
+Section 1's S15 note) and a Worker can still be declared on that path — and
+where more than one Manager is declared it is the first, which is the project's
+priority order (§2.4).
 
 **With nobody at the terminal it is not asked, and that is said.** A prompt
 is not an exception, it is the absence of an answer (§9.11): asking
@@ -7575,8 +7650,31 @@ setting a credential and then separately discovering the config it also needed.
 `ticket_backend.type` when the project has no board (`none`). The site and the
 project key alone were not a board: measured in the v0.7.0 dogfood, `rite init`
 answered `none`, `rite credential set jira` recorded both, `type` stayed `none`,
-and rite read no board at all. A project already on another board keeps it and
-is told how to switch; rite does not replace a board it did not choose.
+and rite read no board at all.
+
+**A project already on another board is ASKED, default No (0.24.76).** It used
+to be told to *"Set it to 'jira' in .rite/config.yaml"* — the one path left in
+setup that sent someone to hand-edit what rite has a command for. Refusing to
+retarget a board **silently** was right; refusing to retarget it at all was not.
+Default No because a retarget changes which board every ticket command reads,
+and a mistyped service name must not move it.
+
+⚠ **Never unattended.** `credential set` runs in scripts — the fields can come
+down a pipe — so with nobody at the terminal it does not ask and does not move,
+and prints the note instead. Same rule as §9.6's: a prompt is not an answer
+(§9.11).
+
+On a retarget the **outgoing** board's own fields are cleared and each one is
+named: `site` and `projects` leaving `jira`, `repo` leaving `github`, and
+`credential`, which renames the outgoing board's token key. The incoming board
+re-prompts for everything it needs in the same run, so nothing needed is ever
+stale — only leftovers, and a `config.yaml` describing two boards invites a
+reader to believe a `site:` that nothing uses. `credential` is cleared rather
+than replaced: an empty one falls back to the new board's default key, and
+naming a new one is a separate question. `scope_label` survives, because it
+marks a ticket as this project's and is backend-agnostic (§6.1.1). Declining
+keeps what was just typed — nothing reads a JIRA site while the board is
+GitHub, and saying yes next time is then all it takes.
 
 **Slack is set up by the same command (0.24.69).** `rite credential set slack`
 asks for the Owner's member id and the broadcast channel as well as the bot
@@ -7788,18 +7886,61 @@ while being entirely inactive. It is the same family as §2.5.10's refusal-witho
 and §5.3's uncountable worker cap, one step earlier: not a check that could not run,
 but a check that was never installed, reporting itself installed.
 
-**Both installers ask git where it will actually look** (`git rev-parse --git-path
-hooks`) and compare that against the repo's own hooks directory. When they differ,
-`rite publish install-hook` refuses with the reason and the remedy, and `rite init`
-declines to count the repo and prints a warning rather than silently omitting the
-line. The remedy is the user's choice of `git config --local core.hooksPath
-.git/hooks` followed by `rite publish install-hook`, or adding `exec rite publish
-pre-push` to the pre-push hook in the redirected directory by hand.
+**One installer asks git where it will actually look** (`git rev-parse --git-path
+hooks`) and compares that against the repo's own hooks directory. There were two —
+`gate/hook.py`'s and a copy inside `rite init`'s scaffold, kept in step by hand; the
+scaffold now delegates, so `rite init` and `rite publish install-hook` cannot
+diverge on this again.
 
-**Deliberately NOT handled by writing into the redirected directory.** That path is
-typically shared across every repo the user owns, so installing there would reach far
-outside the project `rite init` was pointed at — the same "surprise in someone else's
-repo" the installer already refuses to cause by clobbering a hand-written hook.
+**A global redirect is CHAINED behind, not switched off.** This refused outright
+until 0.24.76, and the refusal was right twice over — see the paragraph below — but
+stopping there meant the gate ran **nowhere automatically** on a machine with a
+global `core.hooksPath`, in any rite project, for the life of that redirect.
+Measured, and the directory it pointed at held another project's data-leak gate.
+So the installer writes a `pre-push` that runs the redirected hook FIRST and
+`rite publish pre-push` second, and points **this repository's** `core.hooksPath`
+at its own hooks directory so git reads it. Four properties make that safe rather
+than clever, and each is pinned by a test:
+
+* the redirected hook's path is resolved **at run time**, from git's global and
+  system scopes, not baked in — so the other project moving its hooks directory, or
+  writing its hook after rite ran, keeps working;
+* that hook's **exit code is final**, and the gate is not reached when it refuses: a
+  confidentiality control consulted after the push has been decided is not a control;
+* git's **ref list reaches both**. git feeds `pre-push` its refs on stdin, which one
+  reader consumes, so the chain writes them to a file and feeds each hook from it;
+* the hook is written **before** `core.hooksPath` is pointed at it, and when the chain
+  cannot be built the installer **refuses loudly** rather than installing half of it.
+  The reverse order has a window in which git reads a directory with no `pre-push`,
+  and that window silently drops the other project's gate — strictly worse than the
+  loud refusal this replaced.
+
+A `core.hooksPath` set on the repository **itself** stays a refusal: somebody chose
+that here, deliberately, and the chain resolves exactly the scopes a local value
+overrides. The local value rite writes is **absolute**, never `.git/hooks`: a relative
+`core.hooksPath` resolves against the working tree a hook runs in, and measured end to
+end, `.git/hooks` ran the hook from the main checkout and ran **nothing** from a
+worktree — both gates gone, silently.
+
+⚠ **"Is this repo redirected?" is not the question the installer asks.** Once
+`core.hooksPath` points back at the repo the answer is no, so an installer asking it
+would write the unchained script on its second run and disarm the other project's gate
+with every signal still reading active. It asks what the global and system scopes say
+instead (`upstream_hooks_dir`), which is what has to keep running.
+
+**Deliberately still NOT handled by writing into the redirected directory.** That path
+is typically shared across every repo the user owns, so installing there would reach
+far outside the project `rite init` was pointed at — the same "surprise in someone
+else's repo" the installer already refuses to cause by clobbering a hand-written hook.
+The other project's installer also owns that file and would overwrite it.
+
+⚠ **A repository is a question for git, not for `.git/`.** In a git **worktree** `.git`
+is a *file*, so `(repo_root / ".git").is_dir()` answered "not a git repository" for
+every worktree there has ever been, and the redirect check reported a redirect in every
+worktree with none set — because it compared git's answer against a path that does not
+exist there. Both now resolve through `--git-common-dir`, which is where git really
+reads a worktree's hooks, guarded by `--show-toplevel` so a plain subdirectory
+registered as a module does not inherit the project's hooks and get reported active.
 
 **Fails OPEN when git cannot answer** (not a repo, git missing, a timeout). The
 installer's job is to install a hook, not to police git's configuration, and a false
@@ -8037,6 +8178,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.76 — `rite init` finishes the job it starts, and the publish gate runs behind a redirected `core.hooksPath` (v0.7.0a5: SCRUM-5 … SCRUM-11).** §9.3 (Section 1, the modules section, the settle list), §9.6, §10.5 and §11.5.1 rewritten. Seven items from a read-only investigation of a real `rite init` run on 0.7.0a4, five of them one root cause: **init's path is thinner than the `rite add *` command it stands in for**. **SCRUM-5 + SCRUM-6:** `setup.offer_a_worker` called `add_worker(root, name)` — two of five parameters — so an init-created Worker was linked to no Manager (brief line 7 "No Manager assigned yet." against line 112 "Tell your Manager you are free", because only that one line is conditional) and was never offered the modules' own instruction files, S23's feature being reachable from `add_worker_cmd` alone. New `cli/module_docs.py` holds the find-and-ask and the no-tty probe, called by both entry points, with the guard INSIDE the step so no caller can pass its way past the `click.confirm` abort (defect class 15); the link is None-safe, since `--yes` declares no Manager and a Worker can still be declared there. **SCRUM-7:** `what_is_missing` gains a board row (`ticket_backend.type: none`, naming `rite credential set jira` and the three fields it writes) and an exclusive Slack row (`refinement.questions_to: dm` with no `slack.owner_user`, naming `rite credential set slack`, `rite replies` and `rite refine answer`); signposts only, because init does not write backend config. **SCRUM-8:** `credential set` asks before retargeting a board, default No, never without a tty, clearing the outgoing backend's exclusive fields and `credential` while `scope_label` survives (`config.models.leave_the_old_board`). **SCRUM-10:** `OWNER_ONLY_UNTIL_MULTI_MANAGER` suppresses the Owner-vs-Manager MACHINE question on both routes through one point (`_ask_role`; the second site is the "existing spec or code" route, which is the one the reported run hit), says which machine it took, and REFUSES `--config project.role: manager` before `.rite/` exists rather than discarding a declared key; `ROLE_OPTIONS`, the select and `_borrow_owner_config` are intact and unreferenced so 0.9.0 re-wires. **SCRUM-11:** modules get a description, defaulted from the module's own README's first prose sentence and offered rather than taken (`manage.description_from_readme`), and `modules.yaml` has ONE writer again (`manage.write_modules_file`, atomic and lockable) where `scaffold.write_modules` was a second, non-atomic one also used by `rite module set-command`. **SCRUM-9, security-sensitive:** a global `core.hooksPath` meant the publish gate ran nowhere automatically, in any rite project, for the life of the redirect — and the directory it pointed at held another project's data-leak gate, so the old refusal was right twice over and wrong to stop there. `install_pre_push_hook` now writes a chained hook (redirected hook first, its exit code final, gate second, ref list duplicated through a file because git feeds them on stdin, upstream resolved at RUN time from the global and system scopes) and points only this repository's `core.hooksPath` at its own hooks, ABSOLUTE — a relative `.git/hooks` ran the hook from the main checkout and nothing at all from a worktree, measured. The hook is written BEFORE the config is pointed at it and the installer refuses loudly when the chain cannot be built, because the reverse order has a window that silently drops the other project's gate. `upstream_hooks_dir` is deliberately not `redirected_hooks_dir`: once pointed back, "is this redirected?" says no, and an installer asking that would write the unchained script on its second run. `own_hooks_dir` (`--git-common-dir`, guarded by `--show-toplevel`) replaces `(repo_root / ".git").is_dir()`, which answered "not a git repository" for every worktree and made the redirect check report a redirect in every worktree with none set; `scaffold.install_pre_push_hooks` was a SECOND installer and now delegates, carrying each refusal's words back. Tests: `tests/test_init_declares_a_whole_worker.py`, `tests/test_init_does_not_call_a_boardless_project_ready.py`, `tests/test_init_is_owner_only_until_multi_manager.py`, `tests/test_init_says_what_each_module_is.py`, `tests/test_a_board_is_retargeted_only_when_asked.py`, `tests/test_the_gate_runs_behind_a_redirected_hooks_path.py` — the last drives real git, real hooks and real pushes to a real remote, with a per-test global git config because these tests WRITE a redirect and the suite's own isolation file is session-scoped. ⚠ BEHAVIOURAL, not a parameter ledger: a test enumerating `add_worker`'s parameters passes with the bug present the moment someone adds the argument and gets it wrong. Twenty-four mutations run and reverted, each red. Existing init tests lose the role answer and gain a description answer; two that pinned "Ready." for a boardless project now pin the board row; `tests/test_init_scaffold.py`'s hook tests use real repositories, because the installer now asks git rather than looking for a `.git` directory.
 
 **Changes in 0.24.75 — a local Manager's permission mode is settled as `auto`, and said not to be a boundary (v0.7.0 local tier: 1c).** New §5.4.9. No behaviour changes: `supervise` has placed `GOOSE_MODE=auto` on a local Manager's pane since the permission destination landed (`engines.GOOSE.permission_env`), and `tests/test_the_permission_reaches_the_engine.py` has asserted it, including that an operator's exported `GOOSE_MODE=approve` is overridden. What was open was the ruling: `local/goose_agent.py`'s `mode` docstring said B4d "is measuring" the question and it "is not yet settled" while the code had already chosen, so a reader was told the opposite of what ran. The ruling and its reason are now recorded in both places — and the reason is that `approve` CANNOT work headless, not that `auto` is safe: B4d measured `auto` exiting 0 having run `rm` unattended, and `approve` exiting 1 on the first tool call with "Tool approval required in non-interactive mode", with no per-command mode in between because `GOOSE_MODE` is whole-session. ⚠ Recorded with the limit that makes it honest: `auto` is **not** a containment decision, containment comes from the seatbelt profile the pane runs inside (§5.4, D-76 as superseded), and a local Manager host-run outside that profile is an unconstrained agent with the operator's file and network access. That `approve` fails fast rather than hanging is kept as the reason the choice is not forced by defect class 15. Tests: `tests/test_the_local_managers_permission_mode_is_settled.py` pins the posture at every layer that could drift — `GooseAgent.mode`'s default, the value the agent puts in the environment, `engines.GOOSE.permission_env`'s destination, and the placement the real supervisor computes with and without an operator `GOOSE_MODE` — plus a guard that the adapter no longer describes the question as unsettled. Four mutations (the default changed to `approve`, the agent not placing the mode, the destination emptied, the docstring's "not yet settled" restored) each go red.
 
