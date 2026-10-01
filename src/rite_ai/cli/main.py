@@ -3532,7 +3532,7 @@ def add_manager_cmd(
       rite add manager planner --preset planner
       rite add manager scribe --duties spec,plan-review
       rite add manager small --engine local:small --endpoint http://localhost:11434 \
-          --model qwen3:8b --agent goose --context-window 32768
+          --model qwen3.8:latest --agent goose --context-window 32768
     """
     from rite_ai.cli.init.scaffold import write_config
     from rite_ai.config.managers import declare_manager
