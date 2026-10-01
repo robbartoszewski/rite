@@ -227,15 +227,25 @@ def test_update_gitignore_idempotent(tmp_path: Path):
     assert content.count(".rite/kb/.cache/") == 1
 
 
-def test_install_pre_push_hooks_root_and_modules(tmp_path: Path):
-    (tmp_path / ".git" / "hooks").mkdir(parents=True)
-    module_dir = tmp_path / "backend"
-    (module_dir / ".git" / "hooks").mkdir(parents=True)
+def _a_repo(path: Path) -> Path:
+    """A REAL one. ⚠ `mkdir .git/hooks` is not a repository, and the installer
+    now asks git rather than looking for a `.git` directory — because in a
+    worktree `.git` is a file, and that check refused every worktree there has
+    ever been."""
+    path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=path, check=True)
+    return path
 
-    installed = scaffold.install_pre_push_hooks(
+
+def test_install_pre_push_hooks_root_and_modules(tmp_path: Path):
+    _a_repo(tmp_path)
+    _a_repo(tmp_path / "backend")
+
+    installed, refused = scaffold.install_pre_push_hooks(
         tmp_path, [Module(name="backend", path="backend/", url=None, branch="main")]
     )
     assert len(installed) == 2
+    assert refused == []
     hook = (tmp_path / ".git" / "hooks" / "pre-push").read_text()
     # Range-scoped `pre-push` (Stage 2 #3), not the unscoped full-history
     # `publish check` this used to exec — and via the pipx-safe console
@@ -245,27 +255,32 @@ def test_install_pre_push_hooks_root_and_modules(tmp_path: Path):
 
 
 def test_install_pre_push_hooks_does_not_clobber_existing(tmp_path: Path):
+    _a_repo(tmp_path)
     hooks_dir = tmp_path / ".git" / "hooks"
-    hooks_dir.mkdir(parents=True)
+    hooks_dir.mkdir(parents=True, exist_ok=True)
     (hooks_dir / "pre-push").write_text("#!/bin/sh\necho custom\n")
 
-    installed = scaffold.install_pre_push_hooks(tmp_path, [])
+    installed, refused = scaffold.install_pre_push_hooks(tmp_path, [])
     assert installed == []
     assert "custom" in (hooks_dir / "pre-push").read_text()
+    # And the reason is carried back rather than dropped: "no hook installed"
+    # is the loudest line `rite init` prints and now has more than one cause.
+    assert refused and "not installed by rite" in refused[0]
 
 
 def test_install_pre_push_hooks_upgrades_the_old_marker(tmp_path: Path):
     """A hook installed by a pre-consolidation `rite init` carries the old
     marker ("# rite: publish gate") — it must be upgraded, not refused as
     foreign."""
+    _a_repo(tmp_path)
     hooks_dir = tmp_path / ".git" / "hooks"
-    hooks_dir.mkdir(parents=True)
+    hooks_dir.mkdir(parents=True, exist_ok=True)
     (hooks_dir / "pre-push").write_text(
         "#!/bin/sh\n# rite: publish gate — installed by `rite init`.\n"
         "exec rite publish check\n"
     )
 
-    installed = scaffold.install_pre_push_hooks(tmp_path, [])
+    installed, _refused = scaffold.install_pre_push_hooks(tmp_path, [])
     assert installed == [str(tmp_path)]
     hook = (hooks_dir / "pre-push").read_text()
     assert "rite publish pre-push" in hook
@@ -301,15 +316,21 @@ def test_config_yaml_key_order_matches_spec(tmp_path: Path):
     ]
 
 
-def test_install_pre_push_hooks_skips_repos_whose_hooks_are_redirected(
+def test_install_pre_push_hooks_refuses_a_hooks_path_the_repo_set_itself(
     tmp_path: Path,
 ):
     """`core.hooksPath` means git never reads `.git/hooks`, so a hook written
     there is not installed in any sense that matters — `init` must not count
-    it. It warns about this instead; counting it produced the "✓ Created
-    .git/hooks/pre-push" that a cold rehearsal caught lying, on a machine
-    where a push carrying planted secrets then sailed through the gate."""
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    it. Counting it produced the "✓ Created .git/hooks/pre-push" that a cold
+    rehearsal caught lying, on a machine where a push carrying planted secrets
+    then sailed through the gate.
+
+    ⚠ A GLOBAL redirect is now CHAINED behind instead (SCRUM-9 / C6,
+    `test_the_gate_runs_behind_a_redirected_hooks_path.py`). This is the
+    repo-LOCAL case, which stays a refusal: somebody set that on this
+    repository deliberately, and the chain resolves the global and system
+    scopes at run time, which is exactly what a local value overrides."""
+    _a_repo(tmp_path)
     elsewhere = tmp_path / "shared-hooks"
     elsewhere.mkdir()
     subprocess.run(
@@ -318,7 +339,8 @@ def test_install_pre_push_hooks_skips_repos_whose_hooks_are_redirected(
         check=True,
     )
 
-    installed = scaffold.install_pre_push_hooks(tmp_path, [])
+    installed, refused = scaffold.install_pre_push_hooks(tmp_path, [])
 
     assert installed == []
     assert not (tmp_path / ".git" / "hooks" / "pre-push").exists()
+    assert refused and "core.hooksPath" in refused[0]

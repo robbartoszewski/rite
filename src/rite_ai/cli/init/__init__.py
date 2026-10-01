@@ -33,7 +33,7 @@ import yaml
 from rite_ai.config.models import ProjectBrief
 from rite_ai.config.parse import parse_brief
 from rite_ai.gate import gitleaks_runner
-from rite_ai.gate.hook import redirected_hooks_dir
+from rite_ai.gate.hook import upstream_hooks_dir
 from rite_ai.state import write_atomic
 
 from . import claude_gen, scaffold, setup, ui
@@ -184,7 +184,9 @@ def run_init(
     created.append(str(checklist_path.relative_to(root)))
 
     scaffold.update_gitignore(root, answers.kb.commit)
-    installed_hooks = scaffold.install_pre_push_hooks(root, answers.modules)
+    installed_hooks, refused_hooks = scaffold.install_pre_push_hooks(
+        root, answers.modules
+    )
     ci = scaffold.write_ci_workflow(root)
     if ci.status == "written":
         created.append(scaffold.CI_WORKFLOW_REL_PATH)
@@ -230,28 +232,36 @@ def run_init(
         "in CI either (see below)."
     )
     if installed_hooks:
-        ui.created(f".git/hooks/pre-push ({len(installed_hooks)} repo(s))")
+        # Named when it is a chain, because what runs first is another
+        # project's gate and the reader should know rite put itself behind it
+        # rather than in place of it (§11.5.1).
+        upstream = upstream_hooks_dir(root)
+        behind = f", chained behind {upstream}/pre-push" if upstream else ""
+        ui.created(f"pre-push hook ({len(installed_hooks)} repo(s){behind})")
+        for why in refused_hooks:
+            # A repo that got one and a repo that did not are different facts.
+            ui.note(f"but not everywhere — {why}")
+    elif refused_hooks:
+        # The installer's own words, which name the cause and the remedy. This
+        # branch used to re-derive both and could only describe one cause.
+        for why in refused_hooks:
+            ui.note(f"no pre-push hook installed — {why}{ci_backstop}")
     else:
         # Never silently. The gate is the thing that stops a secret reaching a
         # remote, so "no hook installed" has to be as loud as a created file —
         # a cold rehearsal found a push carrying four planted secrets going
         # through with exit 0 because git was reading hooks from elsewhere.
-        redirected = redirected_hooks_dir(root)
-        if redirected is not None:
-            ui.note(
-                f"no pre-push hook installed — git reads hooks from "
-                f"{redirected} (core.hooksPath), not .git/hooks. The publish "
-                "gate will NOT run on push. Either add `exec rite publish "
-                "pre-push` to the pre-push hook in that directory, or run "
-                "`git config --local core.hooksPath .git/hooks` followed by "
-                "`rite publish install-hook`." + ci_backstop
-            )
-        else:
-            ui.note(
-                "no pre-push hook installed — the publish gate will not "
-                "run automatically on push. Install it with `rite publish "
-                "install-hook`, or run `rite publish check` by hand." + ci_backstop
-            )
+        #
+        # Nothing installed AND nothing refused means there was no repository
+        # to install into. A redirected `core.hooksPath` is no longer a cause
+        # here: it is chained behind, or it is refused with the installer's own
+        # words in the branch above.
+        ui.note(
+            "no pre-push hook installed — there is no git repository here to "
+            "install one in, so the publish gate will not run automatically "
+            "on push. `git init` and commit, then `rite publish "
+            "install-hook`; or run `rite publish check` by hand." + ci_backstop
+        )
     # The CI half of SPEC §11.5's "belt and braces", and per §11.5.1 the
     # load-bearing half: the hook above is disarmable by this machine's own
     # git config, with no signal that it happened, and CI is the only layer

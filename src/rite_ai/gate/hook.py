@@ -62,6 +62,74 @@ PRE_PUSH_HOOK_SCRIPT = f"""#!/bin/sh
 {HOOK_MARKER}
 exec rite publish pre-push
 """
+
+# The chained form, for a repo where `core.hooksPath` sends git's hooks
+# somewhere else. See `install_pre_push_hook`: rite's gate runs AFTER whatever
+# that directory's own `pre-push` does, and this repo's `core.hooksPath` is
+# pointed back here so git reads this file at all.
+#
+# 🔴 **SECURITY-SENSITIVE, in someone else's control.** The redirect is
+# typically another project's deliberate choice and the hook it points at may
+# be a confidentiality gate — the one measured here is a firm data-leak gate
+# whose own header says a hook inside a worktree is "silently disarmed by
+# checking out any commit that predates it". So:
+#
+# * the redirect is resolved at RUN time, from git's global and system config,
+#   not baked in: if that project moves or changes its hook, the chain follows
+#   whatever git says today rather than carrying a stale path;
+# * the upstream hook runs FIRST and its exit code is final. A gate that is
+#   consulted after the push has been decided is not a gate;
+# * the ref list reaches BOTH. git feeds pre-push its refs on stdin, which one
+#   reader consumes; it is written to a file and each hook is fed from that,
+#   byte for byte, rather than echoed back out of a shell variable;
+# * argv (`<remote-name> <remote-url>`) is forwarded to the upstream hook,
+#   which is a real pre-push hook and may use it, and NOT to `rite publish
+#   pre-push`, which takes no arguments (see the comment below this script);
+# * `mktemp` failing blocks the push. A gate that cannot read the refs must not
+#   wave them through;
+# * `RITE_PRE_PUSH_CHAINED` stops an upstream hook that somehow re-enters this
+#   one from looping, belt to the path comparison's braces.
+#
+# Not `set -e`: `gate/ci.py::script_invokes` reads this file to decide whether
+# the gate actually runs, and bails on constructs it cannot judge. The exit
+# codes are handled explicitly instead.
+CHAINED_PRE_PUSH_TEMPLATE = f"""#!/bin/sh
+{HOOK_MARKER}
+# chained: this repo's core.hooksPath is pointed at __OWN_HOOKS__ so git reads
+# this file, and the hook git WOULD have run is run first, from wherever
+# core.hooksPath says it is now. Do not reorder.
+refs_file=$(mktemp) || {{
+	echo "pre-push: could not make a temporary file for the ref list, so" >&2
+	echo "  neither gate could read it. Refusing the push." >&2
+	exit 1
+}}
+trap 'rm -f "$refs_file"' EXIT
+cat > "$refs_file"
+
+own_hooks='__OWN_HOOKS__'
+upstream_dir=$(git config --global --get core.hooksPath 2>/dev/null)
+if [ -z "$upstream_dir" ]; then
+	upstream_dir=$(git config --system --get core.hooksPath 2>/dev/null)
+fi
+if [ -n "$upstream_dir" ] && [ "$upstream_dir" != "$own_hooks" ] &&
+	[ -z "$RITE_PRE_PUSH_CHAINED" ] && [ -x "$upstream_dir/pre-push" ]; then
+	RITE_PRE_PUSH_CHAINED=1 "$upstream_dir/pre-push" "$@" < "$refs_file"
+	upstream_status=$?
+	if [ "$upstream_status" -ne 0 ]; then
+		echo "pre-push: $upstream_dir/pre-push refused this push (exit \
+$upstream_status). rite's publish gate was not reached." >&2
+		exit "$upstream_status"
+	fi
+fi
+
+rite publish pre-push < "$refs_file"
+"""
+
+
+def chained_pre_push_script(own_hooks: Path) -> str:
+    return CHAINED_PRE_PUSH_TEMPLATE.replace("__OWN_HOOKS__", str(own_hooks))
+
+
 # NOT "$@" — git invokes pre-push as `pre-push <remote-name> <remote-url>`
 # (the ref lines come on stdin, not argv) and `rite publish pre-push` takes
 # no arguments, so forwarding argv made every push fail with a Click usage
@@ -134,6 +202,119 @@ def compute_pre_push_ranges(stdin_lines: list[str]) -> list[str]:
     return ranges
 
 
+def _git(repo_root: Path, *args: str) -> str | None:
+    """`git <args>`'s stdout, stripped, or None when git could not answer.
+
+    Fails OPEN for the same reason `redirected_hooks_dir` does: this module's
+    job is to install a hook, not to police git's configuration.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.strip()
+
+
+def own_hooks_dir(repo_root: Path) -> Path | None:
+    """This repository's OWN hooks directory, absolute — or None when
+    `repo_root` is not a repository.
+
+    🔴 **Not `repo_root / ".git" / "hooks"`.** In a git worktree `.git` is a
+    *file*, not a directory, and the hooks live in the common directory the
+    worktrees share. Measured: `install_pre_push_hook` answered "is not a git
+    repository (no .git/)" for every worktree, and `redirected_hooks_dir`
+    reported a `core.hooksPath` redirect in every worktree where there was
+    none — because it compared git's answer against a path that does not
+    exist there. So no worktree has ever had the publish gate installed, for
+    a reason that had nothing to do with the redirect it blamed.
+
+    `--git-common-dir` is the one git reports for the shared directory, and
+    `git rev-parse --git-path hooks` confirms hooks are read from there in a
+    worktree (measured, not assumed).
+
+    ⚠ **Only for a directory that is itself the top of a working tree.** git
+    answers for any directory INSIDE a repository, so asking it alone would
+    make a plain subdirectory — a module registered as `backend/` that is not
+    its own checkout — report the parent project's hooks as its own, and
+    `rite doctor` would say its gate was active instead of saying it is not a
+    repository.
+    """
+    top = _git(repo_root, "rev-parse", "--show-toplevel")
+    if not top:
+        return None
+    try:
+        if Path(top).resolve() != repo_root.resolve():
+            return None
+    except OSError:
+        return None
+    common = _git(repo_root, "rev-parse", "--git-common-dir")
+    if common is None:
+        return None
+    path = Path(common)
+    if not path.is_absolute():
+        path = repo_root / path
+    return (path / "hooks").resolve()
+
+
+def _resolved(value: str, repo_root: Path) -> Path:
+    """A `core.hooksPath` value as the directory git will read.
+
+    ⚠ **A relative value is relative to where hooks RUN** — the top of the
+    working tree — not to the git directory. That is git's documented rule and
+    it is the trap: `core.hooksPath = .git/hooks` works in the main checkout
+    and, in a worktree, points at `<worktree>/.git/hooks`, which does not
+    exist, so git runs NO pre-push hook at all and the push goes through.
+    Measured end to end, both directions, before this module was allowed to
+    set the value.
+    """
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = repo_root / path
+    try:
+        return path.resolve()
+    except OSError:
+        return path
+
+
+def local_hooks_path(repo_root: Path) -> Path | None:
+    """What THIS repository's own config says, resolved, or None."""
+    value = _git(repo_root, "config", "--local", "--get", "core.hooksPath")
+    return _resolved(value, repo_root) if value else None
+
+
+def upstream_hooks_dir(repo_root: Path) -> Path | None:
+    """The hooks directory a global or system `core.hooksPath` sends git to,
+    resolved — or None when neither says anything, or it is already this
+    repository's own.
+
+    Kept apart from `redirected_hooks_dir` because the two answer different
+    questions, and conflating them would disarm the chain. That one asks
+    "where is git reading hooks from right now", which stops being the
+    redirected directory the moment this module points `core.hooksPath` back
+    at the repo. This one asks "what would git have read if we had not", which
+    is what has to keep running — so re-running `rite publish install-hook` on
+    an already-chained repo writes the chain again instead of quietly
+    replacing it with the plain script.
+    """
+    own = own_hooks_dir(repo_root)
+    for scope in ("--global", "--system"):
+        value = _git(repo_root, "config", scope, "--get", "core.hooksPath")
+        if not value:
+            continue
+        resolved = _resolved(value, repo_root)
+        return None if resolved == own else resolved
+    return None
+
+
 def redirected_hooks_dir(repo_root: Path) -> Path | None:
     """The directory git will ACTUALLY read hooks from, when that is not this
     repo's own `.git/hooks` — otherwise None.
@@ -149,35 +330,31 @@ def redirected_hooks_dir(repo_root: Path) -> Path | None:
     that path is typically shared across every repo the user owns, so
     installing there would reach far outside the project `rite init` was
     pointed at — the same "surprise in someone else's repo" this module
-    already refuses to cause by clobbering a hand-written hook.
+    already refuses to cause by clobbering a hand-written hook. What
+    `install_pre_push_hook` does instead is CHAIN behind it, touching nothing
+    outside this repository.
 
     Fails OPEN (returns None) whenever git cannot answer — not a repo, git
     missing, a timeout. The caller's job is to install a hook, not to police
     git's configuration, and a false "redirected" would block a legitimate
     install for no reason.
     """
-    try:
-        proc = subprocess.run(
-            ["git", "rev-parse", "--git-path", "hooks"],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            errors="replace",
-            timeout=10,
-        )
-    except (OSError, subprocess.SubprocessError):
+    reported = _git(repo_root, "rev-parse", "--git-path", "hooks")
+    if reported is None:
         return None
-    if proc.returncode != 0:
-        return None
-    reported = Path(proc.stdout.strip())
-    if not reported.is_absolute():
-        reported = repo_root / reported
+    where = Path(reported)
+    if not where.is_absolute():
+        where = repo_root / where
+    own = own_hooks_dir(repo_root)
     try:
-        if reported.resolve() == (repo_root / ".git" / "hooks").resolve():
-            return None
+        resolved = where.resolve()
     except OSError:
         return None
-    return reported
+    # ⚠ Compared against the repo's OWN hooks directory, which in a worktree
+    # is the shared one and never `<worktree>/.git/hooks` — see
+    # `own_hooks_dir`. Comparing against that path reported a redirect in
+    # every worktree, with no `core.hooksPath` set anywhere.
+    return None if own is None or resolved == own else where
 
 
 @dataclass
@@ -219,7 +396,8 @@ def gate_hook_status(repo_root: Path) -> HookStatus:
     by a tool, long after the hook was installed. Measured on a real
     project: the hook deleted AND `core.hooksPath` pointed elsewhere, and
     `rite doctor` printed "ok"."""
-    if not (repo_root / ".git").exists():
+    own_hooks = own_hooks_dir(repo_root)
+    if own_hooks is None:
         return HookStatus("not_a_repo")
 
     redirected = redirected_hooks_dir(repo_root)
@@ -227,13 +405,13 @@ def gate_hook_status(repo_root: Path) -> HookStatus:
         return HookStatus(
             "redirected",
             f"git reads hooks from {redirected} (core.hooksPath), not "
-            f"{repo_root / '.git' / 'hooks'} — the gate does not run on push. "
-            "Either add `exec rite publish pre-push` to the pre-push hook "
-            "there, or run `git config --local core.hooksPath .git/hooks` "
-            "followed by `rite publish install-hook`.",
+            f"{own_hooks} — the gate does not run on push. `rite publish "
+            "install-hook` now installs a hook that runs that one first and "
+            "the gate second, and points this repository's core.hooksPath "
+            "here; nothing outside this repository is changed.",
         )
 
-    hook_path = repo_root / ".git" / "hooks" / "pre-push"
+    hook_path = own_hooks / "pre-push"
     if not hook_path.is_file():
         return HookStatus(
             "missing",
@@ -297,32 +475,71 @@ def gate_hook_status(repo_root: Path) -> HookStatus:
 
 
 def install_pre_push_hook(repo_root: Path, force: bool = False) -> InstallResult:
-    """Write `.git/hooks/pre-push`. Refuses to overwrite an existing hook
-    that this module didn't install, unless `force=True` — a silently
-    clobbered hook is exactly the kind of surprise this tool should never
-    cause in someone else's repo."""
-    git_dir = repo_root / ".git"
-    if not git_dir.is_dir():
-        return InstallResult(False, f"{repo_root} is not a git repository (no .git/)")
+    """Write this repository's `pre-push` hook, and make sure git reads it.
 
-    redirected = redirected_hooks_dir(repo_root)
-    if redirected is not None:
+    Refuses to overwrite an existing hook this module didn't install, unless
+    `force=True` — a silently clobbered hook is exactly the kind of surprise
+    this tool should never cause in someone else's repo.
+
+    🔴 **A global `core.hooksPath` is CHAINED behind, not switched off.** This
+    used to refuse outright, for two correct reasons: a hook git will not read
+    is a gate that reports installed and never runs, and the redirected
+    directory is typically shared across every repo the user owns, so writing
+    into it reaches far outside this project. The defect was stopping there.
+    Measured on a real machine: a global redirect meant rite's publish gate ran
+    NOWHERE automatically, in any rite project, for the life of that
+    redirect — and the directory it pointed at held one hook, a firm
+    data-leak gate belonging to another project.
+
+    So: this repository's own `pre-push` runs the redirected hook first and
+    the gate second, and this repository's `core.hooksPath` is pointed at its
+    own hooks directory so git reads it. Nothing outside the repository is
+    written — not `~/.gitconfig`, not the shared hook. The other project's
+    gate keeps running, resolved at run time rather than baked in, and the
+    ref list reaches both.
+
+    ⚠ **And when the chain cannot be built, this REFUSES rather than
+    installing half of it.** The order below is the whole safety property:
+    the hook is written BEFORE `core.hooksPath` is pointed at it, so a
+    failure can only ever leave an inert file in a directory git is not
+    reading — the status quo. The reverse order has a window in which git
+    reads a directory with no `pre-push` in it, and that window silently drops
+    the other project's gate, which is strictly worse than today's loud
+    refusal.
+    """
+    own_hooks = own_hooks_dir(repo_root)
+    if own_hooks is None:
+        # ⚠ Asked of git, not of `(repo_root / ".git").is_dir()`: in a worktree
+        # `.git` is a file, and that check answered "not a git repository" for
+        # every worktree there has ever been.
+        return InstallResult(False, f"{repo_root} is not a git repository")
+
+    local = local_hooks_path(repo_root)
+    if local is not None and local != own_hooks:
+        # This repository's OWN config sends hooks somewhere else. Someone
+        # chose that deliberately, here, for this repo; overwriting it would be
+        # the "surprise in someone else's repo" a few lines up, and chaining
+        # behind it would mean baking a path this module cannot resolve at run
+        # time (run-time resolution reads the global and system scopes, which
+        # is what the local value is overriding). So: say so, and stop.
         return InstallResult(
             False,
-            f"git reads hooks from {redirected} (core.hooksPath), not "
-            f"{git_dir / 'hooks'} — a hook written there would never run, so "
-            "the publish gate would be silently inactive on every push. Point "
-            "this repo back at its own hooks with `git config --local "
-            "core.hooksPath .git/hooks`, or add `exec rite publish pre-push` "
-            "to the pre-push hook in that directory yourself.",
+            f"this repository's own git config sends hooks to {local} "
+            "(core.hooksPath, --local), so a hook written in "
+            f"{own_hooks} would never run. rite will not change a hooks path "
+            "you set on this repository. Either remove it with `git config "
+            "--local --unset core.hooksPath` and run this again, or add `exec "
+            f"rite publish pre-push` to {local}/pre-push yourself.",
         )
 
-    hooks_dir = git_dir / "hooks"
-    hooks_dir.mkdir(parents=True, exist_ok=True)
-    hook_path = hooks_dir / "pre-push"
+    upstream = upstream_hooks_dir(repo_root)
+    hook_path = own_hooks / "pre-push"
 
     if hook_path.exists() and not force:
-        existing = hook_path.read_text()
+        try:
+            existing = hook_path.read_text()
+        except OSError as e:
+            return InstallResult(False, f"{hook_path} could not be read: {e}")
         if not _is_rite_installed(existing):
             return InstallResult(
                 False,
@@ -330,6 +547,47 @@ def install_pre_push_hook(repo_root: Path, force: bool = False) -> InstallResult
                 "pass force=True to overwrite",
             )
 
-    hook_path.write_text(PRE_PUSH_HOOK_SCRIPT)
-    hook_path.chmod(0o755)
-    return InstallResult(True, f"installed {hook_path}")
+    script = (
+        chained_pre_push_script(own_hooks)
+        if upstream is not None
+        else PRE_PUSH_HOOK_SCRIPT
+    )
+    try:
+        own_hooks.mkdir(parents=True, exist_ok=True)
+        hook_path.write_text(script)
+        hook_path.chmod(0o755)
+    except OSError as e:
+        return InstallResult(False, f"{hook_path} could not be written: {e}")
+
+    if upstream is None and local is None:
+        return InstallResult(True, f"installed {hook_path}")
+
+    # Pointed back at this repository's own hooks, ABSOLUTELY. A relative
+    # `.git/hooks` resolves against the working tree a hook runs in, so in a
+    # worktree it names a path that does not exist and git runs nothing at
+    # all — measured, and the reason this is not spelled the short way.
+    if local != own_hooks and (
+        _git(repo_root, "config", "--local", "core.hooksPath", str(own_hooks)) is None
+    ):
+        # 🔴 The loud refusal. The hook above is inert while git still reads
+        # the redirected directory, so the other project's gate is untouched
+        # and nothing has been silently weakened — which is exactly why the
+        # write came first.
+        return InstallResult(
+            False,
+            f"wrote {hook_path}, but could not point this repository's "
+            f"core.hooksPath at {own_hooks} (`git config --local` failed), so "
+            f"git still reads hooks from {upstream} and the publish gate does "
+            "NOT run on push. Nothing else was changed. Set it by hand with "
+            f"`git config --local core.hooksPath {own_hooks}`, then run this "
+            "again.",
+        )
+    if upstream is None:
+        return InstallResult(True, f"installed {hook_path}")
+    return InstallResult(
+        True,
+        f"installed {hook_path}, chained behind {upstream}/pre-push — that "
+        "hook runs first and its refusal is final, then the publish gate. "
+        f"This repository's core.hooksPath now points at {own_hooks}; "
+        "core.hooksPath elsewhere, and the hook it names, were not touched.",
+    )

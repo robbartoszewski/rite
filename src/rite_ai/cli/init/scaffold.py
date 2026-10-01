@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import re
 import shutil
-import stat
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -27,8 +26,6 @@ from rite_ai.gate.ci import (
 )
 from rite_ai.gate.hook import HOOK_MARKER as PRE_PUSH_MARKER
 from rite_ai.gate.hook import PRE_PUSH_HOOK_SCRIPT as PRE_PUSH_HOOK
-from rite_ai.gate.hook import _is_rite_installed as _is_rite_pre_push_hook
-from rite_ai.gate.hook import redirected_hooks_dir
 
 from .paths import templates_dir
 from .questionnaire import KbAnswers
@@ -555,39 +552,39 @@ def update_gitignore(project_root: Path, kb_commit: bool) -> None:
         f.write(prefix + "\n".join(missing) + "\n")
 
 
-def _install_hook(repo_dir: Path) -> bool:
-    hooks_dir = repo_dir / ".git" / "hooks"
-    if not hooks_dir.is_dir():
-        return False
-    # `core.hooksPath` makes git ignore this directory entirely, so a hook
-    # written here would report installed and never run. See
-    # `rite_ai.gate.hook.redirected_hooks_dir`; `init` warns about the repos
-    # this skips rather than counting them as installed.
-    if redirected_hooks_dir(repo_dir) is not None:
-        return False
-    hook_path = hooks_dir / "pre-push"
-    if hook_path.exists():
-        existing = hook_path.read_text()
-        if not _is_rite_pre_push_hook(existing):
-            return False  # don't clobber a hand-written hook
-    hook_path.write_text(PRE_PUSH_HOOK)
-    hook_path.chmod(
-        hook_path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH
-    )
-    return True
-
-
-def install_pre_push_hooks(project_root: Path, modules: list[Module]) -> list[str]:
+def install_pre_push_hooks(
+    project_root: Path, modules: list[Module]
+) -> tuple[list[str], list[str]]:
     """Install the publish-gate pre-push hook (SPEC.md §11.5) wherever a real
-    git repo exists — the root, and each module that is its own checkout."""
+    git repo exists — the root, and each module that is its own checkout.
+    Returns (where it was installed, why it was not where it was not).
+
+    🔴 **Through `gate.hook.install_pre_push_hook`, which is the one
+    installer.** This was a SECOND one: it had its own `.git/hooks` path, its
+    own redirect refusal and its own write, and the two were kept in step only
+    by hand — the exact divergence that module's own docstring records closing
+    once already, between `rite init`'s scaffold and the standalone path. It
+    mattered: the chaining that makes the gate run behind a global
+    `core.hooksPath` went into that function, and until this delegated, `rite
+    init` would have gone on refusing while `rite publish install-hook`
+    chained.
+
+    The reasons are returned rather than dropped, because "no hook installed"
+    is the loudest line `rite init` prints and it now has more than one cause.
+    """
+    from rite_ai.gate.hook import install_pre_push_hook
+
     installed: list[str] = []
-    if _install_hook(project_root):
-        installed.append(str(project_root))
-    for m in modules:
-        module_dir = project_root / m.path
-        if _install_hook(module_dir):
-            installed.append(str(module_dir))
-    return installed
+    refused: list[str] = []
+    for repo_dir in [project_root, *(project_root / m.path for m in modules)]:
+        result = install_pre_push_hook(repo_dir)
+        if result.ok:
+            installed.append(str(repo_dir))
+        elif "is not a git repository" not in result.message:
+            # Not a repository at all is the ordinary case for a module that is
+            # a plain directory, and `rite init` already says what that means.
+            refused.append(result.message)
+    return installed, refused
 
 
 __all__ = [
