@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### A deferred question's `--while` no longer goes on the command line
+
+`rite ask --defer --while "…"` took what the Manager would do meanwhile as text
+in double quotes, where the shell runs anything in backticks or `$( )` before
+rite sees it, and a Manager's meanwhile often names tickets other people
+wrote. It is now `--while -`, with the meanwhile as the first line of the same
+quoted heredoc as the question:
+
+    rite ask --defer --while - - <<'RITE_TEXT_1f2e3d'
+    tickets 8 and 9
+    rename --out to --output?
+    RITE_TEXT_1f2e3d
+
+Text given to `--while` itself is refused, and a Manager's instructions teach
+only this form.
+
 ### The decomposer writes the plan, and the model never approves its own
 
 `rite local decompose <manager> <ticket>` is new: the Manager holding the

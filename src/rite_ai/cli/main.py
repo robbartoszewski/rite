@@ -9795,8 +9795,9 @@ def reply(text: str, manager: str) -> None:
     "--while",
     "meanwhile",
     default="",
-    help="What you will do meanwhile. Required with --defer: if there is "
-    "nothing, the question blocks you and must be asked now.",
+    help="`-`: what you will do meanwhile is the FIRST LINE of stdin, the "
+    "question the rest. Required with --defer: if there is nothing, the "
+    "question blocks you and must be asked now. Never text on the command line.",
 )
 @click.option(
     "--manager",
@@ -9815,13 +9816,16 @@ def ask(question: str, defer: bool, meanwhile: str, manager: str) -> None:
     deferral cannot be honoured safely asks now too and says why.
 
     ⚠ **QUESTION IS `-`, AND THE QUESTION COMES ON STDIN (F14)**, as for
-    `rite reply`.
+    `rite reply`. So does `--while` (SCRUM-33): `--while -` makes stdin's
+    first line the meanwhile and the rest the question, and text given to
+    `--while` itself is refused.
 
     Examples:
       rite ask --manager planner - <<'RITE_TEXT_1f2e3d'
       which of the two schemas should ticket 12 use?
       RITE_TEXT_1f2e3d
-      rite ask --manager planner --defer --while "tickets 14, 15" - <<'RITE_TEXT_1f2e3d'
+      rite ask --manager planner --defer --while - - <<'RITE_TEXT_1f2e3d'
+      tickets 14 and 15
       rename the CLI flag to --out?
       RITE_TEXT_1f2e3d
     """
@@ -9849,6 +9853,25 @@ def ask(question: str, defer: bool, meanwhile: str, manager: str) -> None:
         known = ", ".join(sorted(r.name for r in roles)) or "none declared"
         click.echo(f"no Manager named {asking!r} in this project — {known}", err=True)
         raise SystemExit(1)
+    # 🔴 SCRUM-33: `--while` was the one text still taken on the command line,
+    # in double quotes, where the shell runs a backtick or `$( )` before rite
+    # sees it — and a meanwhile names tickets other people wrote. Refused like
+    # the question, BEFORE stdin is read and before anything is queued; the
+    # shell has already run whatever it ran, but nothing it printed is sent.
+    if meanwhile and meanwhile != stdin_text.STDIN:
+        click.echo(
+            "refusing: --while takes `-`, and what you will do meanwhile is "
+            "the first line of stdin. In double quotes on the command line the "
+            "shell runs anything in backticks or $( ) BEFORE rite sees it — "
+            "and if yours had any, it already ran. Send both through one "
+            "quoted heredoc, where nothing is expanded:\n"
+            + stdin_text.heredoc(
+                f"rite ask --manager {asking} --defer --while - -",
+                "<what you will do meanwhile, on this one line>\n<your question>",
+            ),
+            err=True,
+        )
+        raise SystemExit(1)
     try:
         question = stdin_text.read(question)
     except stdin_text.OnTheCommandLine:
@@ -9857,6 +9880,8 @@ def ask(question: str, defer: bool, meanwhile: str, manager: str) -> None:
             err=True,
         )
         raise SystemExit(1)
+    if meanwhile:
+        meanwhile, question = stdin_text.split_first_line(question)
     if not question.strip():
         click.echo("refusing to send an empty question.", err=True)
         raise SystemExit(1)
@@ -9866,7 +9891,8 @@ def ask(question: str, defer: bool, meanwhile: str, manager: str) -> None:
         # parallel work is waiting on the answer, which makes the question
         # blocking by definition.
         click.echo(
-            f"refusing to defer: no --while. If you cannot say what you will "
+            f"refusing to defer: no --while, or an empty first line. If you "
+            f"cannot say what you will "
             f"do meanwhile, {checkins.REFUSED_WITHOUT_WHILE}:\n"
             + stdin_text.heredoc(f"rite ask --manager {asking} -", "<question>"),
             err=True,

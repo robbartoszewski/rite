@@ -272,16 +272,17 @@ keeps reading a waiting question's thread for as long as it waits. Answer in
 the question's own thread: a message elsewhere cannot be matched to it.
 
 A Manager can also **defer** a question to your next check-in, but only by
-naming what it will do meanwhile:
+naming what it will do meanwhile, on the first line:
 
-    rite ask --defer --while "tickets 8 and 9, which do not touch the CLI" - <<'RITE_TEXT_1f2e3d'
+    rite ask --defer --while - - <<'RITE_TEXT_1f2e3d'
+    tickets 8 and 9, which do not touch the CLI
     rename --out to --output?
     RITE_TEXT_1f2e3d
 
 A Manager's text always goes on stdin like this, never in double quotes on
 the command line: there the shell runs anything in backticks or `$( )`, and
 the text often quotes a ticket someone else wrote. rite refuses text given as
-an argument.
+an argument, `--while` included.
 
 ⚠ **The rule every Manager is given, in these words: ask now unless the
 question is clearly deferrable; if you are unsure whether it blocks you, it
@@ -289,8 +290,8 @@ blocks you.** Deferring a question that blocks it idles a Manager until the
 next check-in, which can be hours away. Asking you one that could have waited
 costs you thirty seconds. So every doubt ends in asking:
 
-- a deferral with no `--while` is refused ("then it blocks you — ask now")
-  and nothing is queued;
+- a deferral with no `--while`, or an empty first line, is refused ("then it
+  blocks you — ask now") and nothing is queued;
 - with no check-in window configured, or none that parses, a deferral is
   asked at once and says why;
 - if the loop runs out of work while questions are queued, at least one was

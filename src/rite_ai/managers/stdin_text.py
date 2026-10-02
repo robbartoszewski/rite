@@ -98,6 +98,20 @@ class OnTheCommandLine(Exception):
     """Text given as an argument rather than on stdin."""
 
 
+def split_first_line(text: str) -> tuple[str, str]:
+    """`(first line, the rest)` of a text read from stdin, for a command that
+    takes TWO texts through its one stdin (`rite ask --defer --while -`).
+
+    🔴 **SCRUM-33.** `--while "<what you will do meanwhile>"` was free text in
+    double quotes on the command line, the shape `reply`, `ask` and `route`
+    were moved off (F14): the meanwhile names tickets, and tickets are written
+    by other people. A process has one stdin, so the second text is its first
+    line. One line on purpose: a meanwhile is a phrase, and a fixed boundary
+    is one nobody writing a question can move."""
+    first, _, rest = text.partition("\n")
+    return first.strip(), rest
+
+
 def refusal(command: str, placeholder: str) -> str:
     """What a command says when its text came on the command line."""
     return (

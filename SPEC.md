@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.78 · **Date:** 2026-10-02
+**Version:** 0.24.79 · **Date:** 2026-10-02
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -7018,9 +7018,13 @@ allows a substitution whose inner command is on the allowlist — and the
 output reached the person. A Manager's text often quotes a ticket, an issue or
 another Manager, so double quotes let whoever wrote that text run commands.
 **Not covered:** rite cannot stop a model putting a substitution into some
-other command (`gh issue comment --body "…"`); the refusal cannot un-run a
-substitution the shell already ran, only keep its output from being sent; and
-`--while` on `rite ask --defer` is still an argument.
+other command (`gh issue comment --body "…"`); and the refusal cannot un-run a
+substitution the shell already ran, only keep its output from being sent.
+`--while` on `rite ask --defer` was the last text still taken as an argument
+and taught in double quotes, and since 0.24.79 (SCRUM-33) it takes `-`: what
+the Manager will do meanwhile is stdin's FIRST LINE, the question the rest, in
+the one quoted heredoc, and text given to `--while` is refused before anything
+is queued.
 
 #### 9.16.1. Two separate questions, and neither answers the other
 
@@ -8254,6 +8258,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.79 — `--while` leaves the command line, and two tests stop measuring the machine (SCRUM-31, SCRUM-32, SCRUM-33).** §9.16's not-covered list loses `--while`. **SCRUM-33, security-shaped:** `rite ask --defer --while "<…>"` was free text in double quotes, the F14 shape `reply`/`ask`/`route` were moved off, and the check-in instructions taught it; a meanwhile names tickets other people wrote. `--while -` now reads stdin's first line (`stdin_text.split_first_line`), anything else given to `--while` is refused before stdin is read or anything queued, and the instructions and guide teach the one heredoc. `test_no_instruction_teaches_text_in_double_quotes` did not scan the check-in instructions, which is how this survived it; it does now. **SCRUM-31:** the blast-radius soak failed when fewer than a quarter of 200+ claim attempts were granted. Investigated rather than floor-skipped: with no fleet layer a refusal is decided on a fresh read under the lock, so every refusal is a claim really held, and the ratio is a function of hold time against the 4ms bursts — measured on the healthy ledger 51% at 0ms, 25.1% at 8ms, 19.6% at 12ms, with nothing lost and nothing held twice; the macOS runner's red was 20.1%, on the soak's first run there (#177 put it on that runner). What the ratio stood in for is a LOST RELEASE, which leaves a zombie claim; with the pre-fix defect (`flock` on `claims.json`) reinstated, zombie claims followed in 9 of 9 runs and lost grants in 3 of 9. So the soak now asserts directly that nothing is still claimed once every worker has released, before the small-sample skip, and the ratio is reported. **SCRUM-32:** `test_it_cannot_rewrite_the_rite_it_runs` touched the real package, which succeeds through the deliberate `/tmp` grant when the checkout is under `/tmp`; it now probes the rule itself, on a decoy given to the same `_running_rite` grant outside every writable one (readable as a positive control, not writable as the property), and probes the real package wherever only that rule can answer. Each change's control goes red on the assertion that names it; for SCRUM-31 the zombie check alone caught 2 of 6 broken-lock runs, which would otherwise have skipped.
 
 **Changes in 0.24.78 — five dogfood fixes on the Worker and Manager paths (SCRUM-25 … SCRUM-29).** §2.7.5, §6.5, §9.6, §9.16.5a and §10.3 gain a paragraph each. **SCRUM-25:** `rite sandbox status` said "answer it by attaching" a release after S30 made the Slack thread the route; `worker_questions.how_to_answer` names the route by state (raised, with the id and `rite message <owner> "<qid> …"`; not yet passed on; stopped; no Manager to relay). **SCRUM-26:** `rite add worker` without `--manager` wrote `manager: ''` in a project with Managers, the SCRUM-5 contradiction on the CLI path; it now links the first declared Manager, refuses an undeclared name, and says when none exists. **SCRUM-27:** `rite sandbox start --ticket` moves the ticket to "In Progress" after the Worker starts, through the backend's own `move`, never failing the start. **SCRUM-28:** a window's `workers` is enforced as a count at the spawn site, and the count and the launch run under a per-project start lock that fails closed; writing the concurrency test found a second race the lock also closes: `worker_home` checks then symlinks, so two starts at once crashed one with `FileExistsError`. **SCRUM-29:** the traceback was already fixed by 0.24.65 (reproduced on this tree and on the installed 0.7.0a5 under a real `sandbox-exec` read deny: degraded, no traceback); what remained was a Manager told to read a board it cannot, and the supervisor now hands it the board it read, under "The board this cycle". The opening prompt also printed a literal `{rite}`, a missing f-string prefix. Tests: `tests/test_sandbox_status_says_how_to_answer.py` (including the printed route run end to end through `rite message` and the real relay), `tests/test_add_worker_reports_to_a_declared_manager.py`, `tests/test_a_started_ticket_moves_on_the_board.py`, `tests/test_the_scheduled_count_is_a_cap.py` (two starts at once, one slot) and `tests/test_a_manager_is_handed_the_board_it_cannot_read.py`. Each fix's mutation goes red on the assertion that names its property; the first race control did not, failing on the crashed thread instead, and the test now pins `worker_home` so the count is what it measures, with the crash its own test.
 
