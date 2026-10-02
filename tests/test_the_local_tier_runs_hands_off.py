@@ -157,7 +157,7 @@ class _Driver:
 
 def _advance(root: Path, driver: _Driver, manager="planner", **kw):
     return advance_ticket(
-        root, manager, TICKET, decompose=driver.decompose, step=driver.step, **kw
+        root, manager, TICKET, author_plan=driver.decompose, step=driver.step, **kw
     )
 
 
@@ -349,7 +349,7 @@ def test_a_decomposer_that_produced_nothing_is_reported_not_retried_blindly(tmp_
             "R", (), {"wrote": False, "problem": "", "reasons": ("no cites",)}
         )()
 
-    blocked = advance_ticket(root, "planner", TICKET, decompose=failed)
+    blocked = advance_ticket(root, "planner", TICKET, author_plan=failed)
     assert not blocked.moved
     assert "no cites" in blocked.blocked
 

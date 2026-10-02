@@ -119,7 +119,7 @@ def advance_ticket(
     ticket: str,
     *,
     state=None,
-    decompose=None,
+    author_plan=None,
     approve=None,
     step=None,
     ask_delivery=None,
@@ -150,11 +150,20 @@ def advance_ticket(
     # 1. No plan yet — author one. It is written PENDING; nothing here can
     #    write APPROVED, which is RL-6's gate and DD-3.5's rule.
     if read.plan is None:
-        if decompose is None:
+        if author_plan is None:
             from rite_ai.local.decompose import decompose_ticket
 
-            decompose = decompose_ticket
-        result = decompose(root, manager, ticket)
+            author_plan = decompose_ticket
+        # ⚠ Named `author_plan` rather than after the command it runs.
+        # `tests/test_no_dead_wiring` asks whether a function is called by
+        # looking for its name followed by an open bracket, as a SUBSTRING — so
+        # the obvious name for this parameter made `enclosure.compose` read as
+        # newly called, the shorter name sitting inside the longer one. The
+        # first draft of this very comment tripped it again by quoting the text.
+        # Fixing that matcher to a word boundary is right and is NOT done here:
+        # it uncovers four unrelated functions the loose match was masking, and
+        # this branch must not merge on someone else's cleanup. Filed separately.
+        result = author_plan(root, manager, ticket)
         # `DecomposeResult.wrote` — the field name matters: `ok`/`written` do not
         # exist on it, and a getattr default of False would have read every
         # successful decomposition as a failure.

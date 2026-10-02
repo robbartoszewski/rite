@@ -9204,20 +9204,40 @@ def _drive_local_tier(root, manager: str, board, say) -> None:
 
 
 def _local_tier_tickets(board, manager: str) -> tuple[list[str], str]:
-    """(the ticket ids assigned to `manager`, or why they could not be read).
+    """(the REFINED tickets assigned to `manager`, or why they could not be read).
 
     `TicketFilter(assignee=...)` is the board's own question, asked of the board
     assignment already labels, so a ticket's owner lives in one place rather than
     two. A `BackendError` is returned rather than raised: a board that cannot be
     read is a cycle that advanced nothing, not a run that ends.
+
+    ⚠ **GATED on REFINED (TR5), and this gate was missing when L-6 was first
+    written.** `tests/test_every_path_to_work_is_enumerated.py` found it: every
+    path that reads the backlog must say what it does with a ticket that is not
+    refined, and this one would have driven an unrefined ticket all the way to a
+    pushed branch. The predicate is `refinement.status`, the same one `loop._ready`
+    asks, one read per ticket — not a second spelling of "is it refined".
+
+    An unrefined ticket is skipped silently here rather than reported: it is the
+    Owner's to refine (TR2), it is not this Manager's to complain about, and a
+    line per unrefined ticket per cycle would bury the local tier's own notes.
     """
+    from rite_ai.refinement import status as refinement_status
     from rite_ai.tickets.interface import BackendError, TicketFilter
 
     page = board.list_tickets(TicketFilter(assignee=manager))
     if isinstance(page, BackendError):
         return [], page.message
     found = getattr(page, "tickets", page) or []
-    return [t.id for t in found if getattr(t, "id", "")], ""
+    refined: list[str] = []
+    for ticket in found:
+        ident = getattr(ticket, "id", "")
+        if not ident:
+            continue
+        answer = refinement_status.status(board, ident)
+        if getattr(answer, "state", "") == refinement_status.REFINED:
+            refined.append(ident)
+    return refined, ""
 
 
 def _engine_ready_for(role):
