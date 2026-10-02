@@ -628,6 +628,53 @@ def _doctor_worker_push_access(
             )
 
 
+def _doctor_github_app(rite_dir: Path, problems: list, network: bool) -> None:
+    """🔴 SCRUM-16. Whether the configured GitHub App can mint the token a
+    Manager is given, asked of GitHub by minting one and revoking it.
+
+    Doctor said nothing about `github_app`, so its "ok" covered an App whose
+    installation had not granted a permission rite asks for, and the first
+    to find out was `rite start`, refusing the Manager with a 422.
+
+    ⚠ **Off unless asked for, and then said rather than implied.** Minting is
+    a call to GitHub, and doctor's live checks are opt-in (`--network`, as
+    the Workers' push check is). Without it this says the App is configured
+    and NOT verified, so a plain run's "ok" no longer reads as a working App.
+    """
+    from rite_ai.config.parse import ParseError, parse_config
+    from rite_ai.credentials.store import store_is_readable
+    from rite_ai.managers.github_access import check_app
+
+    config = parse_config(rite_dir / "config.yaml")
+    if isinstance(config, ParseError):
+        return  # the config check already reports it
+    app = getattr(config, "github_app", None)
+    if not (app and app.app_id):
+        return
+    label = f"github app {app.app_id} (installation {app.installation_id})"
+    if not network:
+        click.echo(
+            f"{label}: configured, NOT verified (no network calls). `rite doctor "
+            "--network` mints a test token and revokes it, which is what `rite "
+            "start` needs to work"
+        )
+        return
+    if not store_is_readable():
+        click.echo(f"{label}: not checked: the credential store cannot be read")
+        return
+    got = check_app(config)
+    if got.kind == "ok":
+        click.echo(f"{label}: ok, {got.detail}")
+    elif got.kind == "refused":
+        click.echo(
+            f"{label}: CANNOT mint a token, so `rite start` will refuse: {got.detail}"
+        )
+        problems.append(f"github app cannot mint a token: {got.detail}")
+    else:
+        # Said, never counted: an unreachable GitHub is not a broken App.
+        click.echo(f"{label}: could not check ({got.detail})")
+
+
 def _doctor_publishing(project, problems: list[str]) -> None:
     """Each module's EFFECTIVE publish settings, and where each came from.
 
@@ -952,6 +999,10 @@ def _doctor_report(problems: list[str], *, network: bool = False) -> None:
                 network,
             )
 
+    # The MANAGER's GitHub credential, whatever the Workers use (SCRUM-16).
+    with _doctor_check("github app", problems):
+        _doctor_github_app(rite_dir, problems, network)
+
     # The WORKERS' checkouts, which the loop above never looked at. Every
     # module line it prints is about `<root>/<module>` — the project's own
     # copy, which nothing works in. The work happens in
@@ -1063,6 +1114,18 @@ def _doctor_report(problems: list[str], *, network: bool = False) -> None:
             else:
                 click.echo(f"publish gate CI (project root): {ci_gate.detail}")
                 problems.append("publish gate does not run in CI")
+
+    # WHAT the gate scans for, which "active" above does not say (SCRUM-17).
+    with _doctor_check("publish gate rules", problems):
+        from rite_ai.config.parse import parse_config as _parse_gate_config
+        from rite_ai.gate.gate import ruleset
+
+        _gate_cfg = _parse_gate_config(rite_dir / "config.yaml")
+        if not isinstance(_gate_cfg, ParseErrorType):
+            line, problem = ruleset(root, _gate_cfg)
+            click.echo(line)
+            if problem:
+                problems.append(f"publish gate: {problem}")
 
     # The property every claim rests on, measured rather than assumed.
     with _doctor_check("file locking", problems):
@@ -3424,6 +3487,144 @@ def credential_remove(name: str, yes: bool) -> None:
         click.echo(f"failed to remove '{name}'", err=True)
         raise SystemExit(1)
     click.echo(f"removed credential '{name}'")
+
+
+def _namespaces_in_use() -> tuple[set[str], list[str]]:
+    """`(namespaces, unreadable)`: what every project rite knows on this
+    machine uses, and the projects whose config could not say."""
+    from rite_ai.config.parse import ParseError, parse_config
+    from rite_ai.dispatch import default_dispatch_dir, load_registry
+    from rite_ai.machine_projects import known_projects
+
+    roots = list(known_projects())
+    # And every project registered with the Dispatch hub: two records of
+    # "projects on this machine", and neither alone is complete.
+    roots += [
+        Path(e.path)
+        for e in load_registry(default_dispatch_dir()).projects.values()
+        if e.path and (Path(e.path) / ".rite" / "config.yaml").is_file()
+    ]
+    here = _find_project_root()
+    if (here / ".rite" / "config.yaml").is_file():
+        roots.append(here)
+    used: set[str] = set()
+    unreadable: list[str] = []
+    for root in dict.fromkeys(Path(r).resolve() for r in roots):
+        cfg = parse_config(root / ".rite" / "config.yaml")
+        if isinstance(cfg, ParseError):
+            unreadable.append(str(root))
+            continue
+        ns = getattr(getattr(cfg, "credentials", None), "namespace", "")
+        if ns:
+            used.add(ns)
+    return used, unreadable
+
+
+@credential.command("prune")
+@click.option(
+    "--namespace",
+    "namespaces",
+    multiple=True,
+    help="A namespace to remove, as `rite credential prune` lists it. Repeat "
+    "for several. Without it, nothing is removed.",
+)
+@click.option("--yes", is_flag=True, default=False, help="Skip the confirmation.")
+def credential_prune(namespaces: tuple[str, ...], yes: bool) -> None:
+    """List, or remove, credentials no project on this machine uses.
+
+    Test and scratch runs left whole namespaces of credentials in the real
+    store (SCRUM-18), and nothing removed them. Run with no options to see
+    which namespaces no project rite knows uses; then remove the ones you
+    recognise by naming each. rite only knows the projects it has seen on
+    this machine, so it never decides on its own that a namespace is stale.
+
+    Examples:
+      rite credential prune
+      rite credential prune --namespace rte2e-scratch-b999b140
+    """
+    import datetime
+
+    from rite_ai.credentials.file_store import CredentialStoreError
+    from rite_ai.credentials.store import (
+        RegistryUnreadable,
+        prune_candidates,
+        remove,
+    )
+
+    used, unreadable = _namespaces_in_use()
+    try:
+        candidates = {c.namespace: c for c in prune_candidates(used)}
+    except (RegistryUnreadable, CredentialStoreError) as e:
+        click.echo(f"cannot prune: the credentials cannot be read here: {e}", err=True)
+        raise SystemExit(1)
+    for root in unreadable:
+        click.echo(
+            f"⚠ {root} is a project rite knows, and its config cannot be read, "
+            "so the namespace it uses is unknown and may be among those below",
+            err=True,
+        )
+    if not namespaces:
+        if not candidates:
+            click.echo("nothing to prune: every stored namespace is in use")
+            return
+        click.echo("namespaces no project rite knows on this machine uses:")
+        for c in candidates.values():
+            when = (
+                datetime.datetime.fromtimestamp(c.last_set).strftime("%Y-%m-%d")
+                if c.last_set
+                else "unknown"
+            )
+            hint = (
+                f"; recorded for {c.project or 'a project'} at " + ", ".join(c.remotes)
+                if c.remotes
+                else ""
+            )
+            click.echo(
+                f"  {c.namespace}: {len(c.names)} credential(s), last set {when}{hint}"
+            )
+        # ⚠ No ready-to-paste command for all of them. Measured on the machine
+        # this was written on: real projects' namespaces were listed beside
+        # the test ones, because rite had not recorded those projects here.
+        # One paste would have deleted their credentials.
+        click.echo(
+            "\nNothing was removed. ⚠ A project rite has not recorded on this "
+            "machine is listed here too, so a namespace being listed does not "
+            "mean it is unused. Remove only the ones you recognise as test or "
+            "scratch runs, one by one:\n"
+            "  rite credential prune --namespace <namespace>"
+        )
+        return
+    refused = [n for n in namespaces if n not in candidates]
+    for n in refused:
+        why = (
+            "a project on this machine uses it"
+            if n in used
+            else "nothing is stored under it"
+        )
+        click.echo(f"refusing {n}: {why}", err=True)
+    if refused:
+        raise SystemExit(1)
+    chosen = [candidates[n] for n in dict.fromkeys(namespaces)]
+    total = sum(len(c.names) for c in chosen)
+    if not yes and not click.confirm(
+        f"remove {total} credential(s) under "
+        + ", ".join(c.namespace for c in chosen)
+        + "?",
+        default=False,
+    ):
+        click.echo("left unchanged")
+        return
+    failed = []
+    for c in chosen:
+        for name in c.names:
+            if remove(name) == "failed":
+                failed.append(name)
+    if failed:
+        click.echo(f"could not remove: {', '.join(failed)}", err=True)
+        raise SystemExit(1)
+    click.echo(
+        f"removed {total} credential(s) under " + ", ".join(c.namespace for c in chosen)
+    )
 
 
 @credential.command("rotate")

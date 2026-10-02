@@ -1150,6 +1150,14 @@ Paste the fingerprint, add ` # ` and the reason. The reason is required: an
 entry without one is an error, not a silently ignored line. Nothing creates
 that file for you — the first suppression does.
 
+gitleaks' own ways of hiding a finding are not honoured, because none of them
+carries a reason: an inline `gitleaks:allow` comment is ignored, a
+`.gitleaks.toml` at the repository root and the `GITLEAKS_CONFIG` variables
+are overridden (rite always names the rules: `.rite/gitleaks.toml` if you
+have one, gitleaks' defaults otherwise), and a `.gitleaksignore` at the root,
+which gitleaks applies by itself, makes the gate refuse to vouch for the scan
+until its entries are moved here. `rite doctor` names the rules in effect.
+
 Two things follow from a fingerprint naming the matched TEXT rather than a
 line number. Moving the code does not break the entry, but changing the
 matched string does, and the gate then reports the old entry as stale and
@@ -1195,7 +1203,11 @@ Three things live outside the project and survive all of the above:
   `~/.config/rite/credential-store.json` (from 0.6.0; before that, your OS
   keychain), with names scoped to the project that owns them —
   `<namespace>/jira_token` (see *Credentials* above). `rite credential list`
-  shows them and `rite credential remove <name>` deletes them. Copies an older rite
+  shows them and `rite credential remove <name>` deletes them. `rite credential
+  prune` lists namespaces no project rite knows on this machine uses (test and
+  scratch runs leave them), and removes one when you name it with
+  `--namespace`; it never removes on its own, because a project rite has not
+  seen on this machine looks unused too. Copies an older rite
   left in the keychain stay there after an import; remove them with your
   keychain's own tool.
 - **The tool** — `uv tool uninstall rite-ai`, or `pipx uninstall rite-ai`.
