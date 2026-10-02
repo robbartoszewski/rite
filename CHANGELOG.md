@@ -5,14 +5,24 @@
 ### A Manager runs until you stop it (SCRUM-20)
 
 **`rite start lead` no longer needs `--sessions` and `--minutes`.** With no
-bounds it keeps working until you stop it with Ctrl-C. Waiting on your answer,
-on routed work or on a quiet board no longer ends the run: it waits, spending
-nothing, and carries on when mail arrives or the board changes. Faults still
-end it (a deadlocked or unreadable board, a verdict rite does not recognise).
+bounds it keeps working until you stop it with Ctrl-C. What bounds it is your
+schedule: it runs one session at a time, and its Workers only up to the
+current window's count. Waiting on your answer, on routed work, on a quiet
+board or through a closed window does not end the run: it waits, spending
+nothing, and carries on when mail arrives, the board changes or the window
+opens (and says when that is). Faults still end it (a deadlocked or unreadable
+board, a verdict rite does not recognise).
 
-⚠ **Not yet built:** a closed schedule window still ends a perpetual run, and
-the per-cycle limit on starting sessions does not yet hold back the rate. How
-the schedule bounds a perpetual run is being decided.
+**A Worker asked for when no slot is free is queued, not dropped.** Before, it
+was refused and forgotten, and the Manager was told not to wait for it. Now
+it waits for a slot and starts when one frees, and the Manager is told once.
+This holds for bounded runs too. And the slot count is this project's own
+Workers: other projects' sandboxes, and leftover test sandboxes, no longer
+use up its slots (SCRUM-36).
+
+⚠ **Not yet decided:** a Manager whose every session only writes a reply
+counts as working, so a run without bounds starts its next session straight
+away. Whether such a session should count as idle is being decided.
 
 Give both to bound the whole run as before. One without the other is still
 refused: they catch different runaways and neither suffices alone, so rite will
@@ -21,11 +31,10 @@ not pick the number you left out.
 **Ctrl-C is the stop that records why**; `rite manager stop` still kills the
 session, which is recorded as "died" rather than "stopped by the operator".
 
-**A run that stops making progress stops.** Three cycles in a row that start no
-session end the run with a message saying it was spinning rather than waiting,
-and that this is a defect in rite rather than something to wait out. Without
-that, a perpetual run with a broken counter is silent, cheap and
-indistinguishable from one that is working.
+**A run that spins stops.** If the supervisor goes round three times without
+starting a session or waiting for anything, the run ends with a message saying
+it was spinning rather than waiting, and that this is a defect in rite.
+Waiting, however long, is never counted.
 
 ## 0.7.0a6 (2026-10-02) — alpha: a checkpoint of what is on main
 

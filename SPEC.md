@@ -5857,14 +5857,13 @@ separately configured stop condition is a second definition of "done" that
 can disagree with the loop's, and the first time they disagree there is no
 way to say which is right.
 
-#### 9.14.5. The session ceiling bounds every cycle
+#### 9.14.5. A run is bounded by its ceilings, or by the schedule
 
-Every cycle a `rite start <provider>` invocation runs is **bounded**, and the
-bound is never a default that means "unlimited". What changed in 0.24.80
-(D-115) is the SCOPE: an invocation given both bounds is bounded as a whole by
-them, and an invocation given NEITHER runs until the operator stops it, with
-the same two ceilings applied per cycle. Reaching one then ends the CYCLE, and
-the Manager waits and continues.
+A `rite start <provider>` invocation given both bounds is bounded as a whole by
+them, and neither has a default that means "unlimited". What changed in
+0.24.80 (D-115): an invocation given NEITHER runs until the operator stops it,
+and what bounds it is CONCURRENCY, not a count or a rate: one Manager session
+at a time, and Workers only up to the schedule window's count (below).
 
 ⚠ **One bound without the other is still refused.** They are not
 interchangeable (D-82 below), and a half-bounded run that silently became
@@ -5973,42 +5972,51 @@ silently choosing a number the user did not choose is how `rite pool fill
 ##### A run with no bound runs until stopped (D-115)
 
 `rite start <manager>` with no flags runs **until the operator stops it**
-(Robert, 2026-10-02). Both bounds above still apply, PER CYCLE:
-`PERPETUAL_SESSIONS_PER_CYCLE` sessions that do work, over
-`PERPETUAL_CYCLE_SECONDS`. Reaching either ends the cycle, says so, waits, and
-begins the next — the run's history is kept across cycles, because that is what
-the lifecycle record (§9.14.12) and the caller read; what resets is where the
-per-cycle counting STARTS.
+(Robert, 2026-10-02).
+
+**What bounds it is concurrency, never a rate** (Robert, 2026-10-02). The
+Manager runs one session at a time, by construction. Its Workers run only up
+to the smaller of `sandbox.max_concurrent_workers` and the current schedule
+window's `workers` (SCRUM-28, enforced where a Worker starts). There is no
+per-hour or per-cycle session number: the salvaged first version had one (20
+sessions per cycle, a fresh 20 after one poll), and it bounded nothing
+(measured on a fake engine: 357 working sessions per virtual hour). It is gone.
+
+**A full slot waits; a request is never discarded.** A Worker asked for when
+no slot is free is QUEUED, for bounded runs too: `start_worker` marks the
+refusal `full`, `rite sandbox start` exits `EXIT_NO_SLOT` (75), the broker
+returns `NO_SLOT`, and the supervisor puts the request back, tells the
+Manager once, and asks again when a slot frees (the waits wake for it, and the
+start happens at the top of the loop, never inside a wait). Every retry is
+decided afresh by the broker, so a queued request is trusted no more than a
+new one. The broker's capacity count is this project's sandboxes, not the
+machine's (SCRUM-36).
 
 **A perpetual run waits where a bounded one would end.** A Manager waiting
 on the User (`waiting-on-user`), on routed work, on a quiet board (`idle`), or
 after a session that changed nothing (F22) waits with no deadline, spending
-nothing, and wakes on mail, a board change or a project change. Faults still
-end it: `deadlocked`, `unknown`, an unrecognised verdict, and the spin gate
-below.
+nothing, and wakes on mail, a board change, a project change or a freed Worker
+slot. **A closed schedule window waits too**: the person saying "not now", not
+"stop". The wait names when the window next opens, and the run carries on when
+it does. Faults still end the run: `deadlocked`, `unknown`, an unrecognised
+verdict, and the spin gate below.
 
-⚠ **PENDING (Robert, 2026-10-02): what bounds STARTING sessions, and the
-schedule's closed window.** Not built. Today the per-cycle ceiling ends a cycle
-and the next begins after one poll, so it does not limit the rate (measured
-on a fake engine: 357 working sessions per virtual hour), and a `closed`
-window still ENDS a perpetual run. The proposed shape makes the schedule the
-spend lever, with no per-hour number of its own: start Workers up to the
-window's cap, then wait for a slot or a board or schedule change; on `closed`,
-wait until the window next opens.
+🔴 **The spin gate, and it is what makes "forever" shippable.** Every pass of
+the supervisor's loop either starts a session or waits. A pass that does
+neither has made no progress and spent no time, and a loop of them is a SPIN:
+cheap, silent, and indistinguishable from working. After
+`SPIN_PASSES_BEFORE_STOPPING` (3) such passes in a row the run stops and says
+it was spinning, and that this is a defect in rite. Waiting is never counted,
+however long or however often it wakes: a night of a board that keeps changing
+while nothing can start is working as meant.
 
-🔴 **The relaunch gate, and it is what makes "forever" shippable.** A cycle
-that begins the next without having started a session has made no progress, and
-a loop that does that without limit is a SPIN: cheap, silent, and
-indistinguishable from working. After `EMPTY_CYCLES_BEFORE_STOPPING` such
-cycles in a row the run stops and says it was spinning rather than waiting, and
-that this is a defect in rite rather than a state to wait out. The count is of
-CONSECUTIVE empty cycles — counted cumulatively it would end every long run
-after three quiet patches, which is the bug and not the guard. ⚠ Found by
-mutation: breaking the per-cycle counter's reset turned the loop into exactly
-this, and the test HUNG instead of failing, which is the worst way for a defect
-to present. For the same reason the gate's predicate asks only whether the
-session list GREW since the cycle began, never going through the per-cycle
-slice it is there to catch.
+⚠ **PENDING (Robert, 2026-10-02): a session that only replies.** A session is
+idle (held by the no-progress guard) only when it changed nothing rite can see.
+A Manager whose every session only writes a reply ("still waiting…") therefore
+counts as productive, and a perpetual run starts the next one at once: back to
+back, one at a time, without bound. Concurrency does not bound this. Whether a
+reply-only session counts as idle is being decided; the answer belongs in
+`supervise._session_was_idle` and only there.
 
 ⚠ **Ctrl-C is the off switch, and the only stop that records why.** It raises
 through the supervisor's `finally`, so the lifecycle record says the operator
@@ -8301,7 +8309,7 @@ happened once already and left no trace until this review found it.
 | D-112 | Should agents write to the board under their own identity? | **rite builds no identity management** | Robert, TRQ12: "Can't the User control it by choosing if they give rite their token or create a separate account for them?" rite works under either choice, says which is in use, and enforces the guardrail where the choice allows it. The same principle covers commit authorship. |
 | D-113 | May an executor Manager do routed work itself? | **Only a chore or a trivial ticket, only REFINED, only on a ticket-named branch through a PR** | Robert, Q4: "Yes, close the bypass. However, instruct that it's meant for chores and trivial tickets. Any serious work should be passed to workers." Instructed (TR3); enforced only once PB1's publish step can refuse (TR10). |
 | D-114 | One status channel, or one per project? | **One shared channel for all projects (`#rite-status` by default), every line naming its project** | Robert, 2026-09-29, chose shared over per-project. He runs several projects and wants one place to see what is running; lifecycle lines are reading material, not action. A line that does not name its project is unattributable once two projects post there, so every post names it (a test pins every post, not each line). D-101 means an app per project, so each project's app is invited to the one channel. §9.16.2 (RS1). |
-| D-115 | Must `rite start <manager>` carry bounds at all? | **No — with NEITHER bound it runs until the operator stops it, and both bounds then apply PER CYCLE** | Robert, 2026-10-02: a Manager should keep working without being re-started every ninety minutes. D-68, D-69 and D-82 are rescoped rather than repealed: the count and the clock still bound a runaway, now per cycle, and reaching one ends the cycle rather than the run. ONE bound without the other is still refused, because a half-bounded run silently becoming perpetual is the surprise that refusal prevents. What bounds such a run is those two per-cycle ceilings and the schedule, and nothing else is claimed. The run also stops after `EMPTY_CYCLES_BEFORE_STOPPING` cycles in a row that start nothing, because a spin is otherwise indistinguishable from working. §9.14.5. |
+| D-115 | Must `rite start <manager>` carry bounds at all? | **No. With NEITHER bound it runs until the operator stops it, bounded by concurrency: one Manager session at a time, and Workers up to the schedule window's count** | Robert, 2026-10-02: a Manager should keep working without being re-started every ninety minutes, and the schedule is the spend lever, not a session budget. Both bounds together still bound a run as before (D-68, D-69, D-82); ONE alone is refused, because a half-bounded run silently becoming perpetual is the surprise that refusal prevents. In a perpetual run every wait has no deadline, a closed window waits until it opens, a Worker request with no free slot is queued rather than discarded (bounded runs too), and the run stops on faults and on the spin gate. PENDING: whether a reply-only session counts as idle. §9.14.5. |
 
 ---
 
@@ -8311,7 +8319,7 @@ Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
 
-**Changes in 0.24.80 — a Manager with no bound runs until you stop it (SCRUM-20, perpetual).** §9.14.5 is rescoped and gains *A run with no bound runs until stopped*; new decision D-115. Robert, 2026-10-02: vanilla `rite start lead` runs forever, so the bounds that were mandatory (D-68, D-69, D-82) become optional — and are rescoped rather than repealed, because they are what bounds a runaway. Given both, a run is bounded as before; given neither, `_perpetual` is true and the ceiling and the window bound the CYCLE: reaching one says so, waits and begins the next (`PERPETUAL_SESSIONS_PER_CYCLE` 20, `PERPETUAL_CYCLE_SECONDS` one hour, `_begin_a_new_cycle`, `_wait_a_cycle_out` through the `_sleep` seam a virtual-clock test patches). ⚠ `cycles` is NOT reset — only `cycle_from`, where per-cycle counting starts — because the lifecycle record 0.24.78's work just made unconditional reads it. ONE bound without the other is still refused, with the reason and both ways out. What bounds such a run is those two per-cycle ceilings and the schedule, and nothing else is claimed. ⚠ **Ctrl-C is the graceful stop** — it raises through the `finally`, so the record says the operator stopped it — while `rite manager stop` still kills the tmux session and is recorded as DIED; a cooperative stop marker is its own ticket, not faked here. 🔴 **The relaunch gate is what makes forever shippable:** after `EMPTY_CYCLES_BEFORE_STOPPING` (3) cycles in a row that start no session, the run stops and says it was spinning rather than waiting, and that this is a defect in rite. Found by mutation — returning the whole run from `this_cycle()` left the per-cycle count permanently at its ceiling, and the test HUNG rather than failing. Two consequences kept: the gate's predicate asks only whether the session list GREW since the cycle began, never through the slice it exists to catch, and the count is of CONSECUTIVE empty cycles, since counted cumulatively it would end every long run after three quiet patches. `board_context.refusal` no longer formats `{None:g}`, which crashed the board-changed refusal on exactly this path. Tests: `tests/test_a_manager_with_no_bound_runs_until_stopped.py`, whose fake clock RAISES after 200 waits so a test of an unbounded loop cannot hang in CI, over which bounds are perpetual, the ceiling and the window ending the cycle with a bounded control, the history kept across cycles, the spin gate firing, waiting its full count first, and clearing on a productive cycle, and a cycle ended by the ceiling re-arming the window; `test_start_a_manager_cli.py`'s `TestNeitherBoundHasADefault` is rewritten to `TestBothBoundsOrNeither` (no bound starts a perpetual run and says what bounds it instead; one alone is refused both ways). Seven mutations each go red — two only after a test was added, and one of those two survived its first test because the hour-long default window hid a deadline that was never re-armed.
+**Changes in 0.24.80 — a Manager with no bound runs until you stop it (SCRUM-20, perpetual; SCRUM-36).** §9.14.5 is rewritten and gains *A run with no bound runs until stopped*; new decision D-115. Robert, 2026-10-02: vanilla `rite start lead` runs until Ctrl-C, and what bounds it is concurrency, not a rate: one Manager session at a time, and Workers up to the schedule window's count. The bounds that were mandatory (D-68, D-69, D-82) become optional: both together bound a run as before, one alone is refused. In a perpetual run: every wait has no deadline (`wait_deadline`), so waiting on the User, on a route, on a quiet board (`_idle_board_wake`) or after an idle session no longer ends it; a `closed` window waits (`_closed_wake`, `_closed_line` naming `next_open`); and the spin gate stops a loop whose passes neither start a session nor wait (`SPIN_PASSES_BEFORE_STOPPING`, 3). The salvaged per-cycle ceiling (20 sessions and an hour per cycle, a new cycle after one poll) bounded nothing, measured at 357 working sessions per virtual hour, and is removed. Queue-not-discard, for all runs: `SandboxResult.full`, `EXIT_NO_SLOT` (75) from `rite sandbox start`, `broker.NO_SLOT`, and `_honour_worker_requests` putting the request back, telling the Manager once, and retrying at the top of the loop when a wait wakes for a freed slot (`_with_a_freed_slot`, `broker.slot_free`); each retry is decided afresh. SCRUM-36: the broker's capacity count is `count_active_sandboxes(root, …)`, this project's, not `list_rite_sandboxes()`, the machine's. ⚠ **Ctrl-C is the graceful stop**; `rite manager stop` still kills the session and is recorded as DIED. PENDING (Robert): whether a reply-only session counts as idle (`_session_was_idle`); until then back-to-back reply-only sessions are unbounded. Tests: `test_a_manager_with_no_bound_runs_until_stopped.py`, `test_a_full_slot_queues_the_worker.py`, `test_the_broker_counts_this_projects_workers.py`.
 
 **Changes in 0.24.79 — `--while` leaves the command line, and two tests stop measuring the machine (SCRUM-31, SCRUM-32, SCRUM-33).** §9.16's not-covered list loses `--while`. **SCRUM-33, security-shaped:** `rite ask --defer --while "<…>"` was free text in double quotes, the F14 shape `reply`/`ask`/`route` were moved off, and the check-in instructions taught it; a meanwhile names tickets other people wrote. `--while -` now reads stdin's first line (`stdin_text.split_first_line`), anything else given to `--while` is refused before stdin is read or anything queued, and the instructions and guide teach the one heredoc. `test_no_instruction_teaches_text_in_double_quotes` did not scan the check-in instructions, which is how this survived it; it does now. **SCRUM-31:** the blast-radius soak failed when fewer than a quarter of 200+ claim attempts were granted. Investigated rather than floor-skipped: with no fleet layer a refusal is decided on a fresh read under the lock, so every refusal is a claim really held, and the ratio is a function of hold time against the 4ms bursts — measured on the healthy ledger 51% at 0ms, 25.1% at 8ms, 19.6% at 12ms, with nothing lost and nothing held twice; the macOS runner's red was 20.1%, on the soak's first run there (#177 put it on that runner). What the ratio stood in for is a LOST RELEASE, which leaves a zombie claim; with the pre-fix defect (`flock` on `claims.json`) reinstated, zombie claims followed in 9 of 9 runs and lost grants in 3 of 9. So the soak now asserts directly that nothing is still claimed once every worker has released, before the small-sample skip, and the ratio is reported. **SCRUM-32:** `test_it_cannot_rewrite_the_rite_it_runs` touched the real package, which succeeds through the deliberate `/tmp` grant when the checkout is under `/tmp`; it now probes the rule itself, on a decoy given to the same `_running_rite` grant outside every writable one (readable as a positive control, not writable as the property), and probes the real package wherever only that rule can answer. Each change's control goes red on the assertion that names it; for SCRUM-31 the zombie check alone caught 2 of 6 broken-lock runs, which would otherwise have skipped.
 

@@ -717,11 +717,12 @@ rite start helper
 
 **With no bounds, a Manager runs until you stop it** — Ctrl-C in its terminal,
 which is also the only stop that records why. Waiting on your answer, on
-routed work or on a quiet board does not end it: it waits, spending nothing,
-and carries on when mail arrives or the board changes. ⚠ Not yet built: a
-closed schedule window still ends the run, and the per-cycle limit on starting
-sessions is not yet the bound it is meant to be. To bound the whole run
-instead, give BOTH bounds:
+routed work, a quiet board or a closed schedule window does not end it: it
+waits, spending nothing, and carries on when mail arrives, the board changes
+or the window opens. What bounds it is your schedule: one session at a time,
+and Workers only up to the window's count; a Worker asked for when no slot is
+free waits for one rather than being dropped. To bound the whole run instead,
+give BOTH bounds:
 
 ```bash
 rite start lead --sessions 3 --minutes 90

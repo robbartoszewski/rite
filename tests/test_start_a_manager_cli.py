@@ -118,7 +118,7 @@ class TestBothBoundsOrNeither:
     Measured: sessions that end instantly hit the COUNT with the clock
     untouched; sessions of realistic length hit the CLOCK after three with the
     count untouched. Neither suffices alone — so both still apply to a
-    perpetual run, PER CYCLE, and ONE given without the other is still refused.
+    bounded run, and ONE given without the other is still refused.
     A half-bounded run silently becoming perpetual is the surprise that refusal
     exists to avoid."""
 
@@ -134,14 +134,15 @@ class TestBothBoundsOrNeither:
         self, project, supervised
     ):
         """⚠ Said, not implied: someone starting a run with no end needs the
-        off switch on the line that starts it. And it must not claim a bound
-        that does not hold: the per-cycle ceiling does not yet limit the rate
-        (PENDING, `supervise._wait_a_cycle_out`), so the line names none. When
-        the schedule-based bound is built, this test changes with it."""
+        off switch, and what does bound it, on the line that starts it (D-115:
+        one session at a time, Workers up to the schedule). And no per-cycle
+        ceiling, which is gone and bounded nothing."""
         result = CliRunner().invoke(cli, ["start", "planner"])
 
         assert "until you stop it" in result.output
         assert "Ctrl-C" in result.output
+        assert "one session at a time" in result.output
+        assert "schedule" in result.output
         assert "does not end it" in result.output
         assert "per cycle" not in result.output.lower()
 

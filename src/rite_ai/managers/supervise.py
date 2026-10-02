@@ -451,6 +451,33 @@ def _say_if_the_sandbox_refused(root: Path, manager: str, pane: str, say) -> Non
         say(confinement.why_it_was_refused(root, manager))
 
 
+_QUEUED_TOLD: dict[tuple[str, str], set[str]] = {}
+"""Requests already told "queued", per (project, Manager), for this process."""
+
+
+def _with_a_freed_slot(root: Path, manager: str, wake, clock):
+    """`wake`, plus: a request is queued and a Worker slot has freed. Checked
+    at the board's cadence, because counting sandboxes asks yoloAI. The start
+    itself happens at the top of the loop, never inside the wait."""
+    from rite_ai.managers import broker
+
+    marks = {"at": clock()}
+
+    def combined() -> str:
+        said = wake() if callable(wake) else ""
+        if said:
+            return said
+        now = clock()
+        if now - marks["at"] >= BOARD_RECHECK_SECONDS:
+            marks["at"] = now
+            # Looked up at each check, not bound when the wait began.
+            if broker.queued(root, manager) and broker.slot_free(root):
+                return "a Worker slot freed for a queued request"
+        return ""
+
+    return combined
+
+
 def _honour_worker_requests(root: Path, manager: str, broker, say) -> None:
     """Start the Workers this cycle asked for, or say why not.
 
@@ -507,8 +534,36 @@ def _honour_worker_requests(root: Path, manager: str, broker, say) -> None:
             "not queued. Do not wait for them; say so to the User."
         )
         return
-    for _, raw in pending:
+    from rite_ai.managers.broker import NO_SLOT, requeue
+
+    told = _QUEUED_TOLD.setdefault((str(root), manager), set())
+    for path, raw in pending:
         ok, message = broker(raw)
+        if ok is NO_SLOT:
+            # 🔴 Queued, not dropped: a discarded request is a lost
+            # instruction. It goes back where it was and is asked for again
+            # when a slot frees (the waits wake for it), decided afresh each
+            # time. Told once, so a Manager does not ask twice.
+            try:
+                requeue(path, raw)
+            except OSError as e:
+                say(f"a Worker request could not be queued, so it is lost: {e}")
+                tell(
+                    f"NOT started, and NOT queued: no Worker slot was free "
+                    f"({message}), and rite could not keep the request ({e}). "
+                    "Ask again."
+                )
+                continue
+            say(f"queued: no Worker slot free ({message})")
+            if raw not in told:
+                told.add(raw)
+                tell(
+                    f"Queued: no Worker slot is free right now ({message}). "
+                    "rite starts it when one frees, and tells you then. Do not "
+                    "ask again."
+                )
+            continue
+        told.discard(raw)
         say(("started: " if ok else "") + message)
         tell(
             ("Started: " if ok else "NOT started: ")
@@ -983,84 +1038,108 @@ def _idle(cycles: list[Cycle]) -> int:
     return sum(1 for c in cycles if c.idle)
 
 
-PERPETUAL_SESSIONS_PER_CYCLE = 20
-"""The per-cycle session ceiling a perpetual run uses (SCRUM-20, perpetual).
+SPIN_PASSES_BEFORE_STOPPING = 3
+"""How many passes of the supervisor loop in a row may neither start a
+session nor wait, before a perpetual run stops (SCRUM-20).
 
-⚠ **A GUARDRAIL, NOT A STOP.** `rite start lead` with no bounds runs until the
-operator ends it, so this number does not end the run — reaching it ends the
-CYCLE, and the next one begins when the schedule and the wait allow. It exists
-so a runaway inside one cycle is bounded, not so the run is.
-"""
-
-EMPTY_CYCLES_BEFORE_STOPPING = 3
-"""How many cycles in a row may start NO session before a perpetual run stops.
-
-🔴 **The relaunch gate, and it is what makes "forever" safe to ship.** A cycle
-that begins another cycle without starting anything has made no progress, and a
-run that does that without limit is a spin: cheap, silent, and indistinguishable
-from working. Found by mutation — breaking the per-cycle counter's reset turned
-the loop into exactly that, and the test HUNG instead of failing, which is the
-worst way for a defect to present.
-
-So a perpetual run stops rather than spins, and says which it was."""
-
-PERPETUAL_CYCLE_SECONDS = 60.0 * 60.0
-"""And the per-cycle window, for the reason D-82 gives: the count and the clock
-catch different runaways and neither suffices alone. Reaching it ends the cycle,
-not the run."""
+🔴 **The relaunch gate, and it is what makes "forever" safe to ship.** Every
+pass of the loop either starts a session or waits for something; a pass that
+does neither has made no progress and spent no time, and a loop of them is a
+SPIN: cheap, silent, and indistinguishable from working. So a perpetual run
+stops rather than spins, and says which it was. Waiting is not counted, however
+long: a Manager waiting a night through a closed window is working as meant."""
 
 
-def _begin_a_new_cycle(why: str, cycles: list, clock, say) -> tuple[float, int]:
-    """End the current cycle and start the next: say why, and return the new
-    window's start and the index its counting begins at (SCRUM-20, perpetual).
-
-    ⚠ **The history is NOT discarded.** `cycles` is what the lifecycle record
-    and the caller read, so what resets is where the per-cycle ceilings START
-    COUNTING (`cycles[cycle_from:]`), never the list. A reset that dropped the
-    history would leave a perpetual run unable to say what it had done — which
-    is the thing SCRUM-20 just fixed.
-    """
-    say(
-        f"cycle ended: {why}. This run has no bound from you, so it waits for "
-        "the next cycle and continues — Ctrl-C ends it."
-    )
-    return clock(), len(cycles)
-
-
-def _spinning(empty_cycles: int, cycles: list) -> SuperviseResult | None:
-    """A perpetual run that has begun `EMPTY_CYCLES_BEFORE_STOPPING` cycles in a
-    row without starting one session is spinning, not waiting. Stop and say so.
-
-    See `EMPTY_CYCLES_BEFORE_STOPPING`: this exists because the alternative
-    presents as a hang.
-    """
-    if empty_cycles < EMPTY_CYCLES_BEFORE_STOPPING:
+def _spinning(passes: int, cycles: list) -> SuperviseResult | None:
+    """A perpetual run whose last `SPIN_PASSES_BEFORE_STOPPING` passes neither
+    started a session nor waited is spinning. Stop and say so."""
+    if passes < SPIN_PASSES_BEFORE_STOPPING:
         return None
     return SuperviseResult(
         True,
-        f"stopped: {empty_cycles} cycles in a row began without starting a "
-        "session, so this run was spinning rather than waiting. That is a "
+        f"stopped: {passes} passes in a row neither started a session nor "
+        "waited, so this run was spinning rather than waiting. That is a "
         "defect in rite, not a state to wait out — `rite status` says what "
         "the Manager and its Workers were doing.",
         cycles,
     )
 
 
-def _wait_a_cycle_out(poll: float, say) -> None:
-    """Pause between cycles of a perpetual run.
+def _queued_requests(root: Path, manager: str) -> bool:
+    from rite_ai.managers.broker import queued
 
-    🔴 **PENDING (Robert, 2026-10-02), and known to be wrong as it stands.**
-    One poll is not a wait: measured on a fake engine, a perpetual run whose
-    every session works started 357 sessions per virtual hour, so the
-    per-cycle ceiling bounds nothing. The proposed shape makes the schedule
-    the bound instead (start up to the window's Worker cap, then wait for a
-    slot or a board or schedule change). Not built until that is decided.
+    return queued(root, manager)
 
-    ⚠ **Through `_sleep`, the module seam a virtual-clock test patches.** A
-    direct `time.sleep` here would make every test of a perpetual run wait in
-    real time, and the suite would either be slow or stop covering this.
-    """
-    _sleep(poll)
+
+def _session_was_idle(changed: list[str]) -> bool:
+    """Whether a session that ended with `changed` (the footprint's changed
+    parts) counts as IDLE: held by the no-progress guard, and not counted
+    toward `--sessions`.
+
+    ⚠ **The seam for a decision that is PENDING (Robert, 2026-10-02).** Today
+    a session is idle only when it changed NOTHING rite can see. A Manager
+    whose every session only writes a reply ("still waiting…") therefore
+    counts as productive, and a perpetual run starts the next one at once:
+    back to back, one at a time, without bound. Whether a reply-only session
+    should count as idle is being decided; the answer belongs here and only
+    here."""
+    return not changed
+
+
+def _closed_wake(root: Path, verdict, clock):
+    """`wake` for a perpetual run's wait through a closed schedule window:
+    the verdict is no longer `closed` (the window opened, or a fault the loop
+    then stops on). Read at the board's cadence."""
+    marks = {"at": clock()}
+
+    def wake() -> str:
+        now = clock()
+        if now - marks["at"] >= BOARD_RECHECK_SECONDS:
+            marks["at"] = now
+            if verdict(root) != "closed":
+                return "the schedule window opened"
+        return ""
+
+    return wake
+
+
+def _next_open(root: Path) -> str:
+    """When the schedule next allows a Worker, as "Mon 09:00", or ""."""
+    try:
+        from rite_ai.config.parse import load_project
+        from rite_ai.schedule import current_moment, next_open
+
+        project = load_project(Path(root))
+        if isinstance(project, list):
+            return ""
+        schedule = project.config.schedule
+        return next_open(schedule, current_moment(schedule.timezone))
+    except Exception:  # noqa: BLE001 - a line of text, never a reason to stop
+        return ""
+
+
+def _closed_line(root: Path, manager: str, clock):
+    """`idle_line` for the closed-window wait."""
+    from rite_ai.managers.routing import STILL_WAITING_EVERY
+
+    said: dict[str, float | None] = {"at": None}
+
+    def line() -> str:
+        now = clock()
+        if said["at"] is not None and now - said["at"] < STILL_WAITING_EVERY:
+            return ""
+        mark = "" if said["at"] is None else "⚠ still: "
+        said["at"] = now
+        when = _next_open(root)
+        return (
+            f"{mark}{manager!r} is waiting, spending nothing: the schedule "
+            "allows no Workers now"
+            + (f", and next opens {when}" if when else "")
+            + ". It carries on when the window opens; mail still reaches it. "
+            "This run has no bound from you; Ctrl-C ends it."
+        )
+
+    return line
 
 
 def _perpetual(max_sessions: int | None, window_seconds: float | None) -> bool:
@@ -1371,22 +1450,15 @@ def _supervise(
     # ends the cycle and waits rather than returning. `perpetual` is resolved
     # once here so every later check reads one answer.
     perpetual = _perpetual(max_sessions, window_seconds)
-    if perpetual:
-        max_sessions = PERPETUAL_SESSIONS_PER_CYCLE
-        window_seconds = PERPETUAL_CYCLE_SECONDS
-    elif max_sessions is None or window_seconds is None:
-        # One bound given and not the other cannot happen through the CLI,
-        # which refuses it; a caller that does it gets the bound it asked for
-        # and a default for the other rather than an accidental forever.
-        max_sessions = (
-            PERPETUAL_SESSIONS_PER_CYCLE if max_sessions is None else max_sessions
-        )
-        window_seconds = (
-            PERPETUAL_CYCLE_SECONDS if window_seconds is None else window_seconds
+    if not perpetual and (max_sessions is None or window_seconds is None):
+        # The CLI refuses one bound without the other; a caller that passes
+        # it gets the same refusal, never a number chosen for it.
+        raise ValueError(
+            "supervise: give both max_sessions and window_seconds, or neither"
         )
 
     begin = clock()
-    deadline = begin + window_seconds if window_seconds > 0 else None
+    deadline = None if perpetual or not window_seconds > 0 else begin + window_seconds
     launch = starter if callable(starter) else _default_starter
     next_id = (
         resume_id_for if callable(resume_id_for) else _resume_id_source(engine, agent)
@@ -1551,36 +1623,35 @@ def _supervise(
     # against it too: mail is new INPUT, not progress, and a session handed a
     # message that then changes nothing is as idle as one handed none.
     last_basis = None
-    # SCRUM-20 (perpetual): where THIS cycle's counting starts. The per-cycle
-    # ceilings read `cycles[cycle_from:]`; `cycles` itself keeps the whole run,
-    # because that is what the lifecycle record and the caller read.
-    cycle_from = 0
-    cycle_began = begin
-    empty_cycles = 0
-
-    def this_cycle() -> list:
-        return cycles[cycle_from:]
 
     def wait_deadline():
-        """The deadline a WAIT honours. A perpetual run's waits have none: a
-        Manager waiting on an answer, a route or a quiet board spends nothing,
-        and the run ends only when the operator ends it (SCRUM-20). The
-        per-cycle `deadline` still bounds starting sessions; it is not a
-        reason to stop waiting."""
-        return None if perpetual else deadline
+        """The deadline a WAIT honours: the run's, which a perpetual run does
+        not have (SCRUM-20). A Manager waiting on an answer, a route, a quiet
+        board or a closed window spends nothing, and only the operator ends
+        such a run."""
+        return deadline
 
-    def note_cycle_end() -> int:
-        """0 when this cycle started a session, else one more empty cycle.
-
-        ⚠ **Deliberately NOT routed through `this_cycle()`.** It asks the one
-        question that cannot be wrong if the per-cycle slice is: did the list
-        grow since this cycle began? Mutating `this_cycle()` to return the
-        whole run made the slice never-empty, which silenced a counter built
-        on it and turned the loop into the hang `_spinning` exists to stop.
-        """
-        return 0 if len(cycles) > cycle_from else empty_cycles + 1
+    # 🔴 SCRUM-20 (perpetual): the spin guard. A pass of this loop either
+    # starts a session or waits; one that does neither, repeated, is a spin
+    # (cheap, silent, and indistinguishable from working). It is counted
+    # here, by those two facts and nothing else, so it cannot be silenced by
+    # a counter it is meant to check.
+    spin = {"passes": 0, "sessions": 0, "waited": False}
 
     while True:
+        if perpetual:
+            if len(cycles) > spin["sessions"] or spin["waited"]:
+                spin["passes"] = 0
+            else:
+                spin["passes"] += 1
+            spin["sessions"], spin["waited"] = len(cycles), False
+            spun = _spinning(spin["passes"], cycles)
+            if spun is not None:
+                return spun
+        # A Worker queued for want of a slot is asked for again here, at a
+        # moment no session is running (the waits wake for a freed slot).
+        if broker is not None and _queued_requests(root, manager):
+            _honour_worker_requests(root, manager, broker, say)
         # ⚠ WHAT CAUSES THIS CYCLE. "" means the ordinary causes: the last
         # session ended cleanly and the board says continue. "mail" means a
         # wait below ended because mail is in the inbox (DF2), and then the
@@ -1589,34 +1660,14 @@ def _supervise(
         # BOTH bounds before starting. A ceiling checked afterwards reports
         # rather than bounds, and the window is what limits cost because the
         # count does not (§9.14.5).
-        stopped = _idle_allowance_spent(manager, max_sessions, this_cycle())
+        # A perpetual run has neither bound (SCRUM-20): what limits it is the
+        # schedule's Worker slots, one session at a time, and the waits.
+        stopped = (
+            None if perpetual else _idle_allowance_spent(manager, max_sessions, cycles)
+        )
         if stopped is not None:
-            if not perpetual:
-                return stopped
-            # Perpetual: the allowance bounds the CYCLE, not the run.
-            empty_cycles = note_cycle_end()
-            cycle_began, cycle_from = _begin_a_new_cycle(
-                "its idle allowance is spent", cycles, clock, say
-            )
-            deadline = cycle_began + window_seconds
-            spun = _spinning(empty_cycles, cycles)
-            if spun is not None:
-                return spun
-            _wait_a_cycle_out(poll, say)
-            continue
-        if _counted(this_cycle()) >= max_sessions:
-            if perpetual:
-                # The ceiling bounds the cycle, not the run (SCRUM-20).
-                empty_cycles = note_cycle_end()
-                cycle_began, cycle_from = _begin_a_new_cycle(
-                    f"{max_sessions} session(s) in it did work", cycles, clock, say
-                )
-                deadline = cycle_began + window_seconds
-                spun = _spinning(empty_cycles, cycles)
-                if spun is not None:
-                    return spun
-                _wait_a_cycle_out(poll, say)
-                continue
+            return stopped
+        if not perpetual and _counted(cycles) >= max_sessions:
             why = _reason_to_wait(root, manager, waiting, router, slack, say)
             if not why:
                 extra = _counted(cycles) - max_sessions
@@ -1651,6 +1702,7 @@ def _supervise(
             # writes during the wait (DIED, FINISHED WITHOUT A REPLY) earns
             # its own allowance. Checked before the wait, a death after a
             # reply and a correction was refused before its note existed.
+            spin["waited"] = True
             stopped = _wait_for_mail(
                 root,
                 manager,
@@ -1679,18 +1731,6 @@ def _supervise(
                 f"{waiting.cap(max_sessions)} under the mail-started cap)"
             )
         if deadline is not None and clock() >= deadline:
-            if perpetual:
-                # The window bounds the cycle, not the run (SCRUM-20).
-                empty_cycles = note_cycle_end()
-                cycle_began, cycle_from = _begin_a_new_cycle(
-                    f"its {int(window_seconds)}s window elapsed", cycles, clock, say
-                )
-                deadline = cycle_began + window_seconds
-                spun = _spinning(empty_cycles, cycles)
-                if spun is not None:
-                    return spun
-                _wait_a_cycle_out(poll, say)
-                continue
             return SuperviseResult(
                 True,
                 f"window elapsed after {int(clock() - begin)}s "
@@ -1738,6 +1778,7 @@ def _supervise(
                     # secondary for what it will be handed (Robert,
                     # 2026-09-27). Waiting spends no session, and the cycle
                     # after it is started by mail.
+                    spin["waited"] = True
                     stopped = _wait_for_mail(
                         root,
                         manager,
@@ -1761,6 +1802,7 @@ def _supervise(
                         f"{manager!r} waits on the User: "
                         f"{getattr(answer, 'detail', '') or 'refinement'}"
                     )
+                    spin["waited"] = True
                     stopped = _wait_for_mail(
                         root,
                         manager,
@@ -1773,7 +1815,9 @@ def _supervise(
                         poll,
                         cycles,
                         live,
-                        wake=_refinement_wake(root, manager, clock),
+                        wake=_with_a_freed_slot(
+                            root, manager, _refinement_wake(root, manager, clock), clock
+                        ),
                     )
                     if stopped is not None:
                         return stopped
@@ -1810,13 +1854,11 @@ def _supervise(
                             "Not retried: a session started again on the same "
                             "mail would repeat the one that just could not."
                         )
-                if not cause and perpetual and answer == "idle":
-                    # 🔴 SCRUM-20 (perpetual): a quiet board is not the end of
-                    # a run nobody bounded. Wait, spending nothing, until the
-                    # board lists something, mail arrives or the project
-                    # changes. What `stopped` holds here is not a fault (the
-                    # routed work was handled, or nothing was routed), so it
-                    # does not end the run either.
+                if not cause and perpetual and answer == "closed":
+                    # 🔴 SCRUM-20 (perpetual): a closed window is the person
+                    # saying "not now", not "stop". The run waits, spending
+                    # nothing, until the window opens, and says when that is.
+                    spin["waited"] = True
                     stopped = _wait_for_mail(
                         root,
                         manager,
@@ -1829,7 +1871,41 @@ def _supervise(
                         poll,
                         cycles,
                         live,
-                        wake=_idle_board_wake(root, manager, verdict, clock),
+                        wake=_closed_wake(root, verdict, clock),
+                        idle_line=_closed_line(root, manager, clock),
+                    )
+                    if stopped is not None:
+                        return stopped
+                    if mail_waiting(root, manager, INBOX):
+                        cause = "mail"
+                    else:
+                        continue
+                if not cause and perpetual and answer == "idle":
+                    # 🔴 SCRUM-20 (perpetual): a quiet board is not the end of
+                    # a run nobody bounded. Wait, spending nothing, until the
+                    # board lists something, mail arrives or the project
+                    # changes. What `stopped` holds here is not a fault (the
+                    # routed work was handled, or nothing was routed), so it
+                    # does not end the run either.
+                    spin["waited"] = True
+                    stopped = _wait_for_mail(
+                        root,
+                        manager,
+                        None,
+                        router,
+                        slack,
+                        say,
+                        clock,
+                        None,
+                        poll,
+                        cycles,
+                        live,
+                        wake=_with_a_freed_slot(
+                            root,
+                            manager,
+                            _idle_board_wake(root, manager, verdict, clock),
+                            clock,
+                        ),
                         idle_line=_quiet_board_line(manager, clock),
                     )
                     if stopped is not None:
@@ -1873,6 +1949,7 @@ def _supervise(
                 # its own reasons to end the wait, so `waiting` goes in only
                 # when there is one (see `_wait_for_mail`).
                 why = _reason_to_wait(root, manager, waiting, router, slack, say)
+                spin["waited"] = True
                 stopped = _wait_for_mail(
                     root,
                     manager,
@@ -1885,7 +1962,12 @@ def _supervise(
                     poll,
                     cycles,
                     live,
-                    wake=_stalled_wake(root, manager, verdict, stalled, clock),
+                    wake=_with_a_freed_slot(
+                        root,
+                        manager,
+                        _stalled_wake(root, manager, verdict, stalled, clock),
+                        clock,
+                    ),
                     idle_line=_idle_line(manager, stalled, clock),
                 )
                 if stopped is not None:
@@ -2246,7 +2328,7 @@ def _supervise(
             stalled = None
             if before is not None:
                 after = footprint(root, manager)
-                if not after.differs_from(before):
+                if _session_was_idle(after.differs_from(before)):
                     stalled = _Stalled(cycle.number, cycle_basis, after)
                     # SCRUM-24: and the ceiling does not count it.
                     cycle.idle = True

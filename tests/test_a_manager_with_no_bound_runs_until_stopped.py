@@ -30,9 +30,8 @@ import rite_ai.managers.supervise as sup
 from rite_ai.cli.main import LoopAnswer
 from rite_ai.managers import mailbox
 from rite_ai.managers.supervise import (
-    EMPTY_CYCLES_BEFORE_STOPPING,
-    PERPETUAL_CYCLE_SECONDS,
-    PERPETUAL_SESSIONS_PER_CYCLE,
+    BOARD_RECHECK_SECONDS,
+    SPIN_PASSES_BEFORE_STOPPING,
     StartResult,
     _perpetual,
     _spinning,
@@ -153,11 +152,19 @@ class TestWhichRunsArePerpetual:
         loop would not treat it as forever either."""
         assert _perpetual(*pair) is False
 
+    @pytest.mark.parametrize("sessions, minutes", [(2, None), (None, 10)])
+    def test_a_caller_giving_one_bound_is_refused_not_defaulted(
+        self, world, sessions, minutes
+    ):
+        go, starts, _ = _run(world, sessions=sessions, minutes=minutes)
+        with pytest.raises(ValueError, match="both"):
+            go()
+        assert starts == []
 
-class TestTheCeilingEndsTheCycleNotTheRun:
+
+class TestABoundedRunIsUnchanged:
     def test_a_bounded_run_still_stops_on_its_ceiling(self, world):
-        """⚠ The control. If this changed, the bounds would have been removed
-        rather than rescoped."""
+        """⚠ The control: the bounds are opt-in now, not gone."""
         go, starts, _said = _run(world, sessions=2, minutes=60)
 
         result = go()
@@ -166,49 +173,25 @@ class TestTheCeilingEndsTheCycleNotTheRun:
         assert "ceiling reached" in result.reason
         assert len(starts) == 2
 
-    def test_a_perpetual_run_passes_its_per_cycle_ceiling_and_keeps_going(
-        self, world, monkeypatch
-    ):
-        """🔴 The property. With the per-cycle ceiling lowered to 2, a run that
-        used to stop at 2 sessions now starts a 3rd — in a new cycle."""
-        monkeypatch.setattr(sup, "PERPETUAL_SESSIONS_PER_CYCLE", 2)
-        go, starts, said = _run(world, sessions=None, minutes=None, stop_after=5)
+
+class TestAPerpetualRunHasNoSessionCeiling:
+    """🔴 The salvaged loop "bounded" a perpetual run with 20 sessions per
+    cycle, then waited one poll and began the next cycle with a fresh 20, so
+    it bounded nothing (measured: 357 working sessions a virtual hour). That
+    machinery is gone (Robert, 2026-10-02: the bound is concurrency, not a
+    rate). A perpetual run starts one session at a time, the schedule caps its
+    Workers, and the waits hold it when there is nothing to do."""
+
+    def test_a_working_run_passes_where_the_old_ceiling_was(self, world):
+        go, starts, said = _run(world, sessions=None, minutes=None, stop_after=25)
 
         result = go()
 
         assert "stopped by the operator" in result.reason
-        assert len(starts) >= 3, "it did not pass the per-cycle ceiling"
-        assert any("cycle ended" in s for s in said)
-        assert any("session(s) in it did work" in s for s in said)
+        assert len(starts) == 25
+        assert not any("cycle ended" in s for s in said)
 
-    def test_and_says_it_waits_and_continues(self, world, monkeypatch):
-        monkeypatch.setattr(sup, "PERPETUAL_SESSIONS_PER_CYCLE", 2)
-        go, _starts, said = _run(world, sessions=None, minutes=None, stop_after=4)
-
-        go()
-
-        assert any("no bound from you" in s and "Ctrl-C ends it" in s for s in said)
-
-    def test_the_window_also_ends_the_cycle_not_the_run(self, world, monkeypatch):
-        """The clock half of D-82, rescoped the same way."""
-        monkeypatch.setattr(sup, "PERPETUAL_CYCLE_SECONDS", 15.0)
-        monkeypatch.setattr(sup, "PERPETUAL_SESSIONS_PER_CYCLE", 99)
-        go, starts, said = _run(
-            world, sessions=None, minutes=None, stop_after=4, cycle_secs=10.0
-        )
-
-        go()
-
-        assert any("cycle ended" in s and "window elapsed" in s for s in said)
-        assert len(starts) >= 3, "the window ended the run instead of the cycle"
-
-
-class TestTheHistoryIsKeptAcrossCycles:
-    def test_the_record_still_holds_every_session(self, world, monkeypatch):
-        """⚠ The per-cycle counters reset; `cycles` must not. SCRUM-20's
-        lifecycle record reads it, so a reset that dropped the history would
-        undo the thing just fixed."""
-        monkeypatch.setattr(sup, "PERPETUAL_SESSIONS_PER_CYCLE", 2)
+    def test_the_record_holds_every_session(self, world):
         root = world["root"]
         go, starts, _said = _run(world, sessions=None, minutes=None, stop_after=5)
 
@@ -217,106 +200,52 @@ class TestTheHistoryIsKeptAcrossCycles:
         from rite_ai.managers.routing import supervisor_record
 
         rec = supervisor_record(root, OWNER)
-        # KeyboardInterrupt runs the `finally`, so the run recorded its end.
         assert rec.get("state") == "ended"
         assert rec.get("sessions_started", 0) >= len(starts) - 1
 
 
-class TestTheDefaultsAreStated:
-    def test_the_per_cycle_numbers_exist_and_are_sane(self):
-        assert PERPETUAL_SESSIONS_PER_CYCLE > 0
-        assert PERPETUAL_CYCLE_SECONDS > 0
+class TestTheSpinGuard:
+    """A pass of the loop either starts a session or waits. One that does
+    neither, repeated, is a spin, and the run stops and says so.
 
-
-class TestASpinningRunStopsRatherThanHanging:
-    """🔴 The relaunch gate. "Runs forever" is only shippable if a run that is
-    making no progress ENDS and says so — a perpetual loop that begins cycle
-    after cycle without starting a session is cheap, silent and looks exactly
-    like working.
-
-    ⚠ **Every assertion here came out of a mutation that HUNG.** Returning the
-    whole run from `this_cycle()` left the per-cycle count never below its
-    ceiling, so each iteration ended the cycle at once and the test never
-    finished. A defect that presents as a hang is the worst case for a suite,
-    so it gets its own stop.
+    ⚠ **Not reachable through a working loop**, and that is the point: with
+    the per-cycle rollover gone, no pass ends without a session or a wait. The
+    guard is for the next defect. So it is pinned here directly, and the loop's
+    counting of it is pinned by `test_a_waiting_run_is_never_counted_as_one`.
     """
 
-    def test_a_run_whose_cycles_start_nothing_stops(self, world, monkeypatch):
-        """A ceiling of 0 is reached before any session, so every cycle is
-        empty. Without the gate this test would not return."""
-        monkeypatch.setattr(sup, "PERPETUAL_SESSIONS_PER_CYCLE", 0)
-        go, starts, said = _run(world, sessions=None, minutes=None)
+    def test_it_stops_at_the_count(self):
+        assert _spinning(SPIN_PASSES_BEFORE_STOPPING - 1, []) is None
+        stopped = _spinning(SPIN_PASSES_BEFORE_STOPPING, ["a"])
+        assert stopped is not None
+        assert "spinning rather than waiting" in stopped.reason
+        assert "defect in rite" in stopped.reason
+        assert stopped.cycles == ["a"]
 
-        result = go()
+    def test_a_waiting_run_is_never_counted_as_one(self, world):
+        """Hours of waiting on a quiet board are not a spin: every pass
+        waited. `world` raises `RanForever` after 200 waits, which is the
+        expected end here; a spin verdict would end it sooner."""
+        root = world["root"]
 
-        assert starts == [], "a cycle that was supposed to start nothing did"
-        assert "spinning rather than waiting" in result.reason
-        assert "defect in rite" in result.reason
-        assert said, "it stopped without saying anything"
+        def starter(*a, **k):
+            raise AssertionError("a quiet board started a session")
 
-    def test_it_waits_that_many_cycles_before_giving_up(self, world, monkeypatch):
-        """Not on the first empty cycle: one is a wait, several in a row is a
-        spin. So the gate is counted, and this pins the count it uses."""
-        monkeypatch.setattr(sup, "PERPETUAL_SESSIONS_PER_CYCLE", 0)
-        go, _starts, said = _run(world, sessions=None, minutes=None)
-
-        go()
-
-        assert (
-            sum(1 for s in said if "cycle ended" in s) == EMPTY_CYCLES_BEFORE_STOPPING
-        )
-
-    def test_a_productive_cycle_clears_the_count(self, world, monkeypatch):
-        """🔴 **The half that keeps "forever" forever.** The gate counts
-        CONSECUTIVE empty cycles. Counted cumulatively it would stop every long
-        run after three quiet patches, which is the bug, not the guard."""
-        monkeypatch.setattr(sup, "PERPETUAL_SESSIONS_PER_CYCLE", 1)
-        go, starts, _said = _run(world, sessions=None, minutes=None, stop_after=8)
-
-        result = go()
-
-        assert len(starts) == 8, "it stopped before the operator did"
-        assert "spinning" not in result.reason
-        assert "stopped by the operator" in result.reason
-
-    def test_the_gate_itself_is_counted(self):
-        assert _spinning(EMPTY_CYCLES_BEFORE_STOPPING - 1, []) is None
-        assert _spinning(EMPTY_CYCLES_BEFORE_STOPPING, []) is not None
-
-    def test_the_gate_reports_the_history_it_stopped_on(self):
-        """It stops because of a defect, so what it returns has to be enough to
-        chase one: the sessions the run did start come back with it."""
-        result = _spinning(EMPTY_CYCLES_BEFORE_STOPPING, ["a", "b"])
-
-        assert result is not None
-        assert result.cycles == ["a", "b"]
-
-
-class TestEachCycleGetsItsOwnWholeWindow:
-    def test_a_cycle_ended_by_the_ceiling_re_arms_the_clock(self, world, monkeypatch):
-        """⚠ The window is PER CYCLE, so ending a cycle on the ceiling has to
-        move the deadline with it. Left where it was, the very next iteration
-        finds it already past and ends a second cycle — one that started
-        nothing — reporting "window elapsed" for a window that never ran out.
-        Mutation-found: the loop self-heals, so only the false line shows it.
-        """
-        monkeypatch.setattr(sup, "PERPETUAL_SESSIONS_PER_CYCLE", 2)
-        # ⚠ The window has to be SHORT enough that a deadline left behind is
-        # already past. With the hour-long default, every cycle finishes long
-        # before it and the defect is invisible — which is how it survived the
-        # first version of this test.
-        monkeypatch.setattr(sup, "PERPETUAL_CYCLE_SECONDS", 30.0)
-        go, starts, said = _run(
-            world, sessions=None, minutes=None, stop_after=6, cycle_secs=10.0
-        )
-
-        go()
-
-        assert len(starts) == 6
-        assert sum(1 for s in said if "session(s) in it did work" in s) >= 2
-        assert not [s for s in said if "window elapsed" in s], (
-            "a cycle ended on the ceiling, then blamed a window that had not elapsed"
-        )
+        with pytest.raises(RanForever):
+            supervise(
+                root,
+                OWNER,
+                engine="claude",
+                prompt="OPEN",
+                starter=starter,
+                verdict=lambda r: LoopAnswer.of(
+                    SimpleNamespace(verdict="idle", ready=[], blocked={})
+                ),
+                resume_id_for=lambda r, m, since=0.0: "sess-1",
+                note=[].append,
+                poll=0,
+                now=lambda: world["t"],
+            )
 
 
 # --- A perpetual run WAITS where a bounded one would end (SCRUM-20) ---------
@@ -427,6 +356,25 @@ class TestAPerpetualRunWaitsRatherThanEnding:
         assert result.reason.startswith("stopped by the operator"), result.reason
         assert len(starts) == 2
 
+    def test_a_closed_window_waits_and_says_when_it_opens(self, patient, monkeypatch):
+        monkeypatch.setattr(sup, "_next_open", lambda root: "Mon 09:00")
+        result, starts, said = _perpetual_run(patient, lambda: _answer("closed"))
+        assert result.reason.startswith("stopped by the operator"), result.reason
+        assert starts == []
+        assert any("next opens Mon 09:00" in s for s in said)
+
+    def test_the_window_opening_starts_a_session(self, patient):
+        board = {"now": _answer("closed")}
+
+        def opens():
+            if patient["t"] >= 3 * 3600 and board["now"] == "closed":
+                board["now"] = _answer("ready", ["KAN-6"])
+
+        patient["between"].append(opens)
+        result, starts, _ = _perpetual_run(patient, lambda: board["now"], useful=1)
+        assert result.reason.startswith("stopped by the operator"), result.reason
+        assert starts and starts[0] >= 3 * 3600
+
     @pytest.mark.parametrize("fault", ["deadlocked", "unknown"])
     def test_a_fault_still_ends_the_run(self, patient, fault):
         result, starts, _ = _perpetual_run(patient, lambda: _answer(fault))
@@ -455,3 +403,81 @@ class TestAPerpetualRunWaitsRatherThanEnding:
             window_seconds=600,
         )
         assert "nothing ready" in result.reason
+
+
+def test_a_queued_worker_starts_when_a_slot_frees_with_no_manager_session(
+    patient, monkeypatch
+):
+    """Queue-not-discard, end to end in a perpetual run: a request waits for a
+    slot, the quiet-board wait wakes when one frees, and the loop starts the
+    Worker at its top. The Worker does not wait for a Manager session: the
+    only sessions are the ones delivering rite's two notes ("Queued", then
+    "Started"), which is how every broker outcome reaches the Manager (DF13)."""
+    import json
+
+    from rite_ai.managers import broker as broker_mod
+    from rite_ai.managers.broker import NO_SLOT, requests_dir
+
+    sup._QUEUED_TOLD.clear()
+    root = patient["root"]
+    where = requests_dir(root, OWNER)
+    where.mkdir(parents=True)
+    (where / "1.json").write_text(json.dumps({"worker": "w1", "ticket": "RT-1"}))
+    asked: list[float] = []
+
+    def broker(raw):
+        asked.append(patient["t"])
+        if patient["t"] < 2 * 3600:
+            return NO_SLOT, "the schedule allows 1 Worker(s) right now"
+        return True, "started Worker 'w1' on ticket RT-1"
+
+    monkeypatch.setattr(broker_mod, "slot_free", lambda r: patient["t"] >= 2 * 3600)
+
+    sessions: list[str] = []
+
+    def starter(r, m, *, engine, resume_id, max_sessions, window_seconds, **kw):
+        sessions.append(kw.get("prompt") or "")
+        patient["t"] += 10.0
+        return StartResult(True, "ok", session=f"s{len(sessions)}", attach="a")
+
+    result = supervise(
+        root,
+        OWNER,
+        engine="claude",
+        prompt="OPEN",
+        starter=starter,
+        verdict=lambda r: _answer("idle"),
+        resume_id_for=lambda r, m, since=0.0: "sess-1",
+        note=[].append,
+        poll=0,
+        now=lambda: patient["t"],
+        broker=broker,
+    )
+    assert result.reason.startswith("stopped by the operator"), result.reason
+    assert asked and asked[0] < 2 * 3600, "it was not tried while the slot was full"
+    assert any(t >= 2 * 3600 for t in asked), "it was never retried"
+    assert not broker_mod.queued(root, OWNER), "it is still queued after starting"
+    started_at = next(t for t in asked if t >= 2 * 3600)
+    assert len(sessions) <= 2, f"{len(sessions)} Manager sessions for two notes"
+    assert all("Queued" in p or "Started" in p for p in sessions), sessions
+    assert started_at < 2 * 3600 + 2 * BOARD_RECHECK_SECONDS, (
+        "the Worker waited for something other than its slot"
+    )
+
+
+def test_waking_again_and_again_without_a_session_is_not_a_spin(patient):
+    """A night of a board that keeps changing while nothing can start: the
+    verdict flips between `idle` and `closed`, each flip wakes the wait, and
+    no session starts. Every pass waited, so the spin guard must not fire;
+    only the operator ends this run. (Mutation-found: with waits not marked,
+    the run stopped as "spinning" after three wakes.)"""
+    flips = {"n": 0}
+
+    def board():
+        flips["n"] += 1
+        return _answer("idle" if (flips["n"] // 2) % 2 else "closed")
+
+    result, starts, _ = _perpetual_run(patient, board)
+    assert result.reason.startswith("stopped by the operator"), result.reason
+    assert starts == []
+    assert flips["n"] > 3 * SPIN_PASSES_BEFORE_STOPPING

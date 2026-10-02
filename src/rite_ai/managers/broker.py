@@ -50,6 +50,13 @@ from pathlib import Path
 from rite_ai.names import name_problem
 
 REQUESTS_DIRNAME = "requests"
+
+NO_SLOT = None
+"""The third outcome of `for_project(...)(raw)`, beside True (started) and
+False (refused): the request is valid and no Worker slot is free right now.
+It is queued, not dropped (`supervise._honour_worker_requests`), because a
+discarded request is a lost instruction. Falsy, so a caller that only asks
+"did it start?" still reads it as not started."""
 ALLOWED_KEYS = frozenset({"worker", "ticket"})
 MAX_REQUEST_BYTES = 4096
 _TICKET_MAX = 64
@@ -70,6 +77,9 @@ class Decision:
     ok: bool
     reason: str = ""
     request: Request | None = None
+    full: bool = False
+    """Refused only because the project is at capacity: valid, and able to
+    start later unchanged."""
 
 
 def requests_dir(root: Path, manager: str) -> Path:
@@ -174,12 +184,13 @@ def decide(
     # bypasses the sandbox count is a request for more capacity than the
     # operator agreed to.
     if capacity and running >= capacity:
+        # Queued, not refused: the supervisor holds it and asks again when a
+        # slot frees, deciding afresh each time (so a queued request is never
+        # trusted more than a new one).
         return Decision(
             False,
-            f"{running} Worker(s) already running and this project allows "
-            f"{capacity}. Refused rather than queued — nothing here would "
-            "start it later, and a queued request that never runs is a "
-            "Worker that silently never existed.",
+            f"{running} Worker(s) already running and this project allows {capacity}",
+            full=True,
         )
     return Decision(True, request=Request(worker=worker, ticket=ticket))
 
@@ -207,8 +218,11 @@ def launch_argv(root: Path, request: Request) -> list[str]:
     ]
 
 
-def honour(root: Path, request: Request, timeout: int = 600) -> tuple[bool, str]:
-    """Run the launch on the host and say what happened."""
+def honour(root: Path, request: Request, timeout: int = 600) -> tuple[bool | None, str]:
+    """Run the launch on the host and say what happened: True, False, or
+    `NO_SLOT` when `rite sandbox start` refused only for want of a slot."""
+    from rite_ai.sandbox import EXIT_NO_SLOT
+
     try:
         done = subprocess.run(
             launch_argv(root, request),
@@ -224,8 +238,44 @@ def honour(root: Path, request: Request, timeout: int = 600) -> tuple[bool, str]
         return False, f"could not run `rite sandbox start`: {e}"
     if done.returncode != 0:
         tail = (done.stderr or done.stdout or "").strip().splitlines()
-        return False, tail[-1][:200] if tail else f"exit {done.returncode}"
+        said = tail[-1][:200] if tail else f"exit {done.returncode}"
+        return (NO_SLOT if done.returncode == EXIT_NO_SLOT else False), said
     return True, f"started Worker {request.worker!r} on ticket {request.ticket}"
+
+
+def requeue(path: Path, raw: str) -> None:
+    """Put a request back where `take_requests` found it, under the same
+    name, so it keeps its place in the queue. Raises OSError, which the
+    caller says: a request that could not be put back is a lost one."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(raw, encoding="utf-8")
+
+
+def queued(root: Path, manager: str) -> bool:
+    """Whether any request is waiting, without taking it."""
+    where = requests_dir(root, manager)
+    return where.is_dir() and any(where.glob("*.json"))
+
+
+def slot_free(root: Path) -> bool:
+    """Whether one more of this project's Workers could start now, by the
+    same three counts `start_worker` refuses on (the project cap, the
+    schedule window, and an uncountable answer counting as no). Cheap enough
+    for a wait's periodic check; the start itself decides again."""
+    from rite_ai.sandbox import (
+        CountUnavailable,
+        _configured_workers,
+        _schedule_refusal,
+        count_active_sandboxes,
+    )
+
+    bound = project_capacity(Path(root))
+    running = count_active_sandboxes(root, _configured_workers(root))
+    if bound < 0 or isinstance(running, CountUnavailable):
+        return False
+    if bound and running >= bound:
+        return False
+    return _schedule_refusal(root, int(running)) is None
 
 
 def take_requests(root: Path, manager: str) -> list[tuple[Path, str]]:
@@ -320,12 +370,25 @@ def for_project(root: Path, board: object = None, capacity: int | None = None):
         return False
 
     def running() -> int:
-        from rite_ai.sandbox import list_rite_sandboxes
+        """THIS project's running Workers, or -1 when they cannot be counted.
 
-        entries = list_rite_sandboxes()
-        return len(entries) if isinstance(entries, list) else -1
+        🔴 SCRUM-36. This was `len(list_rite_sandboxes())`: every `rite-`
+        sandbox on the machine, so another project's Workers and leftover
+        test probes filled this project's capacity, and the broker refused
+        Workers for a project that had none running (seen in the live
+        dogfood; the fix there was destroying sandboxes by hand). The cap is
+        per project (SPEC §2.5.9), so the count is the project-scoped one
+        `start_worker` already uses."""
+        from rite_ai.sandbox import (
+            CountUnavailable,
+            _configured_workers,
+            count_active_sandboxes,
+        )
 
-    def handle(raw: str) -> tuple[bool, str]:
+        counted = count_active_sandboxes(root, _configured_workers(root))
+        return -1 if isinstance(counted, CountUnavailable) else int(counted)
+
+    def handle(raw: str) -> tuple[bool | None, str]:
         bound = project_capacity(Path(root)) if capacity is None else capacity
         if bound < 0:
             return False, (
@@ -342,6 +405,8 @@ def for_project(root: Path, board: object = None, capacity: int | None = None):
                 "absent one."
             )
         decision = decide(raw, known_worker, ticket_exists, live, bound)
+        if decision.full:
+            return NO_SLOT, decision.reason
         if not decision.ok or decision.request is None:
             return False, f"refusing to start a Worker: {decision.reason}"
         return honour(Path(root), decision.request)

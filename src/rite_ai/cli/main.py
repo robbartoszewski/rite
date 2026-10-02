@@ -7718,7 +7718,11 @@ def sandbox_start(
     )
     click.echo(result.message)
     if not result.ok:
-        raise SystemExit(1)
+        # A full slot is not a failure of the request: the same start can
+        # succeed when one frees, and the broker queues it on this status.
+        from rite_ai.sandbox import EXIT_NO_SLOT
+
+        raise SystemExit(EXIT_NO_SLOT if result.full else 1)
     if ticket is not None:
         _mark_started(root, config, ticket)
 
@@ -9200,10 +9204,9 @@ def _start_a_manager(
     🔴 **The bounds used to be mandatory and are now optional (SCRUM-20,
     perpetual; Robert, 2026-10-02).** `rite start lead` runs until Ctrl-C.
 
-    ⚠ **D-69 and D-82 are rescoped, not repealed.** The count and the clock
-    still bound a runaway, and both still apply — but PER CYCLE. Reaching one
-    ends the cycle and the Manager waits and continues, instead of ending the
-    run. Those two ceilings and the schedule are what bound a perpetual run.
+    ⚠ **What bounds a run with no bound is concurrency, not a rate** (D-115):
+    one Manager session at a time, and Workers up to the schedule window's
+    count. Given both, `--sessions` and `--minutes` bound the run as before.
 
     ⚠ **Ctrl-C is the off switch** and it is the only one that records why:
     it raises through `supervise`'s `finally`, so the lifecycle record says
@@ -9228,7 +9231,7 @@ def _start_a_manager(
             "after three with the count untouched.\n"
             f"  Give both to bound this run, or neither to run until you stop "
             f"it — `rite start {role.name}` with no bounds runs perpetually, "
-            "with the same two ceilings applied per cycle.",
+            "with its Workers bounded by your schedule.",
             err=True,
         )
         raise SystemExit(1)
@@ -9258,12 +9261,13 @@ def _start_a_manager(
 
     if sessions is None:
         # ⚠ Said, not implied: a run with no end needs the person to know how
-        # to stop it. Nothing here claims a rate bound: the per-cycle ceiling
-        # does not yet hold one back (PENDING, `_wait_a_cycle_out`).
+        # to stop it, and what does bound it (D-115).
         click.echo(
             f"starting Manager '{role.name}' — no bound given, so it runs "
-            "until you stop it (Ctrl-C). Waiting on an answer, routed work or "
-            "a quiet board does not end it; it waits, spending nothing."
+            "until you stop it (Ctrl-C). It runs one session at a time, and "
+            "its Workers only up to your schedule's count; waiting on an "
+            "answer, routed work, a quiet board or a closed window does not "
+            "end it, it waits, spending nothing."
         )
     else:
         click.echo(
@@ -10522,8 +10526,8 @@ def manager_stop(name: str) -> None:
     "commit or edit, claim, reply, route or Worker request). A session "
     "that changes nothing is not counted, and at most this many of those "
     "run as well. A COUNT, not spend. Give it with --minutes to bound the "
-    "run; give neither and the run goes on until you stop it, with this "
-    "ceiling applied per cycle instead. With several Managers in one "
+    "run; give neither and the run goes on until you stop it, bounded by "
+    "your schedule's Worker count instead. With several Managers in one "
     "project it is SOFT while routed work is outstanding: a session started "
     "by routed mail can pass it, and each one is said.",
 )
@@ -10534,7 +10538,7 @@ def manager_stop(name: str) -> None:
     help="Ceiling on how long this run may keep starting sessions. Give it "
     "with --sessions, or neither: the two bounds catch different runaways "
     "and neither suffices alone, so one without the other is refused. With "
-    "neither, the run goes on until you stop it and both apply per cycle.",
+    "neither, the run goes on until you stop it.",
 )
 @click.option(
     "--fresh",
