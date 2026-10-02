@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### A refused message is reported once, and not as lost when the retry arrived (SCRUM-22)
+
+When the engine refused one of a Manager's messages, rite told you so again
+in every later session of the same conversation, because it re-read the whole
+conversation each time. One refusal from the early morning reached the dogfood
+Owner's DM sixteen times in twenty minutes, as "did not reach anyone", while
+every message in that window had arrived, the refused one included: the
+Manager had sent it again eleven seconds after the refusal. Each refusal is now
+reported once, and a refused `rite reply` or `rite ask` that the Manager sent
+again successfully is not reported to you as missing. When one is, the notice
+says "that call sent nothing", not "nothing was sent".
+
 ## 0.7.0a6 (2026-10-02) — alpha: a checkpoint of what is on main
 
 ⚠ **Still an alpha, and a checkpoint, not a release**, cut so the dogfood can

@@ -29,6 +29,7 @@ from rite_ai.cli.main import _manager_roles, cli
 from rite_ai.managers import MANAGER_ENV, checkins, routing, stdin_text
 from rite_ai.managers.mailbox import INBOX, OUTBOX, how_to_reply, read
 from rite_ai.managers.supervise import _substitutes
+from rite_ai.managers.transcripts import Refusal
 from rite_ai.tickets.interface import Ticket
 from tests.refined_board import refined
 
@@ -248,7 +249,9 @@ def test_w9_the_refusal_says_substitution_not_a_broken_settings_file(
     from rite_ai.managers import supervise
 
     command = 'rite reply --manager lead "see `rite doctor`"'
-    monkeypatch.setattr(supervise, "refused_commands", lambda *a, **k: [command])
+    monkeypatch.setattr(
+        supervise, "refusals", lambda *a, **k: [Refusal(c) for c in [command]]
+    )
     said: list[str] = []
     supervise._say_refusals(tmp_path, 0.0, said.append, engine="claude", manager="")
     (line,) = said

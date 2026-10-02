@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from rite_ai.managers.engines import CLAUDE, GOOSE
 from rite_ai.managers.session import approval_blocked
+from rite_ai.managers.transcripts import Refusal
 
 
 class TestTheAxisIsNamedRatherThanInferred:
@@ -45,7 +46,9 @@ class TestClaudesReportingIsUnchanged:
     ):
         import rite_ai.managers.supervise as sup
 
-        monkeypatch.setattr(sup, "refused_commands", lambda *a, **k: ["curl http://x"])
+        monkeypatch.setattr(
+            sup, "refusals", lambda *a, **k: [Refusal(c) for c in ["curl http://x"]]
+        )
         said: list[str] = []
         sup._say_refusals(tmp_path, 0.0, said.append, "claude", "", "")
         assert '"Bash(curl:*)"' in said[0]
@@ -55,7 +58,9 @@ class TestClaudesReportingIsUnchanged:
         must not quietly turn Claude's reporting off."""
         import rite_ai.managers.supervise as sup
 
-        monkeypatch.setattr(sup, "refused_commands", lambda *a, **k: ["curl http://x"])
+        monkeypatch.setattr(
+            sup, "refusals", lambda *a, **k: [Refusal(c) for c in ["curl http://x"]]
+        )
         said: list[str] = []
         sup._say_refusals(tmp_path, 0.0, said.append)
         assert said and "curl" in said[0]
@@ -73,7 +78,7 @@ class TestAWholeSessionEngineIsNotScannedForSomethingItNeverRecords:
             scanned.append(a)
             return ["curl http://x"]
 
-        monkeypatch.setattr(sup, "refused_commands", spy)
+        monkeypatch.setattr(sup, "refusals", spy)
         said: list[str] = []
         sup._say_refusals(tmp_path, 0.0, said.append, "local:tier", "goose", "")
         assert scanned == [], "Claude's transcript scan ran for a Goose Manager"

@@ -42,6 +42,7 @@ from rite_ai.managers.permissions import (
     write_settings,
 )
 from rite_ai.managers.supervise import launch_command
+from rite_ai.managers.transcripts import Refusal
 
 CORPUS = Path(__file__).parent / "data" / "observed_commands.json"
 
@@ -306,7 +307,7 @@ class TestRiteCanSeeWhatTheEngineRefused:
     acceptance run was all three across three cycles that each exited 0."""
 
     def test_it_finds_the_command_behind_a_bare_denial(self, tmp_path):
-        from rite_ai.managers.transcripts import refused_commands
+        from rite_ai.managers.transcripts import refusals
 
         root = tmp_path / "project"
         root.mkdir()
@@ -319,13 +320,15 @@ class TestRiteCanSeeWhatTheEngineRefused:
                 _result("t1", "This command requires approval"),
             ],
         )
-        assert refused_commands(root, base=base) == ["curl https://example.com"]
+        assert [r.command for r in refusals(root, base=base)] == [
+            "curl https://example.com"
+        ]
 
     def test_it_prefers_the_part_the_engine_named(self, tmp_path):
         """⚠ Otherwise the refusal quotes a compound line and names the
         wrong executable — measured shape: *'This Bash command contains
         multiple operations. The following part requires approval: …'*"""
-        from rite_ai.managers.transcripts import refused_commands
+        from rite_ai.managers.transcripts import refusals
 
         root = tmp_path / "project"
         root.mkdir()
@@ -342,10 +345,12 @@ class TestRiteCanSeeWhatTheEngineRefused:
                 ),
             ],
         )
-        assert refused_commands(root, base=base) == ["curl https://example.com"]
+        assert [r.command for r in refusals(root, base=base)] == [
+            "curl https://example.com"
+        ]
 
     def test_a_successful_command_is_not_reported_as_refused(self, tmp_path):
-        from rite_ai.managers.transcripts import refused_commands
+        from rite_ai.managers.transcripts import refusals
 
         root = tmp_path / "project"
         root.mkdir()
@@ -355,14 +360,14 @@ class TestRiteCanSeeWhatTheEngineRefused:
             root,
             [_use("t1", "git status"), _result("t1", "On branch main", error=False)],
         )
-        assert refused_commands(root, base=base) == []
+        assert [r.command for r in refusals(root, base=base)] == []
 
     def test_a_missing_transcript_directory_is_not_an_error(self, tmp_path):
         """⚠ Absence is not an exception. A project with no transcripts has
         had nothing refused, which is a different thing from a failure."""
-        from rite_ai.managers.transcripts import refused_commands
+        from rite_ai.managers.transcripts import refusals
 
-        assert refused_commands(tmp_path, base=tmp_path / "nope") == []
+        assert [r.command for r in refusals(tmp_path, base=tmp_path / "nope")] == []
 
 
 class TestTheUserIsToldAboutARefusal:
@@ -381,7 +386,9 @@ class TestTheUserIsToldAboutARefusal:
         way."""
         import rite_ai.managers.supervise as sup
 
-        monkeypatch.setattr(sup, "refused_commands", lambda *a, **k: ["rite status"])
+        monkeypatch.setattr(
+            sup, "refusals", lambda *a, **k: [Refusal(c) for c in ["rite status"]]
+        )
         said: list[str] = []
         sup._say_refusals(tmp_path, 0.0, said.append)
         assert len(said) == 1
@@ -399,7 +406,9 @@ class TestTheUserIsToldAboutARefusal:
         import rite_ai.managers.supervise as sup
 
         command = "printf 'sb11\\n' > notes/SB11.txt && cat notes/SB11.txt"
-        monkeypatch.setattr(sup, "refused_commands", lambda *a, **k: [command])
+        monkeypatch.setattr(
+            sup, "refusals", lambda *a, **k: [Refusal(c) for c in [command]]
+        )
         monkeypatch.setattr(sup, "allowed", lambda c: True)
         said: list[str] = []
         sup._say_refusals(tmp_path, 0.0, said.append)
@@ -426,7 +435,9 @@ class TestTheUserIsToldAboutARefusal:
     ):
         import rite_ai.managers.supervise as sup
 
-        monkeypatch.setattr(sup, "refused_commands", lambda *a, **k: ["curl http://x"])
+        monkeypatch.setattr(
+            sup, "refusals", lambda *a, **k: [Refusal(c) for c in ["curl http://x"]]
+        )
         said: list[str] = []
         sup._say_refusals(tmp_path, 0.0, said.append)
         assert '"Bash(curl:*)"' in said[0]
@@ -436,7 +447,9 @@ class TestTheUserIsToldAboutARefusal:
         import rite_ai.managers.supervise as sup
 
         monkeypatch.setattr(
-            sup, "refused_commands", lambda *a, **k: ["curl x", "curl x", "curl x"]
+            sup,
+            "refusals",
+            lambda *a, **k: [Refusal(c) for c in ["curl x", "curl x", "curl x"]],
         )
         said: list[str] = []
         sup._say_refusals(tmp_path, 0.0, said.append)
@@ -512,7 +525,7 @@ class TestRiteCanSeeANonBashDenial:
     empty list and the run looked like five unexplained failures."""
 
     def test_a_denied_tool_is_reported_by_name(self, tmp_path):
-        from rite_ai.managers.transcripts import refused_commands
+        from rite_ai.managers.transcripts import refusals
 
         root = tmp_path / "project"
         root.mkdir()
@@ -540,7 +553,7 @@ class TestRiteCanSeeANonBashDenial:
                 ),
             ],
         )
-        assert refused_commands(root, base=base) == ["Edit"]
+        assert [r.command for r in refusals(root, base=base)] == ["Edit"]
 
 
 def test_the_rite_the_instructions_name_is_on_the_allowlist(tmp_path):

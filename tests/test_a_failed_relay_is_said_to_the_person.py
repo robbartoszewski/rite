@@ -75,7 +75,7 @@ class TestARefusedRelayReachesThePerson:
         (notice,) = _questions(root)
         assert "did not reach anyone" in notice.text
         assert "end line was written twice" in notice.text
-        assert "Nothing was sent" in notice.text
+        assert "that call sent nothing" in notice.text
         assert SECRET_ISH not in notice.text
 
         listener.post_replies(call=slack)

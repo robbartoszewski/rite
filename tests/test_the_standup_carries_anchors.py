@@ -25,6 +25,7 @@ from rite_ai.managers import checkins, standup
 from rite_ai.managers.mailbox import OUTBOX, read
 from rite_ai.managers.session import StartResult, Stopped
 from rite_ai.managers.supervise import supervise
+from rite_ai.managers.transcripts import Refusal
 from rite_ai.reporting import events
 
 ALWAYS_OPEN = 'checkins:\n  windows:\n    - {hours: "00:00-24:00"}\n'
@@ -297,7 +298,9 @@ def test_a_refusal_is_recorded_with_its_cycle(tmp_path, monkeypatch, no_yoloai):
 
     root = _build(tmp_path, "checkins:\n  windows: []\n")
     monkeypatch.setattr(
-        sup, "refused_commands", lambda r, since, base=None: ["rm -rf build"]
+        sup,
+        "refusals",
+        lambda r, since, base=None: [Refusal(c) for c in ["rm -rf build"]],
     )
     _drive(monkeypatch, root)
     [refusal] = [e for e in checkins.ledger(root, "lead") if e["event"] == "refusal"]
