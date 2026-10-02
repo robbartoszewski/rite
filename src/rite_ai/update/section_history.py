@@ -4,7 +4,7 @@ SHA-256 of each CLAUDE.md section every tagged release wrote identically
 for every project, so a file written before markers existed can still be
 shown to be rite's own rather than a user's edit.
 
-From: v0.1.0 (15/23 static), v0.2.0 (16/24 static), v0.3.0 (16/26 static), v0.4.0 (13/26 static), v0.5.0 (16/29 static), v0.5.1 (16/29 static), v0.6.0 (16/29 static), v0.7.0a1 (16/29 static), v0.7.0a2 (16/29 static), v0.7.0a3 (16/29 static), v0.7.0a4 (16/29 static), v0.7.0a5 (16/29 static).
+From: v0.1.0 (15/23 static), v0.2.0 (16/24 static), v0.3.0 (16/26 static), v0.4.0 (13/26 static), v0.5.0 (16/29 static), v0.5.1 (16/29 static), v0.6.0 (16/29 static), v0.7.0a1 (16/29 static), v0.7.0a2 (16/29 static), v0.7.0a3 (16/29 static), v0.7.0a4 (16/29 static), v0.7.0a5 (16/29 static), v0.7.0a6 (16/29 static).
 """
 
 # ruff: noqa: E501 — these lines are the bytes a release wrote.
@@ -24,6 +24,7 @@ RELEASES: tuple[str, ...] = (
     "v0.7.0a3",
     "v0.7.0a4",
     "v0.7.0a5",
+    "v0.7.0a6",
 )
 
 SECTIONS: dict[str, frozenset[str]] = {
