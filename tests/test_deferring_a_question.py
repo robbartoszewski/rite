@@ -72,18 +72,19 @@ def project(tmp_path: Path, monkeypatch):
 
 def _ask(*args: str):
     """`rite ask` with its question on stdin (F14): the one argument that is
-    neither an option nor an option's value."""
-    rest, question, it = [], None, iter(args)
+    neither an option nor an option's value. A `--while` value goes where
+    SCRUM-33 put it, as stdin's first line behind `--while -`."""
+    rest, question, meanwhile, it = [], None, None, iter(args)
     for arg in it:
         if arg == "--while":
-            rest += [arg, next(it)]
+            rest += [arg, "-"]
+            meanwhile = next(it)
         elif arg.startswith("--"):
             rest.append(arg)
         else:
             question = arg
-    return CliRunner().invoke(
-        cli, ["ask", "--manager", "lead", *rest, "-"], input=question
-    )
+    text = question if meanwhile is None else f"{meanwhile}\n{question}"
+    return CliRunner().invoke(cli, ["ask", "--manager", "lead", *rest, "-"], input=text)
 
 
 def _outbox(root: Path) -> list[str]:

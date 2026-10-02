@@ -26,7 +26,7 @@ import pytest
 from click.testing import CliRunner
 
 from rite_ai.cli.main import _manager_roles, cli
-from rite_ai.managers import MANAGER_ENV, routing, stdin_text
+from rite_ai.managers import MANAGER_ENV, checkins, routing, stdin_text
 from rite_ai.managers.mailbox import INBOX, OUTBOX, how_to_reply, read
 from rite_ai.managers.supervise import _substitutes
 from rite_ai.tickets.interface import Ticket
@@ -207,17 +207,22 @@ def test_every_heredoc_rite_teaches_ends_on_an_unguessable_line(project):
 
 
 def test_no_instruction_teaches_text_in_double_quotes(project):
+    """⚠ The check-in instructions are in the list since SCRUM-33: they were
+    not, and they were the one place that still taught `--while "<…>"`."""
     roles, _ = _manager_roles(project)
     said = "\n".join(
         [
             how_to_reply(project, "lead"),
             routing.briefing("lead", "lead", roles),
             routing.briefing("helper", "lead", roles),
+            checkins.instructions(project, "lead"),
         ]
     )
     for verb in ("reply", "ask", "route"):
         assert f'{verb} --manager lead "' not in said
         assert f'{verb} "' not in said
+    assert '--while "' not in said
+    assert "--while -" in said, "the check-in instructions no longer teach a deferral"
     assert stdin_text.RULE in said
 
 
@@ -250,3 +255,54 @@ def test_w9_the_refusal_says_substitution_not_a_broken_settings_file(
     assert "backticks or $( )" in line
     assert "quoted heredoc" in line
     assert "did not apply" not in line
+
+
+# --- SCRUM-33: `--while` is text too ------------------------------------------
+
+
+def test_while_on_the_command_line_is_refused_and_nothing_is_queued_or_sent(
+    project, monkeypatch
+):
+    monkeypatch.setenv(MANAGER_ENV, "lead")
+    got = CliRunner().invoke(
+        cli,
+        ["ask", "--manager", "lead", "--defer", "--while", "ticket 9", "-"],
+        input="rename the flag?",
+    )
+    assert got.exit_code == 1
+    assert "--while takes `-`" in got.output
+    assert "--defer --while - - <<'RITE_TEXT_" in got.output
+    assert not list((project / ".rite").rglob("*.json"))
+    assert read(project, "lead", OUTBOX) == []
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+def test_a_deferral_as_taught_arrives_verbatim_and_runs_nothing(
+    project, tmp_path_factory, shell
+):
+    """The form the check-in instructions teach, run by a real shell with a
+    hostile meanwhile AND a hostile question. Deferred into a window that is
+    not open, so both are read back from the queue exactly as stored."""
+    from tests.test_deferring_a_question import CLOSED
+
+    with (project / ".rite" / "config.yaml").open("a") as config:
+        config.write(CLOSED)
+    canary = tmp_path_factory.mktemp("canary") / "ran"
+    meanwhile = f"ticket 9, not `touch {canary}-while` nor $(touch {canary}-wd)"
+    question = hostile(canary).replace("?", "")
+    # Four lines, not `_taught`'s three: the command, two placeholders, and
+    # the end line, which is the first `RITE_TEXT_` line after the command.
+    lines = checkins.instructions(project, "lead").splitlines()
+    at = next(i for i, line in enumerate(lines) if "ask --manager lead --defer" in line)
+    command = lines[at]
+    end = next(line for line in lines[at + 1 :] if line.startswith("RITE_TEXT_"))
+    assert "--while -" in command and command.endswith(f"<<'{end}'")
+    _run(shell, "\n".join([command, meanwhile, question, end]), project, "lead")
+
+    assert canaries(canary) == []
+    # Read as stored: `_queued` strips text for display, `defer` writes it
+    # as given, and the property is what was written.
+    (queued,) = checkins._queued(project, "lead")
+    stored = json.loads(queued.path.read_text())
+    assert stored["meanwhile"] == meanwhile
+    assert stored["text"] == question

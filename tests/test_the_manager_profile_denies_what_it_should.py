@@ -529,16 +529,72 @@ class TestTheRiteItsInstructionsNameCanRun:
         assert _under(profile, f"{own_command()} reply --help >/dev/null 2>&1") == 0
 
     @on_macos
-    def test_it_cannot_rewrite_the_rite_it_runs(self, project):
+    def test_it_cannot_rewrite_the_rite_it_runs(
+        self, project, tmp_path_factory, monkeypatch
+    ):
         """Read-only: a writable copy of its own code is one a Manager could
-        change for its next cycle."""
+        change for its next cycle.
+
+        🔴 **Measured on the RULE, wherever the checkout is (SCRUM-32).** This
+        touched a file in the real package and expected a refusal, which went
+        red whenever rite ran from a checkout under `/tmp`: the profile grants
+        `/tmp` and `/private/tmp` writable on purpose (`enclosure.compose`,
+        SB8), so the touch succeeded through THAT grant while the rule for
+        rite's own code stayed read-only. Every scratchpad worktree hit it.
+        So the rule is probed where nothing else can answer for it: a decoy
+        directory, outside the project and every writable grant, handed to the
+        same `_running_rite` grant the real code goes through. Readable, which
+        shows the rule applied, and not writable, which is the property. The
+        real package is still probed wherever the probe can only be answered by
+        that rule — which is every install but a checkout under a writable
+        grant, and there the test says which grant would have answered."""
         import rite_ai
+        from rite_ai.managers import enclosure
+
+        decoy = tmp_path_factory.mktemp("rite-code-decoy")
+        (decoy / "module.py").write_text("x = 1\n")
+        real = enclosure._running_rite
+        monkeypatch.setattr(enclosure, "_running_rite", lambda: (*real(), decoy))
+        profile = write_profile(project, "lead")
+        writable = [
+            Path(line.split('(subpath "', 1)[1].rsplit('"', 1)[0])
+            for line in profile.read_text().splitlines()
+            if line.startswith("(allow") and "file-write" in line and "(subpath" in line
+        ]
+        # Any OTHER writable grant would answer for the decoy; its own rule is
+        # the one under test, so a write grant on the decoy itself is the
+        # defect and must reach the assertion that names it.
+        others = [w for w in writable if w != decoy]
+        assert not any(decoy.is_relative_to(w) for w in others), (
+            f"the decoy {decoy} sits under a writable grant, so it cannot "
+            f"isolate the rule; pick a location outside {others}"
+        )
+
+        assert _under(profile, f"cat {decoy / 'module.py'}") == 0, (
+            "rite's own code is not even readable under the profile, so the "
+            "refusal below would prove nothing about a read-only grant"
+        )
+        probe = decoy / "rite-probe-should-not-exist"
+        assert _under(profile, f"touch {probe}") != 0, (
+            "the profile lets a Manager write the code it runs"
+        )
+        assert not probe.exists()
 
         package = Path(rite_ai.__file__).resolve().parent
-        if package.is_relative_to(project):
-            pytest.skip("the package lives inside the project under test")
+        covering = [w for w in writable if package.is_relative_to(w)]
+        if package.is_relative_to(project) or covering:
+            # Not a pass on the real package: a grant other than rite's own
+            # answers a probe there. Said, so it reads as what it is.
+            # `print` and `return`, not `pytest.skip`: the decoy probe above
+            # RAN and passed, and a skip would report the whole test as not
+            # run (and count against `every-test-passes-somewhere`). Visible
+            # with `-s`.
+            print(
+                f"real package {package} not probed: writable through "
+                f"{covering or [project]}, not through rite's own rule"
+            )
+            return
         target = package / "rite-probe-should-not-exist"
-        profile = write_profile(project, "lead")
         assert _under(profile, f"touch {target}") != 0
         assert not target.exists()
 

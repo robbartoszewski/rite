@@ -730,13 +730,15 @@ def instructions(root: Path, manager: str) -> str:
         "Only when a question is CLEARLY deferrable, meaning you have real "
         "work to do meanwhile that does not depend on the answer, you may "
         "defer it to the User's next check-in:",
+        # SCRUM-33: the meanwhile is the heredoc's first line, never a
+        # double-quoted argument; it names tickets other people wrote.
         stdin_text.heredoc(
-            f"{rite} ask --manager {manager} --defer "
-            '--while "<what you will do meanwhile>" -',
-            "<question>",
+            f"{rite} ask --manager {manager} --defer --while - -",
+            "<what you will do meanwhile, on this one line>\n<question>",
         ),
-        "If you cannot name that work, the question blocks you: ask now. A "
-        "deferral with no --while is refused.",
+        "The first line is what you will do meanwhile, the rest is the "
+        "question. If you cannot name that work, the question blocks you: ask "
+        "now. A deferral with no --while, or an empty first line, is refused.",
         "",
     ]
     if state.usable:

@@ -246,53 +246,51 @@ class TestExclusionHoldsUnderSustainedConcurrency:
             f"workers, e.g. {simultaneous[:3]}"
         )
 
-        # LAST, and a skip rather than a failure.
+        # Every grant was released, so nothing may still be claimed once the
+        # workers are done. A claim left over is a RELEASE some writer working
+        # from a stale read overwrote: the loss the read-back above cannot
+        # see, because it checks grants and never releases (SCRUM-31).
         #
-        # This was `assert grants > 100` and it ran FIRST, which made it the
-        # thing that spoke whenever the machine was slow. A CI runner
-        # produced 31 grants where this laptop produces thousands, and the
-        # suite went red on a soak whose actual properties — nothing lost,
-        # nothing held twice — had not been violated once. A hard floor on a
-        # clock-bound loop measures the machine, and the machine is not the
-        # subject.
-        #
-        # Failing is the wrong verdict because nothing failed; passing
-        # silently is worse, because "the soak ran" and "the soak ran 31
-        # rounds and proved almost nothing" must not look alike. So: skip,
-        # with both numbers and the remedy. Measured on this machine, the
-        # detection floor is real — with the pre-fix inode defect
-        # reinstated, a full-scale run caught it 6 times out of 6 on the
-        # `lost` assertion, and a run an order of magnitude smaller caught
-        # it inconsistently. Below the floor the soak genuinely cannot tell.
-        # Slow machine, or broken lock? They look alike in the grant count
-        # and are opposites underneath, and telling them apart is the whole
-        # reason this is not one number.
-        #
-        # Measured, with the pre-fix inode defect reinstated: the ORIGINAL
-        # form of this test caught it 6 times out of 6 — and every one of
-        # those was the `grants > 100` floor, never `lost` and never
-        # `simultaneous`. It was detecting a broken lock BY ITS SLOWNESS,
-        # through the same assertion a loaded CI runner trips. One signal,
-        # two opposite meanings, and CI got the wrong one.
-        #
-        # An attempt is a round entered; a grant is a round the ledger
-        # allowed. A slow machine makes few ATTEMPTS. A broken ledger makes
-        # plenty of attempts and refuses most of them, because every writer
-        # is reading state another writer has already replaced. So a low
-        # grant rate against a healthy attempt count is not slowness, and
-        # must never be skipped as though it were.
-        if attempts >= 200 and grants < attempts // 4:
-            raise AssertionError(
-                f"{attempts} claim attempts produced only {grants} grants. "
-                "The machine was not slow — it entered plenty of rounds and "
-                "the ledger refused most of them, which is what a writer "
-                "reading state somebody else has already replaced looks "
-                f"like. {lost} of the grants were also unreadable afterwards."
-            )
+        # ⚠ **This replaces a grant-RATIO heuristic that measured the machine.**
+        # It failed when fewer than a quarter of 200+ attempts were granted, on
+        # the reasoning that a broken ledger refuses most claims. It does, and
+        # this is why: a lost release leaves a zombie claim, and every later
+        # claim on that path is refused. Measured with the pre-fix defect
+        # reinstated (`flock` on `claims.json` itself): zombie claims after the
+        # run in 9 of 9 runs, from 0.3s (8 grants) to 3s; lost grants in only
+        # 3 of 9. But a correct ledger refuses legitimately too: here every
+        # refusal is decided on a fresh read under the lock, so it is a claim
+        # another worker really held, and how many there are depends on how
+        # long a hold lasts against the 4ms bursts. Measured on the healthy
+        # ledger with a sleep standing in for slower I/O inside each hold: 51%
+        # at 0ms, 33% at 4ms, 25.1% at 8ms, 19.6% at 12ms — the macOS CI
+        # runner's red was 20.1% (2447 of 12145), with nothing lost, nothing
+        # held twice and no zombie. That was the soak's first run on that
+        # runner, which #177 put it on. So the property the ratio stood for is
+        # asserted directly, at any sample size, and the ratio is reported.
+        from rite_ai.claims.ledger import ClaimsLedger
 
+        left = ClaimsLedger(root / ".rite" / "claims.json").list_claims()
+        held = [(c.worker, c.paths) for c in left][:3]
+        assert not left, (
+            f"{len(left)} claim(s) still held after every worker released "
+            f"everything it was granted, e.g. {held} "
+            "— a release overwritten by a writer working from a stale read, "
+            "which leaves the path blocked for everyone else"
+        )
+
+        # LAST, and a skip rather than a failure: every property above is TRUE
+        # at any number of rounds, and only the confidence scales. A hard
+        # floor on a clock-bound loop measures the machine (a CI runner once
+        # produced 31 grants where a laptop produces thousands). Below the
+        # floor the soak cannot tell, and "the soak ran" must not look like
+        # "the soak ran 31 rounds and proved almost nothing", so it skips with
+        # the numbers. A broken lock cannot hide here: the zombie check above
+        # fires first, at 8 grants.
         if grants <= 100:
             pytest.skip(
-                f"only {grants} grants from {attempts} attempts in "
+                f"only {grants} grants from {attempts} attempts "
+                f"({grants / attempts if attempts else 0:.0%} granted) in "
                 f"{SOAK_SECONDS}s — this machine is too slow or too loaded "
                 "for the soak to conclude anything. "
                 f"Exclusion held and nothing was lost across those {grants}, "
