@@ -759,15 +759,37 @@ def configuration_problems(
                 "labelled"
             )
 
-    for role in roles:
-        if INTEGRATE in held[role.name] and role.is_local:
-            # RL-11: the harness is rite's own code, and SPEC §5.1.1 forbids
-            # rite's code a push. A local integrate holder cannot do the job.
-            problems.append(
-                f"manager {role.name} holds integrate on a {role.engine} engine. "
-                "Local engines commit to a local branch and stop; pushing and "
-                "opening the PR needs a claude engine or a person"
-            )
+    # ⚠ **A local `integrate` holder is NOT refused any more** (Robert,
+    # 2026-10-02, OL8). RL-11 refused it because "SPEC §5.1.1 forbids rite's
+    # code a push; the harness is rite's code" — written 2026-09-19, while PB1
+    # gave `rite deliver` a push on 2026-09-29 (`4242d48`), which §5.1.1 now
+    # states and `tests/test_blast_radius.py` allows by name (`ALLOWED_GIT`).
+    # The premise expired ten days before anyone looked at it.
+    #
+    # **No engine pushes by itself, and that is still true.** The holder — on
+    # any engine — posts the same two-value request a Claude Manager posts
+    # (`publishing/requests.py`: it "cannot even commit, so it ASKS"), and rite
+    # validates it and performs the push on the host (`publishing/deliver.py`:
+    # "done here by rite, not by a model"). Both files are engine-agnostic;
+    # neither contains an engine check. §5.1.1's bounds therefore apply
+    # unchanged, because they live in the file that does the pushing: draft
+    # only, a repository the operator owns, its default branch, the publish
+    # gate passed on exactly those commits, never `--force`.
+    #
+    # ⚠ **Deliberately NOT the other route.** A sandboxed Manager's own
+    # repo-scoped token can push (C6/C26), and that path is gated only by the
+    # `pre-push` hook, which a global `core.hooksPath` stops git reading. The
+    # request path gates by construction, which is why it is the one.
+    #
+    # RL-11's SECOND reason is untouched and is what the request path satisfies:
+    # the terminating check belongs before anything leaves the machine.
+    #
+    # What the harness cannot check is whether the work is finished — §5.1.1
+    # bounds the damage of a wrong verdict, never its quality. That is why
+    # plan-review independence (RL-6, just above) compares the MODEL rather than
+    # the engine label: a verdict is worth acting on only if its reviewer was
+    # genuinely another model. Analysis:
+    # `docs/design/OL_WHY_A_LOCAL_MANAGER_CANNOT_PUSH.md`.
 
     eligible = [
         r for r in roles if r.engine != HUMAN and {DECIDE, BOARD, ROUTE} <= held[r.name]
