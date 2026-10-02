@@ -722,7 +722,8 @@ waits, spending nothing, and carries on when mail arrives, the board changes
 or the window opens. While it waits no Manager session is running: rite's
 own code watches, and starts one only for an event (your message or `rite
 connect`, a Slack message, an answer, a Worker's or another Manager's mail,
-new ready work, a freed slot, the window opening). A session that only
+new ready work, a freed slot, the window opening), plus a heartbeat once an
+hour with no session, in case rite missed something. A session that only
 replied, or only edited code, counts as idle, so it does not run again at
 once. What bounds it is your schedule: one session at a time,
 and Workers only up to the window's count; a Worker asked for when no slot is

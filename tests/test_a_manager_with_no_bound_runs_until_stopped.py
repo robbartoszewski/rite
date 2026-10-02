@@ -1,23 +1,20 @@
 """SCRUM-20 (perpetual): `rite start lead` with no bounds runs until stopped.
 
-Robert, 2026-10-02: vanilla `rite start` runs FOREVER by default — until Ctrl-C
-or the machine dies. The mandatory `--sessions`/`--minutes` stop being
-mandatory.
+Robert, 2026-10-02: vanilla `rite start` runs until Ctrl-C. `--sessions` and
+`--minutes` are optional: both together bound a run as before, one alone is
+refused.
 
-🔴 **D-69 and D-82 are not repealed, they are rescoped.** Both bounds still
-exist and both still apply — PER CYCLE. Reaching one ends the CYCLE; the
-Manager waits and continues. That is the whole difference, and it is what these
-tests pin: the same ceiling that used to return a result now begins another
-cycle.
-
-⚠ **What bounds a perpetual run, stated here because it is the whole story:**
-the per-cycle ceilings these tests pin, and the schedule (its own change). There
-is no third thing, and these tests are where the first of the two is held.
+⚠ **What bounds a perpetual run is concurrency, never a rate:** one Manager
+session at a time, and Workers up to the schedule window's count. It is
+EVENT-DRIVEN: every wait has no deadline, a Manager session starts only for an
+event (inbox mail, or rite's own checks of the board, the project, a freed
+slot, the window), plus a periodic HEARTBEAT as the safety net, and between
+them none is running.
 
 ⚠ **Ctrl-C is the off switch**, and the only one that records why: it raises
 through `supervise`'s `finally`, so the lifecycle record says the operator
 stopped it. `rite manager stop` kills the tmux session, which skips that and is
-recorded as DIED — a cooperative stop marker is its own ticket.
+recorded as DIED; a cooperative stop marker is its own ticket.
 """
 
 from __future__ import annotations
@@ -88,6 +85,9 @@ def world(tmp_path, monkeypatch):
     monkeypatch.setattr(sup, "stop_session", lambda s: None)
     monkeypatch.setattr(sup, "forget_instance", lambda r, m: None)
     monkeypatch.setattr(sup, "_sleep", pause)
+    # Off unless a test is about it: these tests pin the other wakes, and a
+    # heartbeat every virtual hour would start sessions through all of them.
+    monkeypatch.setattr(sup, "HEARTBEAT_SECONDS", float("inf"))
     return state
 
 
@@ -289,6 +289,9 @@ def patient(tmp_path, monkeypatch):
     monkeypatch.setattr(sup, "stop_session", lambda s: None)
     monkeypatch.setattr(sup, "forget_instance", lambda r, m: None)
     monkeypatch.setattr(sup, "_sleep", pause)
+    # Off unless a test is about it: these tests pin the other wakes, and a
+    # heartbeat every virtual hour would start sessions through all of them.
+    monkeypatch.setattr(sup, "HEARTBEAT_SECONDS", float("inf"))
     return state
 
 
@@ -585,3 +588,85 @@ class TestNoManagerSessionIsLiveWhileIdle:
             "a Manager session was live after the run went idle"
         )
         assert patient["t"] >= HORIZON
+
+
+# --- The heartbeat: the safety net beside the events (Robert, 2026-10-02) ---
+
+DEFAULT_HEARTBEAT = sup.HEARTBEAT_SECONDS
+"""Read at import, before any fixture turns it off."""
+
+
+def _heartbeat_run(patient, board, mail_every=None):
+    """A perpetual run at the real heartbeat interval, with a message from
+    the User every `mail_every` virtual seconds (or none). Returns (start
+    times, the prompt each session got)."""
+    root = patient["root"]
+    sup.HEARTBEAT_SECONDS = DEFAULT_HEARTBEAT  # restored by monkeypatch
+    starts: list[float] = []
+    prompts: list[str] = []
+    if mail_every is not None:
+        due = {"at": mail_every}
+
+        def user_writes():
+            if patient["t"] >= due["at"]:
+                due["at"] += mail_every
+                mailbox.send(root, OWNER, mailbox.INBOX, "the User: any news?")
+
+        patient["between"].append(user_writes)
+
+    def starter(r, m, *, engine, resume_id, max_sessions, window_seconds, **kw):
+        starts.append(patient["t"])
+        prompts.append(kw.get("prompt") or "")
+        patient["t"] += 10.0
+        if len(starts) > 20:
+            # Five virtual hours hold at most seven. Back to back, no wait
+            # reaches the fixture's Ctrl-C, so the operator presses it here.
+            raise KeyboardInterrupt
+        return StartResult(True, "ok", session=f"s{len(starts)}", attach="a")
+
+    result = supervise(
+        root,
+        OWNER,
+        engine="claude",
+        prompt="OPEN",
+        starter=starter,
+        verdict=lambda r: board(),
+        resume_id_for=lambda r, m, since=0.0: "sess-1",
+        note=[].append,
+        poll=0,
+        now=lambda: patient["t"],
+    )
+    assert result.reason.startswith("stopped by the operator"), result.reason
+    return starts, prompts
+
+
+class TestAHeartbeatWakesTheManager:
+    """With no event at all, a perpetual run still wakes its Manager every
+    `HEARTBEAT_SECONDS`, in case something needs it that rite's own checks
+    missed. A wake, not a spin: between heartbeats no session runs."""
+
+    def test_the_interval_is_an_hour(self):
+        assert DEFAULT_HEARTBEAT == 3600.0
+
+    @pytest.mark.parametrize("verdict", ["idle", "closed", "waiting-on-user"])
+    def test_a_run_with_no_events_wakes_at_the_heartbeat(self, patient, verdict):
+        """🔴 Before, each of these waited the whole five virtual hours with
+        no session at all: a missed event stayed missed until Ctrl-C."""
+        ready = [] if verdict == "idle" else ["KAN-7"]
+        starts, prompts = _heartbeat_run(patient, lambda: _answer(verdict, ready))
+        assert len(starts) >= 3, f"{len(starts)} heartbeats in five hours"
+        assert DEFAULT_HEARTBEAT <= starts[0] < DEFAULT_HEARTBEAT + 120, starts
+        for before, after in zip(starts, starts[1:]):
+            # Not sooner (no spin), and not much later (the wake is on time).
+            assert DEFAULT_HEARTBEAT <= after - before < DEFAULT_HEARTBEAT + 120
+        assert all("heartbeat" in p for p in prompts), prompts
+
+    def test_a_manager_events_keep_busy_gets_no_heartbeat(self, patient):
+        """Counted from the last session: mail every 40 minutes means the
+        heartbeat never falls due, so it adds no session."""
+        starts, prompts = _heartbeat_run(
+            patient, lambda: _answer("idle"), mail_every=40 * 60
+        )
+        assert len(starts) >= 5
+        assert not [p for p in prompts if "heartbeat" in p], prompts
+        assert all("any news?" in p for p in prompts)

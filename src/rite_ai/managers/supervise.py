@@ -1151,7 +1151,9 @@ def _closed_line(root: Path, manager: str, clock):
             f"{mark}{manager!r} is waiting, spending nothing: the schedule "
             "allows no Workers now"
             + (f", and next opens {when}" if when else "")
-            + ". It carries on when the window opens; mail still reaches it. "
+            + ". It carries on when the window opens; mail still reaches it"
+            + _heartbeat_words()
+            + ". "
             "This run has no bound from you; Ctrl-C ends it."
         )
 
@@ -1654,6 +1656,9 @@ def _supervise(
     # here, by those two facts and nothing else, so it cannot be silenced by
     # a counter it is meant to check.
     spin = {"passes": 0, "sessions": 0, "waited": False}
+    # The safety net beside the events (Robert, 2026-10-02): every wait of a
+    # perpetual run wakes the Manager after `HEARTBEAT_SECONDS` without one.
+    beat = _heartbeat(root, manager, cycles, begin, clock) if perpetual else None
 
     while True:
         if perpetual:
@@ -1732,6 +1737,7 @@ def _supervise(
                 poll,
                 cycles,
                 live,
+                heartbeat=beat,
             )
             if stopped is not None:
                 return stopped
@@ -1808,6 +1814,7 @@ def _supervise(
                         poll,
                         cycles,
                         live,
+                        heartbeat=beat,
                     )
                     if stopped is None:
                         cause = "mail"
@@ -1832,6 +1839,7 @@ def _supervise(
                         poll,
                         cycles,
                         live,
+                        heartbeat=beat,
                         wake=_with_a_freed_slot(
                             root, manager, _refinement_wake(root, manager, clock), clock
                         ),
@@ -1888,6 +1896,7 @@ def _supervise(
                         poll,
                         cycles,
                         live,
+                        heartbeat=beat,
                         wake=_closed_wake(root, verdict, clock),
                         idle_line=_closed_line(root, manager, clock),
                     )
@@ -1917,6 +1926,7 @@ def _supervise(
                         poll,
                         cycles,
                         live,
+                        heartbeat=beat,
                         wake=_with_a_freed_slot(
                             root,
                             manager,
@@ -1979,6 +1989,7 @@ def _supervise(
                     poll,
                     cycles,
                     live,
+                    heartbeat=beat,
                     wake=_with_a_freed_slot(
                         root,
                         manager,
@@ -2638,6 +2649,13 @@ BOARD_RECHECK_SECONDS = 60.0
 again. A read is a request to the backend, so not every poll tick."""
 PROJECT_RECHECK_SECONDS = 15.0
 """How often it looks at the project again (two `git` calls)."""
+HEARTBEAT_SECONDS = 3600.0
+"""How long a perpetual run's Manager goes with no session before rite wakes
+it anyway (Robert, 2026-10-02): the safety net for a circumstance rite's own
+checks failed to notice. Counted from the end of the last session, so a
+Manager that events keep busy never gets an extra one; at most one heartbeat
+session an hour while nothing else happens. ⚠ The one place the interval is
+set: a config key, when there is one, replaces this number and nothing else."""
 
 
 @dataclass(frozen=True)
@@ -2842,6 +2860,61 @@ def _idle_board_wake(root: Path, manager: str, verdict, clock):
     return wake
 
 
+def _heartbeat_words() -> str:
+    """The clause a wait's line ends with, naming the heartbeat; empty when
+    the heartbeat is off (an infinite interval)."""
+    every = HEARTBEAT_SECONDS
+    if every == float("inf"):
+        return ""
+    return f", and a heartbeat after {int(every // 60)} minutes with no session"
+
+
+def _heartbeat(root: Path, manager: str, cycles, begin: float, clock):
+    """`heartbeat` for a perpetual run's waits: once `HEARTBEAT_SECONDS` have
+    passed since the last session ended (or since the run began), put a note
+    from rite in the Manager's inbox and return what to say; else "".
+
+    ⚠ **A note, not a second way to start a session.** Every wait already
+    starts a session for inbox mail, so the heartbeat goes through the event
+    path every other trigger uses: one place decides that a session starts,
+    and the session it starts is told why. Between heartbeats and events no
+    Manager session runs. Read at each check, so a test or a later config
+    key sets the interval in one place."""
+    from rite_ai.managers.telling import tell_manager
+
+    marks = {"sent": float("-inf")}
+
+    def beat() -> str:
+        last = begin
+        if cycles:
+            ended = cycles[-1].ended_at
+            last = ended if ended is not None else cycles[-1].started_at
+        now = clock()
+        every = HEARTBEAT_SECONDS
+        if now - max(last, marks["sent"]) < every:
+            return ""
+        marks["sent"] = now
+        minutes = int(every // 60)
+        try:
+            tell_manager(
+                root,
+                manager,
+                "a heartbeat",
+                f"Nothing has woken you for {minutes} minutes. This is rite's "
+                "periodic check, in case something needs you that rite did not "
+                "notice: look at the board, your routes, your Workers and any "
+                "question still open. If nothing needs you, end the turn.",
+            )
+        except OSError as e:
+            return f"heartbeat: could not wake {manager!r} ({e})"
+        return (
+            f"heartbeat: no session for {manager!r} in {minutes} minutes, "
+            "so rite wakes it to check for anything it missed"
+        )
+
+    return beat
+
+
 def _quiet_board_line(manager: str, clock):
     """`idle_line` for that wait: said when it begins, then every
     `STILL_WAITING_EVERY` with a ⚠, as the other waits are."""
@@ -2859,7 +2932,9 @@ def _quiet_board_line(manager: str, clock):
             f"{mark}{manager!r} is waiting, spending nothing: the board lists "
             "nothing ready. Work on the board wakes it (read every "
             f"{int(BOARD_RECHECK_SECONDS)}s), and so does mail or a change in "
-            "the project. This run has no bound from you; Ctrl-C ends it."
+            "the project"
+            + _heartbeat_words()
+            + ". This run has no bound from you; Ctrl-C ends it."
         )
 
     return line
@@ -2937,6 +3012,7 @@ def _wait_for_mail(
     live: str,
     wake=None,
     idle_line=None,
+    heartbeat=None,
 ) -> SuperviseResult | None:
     """Wait, with no engine running, until mail is in this Manager's inbox.
     None means start a cycle now, BECAUSE of that mail; a result means stop.
@@ -2963,9 +3039,11 @@ def _wait_for_mail(
     Reversed, a tick could collect nothing, then see the route handled, then
     stop — the reply left for the next `rite start`.
 
-    There is no timer (Robert, 2026-09-27). It ends on mail, on `over()`, on
-    the window, or on Ctrl-C, and a wait that cannot end by itself is SAID
-    every `routing.STILL_WAITING_EVERY`.
+    There is no timer of its own (Robert, 2026-09-27). It ends on mail, on
+    `over()`, on the window, or on Ctrl-C, and a wait that cannot end by
+    itself is SAID every `routing.STILL_WAITING_EVERY`. ⚠ A perpetual run
+    passes `heartbeat` (Robert, 2026-10-02), which writes mail when it is
+    due, so the check below ends the wait as for any other mail.
     """
     if waiting is not None:
         waiting.begin()
@@ -2978,6 +3056,9 @@ def _wait_for_mail(
                 # check below starts the Owner's session to tell the person.
                 waiting.notice_gone(say)
             _relay_tick(root, manager, router, slack, say)
+            beat = heartbeat() if callable(heartbeat) else ""
+            if beat:
+                say(beat)
             if mail_waiting(root, manager, INBOX):
                 return None
             if ended:
