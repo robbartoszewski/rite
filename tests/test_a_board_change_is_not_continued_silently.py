@@ -61,6 +61,23 @@ class TestTheRefusal:
         assert "'lead''s" not in said, "a quoted name ran into its possessive"
         assert "setup session" not in said, "a user should not need rite's jargon"
 
+    def test_a_perpetual_start_is_offered_the_command_it_typed(self, tmp_path):
+        """⚠ `rite start lead` with no bounds is a PERPETUAL start (SCRUM-20),
+        and the two commands offered have to be the one the person actually
+        typed. Formatting the bounds unconditionally raised TypeError on
+        `{None:g}` — a crash on the path whose only job is to refuse clearly.
+        """
+        _began(tmp_path, NONE)
+        _config(tmp_path, BOARD)
+
+        said = refusal(tmp_path, "lead", sessions=None, minutes=None)
+
+        assert "    rite start lead --fresh\n" in said
+        assert said.rstrip().endswith("rite start lead --keep-conversation")
+        assert "--sessions" not in said, "it suggested bounds that were not given"
+        assert "--minutes" not in said
+        assert "None" not in said
+
     def test_a_board_removed_since_is_refused(self, tmp_path):
         _began(tmp_path, BOARD)
         _config(tmp_path, NONE)

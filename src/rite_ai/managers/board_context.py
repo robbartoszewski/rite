@@ -87,8 +87,8 @@ def refusal(
     root: Path,
     manager: str,
     *,
-    sessions: int,
-    minutes: float,
+    sessions: int | None,
+    minutes: float | None,
     now: dict | None = None,
 ) -> str:
     """Why a bare `rite start` must not continue this Manager's conversation,
@@ -111,9 +111,17 @@ def refusal(
         # Nothing can have been configured since that the conversation
         # missed; a board REMOVED since is the one case this cannot see.
         return ""
-    bounds = f"--sessions {sessions} --minutes {minutes:g}"
-    fresh = f"rite start {manager} --fresh {bounds}"
-    keep = f"rite start {manager} --keep-conversation {bounds}"
+    # ⚠ Both None is a PERPETUAL start (SCRUM-20), and the commands offered
+    # here have to be the one the person actually typed. Formatted
+    # unconditionally this raised TypeError on `{None:g}` — a crash, on the
+    # path whose whole job is to refuse clearly.
+    bounds = (
+        ""
+        if sessions is None and minutes is None
+        else f" --sessions {sessions} --minutes {minutes:g}"
+    )
+    fresh = f"rite start {manager} --fresh{bounds}"
+    keep = f"rite start {manager} --keep-conversation{bounds}"
     if recorded:
         head = (
             f"refusing to continue the conversation of Manager {manager!r}: it "

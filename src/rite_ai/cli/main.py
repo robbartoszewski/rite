@@ -9195,30 +9195,40 @@ def _start_a_manager(
     fresh: bool = False,
     keep_conversation: bool = False,
 ) -> None:
-    """Start one Manager, refusing without a ceiling (D-68)."""
-    if sessions is None:
-        click.echo(
-            "refusing to start: --sessions is required and has no default.\n"
-            "  It caps how many provider sessions this run may START — a "
-            "COUNT, not spend, because rite cannot read the quota (§2.6.1, "
-            "D-69).\n"
-            "  Silently choosing a number you did not choose is how `rite "
-            "pool fill --count 500` became possible, and spent quota is the "
-            "one damage no cleanup reverses.",
-            err=True,
-        )
-        raise SystemExit(1)
+    """Start one Manager. With no bound given it runs until you stop it.
 
-    if minutes is None:
+    🔴 **The bounds used to be mandatory and are now optional (SCRUM-20,
+    perpetual; Robert, 2026-10-02).** `rite start lead` runs until Ctrl-C.
+
+    ⚠ **D-69 and D-82 are rescoped, not repealed.** The count and the clock
+    still bound a runaway, and both still apply — but PER CYCLE. Reaching one
+    ends the cycle and the Manager waits and continues, instead of ending the
+    run. Those two ceilings and the schedule are what bound a perpetual run.
+
+    ⚠ **Ctrl-C is the off switch** and it is the only one that records why:
+    it raises through `supervise`'s `finally`, so the lifecycle record says
+    "stopped by the operator". `rite manager stop` kills the tmux session, so
+    that path is recorded as DIED — a cooperative stop marker is its own
+    ticket, not faked here.
+
+    One bound without the other is still refused: a half-bounded run that
+    silently became perpetual is the surprise this avoids.
+    """
+    if (sessions is None) != (minutes is None):
+        given, missing = (
+            ("--sessions", "--minutes")
+            if minutes is None
+            else ("--minutes", "--sessions")
+        )
         click.echo(
-            "refusing to start: --minutes is required and has no default.\n"
-            "  It caps how LONG this run may keep starting sessions. The two "
-            "bounds are not interchangeable and neither suffices alone — "
-            "measured: sessions that end instantly hit the count with the "
+            f"refusing to start: {given} was given and {missing} was not.\n"
+            "  The two bounds catch different runaways and neither suffices "
+            "alone (D-82): sessions that end instantly hit the count with the "
             "clock untouched, and sessions of realistic length hit the clock "
-            "after three with the count untouched (D-82).\n"
-            "  A duration that defaults to forever is a bound in name only, "
-            "and this is the command that spends quota unattended.",
+            "after three with the count untouched.\n"
+            f"  Give both to bound this run, or neither to run until you stop "
+            f"it — `rite start {role.name}` with no bounds runs perpetually, "
+            "with the same two ceilings applied per cycle.",
             err=True,
         )
         raise SystemExit(1)
@@ -9246,12 +9256,29 @@ def _start_a_manager(
             err=True,
         )
 
-    click.echo(
-        f"starting Manager '{role.name}' — up to {sessions} session(s), "
-        f"for up to {minutes:g} minute(s). Whichever bound is reached first "
-        "ends the run. Ctrl-C ends it too; a session already started keeps "
-        "running."
-    )
+    if sessions is None:
+        from rite_ai.managers.supervise import (
+            PERPETUAL_CYCLE_SECONDS,
+            PERPETUAL_SESSIONS_PER_CYCLE,
+        )
+
+        # ⚠ Said, not implied. A run with no end needs the person to know
+        # what DOES bound it and how to stop it.
+        click.echo(
+            f"starting Manager '{role.name}' — no bound given, so it runs "
+            "until you stop it (Ctrl-C). Per cycle it starts at most "
+            f"{PERPETUAL_SESSIONS_PER_CYCLE} session(s) that do work, over at "
+            f"most {int(PERPETUAL_CYCLE_SECONDS / 60)} minute(s); reaching "
+            "either ends that cycle, waits, and continues. Those two ceilings "
+            "and your schedule are what bound it."
+        )
+    else:
+        click.echo(
+            f"starting Manager '{role.name}' — up to {sessions} session(s), "
+            f"for up to {minutes:g} minute(s). Whichever bound is reached first "
+            "ends the run. Ctrl-C ends it too; a session already started keeps "
+            "running."
+        )
     # Track MS: the effective model and its source, the same line `rite
     # doctor` prints. `role` is None for an undeclared lone Manager, which
     # runs Claude Code's default.
@@ -9457,7 +9484,7 @@ def _start_a_manager(
             slack=listener,
             github=github,
             max_sessions=sessions,
-            window_seconds=minutes * 60.0,
+            window_seconds=None if minutes is None else minutes * 60.0,
             prompt=(
                 _setup_prompt(root, role.name)
                 # The setup session too: a secondary configuring the board as
@@ -10501,18 +10528,20 @@ def manager_stop(name: str) -> None:
     help="Ceiling on provider sessions this run may start that do work (a "
     "commit or edit, claim, reply, route or Worker request). A session "
     "that changes nothing is not counted, and at most this many of those "
-    "run as well. Required when starting a Manager; a COUNT, not spend. "
-    "With several Managers in one project it is SOFT while routed work is "
-    "outstanding: a session started by routed mail can pass it, and each "
-    "one is said.",
+    "run as well. A COUNT, not spend. Give it with --minutes to bound the "
+    "run; give neither and the run goes on until you stop it, with this "
+    "ceiling applied per cycle instead. With several Managers in one "
+    "project it is SOFT while routed work is outstanding: a session started "
+    "by routed mail can pass it, and each one is said.",
 )
 @click.option(
     "--minutes",
     type=float,
     default=None,
-    help="Ceiling on how long this run may keep starting sessions. Required "
-    "when starting a Manager: the two bounds catch different runaways and "
-    "neither suffices alone.",
+    help="Ceiling on how long this run may keep starting sessions. Give it "
+    "with --sessions, or neither: the two bounds catch different runaways "
+    "and neither suffices alone, so one without the other is refused. With "
+    "neither, the run goes on until you stop it and both apply per cycle.",
 )
 @click.option(
     "--fresh",

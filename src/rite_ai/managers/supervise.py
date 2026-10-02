@@ -983,6 +983,89 @@ def _idle(cycles: list[Cycle]) -> int:
     return sum(1 for c in cycles if c.idle)
 
 
+PERPETUAL_SESSIONS_PER_CYCLE = 20
+"""The per-cycle session ceiling a perpetual run uses (SCRUM-20, perpetual).
+
+⚠ **A GUARDRAIL, NOT A STOP.** `rite start lead` with no bounds runs until the
+operator ends it, so this number does not end the run — reaching it ends the
+CYCLE, and the next one begins when the schedule and the wait allow. It exists
+so a runaway inside one cycle is bounded, not so the run is.
+"""
+
+EMPTY_CYCLES_BEFORE_STOPPING = 3
+"""How many cycles in a row may start NO session before a perpetual run stops.
+
+🔴 **The relaunch gate, and it is what makes "forever" safe to ship.** A cycle
+that begins another cycle without starting anything has made no progress, and a
+run that does that without limit is a spin: cheap, silent, and indistinguishable
+from working. Found by mutation — breaking the per-cycle counter's reset turned
+the loop into exactly that, and the test HUNG instead of failing, which is the
+worst way for a defect to present.
+
+So a perpetual run stops rather than spins, and says which it was."""
+
+PERPETUAL_CYCLE_SECONDS = 60.0 * 60.0
+"""And the per-cycle window, for the reason D-82 gives: the count and the clock
+catch different runaways and neither suffices alone. Reaching it ends the cycle,
+not the run."""
+
+
+def _begin_a_new_cycle(why: str, cycles: list, clock, say) -> tuple[float, int]:
+    """End the current cycle and start the next: say why, and return the new
+    window's start and the index its counting begins at (SCRUM-20, perpetual).
+
+    ⚠ **The history is NOT discarded.** `cycles` is what the lifecycle record
+    and the caller read, so what resets is where the per-cycle ceilings START
+    COUNTING (`cycles[cycle_from:]`), never the list. A reset that dropped the
+    history would leave a perpetual run unable to say what it had done — which
+    is the thing SCRUM-20 just fixed.
+    """
+    say(
+        f"cycle ended: {why}. This run has no bound from you, so it waits for "
+        "the next cycle and continues — Ctrl-C ends it."
+    )
+    return clock(), len(cycles)
+
+
+def _spinning(empty_cycles: int, cycles: list) -> SuperviseResult | None:
+    """A perpetual run that has begun `EMPTY_CYCLES_BEFORE_STOPPING` cycles in a
+    row without starting one session is spinning, not waiting. Stop and say so.
+
+    See `EMPTY_CYCLES_BEFORE_STOPPING`: this exists because the alternative
+    presents as a hang.
+    """
+    if empty_cycles < EMPTY_CYCLES_BEFORE_STOPPING:
+        return None
+    return SuperviseResult(
+        True,
+        f"stopped: {empty_cycles} cycles in a row began without starting a "
+        "session, so this run was spinning rather than waiting. That is a "
+        "defect in rite, not a state to wait out — `rite status` says what "
+        "the Manager and its Workers were doing.",
+        cycles,
+    )
+
+
+def _wait_a_cycle_out(poll: float, say) -> None:
+    """Pause between cycles of a perpetual run.
+
+    ⚠ **Through `_sleep`, the module seam a virtual-clock test patches.** A
+    direct `time.sleep` here would make every test of a perpetual run wait in
+    real time, and the suite would either be slow or stop covering this.
+    """
+    _sleep(poll)
+
+
+def _perpetual(max_sessions: int | None, window_seconds: float | None) -> bool:
+    """Whether this run has no operator-set bound and so runs until stopped.
+
+    Both absent means perpetual. ONE given means the operator asked for a
+    bounded run and gets exactly that: a half-bounded run that silently became
+    perpetual would be the surprise this flag exists to avoid.
+    """
+    return max_sessions is None and window_seconds is None
+
+
 def _idle_allowance_spent(manager: str, max_sessions: int, cycles):
     """A result that stops the run once `--sessions` idle sessions have run,
     or None.
@@ -1203,8 +1286,8 @@ def _supervise(
     *,
     engine: str = "",
     agent: str = "",
-    max_sessions: int,
-    window_seconds: float,
+    max_sessions: int | None = None,
+    window_seconds: float | None = None,
     prompt: str = "",
     fresh: bool = False,
     began_under: dict | None = None,
@@ -1275,6 +1358,25 @@ def _supervise(
             if callable(routing_step):
                 routing_step(say_)
             watch(say_)
+
+    # 🔴 SCRUM-20 (perpetual). With no bound from the operator, the run does
+    # not end: the ceilings below become PER-CYCLE guardrails, and reaching one
+    # ends the cycle and waits rather than returning. `perpetual` is resolved
+    # once here so every later check reads one answer.
+    perpetual = _perpetual(max_sessions, window_seconds)
+    if perpetual:
+        max_sessions = PERPETUAL_SESSIONS_PER_CYCLE
+        window_seconds = PERPETUAL_CYCLE_SECONDS
+    elif max_sessions is None or window_seconds is None:
+        # One bound given and not the other cannot happen through the CLI,
+        # which refuses it; a caller that does it gets the bound it asked for
+        # and a default for the other rather than an accidental forever.
+        max_sessions = (
+            PERPETUAL_SESSIONS_PER_CYCLE if max_sessions is None else max_sessions
+        )
+        window_seconds = (
+            PERPETUAL_CYCLE_SECONDS if window_seconds is None else window_seconds
+        )
 
     begin = clock()
     deadline = begin + window_seconds if window_seconds > 0 else None
@@ -1442,6 +1544,27 @@ def _supervise(
     # against it too: mail is new INPUT, not progress, and a session handed a
     # message that then changes nothing is as idle as one handed none.
     last_basis = None
+    # SCRUM-20 (perpetual): where THIS cycle's counting starts. The per-cycle
+    # ceilings read `cycles[cycle_from:]`; `cycles` itself keeps the whole run,
+    # because that is what the lifecycle record and the caller read.
+    cycle_from = 0
+    cycle_began = begin
+    empty_cycles = 0
+
+    def this_cycle() -> list:
+        return cycles[cycle_from:]
+
+    def note_cycle_end() -> int:
+        """0 when this cycle started a session, else one more empty cycle.
+
+        ⚠ **Deliberately NOT routed through `this_cycle()`.** It asks the one
+        question that cannot be wrong if the per-cycle slice is: did the list
+        grow since this cycle began? Mutating `this_cycle()` to return the
+        whole run made the slice never-empty, which silenced a counter built
+        on it and turned the loop into the hang `_spinning` exists to stop.
+        """
+        return 0 if len(cycles) > cycle_from else empty_cycles + 1
+
     while True:
         # ⚠ WHAT CAUSES THIS CYCLE. "" means the ordinary causes: the last
         # session ended cleanly and the board says continue. "mail" means a
@@ -1451,10 +1574,34 @@ def _supervise(
         # BOTH bounds before starting. A ceiling checked afterwards reports
         # rather than bounds, and the window is what limits cost because the
         # count does not (§9.14.5).
-        stopped = _idle_allowance_spent(manager, max_sessions, cycles)
+        stopped = _idle_allowance_spent(manager, max_sessions, this_cycle())
         if stopped is not None:
-            return stopped
-        if _counted(cycles) >= max_sessions:
+            if not perpetual:
+                return stopped
+            # Perpetual: the allowance bounds the CYCLE, not the run.
+            empty_cycles = note_cycle_end()
+            cycle_began, cycle_from = _begin_a_new_cycle(
+                "its idle allowance is spent", cycles, clock, say
+            )
+            deadline = cycle_began + window_seconds
+            spun = _spinning(empty_cycles, cycles)
+            if spun is not None:
+                return spun
+            _wait_a_cycle_out(poll, say)
+            continue
+        if _counted(this_cycle()) >= max_sessions:
+            if perpetual:
+                # The ceiling bounds the cycle, not the run (SCRUM-20).
+                empty_cycles = note_cycle_end()
+                cycle_began, cycle_from = _begin_a_new_cycle(
+                    f"{max_sessions} session(s) in it did work", cycles, clock, say
+                )
+                deadline = cycle_began + window_seconds
+                spun = _spinning(empty_cycles, cycles)
+                if spun is not None:
+                    return spun
+                _wait_a_cycle_out(poll, say)
+                continue
             why = _reason_to_wait(root, manager, waiting, router, slack, say)
             if not why:
                 extra = _counted(cycles) - max_sessions
@@ -1517,6 +1664,18 @@ def _supervise(
                 f"{waiting.cap(max_sessions)} under the mail-started cap)"
             )
         if deadline is not None and clock() >= deadline:
+            if perpetual:
+                # The window bounds the cycle, not the run (SCRUM-20).
+                empty_cycles = note_cycle_end()
+                cycle_began, cycle_from = _begin_a_new_cycle(
+                    f"its {int(window_seconds)}s window elapsed", cycles, clock, say
+                )
+                deadline = cycle_began + window_seconds
+                spun = _spinning(empty_cycles, cycles)
+                if spun is not None:
+                    return spun
+                _wait_a_cycle_out(poll, say)
+                continue
             return SuperviseResult(
                 True,
                 f"window elapsed after {int(clock() - begin)}s "
@@ -2708,8 +2867,8 @@ def _torn_down(root, manager: str, session: str, cycles, say) -> SuperviseResult
         )
         return SuperviseResult(
             True,
-            f"stopped Manager {manager!r} — interrupted during teardown, so "
-            f"its session may still be running",
+            f"stopped by the operator (Ctrl-C) — interrupted during teardown, "
+            f"so Manager {manager!r}'s session may still be running",
             cycles,
         )
     if gone is not None and not gone.ok:
@@ -2720,8 +2879,8 @@ def _torn_down(root, manager: str, session: str, cycles, say) -> SuperviseResult
         )
         return SuperviseResult(
             False,
-            f"stopped supervising Manager {manager!r}, but its session "
-            f"{session} may still be running — {gone.detail}",
+            f"stopped by the operator (Ctrl-C) — Manager {manager!r}'s session "
+            f"{session} may still be running: {gone.detail}",
             cycles,
         )
     if gone is not None and gone.killed:
@@ -2730,7 +2889,8 @@ def _torn_down(root, manager: str, session: str, cycles, say) -> SuperviseResult
         )
     return SuperviseResult(
         True,
-        f"stopped Manager {manager!r} — its session had already ended",
+        f"stopped by the operator (Ctrl-C) — Manager {manager!r}'s session "
+        f"had already ended",
         cycles,
     )
 

@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.79 · **Date:** 2026-10-02
+**Version:** 0.24.80 · **Date:** 2026-10-02
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -5857,16 +5857,21 @@ separately configured stop condition is a second definition of "done" that
 can disagree with the loop's, and the first time they disagree there is no
 way to say which is right.
 
-#### 9.14.5. The budget ceiling is mandatory
+#### 9.14.5. The session ceiling bounds every cycle
 
-A `rite start <provider>` invocation **must** carry a ceiling on what it may
-spend, and the command refuses to start without one — no default that means
-"unlimited", and no default at all where the provider has a metered cost.
+Every cycle a `rite start <provider>` invocation runs is **bounded**, and the
+bound is never a default that means "unlimited". What changed in 0.24.80
+(D-115) is the SCOPE: an invocation given both bounds is bounded as a whole by
+them, and an invocation given NEITHER runs until the operator stops it, with
+the same two ceilings applied per cycle. Reaching one then ends the CYCLE, and
+the Manager waits and continues.
 
-Refused rather than defaulted, matching §2.5.1 and `check_worker_cap`:
-silently choosing a number the user did not choose is how `rite pool fill
---count 500` became possible, and spent quota is the one kind of damage no
-cleanup reverses (§5.1.1).
+⚠ **One bound without the other is still refused.** They are not
+interchangeable (D-82 below), and a half-bounded run that silently became
+perpetual is the surprise that refusal exists to prevent — matching §2.5.1 and
+`check_worker_cap`: silently choosing a number the user did not choose is how
+`rite pool fill --count 500` became possible, and spent quota is the one kind
+of damage no cleanup reverses (§5.1.1).
 
 The ceiling is **checked before each session start, not only at the end**. A
 ceiling enforced after the fact is a report, not a ceiling.
@@ -5937,8 +5942,8 @@ is a property of the provider and the second is a decision nobody made.
 ##### Two bounds, because neither one suffices (D-82)
 
 `--sessions` caps how many provider sessions a run may START. `--minutes`
-caps how long it may go on starting them. **Both are mandatory and neither
-has a default.**
+caps how long it may go on starting them. **Either both are given or
+neither is: one alone is refused, and neither has a default.**
 
 They are not two spellings of one bound, and the supervisor was measured to
 establish that rather than argued about:
@@ -5961,9 +5966,43 @@ dead-wiring guard cannot see this: it asks whether a FUNCTION is called,
 never whether a PARAMETER is ever supplied.
 
 A duration that defaults to forever is a bound in name only, which is why
-this one is mandatory rather than defaulted. That is D-69's reasoning about
-`--sessions` — silently choosing a number the user did not choose is how
-`rite pool fill --count 500` became possible — applied to the other axis.
+neither may be silently chosen. That is D-69's reasoning about `--sessions` —
+silently choosing a number the user did not choose is how `rite pool fill
+--count 500` became possible — applied to the other axis.
+
+##### A run with no bound runs until stopped (D-115)
+
+`rite start <manager>` with no flags runs **until the operator stops it**
+(Robert, 2026-10-02). Both bounds above still apply, PER CYCLE:
+`PERPETUAL_SESSIONS_PER_CYCLE` sessions that do work, over
+`PERPETUAL_CYCLE_SECONDS`. Reaching either ends the cycle, says so, waits, and
+begins the next — the run's history is kept across cycles, because that is what
+the lifecycle record (§9.14.12) and the caller read; what resets is where the
+per-cycle counting STARTS.
+
+**What bounds a perpetual run is the per-cycle ceilings above and the
+schedule**, and that is the whole list. A window authorising no Workers is the
+person saying "not now", and a perpetual run follows it.
+
+🔴 **The relaunch gate, and it is what makes "forever" shippable.** A cycle
+that begins the next without having started a session has made no progress, and
+a loop that does that without limit is a SPIN: cheap, silent, and
+indistinguishable from working. After `EMPTY_CYCLES_BEFORE_STOPPING` such
+cycles in a row the run stops and says it was spinning rather than waiting, and
+that this is a defect in rite rather than a state to wait out. The count is of
+CONSECUTIVE empty cycles — counted cumulatively it would end every long run
+after three quiet patches, which is the bug and not the guard. ⚠ Found by
+mutation: breaking the per-cycle counter's reset turned the loop into exactly
+this, and the test HUNG instead of failing, which is the worst way for a defect
+to present. For the same reason the gate's predicate asks only whether the
+session list GREW since the cycle began, never going through the per-cycle
+slice it is there to catch.
+
+⚠ **Ctrl-C is the off switch, and the only stop that records why.** It raises
+through the supervisor's `finally`, so the lifecycle record says the operator
+stopped it. `rite manager stop` kills the tmux session, which skips that and is
+recorded as DIED; a cooperative stop marker is its own ticket and is
+deliberately not faked here.
 
 #### 9.14.6. §9.12, and the argument that FAILED
 
@@ -8250,6 +8289,7 @@ happened once already and left no trace until this review found it.
 | D-112 | Should agents write to the board under their own identity? | **rite builds no identity management** | Robert, TRQ12: "Can't the User control it by choosing if they give rite their token or create a separate account for them?" rite works under either choice, says which is in use, and enforces the guardrail where the choice allows it. The same principle covers commit authorship. |
 | D-113 | May an executor Manager do routed work itself? | **Only a chore or a trivial ticket, only REFINED, only on a ticket-named branch through a PR** | Robert, Q4: "Yes, close the bypass. However, instruct that it's meant for chores and trivial tickets. Any serious work should be passed to workers." Instructed (TR3); enforced only once PB1's publish step can refuse (TR10). |
 | D-114 | One status channel, or one per project? | **One shared channel for all projects (`#rite-status` by default), every line naming its project** | Robert, 2026-09-29, chose shared over per-project. He runs several projects and wants one place to see what is running; lifecycle lines are reading material, not action. A line that does not name its project is unattributable once two projects post there, so every post names it (a test pins every post, not each line). D-101 means an app per project, so each project's app is invited to the one channel. §9.16.2 (RS1). |
+| D-115 | Must `rite start <manager>` carry bounds at all? | **No — with NEITHER bound it runs until the operator stops it, and both bounds then apply PER CYCLE** | Robert, 2026-10-02: a Manager should keep working without being re-started every ninety minutes. D-68, D-69 and D-82 are rescoped rather than repealed: the count and the clock still bound a runaway, now per cycle, and reaching one ends the cycle rather than the run. ONE bound without the other is still refused, because a half-bounded run silently becoming perpetual is the surprise that refusal prevents. What bounds such a run is those two per-cycle ceilings and the schedule, and nothing else is claimed. The run also stops after `EMPTY_CYCLES_BEFORE_STOPPING` cycles in a row that start nothing, because a spin is otherwise indistinguishable from working. §9.14.5. |
 
 ---
 
@@ -8258,6 +8298,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.80 — a Manager with no bound runs until you stop it (SCRUM-20, perpetual).** §9.14.5 is rescoped and gains *A run with no bound runs until stopped*; new decision D-115. Robert, 2026-10-02: vanilla `rite start lead` runs forever, so the bounds that were mandatory (D-68, D-69, D-82) become optional — and are rescoped rather than repealed, because they are what bounds a runaway. Given both, a run is bounded as before; given neither, `_perpetual` is true and the ceiling and the window bound the CYCLE: reaching one says so, waits and begins the next (`PERPETUAL_SESSIONS_PER_CYCLE` 20, `PERPETUAL_CYCLE_SECONDS` one hour, `_begin_a_new_cycle`, `_wait_a_cycle_out` through the `_sleep` seam a virtual-clock test patches). ⚠ `cycles` is NOT reset — only `cycle_from`, where per-cycle counting starts — because the lifecycle record 0.24.78's work just made unconditional reads it. ONE bound without the other is still refused, with the reason and both ways out. What bounds such a run is those two per-cycle ceilings and the schedule, and nothing else is claimed. ⚠ **Ctrl-C is the graceful stop** — it raises through the `finally`, so the record says the operator stopped it — while `rite manager stop` still kills the tmux session and is recorded as DIED; a cooperative stop marker is its own ticket, not faked here. 🔴 **The relaunch gate is what makes forever shippable:** after `EMPTY_CYCLES_BEFORE_STOPPING` (3) cycles in a row that start no session, the run stops and says it was spinning rather than waiting, and that this is a defect in rite. Found by mutation — returning the whole run from `this_cycle()` left the per-cycle count permanently at its ceiling, and the test HUNG rather than failing. Two consequences kept: the gate's predicate asks only whether the session list GREW since the cycle began, never through the slice it exists to catch, and the count is of CONSECUTIVE empty cycles, since counted cumulatively it would end every long run after three quiet patches. `board_context.refusal` no longer formats `{None:g}`, which crashed the board-changed refusal on exactly this path. Tests: `tests/test_a_manager_with_no_bound_runs_until_stopped.py`, whose fake clock RAISES after 200 waits so a test of an unbounded loop cannot hang in CI, over which bounds are perpetual, the ceiling and the window ending the cycle with a bounded control, the history kept across cycles, the spin gate firing, waiting its full count first, and clearing on a productive cycle, and a cycle ended by the ceiling re-arming the window; `test_start_a_manager_cli.py`'s `TestNeitherBoundHasADefault` is rewritten to `TestBothBoundsOrNeither` (no bound starts a perpetual run and says what bounds it instead; one alone is refused both ways). Seven mutations each go red — two only after a test was added, and one of those two survived its first test because the hour-long default window hid a deadline that was never re-armed.
 
 **Changes in 0.24.79 — `--while` leaves the command line, and two tests stop measuring the machine (SCRUM-31, SCRUM-32, SCRUM-33).** §9.16's not-covered list loses `--while`. **SCRUM-33, security-shaped:** `rite ask --defer --while "<…>"` was free text in double quotes, the F14 shape `reply`/`ask`/`route` were moved off, and the check-in instructions taught it; a meanwhile names tickets other people wrote. `--while -` now reads stdin's first line (`stdin_text.split_first_line`), anything else given to `--while` is refused before stdin is read or anything queued, and the instructions and guide teach the one heredoc. `test_no_instruction_teaches_text_in_double_quotes` did not scan the check-in instructions, which is how this survived it; it does now. **SCRUM-31:** the blast-radius soak failed when fewer than a quarter of 200+ claim attempts were granted. Investigated rather than floor-skipped: with no fleet layer a refusal is decided on a fresh read under the lock, so every refusal is a claim really held, and the ratio is a function of hold time against the 4ms bursts — measured on the healthy ledger 51% at 0ms, 25.1% at 8ms, 19.6% at 12ms, with nothing lost and nothing held twice; the macOS runner's red was 20.1%, on the soak's first run there (#177 put it on that runner). What the ratio stood in for is a LOST RELEASE, which leaves a zombie claim; with the pre-fix defect (`flock` on `claims.json`) reinstated, zombie claims followed in 9 of 9 runs and lost grants in 3 of 9. So the soak now asserts directly that nothing is still claimed once every worker has released, before the small-sample skip, and the ratio is reported. **SCRUM-32:** `test_it_cannot_rewrite_the_rite_it_runs` touched the real package, which succeeds through the deliberate `/tmp` grant when the checkout is under `/tmp`; it now probes the rule itself, on a decoy given to the same `_running_rite` grant outside every writable one (readable as a positive control, not writable as the property), and probes the real package wherever only that rule can answer. Each change's control goes red on the assertion that names it; for SCRUM-31 the zombie check alone caught 2 of 6 broken-lock runs, which would otherwise have skipped.
 

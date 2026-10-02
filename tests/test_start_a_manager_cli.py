@@ -110,31 +110,60 @@ class TestBothBoundsReachTheSupervisor:
         assert supervised[0]["window_seconds"] == pytest.approx(30.0)
 
 
-class TestNeitherBoundHasADefault:
-    """Measured (D-82): sessions that end instantly hit the COUNT with the
-    clock untouched; sessions of realistic length hit the CLOCK after three
-    with the count untouched. Neither suffices alone, so neither may be
-    silently chosen — the reasoning that made `--sessions` required applies
-    unchanged to a duration, and a duration defaulting to forever is a
-    bound in name only."""
+class TestBothBoundsOrNeither:
+    """🔴 **The bounds became OPTIONAL (SCRUM-20, perpetual; Robert,
+    2026-10-02): `rite start planner` with no flags runs until stopped.**
 
-    def test_no_sessions_refuses_and_starts_nothing(self, project, supervised):
-        result = CliRunner().invoke(cli, ["start", "planner", "--minutes", "90"])
-        assert result.exit_code == 1
-        assert "--sessions is required" in result.output
-        assert not supervised, "it refused and started a Manager anyway"
+    ⚠ **D-82 is rescoped, not repealed, and this class is where that shows.**
+    Measured: sessions that end instantly hit the COUNT with the clock
+    untouched; sessions of realistic length hit the CLOCK after three with the
+    count untouched. Neither suffices alone — so both still apply to a
+    perpetual run, PER CYCLE, and ONE given without the other is still refused.
+    A half-bounded run silently becoming perpetual is the surprise that refusal
+    exists to avoid."""
 
-    def test_no_minutes_refuses_and_starts_nothing(self, project, supervised):
+    def test_no_bound_at_all_starts_a_perpetual_run(self, project, supervised):
+        result = CliRunner().invoke(cli, ["start", "planner"])
+
+        assert result.exit_code == 0, result.output
+        assert supervised, "it accepted the command and started nothing"
+        assert supervised[0]["max_sessions"] is None
+        assert supervised[0]["window_seconds"] is None
+
+    def test_and_says_what_bounds_it_instead(self, project, supervised):
+        """⚠ Said, not implied. Someone starting a run with no end needs the
+        per-cycle guardrails and the off switch — on the line that starts it,
+        not in the docs."""
+        result = CliRunner().invoke(cli, ["start", "planner"])
+
+        assert "until you stop it" in result.output
+        assert "Ctrl-C" in result.output
+        assert "per cycle" in result.output.lower()
+        assert "ceilings" in result.output and "schedule" in result.output
+
+    def test_sessions_without_minutes_refuses_and_starts_nothing(
+        self, project, supervised
+    ):
         result = CliRunner().invoke(cli, ["start", "planner", "--sessions", "3"])
         assert result.exit_code == 1
-        assert "--minutes is required" in result.output
+        assert "--minutes was not" in result.output
+        assert not supervised, "it refused and started a Manager anyway"
+
+    def test_minutes_without_sessions_refuses_and_starts_nothing(
+        self, project, supervised
+    ):
+        result = CliRunner().invoke(cli, ["start", "planner", "--minutes", "90"])
+        assert result.exit_code == 1
+        assert "--sessions was not" in result.output
         assert not supervised, "it refused and started a Manager anyway"
 
     def test_the_refusal_says_why_rather_than_just_what(self, project, supervised):
         """A refusal nobody understands is a refusal people work around by
-        typing any number that makes it stop."""
+        typing any number that makes it stop — so it gives the reason AND both
+        ways out."""
         result = CliRunner().invoke(cli, ["start", "planner", "--sessions", "3"])
         assert "neither suffices alone" in result.output
+        assert "or neither to run until you stop it" in result.output
 
 
 class TestTheManagerNameIsInterceptedFirst:
