@@ -401,6 +401,39 @@ def _format_boards(boards: list[BoardState] | None, unreached: str = "") -> list
     return lines
 
 
+def _ended_line(name: str, state: str, record: dict) -> str:
+    """What a finished run says about itself (SCRUM-20).
+
+    Nothing recorded WHY a run ended or what it did, so "ceiling reached" and
+    "crashed having started nothing" read identically — a stopped Manager with
+    a Worker mid-question took an hour to diagnose for exactly that reason.
+    """
+    from rite_ai.managers.routing import DIED
+
+    why = str(record.get("ended") or "").strip()
+    did = record.get("sessions_that_did_work")
+    idle = record.get("sessions_that_changed_nothing")
+    counted = ""
+    if isinstance(did, int):
+        counted = f"; {did} session(s) did work"
+        if isinstance(idle, int) and idle:
+            counted += f", {idle} changed nothing"
+    left = record.get("left_unattended") or []
+    unattended = ""
+    if left:
+        who = ", ".join(str(w.get("worker", "?")) for w in left)
+        unattended = (
+            f". ⚠ It left {len(left)} Worker(s) holding work: {who} — "
+            "nothing was released; start a Manager again to pick them up"
+        )
+    if state == DIED:
+        return (
+            f"  {name}: stopped WITHOUT recording an end — killed, or it "
+            f"crashed past its own cleanup{counted}{unattended}"
+        )
+    return f"  {name}: finished — {why or 'no reason recorded'}{counted}{unattended}"
+
+
 def _manager_lines(root: Path) -> list[str]:
     """Which Managers are running, WITHOUT spawning a process.
 
@@ -424,6 +457,13 @@ def _manager_lines(root: Path) -> list[str]:
     naming it is what gets it cleaned up.
     """
     from rite_ai.managers import pid_alive, running_instances
+    from rite_ai.managers.routing import (
+        DIED,
+        ENDED,
+        RUNNING,
+        supervisor_record,
+        supervisor_state,
+    )
 
     live: list[str] = []
     stale: list[str] = []
@@ -433,8 +473,30 @@ def _manager_lines(root: Path) -> list[str]:
                 f"  {instance.name}: running as {instance.session} "
                 f"— tmux attach -t {instance.session}"
             )
-        else:
-            stale.append(instance.name)
+            continue
+        # 🔴 SCRUM-20. The INSTANCE pid is the tmux pane's, and it is dead
+        # between cycles BY DESIGN (`record_supervisor`'s own docstring says
+        # so). Reporting that as "the recorded process is gone" called a
+        # running Manager gone — measured: `rite start lead` alive as pid 7309
+        # with a tmux session seconds old, while this line said it was not
+        # running. The SUPERVISOR record is the one that spans a whole run,
+        # waits included, so it is asked before the pane's pid is believed.
+        state = supervisor_state(root, instance.name)
+        if state == RUNNING:
+            live.append(
+                f"  {instance.name}: running — between sessions right now "
+                f"(its supervisor holds the run; the pane's own process is "
+                f"dead between cycles by design)"
+            )
+            continue
+        if state in (ENDED, DIED):
+            live.append(
+                _ended_line(
+                    instance.name, state, supervisor_record(root, instance.name)
+                )
+            )
+            continue
+        stale.append(instance.name)
     if stale:
         # ⚠ **It said "the session is gone", and it cannot know that.**
         # `pid_alive` answers about the recorded PROCESS. `remain-on-exit`

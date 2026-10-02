@@ -885,7 +885,11 @@ def record_supervisor(root: Path, manager: str, pid: int) -> None:
 
 
 def forget_supervisor(
-    root: Path, manager: str, pid: int, how: str = "finished"
+    root: Path,
+    manager: str,
+    pid: int,
+    how: str = "finished",
+    counts: dict | None = None,
 ) -> None:
     """The run recorded its own end: the second half of the lifecycle.
 
@@ -895,15 +899,17 @@ def forget_supervisor(
     path = _ledger_dir(root, manager) / SUPERVISOR_FILE
     data = _load(path)
     if data.get("pid") == pid:
-        _store(
-            path,
-            {
-                "state": ENDED,
-                "ended": how,
-                "ended_at": time.time(),
-                "started_at": data.get("started_at"),
-            },
-        )
+        record = {
+            "state": ENDED,
+            "ended": how,
+            "ended_at": time.time(),
+            "started_at": data.get("started_at"),
+        }
+        # SCRUM-20: what the run DID, beside why it stopped. "Ended on the
+        # ceiling" and "ended having started nothing" are different facts and
+        # were indistinguishable.
+        record.update(counts or {})
+        _store(path, record)
 
 
 NEVER, RUNNING, ENDED, DIED = "never", "running", "ended", "died"
@@ -935,6 +941,13 @@ def _supervisor_state(root: Path, manager: str) -> str:
     if recorded and _process_start(pid) not in ("", recorded):
         return DIED
     return RUNNING
+
+
+def supervisor_record(root: Path, manager: str) -> dict:
+    """The recorded lifecycle as written, for a reader that wants the REASON
+    and the counts rather than only the state (SCRUM-20). `{}` when no run was
+    ever recorded here."""
+    return _load(_ledger_dir(root, manager) / SUPERVISOR_FILE)
 
 
 def supervisor_state(root: Path, manager: str) -> str:

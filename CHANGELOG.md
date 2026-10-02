@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+### A Manager that stops says so, says why, and says what it left (SCRUM-20)
+
+Three things were silent at once when a Manager's run ended, and together they
+cost an hour of diagnosis while a Worker sat waiting for an answer nobody knew
+it needed.
+
+**`rite status` called a running Manager gone.** It read the record of the
+Manager's current session, whose process is dead between sessions by design, so
+a Manager that was alive and about to start its next session was reported as
+"the recorded process is gone". It now reads the record that spans the whole
+run, and says "running — between sessions right now" instead.
+
+**Nothing recorded why a run ended, or what it did.** A run that stopped
+because it reached its `--sessions` ceiling and one that crashed having started
+nothing read identically. Both are now recorded and reported: the reason, and
+how many sessions did work, changed nothing, or were started at all.
+
+⚠ The record was always written for a Manager in a project shared with others,
+and never for a lone Manager — the commonest kind, and the one this was found
+on. It is written for every run now.
+
+**And a Manager that stops while its Workers are still working says which.**
+Its Workers outlive it: their sandboxes are their own processes. The notice goes
+to the Owner's DM, names each Worker still holding a claim or waiting on an
+answer, and says plainly that nothing was released — a running Worker's claim is
+what stops a second Worker editing the same files. Answering a Worker's question
+still needs a Manager running, or its own session; the notice says so rather
+than leaving you to find out.
+
+
 ### The decomposer writes the plan, and the model never approves its own
 
 `rite local decompose <manager> <ticket>` is new: the Manager holding the
