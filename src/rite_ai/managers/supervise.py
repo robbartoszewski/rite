@@ -88,8 +88,9 @@ from rite_ai.managers.session import (
 from rite_ai.managers.session import start as start_session
 from rite_ai.managers.session import stop as stop_session
 from rite_ai.managers.transcripts import (
+    Refusal,
     belongs_to_project,
-    refused_commands,
+    refusals,
     session_id_problem,
 )
 
@@ -593,7 +594,7 @@ def _say_refusals(
     whole sessions.
 
     ⚠ **Break 4 of B4b: this read CLAUDE's transcripts for every engine.**
-    `refused_commands` scans Claude Code's transcript directory, which Goose
+    `refusals` scans Claude Code's transcript directory, which Goose
     does not write — so a Goose Manager's refusals were invisible, and the
     empty list that came back was indistinguishable from "nothing was
     refused". An instrument that reports the absence of a thing it never
@@ -648,7 +649,8 @@ def _say_refusals(
     # A Claude Manager with its own config directory writes its transcripts
     # there (`claude_login`), so that is where its refusals are.
     base = claude_login.projects_dir(root, manager) if manager else None
-    refused = list(dict.fromkeys(refused_commands(root, since, base=base)))
+    found = _not_yet_reported(root, manager, refusals(root, since, base=base))
+    refused = list(dict.fromkeys(r.command for r in found))
     for command in refused:
         if _substitutes(command):
             # ⚠ W9 (v0.6.0 readiness). This used to fall to the branch below
@@ -693,12 +695,146 @@ def _say_refusals(
         else:
             say(refusal(command, root))
     if manager:
-        for command in refused:
-            _tell_the_person_a_relay_was_refused(root, manager, command, since, say)
+        told: set[str] = set()
+        for denial in found:
+            if denial.command in told:
+                continue
+            told.add(denial.command)
+            _tell_the_person_a_relay_was_refused(root, manager, denial, since, say)
     return [c.strip() for c in refused]
 
 
+REPORTED_FILE = "refusals-reported.json"
+"""The engine's ids of the denials already reported for this Manager."""
+
+REPORTED_KEPT = 2000
+"""Enough ids to outlast any conversation a Manager resumes; the oldest go."""
+
+
+def _not_yet_reported(root: Path, manager: str, found: list[Refusal]) -> list[Refusal]:
+    """`found`, less the denials already reported for `manager`, which are
+    recorded as reported now (SCRUM-22).
+
+    ⚠ **Keyed by the engine's `tool_use_id`, not by the text.** The text of a
+    person's notice names the session it came from, so `asking`'s own
+    once-only ledger, keyed by text, saw a new question every session and
+    raised the same old refusal again each time — sixteen times in twenty-two
+    minutes on a live Owner. The id is the call's, and it survives a resumed
+    conversation copying its history into a new file.
+
+    Under the Manager's own state lock and written atomically, so two scans
+    cannot both decide an id is new. A denial with no id is passed through:
+    nothing identifies it to remember, and `refusals` has already bounded it
+    to this session where it carries a time. With no Manager there is no
+    directory to remember in, and nothing is filtered.
+    """
+    if not manager:
+        return found
+    import json
+
+    from rite_ai.managers import manager_dir
+    from rite_ai.state import locked, write_atomic
+
+    path = manager_dir(root, manager) / REPORTED_FILE
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with locked(path):
+            try:
+                seen = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                seen = []
+            seen = (
+                [i for i in seen if isinstance(i, str)]
+                if isinstance(seen, list)
+                else []
+            )
+            known = set(seen)
+            fresh = [
+                r for r in found if not r.tool_use_id or r.tool_use_id not in known
+            ]
+            new_ids = [r.tool_use_id for r in fresh if r.tool_use_id]
+            if new_ids:
+                kept = (seen + list(dict.fromkeys(new_ids)))[-REPORTED_KEPT:]
+                write_atomic(path, json.dumps(kept) + "\n")
+            return fresh
+    except OSError:
+        # Cannot remember, so cannot dedupe: report rather than go silent. A
+        # repeat is noise; a refusal never said is the defect C21 exists for.
+        return found
+
+
 _RELAY_VERBS = ("reply", "ask", "route")
+
+
+def _relay_verb(command: str) -> str:
+    """`reply`, `ask`, `route` or `refine ask` when `command` is one of rite's
+    relays, else "". Read from its first line, where the verb is."""
+    words = command.split("\n", 1)[0].split()
+    if not words or Path(words[0]).name != "rite":
+        return ""
+    rest = [w for w in words[1:] if not w.startswith("-")]
+    if rest[:1] and rest[0] in _RELAY_VERBS:
+        return rest[0]
+    if rest[:2] == ["refine", "ask"]:
+        return "refine ask"
+    return ""
+
+
+def _heredoc_body(command: str) -> str | None:
+    """The text a relay carried on stdin: the lines after `<<'END'` up to the
+    first line that is exactly `END`, as `stdin_text.read` hands it to the
+    command. None when the command carries no quoted heredoc, or its end line
+    never comes."""
+    head, _, rest = command.partition("\n")
+    marker = head.rfind("<<'")
+    if marker < 0 or not head.rstrip().endswith("'"):
+        return None
+    end = head[marker + 3 :].rstrip()[:-1]
+    if not end:
+        return None
+    lines = rest.split("\n")
+    if end not in lines:
+        return None
+    return "\n".join(lines[: lines.index(end)])
+
+
+def _the_same_message_went(root: Path, manager: str, refusal: Refusal) -> bool:
+    """Whether the very message this refusal stopped reached the outbox
+    afterwards: a later `reply` or `ask` with EXACTLY the refused heredoc's text
+    (SCRUM-22).
+
+    ⚠ **The text, not "a later message".** This first accepted any later
+    message the Manager wrote, which suppressed the notice for a reply that was
+    never sent again whenever anything else followed it, and in a running loop
+    something always does: the guarantee that a lost message is told (SCRUM-23)
+    would have failed exactly when it is needed. So it proves only this: the
+    same words, from the outbox writers a person reads (`reply`, or `ask`,
+    which is where rite sends a reply that reads as a question), after the
+    refusal.
+
+    Everything else is still told, which is the safe way to be wrong: a
+    refusal with no time, a refused `route` or `refine ask` (no outbox message
+    shows those went), a command whose text was on the command line (no body
+    to compare), and a retry the Manager reworded (one notice too many,
+    never one too few)."""
+    if refusal.at is None:
+        return False
+    command = refusal.full_command or refusal.command
+    if _relay_verb(command) not in ("reply", "ask"):
+        return False
+    body = _heredoc_body(command)
+    if body is None or not body.strip():
+        return False
+    from rite_ai.managers.mailbox import OUTBOX, QUESTION, REPLY, read
+
+    try:
+        messages = read(root, manager, OUTBOX)
+    except OSError:
+        return False
+    return any(
+        m.timestamp > refusal.at and m.kind in (REPLY, QUESTION) and m.text == body
+        for m in messages
+    )
 
 
 def _relay_refused(command: str) -> str:
@@ -709,18 +845,11 @@ def _relay_refused(command: str) -> str:
 
     if stray_end(command):
         return "a message in rite's text form"
-    words = command.split("\n", 1)[0].split()
-    if not words or Path(words[0]).name != "rite":
-        return ""
-    rest = [w for w in words[1:] if not w.startswith("-")]
-    if rest[:1] and rest[0] in _RELAY_VERBS:
-        return f"`rite {rest[0]}`"
-    if rest[:2] == ["refine", "ask"]:
-        return "`rite refine ask`"
-    return ""
+    verb = _relay_verb(command)
+    return f"`rite {verb}`" if verb else ""
 
 
-def _tell_the_person_a_relay_was_refused(root, manager, command, since, say):
+def _tell_the_person_a_relay_was_refused(root, manager, refusal, since, say):
     """🔴 SCRUM-23. A relay the engine refused was said only in the
     supervisor's pane, so the person it was for never learned it did not
     come. Told in their DM, through the outbox the message itself would have
@@ -732,8 +861,18 @@ def _tell_the_person_a_relay_was_refused(root, manager, command, since, say):
     from rite_ai.managers.asking import raise_to_person
     from rite_ai.managers.stdin_text import stray_end
 
+    command = refusal.command
     what = _relay_refused(command)
     if not what:
+        return
+    if _the_same_message_went(root, manager, refusal):
+        # 🔴 SCRUM-22. The same words reached the outbox after the refusal, so
+        # "did not reach anyone" would be false. Said in the pane, not the DM.
+        say(
+            f"{what} from {manager!r} was refused, and a message with exactly "
+            "its text reached the outbox afterwards; the person is not told it "
+            "went missing"
+        )
         return
     if stray_end(command):
         why = "its end line was written twice, so the engine refused the whole call"
@@ -750,9 +889,9 @@ def _tell_the_person_a_relay_was_refused(root, manager, command, since, say):
             raiser=f"manager:{manager}",
             text=(
                 f"{what} from Manager {manager!r} did not reach anyone "
-                f"(session from {when}): {why}. Nothing was sent. The Manager "
-                "was told and may send it again; until it does, whatever it "
-                "was meant to say has not arrived."
+                f"(session from {when}): {why}, so that call sent nothing. "
+                "The Manager was told and may send it again; until it does, "
+                "whatever it was meant to say has not arrived."
             ),
         )
     except Exception as e:  # noqa: BLE001 - said, never raised into the run

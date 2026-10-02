@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -294,11 +295,26 @@ _DENIAL = re.compile(
 _NAMED_PART = re.compile(r"following part requires approval:\s*(.+)", re.I | re.S)
 
 
-def refused_commands(
-    root: Path, since: float = 0.0, base: Path | None = None
-) -> list[str]:
-    """Commands this project's recent sessions were REFUSED, most recent last.
+@dataclass(frozen=True)
+class Refusal:
+    """One denial, with what identifies it and when it happened."""
 
+    command: str
+    """What to name: the part the engine named, else the whole command."""
+    full_command: str = ""
+    """The whole command the denied tool call carried, for telling what it
+    was sending (the named part of a doubled heredoc is only its end line)."""
+    tool_use_id: str = ""
+    """The engine's id for the call. Stable across a resumed conversation's
+    copies, so it is what "reported once" is keyed by."""
+    at: float | None = None
+    """When the engine recorded the denial (the entry's `timestamp`), or None
+    when the entry did not say."""
+
+
+def refusals(root: Path, since: float = 0.0, base: Path | None = None) -> list[Refusal]:
+    """The denials this project's recent sessions met, most recent last, each
+    with the engine's id for the call and when it happened.
     ⚠ **Without this, a refusal is invisible to rite.** The engine tells the
     MODEL that a command needed approval; the model may then say so, work
     around it, or quietly do neither — and the v0.5.1 acceptance run is all
@@ -318,6 +334,21 @@ def refused_commands(
     The second names the offending part, so it is preferred over the whole
     command when present — otherwise the refusal rite prints would quote a
     compound line and name the wrong executable.
+
+    ⚠ It replaced `refused_commands`, which returned only the text (SCRUM-22).
+
+    🔴 **`since` bounds the ENTRIES, not the files.** It used to keep any file
+    whose mtime was at or after `since` and then report every denial in it. A
+    Manager that resumes one conversation appends to the same `.jsonl` every
+    cycle, so its mtime is always new and every session re-reported the whole
+    history: measured on a live Owner, one stray heredoc end line refused at
+    00:04Z was told to the person sixteen times between 18:46 and 19:08 as
+    "did not reach anyone", while every relay in that window had gone. Each
+    denial now carries its own `timestamp` and one older than `since` is not
+    this session's. A resumed session also COPIES earlier history into a new
+    file with the original timestamps (`_latest_event`), which this excludes
+    too. A denial whose entry has no timestamp is kept: "could not tell when"
+    is not "before", and the caller's once-per-id ledger stops it repeating.
     """
     directory = project_transcript_dir(root, base)
     try:
@@ -326,15 +357,30 @@ def refused_commands(
         return []
     if since > 0:
         candidates = [p for p in candidates if _mtime(p) >= since]
-    refused: list[str] = []
+    found: list[Refusal] = []
     for path in sorted(candidates, key=_mtime):
-        refused.extend(_refused_in(path))
-    return refused
+        found.extend(
+            r
+            for r in _refused_in(path)
+            if not (since > 0 and r.at is not None and r.at < since)
+        )
+    return found
 
 
-def _refused_in(path: Path) -> list[str]:
+def _entry_time(entry: dict) -> float | None:
+    raw = entry.get("timestamp")
+    if not isinstance(raw, str):
+        return None
+    try:
+        when = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return when.timestamp() if when.tzinfo is not None else None
+
+
+def _refused_in(path: Path) -> list[Refusal]:
     commands: dict[str, str] = {}
-    refused: list[str] = []
+    refused: list[Refusal] = []
     try:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
@@ -373,11 +419,16 @@ def _refused_in(path: Path) -> list[str]:
                 # The named part wins; otherwise fall back to the command the
                 # result belongs to; a result with neither is skipped rather
                 # than reported as an empty refusal.
-                found = (
-                    named.group(1).strip()
-                    if named
-                    else commands.get(block.get("tool_use_id", ""), "")
-                )
+                call = block.get("tool_use_id", "") or ""
+                whole = commands.get(call, "")
+                found = named.group(1).strip() if named else whole
                 if found:
-                    refused.append(found)
+                    refused.append(
+                        Refusal(
+                            command=found,
+                            full_command=whole or found,
+                            tool_use_id=call,
+                            at=_entry_time(entry),
+                        )
+                    )
     return refused
