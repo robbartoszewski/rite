@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.76 · **Date:** 2026-10-01
+**Version:** 0.24.77 · **Date:** 2026-10-02
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -7021,13 +7021,30 @@ whoever types them and whatever they say.**
 ⚠ **This adds one Slack scope — measured 2026-09-25 (plan § A6).** A3a
 established that `channels:history` and `chat:write` suffice for a public
 channel. **Reading the Owner's DM needs `im:history`.** Posting to it needs
-nothing more: a post to the Owner's user id returns the DM's id, which is how
-rite learns it (`conversations.open` would need `im:write`, and is not used).
+nothing more: a post to the Owner's user id returns the DM's id. rite learns
+the id once and remembers it (the relay's state, per project and per Owner):
+with `im:write` granted it opens the DM without posting (`conversations.open`),
+and without it it posts ONE line, the first time only, saying what the DM is
+for. A later run posts nothing to learn it.
 
-**Configured per project** as `slack.owner_user` (the Owner's user id) and
-`slack.broadcast_channel`. There is **no configurable command channel**: a
-`slack.command_channel` key is refused by the parser, because configuring
-authority as a channel is what lets it be pointed at one others can post in.
+**Starts and stops are said in the status channel, never in the DM**
+(`slack.status_channel`, default `#rite-status`; RS1). Robert, 2026-09-29: "it
+must go to a separate #rite-status channel or something. It's a spam anywhere
+else." The DM is where rite asks the person things, and a lifecycle line there
+makes a real question easy to miss. The status channel is **output only**: rite
+never reads it, so nothing typed there reaches a Manager, and the parser
+refuses the broadcast channel as the status channel, because that one is read
+as context. **One status channel is shared by all projects** (D-114), so every
+line names its project. A status channel rite cannot post to leaves the line on
+the terminal and says so; it never falls back to the DM or the broadcast
+channel. The one stop line that stays in the DM is a message rite took from
+Slack and never delivered: that needs the person, where they typed it.
+
+**Configured per project** as `slack.owner_user` (the Owner's user id),
+`slack.broadcast_channel` and `slack.status_channel`. There is **no
+configurable command channel**: a `slack.command_channel` key is refused by the
+parser, because configuring authority as a channel is what lets it be pointed
+at one others can post in.
 
 #### 9.16.3. Unaddressed thread comments are context, never instruction (D-94)
 
@@ -8178,6 +8195,7 @@ happened once already and left no trace until this review found it.
 | D-111 | May a session running as the person attest a definition of done? | **Yes, marked `attested` and findable** | Robert, TRQ10: "Allow it." rite cannot tell the person from a model running as them, and says so in the record; the Slack DM stays the stronger path. `/dev/tty` confirmation was measured not to be a barrier and is not used. Built (`rite refine accept`). |
 | D-112 | Should agents write to the board under their own identity? | **rite builds no identity management** | Robert, TRQ12: "Can't the User control it by choosing if they give rite their token or create a separate account for them?" rite works under either choice, says which is in use, and enforces the guardrail where the choice allows it. The same principle covers commit authorship. |
 | D-113 | May an executor Manager do routed work itself? | **Only a chore or a trivial ticket, only REFINED, only on a ticket-named branch through a PR** | Robert, Q4: "Yes, close the bypass. However, instruct that it's meant for chores and trivial tickets. Any serious work should be passed to workers." Instructed (TR3); enforced only once PB1's publish step can refuse (TR10). |
+| D-114 | One status channel, or one per project? | **One shared channel for all projects (`#rite-status` by default), every line naming its project** | Robert, 2026-09-29, chose shared over per-project. He runs several projects and wants one place to see what is running; lifecycle lines are reading material, not action. A line that does not name its project is unattributable once two projects post there, so every post names it (a test pins every post, not each line). D-101 means an app per project, so each project's app is invited to the one channel. §9.16.2 (RS1). |
 
 ---
 
@@ -8186,6 +8204,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.77 — starts and stops leave the DM for a status channel (RS1).** §9.16.2, new decision D-114. Robert, 2026-09-29: the DM line "rite: Manager `lead` is running …" on every start and stop "must go to a separate #rite-status channel or something. It's a spam anywhere else" — it crowded the one conversation where rite asks the person things. Starts and stops now go to `slack.status_channel` (default `#rite-status`), each naming its project so one channel serves several (D-114); the DM and the broadcast channel no longer hear them. The status channel is output only: rite never reads it, and the parser refuses the broadcast channel there because that one is read as context. A status channel rite cannot post to leaves the line on the terminal and never falls back to the DM, because that fallback is the spam. Because the DM start post was also how rite learned the DM's id, the relay now remembers the DM and broadcast ids between runs (keyed by Owner and by channel name, so a changed config is relearned) and opens the DM with `conversations.open` where `im:write` is granted; otherwise it posts one line, once per project, saying what the DM is for. The one stop line kept in the DM is a message rite took from Slack and never delivered — that needs the person. Tests: start and stop only in the status channel; a second start posts nothing to the DM or broadcast; with `im:write` the DM is never posted to; the undelivered warning stays in the DM; a status channel rite cannot reach never falls back; config defaults, naming, round-trip, and the broadcast-channel refusal. The two tests that pinned the stop line in the DM and `#all-rite` are rewritten to the new property, not deleted.
 
 **Changes in 0.24.76 — `rite init` finishes the job it starts, and the publish gate runs behind a redirected `core.hooksPath` (v0.7.0a5: SCRUM-5 … SCRUM-11).** §9.3 (Section 1, the modules section, the settle list), §9.6, §10.5 and §11.5.1 rewritten. Seven items from a read-only investigation of a real `rite init` run on 0.7.0a4, five of them one root cause: **init's path is thinner than the `rite add *` command it stands in for**. **SCRUM-5 + SCRUM-6:** `setup.offer_a_worker` called `add_worker(root, name)` — two of five parameters — so an init-created Worker was linked to no Manager (brief line 7 "No Manager assigned yet." against line 112 "Tell your Manager you are free", because only that one line is conditional) and was never offered the modules' own instruction files, S23's feature being reachable from `add_worker_cmd` alone. New `cli/module_docs.py` holds the find-and-ask and the no-tty probe, called by both entry points, with the guard INSIDE the step so no caller can pass its way past the `click.confirm` abort (defect class 15); the link is None-safe, since `--yes` declares no Manager and a Worker can still be declared there. **SCRUM-7:** `what_is_missing` gains a board row (`ticket_backend.type: none`, naming `rite credential set jira` and the three fields it writes) and an exclusive Slack row (`refinement.questions_to: dm` with no `slack.owner_user`, naming `rite credential set slack`, `rite replies` and `rite refine answer`); signposts only, because init does not write backend config. **SCRUM-8:** `credential set` asks before retargeting a board, default No, never without a tty, clearing the outgoing backend's exclusive fields and `credential` while `scope_label` survives (`config.models.leave_the_old_board`). **SCRUM-10:** `OWNER_ONLY_UNTIL_MULTI_MANAGER` suppresses the Owner-vs-Manager MACHINE question on both routes through one point (`_ask_role`; the second site is the "existing spec or code" route, which is the one the reported run hit), says which machine it took, and REFUSES `--config project.role: manager` before `.rite/` exists rather than discarding a declared key; `ROLE_OPTIONS`, the select and `_borrow_owner_config` are intact and unreferenced so 0.9.0 re-wires. **SCRUM-11:** modules get a description, defaulted from the module's own README's first prose sentence and offered rather than taken (`manage.description_from_readme`), and `modules.yaml` has ONE writer again (`manage.write_modules_file`, atomic and lockable) where `scaffold.write_modules` was a second, non-atomic one also used by `rite module set-command`. **SCRUM-9, security-sensitive:** a global `core.hooksPath` meant the publish gate ran nowhere automatically, in any rite project, for the life of the redirect — and the directory it pointed at held another project's data-leak gate, so the old refusal was right twice over and wrong to stop there. `install_pre_push_hook` now writes a chained hook (redirected hook first, its exit code final, gate second, ref list duplicated through a file because git feeds them on stdin, upstream resolved at RUN time from the global and system scopes) and points only this repository's `core.hooksPath` at its own hooks, ABSOLUTE — a relative `.git/hooks` ran the hook from the main checkout and nothing at all from a worktree, measured. The hook is written BEFORE the config is pointed at it and the installer refuses loudly when the chain cannot be built, because the reverse order has a window that silently drops the other project's gate. `upstream_hooks_dir` is deliberately not `redirected_hooks_dir`: once pointed back, "is this redirected?" says no, and an installer asking that would write the unchained script on its second run. `own_hooks_dir` (`--git-common-dir`, guarded by `--show-toplevel`) replaces `(repo_root / ".git").is_dir()`, which answered "not a git repository" for every worktree and made the redirect check report a redirect in every worktree with none set; `scaffold.install_pre_push_hooks` was a SECOND installer and now delegates, carrying each refusal's words back. Review found three gaps, all closed on the branch: the chain read `core.hooksPath` with a bare `--get`, so a `~/…` value disarmed the upstream hook silently (latent on an absolute value, live the moment anything rewrites that line in `~` form); no test could catch it because every fixture wrote the expanded path; and `settle_module_descriptions`' `if module.description` guard was unpinned, though a module name containing a dot (which `name_problem` allows) defeats `Preset.get`'s dotted walk and lets the README-derived default replace a description declared in `--config`. Tests: `tests/test_init_declares_a_whole_worker.py`, `tests/test_init_does_not_call_a_boardless_project_ready.py`, `tests/test_init_is_owner_only_until_multi_manager.py`, `tests/test_init_says_what_each_module_is.py`, `tests/test_a_board_is_retargeted_only_when_asked.py`, `tests/test_the_gate_runs_behind_a_redirected_hooks_path.py` — the last drives real git, real hooks and real pushes to a real remote, with a per-test global git config because these tests WRITE a redirect and the suite's own isolation file is session-scoped. ⚠ BEHAVIOURAL, not a parameter ledger: a test enumerating `add_worker`'s parameters passes with the bug present the moment someone adds the argument and gets it wrong. Twenty-four mutations run and reverted, each red. Existing init tests lose the role answer and gain a description answer; two that pinned "Ready." for a boardless project now pin the board row; `tests/test_init_scaffold.py`'s hook tests use real repositories, because the installer now asks git rather than looking for a `.git` directory.
 

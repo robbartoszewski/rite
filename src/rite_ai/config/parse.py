@@ -12,6 +12,7 @@ import yaml
 
 from .managers import parse_managers
 from .models import (
+    DEFAULT_BROADCAST,
     STRATEGIES,
     BudgetConfig,
     CheckinsConfig,
@@ -590,6 +591,7 @@ def parse_config(path: Path) -> ProjectConfig | ParseError:
     slack_raw = raw.get("slack") or {}
     slack = SlackConfig(
         owner_user=str(slack_raw.get("owner_user") or ""),
+        status_channel=normalize_slack_channel(slack_raw.get("status_channel") or ""),
         broadcast_channel=normalize_slack_channel(
             slack_raw.get("broadcast_channel") or ""
         ),
@@ -933,7 +935,7 @@ def _slack_problem(raw: object) -> str:
             "Owner's DM with the rite app (SPEC §9.16.2, D-95), so authority "
             "cannot be pointed at a channel others can post in. Set "
             "slack.owner_user to the Owner's Slack user id (U…) and remove "
-            "command_channel; a channel for status goes in slack.broadcast_channel"
+            "command_channel; starts and stops are said in slack.status_channel"
         )
     owner = raw.get("owner_user") or ""
     if owner and not (isinstance(owner, str) and _SLACK_USER.match(owner)):
@@ -951,6 +953,21 @@ def _slack_problem(raw: object) -> str:
             f"slack.broadcast_channel {broadcast!r} is neither a channel name "
             "starting with '#' (lower case, as Slack writes it) nor a channel "
             "id (C…)"
+        )
+    status = normalize_slack_channel(raw.get("status_channel") or "")
+    if status and not (isinstance(status, str) and _SLACK_CHANNEL.match(status)):
+        return (
+            f"slack.status_channel {status!r} is neither a channel name starting "
+            "with '#' (lower case, as Slack writes it) nor a channel id (C…)"
+        )
+    if status and status == (broadcast or DEFAULT_BROADCAST):
+        # ⚠ The broadcast channel is READ, as context. Status posted there
+        # would be the spam this channel exists to move, and rite's own
+        # lifecycle lines would reach every Manager as context.
+        return (
+            f"slack.status_channel {status!r} is the broadcast channel, which "
+            "rite reads as context for the Managers. Give status a channel of "
+            "its own"
         )
     return ""
 
