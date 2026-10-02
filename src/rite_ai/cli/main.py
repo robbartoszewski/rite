@@ -9257,20 +9257,13 @@ def _start_a_manager(
         )
 
     if sessions is None:
-        from rite_ai.managers.supervise import (
-            PERPETUAL_CYCLE_SECONDS,
-            PERPETUAL_SESSIONS_PER_CYCLE,
-        )
-
-        # ⚠ Said, not implied. A run with no end needs the person to know
-        # what DOES bound it and how to stop it.
+        # ⚠ Said, not implied: a run with no end needs the person to know how
+        # to stop it. Nothing here claims a rate bound: the per-cycle ceiling
+        # does not yet hold one back (PENDING, `_wait_a_cycle_out`).
         click.echo(
             f"starting Manager '{role.name}' — no bound given, so it runs "
-            "until you stop it (Ctrl-C). Per cycle it starts at most "
-            f"{PERPETUAL_SESSIONS_PER_CYCLE} session(s) that do work, over at "
-            f"most {int(PERPETUAL_CYCLE_SECONDS / 60)} minute(s); reaching "
-            "either ends that cycle, waits, and continues. Those two ceilings "
-            "and your schedule are what bound it."
+            "until you stop it (Ctrl-C). Waiting on an answer, routed work or "
+            "a quiet board does not end it; it waits, spending nothing."
         )
     else:
         click.echo(

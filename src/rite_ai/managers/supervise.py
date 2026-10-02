@@ -1049,6 +1049,13 @@ def _spinning(empty_cycles: int, cycles: list) -> SuperviseResult | None:
 def _wait_a_cycle_out(poll: float, say) -> None:
     """Pause between cycles of a perpetual run.
 
+    🔴 **PENDING (Robert, 2026-10-02), and known to be wrong as it stands.**
+    One poll is not a wait: measured on a fake engine, a perpetual run whose
+    every session works started 357 sessions per virtual hour, so the
+    per-cycle ceiling bounds nothing. The proposed shape makes the schedule
+    the bound instead (start up to the window's Worker cap, then wait for a
+    slot or a board or schedule change). Not built until that is decided.
+
     ⚠ **Through `_sleep`, the module seam a virtual-clock test patches.** A
     direct `time.sleep` here would make every test of a perpetual run wait in
     real time, and the suite would either be slow or stop covering this.
@@ -1554,6 +1561,14 @@ def _supervise(
     def this_cycle() -> list:
         return cycles[cycle_from:]
 
+    def wait_deadline():
+        """The deadline a WAIT honours. A perpetual run's waits have none: a
+        Manager waiting on an answer, a route or a quiet board spends nothing,
+        and the run ends only when the operator ends it (SCRUM-20). The
+        per-cycle `deadline` still bounds starting sessions; it is not a
+        reason to stop waiting."""
+        return None if perpetual else deadline
+
     def note_cycle_end() -> int:
         """0 when this cycle started a session, else one more empty cycle.
 
@@ -1731,7 +1746,7 @@ def _supervise(
                         slack,
                         say,
                         clock,
-                        deadline,
+                        wait_deadline(),
                         poll,
                         cycles,
                         live,
@@ -1754,7 +1769,7 @@ def _supervise(
                         slack,
                         say,
                         clock,
-                        deadline,
+                        wait_deadline(),
                         poll,
                         cycles,
                         live,
@@ -1795,6 +1810,34 @@ def _supervise(
                             "Not retried: a session started again on the same "
                             "mail would repeat the one that just could not."
                         )
+                if not cause and perpetual and answer == "idle":
+                    # 🔴 SCRUM-20 (perpetual): a quiet board is not the end of
+                    # a run nobody bounded. Wait, spending nothing, until the
+                    # board lists something, mail arrives or the project
+                    # changes. What `stopped` holds here is not a fault (the
+                    # routed work was handled, or nothing was routed), so it
+                    # does not end the run either.
+                    stopped = _wait_for_mail(
+                        root,
+                        manager,
+                        None,
+                        router,
+                        slack,
+                        say,
+                        clock,
+                        None,
+                        poll,
+                        cycles,
+                        live,
+                        wake=_idle_board_wake(root, manager, verdict, clock),
+                        idle_line=_quiet_board_line(manager, clock),
+                    )
+                    if stopped is not None:
+                        return stopped
+                    if mail_waiting(root, manager, INBOX):
+                        cause = "mail"
+                    else:
+                        continue
                 if not cause:
                     # ⚠ Before stopping: a check-in due in this window goes out
                     # rather than being skipped, and idle with questions queued
@@ -1838,7 +1881,7 @@ def _supervise(
                     slack,
                     say,
                     clock,
-                    deadline,
+                    wait_deadline(),
                     poll,
                     cycles,
                     live,
@@ -2670,6 +2713,57 @@ def _stalled_wake(root: Path, manager: str, verdict, stalled: _Stalled, clock):
         return ""
 
     return wake
+
+
+def _idle_board_wake(root: Path, manager: str, verdict, clock):
+    """`wake` for a perpetual run's wait on a quiet board: why to start a
+    session now, or "" (SCRUM-20).
+
+    Not `_stalled_wake`: that one treats any verdict outside
+    `CONTINUE_VERDICTS` as "the board changed", and `idle` is outside them,
+    so it would wake on every read. This wakes when the verdict is no longer
+    `idle` (work appeared, or a fault the loop then stops on) and when the
+    project changes; mail ends the wait by itself."""
+    marks = {"board": clock(), "project": clock()}
+    before = footprint(root, manager)
+
+    def wake() -> str:
+        now = clock()
+        if now - marks["project"] >= PROJECT_RECHECK_SECONDS:
+            marks["project"] = now
+            changed = footprint(root, manager).differs_from(before)
+            if changed:
+                return "the project changed (" + ", ".join(changed) + ")"
+        if now - marks["board"] >= BOARD_RECHECK_SECONDS:
+            marks["board"] = now
+            if verdict(root) != "idle":
+                return "the board changed"
+        return ""
+
+    return wake
+
+
+def _quiet_board_line(manager: str, clock):
+    """`idle_line` for that wait: said when it begins, then every
+    `STILL_WAITING_EVERY` with a ⚠, as the other waits are."""
+    from rite_ai.managers.routing import STILL_WAITING_EVERY
+
+    said: dict[str, float | None] = {"at": None}
+
+    def line() -> str:
+        now = clock()
+        if said["at"] is not None and now - said["at"] < STILL_WAITING_EVERY:
+            return ""
+        mark = "" if said["at"] is None else "⚠ still: "
+        said["at"] = now
+        return (
+            f"{mark}{manager!r} is waiting, spending nothing: the board lists "
+            "nothing ready. Work on the board wakes it (read every "
+            f"{int(BOARD_RECHECK_SECONDS)}s), and so does mail or a change in "
+            "the project. This run has no bound from you; Ctrl-C ends it."
+        )
+
+    return line
 
 
 def _idle_line(manager: str, stalled: _Stalled, clock):

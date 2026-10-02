@@ -5,19 +5,21 @@
 ### A Manager runs until you stop it (SCRUM-20)
 
 **`rite start lead` no longer needs `--sessions` and `--minutes`.** With no
-bounds it keeps working until you stop it with Ctrl-C. Per cycle it starts at
-most 20 sessions that do work, over at most an hour; reaching either ends that
-cycle, says so, waits, and begins the next. The bounds are not gone — they now
-bound the cycle instead of the run, because they are what stops a runaway.
+bounds it keeps working until you stop it with Ctrl-C. Waiting on your answer,
+on routed work or on a quiet board no longer ends the run: it waits, spending
+nothing, and carries on when mail arrives or the board changes. Faults still
+end it (a deadlocked or unreadable board, a verdict rite does not recognise).
+
+⚠ **Not yet built:** a closed schedule window still ends a perpetual run, and
+the per-cycle limit on starting sessions does not yet hold back the rate. How
+the schedule bounds a perpetual run is being decided.
 
 Give both to bound the whole run as before. One without the other is still
 refused: they catch different runaways and neither suffices alone, so rite will
 not pick the number you left out.
 
-**What bounds such a run is those two per-cycle ceilings and your schedule**,
-and the start line says so. **Ctrl-C is the stop that records why**; `rite
-manager stop` still kills the session, which is recorded as "died" rather than
-"stopped by the operator".
+**Ctrl-C is the stop that records why**; `rite manager stop` still kills the
+session, which is recorded as "died" rather than "stopped by the operator".
 
 **A run that stops making progress stops.** Three cycles in a row that start no
 session end the run with a message saying it was spinning rather than waiting,

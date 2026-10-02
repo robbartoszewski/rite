@@ -5980,9 +5980,21 @@ begins the next — the run's history is kept across cycles, because that is wha
 the lifecycle record (§9.14.12) and the caller read; what resets is where the
 per-cycle counting STARTS.
 
-**What bounds a perpetual run is the per-cycle ceilings above and the
-schedule**, and that is the whole list. A window authorising no Workers is the
-person saying "not now", and a perpetual run follows it.
+**A perpetual run waits where a bounded one would end.** A Manager waiting
+on the User (`waiting-on-user`), on routed work, on a quiet board (`idle`), or
+after a session that changed nothing (F22) waits with no deadline, spending
+nothing, and wakes on mail, a board change or a project change. Faults still
+end it: `deadlocked`, `unknown`, an unrecognised verdict, and the spin gate
+below.
+
+⚠ **PENDING (Robert, 2026-10-02): what bounds STARTING sessions, and the
+schedule's closed window.** Not built. Today the per-cycle ceiling ends a cycle
+and the next begins after one poll, so it does not limit the rate (measured
+on a fake engine: 357 working sessions per virtual hour), and a `closed`
+window still ENDS a perpetual run. The proposed shape makes the schedule the
+spend lever, with no per-hour number of its own: start Workers up to the
+window's cap, then wait for a slot or a board or schedule change; on `closed`,
+wait until the window next opens.
 
 🔴 **The relaunch gate, and it is what makes "forever" shippable.** A cycle
 that begins the next without having started a session has made no progress, and

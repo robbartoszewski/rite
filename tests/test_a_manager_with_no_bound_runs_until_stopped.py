@@ -317,3 +317,141 @@ class TestEachCycleGetsItsOwnWholeWindow:
         assert not [s for s in said if "window elapsed" in s], (
             "a cycle ended on the ceiling, then blamed a window that had not elapsed"
         )
+
+
+# --- A perpetual run WAITS where a bounded one would end (SCRUM-20) ---------
+#
+# 🔴 Found by probing the salvaged loop, each measured on it before the fix: a
+# Manager waiting on the User, or on a quiet board, ENDED a run nobody bounded
+# ("window elapsed while waiting for mail" after one hour; "done: the board
+# listed nothing ready" at once). Waiting on answers is most of what a
+# perpetual Manager does. Here the only thing that ends the run is the
+# operator, standing in as a KeyboardInterrupt at a five-hour horizon.
+
+HORIZON = 5 * 3600.0
+
+
+@pytest.fixture
+def patient(tmp_path, monkeypatch):
+    """`world`, but a wait advances 30 virtual seconds and the operator
+    presses Ctrl-C at `HORIZON`. Hours of waiting must reach that point."""
+    root = tmp_path
+    (root / ".rite").mkdir()
+    state = {"t": 0.0, "root": root, "between": []}
+
+    def pause(_seconds):
+        state["t"] += 30.0
+        for step in state["between"]:
+            step()
+        if state["t"] >= HORIZON:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(
+        sup, "liveness", lambda n: type("L", (), {"alive": False, "known": True})()
+    )
+    monkeypatch.setattr(sup, "was_attached", lambda n: False)
+    monkeypatch.setattr(sup, "ending", lambda n, human_was_present, pane="": _Ending())
+    monkeypatch.setattr(sup, "stop_session", lambda s: None)
+    monkeypatch.setattr(sup, "forget_instance", lambda r, m: None)
+    monkeypatch.setattr(sup, "_sleep", pause)
+    return state
+
+
+def _answer(verdict, ready=()):
+    return LoopAnswer.of(
+        SimpleNamespace(verdict=verdict, ready=list(ready), blocked={})
+    )
+
+
+def _perpetual_run(patient, board, useful=0):
+    """No bounds. The first `useful` sessions each write a reply; the rest
+    change nothing. Returns (result, start times, what was said)."""
+    root = patient["root"]
+    starts: list[float] = []
+    said: list[str] = []
+
+    def starter(r, m, *, engine, resume_id, max_sessions, window_seconds, **kw):
+        starts.append(patient["t"])
+        if len(starts) <= useful:
+            mailbox.send(root, OWNER, mailbox.OUTBOX, f"did something {len(starts)}")
+        patient["t"] += 10.0
+        return StartResult(True, "ok", session=f"s{len(starts)}", attach="a")
+
+    result = supervise(
+        root,
+        OWNER,
+        engine="claude",
+        prompt="OPEN",
+        starter=starter,
+        verdict=lambda r: board(),
+        resume_id_for=lambda r, m, since=0.0: "sess-1",
+        note=said.append,
+        poll=0,
+        now=lambda: patient["t"],
+    )
+    return result, starts, said
+
+
+class TestAPerpetualRunWaitsRatherThanEnding:
+    def test_waiting_on_the_user_does_not_end_the_run(self, patient):
+        result, starts, _ = _perpetual_run(
+            patient, lambda: _answer("waiting-on-user", ["KAN-7"])
+        )
+        assert result.reason.startswith("stopped by the operator"), result.reason
+        assert patient["t"] >= HORIZON and starts == []
+
+    def test_a_quiet_board_does_not_end_the_run(self, patient):
+        result, starts, said = _perpetual_run(patient, lambda: _answer("idle"))
+        assert result.reason.startswith("stopped by the operator"), result.reason
+        assert starts == []
+        assert any("the board lists nothing ready" in s for s in said)
+
+    def test_work_appearing_on_a_quiet_board_starts_a_session(self, patient):
+        board = {"now": _answer("idle")}
+
+        def filed():
+            if patient["t"] >= 2 * 3600 and board["now"] == "idle":
+                board["now"] = _answer("ready", ["KAN-10"])
+
+        patient["between"].append(filed)
+        result, starts, _ = _perpetual_run(patient, lambda: board["now"], useful=1)
+        assert result.reason.startswith("stopped by the operator"), result.reason
+        assert starts and starts[0] >= 2 * 3600
+
+    def test_a_manager_whose_session_changed_nothing_waits_past_the_hour(self, patient):
+        """The probe's shape: one useful session, then nothing to do on an
+        unchanged board. It ended after an hour, 'window elapsed'."""
+        result, starts, _ = _perpetual_run(
+            patient, lambda: _answer("ready", ["KAN-6"]), useful=1
+        )
+        assert result.reason.startswith("stopped by the operator"), result.reason
+        assert len(starts) == 2
+
+    @pytest.mark.parametrize("fault", ["deadlocked", "unknown"])
+    def test_a_fault_still_ends_the_run(self, patient, fault):
+        result, starts, _ = _perpetual_run(patient, lambda: _answer(fault))
+        assert not result.reason.startswith("stopped by the operator"), result.reason
+        assert patient["t"] < HORIZON and starts == []
+
+    def test_an_unrecognised_verdict_still_ends_the_run(self, patient):
+        result, _, _ = _perpetual_run(patient, lambda: "not a verdict")
+        assert "not one of its verdicts" in result.reason
+        assert patient["t"] < HORIZON
+
+    def test_control_a_bounded_run_on_a_quiet_board_still_ends(self, patient):
+        root = patient["root"]
+        result = supervise(
+            root,
+            OWNER,
+            engine="claude",
+            prompt="OPEN",
+            starter=lambda *a, **k: StartResult(True, "ok", session="s", attach="a"),
+            verdict=lambda r: _answer("idle"),
+            resume_id_for=lambda r, m, since=0.0: "sess-1",
+            note=[].append,
+            poll=0,
+            now=lambda: patient["t"],
+            max_sessions=5,
+            window_seconds=600,
+        )
+        assert "nothing ready" in result.reason

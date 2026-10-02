@@ -716,18 +716,19 @@ rite start helper
 ```
 
 **With no bounds, a Manager runs until you stop it** — Ctrl-C in its terminal,
-which is also the only stop that records why. Per cycle it starts at most 20
-sessions that do work, over at most 60 minutes; reaching either ends that
-cycle, and the next one begins after a wait. To bound the whole run instead,
-give BOTH bounds:
+which is also the only stop that records why. Waiting on your answer, on
+routed work or on a quiet board does not end it: it waits, spending nothing,
+and carries on when mail arrives or the board changes. ⚠ Not yet built: a
+closed schedule window still ends the run, and the per-cycle limit on starting
+sessions is not yet the bound it is meant to be. To bound the whole run
+instead, give BOTH bounds:
 
 ```bash
 rite start lead --sessions 3 --minutes 90
 ```
 
 One without the other is refused: they catch different runaways and neither
-suffices alone, so rite will not guess the one you left out. What bounds a run
-is those two ceilings and your schedule.
+suffices alone, so rite will not guess the one you left out.
 
 The Owner hands work down with `rite route --ticket RT-12 helper -` (the text on stdin), and
 `helper` answers with `rite reply`. Every route names the ticket the work is

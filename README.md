@@ -458,10 +458,10 @@ would be spending your quota with nobody watching.
 `rite start <manager>` starts a Manager session and starts the next one when the last finishes cleanly — so it opens
 sessions you did not individually type. What keeps the promise above true is
 that it runs in the **foreground**, in your own terminal: it is your process,
-you can attach to the session and watch it, Ctrl-C ends the run, and it stops
-at two ceilings you had to type — `--sessions` (how many) and `--minutes`
-(how long), neither of which has a default. Nothing about it is scheduled and
-nothing survives your shell.
+you can attach to the session and watch it, and Ctrl-C ends the run. With no
+flags it runs until you stop it; give `--sessions` (how many) and `--minutes`
+(how long) together to bound the whole run instead. Nothing about it is
+scheduled and nothing survives your shell.
 
 **A lone Manager needs a ticket backend to run more than once.** With no board configured, `rite start` runs one session to help you set one
 up. A lone Manager does not start another, whatever `--sessions` says. Where
