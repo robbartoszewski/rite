@@ -777,9 +777,16 @@ def configuration_problems(
     # gate passed on exactly those commits, never `--force`.
     #
     # ⚠ **Deliberately NOT the other route.** A sandboxed Manager's own
-    # repo-scoped token can push (C6/C26), and that path is gated only by the
-    # `pre-push` hook, which a global `core.hooksPath` stops git reading. The
-    # request path gates by construction, which is why it is the one.
+    # repo-scoped token can push (C6/C26). That path IS gated wherever rite's
+    # `pre-push` hook was installed — SCRUM-9 (`82bbcf6`, 2026-10-01) chains it
+    # behind a redirected `core.hooksPath` and refuses rather than installing
+    # half a chain — so "a global hooksPath stops git reading it" is no longer a
+    # fact about rite and is not the reason here.
+    #
+    # The reason is that the hook path depends on an INSTALL having happened,
+    # while the request path gates **by construction in rite's own code**,
+    # independent of git config and of whether any hook exists. That holds even
+    # where the chain is installed, which is why it is the route.
     #
     # RL-11's SECOND reason is untouched and is what the request path satisfies:
     # the terminating check belongs before anything leaves the machine.

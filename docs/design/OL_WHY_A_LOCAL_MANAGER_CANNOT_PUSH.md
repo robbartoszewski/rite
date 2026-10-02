@@ -163,11 +163,22 @@ parity.**
 with this path: a sandboxed Manager holds a repo-scoped one-hour token that
 *"already serves `git push` over HTTPS as well as `gh`"* (C6/C26, Robert,
 2026-09-26, `managers/github_access.py`), so an agent *could* push as a tool
-action. That is not how integrate works, and it is the weaker path for any
-engine, because it is gated only by the `pre-push` hook — which a global
-`core.hooksPath` stops git reading, the state of this machine. **If self-integrate
-is wanted, it should go through the request path, which gates by construction,
-and not through the token.**
+action. That is not how integrate works, and it is the weaker path for any engine.
+
+⚠ **Corrected 2026-10-03.** This note first said that path is "gated only by the
+`pre-push` hook, which a global `core.hooksPath` stops git reading". SCRUM-9
+(`82bbcf6`, 2026-10-01) makes rite **CHAIN** — the repo's own `pre-push` runs the
+redirected hook first and `rite publish pre-push` second, only the repo's own
+`core.hooksPath` is set, and it refuses rather than installing half a chain. So
+the token path IS gated wherever rite's hook was installed, and the original
+reason was a day out of date.
+
+**The conclusion is unchanged and the reason is now the durable one:** the hook
+path depends on an install having happened, while the request path gates **by
+construction in rite's own code**, independent of git config and of whether any
+hook exists. ⚠ Separately, and still true: this machine has the global redirect,
+no local `core.hooksPath` and no `pre-push`, so nothing is gating a push here
+automatically — which is a fact about this checkout, not about rite.
 
 ## 5. What this note does not do
 

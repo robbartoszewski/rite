@@ -304,11 +304,22 @@ def _instruction(context: Context) -> str:
     SLICE, never a pointer into the spec — a small model's context window
     cannot go and read the file."""
     scope = ", ".join(context.subtask.scope) or "(none declared)"
+    # Level 2's approach, when there is one (DD-2.4). Placed AFTER the subtask
+    # and the spec slice and labelled as the unit's own, so a model cannot read
+    # it as part of what was approved — the approach is advice this unit gave
+    # itself, and the paths and the check above are not negotiable.
+    approach = getattr(context, "approach", "") or ""
+    own_steps = (
+        f"Your own steps for this, which you wrote before starting:\n{approach}\n\n"
+        if approach.strip()
+        else ""
+    )
     return (
         f"Ticket {context.ticket}, subtask {context.subtask.id}.\n\n"
         f"{context.subtask.intent}\n\n"
         f"Change only these paths: {scope}\n\n"
         f"Relevant specification:\n{context.spec_slice}\n\n"
+        f"{own_steps}"
         "Make the change directly. Do not ask for confirmation. "
         "Say briefly what you changed when you are done."
     )

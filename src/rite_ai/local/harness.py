@@ -59,6 +59,16 @@ class Context:
     subtask: Subtask
     spec_slice: str
     ticket: str
+    approach: str = ""
+    """Level 2 (DD-2.4): the unit's OWN steps for this subtask, produced at the
+    front of the turn with its decomposition model.
+
+    ⚠ **A working artifact, and it stops here.** It is never written into the
+    `Decomposition` — "if it is written into `Decomposition`, the gates start
+    reading the executor's own words", which is what keeps Level 2 outside the
+    gates. Empty is the ordinary case: a unit with no decomposition model, or a
+    Level-2 step that could not run, executes exactly as before, because an
+    approach improves a turn and is not a gate on it."""
 
 
 @dataclass(frozen=True)
@@ -169,6 +179,7 @@ def run_subtask(
     committer: Committer,
     claims: Claims,
     in_flight: int = 1,
+    approach: str = "",
 ) -> Outcome:
     """One subtask: claim, run, verify, commit, report, release.
 
@@ -201,7 +212,12 @@ def run_subtask(
         publish_heartbeat(state, manager, workers=[worker], in_flight=in_flight)
 
         report = agent.run(
-            Context(subtask=subtask, spec_slice=spec_slice, ticket=plan.ticket),
+            Context(
+                subtask=subtask,
+                spec_slice=spec_slice,
+                ticket=plan.ticket,
+                approach=approach,
+            ),
             workspace,
         )
         outcome.agent_claimed = report.claimed_success

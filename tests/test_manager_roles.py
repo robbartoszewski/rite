@@ -298,9 +298,19 @@ def test_a_decomposer_with_an_independent_reviewer_is_not_reported():
     assert configuration_problems(list(roles)) == []
 
 
-def test_integrate_on_a_local_engine_is_reported():
-    """RL-11: the harness is rite's own code and SPEC §5.1.1 forbids it a push,
-    so a local integrate holder cannot do the job it was given."""
+def test_integrate_on_a_local_engine_is_allowed():
+    """⚠ Was `..._is_reported`, asserting RL-11's refusal. Robert approved
+    self-integrate on 2026-10-02 (OL8) and the refusal is lifted.
+
+    RL-11's reason — *"SPEC §5.1.1 forbids rite's code a push; the harness is
+    rite's code"* — was written 2026-09-19, while PB1 gave `rite deliver` a push
+    on 2026-09-29, which §5.1.1 now states and `test_blast_radius` allows by
+    name. A local `integrate` holder still never runs `git push`: it posts the
+    same two-value request a Claude Manager posts and rite performs the push.
+
+    The behaviour this replaces is pinned the other way round in
+    `test_an_all_local_fleet_self_integrates.py`, which also proves the delivery
+    reaches origin."""
     roles = _roles(
         {
             "name": "small",
@@ -313,7 +323,7 @@ def test_integrate_on_a_local_engine_is_reported():
         {"name": "lead", "preset": "lead"},
     )
     problems = configuration_problems(list(roles))
-    assert any("integrate" in p and "small" in p for p in problems)
+    assert not any("integrate" in p for p in problems), problems
 
 
 def test_a_project_whose_only_deciders_are_people_is_reported():
