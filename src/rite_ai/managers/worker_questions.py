@@ -273,8 +273,35 @@ def relay(root: Path, manager: str, say) -> int:
     try:
         return _relay(root, manager, say)
     except Exception as e:  # noqa: BLE001 - a watcher must not end the run
-        _say_once(root, manager, say, f"could not relay Worker answers: {e}")
+        problem = f"{type(e).__name__}: {e}"
+        _say_once(root, manager, say, f"could not relay Worker answers: {problem}")
+        _tell_the_person_relaying_failed(root, manager, problem, say)
         return 0
+
+
+def _tell_the_person_relaying_failed(root: Path, manager: str, problem: str, say):
+    """🔴 SCRUM-23. The relay failing as a whole was said only in the
+    supervisor's pane, so a person waiting on a Worker was told nothing.
+    Raised once per problem (`asking`'s ledger is keyed by the text), in
+    the Owner's DM like an answer that could not land. If even that fails,
+    the pane says so."""
+    from rite_ai.managers.asking import raise_to_person
+
+    try:
+        raise_to_person(
+            root,
+            manager,
+            subject="",
+            raiser=f"manager:{manager}",
+            text=(
+                f"rite could not relay your answers to Workers: {problem}. "
+                "Nothing was written into a Worker. rite tries again at its "
+                "next look; if this does not clear, the Workers are still "
+                "waiting on you."
+            ),
+        )
+    except Exception as e:  # noqa: BLE001 - said, never raised into the run
+        _say_once(root, manager, say, f"could not tell the User either: {e}")
 
 
 def _relay(root: Path, manager: str, say) -> int:

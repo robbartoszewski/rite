@@ -637,7 +637,71 @@ def _say_refusals(
             )
         else:
             say(refusal(command, root))
+    if manager:
+        for command in refused:
+            _tell_the_person_a_relay_was_refused(root, manager, command, since, say)
     return [c.strip() for c in refused]
+
+
+_RELAY_VERBS = ("reply", "ask", "route")
+
+
+def _relay_refused(command: str) -> str:
+    """What a refused command was carrying to someone, or "" when it was
+    not one of rite's relays: `rite reply`, `ask`, `route` or `refine ask`,
+    or the stray end line of one (`stdin_text.stray_end`)."""
+    from rite_ai.managers.stdin_text import stray_end
+
+    if stray_end(command):
+        return "a message in rite's text form"
+    words = command.split("\n", 1)[0].split()
+    if not words or Path(words[0]).name != "rite":
+        return ""
+    rest = [w for w in words[1:] if not w.startswith("-")]
+    if rest[:1] and rest[0] in _RELAY_VERBS:
+        return f"`rite {rest[0]}`"
+    if rest[:2] == ["refine", "ask"]:
+        return "`rite refine ask`"
+    return ""
+
+
+def _tell_the_person_a_relay_was_refused(root, manager, command, since, say):
+    """🔴 SCRUM-23. A relay the engine refused was said only in the
+    supervisor's pane, so the person it was for never learned it did not
+    come. Told in their DM, through the outbox the message itself would have
+    gone through, once per refusal per session.
+
+    ⚠ **The command is not quoted.** Its text is the Manager's, and often
+    someone else's (a ticket, a routed reply); the person is told what kind
+    of message did not come and why, not handed the text."""
+    from rite_ai.managers.asking import raise_to_person
+    from rite_ai.managers.stdin_text import stray_end
+
+    what = _relay_refused(command)
+    if not what:
+        return
+    if stray_end(command):
+        why = "its end line was written twice, so the engine refused the whole call"
+    elif _substitutes(command):
+        why = "its text was on the command line with backticks or $( ) in it"
+    else:
+        why = "the engine refused the command"
+    when = time.strftime("%H:%M", time.localtime(since)) if since else "this run"
+    try:
+        raise_to_person(
+            root,
+            manager,
+            subject="",
+            raiser=f"manager:{manager}",
+            text=(
+                f"{what} from Manager {manager!r} did not reach anyone "
+                f"(session from {when}): {why}. Nothing was sent. The Manager "
+                "was told and may send it again; until it does, whatever it "
+                "was meant to say has not arrived."
+            ),
+        )
+    except Exception as e:  # noqa: BLE001 - said, never raised into the run
+        say(f"could not tell the User that {what} was refused: {e}")
 
 
 def _substitutes(command: str) -> bool:
@@ -897,6 +961,49 @@ class Cycle:
     attended: bool = False
     mail_waiting: bool = False
     ending: str = ""
+    idle: bool = False
+    """It changed nothing rite can see (`progress.footprint`), so the
+    `--sessions` ceiling does not count it (SCRUM-24). False when rite could
+    not tell, so an unjudged session is counted."""
+
+
+def _counted(cycles: list[Cycle]) -> int:
+    """The sessions the `--sessions` ceiling counts: those that changed
+    something, or that rite could not judge.
+
+    🔴 SCRUM-24. A Manager waiting for an answer woke, found nothing to do,
+    and each such session used up the ceiling, so the run stopped on
+    "ceiling reached" while it was only waiting."""
+    return sum(1 for c in cycles if not c.idle)
+
+
+def _idle(cycles: list[Cycle]) -> int:
+    """Sessions that changed nothing. They still cost tokens, so they have
+    their own allowance (`_idle_allowance_spent`)."""
+    return sum(1 for c in cycles if c.idle)
+
+
+def _idle_allowance_spent(manager: str, max_sessions: int, cycles):
+    """A result that stops the run once `--sessions` idle sessions have run,
+    or None.
+
+    ⚠ **Not counting idle sessions must not make them unbounded.** A session
+    that changes nothing still spends tokens, and the no-progress guard
+    waits between them, but a run with no window and a steady stream of
+    wakes would have no limit at all. So idle sessions get their own
+    allowance, equal to the ceiling: at most twice what `--sessions`
+    allowed before, never more."""
+    if _idle(cycles) < max_sessions:
+        return None
+    return SuperviseResult(
+        True,
+        f"stopped: {_idle(cycles)} session(s) changed nothing rite can see "
+        f"(no commit or edit, claim, reply, route or Worker request). The "
+        f"--sessions ceiling does not count those, so they have an allowance "
+        f"of their own, the same number ({max_sessions}), and it is spent. "
+        f"{_counted(cycles)} session(s) did work.",
+        cycles,
+    )
 
 
 @dataclass
@@ -1204,17 +1311,25 @@ def _supervise(
         # BOTH bounds before starting. A ceiling checked afterwards reports
         # rather than bounds, and the window is what limits cost because the
         # count does not (§9.14.5).
-        if len(cycles) >= max_sessions:
+        stopped = _idle_allowance_spent(manager, max_sessions, cycles)
+        if stopped is not None:
+            return stopped
+        if _counted(cycles) >= max_sessions:
             why = _reason_to_wait(root, manager, waiting, router, slack, say)
             if not why:
-                extra = len(cycles) - max_sessions
+                extra = _counted(cycles) - max_sessions
                 return SuperviseResult(
                     True,
-                    f"ceiling reached: {max_sessions} session(s) started"
+                    f"ceiling reached: {max_sessions} session(s) that did work"
                     + (
-                        f", and {extra} more started by routed mail past it "
-                        f"({len(cycles)} in all)"
+                        f", and {extra} more started by routed mail past it"
                         if extra > 0
+                        else ""
+                    )
+                    + (
+                        f" ({len(cycles)} started in all; {_idle(cycles)} "
+                        "changed nothing, and the ceiling does not count those)"
+                        if _idle(cycles)
                         else ""
                     )
                     + ". This is a COUNT, not a spend limit — a session may "
@@ -1258,7 +1373,7 @@ def _supervise(
             say(
                 f"the ceiling ({max_sessions} session(s)) is reached, and it is "
                 f"SOFT while {why}: mail arrived, so this cycle starts because "
-                f"of it (session {len(cycles) + 1} of at most "
+                f"of it (session {_counted(cycles) + 1} of at most "
                 f"{waiting.cap(max_sessions)} under the mail-started cap)"
             )
         if deadline is not None and clock() >= deadline:
@@ -1791,6 +1906,8 @@ def _supervise(
                 after = footprint(root, manager)
                 if not after.differs_from(before):
                     stalled = _Stalled(cycle.number, cycle_basis, after)
+                    # SCRUM-24: and the ceiling does not count it.
+                    cycle.idle = True
             refused = _say_refusals(
                 root, cycle.started_at, say, engine, agent, live_pane, manager
             )
@@ -2038,14 +2155,14 @@ def _at_the_cap(manager, waiting, ceiling: int, cycles, why: str):
     different responses: the first is the number the person chose, the second
     means a Manager kept sending mail past what its routed work explains."""
     cap = waiting.cap(ceiling)
-    if len(cycles) < cap:
+    if _counted(cycles) < cap:
         return None
     routed = waiting.routed_this_run()
     notes = waiting.notes_this_run()
     return SuperviseResult(
         True,
-        f"stopped at the MAIL-STARTED CAP, not the ceiling: {len(cycles)} "
-        f"session(s) started, and the cap is --sessions {ceiling} plus 2 per "
+        f"stopped at the MAIL-STARTED CAP, not the ceiling: {_counted(cycles)} "
+        f"session(s) did work, and the cap is --sessions {ceiling} plus 2 per "
         f"message routed this run ({routed})"
         + (f" plus 1 per note rite wrote ({notes})" if notes else "")
         + f" = {cap}. It was reached while "
@@ -2272,7 +2389,8 @@ def _idle_line(manager: str, stalled: _Stalled, clock):
         return (
             f"{mark}{manager!r} is waiting, spending nothing: session "
             f"{stalled.number} changed nothing rite can see (no commit or edit "
-            "in the project, claim, reply, route or Worker request), and the "
+            "in the project, claim, reply, route or Worker request), so it "
+            "does not count toward --sessions, and the "
             "board reads as it did when that session began, "
             "so another would repeat it. Mail wakes it (a Slack DM, a routed "
             f"reply, `rite message {manager} …`), and so does a change on the "
