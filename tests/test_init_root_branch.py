@@ -14,11 +14,24 @@ import subprocess
 from pathlib import Path
 
 import click
+import pytest
 import yaml
 from click.testing import CliRunner
 
+import rite_ai.sandbox as sb
 from rite_ai.cli.init import run_init
 from rite_ai.cli.init.detect import detect_repos, detect_root_branch
+
+
+@pytest.fixture(autouse=True)
+def _no_verified_sandbox(monkeypatch):
+    """The Enter-through sequence below is written for init asking no sandbox
+    question, which only this pins. The host decided it before: Linux reaches
+    that branch anyway, and a Mac without yoloAI was offered the install and
+    took its default Yes — which is how the first whole-suite macOS CI run
+    found five of these tests calling `brew install --cask yoloai` for real.
+    The branches themselves are `test_init_sandbox_branches.py`'s."""
+    monkeypatch.setattr(sb, "platform_can_sandbox", lambda: False)
 
 
 def _repo(path: Path, branch: str) -> None:
