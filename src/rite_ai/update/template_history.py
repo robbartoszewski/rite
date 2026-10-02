@@ -2,7 +2,7 @@
 
 SHA-256 of every command and agent template each tagged release shipped,
 from: v0.1.0, v0.2.0, v0.3.0, v0.4.0, v0.5.0, v0.5.1, v0.6.0, v0.7.0a1, v0.7.0a2,
-v0.7.0a3, v0.7.0a4, v0.7.0a5, v0.7.0a6.
+v0.7.0a3, v0.7.0a4, v0.7.0a5, v0.7.0a6, v0.7.0a7.
 """
 
 RELEASED: dict[str, frozenset[str]] = {
@@ -30,6 +30,7 @@ RELEASED: dict[str, frozenset[str]] = {
     ),
     "ci/publish-gate.yml": frozenset(
         {
+            "242744d1d2d2bed8fbcc903c0a780f261b8f18c1b4a085d77d67a76ae79effa5",
             "3d198bd353c03a0d141030f39911b2e304c76f5861bba5711b905d7ff296809d",
             "3eb08555ceccee6f0e5eddd6c07cfd32269e233fe1a4ac431473ca0e9c5477fa",
             "3eef22664a1b491ecdc192c6eeab831d282f45ba416fdf15beb5545befa04e43",
