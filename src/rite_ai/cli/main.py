@@ -2146,18 +2146,17 @@ def local_step(manager: str, ticket: str) -> None:
 def local_approve(reviewer: str, ticket: str) -> None:
     """Approve TICKET's decomposition as plan-review holder REVIEWER.
 
-    \b
-    ⚠ **This was a hand edit until now**, which made RL-6's gate a convention:
-    the one thing a decomposer may not set was set by whoever held a text
-    editor. Every condition is checked here instead — REVIEWER holds
-    plan-review, did not write the plan (DD-3.5), and is a different MODEL from
-    the author (RL-6, so two 'local:' classes serving one model are refused).
+    Nothing from a decomposition runs until it is approved. REVIEWER must
+    hold the plan-review duty, must not be the Manager that wrote the plan,
+    and must run a different model from it — two `local:` classes serving the
+    same model count as the same model.
 
     \b
-    The plan's shape is re-validated before the write, because the file may
-    have changed since it was written and this is the last point before its
-    subtasks may run.
+    The plan is re-checked before it is approved, so approval can refuse a
+    plan that was valid when written and is not now. A cited spec unit that
+    is no longer on disk is the common case; `rite spec index` puts it back.
 
+    \b
     Examples:
       rite local approve lead KAN-7
     """
@@ -9176,6 +9175,51 @@ def _doctor_slack(root: Path, problems: list[str], *, network: bool = False) -> 
                 problems.append(f"slack delivery to {slack.broadcast}: {detail}")
 
 
+def _drive_local_tier(root, manager: str, board, say) -> None:
+    """L-6's per-cycle pass: advance this Manager's local tier by one stage.
+
+    ⚠ **The tickets come from the BOARD, read here and not inside the driver.**
+    The state layer has no list operation on purpose (it is backend-neutral), so
+    nothing can enumerate decompositions; and the board is the one place that
+    knows what is assigned. Reading it here keeps `advance_ticket` testable
+    without a board and keeps the read at the cycle boundary the poll may wait
+    on.
+
+    Never raises into the cycle. A board that cannot be read is a pass that did
+    nothing and said so — the supervisor's own spin guard is what notices a run
+    that stops making progress, and an exception here would end the run instead.
+    """
+    from rite_ai.local.loop import drive_local_tier
+
+    tickets, why = _local_tier_tickets(board, manager)
+    if why:
+        say(f"local tier: the board could not be read this cycle — {why}")
+        return
+    if not tickets:
+        return
+    try:
+        drive_local_tier(root, manager, tickets, say)
+    except Exception as e:  # noqa: BLE001 - see the docstring
+        say(f"local tier: nothing advanced this cycle ({type(e).__name__}: {e})")
+
+
+def _local_tier_tickets(board, manager: str) -> tuple[list[str], str]:
+    """(the ticket ids assigned to `manager`, or why they could not be read).
+
+    `TicketFilter(assignee=...)` is the board's own question, asked of the board
+    assignment already labels, so a ticket's owner lives in one place rather than
+    two. A `BackendError` is returned rather than raised: a board that cannot be
+    read is a cycle that advanced nothing, not a run that ends.
+    """
+    from rite_ai.tickets.interface import BackendError, TicketFilter
+
+    page = board.list_tickets(TicketFilter(assignee=manager))
+    if isinstance(page, BackendError):
+        return [], page.message
+    found = getattr(page, "tickets", page) or []
+    return [t.id for t in found if getattr(t, "id", "")], ""
+
+
 def _engine_ready_for(role):
     """Why this local Manager's engine cannot be used, per cycle.
 
@@ -9508,6 +9552,15 @@ def _start_a_manager(
             # TR9: a User's instruction becomes a chore, written by rite
             # outside the boundary, on the same board the broker checks.
             chores=lambda say: create_asked_for(root, role.name, board, say),
+            # L-6 (Robert, 2026-10-03): the local tier runs hands-off, driven by
+            # this same cycle. LOCAL ENGINES ONLY, like `engine_ready` above —
+            # a Claude Manager has no local pipeline, and None means "nothing to
+            # drive" rather than "a driver that does nothing".
+            local_tier=(
+                (lambda say: _drive_local_tier(root, role.name, board, say))
+                if role.is_local
+                else None
+            ),
             # TR2: the rounds this Manager asks for, and what the User's
             # replies to them do, decided outside the boundary on this board.
             # Only the Manager that refines does anything (TRQ7).
