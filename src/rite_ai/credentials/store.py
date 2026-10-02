@@ -484,10 +484,44 @@ def warn_if_global(key: str, credentials: object | None = None) -> str | None:
 # sandbox could only let a Worker push, open a pull request — upstream too —
 # or merge, which only instructions forbade.
 WORKER_SERVICES: tuple[str, ...] = ("claude",)
+"""What a CLAUDE Worker receives. See `worker_services_for` for why the set is
+now asked per engine rather than read directly."""
 
 
-def worker_environment(credentials: object | None = None) -> dict[str, str]:
+def worker_services_for(engine: str) -> tuple[str, ...]:
+    """The services a Worker of this engine receives (OL4).
+
+    ⚠ **A local Worker gets NOTHING, and that is the narrowing — not an
+    omission.** `WORKER_SERVICES` is the Claude login, and an Ollama Worker has
+    no use for it: its model answers on this machine's own loopback, which needs
+    no credential at all (OL1 measured the daemon answering a sandboxed client
+    with no token in play). Handing it one anyway would put the operator's
+    Claude login inside a sandbox that cannot spend it — and SB12 measured a
+    sandbox's environment readable from other sandboxes on the same machine, so
+    an unused credential in there is a credential exposed for nothing.
+
+    This is the 2026-09-29 "Narrow it down" rule applied to the axis that did
+    not exist when it was made: then the question was WHICH services a Worker
+    needs, and every Worker was Claude. Now a Worker has an engine, and the
+    answer depends on it.
+
+    ⚠ **An endpoint that does need a credential is not handled here.** A
+    Manager names one with `credential:`, a key name and never a secret; a
+    Worker declares no such key yet (OL3 added five, not six), because no local
+    endpoint on this machine needs one. Add the key when one does, rather than
+    widening this to "whatever a Worker might want".
+    """
+    from rite_ai.config.managers import is_local_engine
+
+    return () if is_local_engine(engine) else WORKER_SERVICES
+
+
+def worker_environment(
+    credentials: object | None = None, *, engine: str = "claude"
+) -> dict[str, str]:
     """The credentials a Worker receives, as env var -> value (§5.3.4).
+
+    `engine` defaults to Claude, which is what every Worker was before OL3.
 
     ⚠ **Only `WORKER_SERVICES`, never "every credential the project holds".**
     That was the rule until 2026-09-29, when Robert reversed it ("Narrow it
@@ -510,7 +544,7 @@ def worker_environment(credentials: object | None = None) -> dict[str, str]:
     from rite_ai.credentials.services import SERVICES, service_key
 
     env: dict[str, str] = {}
-    for name in WORKER_SERVICES:
+    for name in worker_services_for(engine):
         svc = SERVICES[name]
         for field in svc.secrets:
             if not field.env:

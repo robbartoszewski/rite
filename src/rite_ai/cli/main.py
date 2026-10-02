@@ -7619,7 +7619,17 @@ def sandbox_start(
     token, tier = resolve_worker_token(worker, config.credentials)
     # What a Worker receives (§5.3.4): its engine's login, and no GitHub
     # token — `token` stays on the host, for `rite deliver` to push with.
-    env = worker_environment(config.credentials)
+    #
+    # "its engine's login" became literal in OL4. A local Worker's engine has
+    # none: its model answers on this machine's loopback, so it receives an
+    # empty environment rather than a Claude credential it cannot spend. The
+    # manifest is read here rather than guessed, and an unreadable one means
+    # Claude — the behaviour before a Worker had an engine at all.
+    from rite_ai.sandbox import worker_manifest
+
+    manifest = worker_manifest(root, worker)
+    engine = getattr(manifest, "engine", "claude")
+    env = worker_environment(config.credentials, engine=engine)
     if tier == "global":
         # Loud, every time — but ONLY for a token belonging to the whole
         # machine. It used to fire for this project's own `github_token`
