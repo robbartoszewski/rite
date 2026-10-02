@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+### Credentials, doctor and the publish gate say what is true (SCRUM-16, 17, 18, 19, 30)
+
+**A credential store that cannot be read is no longer read as empty.** Inside a
+sandbox that denies even the credential file's metadata, rite reported every
+credential "not found" (`jira_email not found`). It now says the credentials
+cannot be read here. Only a file that does not exist is an empty store.
+
+**`rite doctor --network` checks the GitHub App.** It mints a token exactly as
+`rite start` does and revokes it at once, so a permission the installation has
+not granted shows up before a Manager is refused. Without `--network`, doctor
+says the App is configured and not verified, instead of saying nothing.
+
+**A refused App token says what to do.** GitHub's "HTTP 422: The permissions
+requested are not granted to this installation" now comes with the permission
+that is missing, read from what the installation grants (most often `issues:
+write`), and a link to accept the installation's pending permission update.
+
+**The publish gate's rules are rite's.** With no rules named, gitleaks took
+them from a `.gitleaks.toml` in the repository, or from `GITLEAKS_CONFIG`, and
+either could switch the scan off: measured, a real-shaped token went from one
+finding to none. rite now always names the rules (`.rite/gitleaks.toml`, or
+gitleaks' defaults), ignores inline `gitleaks:allow` comments, and refuses to
+vouch for a scan while a `.gitleaksignore` at the root could be hiding
+findings without a reason. `rite doctor` says which rules are in effect.
+
+**`rite credential prune` lists leftover credentials** under namespaces no
+project rite knows uses (test and scratch runs left them), and removes one when
+you name it. It never removes on its own, because a project rite has not seen
+on this machine looks unused too. The test suite now fails a run that adds a
+name to your real credential files.
+
 ### A Manager that stops says so, says why, and says what it left (SCRUM-20)
 
 Three things were silent at once when a Manager's run ended, and together they
