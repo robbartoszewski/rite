@@ -87,7 +87,7 @@ def session_name(ticket: str, subtask_id: str) -> str:
 
 
 def goose_environment(
-    endpoint: str, model: str, *, context_limit: int = 0
+    endpoint: str, model: str, *, context_limit: int = 0, path_root: str = ""
 ) -> dict[str, str]:
     """What tells Goose WHICH model to run, and where.
 
@@ -97,6 +97,39 @@ def goose_environment(
     it does so silently. Measured 2026-09-25: a Manager declared with
     `model: qwen3:8b` ran `qwen3-vl:8b-instruct`, because only the Worker path
     set them.
+
+    `path_root` is `GOOSE_PATH_ROOT`, and it is **empty for a Manager and set
+    for a Worker running inside a sandbox** — a difference measured rather
+    than chosen (OL1).
+
+    ⚠ **A Worker MUST pass one or Goose dies before it reaches the model.**
+    Inside a seatbelt Worker `~/.local` is granted READ and not WRITE — the
+    read grant `sandbox.worker_home` depends on, since it is what lets rite's
+    Python load at all. Goose needs to WRITE its config, its session sqlite
+    and its logs, so it panics in `session_manager.rs` with
+    *"Failed to secure session database directory: PermissionDenied"*. This
+    one variable relocates all four paths together.
+
+    ⚠ **A Manager must NOT pass one, and this is the trap.** A local Manager
+    already has writable state: its profile grants `~/.config/goose` and
+    `~/.local/share/goose` by exact path rather than redirecting `HOME`
+    (`managers.enclosure.ENGINE_HOME_IS_THE_OPERATORS`, measured). That store
+    holds **the conversation handle every resumed cycle names**, so moving the
+    root would hand a running Manager an empty session store and lose the
+    conversation it is mid-way through. The silent-fallback defect above is
+    already closed for Managers by `GOOSE_MODEL`/`GOOSE_PROVIDER`, which win
+    over `config.yaml`; a path root removes the fallback's SOURCE as well,
+    which is worth having inside a Worker and is not worth a Manager's
+    conversation.
+
+    ⚠ **Where a Worker's root points is itself load-bearing.** It must not be
+    the workspace (it would show in `yoloai diff` and in the tree the
+    committer inspects, the same argument `GooseAgent.run` makes about its
+    instruction file), and it must not be the temp root (granted to every
+    sandbox on the machine, so one Worker's conversation would be readable by
+    another — the leak `enclosure.engine_tmp` measured for a Manager). The
+    sandbox's own state directory is per-sandbox and was measured isolated:
+    `ol2-w1` could not read `ol2-w2`'s layer or write into it.
     """
     env = {
         "GOOSE_PROVIDER": "ollama",
@@ -108,6 +141,8 @@ def goose_environment(
         # one. Observed: Goose then compacts at 80% of it, which cannot rescue
         # a single message larger than the window (plan, Track MS).
         env["GOOSE_CONTEXT_LIMIT"] = str(context_limit)
+    if path_root:
+        env["GOOSE_PATH_ROOT"] = path_root
     return env
 
 
