@@ -1,0 +1,141 @@
+# OL1 — can a Worker sandbox reach Ollama, and run the harness there?
+
+**Citation convention:** a bare `§` means a section of `SPEC.md`; this note's
+own sections are written out, because the citation gate's regex is
+context-free and would match a real SPEC section.
+
+**Measured 2026-10-02. yoloAI 0.11.0 (seatbelt), Goose 1.51.0, Ollama 0.34.2,
+macOS 26.2, model `rite-ctx32768-qwen3.8-latest:latest` (the window rite pins).**
+
+This is step 1 of the v0.7.0 Ollama track. The local tier has only ever run
+on the HOST; a rendered Worker *profile* was known to reach the daemon, but
+no process had been measured running the harness from inside a real Worker
+sandbox. Everything below is a measurement; where a thing was not measured it
+says so.
+
+---
+
+## 0. The answer
+
+⚠ **The network reaches. The blocker was the filesystem, and it is one
+environment variable.**
+
+| question | result |
+|---|---|
+| TCP to `localhost:11434` from inside | **HTTP 200**, 23 models listed |
+| TCP to `127.0.0.1:11434` from inside | **HTTP 200**, body read |
+| `goose` / `uv` / `python3` / `rite` on PATH inside | **all four present** |
+| `goose run` with a tool loop, against Ollama, inside | ⚠ **panics** — then **works** with `GOOSE_PATH_ROOT` |
+| rite's own `engine_probe` inside | **reachable, model present, agent installed, window 32768** |
+
+**Nothing in the seatbelt profile stands between a Worker and the Ollama
+daemon.** The loopback grant is there, and the daemon on the host answers a
+sandboxed client exactly as it answers the host.
+
+## 1. Method, and why it is a real Worker
+
+rite does not render the Worker's seatbelt profile — yoloAI does
+(`runtime/seatbelt/profile.go`). A Worker therefore IS
+`yoloai new --backend seatbelt`, launched with the clean home
+`sandbox.worker_home()` and `--data-dir`, which is what
+`sandbox/__init__.py` builds. The probe reproduced that launch and changed
+only `--agent`: `idle` instead of `claude`, so no Claude session was spent on
+a question about the network.
+
+**Control, so "it worked" is not "it was never sandboxed".** From inside:
+
+```
+cat /Users/<operator>/.ssh/id_ed25519   ->  Operation not permitted
+```
+
+The sandbox was enforcing while every probe below returned 200.
+
+## 2. The blocker, exactly
+
+A first `goose run` inside died before it reached the model:
+
+```
+Warning: Failed to initialize logging: Failed to create log directory:
+  ".../.local/state/goose/logs/cli/2026-10-02"
+thread 'goose-cli-main' panicked at session/session_manager.rs:935:22:
+Failed to secure session database directory:
+  Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+```
+
+**`~/.local` is granted READ and not WRITE inside a Worker.** Measured, per
+directory:
+
+| path | inside a Worker |
+|---|---|
+| `$HOME/.local/state`, `$HOME/.local/share`, `$HOME/.config/goose` | **denied** |
+| `$TMPDIR` | writable |
+| the workdir copy | writable |
+
+That read grant is the one `worker_home()` already documents and depends on —
+it is why `rite`'s Python can load at all. Goose needs to WRITE its config,
+its session sqlite and its logs, and under the operator's home it cannot.
+
+**The fix is `GOOSE_PATH_ROOT`**, a knob Goose carries (found in its own
+strings, alongside `goose requires a home dir`). It relocates all four paths
+together:
+
+```
+Config dir:            <root>/config
+Config yaml:           <root>/config/config.yaml
+Sessions DB (sqlite):  <root>/data/sessions/sessions.db
+Logs dir:              <root>/state/logs
+```
+
+⚠ **It is not only a workaround — it closes a known defect.**
+`goose_environment`'s docstring records a Manager declared `qwen3:8b` that
+ran `qwen3-vl:8b-instruct`, because Goose silently fell back to the
+operator's global `~/.config/goose/config.yaml`. A path root rite owns means
+there is no operator config to fall back TO, so the environment rite places
+is the only configuration in play.
+
+## 3. The turn that worked
+
+With `GOOSE_PATH_ROOT` set to a writable path, and the environment
+`goose_environment()` already builds (`GOOSE_PROVIDER=ollama`,
+`GOOSE_MODEL`, `OLLAMA_HOST`, `GOOSE_CONTEXT_LIMIT=32768`,
+`GOOSE_MODE=auto`), inside the sandbox:
+
+- Goose opened a session against `ollama rite-ctx32768-qwen3.8-latest:latest`;
+- it called `write` (`PROOF.txt`), then `shell` (`cat PROOF.txt`) to check
+  itself — **the tool loop ran, not just the completion**;
+- the file existed on disk afterwards with exactly the requested line;
+- **71 seconds**, 20:02:39 → 20:03:50.
+
+The instruction file was created with `mktemp` OUTSIDE the workspace, as
+`GooseAgent.run` does, and Goose read it — so that detail of the adapter
+needs no change for the sandbox.
+
+**rite's own preflight passes inside too.** `engine_probe._probe` against
+`http://localhost:11434`:
+
+```
+reachable        = True        detail          = 'answering, 23 model(s)'
+model_present    = True        agent_installed = True
+context_window   = 32768       context_detail  = ''
+```
+
+So `GooseAgent._preflight` would not block a turn inside a Worker, and the
+window rite pinned is read back correctly from inside.
+
+## 4. What this did NOT measure
+
+- **A full `rite local step` inside a Worker.** The decisive primitives were
+  measured separately — loopback reach, the Goose tool loop, and rite's
+  preflight — but `run_subtask` end to end inside a sandbox needs a project
+  and an APPROVED plan in there, which is the automation work itself.
+- **Where `GOOSE_PATH_ROOT` should point.** The probe used `/tmp/goose-root`
+  because it is writable; `/tmp` is granted on both platforms, so that is a
+  convenient location and not an argued one. A per-Worker root under the
+  sandbox's own writable state is the likely answer and is a design choice,
+  not a measurement.
+- **Concurrency.** One sandbox, one model. Two Ollama Workers against one
+  32 GB daemon is a sizing question this says nothing about.
+- **Whether the daemon should be reachable at all.** This note measures that
+  it IS. A Worker that can reach `localhost` can reach any other loopback
+  service on the machine, which is a property of the yoloAI profile and not
+  something rite grants or can revoke here.
