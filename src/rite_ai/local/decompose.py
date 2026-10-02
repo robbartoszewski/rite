@@ -1,0 +1,367 @@
+"""Level 1 — writing the PLAN (DD-1.2, DD-2.4; RL-6..RL-8, RL-68).
+
+**This fills the one hole in a pipeline that otherwise exists.** `local/step.py`
+runs an approved subtask; `decomposition.py` stores the plan the three gates
+read; `duty_router.py` routes the `decompose` stage. What was missing is that
+**nothing ever wrote a plan** — there was no caller of `with_subtask` and no
+`Subtask` built outside its own module. This is the `decompose` analogue of
+`step.py`: resolve the Manager holding DECOMPOSE, ask it, take the bytes, and —
+because the model fills the hole badly as often as well — spend most of the code
+on what rite does then.
+
+The pipeline is **model → bytes → `parse` → `candidate_problems` → write
+PENDING** (DD-2.2), and every arrow is a refusal point. Nothing between the model
+and the APPROVED gate trusts the model's self-assessment, which is RL-7 applied
+one level up, to the plan.
+
+Three things this does NOT do, each because the alternative is a known defect
+class (DD-3.3):
+
+- **Never repairs a plan.** A plan that parses but fails validation is rejected,
+  not patched. rite filling a missing verify is rite writing the plan and then
+  checking its own work.
+- **Never executes a partially-valid plan.** A decomposition is a claim about
+  how a ticket splits; dropping the bad subtask changes the claim, and the rest
+  compose into something that does not satisfy the ticket (DD-5.2).
+- **Never lets a rejected plan count as a subtask's attempt** (RL-47): no subtask
+  was tried. An infrastructure fault is not an attempt either, so the loop stops
+  rather than spinning the budget.
+
+On exhaustion the ticket **escalates** — it does not fall back to a free-form
+run or a degraded plan. `escalated` says so; hooking it to the escalation budget
+(design §8.9) is the orchestrator's, and this returns the fact rather than
+inventing the mechanism.
+
+**It never writes APPROVED.** The write is PENDING whatever the model emitted,
+and a candidate that marked itself approved is refused by `candidate_problems`
+(DD-3.5) before it is reached.
+"""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import tempfile
+from dataclasses import dataclass, field, replace
+from pathlib import Path
+from typing import Protocol
+
+from rite_ai.config.managers import DECOMPOSE, ManagerRole, effective_duties
+from rite_ai.local import decomposition as dec
+from rite_ai.local.plan_validation import (
+    DEFAULT_MAX_SUBTASKS,
+    candidate_problems,
+)
+
+# Small and configurable (DD-3.4): a bounded retry assumes the model's second
+# answer is informed by the first rejection, and that is unmeasured, so the loop
+# is cheap and stops early when the reasons do not change (RL-69).
+DEFAULT_MAX_ATTEMPTS = 2
+
+
+@dataclass(frozen=True)
+class Proposal:
+    """What a decomposer agent produced: the raw bytes of a candidate plan, or
+    the fact that the turn did not happen. `bytes` is never trusted — `parse`
+    and `candidate_problems` are the boundary between them and a plan."""
+
+    bytes: bytes = b""
+    infrastructure_fault: bool = False
+    problem: str = ""
+
+
+class Proposer(Protocol):
+    def propose(self, prompt: str, workspace: str) -> Proposal: ...
+
+
+@dataclass
+class DecomposeResult:
+    """What one decomposition call did, in terms a Manager's output can state."""
+
+    wrote: bool = False
+    ticket: str = ""
+    attempts: int = 0
+    """Real attempts only — a turn that did not happen is not one (RL-47)."""
+    reasons: tuple[str, ...] = ()
+    """Why the last real attempt was rejected. Fed back into the retry (DD-3.3)."""
+    warnings: tuple[str, ...] = ()
+    escalated: bool = False
+    converged_early: bool = False
+    """RL-69: the retry's reasons were identical, so the loop converged on
+    failure and the last attempt was not spent proving it again."""
+    problem: str = ""
+    """Why nothing was even attempted — a misconfiguration or an unreachable
+    agent, not a rejected plan."""
+    lines: list[str] = field(default_factory=list)
+
+
+def decompose_ticket(
+    root,
+    manager: str,
+    ticket: str,
+    *,
+    proposer: Proposer | None = None,
+    state=None,
+    roles: list[ManagerRole] | None = None,
+    max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+    max_subtasks: int = DEFAULT_MAX_SUBTASKS,
+    ticket_text: str = "",
+) -> DecomposeResult:
+    """Author a plan for `ticket` with the Manager holding decompose, or say why
+    none was written. Every dependency is injectable and defaults to production,
+    so a test substitutes the agent without substituting the path (DD-4.3)."""
+    root = Path(root)
+    result = DecomposeResult(ticket=ticket)
+
+    if roles is None:
+        roles, problem = _roles_for(root)
+        if problem:
+            result.problem = problem
+            return result
+    holders = _decompose_holders(roles)
+    if manager not in holders:
+        result.problem = (
+            f"{manager!r} does not hold the decompose duty, so it cannot author a "
+            f"plan — holders: {', '.join(sorted(holders)) or 'none'}"
+        )
+        return result
+
+    if state is None:
+        from rite_ai.coordination.local_backend import LocalStateLayer
+
+        state = LocalStateLayer(root / ".rite")
+
+    read = dec.read(state, ticket)
+    if read.unavailable:
+        result.problem = (
+            f"the decomposition for {ticket} could not be read: {read.unavailable}"
+        )
+        return result
+    if read.plan is not None and read.plan.released:
+        # Overwriting an approved plan would silently drop its approval
+        # (`returned_to_plan_review` is the only sanctioned way back to PENDING).
+        result.problem = (
+            f"{ticket} already has an approved decomposition — a decomposer does "
+            "not overwrite one a plan-review holder released"
+        )
+        return result
+    version = read.version
+
+    if proposer is None:
+        proposer, problem = _proposer_for(roles, manager)
+        if problem:
+            result.problem = problem
+            return result
+
+    base_prompt = _prompt_for(ticket, ticket_text)
+    previous: tuple[str, ...] | None = None
+    addendum = ""
+
+    while result.attempts < max_attempts:
+        proposal = proposer.propose(base_prompt + addendum, str(root))
+        if proposal.infrastructure_fault or (proposal.problem and not proposal.bytes):
+            # The turn did not happen (RL-47): not an attempt, and spinning the
+            # budget on a down endpoint proves nothing. Stop and say so.
+            result.problem = (
+                "the decomposer's turn did not happen (infrastructure fault), so "
+                f"no attempt was made: {proposal.problem or 'see the agent output'}"
+            )
+            return result
+
+        result.attempts += 1
+        parsed = dec.parse(proposal.bytes)
+        if isinstance(parsed, str):
+            reasons: tuple[str, ...] = (f"the bytes are not a decomposition: {parsed}",)
+        else:
+            # The ticket identity is rite's, never the model's: a candidate that
+            # names another ticket is still this ticket's plan.
+            candidate = replace(parsed, ticket=ticket)
+            problems = candidate_problems(
+                candidate,
+                root=root,
+                decompose_managers=tuple(holders),
+                max_subtasks=max_subtasks,
+                ticket_text=ticket_text,
+            )
+            if problems.ok:
+                return _write_pending(
+                    state, candidate, manager, version, result, problems.warnings
+                )
+            reasons = problems.refusals
+
+        result.reasons = reasons
+        # RL-69 — identical reasons mean the loop has converged on failure.
+        if previous is not None and reasons == previous:
+            result.converged_early = True
+            result.escalated = True
+            result.lines.append(
+                "the rejection reasons did not change on retry, so the loop "
+                "converged on failure and stopped early (RL-69)"
+            )
+            return result
+        previous = reasons
+        addendum = _rejection_addendum(reasons)
+
+    # Budget spent with no valid plan: escalate, never fall back (DD-3.3, RL-68).
+    result.escalated = True
+    result.lines.append(
+        f"no valid plan after {result.attempts} attempt(s); the ticket escalates "
+        "rather than running free-form or on a degraded plan (RL-68)"
+    )
+    return result
+
+
+def _write_pending(state, candidate, manager, version, result, warnings):
+    """Write the valid candidate as a PENDING plan and never as APPROVED."""
+    plan = replace(
+        candidate,
+        approval=dec.PENDING,
+        approved_by="",
+        decomposed_by=candidate.decomposed_by or manager,
+    )
+    written = dec.write(state, plan, version)
+    if type(written).__name__ != "Written":
+        # The plan was valid but the store moved under us; nothing was approved
+        # and nothing partial was written.
+        result.problem = (
+            f"the plan for {plan.ticket} was valid but could not be written "
+            f"({type(written).__name__}); nothing was approved"
+        )
+        return result
+    result.wrote = True
+    result.warnings = warnings
+    return result
+
+
+def _roles_for(root: Path):
+    from rite_ai.config.parse import ParseError, parse_config
+
+    parsed = parse_config(Path(root) / ".rite" / "config.yaml")
+    if isinstance(parsed, ParseError):
+        return [], f"this project's config.yaml will not parse: {parsed.message}"
+    return parsed.coordination.manager_roles, ""
+
+
+def _decompose_holders(roles: list[ManagerRole]) -> set[str]:
+    declared = len(roles)
+    return {r.name for r in roles if DECOMPOSE in effective_duties(r, declared)}
+
+
+def _rejection_addendum(reasons: tuple[str, ...]) -> str:
+    """The rejection, fed back so the retry is informed rather than blind (DD-3.3)."""
+    joined = "\n".join(f"- {r}" for r in reasons)
+    return (
+        "\n\nA previous attempt was REFUSED for these reasons. Produce a plan "
+        "that does not repeat them; do not argue with them:\n" + joined
+    )
+
+
+def _prompt_for(ticket: str, ticket_text: str) -> str:
+    """The decomposer's instruction. The model emits BYTES — a JSON object — and
+    `parse` + `candidate_problems` decide whether they are a plan (DD-2.2)."""
+    body = ticket_text.strip() or "(no ticket text was supplied)"
+    return (
+        f"Decompose ticket {ticket} into independent subtasks. Emit ONE JSON "
+        "object and nothing else, of the form:\n"
+        '{"format_version": '
+        + str(dec.FORMAT_VERSION)
+        + ', "ticket": "'
+        + ticket
+        + '", "decomposed_by": "", "subtasks": [\n'
+        '  {"id": "s1", "intent": "<what this subtask achieves>",\n'
+        '   "scope": ["<repo-relative path this subtask may touch>"],\n'
+        '   "verify": "<a shell command that fails unless this subtask is done>",\n'
+        '   "cites": ["<spec unit id this subtask depends on>"]}\n'
+        "]}\n\n"
+        "Rules: 2 to 8 subtasks; each scope path is repo-relative and inside the "
+        "repo; each subtask cites at least one spec unit that exists; no two "
+        "subtasks share a scope path; the verify is a real command, never `true` "
+        "or `:`. Do NOT set an approval — a plan-review holder approves the "
+        "plan.\n\nThe ticket:\n" + body
+    )
+
+
+def _proposer_for(roles: list[ManagerRole], manager: str):
+    """(a production proposer, or a problem). Built from the DECOMPOSE Manager's
+    declared engine — a local Manager runs the model its role names."""
+    role = next((r for r in roles if r.name == manager), None)
+    if role is None:
+        return None, f"no Manager named {manager!r} in this project"
+    if role.is_local:
+        if role.agent != "goose":
+            return None, (
+                f"{manager!r} declares agent {role.agent!r}; only 'goose' has the "
+                "local launch path today (S35)"
+            )
+        return GooseProposer(model=role.model, endpoint=role.endpoint), ""
+    # ⚠ The Claude decomposer-agent adapter — capturing a full candidate from a
+    # `claude` Manager — is not wired in this change. The local (goose) path is
+    # the one the proof run B exercises; the Claude side is flagged, not faked.
+    return None, (
+        f"{manager!r} is a {role.engine} Manager; the Claude decomposer-agent "
+        "adapter is not wired yet (DD-2.4). Inject a proposer, "
+        "or author the plan with a local decompose Manager"
+    )
+
+
+@dataclass(frozen=True)
+class GooseProposer:
+    """One turn of Goose asked for a plan, returning its FULL output as bytes.
+
+    Unlike `GooseAgent`, which runs a subtask and reports, this captures the
+    whole of stdout — the candidate plan is the output, not a tail of it. The
+    bytes are never trusted here; `parse` is the boundary (DD-2.2).
+
+    ⚠ This shares `local/step.py`'s window gap (DD-4.5): it does not pin the
+    window it launches against. That is a listed follow-up, not this change — a
+    smaller window degrades a plan's quality, which validation and plan review
+    still catch, rather than letting an unapproved plan run.
+    """
+
+    model: str
+    endpoint: str
+    binary: str = "goose"
+    mode: str = "auto"
+    launch: object | None = None
+
+    def propose(self, prompt: str, workspace: str) -> Proposal:
+        from rite_ai.local.goose_agent import _infrastructure_fault, goose_environment
+
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".txt", prefix="rite-decompose-", delete=False
+        ) as handle_file:
+            handle_file.write(prompt)
+            instruction_path = handle_file.name
+        argv = [self.binary, "run", "-n", "rite-decompose", "-i", instruction_path]
+        environment = dict(os.environ)
+        environment.update(goose_environment(self.endpoint, self.model))
+        environment["GOOSE_MODE"] = self.mode
+        try:
+            completed = self._launch(argv, workspace, environment)
+        except Exception as e:  # noqa: BLE001 - a launch failure is a result
+            return Proposal(
+                problem=f"could not start {self.binary}: {type(e).__name__}: {e}"
+            )
+        finally:
+            try:
+                os.unlink(instruction_path)
+            except OSError:
+                pass
+        said = f"{completed.stdout or ''}\n{completed.stderr or ''}"
+        fault = _infrastructure_fault(said)
+        if fault:
+            return Proposal(infrastructure_fault=True, problem=fault)
+        return Proposal(bytes=(completed.stdout or "").encode("utf-8"))
+
+    def _launch(self, argv, workspace, environment):
+        if self.launch is not None:
+            return self.launch(argv, workspace, environment)
+        return subprocess.run(
+            argv,
+            cwd=workspace,
+            env=environment,
+            capture_output=True,
+            text=True,
+            errors="replace",
+            check=False,
+        )

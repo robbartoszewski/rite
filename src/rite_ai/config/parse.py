@@ -19,6 +19,7 @@ from .models import (
     CheckinWindow,
     CoordinationConfig,
     CredentialsConfig,
+    DecomposerConfig,
     ExpertiseEntry,
     GithubAppConfig,
     HeartbeatConfig,
@@ -1033,12 +1034,38 @@ def parse_worker(path: Path) -> WorkerManifest | ParseError:
     if not name:
         return ParseError(str(path), "'worker.name' is required")
 
+    decomposer_raw = worker.get("decomposer")
+    if decomposer_raw is not None and not isinstance(decomposer_raw, dict):
+        return ParseError(
+            str(path), "'worker.decomposer' must be a mapping with a 'model'"
+        )
+    decomposer_raw = decomposer_raw or {}
+    unknown_dec = sorted(set(decomposer_raw) - {"model"})
+    if unknown_dec:
+        return ParseError(
+            str(path),
+            f"'worker.decomposer' knows only 'model', not {', '.join(unknown_dec)}",
+        )
+    dec_model = decomposer_raw.get("model", "")
+    if dec_model and not isinstance(dec_model, str):
+        return ParseError(str(path), "'worker.decomposer.model' must be text")
+    # A Worker is a Claude sandbox, so a named decomposer model is a Claude one.
+    if dec_model:
+        from rite_ai.config.managers import claude_model_problem
+
+        problem = claude_model_problem(str(dec_model))
+        if problem:
+            return ParseError(
+                str(path), f"'worker.decomposer.model' {dec_model!r} {problem}"
+            )
+
     return WorkerManifest(
         name=name,
         manager=worker.get("manager", ""),
         modules=_str_list(worker.get("modules", [])),
         claude_instructions=worker.get("claude_instructions", ""),
         follow_module_docs=_str_list(worker.get("follow_module_docs", [])),
+        decomposer=DecomposerConfig(model=str(dec_model or "")),
     )
 
 

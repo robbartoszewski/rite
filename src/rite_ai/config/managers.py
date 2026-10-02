@@ -72,7 +72,16 @@ PRESETS: dict[str, tuple[str, ...]] = {
 # class label is a name, not a configuration (design §3.1).
 _LOCAL_ONLY = ("endpoint", "model", "agent")
 _ENTRY_KEYS = frozenset(
-    {"name", "engine", "duties", "preset", "credential", "context_window", *_LOCAL_ONLY}
+    {
+        "name",
+        "engine",
+        "duties",
+        "preset",
+        "credential",
+        "context_window",
+        "decomposer",
+        *_LOCAL_ONLY,
+    }
 )
 
 # A Claude Manager may name its model (`claude --model <name>`). A CLAUDE
@@ -82,6 +91,25 @@ _ENTRY_KEYS = frozenset(
 # argv, which this closed spelling keeps safe.
 _CLAUDE_ALIASES = frozenset({"sonnet", "opus", "haiku", "fable", "opusplan", "default"})
 _CLAUDE_MODEL = re.compile(r"^claude-[a-z0-9][a-z0-9.-]{0,60}(\[1m\])?$")
+
+# The Level-2 decomposition model a Claude executing unit plans with, when it
+# names none (RL-61, DECOMPOSER_DESIGN 0/1.7). An alias, so it travels safely
+# on tmux's argv like any other Claude model name.
+CLAUDE_DECOMPOSER_DEFAULT = "opus"
+
+
+@dataclass(frozen=True)
+class DecomposerConfig:
+    """The ONE new attribute the per-worker (Level-2) placement forces
+    (DECOMPOSER_DESIGN 1.7, RL-61). It names the model an executing unit plans
+    its own APPROACH with — separate from the model it implements with.
+
+    Empty `model` means "use this unit's type default": Opus for a Claude unit,
+    the unit's own model for a local one (`decomposition_model_for`). The common
+    case stays empty, so nobody maintains a model name in two places — the S35
+    shape this is shaped to avoid."""
+
+    model: str = ""
 
 
 @dataclass(frozen=True)
@@ -106,6 +134,10 @@ class ManagerRole:
     # A KEY NAME, never a secret (SPEC §10). A local endpoint usually needs
     # none; one that does names a credential the keychain holds.
     credential: str = ""
+    # Level 2 (DECOMPOSER_DESIGN 1.7): the model this unit plans its own
+    # approach with, separate from `model` which it implements with. Default
+    # empty — resolved by `decomposition_model_for`.
+    decomposer: DecomposerConfig = field(default_factory=DecomposerConfig)
 
     @property
     def is_local(self) -> bool:
@@ -139,6 +171,21 @@ def effective_duties(role: ManagerRole, declared: int) -> frozenset[str]:
     return frozenset(DUTIES) if declared <= 1 else frozenset()
 
 
+def decomposition_model_for(role: ManagerRole) -> str:
+    """The model this executing unit plans its APPROACH with (Level 2, RL-61).
+
+    The unit's own `decomposer.model` when it names one; otherwise the type
+    default — the unit's own model for a local one (one GPU, nothing to gain
+    from a second model), Opus for a Claude one (plan with Opus, implement with
+    its Claude model). Computed, never stored, so the common case stays empty
+    and no model name lives in two files (DECOMPOSER_DESIGN 1.7 reason 3)."""
+    if role.decomposer.model:
+        return role.decomposer.model
+    if role.is_local:
+        return role.model
+    return CLAUDE_DECOMPOSER_DEFAULT
+
+
 def _engine_error(engine: str) -> str:
     if engine in (CLAUDE, HUMAN) or _LOCAL.match(engine):
         return ""
@@ -164,7 +211,7 @@ def _entry_error(raw: dict, name: str) -> str:
             f"manager {name or '?'}: unknown key(s) {', '.join(unknown)} — "
             f"known keys are {', '.join(sorted(_ENTRY_KEYS))}"
         )
-    for key in _ENTRY_KEYS - {"context_window"}:
+    for key in _ENTRY_KEYS - {"context_window", "decomposer"}:
         if key in raw and not isinstance(raw[key], (str, list)):
             return f"manager {name or '?'}: {key} must be text"
     window_problem = _window_error(raw, name)
@@ -213,6 +260,39 @@ def _entry_error(raw: dict, name: str) -> str:
             f"manager {name}: {', '.join(stray)} means nothing on a "
             f"{engine!r} engine — only 'local:<class>' runs a model rite drives"
         )
+    decomposer_problem = _decomposer_error(raw, name, engine)
+    if decomposer_problem:
+        return decomposer_problem
+    return ""
+
+
+def _decomposer_error(raw: dict, name: str, engine: str) -> str:
+    """Why this entry's `decomposer:` cannot be read, or "" (RL-61).
+
+    The ONE Level-2 key. A mapping with just `model`: a Claude unit's model is
+    validated as a Claude name (it reaches `claude --model`), a local unit's is
+    free (it names an Ollama tag like `qwen3.8:latest`). Absent is the common
+    case and means "use the type default"."""
+    if "decomposer" not in raw:
+        return ""
+    body = raw["decomposer"]
+    if not isinstance(body, dict):
+        return (
+            f"manager {name}: decomposer must be a mapping with a 'model', e.g. "
+            "'decomposer: {model: opus}'"
+        )
+    unknown = sorted(set(body) - {"model"})
+    if unknown:
+        return (
+            f"manager {name}: decomposer knows only 'model', not {', '.join(unknown)}"
+        )
+    model = body.get("model", "")
+    if not isinstance(model, str) or not model.strip():
+        return f"manager {name}: decomposer.model must be a non-empty model name"
+    if engine == CLAUDE:
+        problem = claude_model_problem(model)
+        if problem:
+            return f"manager {name}: decomposer.model {model!r} {problem}"
     return ""
 
 
@@ -279,6 +359,7 @@ def parse_managers(raw: object) -> ParsedManagers:
             if problem:
                 out.error = problem
                 return out
+            decomposer_raw = item.get("decomposer") or {}
             role = ManagerRole(
                 name=name,
                 engine=str(item.get("engine", CLAUDE)),
@@ -289,6 +370,7 @@ def parse_managers(raw: object) -> ParsedManagers:
                 agent=str(item.get("agent", "")),
                 credential=str(item.get("credential", "")),
                 context_window=int(item.get("context_window", 0) or 0),
+                decomposer=DecomposerConfig(model=str(decomposer_raw.get("model", ""))),
             )
         else:
             out.error = (
@@ -477,6 +559,10 @@ def to_yaml_entry(role: ManagerRole) -> str | dict:
         value = getattr(role, key)
         if value:
             entry[key] = value
+    if role.decomposer.model:
+        # The one Level-2 attribute (RL-61). Absent when the type default is
+        # taken, so the common case stays a bare name or a plain entry.
+        entry["decomposer"] = {"model": role.decomposer.model}
     return entry
 
 
