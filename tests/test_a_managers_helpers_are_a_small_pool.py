@@ -1,7 +1,7 @@
 """A Manager's helper sessions are a small on-demand pool, bounded at a moment (D-115).
 
-Robert, 2026-10-02: the Manager is a passive coordinator. It never implements
-tickets, and it reaches for a HELPER session only on demand, for coordinator
+Robert, 2026-10-02: the Manager is a coordinator, with no heavy
+implementation, and it reaches for a HELPER session only on demand, for coordinator
 work (a review, a verification, a spec, an answer) that needs fresh eyes or
 must not block the interactive thread. Helpers are bounded by concurrency,
 never by a rate: at most `MANAGER_HELPER_POOL` at once, and one more WAITS for

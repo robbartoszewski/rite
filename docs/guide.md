@@ -719,12 +719,19 @@ rite start helper
 which is also the only stop that records why. Waiting on your answer, on
 routed work, a quiet board or a closed schedule window does not end it: it
 waits, spending nothing, and carries on when mail arrives, the board changes
-or the window opens. What bounds it is your schedule: one session at a time,
+or the window opens. While it waits no Manager session is running: rite's
+own code watches, and starts one only for an event (your message or `rite
+connect`, a Slack message, an answer, a Worker's or another Manager's mail,
+new ready work, a freed slot, the window opening). A session that only
+replied, or only edited code, counts as idle, so it does not run again at
+once. What bounds it is your schedule: one session at a time,
 and Workers only up to the window's count; a Worker asked for when no slot is
 free waits for one rather than being dropped. Beside its own session a Manager
 runs at most two short helper sessions at once, for checks and reviews that
-need fresh eyes; it does not implement tickets itself. To bound the whole run instead,
-give BOTH bounds:
+need fresh eyes. A Manager does no heavy implementation: the lead implements
+nothing, and a secondary may do only chores, ticket breakdowns and similar
+trivial work, through a branch and a pull request. To bound the whole run
+instead, give BOTH bounds:
 
 ```bash
 rite start lead --sessions 3 --minutes 90

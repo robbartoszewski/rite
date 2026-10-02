@@ -10522,9 +10522,10 @@ def manager_stop(name: str) -> None:
     "--sessions",
     type=int,
     default=None,
-    help="Ceiling on provider sessions this run may start that do work (a "
-    "commit or edit, claim, reply, route or Worker request). A session "
-    "that changes nothing is not counted, and at most this many of those "
+    help="Ceiling on provider sessions this run may start that make progress "
+    "(a claim, route, Worker request or delivery; a reply or a project edit "
+    "alone is not progress). Other sessions are not counted, and at most "
+    "this many of those "
     "run as well. A COUNT, not spend. Give it with --minutes to bound the "
     "run; give neither and the run goes on until you stop it, bounded by "
     "your schedule's Worker count instead. With several Managers in one "

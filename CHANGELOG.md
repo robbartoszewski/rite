@@ -10,7 +10,11 @@ schedule: it runs one session at a time, and its Workers only up to the
 current window's count. Waiting on your answer, on routed work, on a quiet
 board or through a closed window does not end the run: it waits, spending
 nothing, and carries on when mail arrives, the board changes or the window
-opens (and says when that is). Faults still end it (a deadlocked or unreadable
+opens (and says when that is). No Manager session runs while it waits: rite's
+own code watches, and starts a session only for an event (your `rite message`
+or `rite connect`, a Slack message, your answer to its `rite ask`, a Worker's
+or another Manager's mail, new ready work, a freed Worker slot, the window
+opening). Faults still end it (a deadlocked or unreadable
 board, a verdict rite does not recognise).
 
 **A Worker asked for when no slot is free is queued, not dropped.** Before, it
@@ -20,15 +24,17 @@ This holds for bounded runs too. And the slot count is this project's own
 Workers: other projects' sandboxes, and leftover test sandboxes, no longer
 use up its slots (SCRUM-36).
 
-**A Manager's helper sessions are a small pool.** A Manager is a coordinator:
-it does not implement tickets, and it uses a helper session only when a
-review, a verification, a spec or an answer needs fresh eyes or would block
-it. At most two run at once, and one more waits. Today the one helper is
+**A Manager's helper sessions are a small pool.** A Manager is a coordinator,
+with no heavy implementation: the lead implements nothing, and a secondary
+may do only chores, ticket breakdowns and similar trivial work, through a
+branch and a pull request. It uses a helper session only when a review, a
+verification, a spec or an answer needs fresh eyes or would block it. At most two run at once, and one more waits. Today the one helper is
 rite's own check of a secondary Manager's reply.
 
-⚠ **Not yet decided:** a Manager whose every session only writes a reply
-counts as working, so a run without bounds starts its next session straight
-away. Whether such a session should count as idle is being decided.
+**A session that only replies is idle.** Progress is a claim, a route, a
+Worker request or a delivery. A session that only wrote a reply ("still
+waiting…"), or only edited the project, no longer earns the next session at
+once: the run waits for an event. Before, such sessions ran back to back.
 
 Give both to bound the whole run as before. One without the other is still
 refused: they catch different runaways and neither suffices alone, so rite will

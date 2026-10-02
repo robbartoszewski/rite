@@ -41,6 +41,11 @@ from rite_ai.managers.supervise import (
 OWNER = "lead"
 
 
+def _claim(root, n: int) -> None:
+    """A session's real progress: a claim (a reply alone is not, D-115)."""
+    (root / ".rite" / "claims.json").write_text(f'[{{"worker": "w{n}"}}]')
+
+
 class _Ending:
     kind = "finished"
     resume = True
@@ -111,6 +116,7 @@ def _run(world, *, sessions, minutes, stop_after=None, cycle_secs=10.0):
         if stop_after is not None and len(starts) >= stop_after:
             raise KeyboardInterrupt
         mailbox.send(root, OWNER, mailbox.OUTBOX, f"did something {len(starts)}")
+        _claim(root, len(starts))
         world["t"] += cycle_secs
         return StartResult(True, "ok", session=f"s{len(starts)}", attach="a")
 
@@ -303,6 +309,7 @@ def _perpetual_run(patient, board, useful=0):
         starts.append(patient["t"])
         if len(starts) <= useful:
             mailbox.send(root, OWNER, mailbox.OUTBOX, f"did something {len(starts)}")
+            _claim(root, len(starts))
         patient["t"] += 10.0
         return StartResult(True, "ok", session=f"s{len(starts)}", attach="a")
 
@@ -481,3 +488,100 @@ def test_waking_again_and_again_without_a_session_is_not_a_spin(patient):
     assert result.reason.startswith("stopped by the operator"), result.reason
     assert starts == []
     assert flips["n"] > 3 * SPIN_PASSES_BEFORE_STOPPING
+
+
+# --- What counts as progress, and holding no session while idle (D-115) -----
+
+
+def _replying_run(patient, *, edit_project=False, minutes_per_session=0.0):
+    """A perpetual run on a ready board whose every session only replies (or
+    only edits the project). Returns (result, start times, liveness reads)."""
+    root = patient["root"]
+    starts: list[float] = []
+    alive_until = {"t": -1.0}
+    seen: list[tuple[float, bool]] = []
+
+    def starter(r, m, *, engine, resume_id, max_sessions, window_seconds, **kw):
+        starts.append(patient["t"])
+        mailbox.send(root, OWNER, mailbox.OUTBOX, f"still waiting {len(starts)}")
+        if edit_project:
+            (root / f"heavy_{len(starts)}.py").write_text("x = 1\n")
+        alive_until["t"] = patient["t"] + minutes_per_session * 60
+        patient["t"] += 10.0
+        if len(starts) > 5:
+            # Back to back, so no wait ever reaches the fixture's Ctrl-C: the
+            # operator presses it here, and a failing run fails at once.
+            raise KeyboardInterrupt
+        return StartResult(True, "ok", session=f"s{len(starts)}", attach="a")
+
+    def live(name):
+        alive = patient["t"] < alive_until["t"]
+        seen.append((patient["t"], alive))
+        if alive:
+            # The in-session poll sleeps in real time, not through `_sleep`,
+            # so a live session advances the virtual clock here instead.
+            patient["t"] += 30.0
+        return type("L", (), {"alive": alive, "known": True})()
+
+    sup.liveness = live  # restored by monkeypatch in `patient`
+    result = supervise(
+        root,
+        OWNER,
+        engine="claude",
+        prompt="OPEN",
+        starter=starter,
+        verdict=lambda r: _answer("ready", ["KAN-6"]),
+        resume_id_for=lambda r, m, since=0.0: "sess-1",
+        note=[].append,
+        poll=0,
+        now=lambda: patient["t"],
+    )
+    return result, starts, seen
+
+
+class TestWhatCountsAsProgress:
+    """Robert, 2026-10-02: a session that only replies, or makes no real
+    progress, is IDLE. A Manager coordinates: a claim, a route, a Worker
+    request or a delivery is progress; a reply, or heavy implementation in
+    the project, is not."""
+
+    def test_reply_only_sessions_do_not_run_back_to_back(self, patient):
+        """🔴 The case that was unbounded: every session replies "still
+        waiting…". Before, each counted as productive and the next started at
+        once. Now the first is idle and the run waits for an event."""
+        result, starts, _ = _replying_run(patient)
+        assert result.reason.startswith("stopped by the operator"), result.reason
+        assert len(starts) == 1, f"{len(starts)} reply-only sessions back to back"
+
+    def test_a_manager_doing_heavy_implementation_does_not_look_busy(self, patient):
+        """Editing and committing in the project is a Worker's job; a Manager
+        session that only does that is idle, so it is not rewarded with the
+        next session at once."""
+        _, starts, _ = _replying_run(patient, edit_project=True)
+        assert len(starts) == 1
+
+    def test_the_classification_is_coordination(self):
+        assert sup._session_was_idle([])
+        assert sup._session_was_idle(["outbox"])
+        assert sup._session_was_idle(["project"])
+        assert sup._session_was_idle(["project", "outbox"])
+        for real in ("claims", "routes", "requests", "deliveries"):
+            assert not sup._session_was_idle([real]), real
+            assert not sup._session_was_idle(["outbox", real]), real
+
+
+class TestNoManagerSessionIsLiveWhileIdle:
+    """Robert, 2026-10-02: a perpetual run is EVENT-DRIVEN. rite's own code is
+    the always-on part; a Manager session runs only in response to an event,
+    and while idle none is running (zero token spend)."""
+
+    def test_after_its_session_ends_the_run_waits_with_none_alive(self, patient):
+        result, starts, seen = _replying_run(patient, minutes_per_session=5)
+        assert result.reason.startswith("stopped by the operator"), result.reason
+        assert len(starts) == 1
+        ended = next(t for t, alive in seen if not alive)
+        assert ended >= starts[0] + 5 * 60 - 30, "the wait began while it ran"
+        assert not [t for t, alive in seen if alive and t >= ended], (
+            "a Manager session was live after the run went idle"
+        )
+        assert patient["t"] >= HORIZON

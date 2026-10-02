@@ -1017,7 +1017,8 @@ class Cycle:
     mail_waiting: bool = False
     ending: str = ""
     idle: bool = False
-    """It changed nothing rite can see (`progress.footprint`), so the
+    """It made no progress (`_session_was_idle`: no claim, route, Worker
+    request or delivery), so the
     `--sessions` ceiling does not count it (SCRUM-24). False when rite could
     not tell, so an unjudged session is counted."""
 
@@ -1071,19 +1072,34 @@ def _queued_requests(root: Path, manager: str) -> bool:
     return queued(root, manager)
 
 
+COORDINATION = frozenset({"claims", "routes", "requests", "deliveries"})
+"""The footprint parts that are a Manager's own progress: claiming work,
+routing it, asking for a Worker, delivering one's work (D-115)."""
+
+
 def _session_was_idle(changed: list[str]) -> bool:
     """Whether a session that ended with `changed` (the footprint's changed
-    parts) counts as IDLE: held by the no-progress guard, and not counted
-    toward `--sessions`.
+    parts) counts as IDLE: held by the no-progress guard until an event wakes
+    it, and not counted toward `--sessions`.
 
-    ⚠ **The seam for a decision that is PENDING (Robert, 2026-10-02).** Today
-    a session is idle only when it changed NOTHING rite can see. A Manager
-    whose every session only writes a reply ("still waiting…") therefore
-    counts as productive, and a perpetual run starts the next one at once:
-    back to back, one at a time, without bound. Whether a reply-only session
-    should count as idle is being decided; the answer belongs here and only
-    here."""
-    return not changed
+    🔴 **Robert, 2026-10-02: a Manager session that only replies, or makes no
+    real progress, is idle.** A Manager is a coordinator, so what counts is
+    COORDINATION: a claim, a route, a Worker request or a delivery. Two things
+    that used to count no longer do:
+
+    - **a reply** (`outbox`). Before, a Manager whose every session only wrote
+      "still waiting…" counted as productive, and a perpetual run started the
+      next session at once: back to back, without bound. Now it waits for an
+      event, which is what a reply is answering anyway.
+    - **an edit or commit in the project** (`project`). Heavy implementation
+      is a Worker's job; a Manager doing it must not look busy for it. Chores
+      and ticket breakdowns a secondary may do itself are real work, but they
+      are not a reason to start another session at once either: the next one
+      starts when something happens.
+
+    Communication and project edits still happen, and are still seen; they
+    are just not progress."""
+    return not (set(changed) & COORDINATION)
 
 
 def _closed_wake(root: Path, verdict, clock):
@@ -1166,8 +1182,9 @@ def _idle_allowance_spent(manager: str, max_sessions: int, cycles):
         return None
     return SuperviseResult(
         True,
-        f"stopped: {_idle(cycles)} session(s) changed nothing rite can see "
-        f"(no commit or edit, claim, reply, route or Worker request). The "
+        f"stopped: {_idle(cycles)} session(s) made no progress (no claim, "
+        f"route, Worker request or delivery; a reply or a project edit alone "
+        f"is not progress). The "
         f"--sessions ceiling does not count those, so they have an allowance "
         f"of their own, the same number ({max_sessions}), and it is spent. "
         f"{_counted(cycles)} session(s) did work.",
@@ -1609,7 +1626,7 @@ def _supervise(
         say(tracking)
 
     # ⚠ THE NO-PROGRESS GUARD (F22). Set when a session the BOARD started
-    # ended having changed nothing rite can see; cleared by anything that
+    # ended having made no progress (`_session_was_idle`); cleared by anything that
     # changes. While set, a board that still reads the same starts no
     # session. See `progress` for what counts and why.
     stalled: _Stalled | None = None
@@ -2863,9 +2880,9 @@ def _idle_line(manager: str, stalled: _Stalled, clock):
         said["at"] = now
         return (
             f"{mark}{manager!r} is waiting, spending nothing: session "
-            f"{stalled.number} changed nothing rite can see (no commit or edit "
-            "in the project, claim, reply, route or Worker request), so it "
-            "does not count toward --sessions, and the "
+            f"{stalled.number} made no progress (no claim, route, Worker "
+            "request or delivery; a reply or a project edit alone is not "
+            "progress), so it does not count toward --sessions, and the "
             "board reads as it did when that session began, "
             "so another would repeat it. Mail wakes it (a Slack DM, a routed "
             f"reply, `rite message {manager} …`), and so does a change on the "

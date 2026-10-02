@@ -1,8 +1,10 @@
 """The Manager's helper sessions: a small, on-demand pool (D-115).
 
-**What a helper is for** (Robert, 2026-10-02). The Manager is a coordinator,
-and it is passive by default: it never implements tickets (that is a Worker's
-job, full stop), and it keeps no helper sessions running. A helper is a
+**What a helper is for** (Robert, 2026-10-02). The Manager is a coordinator:
+no heavy implementation (the lead implements nothing; a secondary may do only
+chores, ticket breakdowns and similar trivial work, through a branch and a
+pull request, `prompt.ROUTED_TICKET_WORK`), and it keeps no helper sessions
+running. A helper is a
 session spawned ON DEMAND for work connected to the coordinator role
 (answering a question, a review, a verification, a spec) and only for one of
 two reasons:
