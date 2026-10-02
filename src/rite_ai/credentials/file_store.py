@@ -37,6 +37,7 @@ profile denies it explicitly as well.
 
 from __future__ import annotations
 
+import errno
 import fcntl
 import json
 import os
@@ -71,7 +72,7 @@ def describe() -> str:
         entries = len(_read(path))
     except CredentialStoreError as e:
         return f"file store at {path}: UNUSABLE — {e}"
-    if not path.exists():
+    if not _present(path):
         return f"file store at {path} (mode 0600): empty, nothing stored yet"
     return f"file store at {path} (mode 0600): {entries} credential(s)"
 
@@ -93,20 +94,46 @@ def _check_mode(path: Path) -> None:
         )
 
 
+_ABSENT = frozenset({errno.ENOENT, errno.ENOTDIR})
+
+
+def _present(path: Path) -> bool:
+    """Whether the store file exists, raising when that cannot be told.
+
+    🔴 SCRUM-30. This was `path.exists()`, which answers False for ANY error
+    from `stat` (Python 3.14 measured: False on EACCES). Inside a sandbox
+    that denies even the file's metadata, the store therefore read as EMPTY,
+    and every credential as "not found" (`jira_email not found`), when the
+    truth was that it could not be read here. Only "no such file" is absent.
+    """
+    try:
+        os.stat(path)
+    except OSError as e:
+        if e.errno in _ABSENT:
+            return False
+        raise CredentialStoreError(
+            f"the credentials cannot be read here: {path} could not be "
+            f"examined ({e.strerror or e}). Inside a Manager's sandbox this is "
+            f"expected: a Manager is not given rite's credentials"
+        ) from None
+    return True
+
+
 def _read(path: Path) -> dict[str, str]:
     """The stored accounts. A missing file is an empty store, not an error.
 
     An unreadable file IS an error: "could not look" is not "nothing is
     there", and reporting it as absent is the silent failure this replaces.
     """
-    if not path.exists():
+    if not _present(path):
         return {}
     try:
         _check_mode(path)
         text = path.read_text()
     except PermissionError as e:
         raise CredentialStoreError(
-            f"{path} could not be read ({e.strerror}). Inside a Manager's "
+            f"the credentials cannot be read here: {path} could not be read "
+            f"({e.strerror}). Inside a Manager's "
             f"sandbox this is expected: a Manager is not given rite's "
             f"credentials"
         ) from None

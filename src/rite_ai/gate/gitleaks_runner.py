@@ -33,6 +33,7 @@ Two verified, load-bearing facts about gitleaks 8.30.1 that shape this file:
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -100,6 +101,21 @@ One constant because there were two copies that had already drifted apart,
 and a third was about to be written for `rite init`."""
 
 
+DEFAULT_CONFIG = "[extend]\nuseDefault = true\n"
+"""The ruleset when a project names none: gitleaks' own defaults, nothing
+added, nothing allowed.
+
+🔴 SCRUM-17. With no `--config`, gitleaks does NOT simply use its defaults: it
+reads `GITLEAKS_CONFIG`, `GITLEAKS_CONFIG_TOML`, or a `.gitleaks.toml` at the
+root of the repository it scans. Measured on gitleaks 8.30.1 with a real-shaped
+`ghp_` token: one finding with nothing configured, ZERO with any of the three
+pointing at a config that allowlists every path. So a repository rite pushes
+for could switch rite's own gate off with a file rite never reads. Passing
+this explicitly restored the finding in every case."""
+
+_IGNORED_ENV = ("GITLEAKS_CONFIG", "GITLEAKS_CONFIG_TOML")
+
+
 def _run_gitleaks_json(
     args: list[str], cwd: Path, binary: str
 ) -> list[dict] | ScanError:
@@ -112,10 +128,27 @@ def _run_gitleaks_json(
     "clean"."""
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
         report_path = Path(tmp.name)
+    default_config: Path | None = None
+    if "--config" not in args:
+        # Written per run rather than shipped as package data: a file the
+        # gate depends on must not be one an install can be missing.
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".toml", prefix="rite-gitleaks-", delete=False
+        ) as cfg:
+            cfg.write(DEFAULT_CONFIG)
+        default_config = Path(cfg.name)
+        args = [*args, "--config", str(default_config)]
+    # Nothing in the caller's environment chooses the ruleset either.
+    env = {k: v for k, v in os.environ.items() if k not in _IGNORED_ENV}
     try:
         full_args = [
             binary,
             *args,
+            # An inline `gitleaks:allow` would silence a finding with no
+            # reason recorded; rite's suppressions carry one
+            # (`.rite/gitleaksignore`). Measured: the comment hid a token,
+            # and this flag brought it back.
+            "--ignore-gitleaks-allow",
             "--no-banner",
             "--exit-code",
             "0",
@@ -128,6 +161,7 @@ def _run_gitleaks_json(
             proc = subprocess.run(
                 full_args,
                 cwd=cwd,
+                env=env,
                 capture_output=True,
                 text=True,
                 errors="replace",
@@ -156,6 +190,8 @@ def _run_gitleaks_json(
         return data
     finally:
         report_path.unlink(missing_ok=True)
+        if default_config is not None:
+            default_config.unlink(missing_ok=True)
 
 
 def _to_finding(entry: dict, source: str) -> Finding | None:

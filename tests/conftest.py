@@ -401,6 +401,71 @@ def _checkout_state() -> str | None:
     return proc.stdout if proc.returncode == 0 else None
 
 
+def _real_credential_files() -> tuple[Path, Path]:
+    """The credential store and name registry a person's own `rite` uses,
+    read BEFORE any test redirects them (session scope, so this runs first)."""
+    store = os.environ.get("RITE_CREDENTIALS_FILE") or str(
+        Path.home() / ".config" / "rite" / "credential-store.json"
+    )
+    home = os.environ.get("RITE_HOME_DIR") or str(Path.home() / ".rite")
+    return Path(store), Path(home) / "credentials.json"
+
+
+def _credential_names(path: Path) -> set[str] | None:
+    """The KEYS in a credential file, never its values; None when it cannot
+    be read (no guard is better than one built on a guess)."""
+    import json
+
+    try:
+        data = json.loads(path.read_text()) if path.is_file() else {}
+    except (OSError, ValueError):
+        return None
+    return set(data) if isinstance(data, dict) else None
+
+
+def appeared_credential_names(before: dict, after: dict) -> list[str]:
+    """Names in `after` that were not in `before`, per file, for the guard
+    below and for its own test."""
+    found = []
+    for path, was in before.items():
+        now = after.get(path)
+        if was is None or now is None:
+            continue
+        found += [f"{path}: {name}" for name in sorted(now - was)]
+    return found
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _suite_leaves_the_real_credentials_alone():
+    """No test writes into the credential store a person's `rite` uses.
+
+    🔴 SCRUM-18. Test and scratch namespaces (`test-credential-set-does-*`,
+    `acme-1a2b3c`) sat in a real store and registry: written before
+    `_no_real_credential_file` existed, and never removed. That fixture is
+    the isolation; this is the measurement that it holds, for every test and
+    every subprocess one starts, now or later.
+
+    ⚠ What it measures is "a credential NAME appeared in the real files
+    during the run". Another process on the machine storing a credential at
+    the same moment looks the same, and the message says so (DF5's lesson).
+    """
+    files = _real_credential_files()
+    before = {p: _credential_names(p) for p in files}
+    yield
+    after = {p: _credential_names(p) for p in files}
+    appeared = appeared_credential_names(before, after)
+    if appeared:
+        pytest.fail(
+            "the real credential files gained names during this test run:\n  "
+            + "\n  ".join(appeared)
+            + "\nEither a test wrote past `_no_real_credential_file` (find it by "
+            "the name, which carries the test's project), or something else on "
+            "this machine stored a credential while the suite ran. "
+            "`rite credential prune` lists them, and removes one by name.",
+            pytrace=False,
+        )
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _suite_leaves_this_checkout_alone():
     """A test run must leave rite's own working tree exactly as it found it.
