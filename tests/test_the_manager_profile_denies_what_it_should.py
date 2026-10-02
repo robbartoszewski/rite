@@ -585,6 +585,10 @@ class TestTheRiteItsInstructionsNameCanRun:
         if package.is_relative_to(project) or covering:
             # Not a pass on the real package: a grant other than rite's own
             # answers a probe there. Said, so it reads as what it is.
+            # `print` and `return`, not `pytest.skip`: the decoy probe above
+            # RAN and passed, and a skip would report the whole test as not
+            # run (and count against `every-test-passes-somewhere`). Visible
+            # with `-s`.
             print(
                 f"real package {package} not probed: writable through "
                 f"{covering or [project]}, not through rite's own rule"
