@@ -237,7 +237,43 @@ Two details of the launcher that the measurement settled:
   `--` separator is not cosmetic.
 - **A host tempfile IS readable from inside** (`cat` of a `mktemp` file written
   on the host returned its contents), so `GooseAgent.run`'s existing
-  instruction file needs no change to work in a sandbox. ⚠ It does sit in the
-  shared temp root, so the task text — not a credential, but project content —
-  is readable by every other sandbox on the machine. `yoloai files put` is the
-  route that avoids it; left as a follow-up rather than done quietly here.
+  instruction file needed no change to WORK in a sandbox. It needed one to be
+  correct — see section 7.
+
+---
+
+## 7. The instruction file, and a fix that was first attempted in the wrong place
+
+⚠ **Functioning hid a leak.** Because a host tempfile is readable from inside,
+`GooseAgent.run`'s instruction file worked in a sandbox unchanged — while
+sitting in the per-user temp root, which every sandbox on this machine is
+granted. The subtask's intent and its spec slice are project content, and they
+were readable by every other Worker for as long as the turn ran.
+
+**The first fix was insufficient, and measuring it is what showed that.** The
+launcher copied the file in with `yoloai files put` and rewrote the path on
+argv. The turn worked and read the in-sandbox copy — but `GooseAgent` still
+*wrote* the host tempfile first, so the task text was in the shared temp root
+for the whole turn anyway. Moving the READ does not close the window; it only
+makes the window look closed.
+
+**What actually closes it: the file is born inside.** `GooseAgent` gained
+`instruction_dir`, used as `tempfile`'s `dir`. `in_sandbox.instruction_dir_for`
+returns the sandbox's exchange directory, which is host-writable and inside the
+layer measured isolated in section 5. ⚠ Its path is the same string from the
+host and from inside, so there is nothing to copy and nothing to rewrite on
+argv — the copy-in and its cleanup were deleted rather than kept alongside.
+
+**Measured, with a control, because a zero without one means nothing.** A
+watcher polled the shared temp root every 200 ms for the whole turn, looking for
+a distinctive phrase from the subtask:
+
+| `instruction_dir` | turn | task text in the shared temp root |
+|---|---|---|
+| the sandbox's layer | success, 30 s | **NEVER** |
+| `""` (the old behaviour) | success | **SEEN** |
+
+The control fired, so the `NEVER` is a real absence and not a watcher that could
+not see. The agent received the instruction either way — the marker file inside
+the sandbox carried the phrase — so the location is load-bearing and invisible
+to the turn.

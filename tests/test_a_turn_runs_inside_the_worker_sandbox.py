@@ -132,3 +132,93 @@ def test_an_unknown_sandbox_gives_no_root_rather_than_a_guess():
 def test_no_yoloai_gives_no_root():
     with patch("rite_ai.sandbox.shutil.which", return_value=None):
         assert goose_path_root("box") == ""
+
+
+# ── Where the instruction file is BORN ───────────────────────────────────────
+# A host tempfile is readable from inside a Worker (measured), so the
+# instruction file WORKED there — while sitting in the per-user temp root, which
+# every sandbox on this machine is granted. The subtask's intent and spec slice
+# were readable by every other Worker for as long as the turn ran. Copying it in
+# afterwards only shortens that window; creating it inside removes it.
+
+
+def test_the_instruction_directory_is_inside_the_sandboxs_own_layer():
+    from rite_ai.local.in_sandbox import instruction_dir_for
+
+    with patch("rite_ai.sandbox.shutil.which", return_value="/bin/yoloai"):
+        with _files_path("/lib/sandboxes/box/rw/files\n"):
+            assert instruction_dir_for("box") == "/lib/sandboxes/box/rw/files"
+
+
+def test_an_unknown_sandbox_gives_no_instruction_directory():
+    # "" leaves GooseAgent.instruction_dir empty, which is the host temp root —
+    # correct for a turn that is not running in a sandbox at all.
+    from rite_ai.local.in_sandbox import instruction_dir_for
+
+    with patch("rite_ai.sandbox.shutil.which", return_value=None):
+        assert instruction_dir_for("box") == ""
+
+
+def test_goose_writes_its_instruction_where_it_is_told(tmp_path):
+    # The whole point: the file must be CREATED there, not moved there.
+    from rite_ai.local.decomposition import Subtask
+    from rite_ai.local.goose_agent import GooseAgent
+    from rite_ai.local.harness import Context
+
+    seen = {}
+
+    def spy(argv, workspace, environment):
+        path = Path(argv[argv.index("-i") + 1])
+        seen["dir"] = path.parent
+        seen["text"] = path.read_text()
+        return MagicMock(returncode=0, stdout="done", stderr="")
+
+    agent = GooseAgent(
+        model="m",
+        endpoint="http://localhost:11434",
+        launch=spy,
+        instruction_dir=str(tmp_path),
+        probe=lambda: MagicMock(problems=[]),
+    )
+    agent.run(
+        Context(
+            subtask=Subtask(id="s1", intent="do the thing", scope=("a.txt",)),
+            spec_slice="the slice",
+            ticket="T-1",
+        ),
+        workspace="/unused",
+    )
+    assert seen["dir"] == tmp_path
+    # And it really carried the task text, so the location is load-bearing.
+    assert "do the thing" in seen["text"]
+    assert "the slice" in seen["text"]
+
+
+def test_an_empty_instruction_dir_still_means_the_system_temp_root(tmp_path):
+    # Unchanged for a host turn, which is the default everywhere else.
+    import tempfile
+
+    from rite_ai.local.decomposition import Subtask
+    from rite_ai.local.goose_agent import GooseAgent
+    from rite_ai.local.harness import Context
+
+    seen = {}
+
+    def spy(argv, workspace, environment):
+        seen["dir"] = Path(argv[argv.index("-i") + 1]).parent
+        return MagicMock(returncode=0, stdout="done", stderr="")
+
+    GooseAgent(
+        model="m",
+        endpoint="http://localhost:11434",
+        launch=spy,
+        probe=lambda: MagicMock(problems=[]),
+    ).run(
+        Context(
+            subtask=Subtask(id="s1", intent="i", scope=()),
+            spec_slice="s",
+            ticket="T-1",
+        ),
+        workspace="/unused",
+    )
+    assert seen["dir"] == Path(tempfile.gettempdir())

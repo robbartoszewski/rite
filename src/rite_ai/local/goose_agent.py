@@ -183,6 +183,22 @@ class GooseAgent:
     probe: Callable | None = None
     launch: Callable | None = None
     env: dict = field(default_factory=dict)
+    instruction_dir: str = ""
+    """Where the instruction file is CREATED. Empty means the system temp root,
+    which is right on the host and wrong in a sandbox (OL5).
+
+    ⚠ **This exists so the file is never written to a shared place at all.** A
+    sandboxed turn's instruction carries the subtask's intent and its spec
+    slice — project content — and the per-user temp root is granted to every
+    sandbox on this machine, so writing it there and reading it from inside
+    (which was measured to work) would leave the task text readable by every
+    other Worker for as long as the turn ran. Copying it in afterwards does not
+    fix that; it only shortens the window. Creating it inside the sandbox's own
+    layer, which was measured ISOLATED, removes the window entirely.
+
+    The path is identical from the host and from inside, so nothing has to be
+    rewritten on argv: `in_sandbox.instruction_dir_for` returns it and this
+    writes there."""
 
     def _probe(self):
         if self.probe is not None:
@@ -211,7 +227,11 @@ class GooseAgent:
         instruction = _instruction(context)
         handle = session_name(context.ticket, context.subtask.id)
         with tempfile.NamedTemporaryFile(
-            "w", suffix=".txt", prefix="rite-goose-", delete=False
+            "w",
+            suffix=".txt",
+            prefix="rite-goose-",
+            delete=False,
+            dir=self.instruction_dir or None,
         ) as handle_file:
             # ⚠ OUTSIDE the workspace on purpose. A file written into the
             # repo would be visible to the agent as part of the work, and

@@ -111,6 +111,32 @@ def exec_argv(
     return [binary, "exec", sandbox, "--", *tail]
 
 
+def instruction_dir_for(sandbox: str, binary: str = "") -> str:
+    """Where a sandboxed turn's instruction file should be CREATED, or "".
+
+    The sandbox's exchange directory, which is host-writable and sits inside the
+    sandbox's own layer — measured isolated (`ol2-w1` could neither read
+    `ol2-w2`'s work nor write into its layer). ⚠ Its path is the SAME string
+    from the host and from inside, so a file written here needs no copying and
+    no argv rewriting; Goose reads the path it was given.
+
+    This is the fix for a leak that merely functioning hid. A host `tempfile` is
+    readable from inside a Worker (measured, OL1), so the instruction file WORKED
+    there — while sitting in the per-user temp root, which every sandbox on this
+    machine is granted. The subtask's intent and spec slice were therefore
+    readable by every other Worker for as long as the turn ran. Copying the file
+    in after the fact only shortens that window; writing it here removes it.
+
+    "" when the sandbox cannot be located, and the caller then leaves
+    `GooseAgent.instruction_dir` empty — the host temp root, which is correct
+    for a turn that is not running in a sandbox at all.
+    """
+    from rite_ai.sandbox import sandbox_state_dir
+
+    layer = sandbox_state_dir(sandbox, binary or shutil.which("yoloai") or "yoloai")
+    return str(layer / "files") if layer is not None else ""
+
+
 def exec_launcher(sandbox: str, binary: str = "", timeout: int = 0):
     """A `GooseAgent.launch` that runs the turn inside `sandbox`.
 
