@@ -10,8 +10,9 @@ conversation each time. One refusal from the early morning reached the dogfood
 Owner's DM sixteen times in twenty minutes, as "did not reach anyone", while
 every message in that window had arrived, the refused one included: the
 Manager had sent it again eleven seconds after the refusal. Each refusal is now
-reported once, and a refused `rite reply` or `rite ask` that the Manager sent
-again successfully is not reported to you as missing. When one is, the notice
+reported once, and a refused `rite reply` or `rite ask` is not reported to you
+as missing when the Manager sent exactly the same text again and it arrived. A
+reworded retry is still reported, so you are never left unaware of a lost message. When one is, the notice
 says "that call sent nothing", not "nothing was sent".
 
 ## 0.7.0a6 (2026-10-02) — alpha: a checkpoint of what is on main

@@ -725,29 +725,60 @@ def _relay_verb(command: str) -> str:
     return ""
 
 
-def _a_later_relay_went(root: Path, manager: str, refusal: Refusal) -> bool:
-    """Whether the Manager's outbox received a message of its own AFTER this
-    refusal, which is a retry that arrived (SCRUM-22).
+def _heredoc_body(command: str) -> str | None:
+    """The text a relay carried on stdin: the lines after `<<'END'` up to the
+    first line that is exactly `END`, as `stdin_text.read` hands it to the
+    command. None when the command carries no quoted heredoc, or its end line
+    never comes."""
+    head, _, rest = command.partition("\n")
+    marker = head.rfind("<<'")
+    if marker < 0 or not head.rstrip().endswith("'"):
+        return None
+    end = head[marker + 3 :].rstrip()[:-1]
+    if not end:
+        return None
+    lines = rest.split("\n")
+    if end not in lines:
+        return None
+    return "\n".join(lines[: lines.index(end)])
 
-    Only for `reply` and `ask`, the relays that write the outbox: a refused
-    `route` or `refine ask` is not shown to have gone by an outbox message,
-    so it is still told. A refusal with no time cannot be placed before
-    anything, and is still told. rite's own notices in the same outbox
-    (`asking.raised_by_rite`) are not the Manager's retry; a Manager's text
-    imitating one only means the person IS told, the safe way to be wrong."""
+
+def _the_same_message_went(root: Path, manager: str, refusal: Refusal) -> bool:
+    """Whether the very message this refusal stopped reached the outbox
+    afterwards: a later `reply` or `ask` with EXACTLY the refused heredoc's text
+    (SCRUM-22).
+
+    ⚠ **The text, not "a later message".** This first accepted any later
+    message the Manager wrote, which suppressed the notice for a reply that was
+    never sent again whenever anything else followed it, and in a running loop
+    something always does: the guarantee that a lost message is told (SCRUM-23)
+    would have failed exactly when it is needed. So it proves only this: the
+    same words, from the outbox writers a person reads (`reply`, or `ask`,
+    which is where rite sends a reply that reads as a question), after the
+    refusal.
+
+    Everything else is still told, which is the safe way to be wrong: a
+    refusal with no time, a refused `route` or `refine ask` (no outbox message
+    shows those went), a command whose text was on the command line (no body
+    to compare), and a retry the Manager reworded (one notice too many,
+    never one too few)."""
     if refusal.at is None:
         return False
-    if _relay_verb(refusal.full_command or refusal.command) not in ("reply", "ask"):
+    command = refusal.full_command or refusal.command
+    if _relay_verb(command) not in ("reply", "ask"):
         return False
-    from rite_ai.managers.asking import raised_by_rite
-    from rite_ai.managers.mailbox import OUTBOX, read
+    body = _heredoc_body(command)
+    if body is None or not body.strip():
+        return False
+    from rite_ai.managers.mailbox import OUTBOX, QUESTION, REPLY, read
 
     try:
         messages = read(root, manager, OUTBOX)
     except OSError:
         return False
     return any(
-        m.timestamp > refusal.at and not raised_by_rite(m.text) for m in messages
+        m.timestamp > refusal.at and m.kind in (REPLY, QUESTION) and m.text == body
+        for m in messages
     )
 
 
@@ -779,12 +810,13 @@ def _tell_the_person_a_relay_was_refused(root, manager, refusal, since, say):
     what = _relay_refused(command)
     if not what:
         return
-    if _a_later_relay_went(root, manager, refusal):
-        # 🔴 SCRUM-22. The Manager sent again and it arrived, so "did not
-        # reach anyone" would now be false. Said in the pane, not the DM.
+    if _the_same_message_went(root, manager, refusal):
+        # 🔴 SCRUM-22. The same words reached the outbox after the refusal, so
+        # "did not reach anyone" would be false. Said in the pane, not the DM.
         say(
-            f"{what} from {manager!r} was refused and then sent again, and the "
-            "second one arrived; the person is not told it went missing"
+            f"{what} from {manager!r} was refused, and a message with exactly "
+            "its text reached the outbox afterwards; the person is not told it "
+            "went missing"
         )
         return
     if stray_end(command):

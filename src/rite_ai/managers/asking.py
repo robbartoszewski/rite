@@ -43,7 +43,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -75,17 +74,6 @@ def _who(raiser: str) -> str:
 
 def _first_line(subject: str, qid: str, raiser: str) -> str:
     return f"{subject} · {qid} · {_who(raiser)} is waiting · reply in this thread"
-
-
-_RAISED = re.compile(r" · q[0-9a-f]{4} · .+ is waiting · reply in this thread$")
-"""`_first_line`'s shape, to tell rite's own raised question from a Manager's
-message in the same outbox (SCRUM-22)."""
-
-
-def raised_by_rite(text: str) -> bool:
-    """Whether `text` is a question rite raised (its first line is
-    `_first_line`'s), not one a Manager wrote."""
-    return bool(_RAISED.search(text.split("\n", 1)[0]))
 
 
 def _ledger_path(root: Path, owner: str) -> Path:

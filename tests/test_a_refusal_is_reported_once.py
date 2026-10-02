@@ -30,7 +30,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from rite_ai.managers import supervise
-from rite_ai.managers.mailbox import OUTBOX, QUESTION, read, send
+from rite_ai.managers.mailbox import OUTBOX, QUESTION, REPLY, read, send
 from rite_ai.managers.transcripts import project_transcript_dir, refusals
 from tests.test_rites_relay_form_is_permitted_and_nothing_else_is import (
     DOUBLED,
@@ -39,6 +39,8 @@ from tests.test_rites_relay_form_is_permitted_and_nothing_else_is import (
 from tests.test_two_destinations import _project
 
 HOUR = 3600.0
+BODY = "Status: KAN-31 round 2 is confirmed in front of you as qb76a."
+"""The text `DOUBLED`'s heredoc carries, as `rite reply` would write it."""
 PLAIN_DENIAL = "This command requires approval"
 
 
@@ -99,7 +101,7 @@ def _notices(root: Path) -> list[str]:
     ]
 
 
-REPLY = (
+REPLY_CALL = (
     "/opt/rite/bin/rite reply --manager lead - <<'RITE_TEXT_aaaaaaaaaaaa'\n"
     "ok\nRITE_TEXT_aaaaaaaaaaaa"
 )
@@ -119,7 +121,7 @@ class TestOncePerRefusal:
         first = _session(root, since=t0 - 60)
         assert any("RITE_TEXT_ab53c15d9459" in line for line in first)
         for n in range(1, 5):
-            talk.call(REPLY, at=t0 + n * HOUR + 30, denied=False)
+            talk.call(REPLY_CALL, at=t0 + n * HOUR + 30, denied=False)
             later = _session(root, since=t0 + n * HOUR)
             assert later == [], f"session {n} reported an old refusal again: {later}"
 
@@ -132,7 +134,7 @@ class TestOncePerRefusal:
         talk = Conversation(tmp_path, monkeypatch)
         t0 = time.time() - HOUR
         talk.call("curl https://example.com", at=t0, denied=True)
-        talk.call(REPLY, at=t0 + 600, denied=False)  # touches the file now
+        talk.call(REPLY_CALL, at=t0 + 600, denied=False)  # touches the file now
 
         # Read through `refusals` with the transcript directory named: with no
         # Manager, `_say_refusals` reads the default directory, so asserting on
@@ -183,25 +185,68 @@ class TestOncePerRefusal:
         assert len(said) == 1 and "curl" in said[0]
 
 
-class TestARetryThatArrived:
-    def test_a_refused_reply_whose_retry_arrived_is_not_told_as_lost(
+class TestTheSameMessageArrived:
+    """Suppressed only when the very text the refusal stopped reached the
+    outbox afterwards. Anything weaker hides a lost message whenever
+    something else follows it, which in a running loop it always does."""
+
+    def test_the_refused_text_sent_again_is_not_told_as_lost(
         self, tmp_path, monkeypatch
     ):
         root = _project(tmp_path)
         talk = Conversation(tmp_path, monkeypatch)
         t0 = time.time() - 120
         talk.call(DOUBLED, at=t0, denied=True)
-        send(
-            root,
-            "lead",
-            OUTBOX,
-            "Status: KAN-31 round 2 is confirmed.",
-        )
+        send(root, "lead", OUTBOX, BODY, kind=REPLY)
 
         said = _session(root, since=t0 - 60)
 
         assert _notices(root) == []
-        assert any("sent again, and the second one arrived" in s for s in said)
+        assert any("exactly its text reached the outbox" in s for s in said)
+
+    def test_sent_again_as_a_question_is_the_same_message(self, tmp_path, monkeypatch):
+        """rite tells a Manager whose reply reads as a question to send it
+        with `rite ask`; the same words then reach the person as a question."""
+        root = _project(tmp_path)
+        talk = Conversation(tmp_path, monkeypatch)
+        t0 = time.time() - 120
+        talk.call(DOUBLED, at=t0, denied=True)
+        send(root, "lead", OUTBOX, BODY, kind=QUESTION)
+
+        _session(root, since=t0 - 60)
+
+        assert _notices(root) == []
+
+    def test_never_retried_with_an_unrelated_later_message_is_still_told(
+        self, tmp_path, monkeypatch
+    ):
+        """The reviewer's case: the loop goes on and the Manager says other
+        things, but the refused message itself never went."""
+        root = _project(tmp_path)
+        talk = Conversation(tmp_path, monkeypatch)
+        t0 = time.time() - 120
+        talk.call(DOUBLED, at=t0, denied=True)
+        send(root, "lead", OUTBOX, "Status: beta started on KAN-29.", kind=REPLY)
+
+        said = _session(root, since=t0 - 60)
+
+        notices = _notices(root)
+        assert len(notices) == 1, "a message that never went was hidden from the person"
+        assert "that call sent nothing" in notices[0]
+        assert not any("reached the outbox" in s for s in said)
+
+    def test_a_reworded_retry_is_still_told(self, tmp_path, monkeypatch):
+        """One notice too many, never one too few: the words differ, so
+        nothing proves this is the refused message."""
+        root = _project(tmp_path)
+        talk = Conversation(tmp_path, monkeypatch)
+        t0 = time.time() - 120
+        talk.call(DOUBLED, at=t0, denied=True)
+        send(root, "lead", OUTBOX, "Status: KAN-31 round 2 is confirmed.", kind=REPLY)
+
+        _session(root, since=t0 - 60)
+
+        assert len(_notices(root)) == 1
 
     def test_control_without_a_retry_the_person_is_told(self, tmp_path, monkeypatch):
         root = _project(tmp_path)
@@ -260,7 +305,7 @@ class TestARetryThatArrived:
             "RITE_TEXT_bbbbbbbbbbbb"
         )
         talk.call(route, at=t0, denied=True)
-        send(root, "lead", OUTBOX, "a status reply")
+        send(root, "lead", OUTBOX, "x", kind=REPLY)
 
         _session(root, since=t0 - 60)
 
