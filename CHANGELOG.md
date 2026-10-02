@@ -1,6 +1,18 @@
 # Changelog
 
-## Unreleased
+## 0.7.0a6 (2026-10-02) — alpha: a checkpoint of what is on main
+
+⚠ **Still an alpha, and a checkpoint, not a release**, cut so the dogfood can
+run on what is merged: credentials, doctor and the publish gate
+(SCRUM-16/17/18/19/30), a Manager that stops saying so (SCRUM-20), the
+SCRUM-31/32/33 hardening, and the status-channel fix. Not installed by
+default: `install.sh` still installs 0.6.0 unless you ask for this one
+(`RITE_VERSION=v0.7.0a6`). Everything 0.7.0a1 to 0.7.0a5 said is and is not
+in it still holds.
+
+**Upgrading does not update a project's files.** `rite update --files-only
+--dry-run` shows what would change in an existing project, and `rite update
+--files-only` applies it.
 
 ### Credentials, doctor and the publish gate say what is true (SCRUM-16, 17, 18, 19, 30)
 
