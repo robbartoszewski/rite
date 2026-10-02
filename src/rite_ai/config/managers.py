@@ -141,7 +141,7 @@ class ManagerRole:
 
     @property
     def is_local(self) -> bool:
-        return bool(_LOCAL.match(self.engine))
+        return is_local_engine(self.engine)
 
     @property
     def local_class(self) -> str:
@@ -186,6 +186,13 @@ def decomposition_model_for(role: ManagerRole) -> str:
     return CLAUDE_DECOMPOSER_DEFAULT
 
 
+def is_local_engine(engine: str) -> bool:
+    """Whether `engine` is a `local:<class>` one — the single spelling of the
+    test. A Worker asks this too now (OL3), and `local:` matched by a second
+    regex somewhere else is how the two would come to disagree."""
+    return bool(_LOCAL.match(engine))
+
+
 def _engine_error(engine: str) -> str:
     if engine in (CLAUDE, HUMAN) or _LOCAL.match(engine):
         return ""
@@ -214,9 +221,9 @@ def _entry_error(raw: dict, name: str) -> str:
     for key in _ENTRY_KEYS - {"context_window", "decomposer"}:
         if key in raw and not isinstance(raw[key], (str, list)):
             return f"manager {name or '?'}: {key} must be text"
-    window_problem = _window_error(raw, name)
-    if window_problem:
-        return window_problem
+    bad_window = window_problem(raw, f"manager {name}")
+    if bad_window:
+        return bad_window
     preset = raw.get("preset", "")
     if preset and preset not in PRESETS:
         return (
@@ -234,39 +241,13 @@ def _entry_error(raw: dict, name: str) -> str:
                 f"manager {name}: {duty!r} is not a duty rite enforces — "
                 f"{', '.join(DUTIES)}"
             )
-    engine = raw.get("engine", CLAUDE)
-    bad = _engine_error(engine)
-    if bad:
-        return f"manager {name}: {bad}"
-    local = bool(_LOCAL.match(engine))
-    missing = [k for k in _LOCAL_ONLY if local and not raw.get(k)]
-    if missing:
-        return (
-            f"manager {name}: a {engine} engine must also say "
-            f"{', '.join(missing)} — the class is a label, not a configuration"
-        )
-    claude = engine == CLAUDE
-    stray = [
-        k
-        for k in _LOCAL_ONLY
-        if not local and raw.get(k) and not (claude and k == "model")
-    ]
-    if claude and raw.get("model"):
-        problem = claude_model_problem(str(raw["model"]))
-        if problem:
-            return f"manager {name}: model {raw['model']!r} {problem}"
-    if stray:
-        return (
-            f"manager {name}: {', '.join(stray)} means nothing on a "
-            f"{engine!r} engine — only 'local:<class>' runs a model rite drives"
-        )
-    decomposer_problem = _decomposer_error(raw, name, engine)
-    if decomposer_problem:
-        return decomposer_problem
+    shape = engine_shape_problem(raw, f"manager {name}")
+    if shape:
+        return shape
     return ""
 
 
-def _decomposer_error(raw: dict, name: str, engine: str) -> str:
+def _decomposer_error(raw: dict, subject: str, engine: str) -> str:
     """Why this entry's `decomposer:` cannot be read, or "" (RL-61).
 
     The ONE Level-2 key. A mapping with just `model`: a Claude unit's model is
@@ -278,21 +259,21 @@ def _decomposer_error(raw: dict, name: str, engine: str) -> str:
     body = raw["decomposer"]
     if not isinstance(body, dict):
         return (
-            f"manager {name}: decomposer must be a mapping with a 'model', e.g. "
+            f"{subject}: decomposer must be a mapping with a 'model', e.g. "
             "'decomposer: {model: opus}'"
         )
     unknown = sorted(set(body) - {"model"})
     if unknown:
         return (
-            f"manager {name}: decomposer knows only 'model', not {', '.join(unknown)}"
+            f"{subject}: decomposer knows only 'model', not {', '.join(unknown)}"
         )
     model = body.get("model", "")
     if not isinstance(model, str) or not model.strip():
-        return f"manager {name}: decomposer.model must be a non-empty model name"
+        return f"{subject}: decomposer.model must be a non-empty model name"
     if engine == CLAUDE:
         problem = claude_model_problem(model)
         if problem:
-            return f"manager {name}: decomposer.model {model!r} {problem}"
+            return f"{subject}: decomposer.model {model!r} {problem}"
     return ""
 
 
@@ -302,28 +283,75 @@ def claude_model_problem(model: str) -> str:
         return ""
     return (
         "is not a Claude model name (an alias such as 'sonnet', or an id such "
-        "as 'claude-opus-5-5'). A local model goes on a 'local:<class>' "
-        "Manager with its endpoint"
+        "as 'claude-opus-5-5'). A local model goes on a 'local:<class>' unit "
+        "with its endpoint"
     )
 
 
-def _window_error(raw: dict, name: str) -> str:
+def engine_shape_problem(raw: dict, subject: str) -> str:
+    """Why this unit's engine and its engine-only keys cannot be read, or "".
+
+    ⚠ **Shared by a Manager and a Worker on purpose (OL3).** A Worker gained
+    `engine`/`endpoint`/`model`/`agent`/`context_window` so a project can run
+    an Ollama Worker beside a Claude one under one Manager, and the rule those
+    keys obey must not come to differ by which file they were written in: a
+    second copy of "a local engine must say all three" is a second copy that
+    drifts. `subject` is the whole prefix a message starts with — `"manager
+    lead"` or `"worker w1"` — so only the noun changes.
+
+    The window is deliberately NOT checked here. `_entry_error` checks it
+    early, before `preset` and `duties`, and folding it in would reorder which
+    problem a half-wrong entry reports first. Callers run `window_problem`
+    themselves, in whatever order suits them.
+    """
+    engine = raw.get("engine", CLAUDE)
+    bad = _engine_error(engine)
+    if bad:
+        return f"{subject}: {bad}"
+    local = bool(_LOCAL.match(engine))
+    missing = [k for k in _LOCAL_ONLY if local and not raw.get(k)]
+    if missing:
+        return (
+            f"{subject}: a {engine} engine must also say "
+            f"{', '.join(missing)} — the class is a label, not a configuration"
+        )
+    claude = engine == CLAUDE
+    stray = [
+        k
+        for k in _LOCAL_ONLY
+        if not local and raw.get(k) and not (claude and k == "model")
+    ]
+    if claude and raw.get("model"):
+        problem = claude_model_problem(str(raw["model"]))
+        if problem:
+            return f"{subject}: model {raw['model']!r} {problem}"
+    if stray:
+        return (
+            f"{subject}: {', '.join(stray)} means nothing on a "
+            f"{engine!r} engine — only 'local:<class>' runs a model rite drives"
+        )
+    return _decomposer_error(raw, subject, engine)
+
+
+def window_problem(raw: dict, subject: str) -> str:
+    """Why this unit's `context_window` cannot be read, or "". Public because a
+    Worker declares one too (OL3) and must refuse it on the same terms."""
     if "context_window" not in raw:
         return ""
     window = raw["context_window"]
     engine = str(raw.get("engine", CLAUDE))
     if not _LOCAL.match(engine):
         return (
-            f"manager {name}: context_window means nothing on a {engine!r} "
+            f"{subject}: context_window means nothing on a {engine!r} "
             "engine — only 'local:<class>' runs a model whose window rite sets"
         )
     if isinstance(window, bool) or not isinstance(window, int):
-        return f"manager {name}: context_window must be a whole number of tokens"
+        return f"{subject}: context_window must be a whole number of tokens"
     from rite_ai.local.engine_probe import MINIMUM_CONTEXT_WINDOW
 
     if window < MINIMUM_CONTEXT_WINDOW:
         return (
-            f"manager {name}: context_window {window} is below "
+            f"{subject}: context_window {window} is below "
             f"{MINIMUM_CONTEXT_WINDOW}, the smallest measured to work — an "
             "agent's own system prompt and tool schemas do not fit below it"
         )

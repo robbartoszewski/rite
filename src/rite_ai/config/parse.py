@@ -10,7 +10,7 @@ from pathlib import Path
 
 import yaml
 
-from .managers import parse_managers
+from .managers import CLAUDE, engine_shape_problem, parse_managers, window_problem
 from .models import (
     DEFAULT_BROADCAST,
     STRATEGIES,
@@ -1040,25 +1040,24 @@ def parse_worker(path: Path) -> WorkerManifest | ParseError:
             str(path), "'worker.decomposer' must be a mapping with a 'model'"
         )
     decomposer_raw = decomposer_raw or {}
-    unknown_dec = sorted(set(decomposer_raw) - {"model"})
-    if unknown_dec:
-        return ParseError(
-            str(path),
-            f"'worker.decomposer' knows only 'model', not {', '.join(unknown_dec)}",
-        )
     dec_model = decomposer_raw.get("model", "")
     if dec_model and not isinstance(dec_model, str):
         return ParseError(str(path), "'worker.decomposer.model' must be text")
-    # A Worker is a Claude sandbox, so a named decomposer model is a Claude one.
-    if dec_model:
-        from rite_ai.config.managers import claude_model_problem
 
-        problem = claude_model_problem(str(dec_model))
-        if problem:
-            return ParseError(
-                str(path), f"'worker.decomposer.model' {dec_model!r} {problem}"
-            )
+    # ⚠ The engine shape is validated by the MANAGER's validator, not a second
+    # copy of it (OL3). A Worker's five engine keys obey exactly the rule a
+    # Manager's do — a `local:<class>` one must say endpoint, model and agent;
+    # `model` on a `claude` one must be a Claude name; a window below the
+    # measured floor is refused — and the earlier Claude-only check here was
+    # true only while a Worker could not be anything else.
+    bad_window = window_problem(worker, f"worker {name}")
+    if bad_window:
+        return ParseError(str(path), bad_window)
+    shape = engine_shape_problem(worker, f"worker {name}")
+    if shape:
+        return ParseError(str(path), shape)
 
+    engine = str(worker.get("engine", CLAUDE))
     return WorkerManifest(
         name=name,
         manager=worker.get("manager", ""),
@@ -1066,6 +1065,11 @@ def parse_worker(path: Path) -> WorkerManifest | ParseError:
         claude_instructions=worker.get("claude_instructions", ""),
         follow_module_docs=_str_list(worker.get("follow_module_docs", [])),
         decomposer=DecomposerConfig(model=str(dec_model or "")),
+        engine=engine,
+        endpoint=str(worker.get("endpoint", "")),
+        model=str(worker.get("model", "")),
+        agent=str(worker.get("agent", "")),
+        context_window=int(worker.get("context_window", 0) or 0),
     )
 
 
