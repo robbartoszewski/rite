@@ -186,6 +186,51 @@ def decomposition_model_for(role: ManagerRole) -> str:
     return CLAUDE_DECOMPOSER_DEFAULT
 
 
+def model_identity(model: str) -> str:
+    """The model two units SHARE, ignoring rite's own window pin (RL-6).
+
+    ⚠ **`rite-ctx32768-qwen3-32b` and `qwen3:32b` are the same model.** rite
+    derives a pinned-window copy of a model and runs that
+    (`local.context_window.derived_name`), so the same weights appear under two
+    names, and a check comparing names would read them as two engines. They are
+    not: the derived model is the base model with a bigger window.
+
+    Compared in the DERIVED name's own normalised space, because the derivation
+    is lossy the other way — `qwen3:32b` becomes `qwen3-32b`, and `-` cannot be
+    turned back into `:` without guessing which it was.
+    """
+    import re
+
+    base = model.strip().lower()
+    pinned = re.match(r"^rite-ctx\d+-(.+)$", base)
+    if pinned:
+        base = pinned.group(1)
+    return re.sub(r"[^a-z0-9._-]+", "-", base).strip("-")
+
+
+def engine_identity(role: ManagerRole) -> tuple[str, str]:
+    """What makes two Managers the same engine for RL-6's independence check.
+
+    ⚠ **The loophole this closes.** The check was `r.engine != decomposer.engine`
+    — a comparison of CLASS LABELS. `local:large` and `local:small` are two
+    strings and may be one model, so a project could satisfy plan review with a
+    reviewer that shares every blind spot of the plan's author, which is the one
+    thing plan review exists to prevent. Robert ruled the fix in on 2026-10-02,
+    config-breaking accepted.
+
+    **The model, not the endpoint.** What shares a blind spot is the weights. Two
+    local Managers both running `qwen3.8:latest` are not independent because they
+    are served on different ports.
+
+    **Claude stays model-independent**, so two `claude` Managers remain
+    non-independent exactly as before — that was already the behaviour and
+    nothing here is an argument for changing it.
+    """
+    if role.is_local:
+        return ("local", model_identity(role.model))
+    return (role.engine, "")
+
+
 def is_local_engine(engine: str) -> bool:
     """Whether `engine` is a `local:<class>` one — the single spelling of the
     BOOLEAN test. A Worker asks this too now (OL3), and `local:` matched by a
@@ -694,20 +739,24 @@ def configuration_problems(
     decomposers = [r for r in roles if DECOMPOSE in held[r.name]]
     reviewers = [r for r in roles if PLAN_REVIEW in held[r.name]]
     for decomposer in decomposers:
+        mine = engine_identity(decomposer)
         independent = [
             r
             for r in reviewers
-            if r.name != decomposer.name and r.engine != decomposer.engine
+            if r.name != decomposer.name and engine_identity(r) != mine
         ]
         if not independent:
             # RL-6: the decomposer reviewing its own plan's output shares every
             # blind spot of the plan, so a wrong slicing passes every check it
-            # wrote. A different engine is what makes the gate a gate.
+            # wrote. A different MODEL is what makes the gate a gate — the class
+            # label is not, which is the loophole `engine_identity` closes.
             problems.append(
                 f"manager {decomposer.name} decomposes, and no other manager on "
-                "a different engine holds plan-review — its decompositions would "
-                "be approved by the engine that wrote them, which is the one "
-                "thing plan review exists to prevent"
+                "a different model holds plan-review — its decompositions would "
+                "be approved by the model that wrote them, which is the one "
+                "thing plan review exists to prevent. Two 'local:' classes "
+                "serving the same model are the same model, however they are "
+                "labelled"
             )
 
     for role in roles:

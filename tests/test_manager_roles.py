@@ -222,8 +222,44 @@ def test_a_duplicate_name_makes_priority_ambiguous_and_is_refused():
 
 
 def test_a_decomposer_reviewed_only_by_its_own_engine_is_reported():
-    """RL-6: a wrong slicing passes every check the slicer wrote. The gate is
-    a DIFFERENT engine, not merely a different Manager."""
+    """RL-6: a wrong slicing passes every check the slicer wrote. The gate is a
+    DIFFERENT MODEL, not merely a different Manager — and not the class label
+    either (Robert, 2026-10-02).
+
+    ⚠ This case was once two `local:large` Managers on DIFFERENT models, asserted
+    as a problem because their engine STRINGS matched. That is the loophole from
+    the other side: two different models do not share a blind spot, however they
+    are labelled, so the pair is independent and the old assertion was wrong
+    about why it passed. The reported case is the one that actually shares an
+    author: one model under two labels."""
+    roles = _roles(
+        {
+            "name": "p1",
+            "engine": "local:large",
+            "preset": "planner",
+            "endpoint": "http://localhost:11434/v1",
+            "model": "qwen3:70b",
+            "agent": "opencode",
+        },
+        {
+            "name": "p2",
+            "engine": "local:small",
+            "duties": ["plan-review"],
+            "endpoint": "http://localhost:11434/v1",
+            "model": "qwen3:70b",
+            "agent": "opencode",
+        },
+        {"name": "lead", "preset": "pm"},
+    )
+    problems = configuration_problems(list(roles))
+    assert any("different model" in p and "p1" in p for p in problems), problems
+
+
+def test_two_local_classes_on_different_models_are_independent():
+    """The other direction of the same ruling: the class label is not the test.
+
+    Two Managers may share a `local:` class and run different models, and they
+    are then as independent as a Claude reviewer would be."""
     roles = _roles(
         {
             "name": "p1",
@@ -244,7 +280,7 @@ def test_a_decomposer_reviewed_only_by_its_own_engine_is_reported():
         {"name": "lead", "preset": "pm"},
     )
     problems = configuration_problems(list(roles))
-    assert any("different engine" in p and "p1" in p for p in problems)
+    assert not any("different model" in p for p in problems), problems
 
 
 def test_a_decomposer_with_an_independent_reviewer_is_not_reported():
