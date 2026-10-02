@@ -1169,6 +1169,52 @@ def start_worker(
         handle.close()
 
 
+LOCAL_WORKER_AGENT = "idle"
+"""The yoloAI agent a LOCAL Worker's sandbox runs, and why it is not the
+engine's own name (OL5, the ruled pattern D-CU-2).
+
+⚠ **`--agent` takes a CLOSED list** — `yoloai system agents` offers aider,
+claude, codex, gemini, idle, opencode, shell, test. **Goose is not on it**, and
+"generalise `--agent`" cannot mean passing a name yoloAI does not have. The
+ruled shape instead: take an `idle` container — a no-op that keeps the sandbox
+running with no agent of its own — and let rite drive each turn from the host
+with `yoloai exec`, which is the same pattern the Cursor work settled on.
+
+That also keeps RL-13 intact. rite still borrows an existing agent's tool loop;
+it is simply Goose started per turn inside the sandbox, rather than an agent
+yoloAI supervises.
+"""
+
+
+def worker_manifest(root: Path, worker: str) -> object | None:
+    """This Worker's manifest, or None when there is no readable one.
+
+    Resolved from `root` and the name rather than passed in: `start_worker`
+    takes a Worker NAME, its one caller holds a `ProjectConfig` (which carries
+    no manifests — they are per-Worker files), and threading one through would
+    change a signature for something this can read in a line.
+
+    ⚠ **None means "could not tell", never "a Claude Worker".** A manifest that
+    is missing or will not parse is answered by the caller, which starts a
+    Claude Worker exactly as it did before OL3 — the pre-existing behaviour, not
+    a default chosen here. A parse error is already reported by `rite doctor`
+    and by `load_project`; failing a start on it would make an unrelated typo in
+    one Worker's file stop another's.
+    """
+    from rite_ai.config.parse import ParseError, parse_worker
+
+    path = root / "workers" / worker / "worker.yml"
+    if not path.exists():
+        return None
+    parsed = parse_worker(path)
+    return None if isinstance(parsed, ParseError) else parsed
+
+
+def yoloai_agent_for(manifest: object | None) -> str:
+    """Which yoloAI agent runs this Worker's sandbox (OL5)."""
+    return LOCAL_WORKER_AGENT if getattr(manifest, "is_local", False) else "claude"
+
+
 def _start_worker_unlocked(
     root: str | os.PathLike[str],
     worker: str,
@@ -1307,7 +1353,11 @@ def _start_worker_unlocked(
     args = [binary]
     if clean_home:
         args += ["--data-dir", str(Path.home() / ".yoloai")]
-    args += ["new", "--backend", config.backend, "--agent", "claude"]
+    # The agent, derived (OL5). This was the literal `"claude"`, which is what
+    # made a Worker Claude-only no matter what its manifest said.
+    manifest = worker_manifest(root, worker)
+    local = bool(getattr(manifest, "is_local", False))
+    args += ["new", "--backend", config.backend, "--agent", yoloai_agent_for(manifest)]
     if allow_dirty:
         # yoloAI refuses a workdir with uncommitted changes unless told
         # otherwise, and a Worker part-way through a task is exactly that.
@@ -1344,17 +1394,29 @@ def _start_worker_unlocked(
     if clean_home:
         yoloai_env["HOME"] = str(worker_home())
     claude_login = delivered.pop(CLAUDE_TOKEN_ENV_VAR, None)
-    if claude_login:
+    # ⚠ Withheld from a LOCAL Worker, deliberately (OL4). Its model answers on
+    # this machine's loopback and needs no login, so passing one would put the
+    # operator's Claude credential inside a sandbox that cannot spend it — and
+    # SB12 measured a sandbox's environment readable from other sandboxes here.
+    # Popped above either way, so it never reaches `--env` by another road.
+    if claude_login and not local:
         yoloai_env[CLAUDE_TOKEN_ENV_VAR] = claude_login
-    login_note = (
-        []
-        if yoloai_env.get(CLAUDE_TOKEN_ENV_VAR) or yoloai_env.get("ANTHROPIC_API_KEY")
-        else [
+    # ⚠ The note is engine-specific, because the Claude advice is WRONG for a
+    # local Worker (OL5): it has no Claude login by design, so the old text
+    # would have sent someone to `claude setup-token` to fix a sandbox that
+    # needs no Claude at all. What can be missing for a local Worker is its
+    # endpoint, its model or its agent — which `rite doctor` probes
+    # (`local.engine_probe`) and which the manifest refuses to omit.
+    if local:
+        login_note = []
+    elif yoloai_env.get(CLAUDE_TOKEN_ENV_VAR) or yoloai_env.get("ANTHROPIC_API_KEY"):
+        login_note = []
+    else:
+        login_note = [
             "  no Claude login for the sandbox, so the session will start and "
             "do nothing — run `claude setup-token`, then `rite credential set "
             "claude`, and start the Worker again"
         ]
-    )
     # The project root, named rather than found. rite walks up from cwd for
     # `.rite/`, and inside the sandbox most of that walk is unreadable.
     delivered.setdefault("RITE_PROJECT_ROOT", str(root))
