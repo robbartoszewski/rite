@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.80 · **Date:** 2026-10-02
+**Version:** 0.24.81 · **Date:** 2026-10-02
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -5857,16 +5857,20 @@ separately configured stop condition is a second definition of "done" that
 can disagree with the loop's, and the first time they disagree there is no
 way to say which is right.
 
-#### 9.14.5. The budget ceiling is mandatory
+#### 9.14.5. A run is bounded by its ceilings, or by the schedule
 
-A `rite start <provider>` invocation **must** carry a ceiling on what it may
-spend, and the command refuses to start without one — no default that means
-"unlimited", and no default at all where the provider has a metered cost.
+A `rite start <provider>` invocation given both bounds is bounded as a whole by
+them, and neither has a default that means "unlimited". What changed in
+0.24.81 (D-115): an invocation given NEITHER runs until the operator stops it,
+and what bounds it is CONCURRENCY, not a count or a rate: one Manager session
+at a time, and Workers only up to the schedule window's count (below).
 
-Refused rather than defaulted, matching §2.5.1 and `check_worker_cap`:
-silently choosing a number the user did not choose is how `rite pool fill
---count 500` became possible, and spent quota is the one kind of damage no
-cleanup reverses (§5.1.1).
+⚠ **One bound without the other is still refused.** They are not
+interchangeable (D-82 below), and a half-bounded run that silently became
+perpetual is the surprise that refusal exists to prevent — matching §2.5.1 and
+`check_worker_cap`: silently choosing a number the user did not choose is how
+`rite pool fill --count 500` became possible, and spent quota is the one kind
+of damage no cleanup reverses (§5.1.1).
 
 The ceiling is **checked before each session start, not only at the end**. A
 ceiling enforced after the fact is a report, not a ceiling.
@@ -5937,8 +5941,8 @@ is a property of the provider and the second is a decision nobody made.
 ##### Two bounds, because neither one suffices (D-82)
 
 `--sessions` caps how many provider sessions a run may START. `--minutes`
-caps how long it may go on starting them. **Both are mandatory and neither
-has a default.**
+caps how long it may go on starting them. **Either both are given or
+neither is: one alone is refused, and neither has a default.**
 
 They are not two spellings of one bound, and the supervisor was measured to
 establish that rather than argued about:
@@ -5961,9 +5965,117 @@ dead-wiring guard cannot see this: it asks whether a FUNCTION is called,
 never whether a PARAMETER is ever supplied.
 
 A duration that defaults to forever is a bound in name only, which is why
-this one is mandatory rather than defaulted. That is D-69's reasoning about
-`--sessions` — silently choosing a number the user did not choose is how
-`rite pool fill --count 500` became possible — applied to the other axis.
+neither may be silently chosen. That is D-69's reasoning about `--sessions` —
+silently choosing a number the user did not choose is how `rite pool fill
+--count 500` became possible — applied to the other axis.
+
+##### A run with no bound runs until stopped (D-115)
+
+`rite start <manager>` with no flags runs **until the operator stops it**
+(Robert, 2026-10-02).
+
+**What bounds it is concurrency, never a rate** (Robert, 2026-10-02). The
+Manager runs one session at a time, by construction. Its Workers run only up
+to the smaller of `sandbox.max_concurrent_workers` and the current schedule
+window's `workers` (SCRUM-28, enforced where a Worker starts). There is no
+per-hour or per-cycle session number: the salvaged first version had one (20
+sessions per cycle, a fresh 20 after one poll), and it bounded nothing
+(measured on a fake engine: 357 working sessions per virtual hour). It is gone.
+
+**The Manager is a coordinator, and its helpers are a small pool** (Robert,
+2026-10-02). **No heavy implementation; chores and ticket breakdowns are
+allowed, through a branch and a pull request.** The lead (Owner, perpetual)
+Manager is passive and implements nothing (`prompt.TICKET_WORK`). A secondary
+Manager may do EXPLICITLY ONLY chores, ticket breakdowns (decomposition) and
+similar trivial work itself, on a branch named for the ticket and through a
+pull request, never a commit to a default branch (`prompt.ROUTED_TICKET_WORK`);
+anything heavier is a Worker's. Both are advice, not enforced (TR10), and
+neither earns a Manager its next session: see *What counts as progress*. A
+Manager keeps no helper sessions running. It reaches for one only ON DEMAND, for
+coordinator work (answering a question, a review, a verification, a spec), and
+only when that work needs FRESH EYES (independent of the interactive thread)
+or must NOT BLOCK it (so the Manager stays responsive to the User's DMs and
+`rite connect`). At any moment a Manager runs its one interactive session plus
+at most `MANAGER_HELPER_POOL` (2) helpers; one more waits for a slot
+(`managers.helpers.helper_slot`), and nothing counts helpers per hour. So the
+whole bound, at a moment, is: one session per Worker up to the schedule
+window's count, plus the Manager's interactive session, plus at most two
+helpers. Today the one helper is rite's reply verifier, a fresh-eyes check
+rite starts from code; it holds a slot while it runs.
+
+**A full slot waits; a request is never discarded.** A Worker asked for when
+no slot is free is QUEUED, for bounded runs too: `start_worker` marks the
+refusal `full`, `rite sandbox start` exits `EXIT_NO_SLOT` (75), the broker
+returns `NO_SLOT`, and the supervisor puts the request back, tells the
+Manager once, and asks again when a slot frees (the waits wake for it, and the
+start happens at the top of the loop, never inside a wait). Every retry is
+decided afresh by the broker, so a queued request is trusted no more than a
+new one. The broker's capacity count is this project's sandboxes, not the
+machine's (SCRUM-36).
+
+**A perpetual run waits where a bounded one would end.** A Manager waiting
+on the User (`waiting-on-user`), on routed work, on a quiet board (`idle`), or
+after a session that made no progress (F22) waits with no deadline, spending
+nothing, and wakes only on an event (*Event-driven*, below). **A closed
+schedule window waits too**: the person saying "not now", not
+"stop". The wait names when the window next opens, and the run carries on when
+it does. Faults still end the run: `deadlocked`, `unknown`, an unrecognised
+verdict, and the spin gate below.
+
+🔴 **The spin gate, and it is what makes "forever" shippable.** Every pass of
+the supervisor's loop either starts a session or waits. A pass that does
+neither has made no progress and spent no time, and a loop of them is a SPIN:
+cheap, silent, and indistinguishable from working. After
+`SPIN_PASSES_BEFORE_STOPPING` (3) such passes in a row the run stops and says
+it was spinning, and that this is a defect in rite. Waiting is never counted,
+however long or however often it wakes: a night of a board that keeps changing
+while nothing can start is working as meant.
+
+**Event-driven: no Manager session runs while idle** (Robert, 2026-10-02).
+rite's own deterministic code (the supervisor, the Slack relay, the broker) is
+the always-on part and spends no tokens. A Manager session is started only in
+response to an event, and every wait happens after the last session's engine
+has exited (the loop waits on `liveness(...).alive` first; the engines are
+one-shot), so while idle no Manager session is live. The events:
+
+- **mail in the Manager's inbox**, which is where every outside trigger lands:
+  the User's `rite message` and `rite connect`, a Slack message (the relay),
+  the User's answer to a `rite ask`, and items from Workers (questions,
+  deliveries, chores) and from the Owner or other Managers (routes, replies);
+- **rite's own checks**, which read state and start a session only when it
+  changed: a quiet board gaining ready work (`_idle_board_wake`, at
+  `BOARD_RECHECK_SECONDS`), a change in the project, a Worker slot freeing for
+  a queued request (`_with_a_freed_slot`), and a closed window opening
+  (`_closed_wake`);
+- **the heartbeat**, the safety net for a circumstance rite's own checks
+  failed to notice (Robert, 2026-10-02): after `HEARTBEAT_SECONDS` (3600, one
+  hour) with no Manager session, rite puts a note in the inbox, and the wait
+  starts a session for it as for any mail. It is counted from the end of the
+  last session, so a Manager that events keep busy gets no extra one, and an
+  idle one gets at most one an hour. **Never in a closed schedule window**
+  (Robert, 2026-10-02): a closed window is "not now" and starts no heartbeat
+  session; the gate is in `_heartbeat`, so every wait honours it, and it
+  reads the loop's own verdict only when a beat is due. A wake, not a
+  spin: between heartbeats and events no session runs. Perpetual runs only;
+  a bounded run has its window. The interval is set in one place,
+  `supervise.HEARTBEAT_SECONDS`, which a config key replaces when there is
+  one.
+
+**What counts as progress** (Robert, 2026-10-02). A Manager coordinates, so a
+session made progress only if it left a claim, a route, a Worker request or a
+delivery (`supervise.COORDINATION`, decided in `_session_was_idle` and only
+there). A session that only replied ("still waiting…"), or only edited or
+committed in the project, is IDLE: the no-progress guard holds the run until
+an event instead of starting the next session at once. Before this, every
+reply counted as work, so a Manager that only replied ran back to back without
+bound, and concurrency did not bound it; and a Manager doing heavy
+implementation looked busy and was rewarded with its next session.
+
+⚠ **Ctrl-C is the off switch, and the only stop that records why.** It raises
+through the supervisor's `finally`, so the lifecycle record says the operator
+stopped it. `rite manager stop` kills the tmux session, which skips that and is
+recorded as DIED; a cooperative stop marker is its own ticket and is
+deliberately not faked here.
 
 #### 9.14.6. §9.12, and the argument that FAILED
 
@@ -8250,6 +8362,7 @@ happened once already and left no trace until this review found it.
 | D-112 | Should agents write to the board under their own identity? | **rite builds no identity management** | Robert, TRQ12: "Can't the User control it by choosing if they give rite their token or create a separate account for them?" rite works under either choice, says which is in use, and enforces the guardrail where the choice allows it. The same principle covers commit authorship. |
 | D-113 | May an executor Manager do routed work itself? | **Only a chore or a trivial ticket, only REFINED, only on a ticket-named branch through a PR** | Robert, Q4: "Yes, close the bypass. However, instruct that it's meant for chores and trivial tickets. Any serious work should be passed to workers." Instructed (TR3); enforced only once PB1's publish step can refuse (TR10). |
 | D-114 | One status channel, or one per project? | **One shared channel for all projects (`#rite-status` by default), every line naming its project** | Robert, 2026-09-29, chose shared over per-project. He runs several projects and wants one place to see what is running; lifecycle lines are reading material, not action. A line that does not name its project is unattributable once two projects post there, so every post names it (a test pins every post, not each line). D-101 means an app per project, so each project's app is invited to the one channel. §9.16.2 (RS1). |
+| D-115 | Must `rite start <manager>` carry bounds at all? | **No. With NEITHER bound it runs until the operator stops it, bounded by concurrency: one Manager session at a time, and Workers up to the schedule window's count** | Robert, 2026-10-02: a Manager should keep working without being re-started every ninety minutes, and the schedule is the spend lever, not a session budget. Both bounds together still bound a run as before (D-68, D-69, D-82); ONE alone is refused, because a half-bounded run silently becoming perpetual is the surprise that refusal prevents. In a perpetual run every wait has no deadline, a closed window waits until it opens, a Worker request with no free slot is queued rather than discarded (bounded runs too), and the run stops on faults and on the spin gate. A Manager session runs only on an event (inbox mail, or rite's own state checks) or the hourly heartbeat (`HEARTBEAT_SECONDS`), never while idle; a session that only replied or only edited the project is idle, and only a claim, route, Worker request or delivery is progress. The lead Manager implements nothing; a secondary may do only chores, ticket breakdowns and similar trivial work, through a branch and a pull request. §9.14.5. |
 
 ---
 
@@ -8258,6 +8371,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.81 — a Manager with no bound runs until you stop it (SCRUM-20, perpetual; SCRUM-36).** §9.14.5 is rewritten and gains *A run with no bound runs until stopped*; new decision D-115. Robert, 2026-10-02: vanilla `rite start lead` runs until Ctrl-C, and what bounds it is concurrency, not a rate: one Manager session at a time, and Workers up to the schedule window's count. The bounds that were mandatory (D-68, D-69, D-82) become optional: both together bound a run as before, one alone is refused. In a perpetual run: every wait has no deadline (`wait_deadline`), so waiting on the User, on a route, on a quiet board (`_idle_board_wake`) or after an idle session no longer ends it; a `closed` window waits (`_closed_wake`, `_closed_line` naming `next_open`); and the spin gate stops a loop whose passes neither start a session nor wait (`SPIN_PASSES_BEFORE_STOPPING`, 3). The salvaged per-cycle ceiling (20 sessions and an hour per cycle, a new cycle after one poll) bounded nothing, measured at 357 working sessions per virtual hour, and is removed. Queue-not-discard, for all runs: `SandboxResult.full`, `EXIT_NO_SLOT` (75) from `rite sandbox start`, `broker.NO_SLOT`, and `_honour_worker_requests` putting the request back, telling the Manager once, and retrying at the top of the loop when a wait wakes for a freed slot (`_with_a_freed_slot`, `broker.slot_free`); each retry is decided afresh. SCRUM-36: the broker's capacity count is `count_active_sandboxes(root, …)`, this project's, not `list_rite_sandboxes()`, the machine's. ⚠ **Ctrl-C is the graceful stop**; `rite manager stop` still kills the session and is recorded as DIED. Event-driven: a Manager session runs only on an event (inbox mail, from `rite message`/`rite connect`, Slack, an answer to `rite ask`, Workers, the Owner or other Managers; or a board change, project change, freed slot or opening window), plus a heartbeat after an hour with no session (`HEARTBEAT_SECONDS`, 3600, a note in the inbox, counted from the last session, never in a closed schedule window), and every wait follows the engine's exit, so none is live while idle. What counts as progress: a claim, route, Worker request or delivery (`COORDINATION`, `_session_was_idle`); a reply-only or project-edit-only session is idle. No heavy implementation: the lead implements nothing, and a secondary may do only chores, ticket breakdowns and similar trivial work via branch and PR (`ROUTED_TICKET_WORK` reworded). Tests: `test_a_manager_with_no_bound_runs_until_stopped.py`, `test_a_full_slot_queues_the_worker.py`, `test_the_broker_counts_this_projects_workers.py`.
 
 **Changes in 0.24.80 — a refusal is reported once, and not as lost when its retry arrived (SCRUM-22).** The ticket read as "a doubled heredoc end line breaks delivery"; measured on the live Owner it was not. Of 42 relays in its conversation exactly one had a doubled end line (00:04Z), the engine refused that call, and the Manager's retry delivered it eleven seconds later. The sixteen "did not reach anyone" notices between 18:46 and 19:08 were that one refusal reported again: `refused_commands` kept any transcript FILE touched since the session began and reported every denial in it, and a resumed conversation appends to one file, so every session re-read the whole history; the notice's text names its session, so `asking`'s text-keyed ledger saw a new question each time. Now `transcripts.refusals` bounds each denial by its entry's own `timestamp` (which also excludes history a resumed session copies into a new file), and `supervise._not_yet_reported` records the engine's `tool_use_id` of every denial reported, under the Manager's lock, so it is reported once whatever the timestamps say. The person's notice is not raised when the refused call was a `reply` or `ask` and a later `reply` or `ask` with EXACTLY the refused heredoc's text reached the outbox (`supervise._the_same_message_went`). Review found the first version accepted any later message the Manager wrote, which would hide a message that was never sent again whenever anything else followed it, and in a running loop something always does. Everything not proven the same is still told: a refused `route` or `refine ask`, text on the command line, a refusal with no time, and a reworded retry (one notice too many, never one too few). The notice now says "that call sent nothing". Nothing about what the engine permits changed: no allowlist entry, no boundary rule. The genuine doubled-end-line fragility (rare, self-retried) is a transport question filed separately. The test that should have caught this re-scanned with the SAME session start, the one case the notice's own text dedupes; `tests/test_a_refusal_is_reported_once.py` changes it, as production does. Five mutations each go red on the assertion naming the property, one only after its test stopped reading the default transcript directory, where it passed whatever the bound did.
 

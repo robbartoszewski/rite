@@ -452,6 +452,33 @@ def _say_if_the_sandbox_refused(root: Path, manager: str, pane: str, say) -> Non
         say(confinement.why_it_was_refused(root, manager))
 
 
+_QUEUED_TOLD: dict[tuple[str, str], set[str]] = {}
+"""Requests already told "queued", per (project, Manager), for this process."""
+
+
+def _with_a_freed_slot(root: Path, manager: str, wake, clock):
+    """`wake`, plus: a request is queued and a Worker slot has freed. Checked
+    at the board's cadence, because counting sandboxes asks yoloAI. The start
+    itself happens at the top of the loop, never inside the wait."""
+    from rite_ai.managers import broker
+
+    marks = {"at": clock()}
+
+    def combined() -> str:
+        said = wake() if callable(wake) else ""
+        if said:
+            return said
+        now = clock()
+        if now - marks["at"] >= BOARD_RECHECK_SECONDS:
+            marks["at"] = now
+            # Looked up at each check, not bound when the wait began.
+            if broker.queued(root, manager) and broker.slot_free(root):
+                return "a Worker slot freed for a queued request"
+        return ""
+
+    return combined
+
+
 def _honour_worker_requests(root: Path, manager: str, broker, say) -> None:
     """Start the Workers this cycle asked for, or say why not.
 
@@ -508,8 +535,36 @@ def _honour_worker_requests(root: Path, manager: str, broker, say) -> None:
             "not queued. Do not wait for them; say so to the User."
         )
         return
-    for _, raw in pending:
+    from rite_ai.managers.broker import NO_SLOT, requeue
+
+    told = _QUEUED_TOLD.setdefault((str(root), manager), set())
+    for path, raw in pending:
         ok, message = broker(raw)
+        if ok is NO_SLOT:
+            # 🔴 Queued, not dropped: a discarded request is a lost
+            # instruction. It goes back where it was and is asked for again
+            # when a slot frees (the waits wake for it), decided afresh each
+            # time. Told once, so a Manager does not ask twice.
+            try:
+                requeue(path, raw)
+            except OSError as e:
+                say(f"a Worker request could not be queued, so it is lost: {e}")
+                tell(
+                    f"NOT started, and NOT queued: no Worker slot was free "
+                    f"({message}), and rite could not keep the request ({e}). "
+                    "Ask again."
+                )
+                continue
+            say(f"queued: no Worker slot free ({message})")
+            if raw not in told:
+                told.add(raw)
+                tell(
+                    f"Queued: no Worker slot is free right now ({message}). "
+                    "rite starts it when one frees, and tells you then. Do not "
+                    "ask again."
+                )
+            continue
+        told.discard(raw)
         say(("started: " if ok else "") + message)
         tell(
             ("Started: " if ok else "NOT started: ")
@@ -1101,7 +1156,8 @@ class Cycle:
     mail_waiting: bool = False
     ending: str = ""
     idle: bool = False
-    """It changed nothing rite can see (`progress.footprint`), so the
+    """It made no progress (`_session_was_idle`: no claim, route, Worker
+    request or delivery), so the
     `--sessions` ceiling does not count it (SCRUM-24). False when rite could
     not tell, so an unjudged session is counted."""
 
@@ -1122,6 +1178,136 @@ def _idle(cycles: list[Cycle]) -> int:
     return sum(1 for c in cycles if c.idle)
 
 
+SPIN_PASSES_BEFORE_STOPPING = 3
+"""How many passes of the supervisor loop in a row may neither start a
+session nor wait, before a perpetual run stops (SCRUM-20).
+
+🔴 **The relaunch gate, and it is what makes "forever" safe to ship.** Every
+pass of the loop either starts a session or waits for something; a pass that
+does neither has made no progress and spent no time, and a loop of them is a
+SPIN: cheap, silent, and indistinguishable from working. So a perpetual run
+stops rather than spins, and says which it was. Waiting is not counted, however
+long: a Manager waiting a night through a closed window is working as meant."""
+
+
+def _spinning(passes: int, cycles: list) -> SuperviseResult | None:
+    """A perpetual run whose last `SPIN_PASSES_BEFORE_STOPPING` passes neither
+    started a session nor waited is spinning. Stop and say so."""
+    if passes < SPIN_PASSES_BEFORE_STOPPING:
+        return None
+    return SuperviseResult(
+        True,
+        f"stopped: {passes} passes in a row neither started a session nor "
+        "waited, so this run was spinning rather than waiting. That is a "
+        "defect in rite, not a state to wait out — `rite status` says what "
+        "the Manager and its Workers were doing.",
+        cycles,
+    )
+
+
+def _queued_requests(root: Path, manager: str) -> bool:
+    from rite_ai.managers.broker import queued
+
+    return queued(root, manager)
+
+
+COORDINATION = frozenset({"claims", "routes", "requests", "deliveries"})
+"""The footprint parts that are a Manager's own progress: claiming work,
+routing it, asking for a Worker, delivering one's work (D-115)."""
+
+
+def _session_was_idle(changed: list[str]) -> bool:
+    """Whether a session that ended with `changed` (the footprint's changed
+    parts) counts as IDLE: held by the no-progress guard until an event wakes
+    it, and not counted toward `--sessions`.
+
+    🔴 **Robert, 2026-10-02: a Manager session that only replies, or makes no
+    real progress, is idle.** A Manager is a coordinator, so what counts is
+    COORDINATION: a claim, a route, a Worker request or a delivery. Two things
+    that used to count no longer do:
+
+    - **a reply** (`outbox`). Before, a Manager whose every session only wrote
+      "still waiting…" counted as productive, and a perpetual run started the
+      next session at once: back to back, without bound. Now it waits for an
+      event, which is what a reply is answering anyway.
+    - **an edit or commit in the project** (`project`). Heavy implementation
+      is a Worker's job; a Manager doing it must not look busy for it. Chores
+      and ticket breakdowns a secondary may do itself are real work, but they
+      are not a reason to start another session at once either: the next one
+      starts when something happens.
+
+    Communication and project edits still happen, and are still seen; they
+    are just not progress."""
+    return not (set(changed) & COORDINATION)
+
+
+def _closed_wake(root: Path, verdict, clock):
+    """`wake` for a perpetual run's wait through a closed schedule window:
+    the verdict is no longer `closed` (the window opened, or a fault the loop
+    then stops on). Read at the board's cadence."""
+    marks = {"at": clock()}
+
+    def wake() -> str:
+        now = clock()
+        if now - marks["at"] >= BOARD_RECHECK_SECONDS:
+            marks["at"] = now
+            if verdict(root) != "closed":
+                return "the schedule window opened"
+        return ""
+
+    return wake
+
+
+def _next_open(root: Path) -> str:
+    """When the schedule next allows a Worker, as "Mon 09:00", or ""."""
+    try:
+        from rite_ai.config.parse import load_project
+        from rite_ai.schedule import current_moment, next_open
+
+        project = load_project(Path(root))
+        if isinstance(project, list):
+            return ""
+        schedule = project.config.schedule
+        return next_open(schedule, current_moment(schedule.timezone))
+    except Exception:  # noqa: BLE001 - a line of text, never a reason to stop
+        return ""
+
+
+def _closed_line(root: Path, manager: str, clock):
+    """`idle_line` for the closed-window wait."""
+    from rite_ai.managers.routing import STILL_WAITING_EVERY
+
+    said: dict[str, float | None] = {"at": None}
+
+    def line() -> str:
+        now = clock()
+        if said["at"] is not None and now - said["at"] < STILL_WAITING_EVERY:
+            return ""
+        mark = "" if said["at"] is None else "⚠ still: "
+        said["at"] = now
+        when = _next_open(root)
+        return (
+            f"{mark}{manager!r} is waiting, spending nothing: the schedule "
+            "allows no Workers now"
+            + (f", and next opens {when}" if when else "")
+            + ". It carries on when the window opens; mail still reaches it, "
+            "and no heartbeat fires while the window is closed. "
+            "This run has no bound from you; Ctrl-C ends it."
+        )
+
+    return line
+
+
+def _perpetual(max_sessions: int | None, window_seconds: float | None) -> bool:
+    """Whether this run has no operator-set bound and so runs until stopped.
+
+    Both absent means perpetual. ONE given means the operator asked for a
+    bounded run and gets exactly that: a half-bounded run that silently became
+    perpetual would be the surprise this flag exists to avoid.
+    """
+    return max_sessions is None and window_seconds is None
+
+
 def _idle_allowance_spent(manager: str, max_sessions: int, cycles):
     """A result that stops the run once `--sessions` idle sessions have run,
     or None.
@@ -1136,8 +1322,9 @@ def _idle_allowance_spent(manager: str, max_sessions: int, cycles):
         return None
     return SuperviseResult(
         True,
-        f"stopped: {_idle(cycles)} session(s) changed nothing rite can see "
-        f"(no commit or edit, claim, reply, route or Worker request). The "
+        f"stopped: {_idle(cycles)} session(s) made no progress (no claim, "
+        f"route, Worker request or delivery; a reply or a project edit alone "
+        f"is not progress). The "
         f"--sessions ceiling does not count those, so they have an allowance "
         f"of their own, the same number ({max_sessions}), and it is spent. "
         f"{_counted(cycles)} session(s) did work.",
@@ -1342,8 +1529,8 @@ def _supervise(
     *,
     engine: str = "",
     agent: str = "",
-    max_sessions: int,
-    window_seconds: float,
+    max_sessions: int | None = None,
+    window_seconds: float | None = None,
     prompt: str = "",
     fresh: bool = False,
     began_under: dict | None = None,
@@ -1415,8 +1602,20 @@ def _supervise(
                 routing_step(say_)
             watch(say_)
 
+    # 🔴 SCRUM-20 (perpetual). With no bound from the operator, the run does
+    # not end: the ceilings below become PER-CYCLE guardrails, and reaching one
+    # ends the cycle and waits rather than returning. `perpetual` is resolved
+    # once here so every later check reads one answer.
+    perpetual = _perpetual(max_sessions, window_seconds)
+    if not perpetual and (max_sessions is None or window_seconds is None):
+        # The CLI refuses one bound without the other; a caller that passes
+        # it gets the same refusal, never a number chosen for it.
+        raise ValueError(
+            "supervise: give both max_sessions and window_seconds, or neither"
+        )
+
     begin = clock()
-    deadline = begin + window_seconds if window_seconds > 0 else None
+    deadline = None if perpetual or not window_seconds > 0 else begin + window_seconds
     launch = starter if callable(starter) else _default_starter
     next_id = (
         resume_id_for if callable(resume_id_for) else _resume_id_source(engine, agent)
@@ -1567,7 +1766,7 @@ def _supervise(
         say(tracking)
 
     # ⚠ THE NO-PROGRESS GUARD (F22). Set when a session the BOARD started
-    # ended having changed nothing rite can see; cleared by anything that
+    # ended having made no progress (`_session_was_idle`); cleared by anything that
     # changes. While set, a board that still reads the same starts no
     # session. See `progress` for what counts and why.
     stalled: _Stalled | None = None
@@ -1581,7 +1780,40 @@ def _supervise(
     # against it too: mail is new INPUT, not progress, and a session handed a
     # message that then changes nothing is as idle as one handed none.
     last_basis = None
+
+    def wait_deadline():
+        """The deadline a WAIT honours: the run's, which a perpetual run does
+        not have (SCRUM-20). A Manager waiting on an answer, a route, a quiet
+        board or a closed window spends nothing, and only the operator ends
+        such a run."""
+        return deadline
+
+    # 🔴 SCRUM-20 (perpetual): the spin guard. A pass of this loop either
+    # starts a session or waits; one that does neither, repeated, is a spin
+    # (cheap, silent, and indistinguishable from working). It is counted
+    # here, by those two facts and nothing else, so it cannot be silenced by
+    # a counter it is meant to check.
+    spin = {"passes": 0, "sessions": 0, "waited": False}
+    # The safety net beside the events (Robert, 2026-10-02): every wait of a
+    # perpetual run wakes the Manager after `HEARTBEAT_SECONDS` without one.
+    beat = (
+        _heartbeat(root, manager, cycles, begin, clock, verdict) if perpetual else None
+    )
+
     while True:
+        if perpetual:
+            if len(cycles) > spin["sessions"] or spin["waited"]:
+                spin["passes"] = 0
+            else:
+                spin["passes"] += 1
+            spin["sessions"], spin["waited"] = len(cycles), False
+            spun = _spinning(spin["passes"], cycles)
+            if spun is not None:
+                return spun
+        # A Worker queued for want of a slot is asked for again here, at a
+        # moment no session is running (the waits wake for a freed slot).
+        if broker is not None and _queued_requests(root, manager):
+            _honour_worker_requests(root, manager, broker, say)
         # ⚠ WHAT CAUSES THIS CYCLE. "" means the ordinary causes: the last
         # session ended cleanly and the board says continue. "mail" means a
         # wait below ended because mail is in the inbox (DF2), and then the
@@ -1590,10 +1822,14 @@ def _supervise(
         # BOTH bounds before starting. A ceiling checked afterwards reports
         # rather than bounds, and the window is what limits cost because the
         # count does not (§9.14.5).
-        stopped = _idle_allowance_spent(manager, max_sessions, cycles)
+        # A perpetual run has neither bound (SCRUM-20): what limits it is the
+        # schedule's Worker slots, one session at a time, and the waits.
+        stopped = (
+            None if perpetual else _idle_allowance_spent(manager, max_sessions, cycles)
+        )
         if stopped is not None:
             return stopped
-        if _counted(cycles) >= max_sessions:
+        if not perpetual and _counted(cycles) >= max_sessions:
             why = _reason_to_wait(root, manager, waiting, router, slack, say)
             if not why:
                 extra = _counted(cycles) - max_sessions
@@ -1628,6 +1864,7 @@ def _supervise(
             # writes during the wait (DIED, FINISHED WITHOUT A REPLY) earns
             # its own allowance. Checked before the wait, a death after a
             # reply and a correction was refused before its note existed.
+            spin["waited"] = True
             stopped = _wait_for_mail(
                 root,
                 manager,
@@ -1640,6 +1877,7 @@ def _supervise(
                 poll,
                 cycles,
                 live,
+                heartbeat=beat,
             )
             if stopped is not None:
                 return stopped
@@ -1703,6 +1941,7 @@ def _supervise(
                     # secondary for what it will be handed (Robert,
                     # 2026-09-27). Waiting spends no session, and the cycle
                     # after it is started by mail.
+                    spin["waited"] = True
                     stopped = _wait_for_mail(
                         root,
                         manager,
@@ -1711,10 +1950,11 @@ def _supervise(
                         slack,
                         say,
                         clock,
-                        deadline,
+                        wait_deadline(),
                         poll,
                         cycles,
                         live,
+                        heartbeat=beat,
                     )
                     if stopped is None:
                         cause = "mail"
@@ -1726,6 +1966,7 @@ def _supervise(
                         f"{manager!r} waits on the User: "
                         f"{getattr(answer, 'detail', '') or 'refinement'}"
                     )
+                    spin["waited"] = True
                     stopped = _wait_for_mail(
                         root,
                         manager,
@@ -1734,11 +1975,14 @@ def _supervise(
                         slack,
                         say,
                         clock,
-                        deadline,
+                        wait_deadline(),
                         poll,
                         cycles,
                         live,
-                        wake=_refinement_wake(root, manager, clock),
+                        heartbeat=beat,
+                        wake=_with_a_freed_slot(
+                            root, manager, _refinement_wake(root, manager, clock), clock
+                        ),
                     )
                     if stopped is not None:
                         return stopped
@@ -1775,6 +2019,68 @@ def _supervise(
                             "Not retried: a session started again on the same "
                             "mail would repeat the one that just could not."
                         )
+                if not cause and perpetual and answer == "closed":
+                    # 🔴 SCRUM-20 (perpetual): a closed window is the person
+                    # saying "not now", not "stop". The run waits, spending
+                    # nothing, until the window opens, and says when that is.
+                    spin["waited"] = True
+                    stopped = _wait_for_mail(
+                        root,
+                        manager,
+                        None,
+                        router,
+                        slack,
+                        say,
+                        clock,
+                        None,
+                        poll,
+                        cycles,
+                        live,
+                        heartbeat=beat,
+                        wake=_closed_wake(root, verdict, clock),
+                        idle_line=_closed_line(root, manager, clock),
+                    )
+                    if stopped is not None:
+                        return stopped
+                    if mail_waiting(root, manager, INBOX):
+                        cause = "mail"
+                    else:
+                        continue
+                if not cause and perpetual and answer == "idle":
+                    # 🔴 SCRUM-20 (perpetual): a quiet board is not the end of
+                    # a run nobody bounded. Wait, spending nothing, until the
+                    # board lists something, mail arrives or the project
+                    # changes. What `stopped` holds here is not a fault (the
+                    # routed work was handled, or nothing was routed), so it
+                    # does not end the run either.
+                    spin["waited"] = True
+                    stopped = _wait_for_mail(
+                        root,
+                        manager,
+                        None,
+                        router,
+                        slack,
+                        say,
+                        clock,
+                        None,
+                        poll,
+                        cycles,
+                        live,
+                        heartbeat=beat,
+                        wake=_with_a_freed_slot(
+                            root,
+                            manager,
+                            _idle_board_wake(root, manager, verdict, clock),
+                            clock,
+                        ),
+                        idle_line=_quiet_board_line(manager, clock),
+                    )
+                    if stopped is not None:
+                        return stopped
+                    if mail_waiting(root, manager, INBOX):
+                        cause = "mail"
+                    else:
+                        continue
                 if not cause:
                     # ⚠ Before stopping: a check-in due in this window goes out
                     # rather than being skipped, and idle with questions queued
@@ -1810,6 +2116,7 @@ def _supervise(
                 # its own reasons to end the wait, so `waiting` goes in only
                 # when there is one (see `_wait_for_mail`).
                 why = _reason_to_wait(root, manager, waiting, router, slack, say)
+                spin["waited"] = True
                 stopped = _wait_for_mail(
                     root,
                     manager,
@@ -1818,11 +2125,17 @@ def _supervise(
                     slack,
                     say,
                     clock,
-                    deadline,
+                    wait_deadline(),
                     poll,
                     cycles,
                     live,
-                    wake=_stalled_wake(root, manager, verdict, stalled, clock),
+                    heartbeat=beat,
+                    wake=_with_a_freed_slot(
+                        root,
+                        manager,
+                        _stalled_wake(root, manager, verdict, stalled, clock),
+                        clock,
+                    ),
                     idle_line=_idle_line(manager, stalled, clock),
                 )
                 if stopped is not None:
@@ -2183,7 +2496,7 @@ def _supervise(
             stalled = None
             if before is not None:
                 after = footprint(root, manager)
-                if not after.differs_from(before):
+                if _session_was_idle(after.differs_from(before)):
                     stalled = _Stalled(cycle.number, cycle_basis, after)
                     # SCRUM-24: and the ceiling does not count it.
                     cycle.idle = True
@@ -2476,6 +2789,13 @@ BOARD_RECHECK_SECONDS = 60.0
 again. A read is a request to the backend, so not every poll tick."""
 PROJECT_RECHECK_SECONDS = 15.0
 """How often it looks at the project again (two `git` calls)."""
+HEARTBEAT_SECONDS = 3600.0
+"""How long a perpetual run's Manager goes with no session before rite wakes
+it anyway (Robert, 2026-10-02): the safety net for a circumstance rite's own
+checks failed to notice. Counted from the end of the last session, so a
+Manager that events keep busy never gets an extra one; at most one heartbeat
+session an hour while nothing else happens. ⚠ The one place the interval is
+set: a config key, when there is one, replaces this number and nothing else."""
 
 
 @dataclass(frozen=True)
@@ -2652,6 +2972,128 @@ def _stalled_wake(root: Path, manager: str, verdict, stalled: _Stalled, clock):
     return wake
 
 
+def _idle_board_wake(root: Path, manager: str, verdict, clock):
+    """`wake` for a perpetual run's wait on a quiet board: why to start a
+    session now, or "" (SCRUM-20).
+
+    Not `_stalled_wake`: that one treats any verdict outside
+    `CONTINUE_VERDICTS` as "the board changed", and `idle` is outside them,
+    so it would wake on every read. This wakes when the verdict is no longer
+    `idle` (work appeared, or a fault the loop then stops on) and when the
+    project changes; mail ends the wait by itself."""
+    marks = {"board": clock(), "project": clock()}
+    before = footprint(root, manager)
+
+    def wake() -> str:
+        now = clock()
+        if now - marks["project"] >= PROJECT_RECHECK_SECONDS:
+            marks["project"] = now
+            changed = footprint(root, manager).differs_from(before)
+            if changed:
+                return "the project changed (" + ", ".join(changed) + ")"
+        if now - marks["board"] >= BOARD_RECHECK_SECONDS:
+            marks["board"] = now
+            if verdict(root) != "idle":
+                return "the board changed"
+        return ""
+
+    return wake
+
+
+def _heartbeat_words() -> str:
+    """The clause a wait's line ends with, naming the heartbeat; empty when
+    the heartbeat is off (an infinite interval)."""
+    every = HEARTBEAT_SECONDS
+    if every == float("inf"):
+        return ""
+    return f", and a heartbeat after {int(every // 60)} minutes with no session"
+
+
+def _heartbeat(root: Path, manager: str, cycles, begin: float, clock, verdict=None):
+    """`heartbeat` for a perpetual run's waits: once `HEARTBEAT_SECONDS` have
+    passed since the last session ended (or since the run began), put a note
+    from rite in the Manager's inbox and return what to say; else "".
+
+    ⚠ **A note, not a second way to start a session.** Every wait already
+    starts a session for inbox mail, so the heartbeat goes through the event
+    path every other trigger uses: one place decides that a session starts,
+    and the session it starts is told why. Between heartbeats and events no
+    Manager session runs. Read at each check, so a test or a later config
+    key sets the interval in one place.
+
+    ⚠ **Never in a closed schedule window** (Robert, 2026-10-02): a closed
+    window is the person saying "not now", and starts no session for a
+    heartbeat. Gated here rather than at the closed-window wait, so a routed
+    or stalled wait during a closed window is covered too. `verdict` is the
+    loop's own, read only when a beat is due, then again at the board's
+    cadence until the window opens (when `_closed_wake` starts a session
+    anyway). An idle board keeps its heartbeat."""
+    from rite_ai.managers.telling import tell_manager
+
+    marks = {"sent": float("-inf"), "closed_at": float("-inf")}
+
+    def beat() -> str:
+        last = begin
+        if cycles:
+            ended = cycles[-1].ended_at
+            last = ended if ended is not None else cycles[-1].started_at
+        now = clock()
+        every = HEARTBEAT_SECONDS
+        if now - max(last, marks["sent"]) < every:
+            return ""
+        if callable(verdict):
+            if now - marks["closed_at"] < BOARD_RECHECK_SECONDS:
+                return ""
+            if verdict(root) == "closed":
+                marks["closed_at"] = now
+                return ""
+        marks["sent"] = now
+        minutes = int(every // 60)
+        try:
+            tell_manager(
+                root,
+                manager,
+                "a heartbeat",
+                f"Nothing has woken you for {minutes} minutes. This is rite's "
+                "periodic check, in case something needs you that rite did not "
+                "notice: look at the board, your routes, your Workers and any "
+                "question still open. If nothing needs you, end the turn.",
+            )
+        except OSError as e:
+            return f"heartbeat: could not wake {manager!r} ({e})"
+        return (
+            f"heartbeat: no session for {manager!r} in {minutes} minutes, "
+            "so rite wakes it to check for anything it missed"
+        )
+
+    return beat
+
+
+def _quiet_board_line(manager: str, clock):
+    """`idle_line` for that wait: said when it begins, then every
+    `STILL_WAITING_EVERY` with a ⚠, as the other waits are."""
+    from rite_ai.managers.routing import STILL_WAITING_EVERY
+
+    said: dict[str, float | None] = {"at": None}
+
+    def line() -> str:
+        now = clock()
+        if said["at"] is not None and now - said["at"] < STILL_WAITING_EVERY:
+            return ""
+        mark = "" if said["at"] is None else "⚠ still: "
+        said["at"] = now
+        return (
+            f"{mark}{manager!r} is waiting, spending nothing: the board lists "
+            "nothing ready. Work on the board wakes it (read every "
+            f"{int(BOARD_RECHECK_SECONDS)}s), and so does mail or a change in "
+            "the project"
+            + _heartbeat_words()
+            + ". This run has no bound from you; Ctrl-C ends it."
+        )
+
+    return line
+
+
 def _idle_line(manager: str, stalled: _Stalled, clock):
     """`idle_line` for the guard's wait: said when it begins, then every
     `STILL_WAITING_EVERY` with a ⚠, as a routed wait is."""
@@ -2667,9 +3109,9 @@ def _idle_line(manager: str, stalled: _Stalled, clock):
         said["at"] = now
         return (
             f"{mark}{manager!r} is waiting, spending nothing: session "
-            f"{stalled.number} changed nothing rite can see (no commit or edit "
-            "in the project, claim, reply, route or Worker request), so it "
-            "does not count toward --sessions, and the "
+            f"{stalled.number} made no progress (no claim, route, Worker "
+            "request or delivery; a reply or a project edit alone is not "
+            "progress), so it does not count toward --sessions, and the "
             "board reads as it did when that session began, "
             "so another would repeat it. Mail wakes it (a Slack DM, a routed "
             f"reply, `rite message {manager} …`), and so does a change on the "
@@ -2724,6 +3166,7 @@ def _wait_for_mail(
     live: str,
     wake=None,
     idle_line=None,
+    heartbeat=None,
 ) -> SuperviseResult | None:
     """Wait, with no engine running, until mail is in this Manager's inbox.
     None means start a cycle now, BECAUSE of that mail; a result means stop.
@@ -2750,9 +3193,11 @@ def _wait_for_mail(
     Reversed, a tick could collect nothing, then see the route handled, then
     stop — the reply left for the next `rite start`.
 
-    There is no timer (Robert, 2026-09-27). It ends on mail, on `over()`, on
-    the window, or on Ctrl-C, and a wait that cannot end by itself is SAID
-    every `routing.STILL_WAITING_EVERY`.
+    There is no timer of its own (Robert, 2026-09-27). It ends on mail, on
+    `over()`, on the window, or on Ctrl-C, and a wait that cannot end by
+    itself is SAID every `routing.STILL_WAITING_EVERY`. ⚠ A perpetual run
+    passes `heartbeat` (Robert, 2026-10-02), which writes mail when it is
+    due, so the check below ends the wait as for any other mail.
     """
     if waiting is not None:
         waiting.begin()
@@ -2765,6 +3210,9 @@ def _wait_for_mail(
                 # check below starts the Owner's session to tell the person.
                 waiting.notice_gone(say)
             _relay_tick(root, manager, router, slack, say)
+            beat = heartbeat() if callable(heartbeat) else ""
+            if beat:
+                say(beat)
             if mail_waiting(root, manager, INBOX):
                 return None
             if ended:
@@ -2847,8 +3295,8 @@ def _torn_down(root, manager: str, session: str, cycles, say) -> SuperviseResult
         )
         return SuperviseResult(
             True,
-            f"stopped Manager {manager!r} — interrupted during teardown, so "
-            f"its session may still be running",
+            f"stopped by the operator (Ctrl-C) — interrupted during teardown, "
+            f"so Manager {manager!r}'s session may still be running",
             cycles,
         )
     if gone is not None and not gone.ok:
@@ -2859,8 +3307,8 @@ def _torn_down(root, manager: str, session: str, cycles, say) -> SuperviseResult
         )
         return SuperviseResult(
             False,
-            f"stopped supervising Manager {manager!r}, but its session "
-            f"{session} may still be running — {gone.detail}",
+            f"stopped by the operator (Ctrl-C) — Manager {manager!r}'s session "
+            f"{session} may still be running: {gone.detail}",
             cycles,
         )
     if gone is not None and gone.killed:
@@ -2869,7 +3317,8 @@ def _torn_down(root, manager: str, session: str, cycles, say) -> SuperviseResult
         )
     return SuperviseResult(
         True,
-        f"stopped Manager {manager!r} — its session had already ended",
+        f"stopped by the operator (Ctrl-C) — Manager {manager!r}'s session "
+        f"had already ended",
         cycles,
     )
 

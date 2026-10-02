@@ -142,7 +142,8 @@ def test_a_secondary_may_do_only_chores_and_trivial_tickets_through_a_pr(
     said = _start(tmp_path, monkeypatch, TWO, "helper", board=True)
     assert "You do not implement tickets yourself" not in said
     assert said.count("## Routed work you do yourself") == 1
-    assert "only when it is a chore or a trivial ticket" in said
+    assert "chore, a ticket breakdown or similar trivial work" in said
+    assert "No heavy implementation" in said
     assert "never a commit to a default branch" in said
     assert "request one (above)" in said
 

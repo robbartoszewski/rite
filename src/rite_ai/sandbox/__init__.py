@@ -542,6 +542,17 @@ def _count_named(binary: str, name: str, env: dict[str, str]) -> int | CountUnav
 class SandboxResult:
     ok: bool
     message: str
+    full: bool = False
+    """Refused ONLY because no slot is free right now: the project cap, the
+    schedule window's count, or the machine bound. Such a start can succeed
+    later unchanged, so a caller queues it rather than dropping it; every
+    other refusal is final until something is fixed."""
+
+
+EXIT_NO_SLOT = 75
+"""`rite sandbox start`'s exit status for a `full` refusal (EX_TEMPFAIL):
+the typed signal the broker reads across the subprocess boundary, instead of
+matching the message text."""
 
 
 def legacy_sandbox_name(worker: str) -> str:
@@ -1234,7 +1245,7 @@ def _start_worker_unlocked(
 
     cap_problem = check_worker_cap(active + 1, config.max_concurrent_workers)
     if cap_problem is not None:
-        return SandboxResult(False, cap_problem)
+        return SandboxResult(False, cap_problem, full=True)
 
     # The SCHEDULE, which until 0.5.0 nothing enforced at the spawn site.
     # Checked after the flat cap because the cap is the more specific
@@ -1243,7 +1254,7 @@ def _start_worker_unlocked(
     # budget).
     schedule_problem = _schedule_refusal(root, active)
     if schedule_problem is not None:
-        return SandboxResult(False, schedule_problem)
+        return SandboxResult(False, schedule_problem, full=True)
 
     # The MACHINE's bound, second and deliberately so. The project cap is
     # the specific, actionable failure ("this project is at its limit"); a
@@ -1283,6 +1294,7 @@ def _start_worker_unlocked(
                 f"belong to other projects, or be leftovers: `rite sandbox "
                 f"status` lists them. Raise it in ~/.rite/machine.json "
                 f'("max_sandboxes") or unset it for no bound.',
+                full=True,
             )
 
     # ⚠ The operator's own Claude settings stay out (dogfood #27). yoloAI's

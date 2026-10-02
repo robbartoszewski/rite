@@ -31,6 +31,11 @@ from rite_ai.managers.supervise import StartResult, supervise
 OWNER = "lead"
 
 
+def _claim(root, n: int) -> None:
+    """A session's real progress: a claim (a reply alone is not, D-115)."""
+    (root / ".rite" / "claims.json").write_text(f'[{{"worker": "w{n}"}}]')
+
+
 class _Ending:
     kind = "finished"
     resume = True
@@ -81,6 +86,7 @@ def _run(world, *, sessions, minutes, useful=1, cycle_secs=10.0, board=None):
         prompts.append(kw.get("prompt") or "")
         if len(starts) <= useful:
             mailbox.send(root, OWNER, mailbox.OUTBOX, f"did something {len(starts)}")
+            _claim(root, len(starts))
         world["t"] += cycle_secs
         return StartResult(True, "ok", session=f"s{len(starts)}", attach="a")
 
@@ -159,7 +165,7 @@ class TestWhatWakesIt:
 
         def someone_claims():
             if not claimed["done"] and world["t"] >= 150:
-                (root / ".rite" / "claims.json").write_text('[{"worker": "w1"}]')
+                (root / ".rite" / "claims.json").write_text('[{"worker": "elsewhere"}]')
                 claimed["done"] = True
 
         world["between"].append(someone_claims)
@@ -268,7 +274,7 @@ class TestAWaitingManagerDoesNotSpendItsCeiling:
         result, starts, _, _ = _run(world, sessions=2, minutes=60, useful=0)
         assert len(starts) == 2, starts
         assert all(c.idle for c in result.cycles)
-        assert "changed nothing" in result.reason
+        assert "made no progress" in result.reason
         assert "allowance" in result.reason
         assert "window elapsed" not in result.reason
 

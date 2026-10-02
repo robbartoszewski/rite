@@ -7718,7 +7718,11 @@ def sandbox_start(
     )
     click.echo(result.message)
     if not result.ok:
-        raise SystemExit(1)
+        # A full slot is not a failure of the request: the same start can
+        # succeed when one frees, and the broker queues it on this status.
+        from rite_ai.sandbox import EXIT_NO_SLOT
+
+        raise SystemExit(EXIT_NO_SLOT if result.full else 1)
     if ticket is not None:
         _mark_started(root, config, ticket)
 
@@ -9195,30 +9199,39 @@ def _start_a_manager(
     fresh: bool = False,
     keep_conversation: bool = False,
 ) -> None:
-    """Start one Manager, refusing without a ceiling (D-68)."""
-    if sessions is None:
-        click.echo(
-            "refusing to start: --sessions is required and has no default.\n"
-            "  It caps how many provider sessions this run may START — a "
-            "COUNT, not spend, because rite cannot read the quota (§2.6.1, "
-            "D-69).\n"
-            "  Silently choosing a number you did not choose is how `rite "
-            "pool fill --count 500` became possible, and spent quota is the "
-            "one damage no cleanup reverses.",
-            err=True,
-        )
-        raise SystemExit(1)
+    """Start one Manager. With no bound given it runs until you stop it.
 
-    if minutes is None:
+    🔴 **The bounds used to be mandatory and are now optional (SCRUM-20,
+    perpetual; Robert, 2026-10-02).** `rite start lead` runs until Ctrl-C.
+
+    ⚠ **What bounds a run with no bound is concurrency, not a rate** (D-115):
+    one Manager session at a time, and Workers up to the schedule window's
+    count. Given both, `--sessions` and `--minutes` bound the run as before.
+
+    ⚠ **Ctrl-C is the off switch** and it is the only one that records why:
+    it raises through `supervise`'s `finally`, so the lifecycle record says
+    "stopped by the operator". `rite manager stop` kills the tmux session, so
+    that path is recorded as DIED — a cooperative stop marker is its own
+    ticket, not faked here.
+
+    One bound without the other is still refused: a half-bounded run that
+    silently became perpetual is the surprise this avoids.
+    """
+    if (sessions is None) != (minutes is None):
+        given, missing = (
+            ("--sessions", "--minutes")
+            if minutes is None
+            else ("--minutes", "--sessions")
+        )
         click.echo(
-            "refusing to start: --minutes is required and has no default.\n"
-            "  It caps how LONG this run may keep starting sessions. The two "
-            "bounds are not interchangeable and neither suffices alone — "
-            "measured: sessions that end instantly hit the count with the "
+            f"refusing to start: {given} was given and {missing} was not.\n"
+            "  The two bounds catch different runaways and neither suffices "
+            "alone (D-82): sessions that end instantly hit the count with the "
             "clock untouched, and sessions of realistic length hit the clock "
-            "after three with the count untouched (D-82).\n"
-            "  A duration that defaults to forever is a bound in name only, "
-            "and this is the command that spends quota unattended.",
+            "after three with the count untouched.\n"
+            f"  Give both to bound this run, or neither to run until you stop "
+            f"it — `rite start {role.name}` with no bounds runs perpetually, "
+            "with its Workers bounded by your schedule.",
             err=True,
         )
         raise SystemExit(1)
@@ -9246,12 +9259,23 @@ def _start_a_manager(
             err=True,
         )
 
-    click.echo(
-        f"starting Manager '{role.name}' — up to {sessions} session(s), "
-        f"for up to {minutes:g} minute(s). Whichever bound is reached first "
-        "ends the run. Ctrl-C ends it too; a session already started keeps "
-        "running."
-    )
+    if sessions is None:
+        # ⚠ Said, not implied: a run with no end needs the person to know how
+        # to stop it, and what does bound it (D-115).
+        click.echo(
+            f"starting Manager '{role.name}' — no bound given, so it runs "
+            "until you stop it (Ctrl-C). It runs one session at a time, and "
+            "its Workers only up to your schedule's count; waiting on an "
+            "answer, routed work, a quiet board or a closed window does not "
+            "end it, it waits, spending nothing."
+        )
+    else:
+        click.echo(
+            f"starting Manager '{role.name}' — up to {sessions} session(s), "
+            f"for up to {minutes:g} minute(s). Whichever bound is reached first "
+            "ends the run. Ctrl-C ends it too; a session already started keeps "
+            "running."
+        )
     # Track MS: the effective model and its source, the same line `rite
     # doctor` prints. `role` is None for an undeclared lone Manager, which
     # runs Claude Code's default.
@@ -9457,7 +9481,7 @@ def _start_a_manager(
             slack=listener,
             github=github,
             max_sessions=sessions,
-            window_seconds=minutes * 60.0,
+            window_seconds=None if minutes is None else minutes * 60.0,
             prompt=(
                 _setup_prompt(root, role.name)
                 # The setup session too: a secondary configuring the board as
@@ -10498,21 +10522,24 @@ def manager_stop(name: str) -> None:
     "--sessions",
     type=int,
     default=None,
-    help="Ceiling on provider sessions this run may start that do work (a "
-    "commit or edit, claim, reply, route or Worker request). A session "
-    "that changes nothing is not counted, and at most this many of those "
-    "run as well. Required when starting a Manager; a COUNT, not spend. "
-    "With several Managers in one project it is SOFT while routed work is "
-    "outstanding: a session started by routed mail can pass it, and each "
-    "one is said.",
+    help="Ceiling on provider sessions this run may start that make progress "
+    "(a claim, route, Worker request or delivery; a reply or a project edit "
+    "alone is not progress). Other sessions are not counted, and at most "
+    "this many of those "
+    "run as well. A COUNT, not spend. Give it with --minutes to bound the "
+    "run; give neither and the run goes on until you stop it, bounded by "
+    "your schedule's Worker count instead. With several Managers in one "
+    "project it is SOFT while routed work is outstanding: a session started "
+    "by routed mail can pass it, and each one is said.",
 )
 @click.option(
     "--minutes",
     type=float,
     default=None,
-    help="Ceiling on how long this run may keep starting sessions. Required "
-    "when starting a Manager: the two bounds catch different runaways and "
-    "neither suffices alone.",
+    help="Ceiling on how long this run may keep starting sessions. Give it "
+    "with --sessions, or neither: the two bounds catch different runaways "
+    "and neither suffices alone, so one without the other is refused. With "
+    "neither, the run goes on until you stop it.",
 )
 @click.option(
     "--fresh",
