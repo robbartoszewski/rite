@@ -1029,17 +1029,39 @@ def supervise(
     ends: it is what another Manager's supervisor reads to know this one is
     PROVABLY gone rather than between two cycles.
     """
-    if waiting is None:
-        return _supervise(root, manager, **options)
     from rite_ai.managers.routing import forget_supervisor, record_supervisor
 
+    # 🔴 SCRUM-20. Recorded for EVERY run, not only one that may wait.
+    # This used to sit behind `if waiting is None: return _supervise(...)`, so
+    # the lifecycle was recorded only in a root several Managers share with an
+    # Owner (`_waiting_for` returns None below two Managers). A lone Manager —
+    # the commonest project there is, and the one the dogfood runs — recorded
+    # no start, no end and no reason, so when it stopped nothing could say
+    # whether a bound fired, a verdict ended it, or it crashed. `rite status`
+    # then read the INSTANCE record, whose pid is dead between cycles by
+    # design, and reported a running Manager as gone.
+    #
+    # `waiting` keeps its own job: it decides whether this Manager may WAIT
+    # for its inbox. It was never the right condition for keeping a record.
     record_supervisor(root, manager, os.getpid())
     how = "stopped by an error"
+    counts: dict = {}
     try:
-        result = _supervise(root, manager, waiting=waiting, **options)
+        result = (
+            _supervise(root, manager, **options)
+            if waiting is None
+            else _supervise(root, manager, waiting=waiting, **options)
+        )
         # Its own words, so the Owner can say HOW it ended, not only that it
         # did: a Ctrl-C, a bound and a finished queue all end a run cleanly.
         how = result.reason
+        # SCRUM-20: and what it did, so a run that ended on a ceiling can be
+        # told from one that ended having run nothing.
+        counts = {
+            "sessions_started": result.sessions_started,
+            "sessions_that_did_work": _counted(result.cycles),
+            "sessions_that_changed_nothing": _idle(result.cycles),
+        }
         if getattr(waiting, "is_owner", False):
             from rite_ai.managers.routing import verification_summary
 
@@ -1054,7 +1076,125 @@ def supervise(
         # Recorded however the run ends, a Ctrl-C and an error included. Only
         # a KILLED run skips it, and that is exactly what `supervisor_state`
         # reads as DIED.
-        forget_supervisor(root, manager, os.getpid(), how)
+        # SCRUM-20: the Workers this run leaves behind, BEFORE the record is
+        # closed — a reader that sees ENDED must already be able to see what
+        # was left mid-flight.
+        left = _hand_over_on_stop(root, manager, how, options.get("say"))
+        if left:
+            counts["left_unattended"] = left
+        forget_supervisor(root, manager, os.getpid(), how, counts=counts)
+
+
+def _workers_left_mid_flight(root: Path) -> list[dict]:
+    """Each Worker this project has that is still holding something, as
+    `{"worker", "ticket", "paths", "question"}` (SCRUM-20).
+
+    ⚠ **Read, never released.** `perform_handover` releases claims, and that
+    is right when a Worker has stopped — but a Manager's Workers OUTLIVE it:
+    their sandboxes are their own processes. Releasing a live Worker's claim
+    would let a second Worker take paths the first is still editing, which is
+    the collision the ledger exists to prevent. So this reports and changes
+    nothing.
+    """
+    from rite_ai.claims.ledger import ClaimsLedger
+    from rite_ai.sandbox import worker_sandbox_status
+    from rite_ai.sandbox.questions import Unknown, pending_question
+
+    workers_dir = root / "workers"
+    if not workers_dir.is_dir():
+        return []
+    left: list[dict] = []
+    ledger = ClaimsLedger(root / ".rite" / "claims.json")
+    for entry in sorted(
+        p for p in workers_dir.iterdir() if (p / "worker.yml").is_file()
+    ):
+        worker = entry.name
+        try:
+            claims = ledger.claims_for(worker)
+        except Exception:  # noqa: BLE001
+            claims = []
+        question = ""
+        try:
+            status = worker_sandbox_status(worker, root)
+            if getattr(status, "known", False) and str(status) != "not found":
+                from rite_ai.sandbox import existing_sandbox_name
+
+                name = existing_sandbox_name(worker, root)
+                asked = pending_question(name) if name else None
+                if asked is not None and not isinstance(asked, Unknown):
+                    question = getattr(asked, "question", "") or "a question"
+        except Exception:  # noqa: BLE001
+            question = ""
+        if not claims and not question:
+            continue
+        left.append(
+            {
+                "worker": worker,
+                "ticket": next((c.ticket for c in claims if c.ticket), ""),
+                "paths": sorted({p for c in claims for p in c.paths}),
+                "question": question[:200],
+            }
+        )
+    return left
+
+
+def _hand_over_on_stop(root: Path, manager: str, how: str, say=None) -> list[dict]:
+    """🔴 SCRUM-20. When a Manager's run ends, say which Workers it left
+    holding something — in the Owner's DM, not only in a pane nobody is
+    watching.
+
+    **The gap this closes.** A Manager stopped on a bound while a Worker sat on
+    an unanswered question with a claim held and uncommitted work in its
+    sandbox. `rite status` said "no handover snapshot recorded yet", nothing
+    reached the person, and the Worker waited on an answer whose only carrier
+    had gone. The Worker was fine; nobody knew it was alone.
+
+    Returns what it found so the lifecycle record can carry it: a reader that
+    sees ENDED must be able to see what was left mid-flight.
+    """
+    # 🔴 Nothing in a REPORT may end a run. This is called from the run's
+    # `finally`, so an exception here would replace whatever actually ended it
+    # — and the first draft of this function did exactly that, raising
+    # ImportError from a mistyped ledger class and taking the run with it.
+    try:
+        left = _workers_left_mid_flight(root)
+    except Exception as e:  # noqa: BLE001
+        if say:
+            say(f"could not work out which Workers were left holding work: {e}")
+        return []
+    if not left:
+        return []
+    who = ", ".join(
+        f"{w['worker']}"
+        + (f" on {w['ticket']}" if w["ticket"] else "")
+        + (" (waiting on an answer)" if w["question"] else "")
+        for w in left
+    )
+    text = (
+        f"Manager {manager!r} has stopped ({how}), and {len(left)} Worker(s) "
+        f"are still holding work: {who}. Their sandboxes and claims are "
+        f"untouched — nothing was released, because a running Worker's claim "
+        f"is what stops a second Worker editing the same files. "
+        + (
+            "A Worker waiting on an answer will not get one until a Manager "
+            "runs again, or you answer it in its own session. "
+            if any(w["question"] for w in left)
+            else ""
+        )
+        + f"Start a Manager again to pick them up: `rite start {manager}`."
+    )
+    try:
+        from rite_ai.managers.asking import raise_to_person
+
+        raise_to_person(
+            root, manager, subject="", raiser=f"manager:{manager}", text=text
+        )
+    except Exception as e:  # noqa: BLE001 - said, never raised into the run
+        if say:
+            say(f"could not tell the User which Workers were left: {e}")
+    if say:
+        say(text)
+    return left
 
 
 def _supervise(
