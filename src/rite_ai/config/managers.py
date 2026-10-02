@@ -188,13 +188,17 @@ def decomposition_model_for(role: ManagerRole) -> str:
 
 def is_local_engine(engine: str) -> bool:
     """Whether `engine` is a `local:<class>` one — the single spelling of the
-    test. A Worker asks this too now (OL3), and `local:` matched by a second
-    regex somewhere else is how the two would come to disagree."""
+    BOOLEAN test. A Worker asks this too now (OL3), and `local:` matched by a
+    second regex somewhere else is how the two would come to disagree.
+
+    `ManagerRole.local_class` still matches directly, because it needs the
+    capture group rather than the answer; that is the one remaining use and it
+    is not a copy of this."""
     return bool(_LOCAL.match(engine))
 
 
 def _engine_error(engine: str) -> str:
-    if engine in (CLAUDE, HUMAN) or _LOCAL.match(engine):
+    if engine in (CLAUDE, HUMAN) or is_local_engine(engine):
         return ""
     return (
         f"engine {engine!r} is not one rite knows — use 'claude', 'human', or "
@@ -308,7 +312,7 @@ def engine_shape_problem(raw: dict, subject: str) -> str:
     bad = _engine_error(engine)
     if bad:
         return f"{subject}: {bad}"
-    local = bool(_LOCAL.match(engine))
+    local = is_local_engine(engine)
     missing = [k for k in _LOCAL_ONLY if local and not raw.get(k)]
     if missing:
         return (
@@ -340,7 +344,7 @@ def window_problem(raw: dict, subject: str) -> str:
         return ""
     window = raw["context_window"]
     engine = str(raw.get("engine", CLAUDE))
-    if not _LOCAL.match(engine):
+    if not is_local_engine(engine):
         return (
             f"{subject}: context_window means nothing on a {engine!r} "
             "engine — only 'local:<class>' runs a model whose window rite sets"
