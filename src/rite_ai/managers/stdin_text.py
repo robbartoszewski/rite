@@ -29,6 +29,7 @@ the command line, and their instructions teach the one safe form.
 
 from __future__ import annotations
 
+import re
 import secrets
 import sys
 
@@ -38,7 +39,9 @@ STDIN = "-"
 RULE = (
     "Your text replaces the <…> line, exactly as written, on as many lines "
     "as it needs, and the last line ends it: copy it exactly, at the start of "
-    "its line with nothing before it. ⚠ Never put "
+    "its line with nothing before it, ONCE, with nothing after it. A second "
+    "copy, or anything after it, is a new shell command, and it is refused. "
+    "⚠ Never put "
     "the text in double quotes on the command line instead: the shell runs "
     "anything in backticks or $( ) there before rite sees it, and text you "
     "quote from a ticket, an issue or another Manager can contain them."
@@ -49,6 +52,25 @@ RULE = (
 def _delimiter() -> str:
     """A heredoc delimiter no ticket can contain by accident or design."""
     return f"RITE_TEXT_{secrets.token_hex(6)}"
+
+
+# Any hex length, not only `_delimiter`'s twelve: `--help` shows six
+# (`RITE_TEXT_1f2e3d`), and a Manager may copy the example.
+_END_LINE = re.compile(r"RITE_TEXT_[0-9a-f]+")
+
+
+def stray_end(command: str) -> str:
+    """The delimiter, when `command` is one of rite's heredoc end lines run
+    as a command of its own; otherwise "".
+
+    🔴 SCRUM-22. A Manager wrote the end line twice. The heredoc closes at
+    the first, so the shell saw the second as a separate command named
+    `RITE_TEXT_…`, and the engine refused that part (and with it the whole
+    call, so nothing was sent). rite's own form was permitted; the stray line
+    was not. This lets the report say so, instead of naming the delimiter as
+    a program to allowlist."""
+    words = command.split()
+    return words[0] if words and _END_LINE.fullmatch(words[0]) else ""
 
 
 def heredoc(command: str, placeholder: str, end: str | None = None) -> str:

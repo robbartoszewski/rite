@@ -20,6 +20,23 @@ A status channel rite cannot post to leaves the line on the terminal and never
 falls back to the DM. A message rite took from Slack but never delivered is
 still said in your DM, because that one needs you.
 
+### A doubled heredoc end line is reported as that, not as a rule to add (SCRUM-22)
+
+When a Manager wrote the end line of rite's text form twice, the engine
+refused the stray copy, which runs as a command of its own. rite's report
+then said `RITE_TEXT_…` "is not in the permission allowlist" and told you to
+add `Bash(RITE_TEXT_…:*)`. That rule would never match again, because the end
+line changes with every instruction. And it would have made things worse:
+the message would be sent, the stray line would fail, and the Manager would
+send it again. The report now says what happened: the end line was repeated,
+the call did not run, nothing was sent, and nothing should be added. A
+Manager's instructions now say to write the end line once, with nothing after
+it.
+
+rite's own `rite reply`, `ask` and `route` were never refused: across the
+recorded Manager transcripts, every heredoc written as taught was permitted,
+including text with backticks, `$` and paths.
+
 ## 0.7.0a5 (2026-10-01) — alpha: init finishes what it starts, and the publish gate runs behind someone else's
 
 ⚠ **Still an alpha, cut for the same dogfood** (a real contribution to yoloAI
