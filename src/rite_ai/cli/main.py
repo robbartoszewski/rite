@@ -10116,10 +10116,13 @@ def manager_stop(name: str) -> None:
     "--sessions",
     type=int,
     default=None,
-    help="Ceiling on provider sessions this run may start. Required when "
-    "starting a Manager; a COUNT, not spend. With several Managers in "
-    "one project it is SOFT while routed work is outstanding: a session "
-    "started by routed mail can pass it, and each one is said.",
+    help="Ceiling on provider sessions this run may start that do work (a "
+    "commit or edit, claim, reply, route or Worker request). A session "
+    "that changes nothing is not counted, and at most this many of those "
+    "run as well. Required when starting a Manager; a COUNT, not spend. "
+    "With several Managers in one project it is SOFT while routed work is "
+    "outstanding: a session started by routed mail can pass it, and each "
+    "one is said.",
 )
 @click.option(
     "--minutes",

@@ -20,6 +20,43 @@ A status channel rite cannot post to leaves the line on the terminal and never
 falls back to the DM. A message rite took from Slack but never delivered is
 still said in your DM, because that one needs you.
 
+### A doubled heredoc end line is reported as that, not as a rule to add (SCRUM-22)
+
+When a Manager wrote the end line of rite's text form twice, the engine
+refused the stray copy, which runs as a command of its own. rite's report
+then said `RITE_TEXT_…` "is not in the permission allowlist" and told you to
+add `Bash(RITE_TEXT_…:*)`. That rule would never match again, because the end
+line changes with every instruction. And it would have made things worse:
+the message would be sent, the stray line would fail, and the Manager would
+send it again. The report now says what happened: the end line was repeated,
+the call did not run, nothing was sent, and nothing should be added. A
+Manager's instructions now say to write the end line once, with nothing after
+it.
+
+rite's own `rite reply`, `ask` and `route` were never refused: across the
+recorded Manager transcripts, every heredoc written as taught was permitted,
+including text with backticks, `$` and paths.
+
+### A message that did not come is said in Slack, not only in the terminal (SCRUM-23)
+
+When the engine refused a Manager's `rite reply`, `ask`, `route` or `refine
+ask`, rite said so only in the supervisor's terminal pane, so the person it
+was meant for never learned it had not arrived. The same was true when relaying
+your answers to Workers failed outright. Both now go to the Owner's DM, the way
+an answer that could not reach its Worker already did, once per problem. The
+notice says what kind of message did not come and why, and does not quote the
+command, whose text is often someone else's.
+
+### A session that changes nothing no longer uses up `--sessions` (SCRUM-24)
+
+A Manager waiting on an answer was woken, found nothing to do, and that session
+counted toward `--sessions`, so a run could end on "ceiling reached" while it
+was only waiting. The ceiling now counts the sessions that did work (a commit
+or edit, a claim, a reply, a route, a Worker request), plus any rite could not
+judge. Sessions that changed nothing still cost tokens, so they have an
+allowance of their own, the same number: a run stops once `--sessions` of them
+have run, and says so.
+
 ## 0.7.0a5 (2026-10-01) — alpha: init finishes what it starts, and the publish gate runs behind someone else's
 
 ⚠ **Still an alpha, cut for the same dogfood** (a real contribution to yoloAI
