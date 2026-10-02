@@ -57,6 +57,43 @@ judge. Sessions that changed nothing still cost tokens, so they have an
 allowance of their own, the same number: a run stops once `--sessions` of them
 have run, and says so.
 
+### `rite sandbox status` tells you how to answer a Worker's question
+
+It still said "answer it by attaching", which stopped being the way in 0.7.0a4.
+It now says: reply in the question's Slack thread, or on this machine
+`rite message <owner> "<id> <your answer>"`, with the question's id. If the
+question has not been sent to you yet, or the Worker has stopped and can no
+longer be answered, it says that instead.
+
+### `rite add worker` links the Worker to a Manager
+
+Without `--manager` it created a Worker that reported to nobody, even in a
+project with Managers, so its instructions said "No Manager assigned yet." and
+then "Tell your Manager you are free". It now links the first declared Manager,
+the same as `rite init`, and says which. A `--manager` naming a Manager the
+project does not declare is refused.
+
+### A ticket a Worker starts on shows as in progress
+
+`rite sandbox start --ticket` now moves the ticket to "In Progress" once the
+Worker is running, so the board stops saying "To Do" about work in hand. If
+the board has no such status, or refuses, the start says so and the Worker
+still runs.
+
+### A schedule window's Worker count is a limit, not only an on/off switch
+
+`workers: 1` used to stop only at zero, so a second and third Worker could
+start. A start that would take the project over the window's count is now
+refused. Two starts at the same moment no longer both fit into one slot, and
+no longer crash each other.
+
+### A Manager is told what is on the board
+
+A Manager was told to check the board with `rite loop run`, which cannot read a
+Jira board from inside its sandbox. rite reads the board itself before it
+starts a session for the board's work, and now ends that session's
+instructions with what it found: what is ready and what is blocked.
+
 ## 0.7.0a5 (2026-10-01) — alpha: init finishes what it starts, and the publish gate runs behind someone else's
 
 ⚠ **Still an alpha, cut for the same dogfood** (a real contribution to yoloAI

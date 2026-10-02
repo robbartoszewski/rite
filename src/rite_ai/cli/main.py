@@ -3645,7 +3645,13 @@ def _undeclared_in(error: str, config, candidate: str = "") -> list[str]:
 
 @add.command("worker")
 @click.argument("name")
-@click.option("--manager", "-m", default="", help="Manager name")
+@click.option(
+    "--manager",
+    "-m",
+    default="",
+    help="The declared Manager this Worker reports to (default: the first "
+    "declared, as `rite init` links its Worker).",
+)
 @click.option(
     "--modules", default="", help="Comma-separated module subset (default: all)"
 )
@@ -3694,6 +3700,31 @@ def add_worker_cmd(
     from rite_ai.workspace import add_worker
 
     root, config = _load_config_for_write()
+    # 🔴 **A Worker reports to a Manager that exists (SCRUM-26).** Without
+    # `--manager` this wrote `manager: ''` while the project had one declared,
+    # so the Worker's brief said "No Manager assigned yet." and, a hundred
+    # lines on, "Tell your Manager you are free" — the contradiction SCRUM-5
+    # fixed for `rite init`. Same rule as init's (`the_declared_manager`):
+    # the first declared Manager, which is `rite start`'s priority order
+    # (§2.4). A name that is not declared is refused rather than written: a
+    # Worker reporting to nobody under a name is the same defect, spelled.
+    declared = list(config.coordination.managers)
+    for role in config.coordination.manager_roles:
+        if role.name not in declared:
+            declared.append(role.name)
+    if manager and manager not in declared:
+        click.echo(
+            f"refusing to add worker '{name}': no Manager named '{manager}' is "
+            f"declared in this project ("
+            + (", ".join(declared) if declared else "none is")
+            + f"). `rite add manager {manager}` declares it; then add the "
+            "Worker again.",
+            err=True,
+        )
+        raise SystemExit(1)
+    defaulted = not manager and bool(declared)
+    if defaulted:
+        manager = declared[0]
     module_subset = (
         [m.strip() for m in modules.split(",") if m.strip()] if modules else None
     )
@@ -3713,6 +3744,19 @@ def add_worker_cmd(
         raise SystemExit(1)
 
     click.echo(result.message)
+    if manager:
+        how = " (the first declared; --manager names another)" if defaulted else ""
+        click.echo(f"  reports to Manager '{manager}'{how}")
+    else:
+        # Said, not silent: the one case a Worker is created reporting to
+        # nobody is a project with no Manager at all, which `rite init` also
+        # allows. Its brief says so, and this is where the person learns it.
+        click.echo(
+            "  reports to no Manager: none is declared in this project. "
+            "`rite add manager <name>` declares one; Workers added after it "
+            "report to it.",
+            err=True,
+        )
     if result.cloned_modules:
         click.echo(f"  cloned: {', '.join(result.cloned_modules)}")
     for module_name, why in result.failed_modules:
@@ -7424,6 +7468,66 @@ def sandbox_start(
     click.echo(result.message)
     if not result.ok:
         raise SystemExit(1)
+    if ticket is not None:
+        _mark_started(root, config, ticket)
+
+
+STARTED_STATUS = "In Progress"
+"""Where a ticket goes when a Worker starts on it. Hardcoded because rite has
+no status vocabulary of its own yet (SPEC §6.5); a board without it says so
+through `move`, and the start says that the board was not moved."""
+
+
+def _mark_started(root: Path, config, ticket: str) -> None:
+    """Move TICKET to `STARTED_STATUS` now that a Worker is on it (SCRUM-27).
+
+    ⚠ **The board said "To Do" for tickets Workers were actively working**
+    (KAN-28, KAN-29): nothing moved a ticket when its Worker started, and a
+    sandboxed Worker cannot move it itself, holding no board credential
+    (§5.3.4). This is the one host-side moment a Worker takes a ticket —
+    `rite sandbox start`, which the broker also runs for a Manager's
+    request — so it is moved here, through the backend's own `move`, which
+    is what keeps it backend-agnostic: GitHub has no such column and says
+    where it mapped instead.
+
+    **Never fails the start.** The Worker is running whatever the board
+    says, and a non-zero exit here would tell the broker it is not. A board
+    that refused or could not be reached is said on stderr, in words that
+    say the ticket still shows its old status.
+    """
+    from rite_ai.tickets import BackendError
+
+    board, problem = _ticket_backend("workers", root, config)
+    if board is None:
+        click.echo(
+            f"  board NOT moved: {ticket} still shows its old status ({problem})",
+            err=True,
+        )
+        return
+    try:
+        moved = board.move(ticket, STARTED_STATUS)
+    except Exception as e:  # noqa: BLE001 - the Worker is running; say, never raise
+        moved = BackendError(f"{type(e).__name__}: {e}")
+    if isinstance(moved, BackendError):
+        click.echo(
+            f"  board NOT moved: {ticket} still shows its old status ({moved.message})",
+            err=True,
+        )
+        return
+    _say_unrecorded(board)
+    landed = moved if isinstance(moved, str) and moved else STARTED_STATUS
+    from rite_ai.managers import current_manager
+    from rite_ai.reporting import events
+
+    events.record(
+        root, "board-move", ticket=ticket, status=landed, by=current_manager()
+    )
+    mapped = (
+        f" (this board has no '{STARTED_STATUS}' column; that is where it maps)"
+        if landed != STARTED_STATUS
+        else ""
+    )
+    click.echo(f"  board: {ticket} -> {landed}{mapped}")
 
 
 def _how_to_register(root: Path) -> str:
@@ -7765,15 +7869,16 @@ def sandbox_status(worker: str) -> None:
     # is waiting is idle only in that sense. The question is said first.
     asked = seen.question
     if isinstance(asked, WorkerQuestion):
-        where = (
-            str(asked.path)
-            if str(seen.status) == "stopped"
-            else f"`rite sandbox pane {worker}`"
-        )
+        from rite_ai.managers.worker_questions import how_to_answer
+
+        stopped = str(seen.status) == "stopped"
+        where = str(asked.path) if stopped else f"`rite sandbox pane {worker}`"
+        answer = how_to_answer(root, worker, asked.sandbox, stopped)
         click.echo(
             f"waiting on a question since {asked.since()} (sandbox "
             f"{seen.status}): {asked.headline()}\n"
-            f"  read it in full: {where}; answer it by attaching"
+            f"  read it in full: {where}\n"
+            f"  to answer: {answer}"
         )
     else:
         # The sentence `rite status` and `rite loop run` print too (S1).

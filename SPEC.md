@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.77 · **Date:** 2026-10-02
+**Version:** 0.24.78 · **Date:** 2026-10-02
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -992,6 +992,21 @@ window requesting more than the sandbox cap is a configuration error: `rite
 schedule set`/`rite doctor` refuse it rather than silently clamping, so the
 mismatch is visible at configuration time instead of producing a schedule that
 quietly never reaches its stated count.
+
+**Enforced at the spawn site as a count, not a switch (0.24.78, SCRUM-28).**
+`rite sandbox start` refused only when a window allowed 0, so `workers: 1` let a
+second and a third Worker start, held back only by the flat cap. It now refuses a
+start that would make this project's running Workers exceed the window's count,
+which is the drop rule above applied to starts: what is running is not stopped,
+and is not added to. The count and the launch run under one per-project lock
+(`.rite/worker-starts.lock`), because both caps are count-then-start and two
+starts at once each counted the same number. Fails closed: where `flock` does not
+exclude, or the lock is still held after 330s (past `yoloai new`'s own 300s),
+nothing starts and the refusal says which. The lock closes the race only if a
+sandbox `yoloai new` has just made is counted by the next start, so that was
+measured rather than assumed: on yoloAI 0.11.0 (seatbelt), a sandbox absent from
+`yoloai ls --active --json` before `yoloai new` was listed there as soon as `new`
+returned (2026-10-02).
 
 ---
 
@@ -2830,6 +2845,15 @@ things rite actually needs to reason about — *is this ticket startable* and *m
 its dependents proceed*. That is a small config addition and a change to one
 method per backend. It is not done, and until it is, §6.2's column names are load-
 bearing in a way a project-agnostic tool's should not be.
+
+**One more place it is load-bearing (0.24.78, SCRUM-27):** `rite sandbox start
+--ticket` moves the ticket to "In Progress" once the Worker has started, through
+the backend's own `move`, because the board read "To Do" for tickets Workers were
+working and a sandboxed Worker holds no board credential to move one itself. A
+board with no such status says so (GitHub maps it to open, and the start says
+where it landed); a refused or failed move is said on stderr and never fails a
+start that happened, since the broker reads a non-zero exit as a Worker that did
+not start.
 
 The **"blocked by" link is different and is a genuine requirement** — §6.1's
 `link()` and the dependency logic that reads it need a real backend-native
@@ -4848,6 +4872,15 @@ also calls, with the no-tty guard INSIDE it: a caller that got to decide whether
 `--yes` counts as somebody being there is a caller that can reintroduce the
 abort below. Init's own way out of the guard is named in init's words, since
 `--follow-module-docs` is this command's.
+
+**It reports to a declared Manager (0.24.78, SCRUM-26).** Without `--manager` it
+wrote `manager: ''` while the project declared one, so the Worker's brief said
+"No Manager assigned yet." and, further down, "Tell your Manager you are free" —
+the contradiction SCRUM-5 fixed for `rite init`. It now makes init's choice, the
+first declared Manager (`rite start`'s priority order, §2.4), and says which; a
+`--manager` naming no declared Manager is refused and nothing is created. A
+project that declares no Manager still gets a Worker reporting to nobody, as
+`rite init` allows, and the command says so.
 
 ⚠ **A Worker init creates is linked to the Manager init declared.** `--manager`
 is this command's; init passed none, so an init-created Worker recorded
@@ -7140,6 +7173,14 @@ wait tick, with or without an Owner session. It reads the inbox WITHOUT
 consuming it: the answer is the Owner's mail too, and taking it would remove
 it from the Manager's next prompt with nobody saying so.
 
+**`rite sandbox status` names the route (0.24.78, SCRUM-25).** It still said
+"answer it by attaching". It now says, by state: reply in the question's Slack
+thread, or on this machine `rite message <owner> "<qid> <answer>"`, which the
+relay matches by the same id, while `rite start <owner>` runs; that the question
+has not been passed on yet, when no id has been raised for it; that a stopped
+Worker cannot be answered; and `yoloai attach` only where no Manager is declared
+to relay.
+
 ⚠ **Isolation, stated rather than implied.** This crosses from the host into
 a sandboxed Worker's exchange directory and **changes no sandbox rule**: no
 flag, no grant, no permission, and nothing in it can be made to turn a
@@ -7592,6 +7633,15 @@ as empty nor calls an unknown verdict "the work is there". Credentials given in
 the environment (tier 1) still build the board without touching the file.
 Measured: in the run, all three commands died with a `CredentialStoreError`
 traceback.
+
+**And the Manager is handed the board it cannot read (0.24.78, SCRUM-29).** Its
+opening prompt told it to work the queue with `rite loop run`, which from inside
+the sandbox can only answer `unknown` for a Jira board. The supervisor reads the
+same board outside before it starts a session, so the instruction now ends with
+what that read found — the verdict, the ready tickets and the blocked ones with
+why — under "The board this cycle", and the opening prompt points there. Only
+from a verdict with a board read behind it: a refinement cycle or one mail
+started gets no such section rather than an invented one.
 
 ### 10.4. Phase 2 — multi-machine credential identity
 
@@ -8204,6 +8254,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.78 — five dogfood fixes on the Worker and Manager paths (SCRUM-25 … SCRUM-29).** §2.7.5, §6.5, §9.6, §9.16.5a and §10.3 gain a paragraph each. **SCRUM-25:** `rite sandbox status` said "answer it by attaching" a release after S30 made the Slack thread the route; `worker_questions.how_to_answer` names the route by state (raised, with the id and `rite message <owner> "<qid> …"`; not yet passed on; stopped; no Manager to relay). **SCRUM-26:** `rite add worker` without `--manager` wrote `manager: ''` in a project with Managers, the SCRUM-5 contradiction on the CLI path; it now links the first declared Manager, refuses an undeclared name, and says when none exists. **SCRUM-27:** `rite sandbox start --ticket` moves the ticket to "In Progress" after the Worker starts, through the backend's own `move`, never failing the start. **SCRUM-28:** a window's `workers` is enforced as a count at the spawn site, and the count and the launch run under a per-project start lock that fails closed; writing the concurrency test found a second race the lock also closes: `worker_home` checks then symlinks, so two starts at once crashed one with `FileExistsError`. **SCRUM-29:** the traceback was already fixed by 0.24.65 (reproduced on this tree and on the installed 0.7.0a5 under a real `sandbox-exec` read deny: degraded, no traceback); what remained was a Manager told to read a board it cannot, and the supervisor now hands it the board it read, under "The board this cycle". The opening prompt also printed a literal `{rite}`, a missing f-string prefix. Tests: `tests/test_sandbox_status_says_how_to_answer.py` (including the printed route run end to end through `rite message` and the real relay), `tests/test_add_worker_reports_to_a_declared_manager.py`, `tests/test_a_started_ticket_moves_on_the_board.py`, `tests/test_the_scheduled_count_is_a_cap.py` (two starts at once, one slot) and `tests/test_a_manager_is_handed_the_board_it_cannot_read.py`. Each fix's mutation goes red on the assertion that names its property; the first race control did not, failing on the crashed thread instead, and the test now pins `worker_home` so the count is what it measures, with the crash its own test.
 
 **Changes in 0.24.77 — starts and stops leave the DM for a status channel (RS1).** §9.16.2, new decision D-114. Robert, 2026-09-29: the DM line "rite: Manager `lead` is running …" on every start and stop "must go to a separate #rite-status channel or something. It's a spam anywhere else" — it crowded the one conversation where rite asks the person things. Starts and stops now go to `slack.status_channel` (default `#rite-status`), each naming its project so one channel serves several (D-114); the DM and the broadcast channel no longer hear them. The status channel is output only: rite never reads it, and the parser refuses the broadcast channel there because that one is read as context. A status channel rite cannot post to leaves the line on the terminal and never falls back to the DM, because that fallback is the spam. Because the DM start post was also how rite learned the DM's id, the relay now remembers the DM and broadcast ids between runs (keyed by Owner and by channel name, so a changed config is relearned) and opens the DM with `conversations.open` where `im:write` is granted; otherwise it posts one line, once per project, saying what the DM is for. The one stop line kept in the DM is a message rite took from Slack and never delivered — that needs the person. Tests: start and stop only in the status channel; a second start posts nothing to the DM or broadcast; with `im:write` the DM is never posted to; the undelivered warning stays in the DM; a status channel rite cannot reach never falls back; config defaults, naming, round-trip, and the broadcast-channel refusal. The two tests that pinned the stop line in the DM and `#all-rite` are rewritten to the new property, not deleted.
 

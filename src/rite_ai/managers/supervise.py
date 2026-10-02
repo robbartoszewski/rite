@@ -1409,8 +1409,12 @@ def _supervise(
                     cycles,
                 )
 
+        # The verdict THIS cycle read, for its board brief; None on a cycle
+        # mail started, which did not read the board (SCRUM-29).
+        briefed = None
         if callable(verdict) and not cause:
             answer = verdict(root)
+            briefed = answer
             if answer in STOP_VERDICTS:
                 why = _reason_to_wait(root, manager, waiting, router, slack, say)
                 stopped = None
@@ -1673,6 +1677,7 @@ def _supervise(
                 delivery_note(waiting_for_it)
                 + refined_now
                 + _refinement_brief(refinement_brief, say)
+                + _board_brief(briefed)
                 + how_to_reply(root, manager)
                 + checkins.instructions(root, manager)
                 + boundary.instruction
@@ -2226,6 +2231,46 @@ def _refinement_brief(brief, say) -> str:
             "\n\n## Refinement: this cycle (rite)\n\nrite could not compose "
             "this cycle's refinement list. Do not refine from memory.\n"
         )
+
+
+def _board_brief(answer) -> str:
+    """This cycle's board as rite read it outside the boundary, as a section
+    of the instruction, or "" (SCRUM-29).
+
+    ⚠ **A Manager was told to read the board with a command that cannot,
+    from where it runs.** Its prompt said to work the queue with `rite loop
+    run`; inside its sandbox a Jira board's credentials are withheld by
+    design (a Manager is not given rite's credentials), so that command can
+    only answer `unknown` there — measured, and before 0.7.0a4 it was a
+    traceback. The supervisor has just read the same board from outside, so
+    the ready and blocked tickets it acted on are handed over here instead.
+
+    Only from a `LoopAnswer` with a basis: a plain verdict, a refinement
+    cycle (whose own brief covers it) or a cycle mail started has no board
+    reading behind it to report, and nothing is invented for it."""
+    basis = getattr(answer, "basis", None)
+    if not basis or len(basis) != 3:
+        return ""
+    from rite_ai.loop import as_of
+
+    verdict, ready, blocked = basis
+    lines = [
+        "",
+        "",
+        "## The board this cycle (rite)",
+        "",
+        f"rite read the board outside your sandbox as of "
+        f"{as_of(getattr(answer, 'read_at', None))}: verdict `{verdict}`.",
+        "Ready to start: " + (", ".join(ready) if ready else "none") + ".",
+    ]
+    for ticket, why in blocked:
+        lines.append(f"Blocked: {ticket} — {why}")
+    lines.append(
+        "Work from this list. `rite loop run` inside your sandbox cannot read a "
+        "board whose credentials you are not given, and answers `unknown` "
+        "there: that is your sandbox, not the board."
+    )
+    return "\n".join(lines) + "\n"
 
 
 def _refinement_heard(refine, messages, say) -> str:
