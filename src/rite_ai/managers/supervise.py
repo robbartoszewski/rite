@@ -1290,9 +1290,8 @@ def _closed_line(root: Path, manager: str, clock):
             f"{mark}{manager!r} is waiting, spending nothing: the schedule "
             "allows no Workers now"
             + (f", and next opens {when}" if when else "")
-            + ". It carries on when the window opens; mail still reaches it"
-            + _heartbeat_words()
-            + ". "
+            + ". It carries on when the window opens; mail still reaches it, "
+            "and no heartbeat fires while the window is closed. "
             "This run has no bound from you; Ctrl-C ends it."
         )
 
@@ -1797,7 +1796,9 @@ def _supervise(
     spin = {"passes": 0, "sessions": 0, "waited": False}
     # The safety net beside the events (Robert, 2026-10-02): every wait of a
     # perpetual run wakes the Manager after `HEARTBEAT_SECONDS` without one.
-    beat = _heartbeat(root, manager, cycles, begin, clock) if perpetual else None
+    beat = (
+        _heartbeat(root, manager, cycles, begin, clock, verdict) if perpetual else None
+    )
 
     while True:
         if perpetual:
@@ -3008,7 +3009,7 @@ def _heartbeat_words() -> str:
     return f", and a heartbeat after {int(every // 60)} minutes with no session"
 
 
-def _heartbeat(root: Path, manager: str, cycles, begin: float, clock):
+def _heartbeat(root: Path, manager: str, cycles, begin: float, clock, verdict=None):
     """`heartbeat` for a perpetual run's waits: once `HEARTBEAT_SECONDS` have
     passed since the last session ended (or since the run began), put a note
     from rite in the Manager's inbox and return what to say; else "".
@@ -3018,10 +3019,18 @@ def _heartbeat(root: Path, manager: str, cycles, begin: float, clock):
     path every other trigger uses: one place decides that a session starts,
     and the session it starts is told why. Between heartbeats and events no
     Manager session runs. Read at each check, so a test or a later config
-    key sets the interval in one place."""
+    key sets the interval in one place.
+
+    ⚠ **Never in a closed schedule window** (Robert, 2026-10-02): a closed
+    window is the person saying "not now", and starts no session for a
+    heartbeat. Gated here rather than at the closed-window wait, so a routed
+    or stalled wait during a closed window is covered too. `verdict` is the
+    loop's own, read only when a beat is due, then again at the board's
+    cadence until the window opens (when `_closed_wake` starts a session
+    anyway). An idle board keeps its heartbeat."""
     from rite_ai.managers.telling import tell_manager
 
-    marks = {"sent": float("-inf")}
+    marks = {"sent": float("-inf"), "closed_at": float("-inf")}
 
     def beat() -> str:
         last = begin
@@ -3032,6 +3041,12 @@ def _heartbeat(root: Path, manager: str, cycles, begin: float, clock):
         every = HEARTBEAT_SECONDS
         if now - max(last, marks["sent"]) < every:
             return ""
+        if callable(verdict):
+            if now - marks["closed_at"] < BOARD_RECHECK_SECONDS:
+                return ""
+            if verdict(root) == "closed":
+                marks["closed_at"] = now
+                return ""
         marks["sent"] = now
         minutes = int(every // 60)
         try:

@@ -648,7 +648,7 @@ class TestAHeartbeatWakesTheManager:
     def test_the_interval_is_an_hour(self):
         assert DEFAULT_HEARTBEAT == 3600.0
 
-    @pytest.mark.parametrize("verdict", ["idle", "closed", "waiting-on-user"])
+    @pytest.mark.parametrize("verdict", ["idle", "waiting-on-user"])
     def test_a_run_with_no_events_wakes_at_the_heartbeat(self, patient, verdict):
         """🔴 Before, each of these waited the whole five virtual hours with
         no session at all: a missed event stayed missed until Ctrl-C."""
@@ -660,6 +660,37 @@ class TestAHeartbeatWakesTheManager:
             # Not sooner (no spin), and not much later (the wake is on time).
             assert DEFAULT_HEARTBEAT <= after - before < DEFAULT_HEARTBEAT + 120
         assert all("heartbeat" in p for p in prompts), prompts
+
+    def test_a_closed_window_starts_no_heartbeat_session(self, patient):
+        """Robert, 2026-10-02: a closed window is "not now", so the
+        heartbeat does not fire in it. Five virtual hours, no events, no
+        session."""
+        starts, _ = _heartbeat_run(patient, lambda: _answer("closed"))
+        assert patient["t"] >= HORIZON
+        assert starts == [], f"{len(starts)} sessions in a closed window"
+
+    def test_the_gate_reads_the_window_when_a_beat_is_due(self, patient):
+        """The gate is in the heartbeat, so EVERY wait honours it (a routed or
+        stalled one during a closed window too): due, closed, no note; open
+        again, the note goes."""
+        root = patient["root"]
+        sup.HEARTBEAT_SECONDS = DEFAULT_HEARTBEAT
+        clock = {"t": DEFAULT_HEARTBEAT}
+        window = {"now": "closed"}
+        beat = sup._heartbeat(
+            root, OWNER, [], 0.0, lambda: clock["t"], lambda r: _answer(window["now"])
+        )
+        assert beat() == ""
+        assert not mailbox.waiting(root, OWNER, mailbox.INBOX)
+        window["now"] = "idle"
+        clock["t"] += BOARD_RECHECK_SECONDS
+        assert beat().startswith("heartbeat:")
+        assert mailbox.waiting(root, OWNER, mailbox.INBOX)
+
+    def test_the_closed_line_promises_no_heartbeat(self, patient):
+        sup.HEARTBEAT_SECONDS = DEFAULT_HEARTBEAT
+        line = sup._closed_line(patient["root"], OWNER, lambda: 0.0)()
+        assert "no heartbeat fires while the window is closed" in line
 
     def test_a_manager_events_keep_busy_gets_no_heartbeat(self, patient):
         """Counted from the last session: mail every 40 minutes means the

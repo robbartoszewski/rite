@@ -15,7 +15,8 @@ own code watches, and starts a session only for an event (your `rite message`
 or `rite connect`, a Slack message, your answer to its `rite ask`, a Worker's
 or another Manager's mail, new ready work, a freed Worker slot, the window
 opening), and, as a safety net in case rite missed something, once an hour
-with no session at all. Faults still end it (a deadlocked or unreadable
+with no session at all, except while your schedule's window is closed. Faults
+still end it (a deadlocked or unreadable
 board, a verdict rite does not recognise).
 
 **A Worker asked for when no slot is free is queued, not dropped.** Before, it
