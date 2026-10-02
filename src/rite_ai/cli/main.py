@@ -2043,8 +2043,9 @@ def local_step(manager: str, ticket: str) -> None:
     and reported nothing, which is what this replaces.
 
     \b
-    ⚠ A plan arrives approved or nothing runs. rite has no decomposer yet, so
-    a decomposition is authored by hand and approved by a plan-review holder.
+    ⚠ A plan arrives approved or nothing runs. `rite local decompose` writes
+    the plan (PENDING); a plan-review holder approves it before any subtask
+    runs.
 
     Examples:
       rite local step small KAN-7
@@ -2074,6 +2075,55 @@ def local_step(manager: str, ticket: str) -> None:
         click.echo("  verify said:")
         for line in step.verify_output.splitlines()[:20]:
             click.echo(f"    {line}")
+
+
+@local.command("decompose")
+@click.argument("manager")
+@click.argument("ticket")
+@click.option(
+    "--text",
+    default="",
+    help="The ticket's text, the decomposer's input. Omitted, the model is "
+    "asked to decompose by id alone, which is weaker — pass the ticket body.",
+)
+def decompose_command(manager: str, ticket: str, text: str) -> None:
+    """Author a PENDING decomposition of TICKET with decompose-holder MANAGER.
+
+    \b
+    ⚠ **It writes PENDING, never APPROVED** (RL-6): a plan-review holder on a
+    different engine approves it before `rite local step` runs any subtask. The
+    model's bytes are never trusted — a plan that fails validation is rejected
+    whole (never repaired, never run in part), the decomposer is asked again
+    with the reasons, and on exhaustion the ticket escalates rather than falling
+    back to a free-form run.
+
+    Examples:
+      rite local decompose planner KAN-7 --text "Add the login route and..."
+    """
+    from rite_ai.local.decompose import decompose_ticket
+
+    root = _require_project_root()
+    result = decompose_ticket(root, manager, ticket, ticket_text=text)
+    if result.problem:
+        click.echo(f"no plan written: {result.problem}", err=True)
+        raise SystemExit(1)
+    if result.wrote:
+        click.echo(f"{ticket}: decomposition written (pending approval)")
+        for warning in result.warnings:
+            click.echo(f"  ⚠ {warning}")
+        return
+    # Rejected or escalated: nothing was written, deliberately.
+    where = "converged on failure" if result.converged_early else "escalates"
+    click.echo(
+        f"{ticket}: no valid plan after {result.attempts} attempt(s); it "
+        f"{where} (RL-68) — nothing was written",
+        err=True,
+    )
+    for reason in result.reasons:
+        click.echo(f"  - {reason}", err=True)
+    for line in result.lines:
+        click.echo(f"  {line}", err=True)
+    raise SystemExit(1)
 
 
 @cli.group()

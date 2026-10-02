@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### The decomposer writes the plan, and the model never approves its own
+
+`rite local decompose <manager> <ticket>` is new: the Manager holding the
+decompose duty is asked for a decomposition, and rite — not the model — decides
+whether it is one. A candidate that will not parse, cites a spec unit that is
+not on disk, slices one subtask or more than eight, puts a scope path outside
+the repo, names an author that holds no decompose duty, or marks itself approved
+is refused whole; the decomposer is asked again with the reasons, and on
+exhaustion the ticket escalates rather than running free-form or on a degraded
+plan. The plan is written PENDING — a plan-review holder on a different engine
+approves it before `rite local step` runs a subtask.
+
+A manager or worker may now carry a `decomposer: {model: ...}` — the model it
+plans its approach with, separate from the one it implements with. It defaults
+by type (Opus for a Claude unit, the unit's own model for a local one), so the
+common case stays empty.
+
 ### Starts and stops are no longer said in your DM
 
 Your DM with rite is where a Manager asks you things. It used to fill up with

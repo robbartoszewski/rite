@@ -3,7 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from rite_ai.config.managers import ManagerRole
+from rite_ai.config.managers import (
+    CLAUDE_DECOMPOSER_DEFAULT,
+    DecomposerConfig,
+    ManagerRole,
+)
 
 
 @dataclass
@@ -592,6 +596,20 @@ class WorkerManifest:
     # follows what it was told to follow, and that is a decision somebody
     # made rather than a file that happened to exist.
     follow_module_docs: list[str] = field(default_factory=list)
+    # Level 2 (DECOMPOSER_DESIGN 1.7, RL-61): the model this Worker plans its
+    # own APPROACH with, separate from the Claude model it implements with.
+    # Empty means the type default — Opus, since a Worker is Claude today
+    # (`worker_decomposition_model`).
+    decomposer: DecomposerConfig = field(default_factory=DecomposerConfig)
+
+
+def worker_decomposition_model(worker: WorkerManifest) -> str:
+    """The model a Worker plans its own approach with (Level 2, RL-61).
+
+    Its own `decomposer.model` when set, else Opus — a Worker is a Claude
+    sandbox today (`sandbox/__init__.py` builds `--agent claude` as a literal),
+    so the type default is the Claude one."""
+    return worker.decomposer.model or CLAUDE_DECOMPOSER_DEFAULT
 
 
 @dataclass
