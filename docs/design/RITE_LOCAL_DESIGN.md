@@ -533,8 +533,9 @@ cannot.
 
 **Strategies choose among safe behaviours. None can turn a gate off.** Plan
 review (RL-6), mechanical verify (RL-7), recomposition verify (RL-8), fail-closed
-counters (SPEC §5.1.1) and local engines never pushing (RL-11) are properties, and
-there is deliberately no strategy for any of them. "rite fits a solo developer"
+counters (SPEC §5.1.1) and no engine pushing by itself (RL-11 as superseded,
+2026-10-02 — the push is the harness's, on a validated request, whatever the
+engine) are properties, and there is deliberately no strategy for any of them. "rite fits a solo developer"
 must not come to mean "rite is unsafe for a solo developer".
 
 ### 8.1. Subjects and values
@@ -1150,7 +1151,7 @@ show it wrong.
 | RL-8 | The whole-versus-parts failure | **Recomposition verify: the parent ticket's verify runs on the combined branch; a failure returns to plan review, not to the decomposer** | Catches the confidently-wrong decomposition, whose parts all pass. Sending it back to the decomposer would ask the author of the mistake to find it. |
 | RL-9 | Step review | **Advisory, and stateless: a fresh context with the plan item, the diff and the verify output** | It shares the plan's blind spots, so it cannot gate. Statelessness keeps each review inside a small context window (D-29). |
 | RL-10 | Repeated failure | **A per-subtask attempt budget escalates up; a threshold of failed subtasks marks the decomposition suspect and returns it to plan review; returns to plan review per parent ticket, from any cause, are budgeted and escalate to the lead's person when spent. Only work counts — infrastructure faults are not attempts (RL-47)** | Retrying a bad plan harder only spends local compute proving it is bad. |
-| RL-11 | Pushing | **Local engines commit to a local task branch and stop. `integrate` — a Claude session or a person — pushes and opens the PR** | SPEC §5.1.1 forbids rite's code a push; the harness is rite's code. It also places the terminating check before anything leaves the machine. |
+| RL-11 | Pushing | ⚠ **SUPERSEDED (Robert, 2026-10-02). Any engine may hold `integrate`, including a local one.** The holder posts the same two-field request a Claude Manager posts (`publishing/requests.py`); rite's harness validates it and performs the push (`publishing/deliver.py`). A local engine still never runs `git push` itself. | **The original reason expired before it was noticed.** It read *"SPEC §5.1.1 forbids rite's code a push; the harness is rite's code"* — written 2026-09-19, while PB1 gave `rite deliver` a push on 2026-09-29 (`4242d48`), which §5.1.1 now states and `test_blast_radius` allows by name (`ALLOWED_GIT`). §5.1.1's exception already describes the shape rite uses: a push as the mechanical consequence of checks that passed. The second reason — the terminating check belongs before anything leaves the machine — is unchanged and is what the request path satisfies by construction, which is why it is the route and the Manager's own repo-scoped token is not. Analysis: `OL_WHY_A_LOCAL_MANAGER_CANNOT_PUSH.md`. |
 | RL-12 | What the harness is for | **Local engines only. The `claude` engine keeps spawning the real `claude` CLI; rite never calls an Anthropic API** | The sanctioned path stays exactly as it is. The harness has no Anthropic dimension to get wrong. |
 | RL-13 | Build or adopt the agent | **Adopt — opencode or aider under yoloAI, against a local endpoint — and orchestrate around it. Build only if the spike shows neither can be held to the contracts** | A reliable small-model tool loop is the riskiest thing here, and two already exist inside a sandbox rite already drives. |
 | RL-14 | Where inference runs | **On the host, behind an OpenAI-compatible endpoint; tool execution sandboxed** | Keeps GPU access out of the sandbox problem, and requires an endpoint rather than a runtime. |
