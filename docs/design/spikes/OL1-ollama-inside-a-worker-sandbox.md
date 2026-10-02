@@ -86,12 +86,27 @@ Sessions DB (sqlite):  <root>/data/sessions/sessions.db
 Logs dir:              <root>/state/logs
 ```
 
-⚠ **It is not only a workaround — it closes a known defect.**
-`goose_environment`'s docstring records a Manager declared `qwen3:8b` that
-ran `qwen3-vl:8b-instruct`, because Goose silently fell back to the
-operator's global `~/.config/goose/config.yaml`. A path root rite owns means
-there is no operator config to fall back TO, so the environment rite places
-is the only configuration in play.
+⚠ **CORRECTION, 2026-10-02, same day.** This note first said the variable
+"also closes a known defect" — the Manager that declared `qwen3:8b` and ran
+`qwen3-vl:8b-instruct` from the operator's global
+`~/.config/goose/config.yaml`. **That reading was wrong twice over, and
+acting on it would have broken working Managers.**
+
+- The model-mismatch defect is **already closed** by `GOOSE_MODEL` and
+  `GOOSE_PROVIDER`, which win over `config.yaml`. A path root removes the
+  fallback's *source* as well; it is not what fixed it.
+- **A Manager must not be given one.** `enclosure.ENGINE_HOME_IS_THE_OPERATORS`
+  records a measurement: a local Manager's profile grants `~/.config/goose`
+  and `~/.local/share/goose` by exact path instead of redirecting `HOME`,
+  because redirecting `HOME` took Claude Code's login away from every Claude
+  Manager. That same store **holds the conversation handle each resumed cycle
+  names**. Moving the root would hand a running Manager an empty session store
+  and lose the conversation it is part-way through.
+
+So `GOOSE_PATH_ROOT` is a **Worker-only** value: required inside a sandbox,
+deliberately absent on the host. Removing the fallback source is a genuine
+second benefit, and it is worth having inside a Worker — it is not worth a
+Manager's conversation.
 
 ## 3. The turn that worked
 
@@ -128,14 +143,52 @@ window rite pinned is read back correctly from inside.
   measured separately — loopback reach, the Goose tool loop, and rite's
   preflight — but `run_subtask` end to end inside a sandbox needs a project
   and an APPROVED plan in there, which is the automation work itself.
-- **Where `GOOSE_PATH_ROOT` should point.** The probe used `/tmp/goose-root`
-  because it is writable; `/tmp` is granted on both platforms, so that is a
-  convenient location and not an argued one. A per-Worker root under the
-  sandbox's own writable state is the likely answer and is a design choice,
-  not a measurement.
+- ~~Where `GOOSE_PATH_ROOT` should point.~~ **Measured afterwards, same day —
+  see section 5.**
 - **Concurrency.** One sandbox, one model. Two Ollama Workers against one
   32 GB daemon is a sizing question this says nothing about.
 - **Whether the daemon should be reachable at all.** This note measures that
   it IS. A Worker that can reach `localhost` can reach any other loopback
   service on the machine, which is a property of the yoloAI profile and not
   something rite grants or can revoke here.
+
+---
+
+## 5. Where a Worker's path root points · measured after section 4
+
+The first probe used `/tmp/goose-root` only because it is writable. **That is
+the wrong place, for a measured reason:** the temp root is granted to every
+sandbox on this machine, so one Worker's Goose session store — its
+conversation — would be readable by another. That is the leak
+`enclosure.engine_tmp` already measured for a Manager, arriving by a second
+road.
+
+Candidates, probed from inside `ol2-w1`:
+
+| candidate | inside a Worker |
+|---|---|
+| `<sandbox>/rw/rite`, `<sandbox>/rw/goose` | **writable** |
+| `$HOME/.rite-goose`, `$HOME/.cache/rite` | denied |
+| `$TMPDIR/rite-goose`, `/tmp/rite-goose` | writable — **and shared, so rejected** |
+| the workspace | writable — **rejected**, see below |
+
+**The sandbox's own state directory is the answer**, and it was measured
+isolated rather than assumed. From `ol2-w1`, against `ol2-w2`:
+
+```
+list w2's rw layer    ->  the directory name is visible
+write into it         ->  denied
+read w2's work/       ->  Operation not permitted
+```
+
+So a root under the sandbox's own layer is per-Worker by construction, stable
+across `exec` calls, destroyed with the sandbox, and outside the repo — which
+the workspace is not: Goose state written there would appear in `yoloai diff`
+and in the tree the committer inspects, the same objection `GooseAgent.run`
+already makes about where it puts its instruction file.
+
+⚠ **It does couple rite to yoloAI's on-disk layout.** The mitigation is that
+the path is DERIVED, not hardcoded: `yoloai sandbox <name> info --json`
+reports `config_path` as `<sandbox>/ro/runtime-config.json`, so the layer is
+its grandparent plus `rw`. Only the `ro`/`rw` sibling convention is assumed,
+in one function, so a layout change is a one-line fix rather than a hunt.
