@@ -299,6 +299,119 @@ class Minted:
     repositories: list[str] = field(default_factory=list)
 
 
+_LEVEL = {"read": 1, "write": 2, "admin": 3}
+
+
+def _headers(bearer: str) -> dict:
+    return {
+        "Authorization": bearer,
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+
+def _installation(app_id: str, installation_id: str, private_key_pem: str, get=None):
+    """GitHub's record of the installation (`GET /app/installations/{id}`),
+    or None when it cannot be read. Its `permissions` are what the
+    installation has actually GRANTED, which is not always what the App asks
+    for: a changed App waits for the installation to accept the update."""
+    if get is None:
+        import httpx
+
+        def get(u, h):
+            r = httpx.get(u, headers=h, timeout=30)
+            return r.status_code, r.text
+
+    try:
+        jwt = _app_jwt(app_id, private_key_pem)
+        status, text = get(
+            f"{GITHUB_API}/app/installations/{installation_id}",
+            _headers(f"Bearer {jwt}"),
+        )
+        return json.loads(text) if status == 200 else None
+    except Exception:  # noqa: BLE001 - a diagnosis that cannot run is said
+        return None
+
+
+def _settings_url(installation_id: str, record: dict | None) -> str:
+    account = (record or {}).get("account") or {}
+    if account.get("type") == "Organization" and account.get("login"):
+        return (
+            f"https://github.com/organizations/{account['login']}/settings/"
+            f"installations/{installation_id}"
+        )
+    return f"https://github.com/settings/installations/{installation_id}"
+
+
+def _why_refused(
+    status: int,
+    message: str,
+    app_id: str,
+    installation_id: str,
+    private_key_pem: str,
+    get=None,
+) -> str:
+    """What to do about a refused mint, beyond GitHub's own words.
+
+    🔴 SCRUM-19. A 422 "The permissions requested are not granted to this
+    installation" was relayed as it came, which names no permission and no
+    remedy. rite asks for `TOKEN_PERMISSIONS` explicitly, so the missing
+    one is the difference between that and what the installation granted,
+    and rite can read the grant with the same JWT. When it cannot, it says
+    which permission is usually the one."""
+    if status != 422 and "not granted" not in message.lower():
+        return ""
+    record = _installation(app_id, installation_id, private_key_pem, get=get)
+    where = _settings_url(installation_id, record)
+    granted = (record or {}).get("permissions")
+    if isinstance(granted, dict):
+        missing = [
+            f"{name}: {level}"
+            + (f" (it has {granted[name]})" if name in granted else " (not granted)")
+            for name, level in TOKEN_PERMISSIONS.items()
+            if _LEVEL.get(str(granted.get(name)), 0) < _LEVEL[level]
+        ]
+        if missing:
+            return (
+                f" The installation does not grant {', '.join(missing)}. Give "
+                f"the App that permission, then accept the installation's "
+                f"pending permission update at {where}; until the update is "
+                f"accepted, the installation keeps its old permissions."
+            )
+        return (
+            f" The installation grants every permission rite asks for "
+            f"({', '.join(f'{k}: {v}' for k, v in TOKEN_PERMISSIONS.items())}), "
+            f"so the refusal is about the repositories: check that the "
+            f"installation at {where} includes the repository rite names."
+        )
+    return (
+        f" rite could not read what the installation grants. It asks for "
+        f"{', '.join(f'{k}: {v}' for k, v in TOKEN_PERMISSIONS.items())}; the one "
+        f"usually missing is issues: write. Give the App that permission, then "
+        f"accept the installation's pending permission update at {where}."
+    )
+
+
+def _revoke(token: str, delete=None) -> str:
+    """Revoke an installation token at once (`DELETE /installation/token`).
+    "" when revoked, otherwise why not; the token still lapses within the
+    hour."""
+    if delete is None:
+        import httpx
+
+        def delete(u, h):
+            r = httpx.delete(u, headers=h, timeout=30)
+            return r.status_code, r.text
+
+    try:
+        status, text = delete(
+            f"{GITHUB_API}/installation/token", _headers(f"token {token}")
+        )
+    except Exception as e:  # noqa: BLE001 - said, never raised
+        return f"{type(e).__name__}: {e}"
+    return "" if status == 204 else f"HTTP {status}"
+
+
 def _mint(
     app_id: str,
     installation_id: str,
@@ -306,6 +419,7 @@ def _mint(
     repositories: list[str],
     *,
     post=None,
+    get=None,
     now: float | None = None,
 ) -> Minted:
     """Mint a token for `repositories` only, with `TOKEN_PERMISSIONS` only."""
@@ -333,12 +447,82 @@ def _mint(
             message = json.loads(text).get("message", text)
         except ValueError:
             message = text
-        raise _MintError(f"GitHub refused to mint a token (HTTP {status}): {message}")
+        raise _MintError(
+            f"GitHub refused to mint a token (HTTP {status}): "
+            f"{str(message).rstrip('.')}."
+            + _why_refused(
+                status, str(message), app_id, installation_id, private_key_pem, get
+            )
+        )
     data = json.loads(text)
     expires = datetime.datetime.fromisoformat(
         data["expires_at"].replace("Z", "+00:00")
     ).timestamp()
     return Minted(token=data["token"], expires_at=expires, repositories=repositories)
+
+
+@dataclass
+class AppCheck:
+    """What `rite doctor --network` learned by minting a throwaway token.
+
+    `kind` is `ok`, `refused` (GitHub or the key said no: a problem, with
+    what to do) or `unknown` (could not ask, which is said and not counted:
+    a network that is down does not make an App broken)."""
+
+    kind: str
+    detail: str
+
+
+def check_app(config, *, get_secret=None, post=None, get=None, delete=None):
+    """🔴 SCRUM-16. Mint a token exactly as `rite start` does, then revoke it.
+
+    `rite doctor` reported nothing about `github_app`, so a permission the
+    installation had not granted was first met when `rite start` refused the
+    Manager. This takes the same path `open_access` takes (`_mint`, with
+    `TOKEN_PERMISSIONS` and the same repositories), so a doctor that passes
+    means a start that mints. None when no App is configured."""
+    from rite_ai.credentials.store import get_scoped
+
+    app_cfg = getattr(config, "github_app", None)
+    if not (app_cfg and app_cfg.app_id):
+        return None
+    if get_secret is None:
+
+        def get_secret(key):
+            return get_scoped(key, config.credentials)
+
+    repos = [r for r in [app_cfg.repository or config.ticket_backend.repo] if r]
+    if not repos:
+        return AppCheck(
+            "refused",
+            "github_app names no repository, and ticket_backend.repo is empty",
+        )
+    key = get_secret("github_app_key") or ""
+    if not key:
+        return AppCheck(
+            "refused",
+            "github_app is configured but no github_app_key is stored: "
+            "`rite credential set github_app_key --stdin < app.pem`",
+        )
+    try:
+        got = _mint(
+            app_cfg.app_id, app_cfg.installation_id, key, repos, post=post, get=get
+        )
+    except _MintError as e:
+        return AppCheck("refused", str(e))
+    except Exception as e:  # noqa: BLE001 - could not ask, which is not "no"
+        return AppCheck("unknown", f"{type(e).__name__}: {e}")
+    unrevoked = _revoke(got.token, delete=delete)
+    return AppCheck(
+        "ok",
+        f"minted a token for {', '.join(repos)} with "
+        + ", ".join(f"{k}: {v}" for k, v in TOKEN_PERMISSIONS.items())
+        + (
+            ", and revoked it"
+            if not unrevoked
+            else f"; it could not be revoked ({unrevoked}) and lapses within the hour"
+        ),
+    )
 
 
 def _own_gh_config(root: Path, manager: str, home: Path | None = None) -> Path:
@@ -438,6 +622,7 @@ class Access:
     token: str = ""
     home: Path | None = None
     post: object = None
+    get: object = None
 
     def secrets(self) -> list[str]:
         return [self.token] if self.token else []
@@ -464,7 +649,14 @@ class Access:
             # decided "5 minutes before expiry" signed a JWT ~55 minutes in the
             # future and GitHub answered `401 Bad credentials`, so the refresh
             # path had never minted anything real.
-            got = _mint(app_id, installation_id, self.app_key, repos, post=self.post)
+            got = _mint(
+                app_id,
+                installation_id,
+                self.app_key,
+                repos,
+                post=self.post,
+                get=self.get,
+            )
         except _MintError as e:
             when = time.strftime("%H:%M", time.localtime(self.expires_at))
             return [
@@ -501,6 +693,7 @@ def open_access(
     get_secret=None,
     home: Path | None = None,
     post=None,
+    get=None,
 ) -> tuple[Access | None, str]:
     """Set up this run's credentials. `(access, refusal)`.
 
@@ -523,7 +716,7 @@ def open_access(
     _own_gh_config(root, manager, home)
     if not wants_app:
         return None, ""
-    access = Access(root=root, manager=manager, home=home, post=post)
+    access = Access(root=root, manager=manager, home=home, post=post, get=get)
     repos = [app_cfg.repository or config.ticket_backend.repo]
     repos = [r for r in repos if r]
     key = get_secret("github_app_key") or ""

@@ -788,6 +788,65 @@ def remember_namespace(namespace: str, remotes: list[str], project: str = "") ->
 
 
 @dataclass(frozen=True)
+class PruneCandidate:
+    """A credential namespace no project rite knows on this machine uses."""
+
+    namespace: str
+    names: tuple[str, ...]
+    """Every stored or registered account under it, in full."""
+    last_set: float
+    project: str = ""
+    remotes: tuple[str, ...] = ()
+    """What `namespaces.json` recorded for it: a hint that a real project,
+    one rite has not seen on this machine, may still use it."""
+
+
+def prune_candidates(used: set[str]) -> list[PruneCandidate]:
+    """🔴 SCRUM-18. Namespaces holding credentials that no known project uses.
+
+    Test and scratch runs left namespaces in the real store and registry
+    (`test-credential-set-does-*`, `rte2e-scratch-*`, `acme-1a2b3c`), and
+    nothing removed them. This only FINDS them. `used` is every namespace a
+    project rite knows uses; a project rite has never seen on this machine
+    is not in it, which is why removal is never automatic (the CLI makes a
+    person name each namespace). Unscoped, machine-global entries are never
+    candidates. Raises `RegistryUnreadable` or `CredentialStoreError` rather
+    than reading an unreadable store as nothing to prune."""
+    from rite_ai.credentials import file_store
+
+    registry = _read_registry()
+    names: dict[str, float] = dict(registry)
+    for key in file_store._read(file_store.store_path()):
+        service, _, account = key.partition(":")
+        if service == SERVICE_NAME and account:
+            names.setdefault(account, 0.0)
+    try:
+        recorded = json.loads(_namespaces_path().read_text())
+    except (OSError, json.JSONDecodeError):
+        recorded = {}
+    if not isinstance(recorded, dict):
+        recorded = {}
+    grouped: dict[str, list[str]] = {}
+    for name in names:
+        ns, sep, _ = name.partition(NAMESPACE_SEPARATOR)
+        if sep and is_valid_namespace(ns) and ns not in used:
+            grouped.setdefault(ns, []).append(name)
+    found = []
+    for ns, members in sorted(grouped.items()):
+        entry = recorded.get(ns) if isinstance(recorded.get(ns), dict) else {}
+        found.append(
+            PruneCandidate(
+                namespace=ns,
+                names=tuple(sorted(members)),
+                last_set=max(float(names[m] or 0) for m in members),
+                project=str(entry.get("project", "")),
+                remotes=tuple(entry.get("remotes") or ()),
+            )
+        )
+    return found
+
+
+@dataclass(frozen=True)
 class NamespaceMatch:
     namespace: str
     project: str

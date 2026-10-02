@@ -214,6 +214,22 @@ def _run_gate(
     if candidate.exists():
         user_config_path = candidate
 
+    # 🔴 SCRUM-17. gitleaks applies a `.gitleaksignore` at the root of what
+    # it scans by itself, and nothing turns that off: measured on 8.30.1, it
+    # hid a token even with `--gitleaks-ignore-path` pointed elsewhere. Every
+    # suppression rite honours carries a reason (`.rite/gitleaksignore`); one
+    # in that file carries none, and rite cannot see which findings it hid.
+    # So the gate cannot vouch for the scan, and says how to make it able to.
+    stray_ignore = root / ".gitleaksignore"
+    if stray_ignore.exists():
+        errors.append(
+            f"{stray_ignore} exists, and gitleaks applies it on its own, so "
+            "any finding it lists is hidden without a reason and rite cannot "
+            "tell which. Move each entry to .rite/gitleaksignore with the "
+            "reason it is safe (`rite publish check` prints the fingerprint "
+            "and the format), then remove .gitleaksignore."
+        )
+
     all_findings: list[Finding] = []
 
     if binary is not None:
@@ -527,3 +543,58 @@ def format_report(report: GateReport) -> str:
     if report.outcome == "clean":
         lines.append("\nclean")
     return "\n".join(lines)
+
+
+def ruleset(root: Path, config: ProjectConfig) -> tuple[str, str]:
+    """`(line, problem)`: which rules the gate applies here, for `rite doctor`.
+
+    🔴 SCRUM-17. Doctor called the gate "active" and said nothing of WHAT it
+    scans for, while the config named a `.rite/gitleaks.toml` that does not
+    exist. The missing file was never the gap (gitleaks' defaults apply,
+    now passed explicitly); the gap was that the effective rules could come
+    from outside rite. This names them, and `problem` is non-empty only when
+    the scan cannot be vouched for."""
+    import tomllib
+
+    declared = len(config.publish_gate.scan_patterns)
+    extra = (
+        f", plus {declared} pattern(s) from config.yaml" if declared else ""
+    ) + f", plus rite's {len(BUILTIN_PATH_PATTERNS)} built-in path rules"
+    stray = root / ".gitleaksignore"
+    if stray.exists():
+        return (
+            f"publish gate rules: CANNOT VOUCH — {stray} exists, and gitleaks "
+            "applies it on its own, hiding what it lists with no reason. Move "
+            "its entries to .rite/gitleaksignore with reasons, then remove it",
+            f"{stray} would hide findings without a reason",
+        )
+    named = root / config.publish_gate.gitleaks_config
+    if not named.exists():
+        return (
+            "publish gate rules: gitleaks' default ruleset, passed by rite "
+            f"explicitly (no {config.publish_gate.gitleaks_config}, which is "
+            f"optional){extra}",
+            "",
+        )
+    try:
+        parsed = tomllib.loads(named.read_text())
+    except (OSError, ValueError) as e:
+        return (
+            f"publish gate rules: {named} cannot be read ({e}), so gitleaks "
+            "will refuse to scan",
+            f"{named} cannot be read",
+        )
+    extends = (parsed.get("extend") or {}).get("useDefault") is True
+    return (
+        (
+            f"publish gate rules: {config.publish_gate.gitleaks_config}, "
+            f"extending gitleaks' default ruleset{extra}"
+        )
+        if extends
+        else (
+            f"publish gate rules: {config.publish_gate.gitleaks_config} REPLACES "
+            "gitleaks' default ruleset (it has no `[extend] useDefault = true`), "
+            f"so only its own rules run{extra}"
+        ),
+        "",
+    )
