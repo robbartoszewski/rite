@@ -1169,6 +1169,72 @@ def start_worker(
         handle.close()
 
 
+def sandbox_state_dir(name: str, binary: str = "") -> Path | None:
+    """The sandbox's own writable layer, or None when it cannot be found.
+
+    ⚠ **Asked of yoloAI rather than constructed.** `yoloai files <name> path`
+    prints the host path of the sandbox's exchange directory — a documented
+    command whose whole purpose is to hand a caller a path into the sandbox —
+    and the layer is its parent. An earlier version of this derived the same
+    place from `sandbox info --json`'s `config_path`, which works and is
+    incidental: that field exists to name a config file, not to describe the
+    layout. One documented accessor, in one function, so a layout change is a
+    one-line fix rather than a hunt.
+
+    **What it is for.** A local Worker's Goose needs somewhere writable for its
+    config, its session sqlite and its logs, and measured (OL1) it has nowhere
+    under the home: `~/.local` is granted READ and not WRITE inside a Worker.
+    This layer is writable, per-sandbox, destroyed with the sandbox, and was
+    measured ISOLATED — `ol2-w1` could neither read `ol2-w2`'s work nor write
+    into its layer.
+
+    ⚠ Not the workspace, and not the temp root. The workspace would put Goose's
+    state in `yoloai diff` and in the tree the committer inspects, which is the
+    objection `GooseAgent.run` already makes about its instruction file; the
+    temp root is granted to every sandbox here, so one Worker's session store —
+    its conversation — would be readable by another, the leak
+    `managers.enclosure.engine_tmp` measured for a Manager.
+    """
+    resolved = binary or shutil.which("yoloai")
+    if not resolved:
+        return None
+    try:
+        proc = subprocess.run(
+            [resolved, "files", name, "path"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=30,
+            stdin=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    printed = (proc.stdout or "").strip().splitlines()
+    if not printed:
+        return None
+    exchange = Path(printed[-1].strip())
+    return exchange.parent if exchange.name else None
+
+
+def goose_path_root(name: str, binary: str = "") -> str:
+    """`GOOSE_PATH_ROOT` for this Worker's sandbox, or "" when unknown.
+
+    Under a `rite/` directory inside the layer rather than beside yoloAI's own
+    `files/`, `home/`, `logs/` and `cache/`: rite's files go in rite's own
+    namespace, so a future yoloAI directory called `goose` cannot collide with
+    this one.
+
+    "" is returned rather than a guess, and the caller must treat it as a
+    refusal to start the turn: a Goose with no writable root does not fail
+    halfway, it panics before reaching the model (OL1), and a root pointing
+    somewhere wrong would be worse than no root at all.
+    """
+    layer = sandbox_state_dir(name, binary)
+    return str(layer / "rite" / "goose") if layer is not None else ""
+
+
 LOCAL_WORKER_AGENT = "idle"
 """The yoloAI agent a LOCAL Worker's sandbox runs, and why it is not the
 engine's own name (OL5, the ruled pattern D-CU-2).

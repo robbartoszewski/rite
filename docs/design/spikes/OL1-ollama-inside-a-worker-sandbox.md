@@ -187,8 +187,57 @@ the workspace is not: Goose state written there would appear in `yoloai diff`
 and in the tree the committer inspects, the same objection `GooseAgent.run`
 already makes about where it puts its instruction file.
 
-⚠ **It does couple rite to yoloAI's on-disk layout.** The mitigation is that
-the path is DERIVED, not hardcoded: `yoloai sandbox <name> info --json`
-reports `config_path` as `<sandbox>/ro/runtime-config.json`, so the layer is
-its grandparent plus `rw`. Only the `ro`/`rw` sibling convention is assumed,
-in one function, so a layout change is a one-line fix rather than a hunt.
+⚠ **It does couple rite to yoloAI's on-disk layout**, and there is a better
+accessor than the one this note first named. `yoloai files <name> path` prints
+the host path of the sandbox's exchange directory — a documented command whose
+whole purpose is to hand a caller a path into the sandbox — so the layer is
+simply its parent:
+
+```
+yoloai files ol5-w1 path   ->  .../library/sandboxes/ol5-w1/rw/files
+layer                      ->  .../library/sandboxes/ol5-w1/rw
+```
+
+The first version derived the same place from `sandbox info --json`'s
+`config_path` (`<sandbox>/ro/runtime-config.json`, so grandparent plus `rw`).
+That works and is **incidental**: the field exists to name a config file, not
+to describe the layout. `sandbox.sandbox_state_dir` uses the documented one, in
+one function, so a layout change is a one-line fix rather than a hunt.
+
+rite's root goes under `<layer>/rite/goose` rather than `<layer>/goose`, so a
+future yoloAI directory of that name cannot collide with it.
+
+---
+
+## 6. End to end, with rite driving · measured after section 5
+
+The whole path, exercised through rite's own objects rather than a shell
+approximation of them: `GooseAgent` with `launch=exec_launcher(sandbox)` and
+`GOOSE_PATH_ROOT` from `goose_path_root(sandbox)`, given a real `Context` and
+`Subtask`.
+
+```
+GOOSE_PATH_ROOT = .../sandboxes/ol5-w1/rw/rite/goose
+elapsed 86s   claimed_success: True   infrastructure_fault: False
+```
+
+Verified on disk rather than taken from the report, which is RL-7's whole
+point:
+
+- `E2E.txt` exists inside the sandbox with exactly the requested line;
+- the root holds `config/`, `data/` and `state/` — the four paths relocated;
+- ⚠ **`yoloai diff` shows only `E2E.txt`.** Goose's state did not reach the
+  workspace, which is the requirement that ruled the workspace out as a
+  location in the first place.
+
+Two details of the launcher that the measurement settled:
+
+- **`yoloai exec` eats the command's own flags.** `yoloai exec <box> curl -s …`
+  fails with *"unknown shorthand flag: 's' in -s"*, and so does `sh -c`. The
+  `--` separator is not cosmetic.
+- **A host tempfile IS readable from inside** (`cat` of a `mktemp` file written
+  on the host returned its contents), so `GooseAgent.run`'s existing
+  instruction file needs no change to work in a sandbox. ⚠ It does sit in the
+  shared temp root, so the task text — not a credential, but project content —
+  is readable by every other sandbox on the machine. `yoloai files put` is the
+  route that avoids it; left as a follow-up rather than done quietly here.
