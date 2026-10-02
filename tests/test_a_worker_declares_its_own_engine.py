@@ -130,3 +130,13 @@ def test_the_shared_validator_still_says_manager_for_a_manager():
     assert engine_shape_problem({"engine": "local:small"}, "manager lead").startswith(
         "manager lead:"
     )
+
+
+def test_a_worker_cannot_be_a_human_engine():
+    # Legitimate on a Manager, meaningless on a Worker: a Worker IS a sandbox.
+    # The shared validator accepts `human` because a Manager may be one, so the
+    # Worker parse refuses it on its own.
+    parsed = _worker("worker:\n  name: w1\n  engine: human\n")
+    assert isinstance(parsed, ParseError)
+    assert "cannot be a 'human' engine" in parsed.message
+    assert "manager_roles" in parsed.message

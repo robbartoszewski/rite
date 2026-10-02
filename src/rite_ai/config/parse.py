@@ -10,7 +10,13 @@ from pathlib import Path
 
 import yaml
 
-from .managers import CLAUDE, engine_shape_problem, parse_managers, window_problem
+from .managers import (
+    CLAUDE,
+    HUMAN,
+    engine_shape_problem,
+    parse_managers,
+    window_problem,
+)
 from .models import (
     DEFAULT_BROADCAST,
     STRATEGIES,
@@ -1058,6 +1064,18 @@ def parse_worker(path: Path) -> WorkerManifest | ParseError:
         return ParseError(str(path), shape)
 
     engine = str(worker.get("engine", CLAUDE))
+    # ⚠ The ONE engine a Worker may not be, and the shared validator cannot
+    # know it: `human` is legitimate on a MANAGER — a person holding duties,
+    # answering questions routed to their expertise — and meaningless on a
+    # Worker, which IS a sandbox. Accepting it would produce a manifest rite
+    # would try to start, with no agent to run and no credential that fits.
+    if engine == HUMAN:
+        return ParseError(
+            str(path),
+            f"worker {name}: a Worker cannot be a 'human' engine — a Worker is "
+            "a sandbox rite starts. A person holding duties is a Manager with "
+            "'engine: human' in coordination.manager_roles",
+        )
     return WorkerManifest(
         name=name,
         manager=worker.get("manager", ""),
