@@ -20,6 +20,12 @@ This holds for bounded runs too. And the slot count is this project's own
 Workers: other projects' sandboxes, and leftover test sandboxes, no longer
 use up its slots (SCRUM-36).
 
+**A Manager's helper sessions are a small pool.** A Manager is a coordinator:
+it does not implement tickets, and it uses a helper session only when a
+review, a verification, a spec or an answer needs fresh eyes or would block
+it. At most two run at once, and one more waits. Today the one helper is
+rite's own check of a secondary Manager's reply.
+
 ⚠ **Not yet decided:** a Manager whose every session only writes a reply
 counts as working, so a run without bounds starts its next session straight
 away. Whether such a session should count as idle is being decided.

@@ -5982,6 +5982,20 @@ per-hour or per-cycle session number: the salvaged first version had one (20
 sessions per cycle, a fresh 20 after one poll), and it bounded nothing
 (measured on a fake engine: 357 working sessions per virtual hour). It is gone.
 
+**The Manager is a passive coordinator, and its helpers are a small pool**
+(Robert, 2026-10-02). It never implements tickets: that is a Worker's job.
+It keeps no helper sessions running. It reaches for one only ON DEMAND, for
+coordinator work (answering a question, a review, a verification, a spec), and
+only when that work needs FRESH EYES (independent of the interactive thread)
+or must NOT BLOCK it (so the Manager stays responsive to the User's DMs and
+`rite connect`). At any moment a Manager runs its one interactive session plus
+at most `MANAGER_HELPER_POOL` (2) helpers; one more waits for a slot
+(`managers.helpers.helper_slot`), and nothing counts helpers per hour. So the
+whole bound, at a moment, is: one session per Worker up to the schedule
+window's count, plus the Manager's interactive session, plus at most two
+helpers. Today the one helper is rite's reply verifier, a fresh-eyes check
+rite starts from code; it holds a slot while it runs.
+
 **A full slot waits; a request is never discarded.** A Worker asked for when
 no slot is free is QUEUED, for bounded runs too: `start_worker` marks the
 refusal `full`, `rite sandbox start` exits `EXIT_NO_SLOT` (75), the broker

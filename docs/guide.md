@@ -721,7 +721,9 @@ routed work, a quiet board or a closed schedule window does not end it: it
 waits, spending nothing, and carries on when mail arrives, the board changes
 or the window opens. What bounds it is your schedule: one session at a time,
 and Workers only up to the window's count; a Worker asked for when no slot is
-free waits for one rather than being dropped. To bound the whole run instead,
+free waits for one rather than being dropped. Beside its own session a Manager
+runs at most two short helper sessions at once, for checks and reviews that
+need fresh eyes; it does not implement tickets itself. To bound the whole run instead,
 give BOTH bounds:
 
 ```bash

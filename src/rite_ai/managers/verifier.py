@@ -625,16 +625,21 @@ def verify(
         )
         seen = _sightings(root, claim, look)
         state = _claimant_state(root, claimant, look)
-        got = run(
-            ["sh", "-c", boundary.wrap(_command(), profile)],
-            cwd=str(root),
-            env=env,
-            input=_prompt(root, claim, seen, state),
-            capture_output=True,
-            text=True,
-            errors="replace",
-            timeout=TIMEOUT_SECONDS,
-        )
+        # A verifier is a fresh-eyes HELPER session, so it holds one of the
+        # Manager's helper slots while it runs (D-115, `helpers`).
+        from rite_ai.managers.helpers import helper_slot
+
+        with helper_slot():
+            got = run(
+                ["sh", "-c", boundary.wrap(_command(), profile)],
+                cwd=str(root),
+                env=env,
+                input=_prompt(root, claim, seen, state),
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=TIMEOUT_SECONDS,
+            )
     except subprocess.TimeoutExpired:
         return Verdict(
             UNVERIFIED, f"the verifier did not finish within {int(TIMEOUT_SECONDS)}s"
