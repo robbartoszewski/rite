@@ -1,0 +1,20 @@
+# Tests that pass in NO CI job, each with the reason CI cannot run it.
+#
+# Read by `tools/every_test_passes_somewhere.py`, which fails the
+# `every-test-passes-somewhere` job on any test that passed nowhere and is not
+# here — and on any entry here that is stale (it passes now), gone (no job
+# collected it), or carries a reason too short to be one.
+#
+# ⚠ An entry is a debt in plain sight, not an exemption. Say what the test
+# needs that CI cannot give it, and what would let it run. The key is the node
+# id pytest prints.
+
+[runs_nowhere]
+"tests/test_a_claude_manager_signs_in_without_the_keychain.py::test_inside_the_profile_claude_READS_its_own_file" = "needs a real `claude` binary run inside seatbelt, and no hosted runner installs Claude Code. The keychain-free login it confirms is covered at file level by the rest of the file; a macOS runner with Claude Code on it would run this"
+"tests/test_a_worker_does_not_carry_the_operators_claude_settings.py::test_live_a_real_workers_settings_carry_none_of_the_operators_hooks" = "a live yoloAI run, gated on RITE_LIVE_YOLOAI=1 and a machine with yoloAI; no runner has it, and installing the cask in CI would make the result depend on yoloAI's release rather than on rite"
+"tests/test_a_worker_does_not_carry_the_operators_claude_settings.py::test_live_rite_runs_inside_a_sandbox_started_from_rites_home" = "the same live yoloAI run as the test above, with the same gate: RITE_LIVE_YOLOAI=1 and yoloAI installed, neither of which a hosted runner has"
+"tests/test_changelog_names_the_commands_it_ships.py::test_every_command_added_since_the_last_tag_is_named_in_the_changelog" = "stands down while no command has been added since the last tag, which is a fact about the repository rather than the runner. It runs again the moment a command is added, and this entry must go then — the guard will say so"
+"tests/test_init_ci_workflow.py::test_install_sh_pins_the_same_ref_the_workflow_does" = "stands down while VERSION is a dev marker, because install.sh pins the last release and the workflow pins main until the release bump. It runs at that bump, and this entry must go then — the guard will say so"
+"tests/test_release_checksums.py::test_the_runbook_points_at_the_tool_rather_than_a_manual_paste" = "reads the publish runbook under docs/private, which is deliberately not in the repository; a maintainer-only check that no clone can run"
+"tests/test_release_notes.py::test_the_runbook_creates_the_release_rather_than_leaving_it_to_a_human" = "reads the same private publish runbook, which is not in the repository; a maintainer-only check that no clone can run"
+"tests/test_the_verify_decides_end_to_end.py::TestWhatGoosesClaimActuallyMeans::test_the_weakness_is_visible_in_the_signal_not_hidden_by_it" = "needs the `goose` binary, which no hosted runner installs; an unpinned Goose in CI would make this result depend on Goose's release"

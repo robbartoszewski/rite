@@ -83,6 +83,7 @@ import shlex
 from pathlib import Path
 
 from rite_ai.managers import user_dir
+from rite_ai.managers.stdin_text import stray_end
 
 BYPASS_FLAG = "--dangerously-skip-permissions"
 """⚠ **No longer passed by anything.** Kept because C22's release note names
@@ -391,6 +392,27 @@ def refusal(command: str, root: Path) -> str:
     # ⚠ A denial of one of the engine's OWN tools is not a shell command,
     # and telling a user to add `Bash(Edit:*)` would be advice that does
     # nothing. The first C20 run failed on exactly that tool.
+    # 🔴 SCRUM-22. A heredoc END LINE refused as a command of its own is not
+    # a program anyone needs permitted, and this used to say "add
+    # `Bash(RITE_TEXT_…:*)`". Nothing should be added. The delimiter changes
+    # with every instruction, so no rule would match the next one. And
+    # permitting it would make things worse: today the engine refuses the
+    # whole call, so nothing was sent and a retry is right. Allowed, the
+    # message would go and then the stray line would exit 127, so the
+    # Manager would retry a message that had already gone.
+    end = stray_end(command)
+    if end:
+        return (
+            f"refused: {end!r} ran as a command of its own. It is the end "
+            f"line of rite's text form (`<<'{end}'`), written a second time "
+            f"or followed by more lines: the text ends at the FIRST such "
+            f"line, and whatever comes after it is a new shell command. The "
+            f"engine refused that part, so the whole call did not run and "
+            f"nothing was sent. rite's own command was not what was refused, "
+            f"and nothing should be added to the allowlist: the end line "
+            f"changes with every instruction. The Manager's instructions say "
+            f"to write it once, with nothing after it."
+        )
     if command in _TOOL_NAMES:
         head = command
         line = f'"{command}"'

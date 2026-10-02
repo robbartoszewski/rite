@@ -109,8 +109,13 @@ jobs:
       - name: Landlock probes
         run: uv run pytest -rs tests/test_landlock_really_confines.py
 
+      # `-rsfE` and a report, for the reason the Landlock step above gives.
+      # This step's skips were `s` characters in a progress line — DF3's
+      # eleven among them — and `-r` with no `s` prints none of them; `fE`
+      # keeps the failure list `-r` would otherwise replace. `--junitxml` is
+      # what `every-test-passes-somewhere` reads.
       - name: Test
-        run: uv run pytest
+        run: uv run pytest -rsfE --junitxml=junit.xml
         env:
           # The concurrency soak is clock-bound, and its default is
           # calibrated for a developer laptop. A shared runner measured ~85x
@@ -120,26 +125,49 @@ jobs:
           # rather than the machine it was written on.
           RITE_SOAK_SECONDS: "20"
 
-  # 🔴 **THERE WAS NO macOS CI AT ALL, AND THE BOUNDARY LIVES THERE.** This
-  # workflow ran only on ubuntu-latest, and five test files are
-  # `sys.platform != "darwin"`-gated — so the seatbelt profile, the inbox
-  # fence and the whole credential story were among the skips in the only job
-  # that ran. Every macOS row in the readiness document rested on somebody's
-  # local run.
+      # `always()`: a red test step still leaves a report, and the guard needs
+      # it to tell "this test failed" from "no job ran this test". A job that
+      # never reached pytest leaves none, which the guard reports as CANNOT
+      # TELL rather than as zero tests.
+      - name: Keep the junit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-lint-and-test-${{ matrix.python-version }}
+          path: junit.xml
+
+  # 🔴 **THERE WAS NO macOS CI AT ALL, AND THEN ITS COVERAGE WAS A LIST OF
+  # FILENAMES.** A list does not grow when a test is added, and that is the
+  # same gap one level down. Measured on `9b59680`: five test files stand down
+  # on anything but macOS (`sys.platform != "darwin"`) and are named nowhere
+  # in this job. One of them is
+  # `tests/test_no_manager_reads_another_managers_mail.py`, whose eleven tests
+  # are the whole of DF3 — that no Manager can list or read a sibling's inbox,
+  # outbox or state. Linux skipped them, this job never collected them, and
+  # both were green, so that property was enforced in no job at all. A test
+  # that skips INSIDE a file the list DOES name, on something the runner
+  # happens to lack, was invisible the same way.
   #
-  # That is not a theoretical gap. In one weekend, local runs found a
-  # credential grant that existed only on seatbelt, a symlink that handed back
-  # the inbox fence, and a first-launch failure where a grant named a path that
-  # did not exist yet. None of those would have been caught here.
+  # ⚠ **So this job runs the WHOLE suite, and nothing anywhere records what
+  # macOS covers.** `every-test-passes-somewhere` below reads what each job
+  # actually ran, from its junit report. The named list's stated reason — that
+  # a hosted runner has "no tmux, no gitleaks and no credential store" — had
+  # stopped holding: tmux and gitleaks are installed here, and credentials are
+  # one file store on both platforms (`credentials/file_store.py`).
   #
-  # ⚠ **The named files, not the whole suite, and the reason is honesty rather
-  # than speed.** A hosted macOS runner has no tmux, no gitleaks and no
-  # credential store, so a full run would skip the very things this job exists
-  # to check and report green. These five need none of that: they compose
-  # profiles and assert what the rules say, and `sandbox-exec` is part of
-  # macOS. The Linux job above remains the full suite.
+  # ⚠ **THE NAME IS A REQUIRED CHECK AND MUST NOT CHANGE HERE ALONE.** `main`'s
+  # ruleset requires `boundary-and-credentials-on-macos` by name, so the name
+  # stays although the job is now the whole suite. A renamed job never reports
+  # under the old name, and a required check that never reports blocks every
+  # PR — so a rename needs the ruleset edited in the same moment, which is not
+  # something this file can do.
   boundary-and-credentials-on-macos:
     runs-on: macos-latest
+    # The whole suite took 19 minutes on the first macOS run that tried it
+    # (run 36490053348). 45 leaves room for a slower runner while keeping a
+    # HANG — an unanswered keychain dialog, a wait on tmux — from running to
+    # the 6-hour default, where it costs the queue rather than failing.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
@@ -148,6 +176,10 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v4
 
+      # Unpinned, the way a user's `uv tool install` is, and so the only job
+      # here that covers whatever Python that resolves to today — no Linux
+      # matrix entry does. The version is printed below, because a red here
+      # may be the interpreter rather than macOS.
       - name: Install dependencies
         run: uv sync
 
@@ -162,23 +194,106 @@ jobs:
           brew install tmux
           tmux -V
 
+      # Pinned and checksummed exactly as the Linux job and `publish-gate.yml`
+      # do it, and for the reason the Linux job gives above: `rite doctor`
+      # reports an absent gitleaks as a problem, and the fifteen tests it
+      # names go red. The asset's own line is grepped OUT of the checksum file
+      # rather than checked with `--ignore-missing`: if the asset name changes,
+      # grep exits 1 and the job stops.
+      - name: Install gitleaks
+        run: |
+          case "$(uname -m)" in
+            arm64) arch=arm64 ;;
+            x86_64) arch=x64 ;;
+            *) echo "no gitleaks build for $(uname -m)"; exit 1 ;;
+          esac
+          asset="gitleaks_8.30.1_darwin_${arch}.tar.gz"
+          cd "$RUNNER_TEMP"
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/${asset}" -o "$asset"
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_checksums.txt \
+            -o gitleaks_checksums.txt
+          grep " ${asset}\$" gitleaks_checksums.txt > expected.sha256
+          shasum -a 256 --check expected.sha256
+          tar -xzf "$asset" gitleaks
+          sudo mv gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      # W8's run-it test
+      # (`test_inside_the_profile_the_operators_gh_config_is_unreadable`) skips
+      # where there is no `~/.config/gh/config.yml` to try, and a hosted runner
+      # has none — so the deny that keeps a Manager out of the operator's gh
+      # login had only ever been checked as profile text. A harmless file here
+      # makes the test run for real: readable outside the profile, which is its
+      # own control, and refused inside.
+      - name: Give the gh-config deny something to protect
+        run: |
+          mkdir -p ~/.config/gh
+          [ -e ~/.config/gh/config.yml ] || printf 'git_protocol: https\n' > ~/.config/gh/config.yml
+
       - name: Which sandbox backend does macOS pick
         run: |
           echo "arch:   $(uname -m)"
           echo "sw_vers: $(sw_vers -productVersion 2>/dev/null || echo unknown)"
+          uv run python -c "import sys; print('python:', sys.version.split()[0])"
           command -v sandbox-exec >/dev/null && echo "sandbox-exec: present" || echo "sandbox-exec: MISSING"
           uv run python -c "from rite_ai.managers.boundaries import describe; print('manager sandbox:', describe())"
 
-      # `-rs` so a skip here is visible rather than silent: these files are the
-      # macOS half of the boundary, and one of them quietly skipping would put
-      # this job back where the workflow started.
-      - name: Boundary and credential tests
+      # The whole suite, with every skip printed by name. A silent skip is how
+      # a green CI lies, and on this platform the skips are the point: the
+      # guard job below reads this report to decide whether anything was left
+      # running nowhere.
+      - name: Test
+        run: uv run pytest -rsfE --junitxml=junit.xml
+        env:
+          RITE_SOAK_SECONDS: "20"
+
+      - name: Keep the junit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-boundary-and-credentials-on-macos
+          path: junit.xml
+
+  # 🔴 **EVERY TEST PASSES IN AT LEAST ONE JOB, OR SAYS WHY IT RUNS NOWHERE.**
+  # Read from the jobs' junit reports, so it measures what they RAN rather
+  # than what this file says they run — the defect it exists for was a file
+  # named in no job, which every green in this workflow was compatible with.
+  # It fails on a test that passed nowhere, and on a stale, reasonless or
+  # vanished entry in `tests/ci_runs_nowhere.toml`. It needs no list of
+  # macOS-only tests: such a test skips on Linux, so narrowing the macOS job
+  # makes it pass nowhere and turns this red by itself.
+  #
+  # `tests/test_every_test_passes_somewhere.py` checks the labels below
+  # against this file's jobs and matrix, so a new job or Python version cannot
+  # be left out of the command.
+  every-test-passes-somewhere:
+    needs: [lint-and-test, boundary-and-credentials-on-macos]
+    # `always()`: the question "did anything run nowhere" is most worth asking
+    # when a test job went red, and a skipped guard answers nothing.
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # `continue-on-error`, deliberately: with no artifact at all this action
+      # fails with its own message, and the question "which job's report is
+      # missing" is the one worth answering. Letting the step through hands
+      # that to the tool, which names the report and says CANNOT TELL. The
+      # job still goes red — on exit 2 from the step below.
+      - name: Fetch every job's junit report
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: junit-*
+          path: reports
+
+      # Stdlib only (`tomllib`, `xml.etree`), so the runner's python3 is
+      # enough and this job needs no install of rite itself.
+      - name: Every test passed somewhere
         run: |
-          uv run pytest -rs \
-            tests/test_the_manager_profile_denies_what_it_should.py \
-            tests/test_no_manager_writes_an_inbox.py \
-            tests/test_a_claude_manager_signs_in_without_the_keychain.py \
-            tests/test_a_manager_gets_github_credentials_without_holding_keys.py \
-            tests/test_credentials_live_in_one_0600_file.py \
-            tests/test_the_sandbox_backend_is_chosen_by_platform.py \
-            tests/test_no_manager_reads_the_refinement_key.py
+          python3 tools/every_test_passes_somewhere.py \
+            --runs-nowhere tests/ci_runs_nowhere.toml \
+            lint-and-test-3.11=reports/junit-lint-and-test-3.11/junit.xml \
+            lint-and-test-3.12=reports/junit-lint-and-test-3.12/junit.xml \
+            lint-and-test-3.13=reports/junit-lint-and-test-3.13/junit.xml \
+            boundary-and-credentials-on-macos=reports/junit-boundary-and-credentials-on-macos/junit.xml

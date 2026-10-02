@@ -23,6 +23,8 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 from rite_ai import kernel_lock
 from rite_ai.loop import lock
 
@@ -162,6 +164,23 @@ class TestWhereItCannotKnowItSaysSo:
 
 # --- the two measurements, short ---------------------------------------------------
 
+# How long each soak contends for. This was a literal `2.0`, calibrated on a
+# developer laptop, until the whole suite first ran on a hosted macOS runner:
+# that machine managed 78 acquisitions where this one does thousands, and the
+# assertion that fired was the SAMPLE SIZE, not the property. Overridable as
+# `RITE_SOAK_SECONDS` already is for the blast-radius soak and `burst.py`, so a
+# job can ask for a budget that suits the machine it runs on instead of
+# inheriting one calibrated somewhere else.
+SOAK_SECONDS = float(os.environ.get("RITE_SOAK_SECONDS", "2"))
+
+# Below this many samples, a clean run is "cannot tell" rather than "the
+# property holds" — so the soaks SKIP and say so, AFTER checking the property.
+# A violation is a violation at any sample size and still fails; what a small
+# sample must not do is report the lock broken when the finding is about the
+# machine. A skip is not a free pass either: `every-test-passes-somewhere` goes
+# red if these skip in every job.
+SAMPLE_FLOOR = 100
+
 
 def _contend(args) -> tuple[list, int]:
     root, seconds = Path(args[0]), args[1]
@@ -182,13 +201,17 @@ def _contend(args) -> tuple[list, int]:
 def test_sustained_contention_never_overlaps_two_loops(tmp_path):
     root = _project(tmp_path)
     with mp.Pool(4) as pool:
-        runs = pool.map(_contend, [(str(root), 2.0)] * 4)
+        runs = pool.map(_contend, [(str(root), SOAK_SECONDS)] * 4)
 
     assert sum(u for _, u in runs) == 0
     intervals = sorted(i for held, _ in runs for i in held)
-    assert len(intervals) > 100, "too few acquisitions to mean anything"
     overlaps = [(a, b) for a, b in zip(intervals, intervals[1:]) if b[0] < a[1]]
     assert not overlaps, f"{len(overlaps)} overlapping loops"
+    if len(intervals) < SAMPLE_FLOOR:
+        pytest.skip(
+            f"{len(intervals)} acquisitions in {SOAK_SECONDS}s is too small a "
+            f"sample to call this held; raise RITE_SOAK_SECONDS on this machine"
+        )
 
 
 def _lone_loop(args) -> tuple[int, int, int]:
@@ -226,16 +249,22 @@ def test_readers_never_make_a_lone_loop_fail_to_start(tmp_path):
     "running" answer must name that loop."""
     root = _project(tmp_path)
     with mp.Pool(5) as pool:
-        loop = pool.apply_async(_lone_loop, ((str(root), 2.0),))
-        readers = [pool.apply_async(_look, ((str(root), 2.0),)) for _ in range(4)]
+        loop = pool.apply_async(_lone_loop, ((str(root), SOAK_SECONDS),))
+        readers = [
+            pool.apply_async(_look, ((str(root), SOAK_SECONDS),)) for _ in range(4)
+        ]
         loop_pid, took, refused = loop.get()
         looks = [r.get() for r in readers]
 
-    assert took > 100, "too few starts to mean anything"
     assert refused == 0, f"a lone loop was refused {refused} times"
     assert sum(u for u, _, _ in looks) == 0
     assert sum(r for _, r, _ in looks) > 0, "no reader ever saw it running"
     assert set().union(*(p for _, _, p in looks)) == {loop_pid}
+    if took < SAMPLE_FLOOR:
+        pytest.skip(
+            f"{took} starts in {SOAK_SECONDS}s is too small a sample to call "
+            f"this held; raise RITE_SOAK_SECONDS on this machine"
+        )
 
 
 def test_without_the_gate_readers_do_make_it_fail(tmp_path, monkeypatch):

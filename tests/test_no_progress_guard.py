@@ -223,3 +223,55 @@ class TestTheJournalIsNotProgress:
         assert wrote[0].ok, wrote[0].message
         assert wrote[0].path is not None and wrote[0].path.is_file()
         assert "window elapsed" in result.reason
+
+
+def _mail_every(world, seconds: float, start: float = 100.0):
+    """A message every `seconds` from `start`: what wakes a waiting Manager.
+    The session it starts changes nothing (the starter writes no reply)."""
+    root = world["root"]
+    sent = {"next": start, "n": 0}
+
+    def arrives():
+        if world["t"] >= sent["next"]:
+            sent["n"] += 1
+            mailbox.send(root, OWNER, mailbox.INBOX, f"any news? ({sent['n']})")
+            sent["next"] += seconds
+
+    world["between"].append(arrives)
+    return sent
+
+
+class TestAWaitingManagerDoesNotSpendItsCeiling:
+    """🔴 SCRUM-24. A Manager waiting on an answer was woken, found nothing
+    to do, and each of those sessions counted toward --sessions, so the run
+    stopped on "ceiling reached" while it was only waiting. A session counts
+    when it changed something rite can see (`progress.footprint`), or when
+    rite could not judge it (`test_a_verdict_without_a_basis_never_engages_it`
+    pins that half)."""
+
+    def test_sessions_that_changed_nothing_do_not_reach_the_ceiling(self, world):
+        _mail_every(world, 120.0, start=100.0)
+        result, starts, prompts, _ = _run(world, sessions=2, minutes=10, useful=1)
+        # One useful session, then idle ones woken by mail: before SCRUM-24
+        # the second (idle) session spent the ceiling of 2, and the next
+        # message ended the run unread.
+        assert "ceiling reached" not in result.reason, result.reason
+        assert len(starts) >= 3, starts
+        assert sum("any news? (1)" in p for p in prompts) == 1
+        assert sum(not c.idle for c in result.cycles) == 1
+        assert result.sessions_started == len(starts)
+
+    def test_idle_sessions_have_an_allowance_of_their_own(self, world):
+        """Not counted toward the ceiling is not unbounded: a session that
+        changes nothing still spends tokens."""
+        _mail_every(world, 30.0, start=20.0)
+        result, starts, _, _ = _run(world, sessions=2, minutes=60, useful=0)
+        assert len(starts) == 2, starts
+        assert all(c.idle for c in result.cycles)
+        assert "changed nothing" in result.reason
+        assert "allowance" in result.reason
+        assert "window elapsed" not in result.reason
+
+    def test_the_wait_line_says_it_does_not_count(self, world):
+        _, _, _, said = _run(world, sessions=10, minutes=10)
+        assert any("does not count toward --sessions" in s for s in said)
