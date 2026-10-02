@@ -2140,6 +2140,37 @@ def local_step(manager: str, ticket: str) -> None:
             click.echo(f"    {line}")
 
 
+@local.command("approve")
+@click.argument("reviewer")
+@click.argument("ticket")
+def local_approve(reviewer: str, ticket: str) -> None:
+    """Approve TICKET's decomposition as plan-review holder REVIEWER.
+
+    \b
+    ⚠ **This was a hand edit until now**, which made RL-6's gate a convention:
+    the one thing a decomposer may not set was set by whoever held a text
+    editor. Every condition is checked here instead — REVIEWER holds
+    plan-review, did not write the plan (DD-3.5), and is a different MODEL from
+    the author (RL-6, so two 'local:' classes serving one model are refused).
+
+    \b
+    The plan's shape is re-validated before the write, because the file may
+    have changed since it was written and this is the last point before its
+    subtasks may run.
+
+    Examples:
+      rite local approve lead KAN-7
+    """
+    from rite_ai.local.approve import Refused, approve_plan
+
+    root = _require_project_root()
+    result = approve_plan(root, ticket, reviewer)
+    if isinstance(result, Refused):
+        click.echo(f"not approved: {result.why}", err=True)
+        raise SystemExit(1)
+    click.echo(result.note())
+
+
 @local.command("decompose")
 @click.argument("manager")
 @click.argument("ticket")
