@@ -690,4 +690,6 @@ default is settled, which is another reason to run both.
 - **A follow-up, and it BLOCKS the local tier's window enforcement:** a pinned twin fails rite's own probe (§4.5) — `derived_name` produces an untagged name, Ollama stores it tagged, and `engine_probe` matches neither. Measured today while re-running 1a.
 - **A follow-up:** `local/step.py` never pins the window it reads (§4.5). It probes with the role's `context_window` and then launches with no `GOOSE_CONTEXT_LIMIT` and no twin.
 - ⚠ **An open dependency, not a follow-up:** `--agent claude` is a literal in `sandbox/__init__.py`, so "worker type" is not a configurable axis yet (§1.7). Level 2's Claude side waits on it.
-- **Nothing is built.** Robert reviews this first.
+- **Built and approved (2026-10-02), per the banner at the top.** Level 1, the
+  plan validation, and the Level-2 attribute shipped; the deferred pieces listed
+  in that banner remain their own PRs.

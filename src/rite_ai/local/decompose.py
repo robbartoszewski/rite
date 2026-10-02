@@ -173,9 +173,14 @@ def decompose_ticket(
         if isinstance(parsed, str):
             reasons: tuple[str, ...] = (f"the bytes are not a decomposition: {parsed}",)
         else:
-            # The ticket identity is rite's, never the model's: a candidate that
-            # names another ticket is still this ticket's plan.
-            candidate = replace(parsed, ticket=ticket)
+            # The ticket identity AND the author are rite's, never the model's.
+            # The author is the Manager rite ASKED, not whoever the model named
+            # (RL-6): a model that copies rite's own template emits
+            # `decomposed_by: ""`, which validation rightly refuses, and a model
+            # that names someone would misdirect RL-6's independence check once
+            # `produced_by` is wired. Filling it here — the same way `ticket` is
+            # filled — is what lets a prompt-compliant plan be written at all.
+            candidate = replace(parsed, ticket=ticket, decomposed_by=manager)
             problems = candidate_problems(
                 candidate,
                 root=root,
@@ -213,11 +218,13 @@ def decompose_ticket(
 
 def _write_pending(state, candidate, manager, version, result, warnings):
     """Write the valid candidate as a PENDING plan and never as APPROVED."""
+    # `candidate.decomposed_by` is already the Manager rite asked (set before
+    # validation); pinned again here so the author recorded is never the model's.
     plan = replace(
         candidate,
         approval=dec.PENDING,
         approved_by="",
-        decomposed_by=candidate.decomposed_by or manager,
+        decomposed_by=manager,
     )
     written = dec.write(state, plan, version)
     if type(written).__name__ != "Written":

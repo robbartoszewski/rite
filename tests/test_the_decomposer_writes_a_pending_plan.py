@@ -107,6 +107,46 @@ def test_a_valid_candidate_is_written_pending_never_approved():
     assert [s.id for s in stored.subtasks] == ["s1", "s2"]
 
 
+def test_rite_records_the_manager_it_asked_not_the_author_the_model_claimed():
+    # The production defect the review caught: `_prompt_for` hands the model a
+    # template with `decomposed_by: ""`, which RL-67 refuses on the production
+    # path (decompose_managers is always non-empty there) — so a model that
+    # copies rite's own template escalated every ticket. The author is rite's:
+    # the Manager it asked, filled before validation.
+    #
+    # (a) A prompt-compliant plan with an EMPTY author is written, not refused.
+    root, state = _project()
+    empty = dcmp.decompose_ticket(
+        root,
+        "planner",
+        "KAN-1",
+        proposer=_Proposer(dcmp.Proposal(bytes=_candidate(decomposed_by=""))),
+        state=state,
+        roles=ROLES,
+        max_attempts=1,
+    )
+    assert empty.wrote
+    assert empty.attempts == 1  # written on the first try, not after a retry
+    assert dec.read(state, "KAN-1").plan.decomposed_by == "planner"
+
+    # (b) A model that CLAIMS a different author is ignored: the recorded author
+    # is the Manager that ran, so RL-6's independence check reads the truth.
+    root, state = _project()
+    claimed = dcmp.decompose_ticket(
+        root,
+        "planner",
+        "KAN-2",
+        proposer=_Proposer(
+            dcmp.Proposal(bytes=_candidate(decomposed_by="someone-else"))
+        ),
+        state=state,
+        roles=ROLES,
+        max_attempts=1,
+    )
+    assert claimed.wrote
+    assert dec.read(state, "KAN-2").plan.decomposed_by == "planner"
+
+
 def test_a_candidate_that_marks_itself_approved_is_refused():
     # DD-4.2: a plan already marked APPROVED by its author must be refused — the
     # gate the APPROVED state exists to be cannot be set by the thing it gates.
