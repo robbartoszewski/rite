@@ -891,8 +891,10 @@ line rite writes, saying which of these it is.
 **Set it up** once per project:
 
 1. Create a Slack app with the bot scopes `channels:history`, `chat:write`
-   and `im:history`. Under **App Home**, allow users to send messages in the
-   Messages tab. Install it, and `/invite @rite` into the broadcast channel.
+   and `im:history` (add `im:write` and rite never has to post in your DM to
+   find it). Under **App Home**, allow users to send messages in the
+   Messages tab. Install it, and `/invite @rite` into the broadcast channel
+   and into the status channel (`#rite-status` unless you name another).
 2. `rite credential set slack` stores the bot token (`xoxb-…`).
 3. In `.rite/config.yaml`:
 
@@ -900,6 +902,7 @@ line rite writes, saying which of these it is.
    slack:
      owner_user: U0123ABCD        # your member ID: profile → ⋮ → Copy member ID
      broadcast_channel: '#all-rite'
+     status_channel: '#rite-status' # where starts and stops are said
    ```
 
    With no `owner_user` Slack is **broadcast-only**, and nothing typed in
@@ -930,12 +933,20 @@ one is stopped would otherwise reach the other. If the first project no longer
 uses the app, the message names the file to remove. Two machines sharing one
 app are not detected.
 
+**Your DM is for what needs you.** rite does not say there that a Manager
+started or stopped: those lines go to the status channel, naming the project,
+so one `#rite-status` can serve every project whose app is in it. The status
+channel is only written, never read: nothing typed there reaches a Manager.
+The first time a project uses your DM, rite posts one line there saying what
+the DM is for (unless the app has `im:write`), and never again.
+
 **When no Manager is running**, a message you send waits in Slack. At the
 next `rite start` it is delivered at the Manager's first turn, with a line
-in the terminal saying how many arrived while it was stopped. Each run posts
-a line when it starts and another when it stops, so the last thing in your
-DM tells you whether anything is listening. The one exception is a
-`rite start` that is killed outright: it cannot post its stop line.
+in the terminal saying how many arrived while it was stopped. Whether anything
+is listening is in the status channel. The one exception is a `rite start`
+that is killed outright: it cannot post its stop line. If rite took a message
+from Slack and the Manager never received it, that is said in your DM, where
+you typed it.
 
 **A check-in goes to your DM, and is mirrored to the broadcast channel.**
 The standup and the questions that survived are one message. It is posted
@@ -947,8 +958,8 @@ the broadcast channel only, and says that answers there cannot instruct:
 answer with `rite message <manager> "…"` instead.
 
 **The first run does not replay history.** Turning Slack on starts reading
-from that run's start line, and replies already in the mailbox stay in
-`rite replies` rather than being posted.
+from the moment that run began listening, and replies already in the mailbox
+stay in `rite replies` rather than being posted.
 
 ## What rite does to ticket text, and what it does not
 

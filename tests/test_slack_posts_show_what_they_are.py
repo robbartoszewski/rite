@@ -100,13 +100,14 @@ class TestPresent:
 # --- through the relay ----------------------------------------------------------
 
 
-def _listener(root, slack, manager="lead"):
+def _listener(root, slack, manager="lead", status=""):
     (root / ".rite").mkdir(exist_ok=True)
     listener = Listener(
         token="t",
         manager=manager,
         owner=OWNER,
         broadcast="#all-rite",
+        status=status,
         project=root,
         clock=lambda: 150.0,
     )
@@ -150,14 +151,27 @@ def _write(root, manager, kind, n):
 
 
 def test_start_and_stop_lines_are_rites_own_and_muted(tmp_path):
+    """RS1: starts and stops are rite's own SYSTEM posts (muted), said in the
+    status channel, never the DM. The one stop line kept in the DM is the
+    undelivered warning, and it is a DELIVERY post."""
     slack = Slack()
-    listener = _listener(tmp_path, slack)
+    listener = _listener(tmp_path, slack, status="#rite-status")
     listener.close(call=slack)
     listener.close(call=slack, undelivered="a message you sent was not delivered")
-    tags = [_tag_of(p) for p in slack.posts]
-    assert tags[:2] == [SYSTEM, SYSTEM], "the two start lines"
-    assert tags[2:4] == [SYSTEM, SYSTEM], "the two stop lines"
-    assert tags[4:] == [DELIVERY, DELIVERY], "the stop lines saying what was lost"
+    assert SYSTEM not in LOUD, "start and stop lines are muted"
+    status_lines = [
+        p
+        for p in slack.posts
+        if "is running" in p["text"]
+        or ("has stopped" in p["text"] and "not delivered" not in p["text"])
+    ]
+    assert status_lines, "start and stop lines are posted to the status channel"
+    assert all(_tag_of(p) == SYSTEM for p in status_lines)
+    assert all(p["channel"].startswith("#") for p in status_lines), (
+        "in the status channel, not the DM"
+    )
+    dm = [p for p in slack.posts if "not delivered" in p["text"]]
+    assert len(dm) == 1 and _tag_of(dm[0]) == DELIVERY
 
 
 def test_a_check_in_mirror_is_muted_whatever_the_dm_copy_is(tmp_path):

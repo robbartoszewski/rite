@@ -21,21 +21,41 @@ def _bare(text: str) -> str:
     return re.sub(r" · sent \w{3} \d\d:\d\d", "", text)
 
 
+# Each configured target resolves to a distinct id, so a test can tell the
+# DM, the broadcast channel and the status channel apart in `posts`.
+_CHANNELS = {"#all-rite": "CB", "#rite-status": "CS"}
+
+
 class Slack:
-    def __init__(self):
-        self.history: dict[str, list[dict]] = {"D1": [], "C1": []}
+    def __init__(self, *, im_write: bool = False, status_ok: bool = True):
+        self.history: dict[str, list[dict]] = {"D1": [], "CB": []}
         self.posts: list[dict] = []
+        # Whether the app has `im:write`: with it, `conversations.open` learns
+        # the DM id without posting; without it, the id is learned by posting
+        # once (RS1).
+        self.im_write = im_write
+        # Whether the status channel can be posted to; False is "the app is not
+        # in it", so the line must stay on the terminal and never fall back.
+        self.status_ok = status_ok
 
     def __call__(self, method, token, params=None, payload=None):
         args = payload or params or {}
         if method == "auth.test":
             return {"ok": True, "user_id": "UR1TE"}
-        if method == "chat.postMessage":
-            self.posts.append(args)
-            target = args["channel"]
-            channel = (
-                "D1" if target.startswith("U") else "C1" if target[0] == "#" else target
+        if method == "conversations.open":
+            return (
+                {"ok": True, "channel": {"id": "D1"}}
+                if self.im_write
+                else {"ok": False}
             )
+        if method == "chat.postMessage":
+            target = args["channel"]
+            if target == "#rite-status" and not self.status_ok:
+                return {"ok": False, "error": "channel_not_found"}
+            channel = "D1" if target.startswith("U") else _CHANNELS.get(target, target)
+            # Record the RESOLVED id, so a test tells the conversations apart by
+            # id whether the caller named a user, a channel name, or an id.
+            self.posts.append({**args, "channel": channel})
             return {"ok": True, "channel": channel, "ts": f"{500 + len(self.posts)}.0"}
         if method == "conversations.history":
             return {"ok": True, "messages": self._newest_first(args)}
@@ -58,6 +78,8 @@ def _run(tmp_path, slack):
         manager="lead",
         owner=OWNER,
         broadcast="#all-rite",
+        status="#rite-status",
+        project_name="acme",
         project=tmp_path,
         clock=lambda: 600.0,
     )
@@ -105,16 +127,89 @@ class TestAMessageSentWhileStoppedIsDeliveredAtTheNextStart:
         assert _heard(_run(tmp_path, slack), slack) == []
 
 
-class TestTheStopIsSaidWhereThePersonIs:
-    def test_both_conversations_are_told(self, tmp_path):
+class TestStartsAndStopsLeaveTheDM:
+    """RS1 (Robert, 2026-09-29): "it must go to a separate #rite-status
+    channel or something. It's a spam anywhere else." Starts and stops are
+    said in the status channel, naming the project; never in the DM or the
+    broadcast channel. The DM is for what needs the person."""
+
+    def test_the_start_line_is_said_only_in_the_status_channel(self, tmp_path):
+        (tmp_path / ".rite").mkdir()
+        slack = Slack()
+        _run(tmp_path, slack)
+        running = [p for p in slack.posts if "is running" in p["text"]]
+        assert [p["channel"] for p in running] == ["CS"]
+        assert "`acme`" in running[0]["text"]
+        # Neither the DM nor the broadcast channel hears a start line.
+        assert not any(
+            "is running" in p["text"]
+            for p in slack.posts
+            if p["channel"] in ("D1", "CB")
+        )
+
+    def test_the_stop_line_is_said_only_in_the_status_channel(self, tmp_path):
         (tmp_path / ".rite").mkdir()
         slack = Slack()
         listener = _run(tmp_path, slack)
-        lines = listener.close(call=slack)
+        slack.posts.clear()
+        listener.close(call=slack)
         stops = [p for p in slack.posts if "has stopped" in p["text"]]
-        assert {p["channel"] for p in stops} == {"D1", "C1"}
+        assert [p["channel"] for p in stops] == ["CS"]
         assert "rite start lead" in stops[0]["text"]
-        assert any("delivered when it next starts" in line for line in lines)
+
+    def test_a_second_start_posts_nothing_to_the_dm_or_broadcast(self, tmp_path):
+        """The DM and broadcast ids are learned once and remembered, so a
+        later start posts only the status line."""
+        (tmp_path / ".rite").mkdir()
+        slack = Slack()
+        _run(tmp_path, slack)
+        slack.posts.clear()
+        _run(tmp_path, slack)
+        assert [p["channel"] for p in slack.posts] == ["CS"]
+
+    def test_with_im_write_the_dm_is_never_posted_to(self, tmp_path):
+        """`conversations.open` learns the DM id without posting, so even the
+        first run posts nothing to the DM."""
+        (tmp_path / ".rite").mkdir()
+        slack = Slack(im_write=True)
+        listener = _run(tmp_path, slack)
+        assert listener.dm == "D1"
+        assert not any(p["channel"] == "D1" for p in slack.posts)
+
+    def test_the_undelivered_warning_stays_in_the_dm(self, tmp_path):
+        """A message rite took from Slack but never delivered needs the
+        person, where they typed it — and that is the one stop line in the DM.
+        The plain stop still goes only to the status channel."""
+        (tmp_path / ".rite").mkdir()
+        slack = Slack()
+        listener = _run(tmp_path, slack)
+        slack.posts.clear()
+        listener.close(call=slack, undelivered='your "ship it" was not delivered')
+        dm = [p for p in slack.posts if p["channel"] == "D1"]
+        assert len(dm) == 1
+        assert "was not delivered" in dm[0]["text"] and "has stopped" in dm[0]["text"]
+        assert any(
+            p["channel"] == "CS" and "has stopped" in p["text"] for p in slack.posts
+        )
+
+    def test_a_status_channel_rite_cannot_post_to_never_falls_back(self, tmp_path):
+        """The fallback that would post to the DM IS the spam this removes. A
+        status channel rite cannot reach leaves the line on the terminal."""
+        (tmp_path / ".rite").mkdir()
+        slack = Slack(im_write=True, status_ok=False)
+        listener = _run(tmp_path, slack)
+        # The failed status line is not retried in the DM or the broadcast
+        # channel: no lifecycle line reaches either, and im:write means the DM
+        # gets no post at all.
+        assert not any(
+            ("is running" in p["text"] or "has stopped" in p["text"])
+            for p in slack.posts
+            if p["channel"] in ("D1", "CB")
+        )
+        assert not any(p["channel"] == "D1" for p in slack.posts)
+        lines = listener.close(call=slack)
+        assert any("cannot post to the status channel" in line for line in lines)
+        assert not any(p["channel"] == "D1" for p in slack.posts)
 
     def test_rite_start_closes_the_relay_even_on_ctrl_c(self):
         """In a `finally`, so an interrupted run still says it stopped."""
