@@ -8767,12 +8767,19 @@ def _slack_listener(root: Path, manager: str):
             err=True,
         )
         return None
+    from rite_ai.config.parse import parse_brief
+
+    brief = parse_brief(root / ".rite" / "brief.yaml")
     listener = Listener(
         token=token,
         manager=manager,
         owner=config.slack.owner_user,
         broadcast=config.slack.broadcast,
         project=root,
+        # Starts and stops are said here, naming the project, and never in the
+        # DM (RS1; Robert, 2026-09-29). One channel is shared by every project.
+        status=config.slack.status,
+        project_name=getattr(brief, "name", "") or root.name,
         # TR2 (TRQ8): refinement rounds to a private channel, when configured
         # and when rite can both post and read there; the DM otherwise.
         refinement_channel=(

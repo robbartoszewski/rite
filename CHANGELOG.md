@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Starts and stops are no longer said in your DM
+
+Your DM with rite is where a Manager asks you things. It used to fill up with
+"Manager `lead` is running" and "has stopped" on every start and stop, which
+made a real question easy to miss. Those lines now go to a status channel,
+`#rite-status` unless you set `slack.status_channel`, and each names its
+project, so one channel can serve several projects: `/invite @rite` into it
+from each project's app. rite only writes there; nothing typed there reaches a
+Manager. The broadcast channel stops getting them too, and the parser refuses
+the broadcast channel as the status channel, because that one is read as
+context.
+
+rite now remembers your DM's id, so it posts in your DM once, the first time a
+project uses it, to say what it is for — not at all if the app has `im:write`.
+A status channel rite cannot post to leaves the line on the terminal and never
+falls back to the DM. A message rite took from Slack but never delivered is
+still said in your DM, because that one needs you.
+
 ### `rite sandbox status` tells you how to answer a Worker's question
 
 It still said "answer it by attaching", which stopped being the way in 0.7.0a4.

@@ -626,6 +626,18 @@ class Listener:
     project: Path | None = None
     """The project root, for the outbox and the relay's own state. None means
     this listener only listens — tests, and nothing else."""
+    status: str = ""
+    """The status channel (`slack.status`): where "started" and "stopped" are
+    said. "" means nowhere in Slack; those lines stay on the terminal. Never
+    the DM (Robert, 2026-09-29: "It's a spam anywhere else")."""
+    project_name: str = ""
+    """How a status line names its project, since one status channel may be
+    shared by several projects' apps (D-114)."""
+    _known: dict = field(default_factory=dict)
+    """Conversation ids learned by an earlier run, so a start need not post to
+    learn them: {"dm": {"user", "channel"}, "broadcast": {"name", "channel"}}.
+    Each is used only while what it was learned for is unchanged, so a changed
+    owner or broadcast name is relearned."""
     _saved_since: dict[str, str] = field(default_factory=dict)
     _started: bool = False
     """Has this relay ever posted for this Manager? An explicit flag rather
@@ -707,20 +719,36 @@ class Listener:
         except Exception:  # noqa: BLE001 - without it, mentions read as unaddressed
             self.me = self.me_bot = ""
         if self.owner:
-            sent = _post(
-                self.owner,
-                self.token,
-                f"rite: Manager `{self.manager}` is running. What you send in "
-                "this DM is an instruction to it, delivered at the start of "
-                "its next turn.",
-                call=caller,
-                kind=SYSTEM,
-                author=self.manager,
-            )
-            if sent.ok:
-                self.dm = sent.channel
-                self._start_at(self.dm, sent.ts)
-                self.remember(sent.channel, sent.ts, self._label("start line", sent))
+            self.dm = self._dm_without_posting(call=caller)
+            if self.dm:
+                # Known, or opened with `im:write`: a start is not news for the
+                # DM, so nothing is posted. Begin reading from the saved cursor
+                # if there is one, else from now.
+                self._start_at(self.dm, self._now_ts())
+            else:
+                # ⚠ ONCE PER PROJECT, not per start. Without `im:write` the only
+                # way to learn the DM's id is to post to the user id (`probe`);
+                # what is posted is what the DM is FOR, said once.
+                sent = _post(
+                    self.owner,
+                    self.token,
+                    "rite: this is where the Managers of project "
+                    f"`{self._project_label}` ask you things, and what you send "
+                    "here is an instruction to them, delivered at the start of "
+                    "a Manager's next turn. Starts and stops are said in "
+                    f"{self.status or 'the terminal'}, not here.",
+                    call=caller,
+                    kind=SYSTEM,
+                    author=self.manager,
+                )
+                if sent.ok:
+                    self.dm = sent.channel
+                    self._learned("dm", "user", self.owner, sent.channel)
+                    self._start_at(self.dm, sent.ts)
+                    self.remember(
+                        sent.channel, sent.ts, self._label("start line", sent)
+                    )
+            if self.dm:
                 lines.append(
                     f"slack: instructions come from the Owner's DM "
                     f"({self.owner}) only, delivered at the start of the next "
@@ -728,9 +756,9 @@ class Listener:
                 )
             else:
                 lines.append(
-                    f"slack: cannot reach the Owner's DM ({self.owner}): "
-                    f"{sent.problem}. Nothing from Slack will instruct this "
-                    "run; `rite doctor` checks each target."
+                    f"slack: cannot reach the Owner's DM ({self.owner}): nothing "
+                    "from Slack will instruct this run; `rite doctor` checks "
+                    "each target."
                 )
         else:
             lines.append(
@@ -739,29 +767,111 @@ class Listener:
                 "instruction."
             )
         if self.broadcast:
-            sent = _post(
-                self.broadcast,
-                self.token,
-                f"rite: Manager `{self.manager}` is running. What is typed here "
-                "reaches it as context — never as an instruction; only the "
-                "Owner's DM with rite instructs it.",
-                call=caller,
-                kind=SYSTEM,
-                author=self.manager,
-            )
-            if sent.ok:
-                self.broadcast_id = sent.channel
-                self._start_at(self.broadcast_id, sent.ts)
-                self.remember(sent.channel, sent.ts, self._label("start line", sent))
+            known = self._known.get("broadcast") or {}
+            if known.get("name") == self.broadcast and known.get("channel"):
+                self.broadcast_id = str(known["channel"])
+                self._start_at(self.broadcast_id, self._now_ts())
+            else:
+                # Once per channel, for the same reason as the DM: a name is
+                # resolved to an id only by posting (no `channels:read`).
+                sent = _post(
+                    self.broadcast,
+                    self.token,
+                    f"rite: project `{self._project_label}` reads this channel. "
+                    "What is typed here reaches its Managers as context — never "
+                    "as an instruction; only the Owner's DM with rite instructs "
+                    "them.",
+                    call=caller,
+                    kind=SYSTEM,
+                    author=self.manager,
+                )
+                if sent.ok:
+                    self.broadcast_id = sent.channel
+                    self._learned("broadcast", "name", self.broadcast, sent.channel)
+                    self._start_at(self.broadcast_id, sent.ts)
+                    self.remember(
+                        sent.channel, sent.ts, self._label("start line", sent)
+                    )
+                else:
+                    lines.append(
+                        f"slack: cannot post to {self.broadcast}: {sent.problem}"
+                    )
+            if self.broadcast_id:
                 lines.append(
                     f"slack: {self.broadcast} is read as context, never as instruction."
                 )
-            else:
-                lines.append(f"slack: cannot post to {self.broadcast}: {sent.problem}")
+        lines.extend(
+            self._say_status(
+                f"Manager `{self.manager}` is running."
+                + (" Instructions: the Owner's DM." if self.dm else ""),
+                call=caller,
+            )
+        )
         if self.refinement_channel:
             lines.append(self._open_refinement_channel(caller))
         self._save()
         return lines
+
+    @property
+    def _project_label(self) -> str:
+        if self.project_name:
+            return self.project_name
+        return self.project.name if self.project is not None else "this project"
+
+    def _now_ts(self) -> str:
+        """Now, as a Slack timestamp, for where reading begins when nothing was
+        posted to begin it."""
+        return f"{float(self.clock()):.6f}"
+
+    def _learned(self, what: str, key: str, value: str, channel: str) -> None:
+        self._known[what] = {key: value, "channel": channel}
+
+    def _dm_without_posting(self, *, call) -> str:
+        """The Owner's DM id without posting to it: remembered from an earlier
+        run for THIS owner, or opened with `conversations.open` where the app
+        has `im:write`. "" when neither works; `open` then posts once to learn
+        it, which is also what says what the DM is for."""
+        known = self._known.get("dm") or {}
+        if known.get("user") == self.owner and known.get("channel"):
+            return str(known["channel"])
+        try:
+            got = call("conversations.open", self.token, {"users": self.owner})
+        except Exception:  # noqa: BLE001 - no answer is not an id
+            return ""
+        # Slack answers `{"channel": {"id": "D…"}}`. Anything else is not an id,
+        # whatever `ok` says.
+        opened = got.get("channel") if got.get("ok") else None
+        channel = opened.get("id") if isinstance(opened, dict) else ""
+        if channel:
+            self._learned("dm", "user", self.owner, str(channel))
+        return str(channel or "")
+
+    def _say_status(self, text: str, *, call=None) -> list[str]:
+        """Say a lifecycle line in the status channel, naming the project.
+
+        ⚠ **Never the DM, never the broadcast channel.** The DM is for what
+        needs the person, and the broadcast channel is read as context. A
+        status channel that cannot be posted to leaves the line on the terminal
+        and says so; it does not fall back to either, because that fallback IS
+        the spam this exists to remove (Robert, 2026-09-29).
+        """
+        if not self.status:
+            return [f"slack (no status channel): {text}"]
+        sent = _post(
+            self.status,
+            self.token,
+            f"rite · `{self._project_label}`: {text}",
+            call=call,
+            kind=SYSTEM,
+            author=self.manager,
+        )
+        if sent.ok:
+            return []
+        return [
+            f"slack: cannot post to the status channel {self.status} "
+            f"({sent.problem}), so this stays here: {text} `rite doctor` says "
+            "how to add the app to it."
+        ]
 
     def _open_refinement_channel(self, caller) -> str:
         """Can rite post AND read in the refinement channel? Both, or rounds
@@ -1184,6 +1294,7 @@ class Listener:
                 "posted": keep,
                 "threads": threads,
                 "notes": self._notes,
+                "known": self._known,
             }
             write_atomic(path, json.dumps(state, indent=1) + "\n")
         except OSError as e:
@@ -1194,6 +1305,8 @@ class Listener:
         reading that are still inside the horizon."""
         state = self._state()
         self._started = bool(state.get("started"))
+        known = state.get("known")
+        self._known = known if isinstance(known, dict) else {}
         notes = state.get("notes")
         if isinstance(notes, dict):
             self._notes = {
@@ -1535,37 +1648,33 @@ class Listener:
         is the one case this cannot cover.
         """
         lines = self.post_replies(call=call)
-        stopped = (
-            f"rite: Manager `{self.manager}` has stopped. Nothing is reading "
-            "this now. What you send here waits in Slack, and is delivered at "
-            f"its first turn when `rite start {self.manager}` next runs."
-        )
-        if undelivered:
-            # ⚠ WHERE THE PERSON TYPED IT. A message rite already took from
-            # Slack but the Manager never received reads, from here, exactly
-            # like one it acted on; the terminal line alone reaches nobody on
-            # a phone (coordinator, 2026-09-28).
-            stopped += f"\n⚠ {undelivered}"
-        for channel in (self.dm, self.broadcast_id):
-            if not channel:
-                continue
-            sent = _post(
-                channel,
-                self.token,
-                stopped,
+        lines.extend(
+            self._say_status(
+                f"Manager `{self.manager}` has stopped. What is sent to it now "
+                f"waits in Slack and is delivered when `rite start "
+                f"{self.manager}` next runs.",
                 call=call,
-                # A message taken from Slack that the Manager never received
-                # is a delivery problem, and shown as one.
-                kind=DELIVERY if undelivered else SYSTEM,
+            )
+        )
+        if undelivered and self.dm:
+            # ⚠ WHERE THE PERSON TYPED IT, and the one stop line that stays in
+            # the DM: a message rite already took from Slack but the Manager
+            # never received reads, from here, exactly like one it acted on;
+            # the terminal line alone reaches nobody on a phone (coordinator,
+            # 2026-09-28). This needs the person; a plain stop does not.
+            sent = _post(
+                self.dm,
+                self.token,
+                f"rite: Manager `{self.manager}` has stopped.\n⚠ {undelivered}",
+                call=call,
+                # A message taken from Slack that the Manager never received is
+                # a delivery problem, and shown as one.
+                kind=DELIVERY,
                 author=self.manager,
             )
             if not sent.ok:
                 lines.append(
-                    f"slack: could not say the Manager stopped: {sent.problem}"
+                    "slack: could not say in the DM that a message was not "
+                    f"delivered: {sent.problem}"
                 )
-        if self.dm or self.broadcast_id:
-            lines.append(
-                "slack: said in Slack that this Manager has stopped; messages "
-                "sent now are delivered when it next starts."
-            )
         return lines

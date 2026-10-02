@@ -163,3 +163,51 @@ class TestTheListenerStartsWhereItSaidItWasListening:
         assert len(news) == 1 and "missing_scope" in news[0]
         listener.poll(call=call)
         assert listener.news() == []
+
+
+class TestTheStatusChannelIsItsOwn:
+    """Robert, 2026-09-29 (RS1): starts and stops go "to a separate
+    #rite-status channel". Output only: rite reads the broadcast channel as
+    context, so the status channel may not be it (D-114)."""
+
+    def test_it_defaults_to_rite_status_once_slack_is_on(self, tmp_path):
+        got = _config(tmp_path, "slack:\n  owner_user: U0C4HK552HF\n")
+        assert got.slack.status == "#rite-status"
+        assert _config(tmp_path, "slack: {}\n").slack.status == ""
+
+    def test_it_may_be_named(self, tmp_path):
+        got = _config(
+            tmp_path,
+            "slack:\n  owner_user: U0C4HK552HF\n  status_channel: '#ops-rite'\n",
+        )
+        assert got.slack.status == "#ops-rite"
+
+    def test_a_bare_name_is_the_channel_not_a_mistake(self, tmp_path):
+        """Same S19 normalisation as broadcast_channel: `ops-rite` is the
+        channel `#ops-rite`, not a rejection."""
+        got = _config(
+            tmp_path,
+            "slack:\n  owner_user: U0C4HK552HF\n  status_channel: ops-rite\n",
+        )
+        assert got.slack.status == "#ops-rite"
+
+    def test_the_broadcast_channel_is_refused_as_the_status_channel(self, tmp_path):
+        for body in (
+            "slack:\n  owner_user: U0C4HK552HF\n  status_channel: '#all-rite'\n",
+            "slack:\n  broadcast_channel: '#team'\n  status_channel: '#team'\n",
+        ):
+            got = _config(tmp_path, body)
+            assert isinstance(got, ParseError), body
+            assert "channel of its own" in got.message
+
+    def test_a_name_normalisation_cannot_fix_is_refused(self, tmp_path):
+        got = _config(tmp_path, "slack:\n  status_channel: '#bad name'\n")
+        assert isinstance(got, ParseError) and "status_channel" in got.message
+
+    def test_it_survives_the_config_round_trip(self, tmp_path):
+        config = _config(
+            tmp_path,
+            "slack:\n  owner_user: U0C4HK552HF\n  status_channel: '#ops-rite'\n",
+        )
+        reparsed = _config(tmp_path, config_to_yaml(config))
+        assert reparsed.slack.status_channel == "#ops-rite"
