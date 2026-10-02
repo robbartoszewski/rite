@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.76 · **Date:** 2026-10-01
+**Version:** 0.24.77 · **Date:** 2026-10-02
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -992,6 +992,21 @@ window requesting more than the sandbox cap is a configuration error: `rite
 schedule set`/`rite doctor` refuse it rather than silently clamping, so the
 mismatch is visible at configuration time instead of producing a schedule that
 quietly never reaches its stated count.
+
+**Enforced at the spawn site as a count, not a switch (0.24.77, SCRUM-28).**
+`rite sandbox start` refused only when a window allowed 0, so `workers: 1` let a
+second and a third Worker start, held back only by the flat cap. It now refuses a
+start that would make this project's running Workers exceed the window's count,
+which is the drop rule above applied to starts: what is running is not stopped,
+and is not added to. The count and the launch run under one per-project lock
+(`.rite/worker-starts.lock`), because both caps are count-then-start and two
+starts at once each counted the same number. Fails closed: where `flock` does not
+exclude, or the lock is still held after 330s (past `yoloai new`'s own 300s),
+nothing starts and the refusal says which. The lock closes the race only if a
+sandbox `yoloai new` has just made is counted by the next start, so that was
+measured rather than assumed: on yoloAI 0.11.0 (seatbelt), a sandbox absent from
+`yoloai ls --active --json` before `yoloai new` was listed there as soon as `new`
+returned (2026-10-02).
 
 ---
 
@@ -2830,6 +2845,15 @@ things rite actually needs to reason about — *is this ticket startable* and *m
 its dependents proceed*. That is a small config addition and a change to one
 method per backend. It is not done, and until it is, §6.2's column names are load-
 bearing in a way a project-agnostic tool's should not be.
+
+**One more place it is load-bearing (0.24.77, SCRUM-27):** `rite sandbox start
+--ticket` moves the ticket to "In Progress" once the Worker has started, through
+the backend's own `move`, because the board read "To Do" for tickets Workers were
+working and a sandboxed Worker holds no board credential to move one itself. A
+board with no such status says so (GitHub maps it to open, and the start says
+where it landed); a refused or failed move is said on stderr and never fails a
+start that happened, since the broker reads a non-zero exit as a Worker that did
+not start.
 
 The **"blocked by" link is different and is a genuine requirement** — §6.1's
 `link()` and the dependency logic that reads it need a real backend-native
@@ -4848,6 +4872,15 @@ also calls, with the no-tty guard INSIDE it: a caller that got to decide whether
 `--yes` counts as somebody being there is a caller that can reintroduce the
 abort below. Init's own way out of the guard is named in init's words, since
 `--follow-module-docs` is this command's.
+
+**It reports to a declared Manager (0.24.77, SCRUM-26).** Without `--manager` it
+wrote `manager: ''` while the project declared one, so the Worker's brief said
+"No Manager assigned yet." and, further down, "Tell your Manager you are free" —
+the contradiction SCRUM-5 fixed for `rite init`. It now makes init's choice, the
+first declared Manager (`rite start`'s priority order, §2.4), and says which; a
+`--manager` naming no declared Manager is refused and nothing is created. A
+project that declares no Manager still gets a Worker reporting to nobody, as
+`rite init` allows, and the command says so.
 
 ⚠ **A Worker init creates is linked to the Manager init declared.** `--manager`
 is this command's; init passed none, so an init-created Worker recorded
@@ -7123,6 +7156,14 @@ wait tick, with or without an Owner session. It reads the inbox WITHOUT
 consuming it: the answer is the Owner's mail too, and taking it would remove
 it from the Manager's next prompt with nobody saying so.
 
+**`rite sandbox status` names the route (0.24.77, SCRUM-25).** It still said
+"answer it by attaching". It now says, by state: reply in the question's Slack
+thread, or on this machine `rite message <owner> "<qid> <answer>"`, which the
+relay matches by the same id, while `rite start <owner>` runs; that the question
+has not been passed on yet, when no id has been raised for it; that a stopped
+Worker cannot be answered; and `yoloai attach` only where no Manager is declared
+to relay.
+
 ⚠ **Isolation, stated rather than implied.** This crosses from the host into
 a sandboxed Worker's exchange directory and **changes no sandbox rule**: no
 flag, no grant, no permission, and nothing in it can be made to turn a
@@ -7575,6 +7616,15 @@ as empty nor calls an unknown verdict "the work is there". Credentials given in
 the environment (tier 1) still build the board without touching the file.
 Measured: in the run, all three commands died with a `CredentialStoreError`
 traceback.
+
+**And the Manager is handed the board it cannot read (0.24.77, SCRUM-29).** Its
+opening prompt told it to work the queue with `rite loop run`, which from inside
+the sandbox can only answer `unknown` for a Jira board. The supervisor reads the
+same board outside before it starts a session, so the instruction now ends with
+what that read found — the verdict, the ready tickets and the blocked ones with
+why — under "The board this cycle", and the opening prompt points there. Only
+from a verdict with a board read behind it: a refinement cycle or one mail
+started gets no such section rather than an invented one.
 
 ### 10.4. Phase 2 — multi-machine credential identity
 
@@ -8186,6 +8236,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.77 — five dogfood fixes on the Worker and Manager paths (SCRUM-25 … SCRUM-29).** §2.7.5, §6.5, §9.6, §9.16.5a and §10.3 gain a paragraph each. **SCRUM-25:** `rite sandbox status` said "answer it by attaching" a release after S30 made the Slack thread the route; `worker_questions.how_to_answer` names the route by state (raised, with the id and `rite message <owner> "<qid> …"`; not yet passed on; stopped; no Manager to relay). **SCRUM-26:** `rite add worker` without `--manager` wrote `manager: ''` in a project with Managers, the SCRUM-5 contradiction on the CLI path; it now links the first declared Manager, refuses an undeclared name, and says when none exists. **SCRUM-27:** `rite sandbox start --ticket` moves the ticket to "In Progress" after the Worker starts, through the backend's own `move`, never failing the start. **SCRUM-28:** a window's `workers` is enforced as a count at the spawn site, and the count and the launch run under a per-project start lock that fails closed; writing the concurrency test found a second race the lock also closes: `worker_home` checks then symlinks, so two starts at once crashed one with `FileExistsError`. **SCRUM-29:** the traceback was already fixed by 0.24.65 (reproduced on this tree and on the installed 0.7.0a5 under a real `sandbox-exec` read deny: degraded, no traceback); what remained was a Manager told to read a board it cannot, and the supervisor now hands it the board it read, under "The board this cycle". The opening prompt also printed a literal `{rite}`, a missing f-string prefix. Tests: `tests/test_sandbox_status_says_how_to_answer.py` (including the printed route run end to end through `rite message` and the real relay), `tests/test_add_worker_reports_to_a_declared_manager.py`, `tests/test_a_started_ticket_moves_on_the_board.py`, `tests/test_the_scheduled_count_is_a_cap.py` (two starts at once, one slot) and `tests/test_a_manager_is_handed_the_board_it_cannot_read.py`. Each fix's mutation goes red on the assertion that names its property; the first race control did not, failing on the crashed thread instead, and the test now pins `worker_home` so the count is what it measures, with the crash its own test.
 
 **Changes in 0.24.76 — `rite init` finishes the job it starts, and the publish gate runs behind a redirected `core.hooksPath` (v0.7.0a5: SCRUM-5 … SCRUM-11).** §9.3 (Section 1, the modules section, the settle list), §9.6, §10.5 and §11.5.1 rewritten. Seven items from a read-only investigation of a real `rite init` run on 0.7.0a4, five of them one root cause: **init's path is thinner than the `rite add *` command it stands in for**. **SCRUM-5 + SCRUM-6:** `setup.offer_a_worker` called `add_worker(root, name)` — two of five parameters — so an init-created Worker was linked to no Manager (brief line 7 "No Manager assigned yet." against line 112 "Tell your Manager you are free", because only that one line is conditional) and was never offered the modules' own instruction files, S23's feature being reachable from `add_worker_cmd` alone. New `cli/module_docs.py` holds the find-and-ask and the no-tty probe, called by both entry points, with the guard INSIDE the step so no caller can pass its way past the `click.confirm` abort (defect class 15); the link is None-safe, since `--yes` declares no Manager and a Worker can still be declared there. **SCRUM-7:** `what_is_missing` gains a board row (`ticket_backend.type: none`, naming `rite credential set jira` and the three fields it writes) and an exclusive Slack row (`refinement.questions_to: dm` with no `slack.owner_user`, naming `rite credential set slack`, `rite replies` and `rite refine answer`); signposts only, because init does not write backend config. **SCRUM-8:** `credential set` asks before retargeting a board, default No, never without a tty, clearing the outgoing backend's exclusive fields and `credential` while `scope_label` survives (`config.models.leave_the_old_board`). **SCRUM-10:** `OWNER_ONLY_UNTIL_MULTI_MANAGER` suppresses the Owner-vs-Manager MACHINE question on both routes through one point (`_ask_role`; the second site is the "existing spec or code" route, which is the one the reported run hit), says which machine it took, and REFUSES `--config project.role: manager` before `.rite/` exists rather than discarding a declared key; `ROLE_OPTIONS`, the select and `_borrow_owner_config` are intact and unreferenced so 0.9.0 re-wires. **SCRUM-11:** modules get a description, defaulted from the module's own README's first prose sentence and offered rather than taken (`manage.description_from_readme`), and `modules.yaml` has ONE writer again (`manage.write_modules_file`, atomic and lockable) where `scaffold.write_modules` was a second, non-atomic one also used by `rite module set-command`. **SCRUM-9, security-sensitive:** a global `core.hooksPath` meant the publish gate ran nowhere automatically, in any rite project, for the life of the redirect — and the directory it pointed at held another project's data-leak gate, so the old refusal was right twice over and wrong to stop there. `install_pre_push_hook` now writes a chained hook (redirected hook first, its exit code final, gate second, ref list duplicated through a file because git feeds them on stdin, upstream resolved at RUN time from the global and system scopes) and points only this repository's `core.hooksPath` at its own hooks, ABSOLUTE — a relative `.git/hooks` ran the hook from the main checkout and nothing at all from a worktree, measured. The hook is written BEFORE the config is pointed at it and the installer refuses loudly when the chain cannot be built, because the reverse order has a window that silently drops the other project's gate. `upstream_hooks_dir` is deliberately not `redirected_hooks_dir`: once pointed back, "is this redirected?" says no, and an installer asking that would write the unchained script on its second run. `own_hooks_dir` (`--git-common-dir`, guarded by `--show-toplevel`) replaces `(repo_root / ".git").is_dir()`, which answered "not a git repository" for every worktree and made the redirect check report a redirect in every worktree with none set; `scaffold.install_pre_push_hooks` was a SECOND installer and now delegates, carrying each refusal's words back. Review found three gaps, all closed on the branch: the chain read `core.hooksPath` with a bare `--get`, so a `~/…` value disarmed the upstream hook silently (latent on an absolute value, live the moment anything rewrites that line in `~` form); no test could catch it because every fixture wrote the expanded path; and `settle_module_descriptions`' `if module.description` guard was unpinned, though a module name containing a dot (which `name_problem` allows) defeats `Preset.get`'s dotted walk and lets the README-derived default replace a description declared in `--config`. Tests: `tests/test_init_declares_a_whole_worker.py`, `tests/test_init_does_not_call_a_boardless_project_ready.py`, `tests/test_init_is_owner_only_until_multi_manager.py`, `tests/test_init_says_what_each_module_is.py`, `tests/test_a_board_is_retargeted_only_when_asked.py`, `tests/test_the_gate_runs_behind_a_redirected_hooks_path.py` — the last drives real git, real hooks and real pushes to a real remote, with a per-test global git config because these tests WRITE a redirect and the suite's own isolation file is session-scoped. ⚠ BEHAVIOURAL, not a parameter ledger: a test enumerating `add_worker`'s parameters passes with the bug present the moment someone adds the argument and gets it wrong. Twenty-four mutations run and reverted, each red. Existing init tests lose the role answer and gain a description answer; two that pinned "Ready." for a boardless project now pin the board row; `tests/test_init_scaffold.py`'s hook tests use real repositories, because the installer now asks git rather than looking for a `.git` directory.
 

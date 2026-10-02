@@ -837,8 +837,17 @@ def count_active_sandboxes(
     return sum(1 for name in names if _belongs_to(name, root, workers))
 
 
-def _schedule_refusal(root: Path | str | None) -> str | None:
-    """Why the schedule forbids starting a Worker right now, or None.
+def _schedule_refusal(root: Path | str | None, running: int = 0) -> str | None:
+    """Why the schedule forbids starting one more Worker right now, or None.
+
+    `running` is this project's Workers already running, counted the way the
+    flat cap counts them. 🔴 **The window's count is a CAP, not a switch
+    (SCRUM-28).** This refused only at 0, so `workers: 1` let a second and a
+    third start, held back only by `sandbox.max_concurrent_workers` (5):
+    the schedule said one and three ran. §2.7.5 calls the schedule a "cap
+    the user sets", and after a drop says the Workers already running "are
+    not replaced when they finish": so a start that would make `running + 1`
+    exceed the window's count is refused, and nothing running is stopped.
 
     ⚠ **The schedule was ADVISORY before 0.5.0 and this is what makes it
     real.** `workers_at` existed, was correct, and was read only by the
@@ -879,7 +888,14 @@ def _schedule_refusal(root: Path | str | None) -> str | None:
     moment = current_moment(schedule.timezone)
     allowed = workers_at(schedule, moment.minute_of_day, moment.weekday)
     if allowed > 0:
-        return None
+        if running + 1 <= allowed:
+            return None
+        return (
+            f"the schedule allows {allowed} Worker(s) right now "
+            f"({moment.zone.describe()}) and {running} of this project's are "
+            f"already running. Refused rather than started — `rite schedule "
+            f"show` lists the windows, and raising the count is a config change."
+        )
 
     when = next_open(schedule, moment)
     coming = f" Next open: {when}." if when else ""
@@ -1056,7 +1072,93 @@ def sandbox_environment(base: dict[str, str] | None = None) -> dict[str, str]:
     return env
 
 
+START_LOCK = "worker-starts"
+"""The project's start lock, `.rite/worker-starts.lock` (`state.lock_path_for`)."""
+
+START_LOCK_WAIT = 330.0
+"""How long a start waits for another one in this project to finish: past
+`yoloai new`'s own 300s timeout, so a start that is merely slow is waited for
+and only one that is stuck is refused."""
+
+
 def start_worker(
+    root: str | os.PathLike[str],
+    worker: str,
+    config: SandboxConfig,
+    agent_args: list[str] | None = None,
+    env: dict[str, str] | None = None,
+    allow_dirty: bool = False,
+    prompt: str | None = None,
+    ticket: str = "",
+) -> SandboxResult:
+    """`_start_worker_unlocked`, one start per project at a time (SCRUM-28).
+
+    🔴 **The caps are count-then-start, and nothing serialised the two.** The
+    flat cap and the schedule's count both read how many Workers run, then
+    `yoloai new` makes one more. Two starts at once — a Manager's request
+    and a person's `rite sandbox start`, or two requests — each counted the
+    same number and each started, so a window of `workers: 1` could run two
+    with both checks passing. The count and the launch now happen under one
+    lock, so the second start counts the first.
+
+    **Fails closed, and says why.** A filesystem where `flock` does not
+    exclude (`state.exclusion_holds`) cannot serialise anything, and a lock
+    still held after `START_LOCK_WAIT` is a start that is stuck, not slow;
+    both refuse rather than start uncounted. `.rite/` is mounted into every
+    Worker, so a wait without a bound would let one stuck holder hang every
+    later start.
+    """
+    import fcntl
+    import time
+
+    from rite_ai.state import exclusion_holds, lock_path_for
+
+    rite_dir = Path(root) / ".rite"
+    if not exclusion_holds(rite_dir):
+        return SandboxResult(
+            False,
+            f"not starting '{worker}': file locking does not work under "
+            f"{rite_dir}, so two starts at once could both pass the Worker "
+            "caps. Refused rather than started uncounted — keep the project "
+            "on a local disk.",
+        )
+    lock_file = lock_path_for(rite_dir / START_LOCK)
+    handle = open(lock_file, "a+")  # noqa: SIM115
+    try:
+        deadline = time.monotonic() + START_LOCK_WAIT
+        while True:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    return SandboxResult(
+                        False,
+                        f"not starting '{worker}': another start of this "
+                        f"project's Workers has held {lock_file} for "
+                        f"{START_LOCK_WAIT:.0f}s. Refused rather than started "
+                        "uncounted; if nothing is starting, the holder is "
+                        f"stuck: `lsof {lock_file}` names it.",
+                    )
+                time.sleep(0.2)
+        try:
+            return _start_worker_unlocked(
+                root,
+                worker,
+                config,
+                agent_args=agent_args,
+                env=env,
+                allow_dirty=allow_dirty,
+                prompt=prompt,
+                ticket=ticket,
+            )
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    finally:
+        handle.close()
+
+
+def _start_worker_unlocked(
     root: str | os.PathLike[str],
     worker: str,
     config: SandboxConfig,
@@ -1139,7 +1241,7 @@ def start_worker(
     # failure, and before anything is started because a ceiling applied
     # afterwards is a report (§9.14.5 makes the same argument about a
     # budget).
-    schedule_problem = _schedule_refusal(root)
+    schedule_problem = _schedule_refusal(root, active)
     if schedule_problem is not None:
         return SandboxResult(False, schedule_problem)
 

@@ -380,3 +380,56 @@ def _relay(root: Path, manager: str, say) -> int:
         say(f"relayed the User's answer to Worker {worker or sandbox!r} ({qid})")
         carried += 1
     return carried
+
+
+def _teller(config) -> str:
+    """The Manager whose supervisor tells the person and relays the answer,
+    or "" when none is declared. The same choice `_worker_question_watch`
+    makes: the one holding `route`, or with no roles the first declared
+    Manager (`rite start`'s priority order, §2.4)."""
+    from rite_ai.config.managers import routing_owner
+
+    roles = list(config.coordination.manager_roles)
+    if roles:
+        return routing_owner(roles)
+    managers = list(config.coordination.managers)
+    return str(managers[0]) if managers else ""
+
+
+def how_to_answer(root: Path, worker: str, sandbox: str, stopped: bool) -> str:
+    """How a person answers this Worker's question, in one sentence, for
+    `rite sandbox status` (SCRUM-25).
+
+    ⚠ **It said "answer it by attaching", which stopped being the way in
+    S30.** The relay above carries an answer into the file the Worker polls;
+    sending people to `yoloai attach` sent them to type into a live session
+    for a question rite had already posted to Slack. Said per state, because
+    each needs a different thing from the person: a stopped Worker cannot
+    be answered at all, and a question no Manager has passed on yet has no
+    thread to reply in."""
+    from rite_ai.config.parse import load_project
+
+    if stopped:
+        return (
+            "the Worker has stopped, so no answer can reach it: start it again "
+            "on its ticket once the question is settled"
+        )
+    project = load_project(Path(root))
+    teller = "" if isinstance(project, list) else _teller(project.config)
+    if not teller:
+        return (
+            "no Manager is declared to relay an answer, so the only way to "
+            f"answer it is to type into the session: `yoloai attach {sandbox}`"
+        )
+    qid = _load(_ledger_path(Path(root), teller)).get(sandbox)
+    if not isinstance(qid, str):
+        return (
+            f"it has not been passed on yet: Manager '{teller}' sends it to you "
+            f"while `rite start {teller}` runs, and its id is what an answer "
+            "is matched by"
+        )
+    return (
+        f"reply in its Slack thread, or here with `rite message {teller} "
+        f'"{qid} <your answer>"`; while `rite start {teller}` runs, it writes '
+        f"the answer into the file Worker '{worker}' is polling"
+    )

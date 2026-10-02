@@ -176,7 +176,10 @@ Robert, verbatim: "I expect rite to refine the lazy tickets before proceeding
   Robert's Slack DM within one poll, labelled "needs your answer", with a
   first line naming the ticket and question id; `rite status` shows the
   Worker as waiting on a question; `rite sandbox destroy` refuses while it is
-  unanswered. The answer goes back by attaching (the agreed manual path).
+  unanswered. The answer goes back through the question's Slack thread, or
+  `rite message <owner> "<qid> …"` on the machine: the Owner's supervisor
+  writes it into the `answer.json` the Worker polls (S30, 0.7.0a4). Attaching
+  is the fallback only where no Manager is declared to relay it.
 - Not a pass: a Worker that stops silently, or a status view that says
   `idle` or `not started` for a Worker that is waiting.
 
@@ -286,7 +289,8 @@ A pass is a pass for **this** configuration. It says nothing about:
 - **Long runs, check-ins and the standup.** One day. Check-in windows,
   deferred questions and a morning standup are not exercised unless
   configured and waited for.
-- **The answer path back into a Worker.** Answers go by attaching. A Worker
+- **The answer path back into a Worker.** Answers go through Slack or
+  `rite message` and the Owner relays them (S30), not by attaching. A Worker
   reading a host-written `answer.json` has not been measured by anyone.
 - **Unattended operation.** Robert drives and watches. Anything that only
   fails with nobody there is not tested.
