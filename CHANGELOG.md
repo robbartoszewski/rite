@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Leaked self-test sandboxes are collected (SCRUM-37)
+
+A `rite doctor`/`rite init` self-test spins up a throwaway sandbox and tears it
+down in a `finally` — but a SIGKILL, a crash or a power cut bypasses that and
+leaves the sandbox active, counting against the machine's sandbox cap until you
+notice it in `rite doctor`'s litter. One such orphan helped trip a worker-cap
+incident. Now a reconciliation pass collects them: it runs on every scheduler
+tick, and there is a manual lever, `rite sandbox reap` (`--dry-run` to
+preview). It destroys only a
+`rite-selftest-*` sandbox whose creating process is gone AND that holds no
+unapplied work; it never touches a project's Worker, a probe with a live
+creator, or anything holding changes.
+
 ### A Manager runs until you stop it (SCRUM-20)
 
 **`rite start lead` no longer needs `--sessions` and `--minutes`.** With no

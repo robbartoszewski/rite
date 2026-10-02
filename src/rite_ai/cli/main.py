@@ -8140,6 +8140,41 @@ def sandbox_status(worker: str) -> None:
         click.echo(seen.describe())
 
 
+@sandbox.command("reap")
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Report what WOULD be reaped without destroying anything.",
+)
+def sandbox_reap(dry_run: bool) -> None:
+    """Collect leaked self-test sandboxes whose creator process is gone (SCRUM-37).
+
+    A `rite-selftest-*` sandbox is torn down in a `finally` and on SIGTERM, but
+    a SIGKILL or a crash bypasses both and leaves it active, counting against
+    the machine's sandbox cap. This destroys only such a probe — a dead creator
+    and no unapplied work — and never a project's Worker. The scheduler tick and
+    a supervisor's startup run it on their own; this is the manual lever.
+
+    Examples:
+      rite sandbox reap
+      rite sandbox reap --dry-run
+    """
+    from rite_ai.sandbox import reap_dead_selftest_sandboxes
+
+    result = reap_dead_selftest_sandboxes(dry_run=dry_run)
+    if result.unavailable:
+        click.echo(result.summary, err=True)
+        raise SystemExit(1)
+    verb = "would reap" if dry_run else "reaped"
+    if result.reaped:
+        click.echo(f"{verb} {len(result.reaped)}: {', '.join(result.reaped)}")
+    else:
+        click.echo("no leaked self-test sandboxes with a dead creator")
+    for name, why in result.kept:
+        click.echo(f"  kept {name}: {why}")
+
+
 # --- Multi-project registry (SPEC §8.9, D-34) ---
 
 
