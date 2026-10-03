@@ -279,7 +279,9 @@ def take_one_step(
     # Level 2 (DD-2.4, OL6): the unit's own steps, with its DECOMPOSITION model,
     # before it edits anything. Advisory by design — a unit with no decomposition
     # model, or a Level-2 turn that could not run, executes exactly as before.
-    approach, approach_note = _approach_for(root, manager, subtask, spec_slice)
+    approach, approach_note = _approach_for(
+        root, manager, subtask, spec_slice, placement if placed else None
+    )
 
     # ⚠ The boundary, checked rather than trusted (DD-2.4). Level 2 runs between
     # approval and execution, so a subtask it altered would be rewriting what
@@ -323,9 +325,17 @@ def take_one_step(
         # ⚠ AFTER `_record`, which ASSIGNS `step.lines` from the outcome — the
         # same trap `_approach_for`'s note below describes, and appending before
         # it would silently drop the line.
+        # ⚠ Only says "committed" when there is a commit. A failed verify makes
+        # no branch, and a line claiming one sends whoever reads it looking in a
+        # sandbox for a ref that was never created.
+        landed = (
+            f"committed to {outcome.branch} ({outcome.commit[:8]})"
+            if outcome.commit
+            else f"nothing committed: {outcome.status}"
+        )
         step.lines.append(
             f"ran inside {placement.worker}'s sandbox {placement.sandbox}, "
-            f"in {placement.subdir}/, committed to {outcome.branch}"
+            f"in {placement.subdir}/, {landed}"
         )
     if approach_note:
         # ⚠ AFTER `_record`, which assigns `step.lines` from the outcome — a note
@@ -335,8 +345,18 @@ def take_one_step(
     return step
 
 
-def _approach_for(root: Path, manager: str, subtask, spec_slice: str):
+def _approach_for(root: Path, manager: str, subtask, spec_slice: str, placement=None):
     """(the approach, a note to record) — Level 2 for this unit (DD-2.4, OL6).
+
+    ⚠ **A PLACED turn plans inside its own sandbox, with the Worker's own
+    model**, and the placement carries that callable ready-made
+    (`worker_step.Placement.approach`). Reading the Manager's role for a placed
+    subtask was wrong three ways: it ran a write-capable auto-mode model turn on
+    the HOST in the operator's real project tree — the containment the placement
+    exists to provide, skipped by the planning half; it planned against a tree
+    where the subtask's module-relative scope paths do not exist and the earlier
+    subtasks' commits are not present; and it ignored OL3's model split, so a
+    Claude Manager driving a GPU Worker produced no approach at all.
 
     ⚠ **Never raises and never refuses the turn.** An approach improves a turn;
     it is not a gate on one. So every failure here returns `("", why)` and the
@@ -348,6 +368,12 @@ def _approach_for(root: Path, manager: str, subtask, spec_slice: str):
     unit has nothing to gain from loading a second set of weights beside the one
     it is about to implement with.
     """
+    if placement is not None and placement.approach is not None:
+        result = placement.approach(subtask, spec_slice)
+        if result.ok:
+            return result.steps, ""
+        return "", f"no Level-2 approach for {subtask.id}: {result.problem}"
+
     from rite_ai.config.managers import decomposition_model_for
     from rite_ai.config.parse import ParseError, parse_config
     from rite_ai.local.approach import plan_approach

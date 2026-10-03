@@ -85,6 +85,31 @@ class Placement:
     in the copy's root, while a Worker's modules are clones one level down."""
     branch: str = ""
     agent: object | None = None
+    approach: object | None = None
+    """`(subtask, spec_slice) -> Approach` — Level 2 for a placed turn, run
+    INSIDE the sandbox with the WORKER's own decomposition model.
+
+    ⚠ **Built here because the alternative was measurably wrong twice over.**
+    `step._approach_for` resolves the MANAGER's role and runs its Goose on the
+    HOST with `workspace=<project root>`. For a placed subtask that is a
+    write-capable auto-mode model turn in the operator's real project tree —
+    the containment this whole module exists to provide, skipped by the planning
+    half — and it plans against a tree where the subtask's module-relative scope
+    paths do not exist and the earlier subtasks' commits are not present. So the
+    approach it produced described a repository that was not the one being
+    edited.
+
+    It is also the model split OL3 made: `worker_decomposition_model` says a
+    local Worker plans with its OWN model ("one GPU, nothing to gain from
+    loading a second") and a Claude one with Opus. Read from the Manager, a
+    Claude Manager driving a GPU Worker returned no approach at all — which is
+    the headline mixed-fleet configuration — and a local Manager on a different
+    model loaded a second set of weights onto the same card (OL2's 2.3x/3.6x).
+    """
+    binary: str = ""
+    """The yoloAI the caller named, carried so the launcher's own status check
+    asks the SAME binary the exec used. Empty means "whatever is on PATH",
+    which is the ordinary case."""
     problem: str = ""
 
     @property
@@ -130,15 +155,22 @@ def placement_for(
     if shape:
         return no(shape)
 
-    from rite_ai.sandbox import existing_sandbox_name, worker_sandbox_status
+    from rite_ai.sandbox import existing_sandbox_name, sandbox_status_named
 
+    # ⚠ **ONE name, asked about once.** `existing_sandbox_name` prefers the
+    # project-scoped name and falls back to the legacy one, while
+    # `worker_sandbox_status` answers for EITHER — so asking them independently
+    # can describe a different sandbox from the one the turn will run in, when a
+    # machine holds both. The gate would then pass on one sandbox and the turn
+    # execute in another. Resolved once, and the status asked of that name.
     sandbox = existing_sandbox_name(worker, root)
-    status = worker_sandbox_status(worker, root)
-    if not status.known:
+    status = sandbox_status_named(sandbox)
+    down = status.container_is_down
+    if down is None:
         # "I could not check" and "there is no sandbox" are opposite answers;
         # only one of them is safe to act on (`worker_sandbox_status`).
         return no(f"rite could not ask yoloAI about its sandbox: {status}")
-    if str(status) != "active":
+    if down:
         return no(
             f"its sandbox is {status}, and a turn runs inside a RUNNING one — "
             f"`rite sandbox start --worker {worker} --ticket {ticket}` starts it"
@@ -208,6 +240,10 @@ def placement_for(
         agent=_sandboxed_agent(
             manifest, sandbox, module, path_root, instruction_dir, binary
         ),
+        approach=_sandboxed_approach(
+            manifest, sandbox, module, path_root, instruction_dir, binary, str(clone)
+        ),
+        binary=binary,
     )
 
 
@@ -239,6 +275,61 @@ def _engine_problem(manifest) -> str:
     if not getattr(manifest, "endpoint", ""):
         return "it declares no endpoint, and the engine class is a label (OL3)"
     return ""
+
+
+def _sandboxed_approach(
+    manifest,
+    sandbox: str,
+    subdir: str,
+    path_root: str,
+    instruction_dir: str,
+    binary,
+    workspace: str,
+):
+    """Level 2 for a placed turn: inside the sandbox, with the unit's own model.
+
+    Returns `(subtask, spec_slice) -> Approach`. ⚠ Advisory and fail-open, like
+    every other Level-2 path: `plan_approach` returns an `Approach` carrying a
+    problem rather than raising, and a subtask whose approach could not be
+    produced executes exactly as it would have without one. An approach improves
+    a turn; it is not a gate on one (DD-2.4).
+    """
+    from rite_ai.config.models import worker_decomposition_model
+    from rite_ai.local.approach import plan_approach
+    from rite_ai.local.decompose import GooseProposer
+    from rite_ai.local.in_sandbox import exec_launcher
+
+    model = worker_decomposition_model(manifest)
+    window = getattr(manifest, "context_window", 0)
+    proposer = GooseProposer(
+        model=model,
+        endpoint=manifest.endpoint,
+        launch=exec_launcher(sandbox, binary, subdir=subdir),
+        instruction_dir=instruction_dir,
+        path_root=path_root,
+        context_limit=window,
+        # Same reason as the agent's, and it has to be set on both: the launcher
+        # refuses a secret-shaped name on argv, and `dict(os.environ)` offers it
+        # one on any machine whose shell holds a token.
+        inherit_environment=False,
+    )
+
+    def approach(subtask, spec_slice: str):
+        return plan_approach(
+            subtask,
+            spec_slice,
+            model=model,
+            endpoint=manifest.endpoint,
+            propose=proposer.propose,
+            # The tree the turn will actually edit. `exec_launcher` ignores this
+            # host path and uses `subdir`; it is passed because `plan_approach`
+            # hands it to `propose`, whose host default would otherwise use it
+            # as a cwd.
+            workspace=workspace,
+            context_limit=window,
+        )
+
+    return approach
 
 
 def _one_module(root: Path, worker: str) -> tuple[str, str]:
@@ -317,7 +408,7 @@ def _sandboxed_agent(
         model=manifest.model,
         endpoint=manifest.endpoint,
         probe=lambda m=manifest: probe_engine(m),
-        launch=exec_launcher(sandbox, binary, subdir=subdir),
+        launch=exec_launcher(sandbox, binary, subdir=subdir),  # binary: see Placement
         instruction_dir=instruction_dir,
         inherit_environment=False,
         # The shared helper, so a Worker's turn and a Manager's launch cannot

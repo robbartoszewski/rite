@@ -348,6 +348,21 @@ class GooseProposer:
     unconfigured 4,096 default an agent's own system prompt does not fit
     (RL-T0 section 0) — so a plan was authored in a window too small to hold the
     question. 0 keeps the old behaviour for a caller that has no window to pass."""
+    inherit_environment: bool = True
+    """Whether the turn's environment starts from the HOST's.
+
+    ⚠ **The same trap as `GooseAgent.inherit_environment`, and the same
+    measured reason.** True is right on the host, where goose needs the
+    operator's `PATH` and `HOME`. In a sandbox the launcher forwards a CLOSED
+    set and REFUSES a secret-shaped name on argv (SB12), so inheriting means a
+    `GITHUB_TOKEN` merely PRESENT in the operator's shell turns the turn into
+    `could not start goose: SecretOnArgv`. Every yoloAI-launched session exports
+    every token the operator holds.
+
+    Carried here as well as on the agent because both halves of a placed
+    subtask run inside the sandbox: Level 2 proposes the approach and the agent
+    executes it. A fix on one of them only would have left the planning half
+    dead on the same machines."""
 
     def propose(self, prompt: str, workspace: str) -> Proposal:
         from rite_ai.local.goose_agent import _infrastructure_fault, goose_environment
@@ -362,7 +377,9 @@ class GooseProposer:
             handle_file.write(prompt)
             instruction_path = handle_file.name
         argv = [self.binary, "run", "-n", "rite-decompose", "-i", instruction_path]
-        environment = dict(os.environ)
+        # ⚠ Host only. See `inherit_environment`: a sandboxed turn that starts
+        # from the operator's environment is refused by its own launcher.
+        environment = dict(os.environ) if self.inherit_environment else {}
         environment.update(
             goose_environment(
                 self.endpoint,

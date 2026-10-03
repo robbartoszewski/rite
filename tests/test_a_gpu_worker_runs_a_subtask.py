@@ -36,6 +36,7 @@ from rite_ai.local import step as st
 from rite_ai.local.harness import Commit, VerifyResult
 from rite_ai.local.in_sandbox import exec_argv
 from rite_ai.local.worker_step import Placement, placement_for
+from rite_ai.sandbox import SandboxStatus
 
 MANAGER = "lead"
 WORKER = "gpu1"
@@ -197,7 +198,7 @@ def test_a_sandbox_stopped_mid_turn_raises_rather_than_looking_like_a_turn(
     )
     monkeypatch.setattr(
         "rite_ai.sandbox.sandbox_status_named",
-        lambda n: type("S", (), {"known": True, "__str__": lambda s: "stopped"})(),
+        lambda n, b="": SandboxStatus("stopped"),
     )
     with pytest.raises(SandboxGone, match="did not run"):
         exec_launcher("box", binary="/bin/yoloai")(["goose"], "/ws", {})
@@ -216,7 +217,7 @@ def test_a_failing_command_in_a_LIVE_sandbox_is_a_result(monkeypatch):
     )
     monkeypatch.setattr(
         "rite_ai.sandbox.sandbox_status_named",
-        lambda n: type("S", (), {"known": True, "__str__": lambda s: "active"})(),
+        lambda n, b="": SandboxStatus("active"),
     )
     done = exec_launcher("box", binary="/bin/yoloai")(["goose"], "/ws", {})
     assert done.returncode == 3
@@ -233,7 +234,7 @@ def test_a_yoloai_that_cannot_be_asked_does_not_invent_a_race(monkeypatch):
     )
     monkeypatch.setattr(
         "rite_ai.sandbox.sandbox_status_named",
-        lambda n: type("S", (), {"known": False, "__str__": lambda s: "unknown"})(),
+        lambda n, b="": SandboxStatus("unknown", known=False),
     )
     done = exec_launcher("box", binary="/bin/yoloai")(["goose"], "/ws", {})
     assert done.returncode == 1
@@ -371,24 +372,29 @@ def test_two_modules_are_refused_rather_than_guessed(project, monkeypatch):
     assert "guessing" in placement.problem
 
 
-def _sandbox(monkeypatch, status: str = "active", known: bool = True, copy=True):
-    """Stand in for yoloAI, so the placement's own rules are what is measured."""
+def _sandbox(monkeypatch, status: str = "active", known: bool = True):
+    """Stand in for yoloAI, so the placement's own rules are what is measured.
+
+    ⚠ The REAL `SandboxStatus`, not a fake with a `known` attribute: the
+    question the placement asks is `container_is_down`, and a stand-in that
+    answered it directly would be testing the stand-in.
+    """
     from rite_ai import sandbox as sb
 
-    class _Status:
-        def __init__(self) -> None:
-            self.known = known
+    asked: list[str] = []
 
-        def __str__(self) -> str:
-            return status
+    def named(names, binary=""):
+        asked.append(names if isinstance(names, str) else sorted(names)[0])
+        return sb.SandboxStatus(status, known)
 
-    monkeypatch.setattr(sb, "worker_sandbox_status", lambda w, r=None: _Status())
+    monkeypatch.setattr(sb, "sandbox_status_named", named)
     monkeypatch.setattr(sb, "existing_sandbox_name", lambda w, r=None: f"rite-p-{w}")
     monkeypatch.setattr(sb, "goose_path_root", lambda n, b="": "/sbx/rite/goose")
     monkeypatch.setattr(
         "rite_ai.local.in_sandbox.instruction_dir_for",
         lambda n, b="": "/sbx/files",
     )
+    return asked
 
 
 def test_the_happy_placement_points_at_the_sandboxes_copy(
@@ -419,6 +425,90 @@ def test_the_happy_placement_points_at_the_sandboxes_copy(
     assert agent.instruction_dir == "/sbx/files"
     assert agent.env["GOOSE_PATH_ROOT"] == "/sbx/rite/goose"
     assert agent.env["GOOSE_CONTEXT_LIMIT"] == "32768"
+
+
+@pytest.mark.parametrize("word", ["active", "idle", "done", "failed", "a-new-word"])
+def test_a_RUNNING_sandbox_is_accepted_whatever_the_agent_is_doing(
+    project, monkeypatch, tmp_path, word
+):
+    """⚠ The gate asks whether the CONTAINER is up, never `== "active"`.
+
+    Three of yoloAI's five status words describe a container that is perfectly
+    running — `activity.py` records its vocabulary from 0.11.0: "active=working,
+    idle=waiting at prompt, done=finished, failed=error" — and a word yoloAI
+    adds later is printed as itself rather than mapped to the nearest one rite
+    knows. A positive test would refuse a live sandbox for sitting still, and
+    `exec_launcher` would read every genuine `goose` failure on an `idle` box as
+    a sandbox that had vanished.
+
+    Measured on 0.11.0: a local Worker's sandbox runs the `idle` NO-OP agent and
+    reports `active`, so nothing was refused today. This is the difference
+    between working and happening to work.
+    """
+    _recorded(project)
+    _sandbox(monkeypatch, status=word)
+    copy = tmp_path / "copy"
+    (copy / "app" / ".git").mkdir(parents=True)
+    from rite_ai import sandbox as sb
+
+    monkeypatch.setattr(sb, "_sandbox_copy", lambda n, w: copy)
+    assert placement_for(project, MANAGER, TICKET).sandboxed is True
+
+
+@pytest.mark.parametrize("word", ["stopped", "not found"])
+def test_only_a_DOWN_container_is_refused(project, monkeypatch, word):
+    _recorded(project)
+    _sandbox(monkeypatch, status=word)
+    assert word in placement_for(project, MANAGER, TICKET).problem
+
+
+def test_one_sandbox_name_answers_both_questions(project, monkeypatch, tmp_path):
+    """⚠ `existing_sandbox_name` prefers the scoped name and falls back to the
+    legacy one; `worker_sandbox_status` answers for EITHER. Asked separately,
+    the gate could pass on one sandbox while the turn ran in another."""
+    _recorded(project)
+    asked = _sandbox(monkeypatch, status="active")
+    copy = tmp_path / "copy"
+    (copy / "app" / ".git").mkdir(parents=True)
+    from rite_ai import sandbox as sb
+
+    monkeypatch.setattr(sb, "_sandbox_copy", lambda n, w: copy)
+    placement = placement_for(project, MANAGER, TICKET)
+    assert asked == [placement.sandbox]
+
+
+def test_the_placement_builds_level_2_on_the_workers_model(
+    project, monkeypatch, tmp_path
+):
+    _recorded(project)
+    _sandbox(monkeypatch)
+    copy = tmp_path / "copy"
+    (copy / "app" / ".git").mkdir(parents=True)
+    from rite_ai import sandbox as sb
+
+    monkeypatch.setattr(sb, "_sandbox_copy", lambda n, w: copy)
+
+    seen: dict = {}
+
+    def fake_plan_approach(subtask, spec_slice, **kw):
+        seen.update(kw)
+        return type("A", (), {"ok": True, "steps": "x", "problem": ""})()
+
+    monkeypatch.setattr("rite_ai.local.approach.plan_approach", fake_plan_approach)
+    placement = placement_for(project, MANAGER, TICKET)
+    assert placement.approach is not None
+    placement.approach(_subtask_for_level2(), "the slice")
+    # `worker_decomposition_model`: a local Worker plans with its OWN model —
+    # one GPU, nothing to gain from loading a second set of weights.
+    assert seen["model"] == "qwen3.8:latest"
+    assert seen["endpoint"] == "http://localhost:11434"
+    assert seen["context_limit"] == 32768
+    # And against the tree the turn will edit, not the operator's project root.
+    assert seen["workspace"] == str(copy / "app")
+
+
+def _subtask_for_level2():
+    return dec.Subtask(id="s1", intent="x", scope=("greet.py",), verify="true")
 
 
 def test_a_missing_checkout_names_the_fix(project, monkeypatch, tmp_path):
@@ -654,6 +744,70 @@ class TestAPlacedTurnNeverTouchesTheHostTree:
             placement=Placement(**{**self.PLACED, "agent": _Agent()}),
         )
         assert dec.read(state, TICKET).plan.subtasks[0].attempts == 1
+
+    def test_level_2_plans_INSIDE_the_sandbox_with_the_workers_own_model(self, project):
+        """⚠ Reading the Manager's role for a placed turn was wrong three ways.
+
+        It ran a write-capable auto-mode model turn on the HOST in the
+        operator's real project tree — the containment the placement exists to
+        provide, skipped by the planning half. It planned against a tree where
+        the subtask's module-relative scope paths do not exist and the earlier
+        subtasks' commits are not present. And it ignored OL3's model split, so
+        a Claude Manager driving a GPU Worker produced no approach at all —
+        which is the headline mixed-fleet configuration.
+        """
+        state = _approved(project)
+        asked: dict = {}
+
+        def approach(subtask, spec_slice):
+            asked["subtask"] = subtask.id
+            asked["slice"] = spec_slice
+            return type(
+                "A", (), {"ok": True, "steps": "1. do the thing", "problem": ""}
+            )()
+
+        agent = _Agent()
+        st.take_one_step(
+            project,
+            MANAGER,
+            TICKET,
+            state=state,
+            verifier=_Verifier(),
+            committer=_Committer(),
+            claims=_Claims(),
+            placement=Placement(
+                **{**self.PLACED, "agent": agent, "approach": approach}
+            ),
+        )
+        assert asked["subtask"] == "s1"
+        assert "5.3" in asked["slice"] or asked["slice"]
+
+    def test_a_level_2_that_could_not_run_does_not_stop_the_turn(self, project):
+        # Advisory, and fail-open by design (DD-2.4): an approach improves a
+        # turn, it is not a gate on one. A Level 2 that failed is REPORTED and
+        # the subtask runs exactly as it would have without one.
+        state = _approved(project)
+
+        def approach(subtask, spec_slice):
+            return type(
+                "A", (), {"ok": False, "steps": "", "problem": "the endpoint was down"}
+            )()
+
+        step = st.take_one_step(
+            project,
+            MANAGER,
+            TICKET,
+            state=state,
+            verifier=_Verifier(),
+            committer=_Committer(),
+            claims=_Claims(),
+            placement=Placement(
+                **{**self.PLACED, "agent": _Agent(), "approach": approach}
+            ),
+        )
+        assert step.ran is True
+        assert step.accepted is True
+        assert any("the endpoint was down" in line for line in step.lines)
 
     def test_a_placement_problem_stops_the_subtask(self, project):
         state = _approved(project)

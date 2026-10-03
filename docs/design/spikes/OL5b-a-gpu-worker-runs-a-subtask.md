@@ -260,14 +260,72 @@ remaining step — a real `goose` turn against `qwen3.8` inside a Worker — is
 gated on a yoloAI binary carrying the path-scoped network deny, which cannot be
 built on this machine (no Go toolchain).
 
+## 6.1 What a review caught that the tests did not
+
+A `/code-review` pass over the branch found five things worth recording,
+because four of them are the same shape: a rule that was *stated* somewhere and
+not *in force*.
+
+- **`== "active"` was a positive test on a mostly-AGENT field.** `yoloai ls
+  --json`'s `status` is "active=working, idle=waiting at prompt, done=finished,
+  failed=error" plus `stopped` — three of five describing a container that is
+  UP. Measured: a local Worker's sandbox runs the `idle` NO-OP agent and reports
+  `active`, so nothing was refused in the field; the real run above went through
+  that gate and executed. But it was working by luck, every other reader in
+  `src/` tests the negative, and `activity.py` says a word yoloAI adds later is
+  printed as itself rather than mapped — so the next word was the one it broke
+  on. Worse, the same literal in `exec_launcher` would have read every genuine
+  `goose` failure on an `idle` sandbox as "the sandbox is gone", throwing the
+  model's output away as a turn that never happened — inverting the RL-47 fix it
+  was added to serve. Now `SandboxStatus.container_is_down`.
+- **A timeout was recorded as a turn that never happened.** The new
+  `infrastructure_fault=True` on the launch-failure branch also caught
+  `TimeoutExpired`, so a turn that ran the full twenty minutes and may well have
+  edited files cost no attempt — and a subtask that hangs every time would be
+  retried for ever.
+- **`run_subtask`'s own "nothing ran" returns still spent an attempt.** The
+  claim-conflict path says so in its own note — "not started, so nothing here
+  counts as an attempt" — and left `infrastructure_fault` False, so a subtask
+  blocked by a neighbour's claim could be retired without ever being tried. Same
+  for the unapproved-plan return.
+- **Level 2 was not placed at all** (see below).
+- Two smaller ones: the placed-turn line said "committed to `<branch>`" even
+  when the verify failed and no branch existed, and the sandbox NAME and its
+  STATUS were asked independently — `existing_sandbox_name` prefers the scoped
+  name while `worker_sandbox_status` answers for either, so on a machine holding
+  both the gate could pass on one sandbox and the turn run in another.
+
+## 6.2 Level 2 is placed too
+
+`step._approach_for` resolved the MANAGER's role and ran its Goose on the HOST
+with `workspace=<project root>`. For a placed subtask that is wrong three ways,
+and the first is the serious one:
+
+1. **A write-capable auto-mode model turn in the operator's real project
+   tree** — the containment this whole module exists to provide, skipped by the
+   planning half of the same subtask.
+2. **It planned against the wrong tree.** The subtask's scope paths are relative
+   to the module clone and do not exist at the project root, and the earlier
+   subtasks' commits are not there either. Observed in the real run: the model
+   reasoned about `app/greet.py` and `workers/gpu1/app/greet.py` and had to guess
+   which it was being asked about.
+3. **It ignored OL3's model split.** `worker_decomposition_model` says a local
+   Worker plans with its OWN model ("one GPU, nothing to gain from loading a
+   second") and a Claude one with Opus — and read from the Manager, a CLAUDE
+   Manager driving a GPU Worker returned no approach at all, which is the
+   headline mixed-fleet configuration. The function had no caller in `src/`.
+
+`Placement.approach` now carries a ready-made Level 2 that runs inside the
+sandbox, with the Worker's own model, against the module clone. ⚠ It stays
+advisory and fail-open: a Level 2 that could not run is reported and the subtask
+executes exactly as it would have without one.
+
+`GooseProposer` needed the same `inherit_environment` fix as `GooseAgent`, for
+the same measured reason — it also built `dict(os.environ)`, so the planning
+half would have been dead on every machine whose shell holds a token.
+
 ## 7. Carried limitations
 
-- **Level 2 uses the MANAGER's model for a placed turn.** `step._approach_for`
-  resolves `decomposition_model_for(<the manager's role>)`, and a Worker has its
-  own answer in `config.models.worker_decomposition_model`. Advisory and
-  fail-open either way (an approach improves a turn, it is not a gate), so it
-  costs correctness nothing today — but a Claude Manager driving a GPU Worker
-  plans that Worker's approach with Opus rather than with the Worker's own
-  model, which is the split OL3 made for exactly this reason. Its own ticket.
 - **One module per local Worker** (section 5).
 - **RL-T30 is still unbuilt** for the Manager-tier path (section 2).
+- **A live agentic GPU turn inside a sandbox** (section 6), gated on DF16.

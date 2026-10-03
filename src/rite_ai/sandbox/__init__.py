@@ -2725,6 +2725,13 @@ def worker_pane(
     return PaneCapture(True, redact_secrets(proc.stdout.rstrip("\n"), secrets))
 
 
+_CONTAINER_DOWN = frozenset({"stopped", "not found"})
+"""The only two `status` values that mean the container cannot run a command.
+Named rather than inlined, because the set is the whole of
+`SandboxStatus.container_is_down`'s correctness and both callers depend on it
+meaning exactly this."""
+
+
 @dataclass
 class SandboxStatus:
     """A Worker's sandbox status, and whether it is an actual answer.
@@ -2739,6 +2746,39 @@ class SandboxStatus:
 
     def __str__(self) -> str:
         return self.value
+
+    @property
+    def container_is_down(self) -> bool | None:
+        """Whether the CONTAINER is not running. None when it cannot be told.
+
+        ⚠ **A negative test, and that is the point.** `yoloai ls --json`'s
+        `status` mostly describes the AGENT, in yoloAI's own vocabulary
+        (`activity.py` records it from 0.11.0's tool description):
+        "active=working, idle=waiting at prompt, done=finished, failed=error",
+        with `stopped` being the container stopped. Three of those five words
+        describe a container that is perfectly up, so `== "active"` is a test
+        that refuses a running sandbox for sitting still.
+
+        ⚠ That matters most where it decides whether a turn RAN
+        (`local/in_sandbox.exec_launcher`): on an `idle` sandbox a positive test
+        would read every genuine `goose` failure as "the sandbox is gone" and
+        discard the model's output as a turn that never happened — inverting the
+        RL-47 rule it exists to serve.
+
+        Measured on 0.11.0: a local Worker's sandbox runs the `idle` NO-OP agent
+        (`LOCAL_WORKER_AGENT`) and reports `active`, so a positive test refused
+        nothing today. This is not a fix for a failure in the field; it is the
+        difference between working and happening to work — and `activity.py`
+        says outright that a word yoloAI adds later is printed as itself rather
+        than mapped to the nearest one rite knows, so the next word is the one
+        a positive test breaks on.
+
+        Every other reader in `src/` already tests the negative (`deliver.py`,
+        `recovery.py`, `supervise.py`: `!= "not found"`).
+        """
+        if not self.known:
+            return None
+        return self.value in _CONTAINER_DOWN
 
 
 def worker_sandbox_status(
@@ -2758,7 +2798,7 @@ def worker_sandbox_status(
     )
 
 
-def sandbox_status_named(names: str | set[str]) -> SandboxStatus:
+def sandbox_status_named(names: str | set[str], binary: str = "") -> SandboxStatus:
     """The same answer for a sandbox named directly rather than by Worker.
 
     ⚠ **Extracted rather than copied.** `worker_sandbox_status` is the only
@@ -2769,7 +2809,12 @@ def sandbox_status_named(names: str | set[str]) -> SandboxStatus:
     ask" answers below are exactly the part a second copy gets wrong.
     """
     wanted = {names} if isinstance(names, str) else set(names)
-    binary = _yoloai_binary()
+    # ⚠ The caller's yoloAI when it named one. `exec_launcher` decides whether a
+    # turn RAN by comparing what `yoloai exec` did against what `yoloai ls` says
+    # — and two different binaries can hold two different sandbox libraries
+    # (`--data-dir`), so asking a different one would answer about a sandbox
+    # that was never execed.
+    binary = binary or _yoloai_binary()
     if binary is None:
         return SandboxStatus("yoloai not found", known=False)
     proc = subprocess.run(

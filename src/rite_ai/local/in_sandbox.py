@@ -249,8 +249,17 @@ def exec_launcher(sandbox: str, binary: str = "", timeout: int = 0, subdir: str 
             # running NOW and the exec failed, the command did not run.
             from rite_ai.sandbox import sandbox_status_named
 
-            status = sandbox_status_named(sandbox)
-            if status.known and str(status) != "active":
+            # ⚠ `container_is_down`, never `!= "active"`. Three of yoloAI's five
+            # status words describe a container that is UP (`activity.py`:
+            # "active=working, idle=waiting at prompt, done=finished,
+            # failed=error"), and a local Worker's sandbox runs the `idle` no-op
+            # agent — so a positive test here would read every genuine `goose`
+            # failure on an idle sandbox as "the sandbox is gone" and throw the
+            # model's output away as a turn that never happened, inverting the
+            # very rule this guard serves. None (yoloAI unaskable) does not
+            # raise: "I could not check" is not "it is gone".
+            status = sandbox_status_named(sandbox, resolved)
+            if status.container_is_down:
                 raise SandboxGone(
                     f"sandbox {sandbox} is {status}, so the turn did not run "
                     f"(`yoloai exec` exited {completed.returncode}). A "

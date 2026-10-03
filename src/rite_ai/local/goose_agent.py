@@ -274,6 +274,22 @@ class GooseAgent:
         environment.update(self.env)
         try:
             completed = self._launch(argv, workspace, environment)
+        except subprocess.TimeoutExpired as e:
+            # ⚠ **A timeout is NOT a turn that never happened.** It ran for
+            # `RUN_TIMEOUT_SECONDS` — twenty minutes, comfortably above the
+            # benchmark's slowest measured task — so it had every chance to
+            # edit files, and the verify below is the only thing that can say
+            # whether it got anywhere. Marking it an infrastructure fault would
+            # make a model that stalls for twenty minutes cost no attempt, and
+            # a subtask that hangs every time would be retried for ever.
+            return AgentReport(
+                claimed_success=False,
+                summary=(
+                    f"{self.binary} did not finish within "
+                    f"{getattr(e, 'timeout', RUN_TIMEOUT_SECONDS)}s and was "
+                    "stopped; whatever it had already changed is still there"
+                ),
+            )
         except Exception as e:  # noqa: BLE001 - a launch failure is a result
             # ⚠ `infrastructure_fault=True`, and it was missing. A launch that
             # RAISED is by definition a turn that did not happen — which is

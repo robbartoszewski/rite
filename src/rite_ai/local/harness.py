@@ -208,6 +208,12 @@ def run_subtask(
         # whoever assigns. A subtask running from an unapproved plan is the one
         # thing plan review exists to prevent.
         outcome.status = FAILED
+        # ⚠ Not an attempt: nothing ran. `counts_as_attempt` is the one place
+        # RL-47 is decided, and these two early returns are the harness's OWN
+        # "nothing ran" paths — the claim conflict below says so in its note
+        # and still spent one, which is how a subtask blocked by a neighbour's
+        # claim could be retired without ever having been tried.
+        outcome.infrastructure_fault = True
         outcome.notes.append(
             f"{plan.ticket} is not approved by a plan-review holder, so nothing "
             "from its decomposition may run"
@@ -216,6 +222,8 @@ def run_subtask(
 
     if not claims.take(subtask.scope, worker):
         outcome.status = FAILED
+        # The note already said this; now it is true. See above.
+        outcome.infrastructure_fault = True
         outcome.notes.append(
             f"another worker holds part of {', '.join(subtask.scope)} — not "
             "started, so nothing here counts as an attempt"
