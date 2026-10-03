@@ -69,6 +69,11 @@ and proves it. But two things it said were not trustworthy:
   report now names the ruleset it used. If you *did* name a config file and
   it is missing, the gate refuses to run rather than quietly enforce weaker
   rules and call the result clean.
+- **A full audit now reads commit messages on every branch.** gitleaks scans
+  file content across every ref; rite's commit-message scan only followed the
+  branch you were on. A secret in the commit message of an unmerged branch was
+  reported clean. Stashes and notes are excluded from both — they are local and
+  never published, and a stashed line used to be unsuppressable.
 
 ### Your answer to a Worker's question reaches the Worker (SCRUM-52)
 

@@ -250,51 +250,52 @@ def _git_toplevel(path: Path) -> Path | None:
         return None
 
 
-def _is_repo_root(path: Path) -> bool:
-    """Is `path` itself the toplevel of a git repository?
+def _git_can_scan(path: Path) -> bool:
+    """Can the gate's git commands run with `path` as their working tree?
 
-    Not `(path / ".git").exists()`: that is false for a linked worktree in
-    some layouts and, worse, the question being asked here is not "is there
-    a repo somewhere at or above this" — a project root sitting INSIDE a
-    larger repository would answer yes to that and send the gate off to scan
-    the wrong tree.
+    That is the whole question, and getting it wrong in either direction has
+    now cost something. Requiring `path` to BE a repository toplevel was the
+    first attempt and is too strict: a rite project living in a subdirectory
+    of a larger repository is a perfectly scannable tree — `git ls-files`
+    there lists that subdirectory — and rejecting it sent the gate up to the
+    outer repository, where it scanned the wrong tree AND lost the project's
+    own `.rite/gitleaksignore`, so every suppressed finding came back
+    unsuppressed. Not requiring a repository at all was SCRUM-60.
+
+    So: inside a repository, by any route.
     """
-    try:
-        resolved = path.resolve()
-    except OSError:
-        return False
-    return _git_toplevel(resolved) == resolved
+    return _git_toplevel(path) is not None
 
 
 def _gate_root() -> Path:
     """Where the publish gate scans.
 
     The gate is a REPOSITORY operation — it lists tracked files and walks
-    history — so its root has to BE a git repository. The rite project root
-    usually is one and is not always, and the case where it is not had the
-    gate failing closed on every push:
+    history — so its root has to be a tree git can answer about. The rite
+    project root usually is one and is not always, and the case where it is
+    not had the gate failing closed on every push:
 
     🔴 SCRUM-60. `rite prepare` lays a project out as a non-repo directory
     holding its `.rite/` with the module repositories as subdirectories
     (`~/projects/yoloAI/.rite/`, repo at `~/projects/yoloAI/yoloai`). The
-    project marker wins the walk, so the gate was handed `~/projects/yoloAI`
-    — not a repository — and both `rite publish check` and the `pre-push`
-    hook died on `'git ls-files' failed: fatal: not a git repository`. The
-    hook fails closed, so that is EVERY push from the layout refused, and
-    `rite deliver` could never push a branch or open a pull request for it.
+    project marker won the walk unconditionally, so the gate was handed
+    `~/projects/yoloAI` — which git knows nothing about — and both `rite
+    publish check` and the `pre-push` hook died on `'git ls-files' failed:
+    fatal: not a git repository`. The hook fails closed, so that is EVERY
+    push from the layout refused, and `rite deliver` could never push a
+    branch or open a pull request for it.
 
-    So a candidate root is accepted only if it is a repository toplevel; the
-    git toplevel of cwd answers when none is. Project root still wins when it
-    qualifies, so a scanned project keeps using its own `.rite/` config and
-    suppressions, which is why that preference exists at all: rite's own repo
-    tracks `.rite/gitleaksignore`, and resolving through the git toplevel
-    alone would scan a subdirectory and silently miss it.
+    Project root still wins whenever git can scan it, which is the point of
+    the preference: a scanned project must use its own `.rite/` config and
+    suppressions. Only when git cannot does the gate fall to the repository
+    cwd is in — that is the layout above, and there the module repo is the
+    right answer.
 
     `RITE_PROJECT_ROOT` is checked first, for the same reason
     `_find_project_root` checks it: a sandboxed Worker is TOLD its root
     rather than finding it, and a module that is itself a rite project makes
-    the upward walk pick the inner one. It was not consulted here at all,
-    so the gate and every other command could disagree about which tree they
+    the upward walk pick the inner one. It was not consulted here at all, so
+    the gate and every other command could disagree about which tree they
     were talking about.
     """
     cwd = Path.cwd()
@@ -309,13 +310,33 @@ def _gate_root() -> Path:
             break
 
     for candidate in candidates:
-        if _is_repo_root(candidate):
+        if _git_can_scan(candidate):
             return candidate
 
     toplevel = _git_toplevel(cwd)
     if toplevel is not None:
         return toplevel
     return cwd
+
+
+def _gate_root_note(root: Path) -> str:
+    """Why the gate is scanning THIS tree — printed whenever it is not the
+    obvious one.
+
+    A gate that reports clean about a directory the reader did not have in
+    mind is the failure mode every other sentence in this module is written
+    against, and `_gate_root` can now legitimately return something other
+    than cwd and other than the project root: a `RITE_PROJECT_ROOT` git
+    cannot scan is passed over, and in the `rite prepare` layout the project
+    root is passed over too. Both were silent.
+    """
+    try:
+        same_as_cwd = root.resolve() == Path.cwd().resolve()
+    except OSError:
+        same_as_cwd = False
+    if same_as_cwd:
+        return ""
+    return f"scanning {root}"
 
 
 def _has_project_in_scope() -> bool:
@@ -4710,13 +4731,27 @@ def publish_check(rev_range: str | None, strict: bool) -> None:
       rite publish check --rev-range origin/main..HEAD
     """
     from rite_ai.gate import run_gate
-    from rite_ai.gate.gate import _partial_lines
+    from rite_ai.gate.gate import _partial_lines, scanned_line
 
     root = _gate_root()
     from rite_ai.gate import suppression
     from rite_ai.gate.suppression import stale_hint
 
     report = run_gate(root, rev_range=rev_range)
+
+    # WHAT WAS SCANNED, BEFORE THE VERDICT — this command builds its own
+    # output and never calls `format_report`, so everything that report
+    # learned to say reached `python -m rite_ai.gate` and the hook and not
+    # the command a human actually types. 🔴 SCRUM-63 was filed off THIS
+    # command printing a bare `gate: clean`, and a fix only the other
+    # formatter carried would have left the reported symptom exactly as it
+    # was.
+    note = _gate_root_note(root)
+    if note:
+        click.echo(note)
+    click.echo(scanned_line(report))
+    if report.ruleset_note:
+        click.echo(report.ruleset_note)
 
     for finding in report.findings:
         click.echo(

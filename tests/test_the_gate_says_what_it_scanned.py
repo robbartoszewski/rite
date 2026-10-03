@@ -201,3 +201,35 @@ def test_a_range_scan_stays_inside_its_range(tmp_path):
 
     assert report.errors == []
     assert report.exit_code == EXIT_CLEAN, [f.rule_id for f in report.findings]
+
+
+@requires_gitleaks
+def test_a_stash_cannot_block_the_gate(tmp_path):
+    """`--all` would have been the obvious spelling for "every ref", and it
+    reaches `refs/stash` and `refs/notes` — local by definition, on their way
+    nowhere. A `git stash push -m "wip <token>"` then failed the gate over
+    text in no commit and no branch, and the block could not even be cleared:
+    a suppression fingerprint embeds the stash commit's sha, and that sha
+    changes every time the stash is rebuilt.
+
+    Worse than it sounds on this project, where one repository's stash stack
+    is shared by every worktree — so one stash would block all of them.
+    """
+    init_repo(tmp_path)
+    write(tmp_path, "README.md", "hello\n")
+    commit_all(tmp_path, "base")
+    write(tmp_path, "README.md", "hello again\n")
+    subprocess.run(
+        ["git", "stash", "push", "-q", "-m", f"wip {A_PLANTED_TOKEN}"],
+        cwd=tmp_path,
+        check=True,
+    )
+    assert subprocess.run(
+        ["git", "stash", "list"], cwd=tmp_path, capture_output=True, text=True
+    ).stdout.strip()
+
+    report = run_gate(tmp_path)
+
+    assert report.exit_code == EXIT_CLEAN, [f.rule_id for f in report.findings]
+    # And the count says the same thing the scan did.
+    assert report.commits_scanned == 1

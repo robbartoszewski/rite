@@ -169,3 +169,50 @@ def test_the_pre_push_hook_path_scans_the_module_repo_too(tmp_path, monkeypatch)
     assert "github-pat" in result.output
     # Non-zero is what aborts the push. Anything else publishes the secret.
     assert result.exit_code == 2
+
+
+def test_a_project_root_inside_a_larger_repo_is_not_escalated(tmp_path, monkeypatch):
+    """The gate must not climb OUT of a project to the repository containing
+    it. Requiring the gate root to BE a repository toplevel did exactly that:
+    it scanned the outer tree and read the outer `.rite/`, so the project's
+    own suppressions vanished and every finding they covered came back
+    blocking. `git ls-files` works perfectly well in a subdirectory; being
+    inside a repository is the property that matters, not being its root.
+    """
+    outer = tmp_path / "big"
+    outer.mkdir()
+    init_repo(outer)
+    write(outer, "top.txt", "top\n")
+    project = outer / "sub" / "proj"
+    (project / ".rite").mkdir(parents=True)
+    (project / ".rite" / "brief.yaml").write_text(
+        "project:\n  name: inner\n  role: owner\n"
+    )
+    (project / ".rite" / "modules.yaml").write_text("modules: {}\n")
+    write(project, "inner.txt", "inner\n")
+    commit_all(outer, "base")
+
+    monkeypatch.chdir(project)
+    monkeypatch.delenv(PROJECT_ROOT_ENV, raising=False)
+    assert _gate_root().resolve() == project.resolve()
+
+
+@requires_gitleaks
+def test_publish_check_itself_says_what_it_scanned(tmp_path, monkeypatch):
+    """At the CLI, not in a formatter it does not call. `publish check` builds
+    its own output, so a coverage line added only to `format_report` reaches
+    the hook and `python -m rite_ai.gate` and never the command SCRUM-63 was
+    filed against — which printed a bare `gate: clean` over an empty range.
+    """
+    init_repo(tmp_path)
+    write(tmp_path, "README.md", "hello\n")
+    commit_all(tmp_path, "base")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv(PROJECT_ROOT_ENV, raising=False)
+    result = CliRunner().invoke(cli, ["publish", "check", "--rev-range", "HEAD..HEAD"])
+
+    assert result.exit_code == 0
+    assert "0 commit(s)" in result.output
+    assert "NO history was in range" in result.output
+    assert "gitleaks ruleset" in result.output

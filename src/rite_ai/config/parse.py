@@ -19,6 +19,7 @@ from .managers import (
 )
 from .models import (
     DEFAULT_BROADCAST,
+    DEFAULT_GITLEAKS_CONFIG,
     STRATEGIES,
     BudgetConfig,
     CheckinsConfig,
@@ -721,9 +722,9 @@ def parse_config(path: Path) -> ProjectConfig | ParseError:
         expertise=expertise,
         publish_gate=PublishGateConfig(
             scan_patterns=patterns,
-            gitleaks_config=pg_raw.get("gitleaks_config", ".rite/gitleaks.toml")
+            gitleaks_config=pg_raw.get("gitleaks_config", DEFAULT_GITLEAKS_CONFIG)
             if isinstance(pg_raw, dict)
-            else ".rite/gitleaks.toml",
+            else DEFAULT_GITLEAKS_CONFIG,
         ),
         heartbeat=heartbeat,
         watchdog=watchdog,

@@ -9,12 +9,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from rite_ai.config.models import ProjectConfig
+from rite_ai.config.models import DEFAULT_GITLEAKS_CONFIG, ProjectConfig
 from rite_ai.config.parse import parse_config
 from rite_ai.gate import gitleaks_runner, pattern_scan
 from rite_ai.gate import suppression as supp_mod
 from rite_ai.gate.builtin_rules import BUILTIN_PATH_PATTERNS
-from rite_ai.gate.findings import Finding, rev_range_args
+from rite_ai.gate.findings import PUBLISHABLE_REFS, Finding, rev_range_args
 from rite_ai.gate.suppression import DEFAULT_SUPPRESSION_PATH, Suppression
 
 # TWO QUESTIONS, TWO ANSWERS. `outcome` says what was found; the exit code
@@ -364,16 +364,6 @@ def _run_gate(
     )
 
 
-DEFAULT_GITLEAKS_CONFIG = ".rite/gitleaks.toml"
-"""The `publish_gate.gitleaks_config` default — the path a project gets
-without ever asking for one. `rite init` writes this very string into every
-generated config.yaml and does NOT create the file, so "configured and
-absent" is the ordinary state of a healthy project, and treating it as an
-error would block every push everywhere. A path that is NOT this one was
-typed by someone who meant it, and that is the case `_resolve_ruleset`
-refuses to paper over."""
-
-
 def _resolve_ruleset(root: Path, config: ProjectConfig) -> tuple[Path | None, str, str]:
     """`(config_path, note, error)` — which gitleaks ruleset this run applies.
 
@@ -421,9 +411,8 @@ def _count_commits(root: Path, rev_range: str | None) -> int | None:
     """
     import subprocess
 
-    args = ["git", "rev-list", "--count", *rev_range_args(rev_range)]
-    if not rev_range:
-        args.append("--all")
+    scope = rev_range_args(rev_range) if rev_range else list(PUBLISHABLE_REFS)
+    args = ["git", "rev-list", "--count", *scope]
     try:
         proc = subprocess.run(
             args, cwd=root, capture_output=True, text=True, errors="replace", timeout=60
@@ -555,6 +544,17 @@ def _partial_lines(report: GateReport, limit: int = 10) -> list[str]:
     return lines
 
 
+def scanned_line(report: GateReport) -> str:
+    """The one sentence every caller says about coverage: "scanned N tracked
+    file(s) and M commit(s) …".
+
+    Shared because `rite publish check` builds its own output and does not
+    call `format_report`, which is how 🔴 SCRUM-63's fix nearly landed in a
+    formatter the reported command never runs."""
+    scanned = report.files_scanned - len(report.unreadable_files)
+    return f"scanned {scanned} tracked file(s)" + _commit_clause(report)
+
+
 def _commit_clause(report: GateReport) -> str:
     """What the HISTORY half of the scan covered, said beside the file half.
 
@@ -586,8 +586,7 @@ def format_report(report: GateReport) -> str:
         lines.extend(_partial_lines(report))
         return "\n".join(lines)
 
-    scanned = report.files_scanned - len(report.unreadable_files)
-    lines.append(f"scanned {scanned} tracked file(s)" + _commit_clause(report))
+    lines.append(scanned_line(report))
     if report.ruleset_note:
         lines.append(report.ruleset_note)
     if report.unreadable_files:

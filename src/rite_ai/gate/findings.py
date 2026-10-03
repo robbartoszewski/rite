@@ -117,6 +117,23 @@ def redact(secret: str, keep: int = 4) -> str:
     return f"{secret[:keep]}{'*' * (len(secret) - keep * 2)}{secret[-keep:]}"
 
 
+"""Every ref a push could publish — NOT `--all`.
+
+`--all` adds `refs/stash` and `refs/notes`, which are local by definition
+and never leave the machine. Measured: a `git stash push -m "wip <token>"`
+made `rite publish check` fail on a repository with nothing wrong with it,
+over text in no commit, in no branch, and on its way nowhere. It cannot even
+be suppressed — the fingerprint embeds the stash commit's sha, and that sha
+changes every time the stash is rebuilt.
+
+That is the shape this gate exists to avoid in the other direction: a block
+nobody can clear is a gate people turn off. Worse here than it sounds,
+because a stash stack is repository-global and shared by every worktree, so
+one stash blocks every one of them.
+"""
+PUBLISHABLE_REFS = ("--branches", "--tags", "--remotes")
+
+
 def rev_range_args(rev_range: str | None) -> list[str]:
     """A revision range as `git log` ARGV, not as one argument.
 
@@ -161,11 +178,11 @@ def iter_commit_messages(
     somehow did, the cost is a message attributed to the wrong commit,
     never a message dropped.
     """
-    # `--all` when no range is given, because that is what the OTHER half of
-    # the history scan covers. 🔴 SCRUM-63: gitleaks' own `detect` walks every
-    # ref (measured on 8.30.1 — a repo with one commit on HEAD and one on an
-    # unmerged branch reports "2 commits scanned"), while this ran bare
-    # `git log` and saw only HEAD's ancestry. So `rite publish check` — the
+    # Every publishable ref when no range is given, because that is what the
+    # OTHER half of the history scan covers. 🔴 SCRUM-63: gitleaks' own
+    # `detect` walks every ref (measured on 8.30.1 — a repo with one commit on
+    # HEAD and one on an unmerged branch reports "2 commits scanned"), while
+    # this ran bare `git log` and saw only HEAD's ancestry. So the audit — the
     # audit that means "safe for the whole history to become public" — scanned
     # unmerged branches for secrets in file CONTENT and not for secrets in
     # their commit MESSAGES. Measured: a GitHub PAT in the commit message of a
@@ -176,8 +193,9 @@ def iter_commit_messages(
     # does not touch — the thing `_split_off_pre_existing` exists to stop.
     #
     # On an empty repository this is also the kinder answer: bare `git log`
-    # fails with "does not have any commits yet", `--all` exits 0 with nothing.
-    scope = rev_range_args(rev_range) if rev_range else ["--all"]
+    # fails with "does not have any commits yet", a ref selector exits 0 with
+    # nothing.
+    scope = rev_range_args(rev_range) if rev_range else list(PUBLISHABLE_REFS)
     args = ["git", "log", "--format=%x00%H%n%B", *scope]
     try:
         proc = subprocess.run(
