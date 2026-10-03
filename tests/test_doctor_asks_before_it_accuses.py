@@ -293,7 +293,8 @@ def test_the_slack_delivery_post_happens_only_under_network(
         "chat.postMessage was sent as a GET"
     )
     if network:
-        assert posts[0]["channel"] == "#all-rite"
+        # The status channel, never the DM or the broadcast channel (RS3).
+        assert posts[0]["channel"] == "#rite-status"
         assert posts[0]["text"]
         assert "slack delivery: ok" in out
     else:
