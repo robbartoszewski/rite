@@ -26,6 +26,7 @@ from pathlib import Path
 
 import pytest
 
+from rite_ai.managers.enclosure import BOUNDARY_DIRNAME
 from rite_ai.managers.permissions import (
     BYPASS_FLAG,
     DEFAULT_ALLOW,
@@ -33,6 +34,7 @@ from rite_ai.managers.permissions import (
     NOT_ALLOWED,
     OBSERVED_ALLOW,
     TOOL_ALLOW,
+    _legacy_settings_path,
     allowed,
     announcement,
     launch_arguments,
@@ -109,12 +111,12 @@ class TestTheListCoversWhatWasObserved:
 
 class TestEveryCycleCarriesThePermissionDecision:
     def test_the_first_cycle_carries_it(self, tmp_path):
-        arguments = launch_arguments(write_settings(tmp_path))
+        arguments = launch_arguments(write_settings(tmp_path, "lead"))
         assert "--settings" in launch_command("claude", "", "/p.txt", arguments)
 
     def test_a_RESUMED_cycle_carries_it_too(self, tmp_path):
         """⚠ The one that matters: `-p` does not restore a session's mode."""
-        arguments = launch_arguments(write_settings(tmp_path))
+        arguments = launch_arguments(write_settings(tmp_path, "lead"))
         built = launch_command("claude", "abc-123", "/p.txt", arguments)
         assert "--settings" in built
         assert "--permission-prompts none" in built
@@ -129,7 +131,7 @@ class TestEveryCycleCarriesThePermissionDecision:
 
     def test_the_bypass_flag_is_no_longer_passed(self, tmp_path):
         """The reversal itself. 0.5.1 passed this on every cycle."""
-        arguments = launch_arguments(write_settings(tmp_path))
+        arguments = launch_arguments(write_settings(tmp_path, "lead"))
         assert BYPASS_FLAG not in arguments
         assert BYPASS_FLAG not in launch_command("claude", "", "/p.txt", arguments)
 
@@ -142,9 +144,33 @@ class TestEveryCycleCarriesThePermissionDecision:
 
 
 class TestTheSettingsFileTheEngineReads:
-    def test_it_is_written_where_per_machine_state_lives(self, tmp_path):
-        assert write_settings(tmp_path) == settings_path(tmp_path)
-        assert settings_path(tmp_path).parent.name == "user"
+    def test_it_is_written_where_no_manager_can_write_it(self, tmp_path):
+        """🔴 **It used to live in `.rite/user/`, inside the project tree
+        the Manager's own profile grants writable** — measured 2026-09-30
+        from inside that profile: overwriting rite's allowlist succeeded.
+        A boundary must not be writable by anything it bounds, which is why
+        the `.sb` file was moved out of there, and this file is the same
+        kind of thing: it IS the allowlist `--settings` names."""
+        written = write_settings(tmp_path, "lead")
+        assert written == settings_path(tmp_path, "lead")
+        assert written.parent.name == BOUNDARY_DIRNAME
+        assert ".rite" not in written.parts
+
+    def test_it_is_per_manager_as_the_boundary_file_is(self, tmp_path):
+        """One writable copy shared between Managers in a root is the peer
+        half of the same problem."""
+        assert settings_path(tmp_path, "lead") != settings_path(tmp_path, "helper")
+
+    def test_a_copy_an_older_build_left_behind_is_removed(self, tmp_path):
+        """As `enclosure.write_profile` does for its own legacy file: a
+        stale copy is one somebody can mistake for the list in force."""
+        stale = _legacy_settings_path(tmp_path)
+        stale.parent.mkdir(parents=True, exist_ok=True)
+        stale.write_text('{"permissions": {"allow": ["Bash(curl:*)"]}}')
+
+        write_settings(tmp_path, "lead")
+
+        assert not stale.exists()
 
     def test_it_is_valid_json_in_the_engines_own_shape(self, tmp_path):
         """⚠ Measured from `claude --help`: under `-p`, a settings file that
@@ -152,7 +178,7 @@ class TestTheSettingsFileTheEngineReads:
         everything, so a malformed write is a stalled Manager with no
         message — which is why rite writes the whole document rather than
         merging into one."""
-        written = json.loads(write_settings(tmp_path).read_text())
+        written = json.loads(write_settings(tmp_path, "lead").read_text())
         assert written == settings_document()
         assert isinstance(written["permissions"]["allow"], list)
         assert all(isinstance(entry, str) for entry in written["permissions"]["allow"])
@@ -160,21 +186,26 @@ class TestTheSettingsFileTheEngineReads:
     def test_it_carries_nothing_but_permissions(self, tmp_path):
         """`--settings` loads ADDITIONAL settings over the user's own, so
         every key rite writes is one it takes away from them."""
-        assert list(json.loads(write_settings(tmp_path).read_text())) == ["permissions"]
+        assert list(json.loads(write_settings(tmp_path, "lead").read_text())) == [
+            "permissions"
+        ]
 
     def test_rite_rewrites_its_own_file_so_the_list_cannot_drift(self, tmp_path):
         """⚠ A write-once-if-absent file would pin every existing project to
         the list that shipped the day it was created."""
-        path = write_settings(tmp_path)
+        path = write_settings(tmp_path, "lead")
         path.write_text('{"permissions": {"allow": ["Bash(echo:*)"]}}')
-        assert json.loads(write_settings(tmp_path).read_text()) == settings_document()
+        assert (
+            json.loads(write_settings(tmp_path, "lead").read_text())
+            == settings_document()
+        )
 
     def test_it_does_not_touch_the_users_own_settings(self, tmp_path):
         """The only file a user edits is theirs, and rite never writes it."""
         theirs = tmp_path / ".claude" / "settings.json"
         theirs.parent.mkdir(parents=True)
         theirs.write_text('{"permissions": {"deny": ["Bash(git push:*)"]}}')
-        write_settings(tmp_path)
+        write_settings(tmp_path, "lead")
         assert json.loads(theirs.read_text())["permissions"]["deny"]
 
 
@@ -183,28 +214,28 @@ class TestARefusalTellsTheUserWhatToDo:
     one."""
 
     def test_it_names_the_command_that_was_refused(self, tmp_path):
-        said = refusal("curl https://example.com", tmp_path)
+        said = refusal("curl https://example.com", tmp_path, "lead")
         assert "curl" in said
 
     def test_it_gives_the_exact_line_that_would_permit_it(self, tmp_path):
-        said = refusal("curl https://example.com", tmp_path)
+        said = refusal("curl https://example.com", tmp_path, "lead")
         assert '"Bash(curl:*)"' in said
 
     def test_it_names_the_file_to_put_that_line_in(self, tmp_path):
-        said = refusal("curl https://example.com", tmp_path)
+        said = refusal("curl https://example.com", tmp_path, "lead")
         assert ".claude/settings.json" in said.replace("\\", "/")
 
     def test_it_says_not_to_edit_rites_own_file(self, tmp_path):
         """Because rite rewrites it every run, an edit there would vanish
         without ever reporting that it had."""
-        said = refusal("curl https://example.com", tmp_path)
+        said = refusal("curl https://example.com", tmp_path, "lead")
         assert "rewritten every run" in said
 
     @pytest.mark.parametrize(
         "command", ["curl x", "/usr/bin/curl x", "HTTPS_PROXY=x curl x"]
     )
     def test_it_finds_the_executable_however_it_was_spelled(self, command, tmp_path):
-        assert '"Bash(curl:*)"' in refusal(command, tmp_path)
+        assert '"Bash(curl:*)"' in refusal(command, tmp_path, "lead")
 
 
 class TestTheGrantIsAnnounced:
@@ -253,7 +284,7 @@ class TestThereIsNoInertConfigLeftBehind:
         (tmp_path / ".rite" / "user" / "lead.yaml").write_text(
             "permission_mode: acceptEdits\n"
         )
-        arguments = launch_arguments(write_settings(tmp_path))
+        arguments = launch_arguments(write_settings(tmp_path, "lead"))
         assert "--settings" in launch_command("claude", "", "/p.txt", arguments)
 
 
@@ -394,7 +425,7 @@ class TestTheUserIsToldAboutARefusal:
         assert len(said) == 1
         assert "appears to cover" in said[0]
         assert "cannot tell" in said[0]
-        assert str(settings_path(tmp_path)) in said[0]
+        assert "rite's own allowlist" in said[0]
         assert "through `>`" not in said[0], "no redirection in `rite status`"
 
     def test_a_refused_redirection_names_the_file_write_first(
@@ -514,7 +545,7 @@ class TestTheEnginesOwnToolsAreOnTheListToo:
 
     def test_a_refused_TOOL_is_told_to_add_the_tool_not_a_bash_pattern(self):
         """⚠ `"Bash(Edit:*)"` is advice that does nothing."""
-        said = refusal("Edit", Path("/p"))
+        said = refusal("Edit", Path("/p"), "lead")
         assert '"Edit"' in said
         assert "Bash(Edit" not in said
 
@@ -566,7 +597,9 @@ def test_the_rite_the_instructions_name_is_on_the_allowlist(tmp_path):
     from rite_ai import own_command
     from rite_ai.managers.permissions import write_settings
 
-    allow = json.loads(write_settings(tmp_path).read_text())["permissions"]["allow"]
+    allow = json.loads(write_settings(tmp_path, "lead").read_text())["permissions"][
+        "allow"
+    ]
     path = own_command()
     if path.startswith("/"):
         assert f"Bash({path}:*)" in allow

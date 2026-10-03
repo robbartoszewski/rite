@@ -159,7 +159,14 @@ def _rite_owned_user_entries() -> tuple[str, ...]:
     be listed here** — `tests/test_a_manager_name_cannot_be_rites_own_state.py`
     writes all of them for a real Manager and fails on any entry that is
     neither this Manager's nor on this list. An unlisted entry is a name some
-    Manager can collide with (C30: `permissions.json`)."""
+    Manager can collide with (C30: `permissions.json`).
+
+    ⚠ `permissions.json` is KEPT here although rite does not write it into
+    `user_dir` any more: `permissions.settings_path` moved it beside the
+    boundary file, where no Manager can write. An older build did write it
+    here, `permissions._legacy_settings_path` removes that copy when the new
+    one is written, and until a checkout has run a build that does, a Manager
+    named after it would still collide with a file already on disk."""
     from rite_ai.managers.enclosure import ENGINE_TMP_DIRNAME
     from rite_ai.managers.permissions import SETTINGS_FILENAME
 

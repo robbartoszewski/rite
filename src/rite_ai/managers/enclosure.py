@@ -294,6 +294,64 @@ def _engine_state_paths(home: Path) -> tuple[Path, ...]:
     return (home / ".local/share/goose", home / ".local/state/goose")
 
 
+def _mach_services() -> tuple[str, ...]:
+    """The mach services a Manager may look up, named one by one.
+
+    ⚠ **This rule used to be `(allow mach-lookup)` with no filter, and what
+    it bought was the operator's CLIPBOARD.** Measured 2026-09-30 in the
+    profile `compose` produces, with a control: `pbpaste` inside the
+    boundary printed the operator's clipboard and exited 0; with the rule
+    removed it printed nothing and exited 1. A clipboard is where a token
+    or a password sits for the seconds between copying it and pasting it,
+    and nothing here was stopping a Manager from reading it every cycle.
+
+    ⚠ **The SB5 row asked a different question, and the answer to that one
+    is NO.** It asked whether a Manager could reach the keychain — other
+    projects' rite credentials — through this rule. It cannot, and this
+    rule is not what stops it: a dummy keychain item readable outside was
+    "not found" inside, and it stayed not-found with `~/Library/Keychains`
+    granted readable, then writable, and with every unix socket allowed
+    back. So the keychain is refused by something underneath this profile
+    rather than by anything rite is holding up, and rite's own credentials
+    have not been in the keychain since C6/C26. The clipboard is what the
+    unfiltered rule was actually costing. See docs/design/spikes/SB5-mach-lookup.md.
+
+    ⚠ **Denied as a CLASS, with names allowed back — the lesson
+    `_socket_denials` records twice over.** A deny aimed at the one name a
+    problem was noticed at leaves the problem at every other name, so
+    `(deny default)` refuses mach-lookup and this list is what returns.
+    Denying `com.apple.pasteboard.1` alone would have been the other shape,
+    and it is the shape that had to be abandoned twice for sockets.
+
+    ⚠ **NOT measured: a real `claude -p` turn under this profile.** The
+    engine is node, and node may want a name none of the commands measured
+    did. It fails closed and loudly — `Operation not permitted` — rather
+    than quietly, which is why this ships denied rather than left open.
+    """
+    return (
+        # ⚠ `confstr(_CS_DARWIN_USER_TEMP_DIR)` resolves the per-user temp
+        # root through this one. Measured: without it `git` and `python3`
+        # print `confstr() failed ... using /tmp instead` on every
+        # invocation — a warning, not a failure, but on every command in
+        # the pane. With it, and nothing else, the pane is byte-identical
+        # to the unfiltered rule while the clipboard stays refused.
+        "com.apple.bsd.dirhelper",
+    )
+
+
+def _mach_lookup() -> list[str]:
+    """`mach-lookup`, named rather than granted as a class.
+
+    The names and the reason each one is here: `_mach_services`.
+    """
+    return [
+        "; ⚠ MACH SERVICES ARE NAMED ONE BY ONE, not granted as a class.",
+        ";   The unfiltered rule let a Manager read the operator's",
+        ";   clipboard — measured, with a control. See _mach_services.",
+        *(f"(allow mach-lookup (global-name {_quote(n)}))" for n in _mach_services()),
+    ]
+
+
 def _manager_separation(project: Path, manager: str) -> list[str]:
     """Other Managers' state is not readable or writable, and NO Manager's
     inbox is writable.
@@ -407,11 +465,14 @@ def _socket_denials(socket_dirs) -> list[str]:
         tmux new-session -d 'yoloai ls'    through tmux  listed 9 sandboxes
 
     ⚠ **Denied at the END and in both spellings.** Seatbelt takes the LAST
-    matching rule, and this profile grants `/tmp` and `/private/tmp`
-    wholesale further up — a deny placed before those grants is overridden
-    and the escape still works. Measured: denying the socket beside the
-    network rule changed nothing at all. macOS resolves `/tmp` to
-    `/private/tmp`, so both are named.
+    matching rule, and a deny placed before a grant that covers the same path
+    is overridden — measured, when this profile still granted `/tmp` and
+    `/private/tmp` wholesale (SB8 removed those): denying the socket beside
+    the network rule changed nothing at all. The grant that can still cover a
+    socket directory is the PROJECT's, for a project living under the temp
+    root, which is where rite's own worktrees are. So the position is still
+    load-bearing and still measured. macOS resolves `/tmp` to `/private/tmp`,
+    so both are named.
 
     ⚠ **Why not narrow the network instead**, which was the first idea:
     `(allow network*)` does grant the socket, and loopback-only blocks it —
@@ -431,8 +492,8 @@ def _socket_denials(socket_dirs) -> list[str]:
     """
     lines = [
         "; ⚠ THE TMUX ESCAPE, closed here and nowhere else — see above.",
-        "; Last, because seatbelt takes the last matching rule and the",
-        "; temp grants further up would otherwise win.",
+        "; Last, because seatbelt takes the last matching rule: a project",
+        "; living under the socket's own directory would otherwise win.",
     ]
     for directory in dict.fromkeys(socket_dirs):
         lines.append(f"(deny network-outbound (subpath {_quote(directory)}))")
@@ -485,6 +546,13 @@ def compose(
     """
     where = Path(home) if home is not None else Path(os.path.expanduser("~"))
     project = Path(root).resolve()
+    # rite's own allowlist: the engine reads it from `--settings` INSIDE this
+    # profile (it is the sandbox-exec CHILD), so the file MUST be readable here
+    # — SB10 moved it out of the Manager-WRITABLE `.rite/user/`, not out of the
+    # engine's reach. Read-only, and this literal is the only grant for it.
+    from rite_ai.managers.permissions import settings_path as _settings_path
+
+    allowlist_file = _settings_path(root, manager, home)
     sockets = tmux_tmpdir or os.environ.get("TMUX_TMPDIR") or "/private/tmp"
     # ⚠ The engine gets its OWN temp directory, and the system one is not
     # granted. Goose writes `.tmpXXXX` in the per-user temp root while
@@ -492,7 +560,28 @@ def compose(
     # printing "goose is ready", so the session appears to start and then
     # dies. Granting `$TMPDIR` fixes that and opens every other process's
     # scratch on this machine; see `engine_tmp`.
-    temps = [Path("/tmp"), Path("/private/tmp")]
+    #
+    # 🔴 **`/tmp` AND `/private/tmp` ARE NOT GRANTED ANY MORE (SB8).** They
+    # were, wholesale, and rite's own worktrees and scratch directories live
+    # there — so one Manager could read and write another project's tree, and
+    # `limitations()` had to say so out loud. Measured 2026-09-30 with a
+    # control: a file under `/private/tmp` was readable with the grant and
+    # `Operation not permitted` without it, while `git`, `curl`, `rite` and
+    # `python3` are unaffected either way.
+    #
+    # This is SB11's change on the other platform, arrived at second: Landlock
+    # dropped the same grant because it cannot carve a hole in a wholesale
+    # one. The divergence that made macOS the wider of the two is gone, and
+    # `landlock.py` no longer says there is one.
+    #
+    # ⚠ **What it costs, stated rather than discovered:** anything that
+    # hardcodes `/tmp` instead of honouring `TMPDIR` now fails here. A Cursor
+    # Manager is the known case — with a long `CURSOR_DATA_DIR` Cursor puts
+    # its socket directory in `/tmp/.cursor/` (CU4) — and it is left to fail
+    # closed rather than granted back, because that directory also holds the
+    # OPERATOR's Cursor sockets, and reaching a socket outside the boundary is
+    # the tmux escape in a different costume. CU4's shorter data path is the
+    # fix, not a grant here.
     # ⚠ **The tmux socket directory is DENIED at the end of this profile,
     # not granted here.** It used to be granted, and that was the hole:
     # the tmux SERVER runs outside the profile, so a command sent through
@@ -529,7 +618,7 @@ def compose(
         "(allow sysctl-read)",
         "(allow file-read-metadata)",
         '(allow file-read* (literal "/"))',
-        "(allow mach-lookup)",
+        *_mach_lookup(),
         "(allow ipc-posix-shm-read-data)",
         "(allow ipc-posix-shm-write-data)",
         "(allow ipc-posix-shm-write-create)",
@@ -551,9 +640,6 @@ def compose(
         "; The project this Manager manages — the WHOLE tree, because that is",
         "; what an orchestrator works on, unlike a Worker's one workspace.",
         *_writable([project]),
-        "",
-        "; Shared temporary space and the tmux socket this pane lives on",
-        *_writable(dict.fromkeys(temps)),
         "",
         "; The engine's own TMPDIR, inside the boundary. HOME is the",
         "; operator's — see ENGINE_HOME_IS_THE_OPERATORS.",
@@ -588,6 +674,22 @@ def compose(
         # `(allow network*)`, and this Manager's own agent and credential
         # directory are allowed back after it (C6/C26, `github_access`).
         *github_access.profile_lines(root, manager, home),
+        "",
+        "; ⚠ rite's own permission allowlist — READABLE here, writable nowhere",
+        "; this profile grants (SB10). The engine reads it from `--settings` as",
+        "; the sandbox-exec CHILD, so without this read grant the engine starts",
+        "; with its allowlist SILENTLY ignored (`-p` drops a file it cannot",
+        "; read) — a Manager that then runs nothing and looks merely idle. A",
+        "; read grant, not a write one: the Manager it bounds still cannot",
+        "; rewrite it, which is the whole of SB10. Exactly this file, not its",
+        "; directory, so the boundary `.sb` beside it stays unreadable too.",
+        "; ⚠ DEAD LAST, after every deny, BECAUSE the per-Manager credential",
+        "; directory can sit under a subpath another rule denies — the",
+        "; credential-store parent (`github_access.profile_lines`), when both",
+        "; share a root. Seatbelt takes the last match, so a read grant placed",
+        "; before those denies is silently overridden; here it wins. Write is",
+        "; not granted, so the deny it sits after still refuses every write.",
+        f"(allow file-read* (literal {_quote(str(allowlist_file))}))",
     ]
     return "\n".join(lines)
 
@@ -665,8 +767,18 @@ def limitations() -> tuple[str, ...]:
         "profile refused directly, and after this profile denied every unix "
         "socket the same attempt failed with `error connecting to … "
         "Operation not permitted` while https still returned 200",
-        "/tmp and /private/tmp are readable and writable, so anything kept "
-        "there — including other rite worktrees — is reachable",
+        "/tmp and /private/tmp are NOT granted (they were until SB8, and "
+        "rite's own worktrees live there). The engine gets its own TMPDIR "
+        "inside the boundary instead, so a tool that hardcodes /tmp rather "
+        "than honouring TMPDIR will fail here — measured, with a control: a "
+        "file under /private/tmp was readable with the grant and refused "
+        "without it, while git, curl, rite and python3 are unaffected",
+        "the operator's CLIPBOARD is not reachable: mach services are named "
+        "one by one rather than granted as a class. Measured 2026-09-30 with "
+        "a control, before and after: `pbpaste` inside the boundary printed "
+        "the clipboard and exited 0 under the old unfiltered rule, and prints "
+        "nothing and exits 1 under this one, while every other command a "
+        "Manager runs exits exactly as it did",
         "the network is NOT confined — seatbelt has no network isolation, so "
         "a Manager can reach anything this machine can",
         "a Manager can run `rite`, which does whatever you can do to this "

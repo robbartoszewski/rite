@@ -13,6 +13,7 @@ Manager cannot start a sandboxed Worker — the kernel refuses — which is why
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -28,6 +29,11 @@ from rite_ai.managers.enclosure import (
     limitations,
     profile_path,
     write_profile,
+)
+from rite_ai.managers.permissions import (
+    _legacy_settings_path,
+    settings_path,
+    write_settings,
 )
 
 on_macos = pytest.mark.skipif(sys.platform != "darwin", reason="seatbelt is macOS only")
@@ -387,14 +393,17 @@ class TestTheEscapesThatWereFoundAfterItShipped:
 
     def test_the_denials_are_LAST_because_seatbelt_takes_the_last_match(self, project):
         """⚠ Measured: the same denial placed beside the network rule
-        changed nothing, because `/private/tmp` is granted further down and
-        won."""
+        changed nothing, because a grant further down covered the same path
+        and won. That grant was `/private/tmp`, wholesale, until SB8 removed
+        it — and the position is still load-bearing, because the PROJECT's
+        grant can still cover a socket directory, for a project living under
+        the temp root. rite's own worktrees are exactly that."""
         text = compose(project, "lead")
         last_deny = text.rindex("(deny ")
-        last_temp_grant = text.rindex(
-            '(allow file-read* file-write* (subpath "/private/tmp")'
+        project_grant = text.rindex(
+            f'(allow file-read* file-write* (subpath "{Path(project).resolve()}"))'
         )
-        assert last_deny > last_temp_grant
+        assert last_deny > project_grant
 
     def test_the_socket_DIRECTORY_is_denied_and_not_the_whole_temp_root(self, project):
         """⚠ `TMUX_TMPDIR` is unset in production, which makes the temp root
@@ -773,3 +782,249 @@ class TestP2BetweenTwoManagersSharingARoot:
         forbade signalling altogether, which would break every Manager."""
         alpha, _ = self._profiles(project)
         assert self._run(alpha, "sleep 30 & p=$!; sleep 0.3; kill $p").returncode == 0
+
+
+class TestTheClipboardTheUnfilteredRuleHandedOver:
+    """⚠ **SB5, and it is a third instance of the same lesson.** The
+    profile carried `(allow mach-lookup)` with no filter, on the reasoning
+    that a Manager needs to talk to system daemons. Measured 2026-09-30:
+    what it actually handed over was the operator's **clipboard**, which is
+    where a token or a password sits for the seconds between copying it and
+    pasting it.
+
+    ⚠ **The row that scheduled this work expected the keychain, and the
+    keychain came back NEGATIVE.** A dummy item readable outside was "not
+    found" inside, and stayed not-found with `~/Library/Keychains` granted
+    readable, then writable, and with every unix socket allowed back. So
+    nothing here is what keeps the keychain shut, and the rule's real cost
+    was somewhere nobody had looked.
+
+    **The mutation control is in the test.** Each check below runs the
+    same command twice: once under the profile rite composes, and once
+    under that profile with the old unfiltered rule appended. The second
+    run is what says the instrument works — if `pbpaste` cannot reach a
+    pasteboard on this machine at all, both runs fail and the test skips
+    rather than passing for the wrong reason.
+    """
+
+    OLD_RULE = "(allow mach-lookup)"
+
+    def _both(self, project, command):
+        """The command under the shipped profile, and under the old rule."""
+        shipped = write_profile(project, "lead")
+        unfiltered = shipped.parent / "unfiltered.sb"
+        unfiltered.write_text(shipped.read_text() + f"\n{self.OLD_RULE}\n")
+        return (
+            subprocess.run(
+                ["sandbox-exec", "-f", str(profile), "/bin/sh", "-c", command],
+                capture_output=True,
+                text=True,
+                timeout=90,
+            )
+            for profile in (shipped, unfiltered)
+        )
+
+    @on_macos
+    def test_pbpaste_is_refused_and_was_not_before(self, project):
+        """⚠ **stdout is never asserted on and never reported.** This runs
+        on the operator's real machine, and the whole point of the finding
+        is what their clipboard may be holding."""
+        narrowed, unfiltered = self._both(project, "pbpaste >/dev/null 2>&1")
+        if unfiltered.returncode != 0:
+            pytest.skip(
+                "no pasteboard reachable on this machine even with the old "
+                "unfiltered rule, so this proves nothing either way"
+            )
+        assert narrowed.returncode != 0, (
+            "the Manager's boundary let `pbpaste` read the operator's "
+            "clipboard — the unfiltered `(allow mach-lookup)` is back"
+        )
+
+    def test_the_class_is_denied_rather_than_the_one_name(self, project):
+        """⚠ Denying `com.apple.pasteboard.1` and leaving the class open is
+        the shape `_socket_denials` had to abandon twice: a deny aimed at
+        the one name a problem was noticed at leaves every other name."""
+        text = compose(project, "lead")
+        assert self.OLD_RULE not in text
+        assert "(deny mach-lookup" not in text, (
+            "the class is refused by `(deny default)`; a named deny here "
+            "would mean the class had been granted again somewhere above"
+        )
+
+    @on_macos
+    def test_what_the_narrowing_cost_a_manager(self, project):
+        """The one name that came back, pinned to the behaviour that is its
+        whole reason: without it `confstr(_CS_DARWIN_USER_TEMP_DIR)` fails
+        and every `git` and `python3` in the pane prints a warning."""
+        narrowed, _ = self._both(
+            project, "python3 -c 'import tempfile; tempfile.gettempdir()'"
+        )
+        assert "confstr() failed" not in narrowed.stderr, (
+            "com.apple.bsd.dirhelper is no longer looked up, so the pane "
+            "gains a warning on every command"
+        )
+
+    def test_and_the_limitations_say_so(self):
+        assert any("CLIPBOARD is not reachable" in line for line in limitations())
+
+
+class TestTheTempRootTheProfileUsedToGrant:
+    """⚠ **SB8, and it is SB11's change arriving on the other platform.**
+    The profile granted `/tmp` and `/private/tmp` wholesale. rite's own
+    worktrees and scratch directories live there, so a Manager could read
+    and write another project's tree — and `limitations()` said so out
+    loud, which made it disclosed rather than hidden, and no less real.
+
+    Landlock dropped the same grant at `b542c15`, because it cannot carve
+    a hole in a wholesale one. macOS could carve, so it kept the grant and
+    carved the inbox out of it; the reason that outlives the inbox is the
+    worktrees, and that one applies to both platforms.
+
+    **The control is in the test:** every check runs twice, once under the
+    profile rite composes and once under that profile with the old grant
+    appended, so a refusal that would have happened anyway cannot pass for
+    this fix working.
+    """
+
+    OLD_GRANT = '(allow file-read* file-write* (subpath "/private/tmp"))'
+
+    def _both(self, project, command):
+        shipped = write_profile(project, "lead")
+        granted = shipped.parent / "with-the-old-temp-grant.sb"
+        granted.write_text(shipped.read_text() + f"\n{self.OLD_GRANT}\n")
+        return (_under(profile, command) for profile in (shipped, granted))
+
+    @pytest.fixture
+    def another_project_under_tmp(self):
+        """⚠ Under the REAL temp root, not `tmp_path`. pytest's directory
+        is under `/private/var/folders`, which no rule here ever granted —
+        a fixture there would be refused whatever this profile said, which
+        is the shape `sandbox-test-under-a-granted-path` warns about."""
+        other = Path(tempfile.mkdtemp(dir="/private/tmp", prefix="rite-sb8-"))
+        (other / "secret.txt").write_text("another project's file\n")
+        try:
+            yield other
+        finally:
+            shutil.rmtree(other, ignore_errors=True)
+
+    @on_macos
+    def test_another_project_under_the_temp_root_is_unreachable(
+        self, project, another_project_under_tmp
+    ):
+        secret = another_project_under_tmp / "secret.txt"
+        narrowed, with_the_grant = self._both(project, f"cat {secret}")
+        assert with_the_grant == 0, (
+            "the fixture could not be read even with the old grant back, so "
+            "this test proves nothing about the grant"
+        )
+        assert narrowed != 0, (
+            "a Manager can still read another project under /private/tmp — "
+            "the wholesale temp grant is back"
+        )
+
+    @on_macos
+    def test_it_cannot_write_there_either(self, project, another_project_under_tmp):
+        planted = another_project_under_tmp / "planted.txt"
+        narrowed, with_the_grant = self._both(project, f"touch {planted}")
+        assert with_the_grant == 0, "the control could not write there either"
+        assert narrowed != 0, "a Manager can still write under /private/tmp"
+
+    @on_macos
+    def test_the_engine_still_has_a_temp_directory_of_its_own(self, project):
+        """What the grant was believed to be for. Goose PANICS without
+        somewhere to write, so removing the grant without this would take
+        every Goose Manager down."""
+        profile = write_profile(project, "lead")
+        mine = engine_tmp(project, "lead")
+        assert _under(profile, f"touch {mine}/scratch") == 0
+
+    def test_the_profile_no_longer_names_the_temp_roots_as_writable(self, project):
+        text = compose(project, "lead")
+        assert '(allow file-read* file-write* (subpath "/tmp"))' not in text
+        assert self.OLD_GRANT not in text
+
+    def test_and_the_limitations_say_what_that_costs(self):
+        """⚠ A tool that hardcodes `/tmp` now fails. Said, not discovered:
+        a Cursor Manager is the known case (CU4)."""
+        assert any("are NOT granted" in line for line in limitations())
+        assert any("hardcodes /tmp" in line for line in limitations())
+
+
+class TestNoManagerCanRewriteItsOwnAllowlist:
+    """🔴 **The allowlist `--settings` names is a boundary too, and it was
+    inside the tree the boundary grants writable.**
+
+    `TestNoManagerCanRewriteABoundary` above says why the `.sb` file left
+    `.rite/user/`: *a boundary must not be writable by anything it bounds,
+    or by a peer*, and a peer replacing the Owner's profile between rite's
+    write and the launcher's read took the Owner out of its sandbox in 19
+    of 20 runs. `permissions.json` is the same kind of file — it is the
+    whole of what a `-p` Manager may do — and it stayed behind. Measured
+    2026-09-30 from inside a Manager's own profile: overwriting it
+    succeeded.
+
+    ⚠ **What this is and is not.** rite rewrites the file before every
+    launch, so a plant does not survive to the next cycle by itself. What
+    was open is the race the `.sb` move closed, and that race has NOT been
+    measured for this file. The fix does not depend on which it is.
+    """
+
+    def test_the_allowlist_is_not_under_the_project_at_all(self, project):
+        path = settings_path(project, "lead")
+        assert ".rite" not in path.parts
+        assert project not in path.parents
+
+    @on_macos
+    def test_a_manager_cannot_write_its_own_allowlist(self, project):
+        profile = write_profile(project, "lead")
+        path = write_settings(project, "lead")
+        assert path.exists(), "the fixture was not written"
+
+        assert _under(profile, f"echo x > {shlex.quote(str(path))}") != 0
+
+    @on_macos
+    def test_the_engine_can_read_its_own_allowlist(self, project):
+        """🔴 The OTHER half, and the one whose absence shipped a break: the
+        engine reads `--settings` from INSIDE the profile (it is the
+        sandbox-exec CHILD), so the file must be READABLE there. The move took
+        it out of the Manager-WRITABLE `.rite/user/`, not out of the engine's
+        reach — without the read grant the engine starts with its allowlist
+        silently ignored (`-p` drops a file it cannot read) and the Manager
+        runs nothing while looking merely idle. Paired with the write test
+        above, this is the real invariant: read YES, write NO."""
+        profile = write_profile(project, "lead")
+        path = write_settings(project, "lead")
+        assert path.exists(), "the fixture was not written"
+
+        assert _under(profile, f"cat {shlex.quote(str(path))}") == 0
+
+    @on_macos
+    def test_nor_can_a_peer_manager(self, project):
+        """§5.4.8's P1 for the file that carries the permission decision."""
+        write_profile(project, "lead")
+        theirs = write_settings(project, "lead")
+        mine = write_profile(project, "helper")
+
+        assert _under(mine, f"echo x > {shlex.quote(str(theirs))}") != 0
+
+    @on_macos
+    def test_the_place_it_used_to_live_is_still_writable(self, project):
+        """⚠ **The control.** `.rite/user/` is inside the granted project
+        tree and still is — so this test would have passed before the move
+        for the wrong reason, and this says the difference is the PATH and
+        not some other rule that appeared."""
+        profile = write_profile(project, "lead")
+        legacy = _legacy_settings_path(project)
+        legacy.parent.mkdir(parents=True, exist_ok=True)
+
+        assert _under(profile, f"echo x > {shlex.quote(str(legacy))}") == 0
+
+    def test_a_stale_copy_there_is_removed_when_the_real_one_is_written(self, project):
+        """So nothing mistakes the writable one for the list in force."""
+        legacy = _legacy_settings_path(project)
+        legacy.parent.mkdir(parents=True, exist_ok=True)
+        legacy.write_text('{"permissions": {"allow": ["Bash(curl:*)"]}}')
+
+        write_settings(project, "lead")
+
+        assert not legacy.exists()

@@ -71,6 +71,20 @@ SYSTEM_GRANTS = {
 }
 
 
+# ⚠ MACH SERVICES, not paths. The rule these replace was `(allow
+# mach-lookup)` with no filter at all, which needed no reason for any
+# individual name because it named none — and it bought the operator's
+# clipboard (SB5, `enclosure._mach_services`). A name added back here
+# without a reason would rebuild that rule one line at a time.
+MACH_GRANTS = {
+    "com.apple.bsd.dirhelper": "confstr(_CS_DARWIN_USER_TEMP_DIR) resolves "
+    "the per-user temp root through it; measured, without it git and python3 "
+    "print `confstr() failed ... using /tmp instead` on every invocation, and "
+    "with it alone the pane is byte-identical to the unfiltered rule while "
+    "the clipboard stays refused",
+}
+
+
 def _home_relative(paths, home: Path) -> set[str]:
     return {str(p.relative_to(home)) for p in paths}
 
@@ -103,7 +117,30 @@ def test_rite_home_is_not_among_them():
     assert ".rite" not in _home_relative(enclosure._tool_paths(Path("/h")), Path("/h"))
 
 
+def test_every_mach_service_has_a_reason():
+    """⚠ The one grant that is not a path, and the newest one to have cost
+    something: the unfiltered rule let a Manager read the clipboard."""
+    granted = set(enclosure._mach_services())
+    assert granted == set(MACH_GRANTS), (
+        f"a mach service with no reason: {sorted(granted - set(MACH_GRANTS))}; "
+        f"a reason for a service that is gone: {sorted(set(MACH_GRANTS) - granted)}"
+    )
+
+
+def test_the_pasteboard_is_not_among_them():
+    """The instance that made this rule, pinned by name — as `~/.rite` is."""
+    assert "com.apple.pasteboard.1" not in MACH_GRANTS
+    assert "com.apple.pasteboard.1" not in enclosure._mach_services()
+
+
+def test_the_class_is_not_granted_wholesale(tmp_path):
+    """⚠ `(allow mach-lookup)` with no `global-name` is the rule this
+    replaced. It would re-grant every service at once, and no per-name
+    reason above would fail."""
+    assert "(allow mach-lookup)" not in enclosure.compose(tmp_path, "lead")
+
+
 def test_every_reason_says_something():
-    for table in (HOME_GRANTS, ENGINE_STATE_GRANTS, SYSTEM_GRANTS):
+    for table in (HOME_GRANTS, ENGINE_STATE_GRANTS, SYSTEM_GRANTS, MACH_GRANTS):
         for path, reason in table.items():
             assert len(reason.split()) >= 4, f"{path}: {reason!r} is not a reason"
