@@ -228,6 +228,25 @@ def take_one_step(
             ClaimsLedger(root / ".rite" / "claims.json"), manager=manager
         )
 
+    # Level 2 (DD-2.4, OL6): the unit's own steps, with its DECOMPOSITION model,
+    # before it edits anything. Advisory by design — a unit with no decomposition
+    # model, or a Level-2 turn that could not run, executes exactly as before.
+    approach, approach_note = _approach_for(root, manager, subtask, spec_slice)
+
+    # ⚠ The boundary, checked rather than trusted (DD-2.4). Level 2 runs between
+    # approval and execution, so a subtask it altered would be rewriting what
+    # plan review passed — and `scope` is the committer's allowlist while
+    # `verify` is the only thing RL-7 trusts. `_approach_for` is given no way to
+    # return a subtask, so this is belt and braces; the design asks for a check
+    # and not a convention, and a structural guarantee somebody can refactor
+    # away is a convention.
+    from rite_ai.local.approach import boundary_problem
+
+    drifted = boundary_problem(plan.subtask(subtask.id) or subtask, subtask)
+    if drifted:
+        step.problem = f"{ticket} {subtask.id}: {drifted}"
+        return step
+
     outcome = run_subtask(
         state=state,
         manager=manager,
@@ -240,10 +259,56 @@ def take_one_step(
         verifier=verifier,
         committer=committer,
         claims=claims,
+        approach=approach,
     )
     step.ran = True
     _record(state, plan, subtask, outcome, read.version, step)
+    if approach_note:
+        # ⚠ AFTER `_record`, which assigns `step.lines` from the outcome — a note
+        # appended before it was silently dropped, which is how a Level-2 failure
+        # would have gone unreported while looking like it never happened.
+        step.lines.append(approach_note)
     return step
+
+
+def _approach_for(root: Path, manager: str, subtask, spec_slice: str):
+    """(the approach, a note to record) — Level 2 for this unit (DD-2.4, OL6).
+
+    ⚠ **Never raises and never refuses the turn.** An approach improves a turn;
+    it is not a gate on one. So every failure here returns `("", why)` and the
+    subtask runs without it — which is also RL-47's distinction: an endpoint that
+    was down did not produce a bad approach, it produced none.
+
+    The model is the unit's own Level-2 model (`decomposition_model_for`), which
+    is Opus for a Claude unit and the unit's OWN model for a local one — a GPU
+    unit has nothing to gain from loading a second set of weights beside the one
+    it is about to implement with.
+    """
+    from rite_ai.config.managers import decomposition_model_for
+    from rite_ai.config.parse import ParseError, parse_config
+    from rite_ai.local.approach import plan_approach
+
+    parsed = parse_config(Path(root) / ".rite" / "config.yaml")
+    if isinstance(parsed, ParseError):
+        return "", ""
+    role = next(
+        (r for r in parsed.coordination.manager_roles if r.name == manager), None
+    )
+    if role is None or not role.is_local:
+        # Level 2's Claude side is a separate piece (DD-2.4); this is the local
+        # one, which is what the proof runs unblocked.
+        return "", ""
+    result = plan_approach(
+        subtask,
+        spec_slice,
+        model=decomposition_model_for(role),
+        endpoint=role.endpoint,
+        workspace=str(root),
+        context_limit=getattr(role, "context_window", 0),
+    )
+    if result.ok:
+        return result.steps, ""
+    return "", f"no Level-2 approach for {subtask.id}: {result.problem}"
 
 
 def _agent_for(root: Path, manager: str):

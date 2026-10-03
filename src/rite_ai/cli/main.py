@@ -2140,6 +2140,36 @@ def local_step(manager: str, ticket: str) -> None:
             click.echo(f"    {line}")
 
 
+@local.command("approve")
+@click.argument("reviewer")
+@click.argument("ticket")
+def local_approve(reviewer: str, ticket: str) -> None:
+    """Approve TICKET's decomposition as plan-review holder REVIEWER.
+
+    Nothing from a decomposition runs until it is approved. REVIEWER must
+    hold the plan-review duty, must not be the Manager that wrote the plan,
+    and must run a different model from it — two `local:` classes serving the
+    same model count as the same model.
+
+    \b
+    The plan is re-checked before it is approved, so approval can refuse a
+    plan that was valid when written and is not now. A cited spec unit that
+    is no longer on disk is the common case; `rite spec index` puts it back.
+
+    \b
+    Examples:
+      rite local approve lead KAN-7
+    """
+    from rite_ai.local.approve import Refused, approve_plan
+
+    root = _require_project_root()
+    result = approve_plan(root, ticket, reviewer)
+    if isinstance(result, Refused):
+        click.echo(f"not approved: {result.why}", err=True)
+        raise SystemExit(1)
+    click.echo(result.note())
+
+
 @local.command("decompose")
 @click.argument("manager")
 @click.argument("ticket")
@@ -7619,7 +7649,17 @@ def sandbox_start(
     token, tier = resolve_worker_token(worker, config.credentials)
     # What a Worker receives (§5.3.4): its engine's login, and no GitHub
     # token — `token` stays on the host, for `rite deliver` to push with.
-    env = worker_environment(config.credentials)
+    #
+    # "its engine's login" became literal in OL4. A local Worker's engine has
+    # none: its model answers on this machine's loopback, so it receives an
+    # empty environment rather than a Claude credential it cannot spend. The
+    # manifest is read here rather than guessed, and an unreadable one means
+    # Claude — the behaviour before a Worker had an engine at all.
+    from rite_ai.sandbox import worker_manifest
+
+    manifest = worker_manifest(root, worker)
+    engine = getattr(manifest, "engine", "claude")
+    env = worker_environment(config.credentials, engine=engine)
     if tier == "global":
         # Loud, every time — but ONLY for a token belonging to the whole
         # machine. It used to fire for this project's own `github_token`
@@ -9135,6 +9175,76 @@ def _doctor_slack(root: Path, problems: list[str], *, network: bool = False) -> 
                 problems.append(f"slack delivery to {slack.broadcast}: {detail}")
 
 
+def _drive_local_tier(root, manager: str, board, say) -> None:
+    """L-6's per-cycle pass: advance this Manager's local tier by one stage.
+
+    ⚠ **The tickets come from the BOARD, read here and not inside the driver.**
+    The state layer has no list operation on purpose (it is backend-neutral), so
+    nothing can enumerate decompositions; and the board is the one place that
+    knows what is assigned. Reading it here keeps `advance_ticket` testable
+    without a board and keeps the read at the cycle boundary the poll may wait
+    on.
+
+    Never raises into the cycle. A board that cannot be read is a pass that did
+    nothing and said so — the supervisor's own spin guard is what notices a run
+    that stops making progress, and an exception here would end the run instead.
+    """
+    from rite_ai.local.loop import drive_local_tier
+
+    tickets, why = _local_tier_tickets(board, manager)
+    if why:
+        say(f"local tier: the board could not be read this cycle — {why}")
+        return
+    if not tickets:
+        return
+    try:
+        drive_local_tier(root, manager, tickets, say)
+    except Exception as e:  # noqa: BLE001 - see the docstring
+        say(f"local tier: nothing advanced this cycle ({type(e).__name__}: {e})")
+
+
+def _local_tier_tickets(board, manager: str) -> tuple[list[str], str]:
+    """(the REFINED tickets assigned to `manager`, or why they could not be read).
+
+    `TicketFilter(assignee=...)` is the board's own question, asked of the board
+    assignment already labels, so a ticket's owner lives in one place rather than
+    two. A `BackendError` is returned rather than raised: a board that cannot be
+    read is a cycle that advanced nothing, not a run that ends.
+
+    ⚠ **GATED on REFINED (TR5), and this gate was missing when L-6 was first
+    written.** `tests/test_every_path_to_work_is_enumerated.py` found it: every
+    path that reads the backlog must say what it does with a ticket that is not
+    refined, and this one would have driven an unrefined ticket all the way to a
+    pushed branch. The predicate is `refinement.status`, the same one `loop._ready`
+    asks, one read per ticket — not a second spelling of "is it refined".
+
+    An unrefined ticket is skipped silently here rather than reported: it is the
+    Owner's to refine (TR2), it is not this Manager's to complain about, and a
+    line per unrefined ticket per cycle would bury the local tier's own notes.
+    """
+    from rite_ai.refinement import status as refinement_status
+    from rite_ai.tickets.interface import BackendError, TicketFilter
+
+    page = board.list_tickets(TicketFilter(assignee=manager))
+    if isinstance(page, BackendError):
+        return [], page.message
+    found = getattr(page, "tickets", page) or []
+    refined: list[str] = []
+    for ticket in found:
+        ident = getattr(ticket, "id", "")
+        if not ident:
+            continue
+        # `Status.refined` rather than comparing the state here: the predicate
+        # owns what "refined" means, and there are five states (NOT REFINED,
+        # REFINED, STALE, CONFLICT, UNREADABLE) of which only one is work. A
+        # comparison written out here would be a second definition to keep in
+        # step, and STALE — a record that no longer matches its ticket — is
+        # exactly the one a looser test would let through.
+        if refinement_status.status(board, ident).refined:
+            refined.append(ident)
+    return refined, ""
+
+
 def _engine_ready_for(role):
     """Why this local Manager's engine cannot be used, per cycle.
 
@@ -9467,6 +9577,15 @@ def _start_a_manager(
             # TR9: a User's instruction becomes a chore, written by rite
             # outside the boundary, on the same board the broker checks.
             chores=lambda say: create_asked_for(root, role.name, board, say),
+            # L-6 (Robert, 2026-10-03): the local tier runs hands-off, driven by
+            # this same cycle. LOCAL ENGINES ONLY, like `engine_ready` above —
+            # a Claude Manager has no local pipeline, and None means "nothing to
+            # drive" rather than "a driver that does nothing".
+            local_tier=(
+                (lambda say: _drive_local_tier(root, role.name, board, say))
+                if role.is_local
+                else None
+            ),
             # TR2: the rounds this Manager asks for, and what the User's
             # replies to them do, decided outside the boundary on this board.
             # Only the Manager that refines does anything (TRQ7).

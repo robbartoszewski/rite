@@ -222,8 +222,44 @@ def test_a_duplicate_name_makes_priority_ambiguous_and_is_refused():
 
 
 def test_a_decomposer_reviewed_only_by_its_own_engine_is_reported():
-    """RL-6: a wrong slicing passes every check the slicer wrote. The gate is
-    a DIFFERENT engine, not merely a different Manager."""
+    """RL-6: a wrong slicing passes every check the slicer wrote. The gate is a
+    DIFFERENT MODEL, not merely a different Manager — and not the class label
+    either (Robert, 2026-10-02).
+
+    ⚠ This case was once two `local:large` Managers on DIFFERENT models, asserted
+    as a problem because their engine STRINGS matched. That is the loophole from
+    the other side: two different models do not share a blind spot, however they
+    are labelled, so the pair is independent and the old assertion was wrong
+    about why it passed. The reported case is the one that actually shares an
+    author: one model under two labels."""
+    roles = _roles(
+        {
+            "name": "p1",
+            "engine": "local:large",
+            "preset": "planner",
+            "endpoint": "http://localhost:11434/v1",
+            "model": "qwen3:70b",
+            "agent": "opencode",
+        },
+        {
+            "name": "p2",
+            "engine": "local:small",
+            "duties": ["plan-review"],
+            "endpoint": "http://localhost:11434/v1",
+            "model": "qwen3:70b",
+            "agent": "opencode",
+        },
+        {"name": "lead", "preset": "pm"},
+    )
+    problems = configuration_problems(list(roles))
+    assert any("different model" in p and "p1" in p for p in problems), problems
+
+
+def test_two_local_classes_on_different_models_are_independent():
+    """The other direction of the same ruling: the class label is not the test.
+
+    Two Managers may share a `local:` class and run different models, and they
+    are then as independent as a Claude reviewer would be."""
     roles = _roles(
         {
             "name": "p1",
@@ -244,7 +280,7 @@ def test_a_decomposer_reviewed_only_by_its_own_engine_is_reported():
         {"name": "lead", "preset": "pm"},
     )
     problems = configuration_problems(list(roles))
-    assert any("different engine" in p and "p1" in p for p in problems)
+    assert not any("different model" in p for p in problems), problems
 
 
 def test_a_decomposer_with_an_independent_reviewer_is_not_reported():
@@ -262,9 +298,19 @@ def test_a_decomposer_with_an_independent_reviewer_is_not_reported():
     assert configuration_problems(list(roles)) == []
 
 
-def test_integrate_on_a_local_engine_is_reported():
-    """RL-11: the harness is rite's own code and SPEC §5.1.1 forbids it a push,
-    so a local integrate holder cannot do the job it was given."""
+def test_integrate_on_a_local_engine_is_allowed():
+    """⚠ Was `..._is_reported`, asserting RL-11's refusal. Robert approved
+    self-integrate on 2026-10-02 (OL8) and the refusal is lifted.
+
+    RL-11's reason — *"SPEC §5.1.1 forbids rite's code a push; the harness is
+    rite's code"* — was written 2026-09-19, while PB1 gave `rite deliver` a push
+    on 2026-09-29, which §5.1.1 now states and `test_blast_radius` allows by
+    name. A local `integrate` holder still never runs `git push`: it posts the
+    same two-value request a Claude Manager posts and rite performs the push.
+
+    The behaviour this replaces is pinned the other way round in
+    `test_an_all_local_fleet_self_integrates.py`, which also proves the delivery
+    reaches origin."""
     roles = _roles(
         {
             "name": "small",
@@ -277,7 +323,7 @@ def test_integrate_on_a_local_engine_is_reported():
         {"name": "lead", "preset": "lead"},
     )
     problems = configuration_problems(list(roles))
-    assert any("integrate" in p and "small" in p for p in problems)
+    assert not any("integrate" in p for p in problems), problems
 
 
 def test_a_project_whose_only_deciders_are_people_is_reported():

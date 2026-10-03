@@ -98,19 +98,50 @@ class Unroutable:
 def _independent(candidate: Candidate, task: Task, roles: list[ManagerRole]) -> bool:
     """Whether this candidate may review what `task.produced_by` produced.
 
-    RL-6 wants a different Manager AND a different engine for plan review: a
-    reviewer sharing the decomposer's engine shares the blind spots of the plan
-    it is checking. RL-18 wants a different instance for step review and for a
+    RL-6 wants a different Manager AND a different MODEL for plan review: a
+    reviewer sharing the decomposer's model shares the blind spots of the plan it
+    is checking. RL-18 wants a different instance for step review and for a
     planner's own work. Both are "not the author", differing only in how far
     apart the two must be.
+
+    ⚠ **Two fixes landed here together (OL7), and both were reachable.**
+
+    **It compared engine STRINGS.** `local:large` and `local:small` are two
+    strings and may be one model, so a plan could be reviewed by the very model
+    that wrote it. `engine_identity` is the same rule `configuration_problems`
+    uses since Robert's 2026-10-02 ruling, and it folds rite's own window pin
+    onto its base so `rite-ctx32768-qwen3.8-latest` cannot pose as a second
+    model.
+
+    **It failed OPEN on an unknown author** — `author is None: return True` — so a
+    plan whose `decomposed_by` named nothing was reviewable by anyone, including
+    the engine that wrote it. `DECOMPOSER_DESIGN` called that the one thing it
+    "would not ship without" (RL-67). It now fails CLOSED: an author rite cannot
+    place is an independence claim rite cannot check, and the decomposer path
+    already refuses to WRITE such a plan (`candidate_problems`, RL-67's
+    validation half), so a plan that reaches here with an unknown author did not
+    come from the sanctioned path.
+
+    ⚠ **That covers BOTH an unplaceable author and an unnamed one, which is a
+    tightening.** RL-67 names the unnamed case as the reachable one — "a plan
+    whose `decomposed_by` names nothing is reviewable by ANYONE … reachable today
+    with a hand-written plan file" — so a hand-written plan must now name its
+    author to be plan-reviewed through the router. Scoped to plan review: other
+    stages still need only a different Manager (RL-18), because they are not the
+    gate RL-6 is about.
+
+    Both mattered more after OL8: an all-Ollama fleet approves its own plans, so
+    independence is the whole of what makes a local verdict worth acting on.
     """
+    from rite_ai.config.managers import engine_identity
+
     if not task.produced_by or candidate.role.name != task.produced_by:
         if task.stage != "plan-review":
             return True
         author = next((r for r in roles if r.name == task.produced_by), None)
         if author is None:
-            return True
-        return candidate.role.engine != author.engine
+            return False
+        return engine_identity(candidate.role) != engine_identity(author)
     return False
 
 
