@@ -31,7 +31,7 @@ have been written THROUGH and the measurement would have meant nothing).
 ```
 $ yoloai exec s54probe -- sh -c 'echo written-inside > from_inside.txt;
                                  echo mutated-inside > marker.txt; pwd; ls'
-/Users/.../sandboxes/s54probe/rw/work/^sUsers^s...^swd
+~/.yoloai/library/sandboxes/s54probe/rw/work/^s…^swd
 from_inside.txt
 marker.txt
 
@@ -122,7 +122,7 @@ turn still gets the sandbox's own `PATH` —
 
 ```
 $ yoloai exec <box> -- env -C app GOOSE_…=… sh -c 'echo $PATH'
-/…/.venv/bin:/opt/homebrew/opt/node@20/bin:/Users/robba…
+/…/.venv/bin:/opt/homebrew/opt/node@20/bin:/…
 ```
 
 ### 3.2 The turn ran one directory above the repository

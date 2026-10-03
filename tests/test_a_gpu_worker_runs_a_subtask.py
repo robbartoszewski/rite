@@ -96,7 +96,7 @@ def test_an_absolute_subdir_is_refused():
     # to exist on the host — runs the turn OUTSIDE the sandbox against the
     # operator's real tree. Relative cannot express that.
     with pytest.raises(ValueError, match="absolute"):
-        exec_argv("box", ["goose"], {}, "yoloai", subdir="/Users/x/proj/app")
+        exec_argv("box", ["goose"], {}, "yoloai", subdir="/abs/proj/app")
 
 
 # --- the environment the sandboxed turn is built with -----------------------
