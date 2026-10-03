@@ -27,6 +27,9 @@ the sections directly under this one.
   Worker's sandbox, no Manager text run as shell, every Worker commit credited,
   a stalled Worker recovered by itself, and leaked self-test sandboxes cleaned
   up.
+- **Your answer reaches the Worker that asked.** A reply in a Worker's
+  question thread is carried into the Worker, even when it wakes the Manager
+  first, and a reply to an earlier question is delivered too (SCRUM-52).
 - **A tighter Manager sandbox.** It reaches one named macOS system service
   instead of all of them (so not your clipboard), no longer gets `/tmp`
   whole, and can no longer rewrite its own permission allowlist (SB5, SB8,
