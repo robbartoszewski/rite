@@ -287,3 +287,60 @@ def test_publish_check_itself_says_what_it_scanned(tmp_path, monkeypatch):
     assert "0 commit(s)" in result.output
     assert "NO history was in range" in result.output
     assert "gitleaks ruleset" in result.output
+
+
+@requires_gitleaks
+def test_the_module_entrypoint_makes_the_same_split(tmp_path, monkeypatch):
+    """`python -m rite_ai.gate check` is in `GATE_INVOCATIONS` and is what
+    rite's own CI workflow runs — the layer local configuration cannot
+    switch off. It resolved one root, so in the prepare layout it ran on a
+    default `ProjectConfig` (a missing config.yaml returns one, with no
+    error): every declared scan pattern dropped and every suppression
+    ignored, silently.
+    """
+    from rite_ai.gate.__main__ import _roots
+
+    project, module = _prepare_layout(tmp_path)
+    monkeypatch.chdir(module)
+    monkeypatch.delenv(PROJECT_ROOT_ENV, raising=False)
+
+    scan_root, config_root = _roots()
+    assert scan_root.resolve() == module.resolve()
+    assert config_root.resolve() == project.resolve()
+
+
+def test_a_clone_with_its_own_rite_dir_keeps_its_own_rules(tmp_path, monkeypatch):
+    """The nearest marker beats `RITE_PROJECT_ROOT`, which is the opposite
+    order from `_find_project_root` and deliberately so. That function asks
+    which project a session BELONGS to; this asks whose rules govern the
+    tree in front of us, and a clone carrying its own `.rite/` answers for
+    itself. Taking the override first applied an outer project's
+    suppressions — whose fingerprints cannot match an inner repository
+    anyway — while ignoring the ones that could.
+    """
+    project, module = _prepare_layout(tmp_path)
+    (module / ".rite").mkdir()
+    (module / ".rite" / "brief.yaml").write_text(
+        "project:\n  name: inner\n  role: owner\n"
+    )
+
+    monkeypatch.chdir(module)
+    monkeypatch.setenv(PROJECT_ROOT_ENV, str(project))
+    assert _gate_config_root().resolve() == module.resolve()
+
+
+def test_the_override_still_answers_when_there_is_no_marker(tmp_path, monkeypatch):
+    """The sandboxed case it was added for: a Worker told its project, with
+    nothing to find by walking."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    init_repo(repo)
+    write(repo, "a.txt", "a\n")
+    commit_all(repo, "base")
+    named = tmp_path / "named"
+    (named / ".rite").mkdir(parents=True)
+    (named / ".rite" / "brief.yaml").write_text("project:\n  name: n\n  role: owner\n")
+
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv(PROJECT_ROOT_ENV, str(named))
+    assert _gate_config_root().resolve() == named.resolve()

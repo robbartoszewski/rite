@@ -75,6 +75,13 @@ class GateReport:
     # Which gitleaks ruleset this run applied, in one clause. Always said —
     # see `_resolve_ruleset`.
     ruleset_note: str = ""
+    # Where a suppression has to be WRITTEN, when that is not the tree being
+    # scanned. `HOW_TO_SUPPRESS` names a rootless `.rite/gitleaksignore`, and
+    # the hook and `python -m rite_ai.gate` print it through `format_report`,
+    # which had no way to know the two roots differed — so in a split-root
+    # layout the reader writes the entry into the repository they are
+    # standing in and the gate goes on ignoring it.
+    config_root_note: str = ""
     errors: list[str] = field(default_factory=list)
     # What the sources that COULD run found, when another source could not.
     # Reported so a blocked run is still worth something, and deliberately
@@ -204,6 +211,15 @@ def _run_gate(
     # drops every suppression the project declared. Defaults to `root`,
     # which is every other layout and every existing caller.
     config_root = root if config_root is None else config_root
+    try:
+        split_roots = root.resolve() != config_root.resolve()
+    except OSError:
+        split_roots = False
+    config_root_note = (
+        f"rules and suppressions read from {config_root} (not {root})"
+        if split_roots
+        else ""
+    )
 
     binary = gitleaks_runner.find_gitleaks_binary()
     if binary is None:
@@ -377,6 +393,7 @@ def _run_gate(
             unreadable_files=unreadable,
             commits_scanned=commits_scanned,
             ruleset_note=ruleset_note,
+            config_root_note=config_root_note,
             partial_findings=partial,
             suppressed=suppressed,
             suppressions=entries,
@@ -403,6 +420,7 @@ def _run_gate(
             unreadable_files=unreadable,
             commits_scanned=commits_scanned,
             ruleset_note=ruleset_note,
+            config_root_note=config_root_note,
             partial_findings=merged,
         )
 
@@ -421,6 +439,7 @@ def _run_gate(
         unreadable_files=unreadable,
         commits_scanned=commits_scanned,
         ruleset_note=ruleset_note,
+        config_root_note=config_root_note,
     )
 
 
@@ -498,6 +517,13 @@ def _count_commits(root: Path, rev_range: str | None) -> int | None:
     unqualified it reads as "history was scanned and is clean", which is how
     a run that looked at no commits came to be offered as proof the scanner
     works. The count is reported so the sentence cannot be misread.
+
+    It counts commits IN SCOPE, which slightly overstates what the CONTENT
+    scan reads: gitleaks walks `git log -p`, which emits no diff for a merge
+    commit, so a secret introduced only in a conflict resolution falls inside
+    this number and outside that scan. The commit-MESSAGE passes do read
+    merges. Said here rather than quietly corrected, because the number's
+    whole purpose is to be the thing you can check.
     """
     import subprocess
 
@@ -699,12 +725,16 @@ def format_report(report: GateReport) -> str:
         lines.append("ERROR — the gate could not complete:")
         for e in report.errors:
             lines.append(f"  {e}")
+        if report.config_root_note:
+            lines.append(report.config_root_note)
         lines.extend(_partial_lines(report))
         return "\n".join(lines)
 
     lines.append(scanned_line(report))
     if report.ruleset_note:
         lines.append(report.ruleset_note)
+    if report.config_root_note:
+        lines.append(report.config_root_note)
     if report.unreadable_files:
         # NOT a warning buried below the verdict. A gate that could not read
         # a file has not cleared it, and the number that used to be printed
@@ -775,7 +805,9 @@ def format_report(report: GateReport) -> str:
     return "\n".join(lines)
 
 
-def ruleset(root: Path, config: ProjectConfig) -> tuple[str, str]:
+def ruleset(
+    root: Path, config: ProjectConfig, scan_root: Path | None = None
+) -> tuple[str, str]:
     """`(line, problem)`: which rules the gate applies here, for `rite doctor`.
 
     🔴 SCRUM-17. Doctor called the gate "active" and said nothing of WHAT it
@@ -790,7 +822,12 @@ def ruleset(root: Path, config: ProjectConfig) -> tuple[str, str]:
     extra = (
         f", plus {declared} pattern(s) from config.yaml" if declared else ""
     ) + f", plus rite's {len(BUILTIN_PATH_PATTERNS)} built-in path rules"
-    stray = root / ".gitleaksignore"
+    # gitleaks applies a `.gitleaksignore` at the root of what it SCANS, so
+    # this question belongs to the scanned tree and the `gitleaks_config`
+    # question below belongs to the project. They were both asked of one
+    # path: a stray file in the module repository then failed every push
+    # closed while doctor reported the rules healthy.
+    stray = (scan_root or root) / ".gitleaksignore"
     if stray.exists():
         return (
             f"publish gate rules: CANNOT VOUCH — {stray} exists, and gitleaks "

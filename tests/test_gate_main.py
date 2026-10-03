@@ -12,7 +12,7 @@ import rite_ai.gate.__main__ as main_mod
 def _run_pre_push(monkeypatch, tmp_path: Path, stdin_lines: list[str]) -> list[str]:
     seen_ranges: list[str] = []
 
-    def fake_run_gate(root, rev_range=None, config=None):
+    def fake_run_gate(root, rev_range=None, config=None, config_root=None):
         seen_ranges.append(rev_range)
 
         class _R:
@@ -70,7 +70,7 @@ def test_empty_stdin_scans_nothing(tmp_path, monkeypatch):
 def test_worst_exit_code_wins_across_multiple_refs(tmp_path, monkeypatch):
     calls = {"n": 0}
 
-    def fake_run_gate(root, rev_range=None, config=None):
+    def fake_run_gate(root, rev_range=None, config=None, config_root=None):
         calls["n"] += 1
 
         class _R:

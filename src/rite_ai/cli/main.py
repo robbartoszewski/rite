@@ -307,21 +307,29 @@ def _gate_config_root() -> Path:
     Falls back to the scanned tree when there is no project, which is rite's
     own repository: it tracks `.rite/gitleaksignore` and
     `.rite/review-checklist.md` for the gate and is not a rite project.
+
+    The NEAREST marker wins over `RITE_PROJECT_ROOT`, which is deliberately
+    the opposite order from `_find_project_root`, and the difference is the
+    difference between the two questions. `_find_project_root` is asking
+    which project a session BELONGS to, and the override exists there
+    because walking up from a module that is itself a rite project found the
+    inner one and gave every Worker a private claims ledger. This is asking
+    whose rules govern the tree in front of us — and for a clone that
+    carries its own `.rite/`, those are its own. Taking the override first
+    applied an outer project's suppressions to an inner repository, where
+    the fingerprints cannot match anyway, while ignoring the ones that
+    could; with commit-message findings now unconditionally blocking, that
+    is a block the Worker has no file to clear it in. The override still
+    answers when there is no marker to find, which is the sandboxed case it
+    was added for.
     """
     cwd = Path.cwd()
-    override = os.environ.get(PROJECT_ROOT_ENV)
-    if override:
-        # Unconditionally, exactly as `_find_project_root` takes it. The
-        # guard that briefly stood here was aimed at the SCAN root, where an
-        # unrelated override fed one repository's shas to another; the scan
-        # root no longer consults the variable at all. Which PROJECT a
-        # Worker belongs to is the question this variable answers, and
-        # answering it differently here than everywhere else is how the gate
-        # and the rest of the CLI came to disagree about the same tree.
-        return Path(override).expanduser().resolve()
     for parent in [cwd, *cwd.parents]:
         if _is_project(parent):
             return parent
+    override = os.environ.get(PROJECT_ROOT_ENV)
+    if override:
+        return Path(override).expanduser().resolve()
     return _gate_root()
 
 
@@ -1193,7 +1201,14 @@ def _doctor_report(problems: list[str], *, network: bool = False) -> None:
     # below is still about something.
     from rite_ai.gate.ci import ci_workflow_status
 
-    ci_root = _gate_root() if _git_toplevel(Path.cwd()) is not None else root
+    # Anchored to the PROJECT, not to wherever doctor was typed. Deriving
+    # it from cwd made `rite doctor` answer about whichever repository the
+    # operator happened to be standing in while labelling it "(project
+    # root)" — a different answer from the same machine depending on the
+    # directory, which is the defect this check was added to catch in the
+    # first place. `install-ci` writes at the repository, so this asks the
+    # repository the project lives in.
+    ci_root = _git_toplevel(root) or root
     with _doctor_check("publish gate CI", problems):
         ci_gate = ci_workflow_status(ci_root)
         if ci_gate.state != "not_a_repo":
@@ -1212,7 +1227,7 @@ def _doctor_report(problems: list[str], *, network: bool = False) -> None:
 
         _gate_cfg = _parse_gate_config(rite_dir / "config.yaml")
         if not isinstance(_gate_cfg, ParseErrorType):
-            line, problem = ruleset(root, _gate_cfg)
+            line, problem = ruleset(root, _gate_cfg, scan_root=_gate_root())
             click.echo(line)
             if problem:
                 problems.append(f"publish gate: {problem}")
