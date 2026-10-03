@@ -1477,7 +1477,6 @@ def yoloai_agent_for(manifest: object | None) -> str:
     return LOCAL_WORKER_AGENT if getattr(manifest, "is_local", False) else "claude"
 
 
-
 def _start_worker_unlocked(
     root: str | os.PathLike[str],
     worker: str,
