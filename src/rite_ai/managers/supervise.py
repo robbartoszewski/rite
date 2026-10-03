@@ -1413,7 +1413,9 @@ def supervise(
 
 def _workers_left_mid_flight(root: Path) -> list[dict]:
     """Each Worker this project has that is still holding something, as
-    `{"worker", "ticket", "paths", "question"}` (SCRUM-20).
+    `{"worker", "ticket", "paths", "question", "qid"}` (SCRUM-20). `qid` is
+    the id the question was raised under, so the summary names it and the
+    Slack relay links it to the question's post (SCRUM-47).
 
     ⚠ **Read, never released.** `perform_handover` releases claims, and that
     is right when a Worker has stopped — but a Manager's Workers OUTLIVE it:
@@ -1439,7 +1441,7 @@ def _workers_left_mid_flight(root: Path) -> list[dict]:
             claims = ledger.claims_for(worker)
         except Exception:  # noqa: BLE001
             claims = []
-        question = ""
+        question = qid = ""
         try:
             status = worker_sandbox_status(worker, root)
             if getattr(status, "known", False) and str(status) != "not found":
@@ -1449,6 +1451,9 @@ def _workers_left_mid_flight(root: Path) -> list[dict]:
                 asked = pending_question(name) if name else None
                 if asked is not None and not isinstance(asked, Unknown):
                     question = getattr(asked, "question", "") or "a question"
+                    from rite_ai.managers.worker_questions import raised_id
+
+                    qid = raised_id(root, name)
         except Exception:  # noqa: BLE001
             question = ""
         if not claims and not question:
@@ -1459,6 +1464,7 @@ def _workers_left_mid_flight(root: Path) -> list[dict]:
                 "ticket": next((c.ticket for c in claims if c.ticket), ""),
                 "paths": sorted({p for c in claims for p in c.paths}),
                 "question": question[:200],
+                "qid": qid,
             }
         )
     return left
@@ -1493,7 +1499,13 @@ def _hand_over_on_stop(root: Path, manager: str, how: str, say=None) -> list[dic
     who = ", ".join(
         f"{w['worker']}"
         + (f" on {w['ticket']}" if w["ticket"] else "")
-        + (" (waiting on an answer)" if w["question"] else "")
+        + (
+            f" (waiting on an answer, {w['qid']})"
+            if w["question"] and w.get("qid")
+            else " (waiting on an answer)"
+            if w["question"]
+            else ""
+        )
         for w in left
     )
     text = (

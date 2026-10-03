@@ -67,6 +67,20 @@ started. It now starts. A project with no ticket backend crashed the same way
 on its setup session; that session now gets one session, supervised for up to
 60 minutes, when you give no bound.
 
+### rite shows it picked up your message, and links back to its questions (SCRUM-35, SCRUM-47)
+
+**👀 the moment rite picks up a message for the Manager**: your DM, an
+`@rite` mention, or your reply in a refinement thread. A message in the
+broadcast channel that nobody addressed to rite gets none. This needs the
+Slack app's `reactions:write` scope; without it rite says so once and relays
+as before.
+
+**A question rite already asked is a link, not prose.** When rite mentions a
+question it posted earlier (its id, such as `q3f9a`), Slack shows the id as a
+link to that question. "N Worker(s) still holding work … waiting on an
+answer" now names each Worker's question, and so does "Your answer did NOT
+reach Worker". `rite replies` in a terminal shows the bare id.
+
 ### A Manager runs until you stop it (SCRUM-20)
 
 **`rite start lead` no longer needs `--sessions` and `--minutes`.** With no

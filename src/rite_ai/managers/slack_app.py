@@ -148,7 +148,8 @@ DEDICATED_APP = (
     "credential set slack`. It needs the scopes rite posts and reads with, "
     "and `reactions:read` — without that one, rite cannot see a reaction to a "
     "question, so only a reply in the question's thread confirms it reached "
-    "you (add it under OAuth & Permissions)."
+    "you (add it under OAuth & Permissions). Add `reactions:write` too, so "
+    "rite can put 👀 on a message the moment it picks it up."
 )
 
 

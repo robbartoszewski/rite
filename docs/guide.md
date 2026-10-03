@@ -920,7 +920,8 @@ line rite writes, saying which of these it is.
 
 1. Create a Slack app with the bot scopes `channels:history`, `chat:write`
    and `im:history` (add `im:write` and rite never has to post in your DM to
-   find it). Under **App Home**, allow users to send messages in the
+   find it, and `reactions:write` so it puts 👀 on each message it picks up
+   for the Manager; without it, rite says so once and relays as before). Under **App Home**, allow users to send messages in the
    Messages tab. Install it, and `/invite @rite` into the broadcast channel
    and into the status channel (`#rite-status` unless you name another).
 2. `rite credential set slack` stores the bot token (`xoxb-…`).
