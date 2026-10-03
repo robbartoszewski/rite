@@ -70,7 +70,62 @@ from pathlib import Path
 LEDGER_FILE = "worker-questions.json"
 """sandbox -> the id (`asking._question_id`) of the question raised for it,
 so it can be settled when the Worker's question is answered or gone. The
-once-only rule itself is `asking`'s ledger, shared with refinement."""
+once-only rule itself is `asking`'s ledger, shared with refinement.
+
+Beside it, under keys that start with `_`: `OPEN_KEY` (every id still open,
+not only the latest per sandbox), `CLOSED_KEY` (ids that were Worker
+questions and are not any more) and `RELAYED_KEY` (messages already
+carried)."""
+
+OPEN_KEY = "_open"
+"""qid -> sandbox, for EVERY Worker question raised and not yet answered or
+gone (SCRUM-52). The per-sandbox entry above holds only the LATEST id, so a
+reply to an earlier question that was still unanswered matched nothing and
+was dropped without a word."""
+
+CLOSED_KEY = "_closed"
+"""qid -> sandbox, for Worker questions that are no longer open, newest last
+and bounded by `CLOSED_KEPT`. A reply to one of these is told back to the
+person as matching no open question, instead of being ignored; an id that was
+never a Worker question is somebody else's mail and is left alone."""
+
+CLOSED_KEPT = 200
+
+
+def _open_of(ledger: dict) -> dict:
+    """Every open Worker question, qid -> sandbox: `OPEN_KEY`, plus the
+    per-sandbox latest ids, which a ledger written before SCRUM-52 holds
+    alone."""
+    found = {
+        k: v
+        for k, v in (ledger.get(OPEN_KEY) or {}).items()
+        if isinstance(k, str) and isinstance(v, str)
+    }
+    for sandbox, qid in ledger.items():
+        if not sandbox.startswith("_") and isinstance(qid, str):
+            found.setdefault(qid, sandbox)
+    return found
+
+
+def _close(ledger: dict, qid: str) -> None:
+    """Move `qid` from open to closed, in place."""
+    open_ = dict(ledger.get(OPEN_KEY) or {})
+    sandbox = open_.pop(qid, None) or next(
+        (s for s, v in ledger.items() if v == qid and not s.startswith("_")), ""
+    )
+    ledger[OPEN_KEY] = open_
+    closed = dict(ledger.get(CLOSED_KEY) or {})
+    closed.pop(qid, None)
+    closed[qid] = sandbox
+    ledger[CLOSED_KEY] = dict(list(closed.items())[-CLOSED_KEPT:])
+
+
+def _close_sandbox(ledger: dict, sandbox: str) -> list[str]:
+    """Close every open question of `sandbox`; return their ids."""
+    gone = [qid for qid, s in _open_of(ledger).items() if s == sandbox]
+    for qid in gone:
+        _close(ledger, qid)
+    return gone
 
 
 def _ledger_path(root: Path, manager: str) -> Path:
@@ -203,10 +258,13 @@ def _surface(root: Path, manager: str, say) -> int:
             )
             continue
         if not isinstance(asked, WorkerQuestion):
-            # Answered, or gone: the person is no longer being asked it.
+            # Answered, or gone: the person is no longer being asked it, nor
+            # any earlier question of this sandbox still open (SCRUM-52).
             earlier = raised.pop(sandbox, None)
+            closed = _close_sandbox(raised, sandbox)
             if isinstance(earlier, str):
                 settle(root, manager, earlier)
+            if isinstance(earlier, str) or closed:
                 _store(path, raised)
             continue
         ticket = _ticket_of(root, sandbox)
@@ -219,10 +277,18 @@ def _surface(root: Path, manager: str, say) -> int:
         )
         earlier = raised.get(sandbox)
         if isinstance(earlier, str) and earlier != result.id:
-            # A rewritten question replaces the one it rewrote.
+            # A rewritten question replaces the one it rewrote as the one the
+            # person is asked. ⚠ It stays OPEN for an answer (SCRUM-52): a
+            # reply to it can still arrive, and dropping that reply silently
+            # is the defect.
             settle(root, manager, earlier)
-        if earlier != result.id:
+        opened = dict(raised.get(OPEN_KEY) or {})
+        if earlier != result.id or opened.get(result.id) != sandbox:
             raised[sandbox] = result.id
+            if isinstance(earlier, str):
+                opened.setdefault(earlier, sandbox)
+            opened[result.id] = sandbox
+            raised[OPEN_KEY] = opened
             _store(path, raised)
         if not result.new:
             continue
@@ -263,15 +329,19 @@ def _qid_in(text: str) -> str:
 # the two cannot come to disagree about what counts as the User speaking.
 
 
-def relay(root: Path, manager: str, say) -> int:
+def relay(root: Path, manager: str, say, messages=None) -> int:
     """Deliver each answered Worker question into the Worker (S30).
 
     Returns how many answers were carried. Never raises into the supervisor,
     for `surface`'s reason: a watcher that ends the run is worse than one
     that misses a tick.
+
+    `messages`, when given, are the ones the cycle boundary has just TAKEN
+    from the inbox (SCRUM-52), relayed instead of reading the inbox: by then
+    they are no longer in it, and the relay must still see them.
     """
     try:
-        return _relay(root, manager, say)
+        return _relay(root, manager, say, messages)
     except Exception as e:  # noqa: BLE001 - a watcher must not end the run
         problem = f"{type(e).__name__}: {e}"
         _say_once(root, manager, say, f"could not relay Worker answers: {problem}")
@@ -304,11 +374,20 @@ def _tell_the_person_relaying_failed(root: Path, manager: str, problem: str, say
         _say_once(root, manager, say, f"could not tell the User either: {e}")
 
 
-def _relay(root: Path, manager: str, say) -> int:
+def _relay(root: Path, manager: str, say, messages=None) -> int:
     """⚠ Reads the inbox WITHOUT consuming it (`mailbox.read`, not
     `take_mail`). The answer is the Owner's mail as well as the Worker's: the
     Owner is told what its Worker was told, and taking the message here would
-    silently remove it from the Manager's next prompt."""
+    silently remove it from the Manager's next prompt.
+
+    🔴 **And the cycle boundary hands it what it takes (SCRUM-52).** This ran
+    only from a watcher throttled to once every 30 s, and a reply that woke a
+    Manager cycle was taken by that cycle (`take_mail`) before the relay's
+    next turn: it reached the Manager's prompt and never the Worker's
+    `answer.json`, while the Owner believed it delivered. Measured in the
+    dogfood: two replies taken, neither ever relayed. So the supervisor passes
+    `messages`, exactly what it took, and nothing taken can slip past. Each
+    message is carried once, whichever path saw it first (`RELAYED_KEY`)."""
     from rite_ai.config.parse import load_project
     from rite_ai.managers import delivered
     from rite_ai.managers.asking import raise_to_person, settle
@@ -317,25 +396,57 @@ def _relay(root: Path, manager: str, say) -> int:
     from rite_ai.sandbox.questions import Undeliverable, deliver_answer
 
     root = Path(root)
+    # Cheap first, because this runs at the poll rate now (SCRUM-52): no
+    # Worker question was ever raised, so nothing here can be an answer.
+    path = _ledger_path(root, manager)
+    ledger = _load(path)
+    by_qid = _open_of(ledger)
+    closed = {
+        k: v for k, v in (ledger.get(CLOSED_KEY) or {}).items() if isinstance(k, str)
+    }
+    if not by_qid and not closed:
+        return 0
     project = load_project(root)
     if isinstance(project, list) or not project.config.sandbox.enabled:
         return 0
-    path = _ledger_path(root, manager)
-    ledger = _load(path)
     raised = {k: v for k, v in ledger.items() if not k.startswith("_")}
-    if not raised:
-        return 0
     done = set(ledger.get(RELAYED_KEY) or [])
-    by_qid = {qid: sandbox for sandbox, qid in raised.items() if isinstance(qid, str)}
     worker_of = {existing_sandbox_name(w.name, root): w.name for w in project.workers}
 
     carried = 0
-    for message in read(root, manager, INBOX):
+    for message in read(root, manager, INBOX) if messages is None else messages:
         name = message.path.name
         if name in done:
             continue
         qid = _qid_in(message.text.split("\n", 1)[0])
         sandbox = by_qid.get(qid)
+        if qid and sandbox is None and qid in closed:
+            # 🔴 SCRUM-52: a reply to a Worker question that is no longer open
+            # (answered already, or its Worker stopped asking). Said and told,
+            # never dropped: the person answered and is otherwise waiting.
+            done.add(name)
+            ledger[RELAYED_KEY] = sorted(done)
+            _store(path, ledger)
+            gone_from = closed.get(qid) or ""
+            who = worker_of.get(gone_from, gone_from) or "a Worker"
+            say(
+                f"a reply to {qid} matched no open question of Worker {who!r}: "
+                "nothing was written into a Worker; told the User"
+            )
+            raise_to_person(
+                root,
+                manager,
+                subject=_ticket_of(root, gone_from) if gone_from else "",
+                raiser=f"worker:{who}",
+                text=(
+                    f"Your reply to {qid} matched no open question of Worker "
+                    f"{who!r}: that question was already answered, or the "
+                    "Worker stopped asking it. Nothing was written into a "
+                    "Worker. If it is still waiting, answer its current "
+                    f"question: `rite sandbox status {who}` shows it."
+                ),
+            )
+            continue
         if not qid or sandbox is None:
             # Not an answer to a Worker's question. Left alone: every other
             # kind of mail is somebody else's to read.
@@ -371,7 +482,17 @@ def _relay(root: Path, manager: str, say) -> int:
             continue
         worker = worker_of.get(sandbox, "")
         status = worker_sandbox_status(worker, root) if worker else None
-        outcome = deliver_answer(sandbox, heard.words, status=status)
+        words = heard.words
+        latest = raised.get(sandbox)
+        if isinstance(latest, str) and latest != qid:
+            # An answer to an EARLIER question of this Worker, which has asked
+            # another since (SCRUM-52). Delivered, and labelled, so the Worker
+            # does not read it as the answer to the question it asked last.
+            words = (
+                f"(This answers your earlier question, {qid}, not your latest "
+                f"one, {latest}.)\n{words}"
+            )
+        outcome = deliver_answer(sandbox, words, status=status)
         done.add(name)
         ledger[RELAYED_KEY] = sorted(done)
         _store(path, ledger)
@@ -401,9 +522,13 @@ def _relay(root: Path, manager: str, say) -> int:
             )
             continue
         settle(root, manager, qid)
-        raised.pop(sandbox, None)
-        ledger.pop(sandbox, None)
+        _close(ledger, qid)
+        if raised.get(sandbox) == qid:
+            raised.pop(sandbox, None)
+            ledger.pop(sandbox, None)
         _store(path, ledger)
+        by_qid.pop(qid, None)
+        closed[qid] = sandbox
         say(f"relayed the User's answer to Worker {worker or sandbox!r} ({qid})")
         carried += 1
     return carried

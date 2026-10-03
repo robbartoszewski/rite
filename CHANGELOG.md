@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Your answer to a Worker's question reaches the Worker (SCRUM-52)
+
+When you replied in a Worker's question thread, the reply reached the
+Manager and was said to be delivered, but the Worker never got it: it kept
+waiting, or went on with its own guess. Two causes, both fixed:
+
+- **The answer was taken by the Manager first.** A reply that woke the
+  Manager was handed to the Manager's next session before rite carried it to
+  the Worker, and then there was nothing left to carry. rite now carries
+  every answer it hands the Manager to the Worker as well, in the same step.
+- **Only a Worker's latest question could be answered.** If a Worker asked
+  again before you replied, your reply to the first question was dropped
+  without a word. It is now delivered, with a note saying which question it
+  answers.
+
+A reply to a question that is no longer open (already answered, or the
+Worker stopped asking) is now told back to you, rather than ignored.
+
 ### A sandboxed Manager can no longer read your clipboard
 
 A Manager's sandbox let it reach any macOS system service, and one of those
