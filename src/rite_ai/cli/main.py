@@ -7728,6 +7728,16 @@ def sandbox_start(
 
 
 STARTED_STATUS = "In Progress"
+
+SETUP_MINUTES = 60.0
+"""The window a setup session gets when `rite start` was given no bound.
+
+A setup session is ONE cycle (it needs the person at the terminal), so a run
+with no bound cannot stay perpetual there, and `supervise` refuses a
+half-bounded run: before this, a vanilla `rite start` on a project with no
+ticket backend passed `max_sessions=1` and no window, and raised. The window
+bounds only the supervision; the session itself is left running (D-85).
+⚠ The figure is rite's choice."""
 """Where a ticket goes when a Worker starts on it. Hardcoded because rite has
 no status vocabulary of its own yet (SPEC §6.5); a board without it says so
 through `move`, and the start says that the board was not moved."""
@@ -9337,9 +9347,13 @@ def _start_a_manager(
         # said out loud rather than left for the user to infer from a run
         # that stopped earlier than they asked for.
         sessions = 1
+        if minutes is None:
+            # Both bounds or neither (D-115): one session alone is refused.
+            minutes = SETUP_MINUTES
         click.echo(
             f"this project has no ticket backend, so Manager {role.name!r} "
-            f"is starting to help you configure one — not to work a queue.",
+            f"is starting to help you configure one — not to work a queue. "
+            f"One session, supervised for up to {minutes:g} minute(s).",
             err=True,
         )
         click.echo(

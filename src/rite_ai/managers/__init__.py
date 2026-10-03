@@ -227,13 +227,15 @@ class ManagerInstance:
     session: str = ""
     started_at: float = 0.0
     engine: str = ""
-    max_sessions: int = 0
+    max_sessions: int | None = 0
     """The session-start ceiling this invocation was given. A COUNT, not
     spend — §2.6.1 says rite cannot read the quota and D-38 forbids the path
-    from measurement back to control (D-69)."""
-    window_seconds: float = 0.0
+    from measurement back to control (D-69). None: a run with no bound
+    (D-115)."""
+    window_seconds: float | None = 0.0
     """The wall-clock bound. The ceiling above bounds starts; this is what
-    bounds duration, and §9.14.5 records that a count alone bounds neither."""
+    bounds duration, and §9.14.5 records that a count alone bounds neither.
+    None: a run with no bound (D-115)."""
 
     def __post_init__(self) -> None:
         if self.started_at == 0.0:

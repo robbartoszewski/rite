@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Fixed: `rite start` with no bound crashed in v0.7.0a7
+
+`rite start lead` with no `--sessions` and `--minutes`, the way the section
+below says to run it, printed its banner and then died with `TypeError: '<='
+not supported between instances of 'NoneType' and 'int'`, so no Manager
+started. It now starts. A project with no ticket backend crashed the same way
+on its setup session; that session now gets one session, supervised for up to
+60 minutes, when you give no bound.
+
 ### rite shows it picked up your message, and links back to its questions (SCRUM-35, SCRUM-47)
 
 **👀 the moment rite picks up a message for the Manager**: your DM, an
