@@ -936,9 +936,14 @@ line rite writes, saying which of these it is.
 
    With no `owner_user` Slack is **broadcast-only**, and nothing typed in
    Slack instructs anyone.
-4. `rite doctor` posts one line to each conversation, reads it back, and
-   names Slack's own error if either fails: `missing_scope`,
-   `not_in_channel` or `channel_not_found`.
+4. `rite doctor` checks Slack **without posting anything**. It reads the
+   app's scopes from what Slack reports, reads your DM and the broadcast
+   channel under the ids rite learned at its first `rite start`, and names
+   Slack's own error if either fails: `missing_scope`, `not_in_channel` or
+   `channel_not_found`. Before the first start it says "not checked" for
+   them (add `im:write` and it can open your DM to check it then).
+   `rite doctor --network` posts one line to the status channel, so you can
+   see a message arrive; it never posts in your DM.
 
 **One Slack app per project.** Two projects can share a workspace, each
 with its own channels. They must not share an app, for two reasons:

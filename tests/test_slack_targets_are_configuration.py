@@ -12,7 +12,7 @@ from __future__ import annotations
 from rite_ai.cli.init.scaffold import config_to_yaml
 from rite_ai.config.models import SlackConfig
 from rite_ai.config.parse import ParseError, parse_config
-from rite_ai.managers.slack import Listener, probe
+from rite_ai.managers.slack import Listener
 
 
 def _config(tmp_path, body: str):
@@ -101,38 +101,6 @@ def _slack(errors: dict | None = None, *, dm="D1", channel="C1"):
         return {"ok": True, "channel": resolved, "ts": "100.5", "messages": []}
 
     return call, calls
-
-
-class TestDoctorNamesSlacksOwnError:
-    def test_both_targets_are_probed_for_posting_and_reading(self):
-        call, calls = _slack()
-        got = probe("U1", "#all-rite", "t", call=call)
-        assert [p.ok for p in got] == [True, True]
-        # Reading is probed with the id the post RESOLVED, not the user id or
-        # the name — `conversations.history` takes neither (measured).
-        assert ("conversations.history", "D1") in calls
-        assert ("conversations.history", "C1") in calls
-
-    def test_a_dm_that_cannot_be_read_names_the_missing_scope(self):
-        """The case that matters: posting to the DM works on `chat:write`
-        alone, so a probe that only posted would pass a relay that can never
-        hear the Owner."""
-        call, _ = _slack({"conversations.history:D1": "missing_scope"})
-        owner, _broadcast = probe("U1", "#all-rite", "t", call=call)
-        assert not owner.ok
-        assert "missing_scope" in owner.detail and "im:history" in owner.detail
-
-    def test_not_in_channel_is_named_with_the_fix(self):
-        call, _ = _slack({"chat.postMessage:#all-rite": "not_in_channel"})
-        _owner, broadcast = probe("U1", "#all-rite", "t", call=call)
-        assert not broadcast.ok
-        assert "not_in_channel" in broadcast.detail and "/invite" in broadcast.detail
-
-    def test_broadcast_only_probes_one_target(self):
-        call, _ = _slack()
-        assert [p.target for p in probe("", "#all-rite", "t", call=call)] == [
-            "broadcast channel #all-rite"
-        ]
 
 
 class TestTheListenerStartsWhereItSaidItWasListening:

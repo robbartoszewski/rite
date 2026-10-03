@@ -137,6 +137,9 @@ class Heard:
         return tuple((m.get("text") or "").strip() for m in self.messages)
 
 
+SCOPES_HEADER = "x-oauth-scopes"
+
+
 def _call(
     method: str, token: str, params: dict | None = None, payload: dict | None = None
 ):
@@ -151,7 +154,16 @@ def _call(
         )
     request.add_header("Authorization", f"Bearer {token}")
     with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
-        return json.loads(response.read())
+        got = json.loads(response.read())
+        # The token's scopes travel in a response HEADER, not the body (RS3).
+        # Kept under the header's own name, which no Slack body uses, so the
+        # one reader (`_scopes_of`) goes through the same `call` as every
+        # other request, and a fake Slack, which sends none, reads as "Slack
+        # did not say", never as a pass.
+        scopes = response.headers.get(SCOPES_HEADER)
+        if isinstance(got, dict) and scopes is not None:
+            got[SCOPES_HEADER] = scopes
+        return got
 
 
 def _hear(channel: str, token: str, *, since: str = "", call=None) -> Heard:
@@ -438,56 +450,175 @@ def refusal(got: dict) -> str:
 
 @dataclass(frozen=True)
 class Probe:
-    """One target `rite doctor` checked."""
+    """One target `rite doctor` checked.
+
+    `ok` is True (verified), False (a problem, counted), or None (not checked:
+    said as that, never as a pass, and not counted — S28's rule that "could
+    not check" is a gap in the report, not a fault in the project)."""
 
     target: str
-    ok: bool
+    ok: bool | None
     detail: str
 
 
-def probe(owner: str, broadcast: str, token: str, *, call=None) -> list[Probe]:
-    """Can rite post to and read each target? For `rite doctor` (A6).
+REQUIRED_SCOPES = ("chat:write", "channels:history")
+DM_SCOPES = ("im:history",)
 
-    ⚠ **This POSTS one line to each target.** Without `im:write` there is no
-    way to learn the Owner's DM id except by posting to the user id (measured:
-    `conversations.open` is `missing_scope`, `conversations.history` on a user
-    id is `channel_not_found`), and without `channels:read` a `#name` is only
-    resolved the same way. The line says what it is, so the Owner seeing it is
-    itself part of the check.
 
-    Reading is probed separately because it needs a different scope: posting
-    to the DM works on `chat:write` alone, and reading it needs `im:history`.
-    A probe that only posted would pass a relay that can never hear.
-    """
-    caller = call or _call
-    out: list[Probe] = []
-    for label, target in (
-        ("command channel (the Owner's DM)", owner),
-        ("broadcast channel", broadcast),
-    ):
-        if not target:
-            continue
-        where = f"{label} {target}"
-        sent = _post(
-            target,
-            token,
-            "rite doctor: checking that rite can reach this conversation.",
-            call=caller,
-        )
-        if not sent.ok:
-            out.append(Probe(where, False, f"cannot post — {sent.problem}"))
+def _scopes_of(token: str, *, call) -> frozenset[str] | None:
+    """The bot token's scopes, as Slack reports them in the `x-oauth-scopes`
+    header of a Web API response (`_call` keeps it), or None when it did not
+    say.
+
+    ⚠ The header is documented by Slack; it is NOT measured here against a
+    live workspace. A missing header is None, which `probe` reports as "not
+    checked", never as "the scopes are fine"."""
+    try:
+        got = call("auth.test", token, {})
+    except Exception:  # noqa: BLE001 - no answer is not a scope list
+        return None
+    header = got.get(SCOPES_HEADER) if isinstance(got, dict) else None
+    if not isinstance(header, str):
+        return None
+    return frozenset(s.strip() for s in header.split(",") if s.strip())
+
+
+def remembered_targets(project: Path, managers: list[str]) -> dict:
+    """The conversation ids the Owner's relay learned at its first start (RS1),
+    from the first of `managers` whose relay state has any. {} when none does.
+
+    ⚠ **READ ONLY.** A running `rite start` owns that file and rewrites it
+    whole; `rite doctor` writing it would race it."""
+    from rite_ai.managers import manager_dir
+
+    for manager in managers:
+        if not manager:
             continue
         try:
+            path = manager_dir(project, manager) / "slack.json"
+            state = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        known = state.get("known") if isinstance(state, dict) else None
+        if isinstance(known, dict) and known:
+            return known
+    return {}
+
+
+def probe(
+    owner: str,
+    broadcast: str,
+    token: str,
+    *,
+    status: str = "",
+    known: dict | None = None,
+    call=None,
+) -> list[Probe]:
+    """Can rite reach each target? For `rite doctor` (A6). **It posts nothing,
+    anywhere.**
+
+    It used to post "rite doctor: checking that rite can reach this
+    conversation." to the Owner's DM and the broadcast channel on every run, a
+    test artefact in a production conversation (RS3; Robert, 2026-09-29).
+    Instead:
+
+    * the app's **scopes**, from the header Slack sends with `auth.test`.
+      Posting needs only `chat:write`, so the scopes settle it without a post;
+    * the **DM and the broadcast channel**, by READING their history under the
+      ids the Owner's relay remembered (`known`, see `remembered_targets`), or,
+      for the DM, `conversations.open` where the app has `im:write` (opening
+      shows nothing to anyone). Reading proves the id and the read scope,
+      which is the half a post cannot: posting to the DM works on
+      `chat:write` alone, so a probe that only posted would pass a relay that
+      can never hear the Owner;
+    * the **status channel** is output only and has no id to read until a
+      post resolves its name, so it is "not checked" here; `rite doctor
+      --network`, where the person asked for a message that arrives, posts
+      its one line there.
+
+    A target with no id yet is "not checked yet": the first `rite start`
+    learns it."""
+    caller = call or _call
+    known = known or {}
+    out: list[Probe] = []
+    have = _scopes_of(token, call=caller)
+    needed = REQUIRED_SCOPES + (DM_SCOPES if owner else ())
+    if have is None:
+        out.append(
+            Probe(
+                "app scopes",
+                None,
+                "Slack did not report the app's scopes",
+            )
+        )
+    else:
+        missing = [s for s in needed if s not in have]
+        out.append(
+            Probe(
+                "app scopes",
+                not missing,
+                f"missing {', '.join(missing)} — add under OAuth & Permissions → "
+                "Bot Token Scopes, then reinstall the app"
+                if missing
+                else ", ".join(needed) + " present",
+            )
+        )
+
+    def read(label: str, channel: str) -> Probe:
+        try:
             got = caller(
-                "conversations.history", token, {"channel": sent.channel, "limit": 1}
+                "conversations.history", token, {"channel": channel, "limit": 1}
             )
         except Exception as e:  # noqa: BLE001
-            out.append(Probe(where, False, f"cannot read — {type(e).__name__}: {e}"))
-            continue
+            return Probe(label, False, f"cannot read — {type(e).__name__}: {e}")
         if not got.get("ok"):
-            out.append(Probe(where, False, f"cannot read — {refusal(got)}"))
-            continue
-        out.append(Probe(where, True, f"posts and reads ({sent.channel})"))
+            return Probe(label, False, f"cannot read — {refusal(got)}")
+        return Probe(label, True, f"reads ({channel})")
+
+    if owner:
+        label = f"command channel (the Owner's DM) {owner}"
+        dm = known.get("dm") or {}
+        channel = str(dm.get("channel") or "") if dm.get("user") == owner else ""
+        if not channel:
+            try:
+                got = caller("conversations.open", token, {"users": owner})
+            except Exception:  # noqa: BLE001 - no answer is not an id
+                got = {}
+            opened = got.get("channel") if got.get("ok") else None
+            channel = str(opened.get("id") or "") if isinstance(opened, dict) else ""
+        out.append(
+            read(label, channel)
+            if channel
+            else Probe(
+                label,
+                None,
+                "the DM's id is learned at the first `rite start` (or "
+                "add `im:write` and doctor opens it)",
+            )
+        )
+    if broadcast:
+        label = f"broadcast channel {broadcast}"
+        b = known.get("broadcast") or {}
+        channel = str(b.get("channel") or "") if b.get("name") == broadcast else ""
+        out.append(
+            read(label, channel)
+            if channel
+            else Probe(
+                label,
+                None,
+                "its id is learned at the first `rite start`; "
+                f"`/invite @rite` into {broadcast} before then",
+            )
+        )
+    if status:
+        out.append(
+            Probe(
+                f"status channel {status}",
+                None,
+                "output only, so not without a post; `rite doctor --network` "
+                "posts one line there",
+            )
+        )
     return out
 
 

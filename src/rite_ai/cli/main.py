@@ -9134,7 +9134,8 @@ def _slack_listener(root: Path, manager: str):
 
 
 def _doctor_slack(root: Path, problems: list[str], *, network: bool = False) -> None:
-    """Probe both Slack targets, naming Slack's own error (A6).
+    """Probe the Slack targets, naming Slack's own error (A6), and posting
+    nothing unless `--network` asks for a delivery (RS3).
 
     Nothing is printed for a project without Slack: a check for a feature
     nobody turned on is noise in the one report meant to be read whole.
@@ -9171,12 +9172,26 @@ def _doctor_slack(root: Path, problems: list[str], *, network: bool = False) -> 
         click.echo(
             f"slack: could not check whether the app is shared — {shared.message}"
         )
-    for checked in probe(slack.owner_user, slack.broadcast, token):
-        click.echo(
-            f"slack {checked.target}: {'ok' if checked.ok else 'FAILED'} — "
-            f"{checked.detail}"
-        )
-        if not checked.ok:
+    # The ids the Owner's relay remembered, READ only: a running `rite start`
+    # owns that file. The relay is the Manager holding `route` (MMQ2), so its
+    # state is read first.
+    from rite_ai.config.managers import routing_owner
+    from rite_ai.managers.slack import remembered_targets
+
+    roles = list(parsed.coordination.manager_roles)
+    known = remembered_targets(
+        root, [routing_owner(roles), *parsed.coordination.managers]
+    )
+    for checked in probe(
+        slack.owner_user,
+        slack.broadcast,
+        token,
+        status=slack.status,
+        known=known,
+    ):
+        verdict = {True: "ok", False: "FAILED", None: "not checked"}[checked.ok]
+        click.echo(f"slack {checked.target}: {verdict} — {checked.detail}")
+        if checked.ok is False:
             problems.append(f"slack {checked.target}: {checked.detail}")
 
     # ⚠ **Posting is allowed HERE and nowhere else in setup.** `rite
@@ -9186,28 +9201,38 @@ def _doctor_slack(root: Path, problems: list[str], *, network: bool = False) -> 
     # answer that settles it is a message that arrives. Still opt-in, because
     # a plain `rite doctor` must not post every time it is run.
     #
+    # ⚠ **To the status channel, never the DM or the broadcast channel**
+    # (RS3). The DM is for what needs the person and the broadcast channel is
+    # read as context; a check line is a lifecycle line, which RS1 sends to
+    # the status channel.
+    #
     # ⚠ Through `slack._post`, which is the path a Manager posts on: a JSON
     # POST. A first draft passed the message to `_call` as `params`, which
     # sends a GET with the text in the query string — nothing says Slack
     # honours `chat.postMessage` that way, so the check could have reported a
     # delivery that never happened. Using the production helper also means
     # this check cannot drift from what rite really does.
-    if network and slack.broadcast:
+    if network and slack.status:
         with _doctor_check("slack delivery", problems):
+            from rite_ai.config.parse import parse_brief
             from rite_ai.managers.slack import _post
 
+            brief = parse_brief(root / ".rite" / "brief.yaml")
+            name = getattr(brief, "name", "") or root.name
             posted = _post(
-                slack.broadcast, token, "rite doctor: this channel is reachable."
+                slack.status,
+                token,
+                f"rite doctor: project `{name}` can post its starts and stops here.",
             )
             if posted.ok and posted.ts:
                 click.echo(
-                    f"slack delivery: ok — posted to {slack.broadcast} "
+                    f"slack delivery: ok — posted to {slack.status} "
                     f"(channel {posted.channel or '?'})"
                 )
             else:
                 detail = posted.problem or "Slack accepted it but returned no message"
                 click.echo(f"slack delivery: FAILED — {detail}")
-                problems.append(f"slack delivery to {slack.broadcast}: {detail}")
+                problems.append(f"slack delivery to {slack.status}: {detail}")
 
 
 def _drive_local_tier(root, manager: str, board, say) -> None:
