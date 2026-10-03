@@ -559,7 +559,24 @@ rite heartbeat --worker <name> --ticket <id>
 Every ten minutes or so, for as long as you are working. This is the only
 thing that writes the liveness record `rite watchdog` and `rite status`
 read — a Worker that never beats is reported STALLED, and the watchdog will
-keep waking a human about it (SPEC.md §9.8)."""
+keep waking a human about it (SPEC.md §9.8).
+
+## A Worker that has handed back has NOT stalled
+
+A Worker signals that it has finished by running `rite done`, which is the
+only way it can tell you: a Worker cannot write your inbox, and from inside
+a sandbox the attempt is refused outright. `rite status` and `rite watchdog`
+then report it as **handed back**, not stalled, and say not to restart it.
+
+⚠ **Do not restart a Worker that has handed back, and do not force-release
+its claims.** It has stopped beating because it finished, so its silence is
+expected, and it holds its claim deliberately until the work lands —
+releasing it lets another Worker change the paths that work is sitting on.
+What a handback asks of you is to integrate the work, or to give that Worker
+the next ticket, which is what frees its slot.
+
+A Worker that is reported STALLED with no handback is the other case, and
+there the usual investigation applies."""
 
 
 def _review_section() -> str:

@@ -323,12 +323,23 @@ NEEDS_YOU = "needs-you"
 STATUS = "status"
 SYSTEM = "system"
 DELIVERY = "delivery"
+ANSWER = "answer"
+"""A Manager's reply to something the Owner asked (SCRUM-56).
+
+⚠ **Its own tag, because "Status" was the wrong word for it.** The point of
+routing an answer into the Owner's DM is that it is not ambient status; a
+post that lands in the right thread and then labels itself `ℹ️ Status`
+unsays that. Muted rather than LOUD all the same: an answer is the end of an
+exchange the Owner started, so it needs reading, not acting on — and putting
+it in the loud set would also put it in the pile `pending` tracks as
+awaiting them, which is the opposite of what it is."""
 TAGS = {
     NEEDS_ANSWER: "❓ *Needs your answer*",
     NEEDS_YOU: "❗ *Needs you*",
     STATUS: "ℹ️ *Status*",
     SYSTEM: "⚙️ *rite*",
     DELIVERY: "⚠️ *Delivery*",
+    ANSWER: "↩️ *Answer*",
 }
 LOUD = frozenset({NEEDS_ANSWER, NEEDS_YOU})
 """The kinds shown as sections. Exactly the ones `pending` tracks as needing
@@ -1712,7 +1723,24 @@ class Listener:
                 # Under the Owner's own message when this answers one, else
                 # today's notes. Both are threads, so the DM's top level —
                 # the scan list — is unchanged either way.
-                root = answering or self._notes_root(target, call=call)
+                if answering and self._post_in_thread(
+                    message, text, answering, posted, lines, call, watch_root=True
+                ):
+                    continue
+                # ⚠ **A FAILED ANSWER POST FALLS THROUGH TO NOTES INSTEAD OF
+                # STOPPING.** The answer root is the Owner's own message: a
+                # ts rite never posted and cannot verify, which the Owner can
+                # delete. Review measured the first version breaking the loop
+                # on it — nothing marked read, `_awaiting` still set, so
+                # every tick retried the same dead thread for the rest of the
+                # window and NOTHING else was posted either, questions and
+                # check-ins included. The Owner saw silence, which is the
+                # failure A5 exists to prevent. The reply itself must still
+                # reach them, so it goes to the pile that always can.
+                if answering:
+                    self._awaiting = {}
+                    self._save(posted)
+                root = self._notes_root(target, call=call)
                 if root is None:
                     break
                 if not self._post_in_thread(message, text, root, posted, lines, call):
@@ -1919,7 +1947,9 @@ class Listener:
 
         return self.project is not None and windows(self.project).usable
 
-    def _post_in_thread(self, message, text, root, posted, lines, call) -> bool:
+    def _post_in_thread(
+        self, message, text, root, posted, lines, call, *, watch_root=False
+    ) -> bool:
         channel, ts = root
         sent = _post(
             channel,
@@ -1927,7 +1957,11 @@ class Listener:
             f"*{self.manager}*: {text}",
             thread=ts,
             call=call,
-            kind=STATUS,
+            # ⚠ An answer is not tagged as status. `STATUS` renders muted,
+            # under "ℹ️ Status", and the premise of routing an answer to the
+            # DM is that it is not ambient status — saying so in the thread
+            # and then labelling it Status contradicts the move.
+            kind=ANSWER if watch_root else STATUS,
             body=text,
             author=self.manager,
         )
@@ -1941,6 +1975,20 @@ class Listener:
             "posted_at": self.clock(),
             **_carried_question(message.text),
         }
+        if watch_root:
+            # ⚠ **THE THREAD rite JUST ANSWERED IN HAS TO BE READ BACK.**
+            # `_notes_root` watches its own root, so a reply under the notes
+            # thread reaches the Manager. The Owner's own message was never
+            # a `Root`, and `conversations.history` does not return thread
+            # replies — so before this, routing the answer there created the
+            # obvious place for the Owner to say "then deploy it" and made
+            # it the one place nothing was listening. Review measured it:
+            # `roots` held only the two start lines.
+            # Labelled as the OWNER's message, not as one of rite's: the
+            # label is what a relayed reply's header shows the Manager
+            # ("reply in the thread under …"), and this root is theirs.
+            at = time.strftime("%H:%M", time.localtime(_as_ts(ts)))
+            self.remember(sent.channel, ts, f"the Owner's own message at {at}")
         self._save(posted)
         lines.append(
             f"slack: posted {message.path.name} → {sent.channel} in the thread of {ts}"
@@ -1954,10 +2002,24 @@ class Listener:
         — the right place for a Manager that is reporting rather than
         replying. See `_awaiting` for what this does and does not claim.
         """
+        if getattr(message, "by_rite", False):
+            # ⚠ rite's own narration, not the Manager answering. `kind`
+            # records the command and `rite reply`'s kind is what
+            # `refinement.protocol._tell_user` writes too — so without this,
+            # rite's line about a refinement round was threaded under
+            # whatever the Owner last asked, and exempted from the check-in
+            # hold along with it. See `mailbox.Message.by_rite`.
+            return None
         awaiting = self._awaiting
         channel = str(awaiting.get("channel") or "")
         ts = str(awaiting.get("ts") or "")
         if not (channel and ts):
+            return None
+        if channel != self.dm:
+            # The Owner's DM changed (`slack.owner_user` was edited) since
+            # this was recorded. An answer belongs to the person who asked,
+            # and posting it into the former Owner's DM would disclose it to
+            # somebody who is no longer the Owner.
             return None
         try:
             at = float(awaiting.get("at") or 0.0)

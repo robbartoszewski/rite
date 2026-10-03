@@ -108,6 +108,15 @@ class WatchdogResult:
     handed_back: list[Handback] = field(default_factory=list)
     """Workers that finished and said so (`rite done`). NOT a fault, and
     never also in `stalled` — see `run_watchdog_check`."""
+    handed_back_reasons: list[str] = field(default_factory=list)
+    """Exactly the entries of `reasons` that are about `handed_back`.
+
+    Carried rather than recomputed or matched by substring. The scheduler
+    has to tell them apart from the rest to keep a standing condition out of
+    its per-tick log, and deciding that by `"handed back" in reason` is the
+    matcher-fires-on-prose mistake this codebase has already paid for; two
+    calls to a shared formatter would compare unequal the moment one of them
+    crossed the `NOT_INTEGRATED_AFTER` boundary."""
 
 
 def run_watchdog_check(root: Path) -> WatchdogResult:
@@ -188,18 +197,44 @@ def run_watchdog_check(root: Path) -> WatchdogResult:
             when = f"{format_duration(s.seconds_silent)} since last heartbeat"
         verb = "stalled" if s.known else "cannot be checked"
         reasons.append(f"worker '{s.worker}' {verb} — {when}{ticket_note}")
+    handback_reasons: list[str] = []
     for h in handed_back:
         # ⚠ The words "do NOT restart" are in the line on purpose. This text
         # is what a Manager reads on its own polling cadence, and in the
         # dogfood the Manager restarted a finished Worker because the only
         # line about it said "stalled". Saying what the state is was not
         # enough; the line says what not to do with it.
-        reasons.append(
+        #
+        # ⚠ **And the unreadable case gets its OWN sentence, because the
+        # confident one is not true of it.** Review caught the first version
+        # appending "it is FREE and NOT hung … Integrate the work" to a
+        # record rite had just said it could not read — three claims nobody
+        # established, on the strength of a corrupt file. The stall is still
+        # suppressed (the file existing is evidence the Worker reached the
+        # step where it says it is done), and that is all that is claimed.
+        if not h.done:
+            handback_reasons.append(
+                f"worker '{h.worker}' {h.describe()} — so rite cannot say "
+                "whether it finished. It is NOT being reported as stalled, "
+                "because the record exists; do not restart it on the "
+                "assumption it is hung, and do not treat this as nothing "
+                "having been said. Read the file, and look at its branch"
+            )
+            reasons.append(handback_reasons[-1])
+            continue
+        waited = (
+            f" It has been waiting {format_duration(h.age_seconds())} and "
+            "nobody has taken it up."
+            if h.not_integrated()
+            else ""
+        )
+        handback_reasons.append(
             f"worker '{h.worker}' {h.describe()} — it is FREE and NOT hung, "
             "so do NOT restart it and do not force-release its claims. Its "
-            "silence from here on is expected. Integrate the work, or give "
-            "that worker the next ticket"
+            f"silence from here on is expected.{waited} Integrate the work, "
+            "or give that worker the next ticket"
         )
+        reasons.append(handback_reasons[-1])
     for b in blockers:
         detail = b.payload.get("detail") or b.payload.get("reason") or ""
         reasons.append(f"{b.kind} in outbox" + (f": {detail}" if detail else ""))
@@ -244,6 +279,7 @@ def run_watchdog_check(root: Path) -> WatchdogResult:
         unreadable=unreadable,
         unwatched=[name for name, _ in unwatched],
         handed_back=handed_back,
+        handed_back_reasons=handback_reasons,
     )
 
 

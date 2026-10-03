@@ -81,12 +81,32 @@ class Suspect:
     """Why the holder's heartbeat could not be read, when it could not be.
     Set means this row is a report of UNCERTAINTY rather than of abandonment,
     and the two must not read alike."""
+    handed_back: bool = False
+    """The holder finished and said so (`rite done`), and is holding this
+    claim ON PURPOSE until the work lands.
+
+    ⚠ **A third kind, for the same reason `unreadable` is a second one.**
+    This module infers abandonment from silence, and a Worker that has
+    handed back is silent because it finished. Review measured the cost of
+    not distinguishing them: in one `rite status` the new handback note said
+    "do not force-release its claims as if it had died" and nine lines later
+    this module printed the force-release command, pre-written. Worse, the
+    loop reads `suspects` as `dead_holders`, so a finished Worker's
+    deliberately-held claim made its tickets `doomed` and stopped the loop
+    with DEADLOCKED — a deadlock that clears the moment somebody integrates."""
 
     @property
     def never_beat(self) -> bool:
         return self.silent_for == float("inf")
 
     def describe(self) -> str:
+        if self.handed_back:
+            return (
+                f"{', '.join(self.paths)} held by {self.worker} for "
+                f"{_age(self.claim_age)} — HELD DELIBERATELY: that Worker "
+                "handed its work back and keeps the claim until the work "
+                "lands. It has not gone quiet, it has finished"
+            )
         if self.unreadable:
             # Uncertainty, and it must not read like abandonment. A heartbeat
             # that is ABSENT says the holder never started; one that cannot be
@@ -110,6 +130,15 @@ class Suspect:
 
     @property
     def remedy(self) -> str:
+        if self.handed_back:
+            # ⚠ NEVER a force-release. Releasing a finished Worker's claim
+            # lets another Worker change the paths its work is sitting on,
+            # before that work has landed, which is what holding the claim
+            # prevents.
+            return (
+                f"integrate {self.worker}'s work (its claim is released when "
+                "the work lands), or give it the next ticket"
+            )
         if self.unreadable:
             # Not a release. The problem is a file on this machine, and
             # releasing on the strength of a heartbeat nobody could read is
@@ -145,6 +174,7 @@ def suspect_claims(
     exists to point at a specific claim, and it has none to point at.
     """
     from rite_ai.claims.ledger import ClaimsLedger
+    from rite_ai.handback import read as read_handback
     from rite_ai.reporting.heartbeat import read_heartbeat_status
 
     now = time.time() if now is None else now
@@ -163,6 +193,23 @@ def suspect_claims(
         if age < threshold_seconds * MIN_AGE_MULTIPLIER:
             # Still inside the window a healthy Worker is allowed to be quiet
             # for. Reporting here would fire on every project on day one.
+            continue
+        # ⚠ Read BEFORE the heartbeat, because it outranks it. A Worker that
+        # handed back is silent by design; asking "has it beaten lately"
+        # first and this second would be deciding abandonment from silence
+        # the Worker already explained.
+        done = read_handback(root, claim.worker)
+        if done is not None and done.done:
+            found.append(
+                Suspect(
+                    worker=claim.worker,
+                    paths=tuple(claim.paths),
+                    claim_age=age,
+                    silent_for=0.0,
+                    registered=claim.worker in known,
+                    handed_back=True,
+                )
+            )
             continue
         beat = read_heartbeat_status(root, claim.worker)
         if not beat.known:

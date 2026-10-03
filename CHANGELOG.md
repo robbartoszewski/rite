@@ -608,11 +608,13 @@ instead of handing it Goose's variable.
 ### A Worker can say it has finished: `rite done`
 
 A Worker had no way to tell its Manager it was done. Its instructions said
-to, and the only command for it writes a Manager's inbox — which a Worker is
-refused, because anything in that inbox is delivered as the User's own
-instruction. Inside a sandbox the refusal arrived as `PermissionError:
-Operation not permitted`. So a Worker in the last dogfood finished its
-ticket, wrote a file of its own that nothing reads, and fell silent.
+to, and there was no command that could: a Manager's inbox is outside the
+project and a Worker's sandbox cannot write it, so every route into it is
+refused — rightly, because anything in that inbox is delivered as the User's
+own instruction. `rite message` says so; `rite reply` raised a
+`PermissionError` traceback instead, which is now a sentence too. So a
+Worker in the last dogfood finished its ticket, wrote a file of its own that
+nothing reads, and fell silent.
 
 `rite done` is the channel: it records the completion in `.rite/`, the same
 tree a Worker's heartbeat already writes from inside its sandbox, and the
@@ -628,6 +630,24 @@ and that it must not be restarted. `rite watchdog` now exits 2 for it rather
 than 1: finished work is work waiting for someone, not a fault. Starting that
 Worker on new work clears the record, so a past handback cannot hide a real
 stall later, and the clearing says what it dropped.
+
+Three other places were saying the opposite of each other about the same
+Worker, and now agree with this one: `rite status`, `rite sandbox status`,
+and the suspect-claims report, which used to print a pre-written
+force-release command for a Worker whose claim is held on purpose until its
+work lands. `rite loop` counted that held claim as a dead holder and could
+stop with DEADLOCKED on a wall that clears the moment somebody integrates.
+
+A handback that has stood for half a day says so — finished work nobody has
+taken up is worth hearing about once, and `rite scheduler-tick` records it
+as one standing condition rather than repeating it every cycle.
+
+### `rite reply` says why it could not send, instead of a traceback
+
+The one channel a Manager has to the person answered a refused write with a
+`PermissionError` out of its own internals. `rite message` has printed a
+sentence for this since 0.7.0a6; this now does too, and says that nothing
+was sent — so a Manager cannot go on as though the person had heard it.
 
 ### A Manager's answer to the Owner goes to the DM, not the day's notes
 

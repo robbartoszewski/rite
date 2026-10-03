@@ -623,7 +623,13 @@ def format_status(status: ProjectStatus) -> str:
                 # Said before the sandbox sentence and instead of a stall: a
                 # Worker that has finished is free, and "idle"/"done" beside
                 # "STALLED" is the pair of readings S1 exists to stop.
-                said.append(f"{handed.describe().upper()} — free, do NOT restart")
+                #
+                # ⚠ Only the LABEL is shouted. `describe().upper()` also
+                # uppercased the branch, so a row about `KAN-7-timeout`
+                # named a branch nobody can check out — and carrying the
+                # branch so somebody checks it out is the whole reason it is
+                # there.
+                said.append(f"HANDED BACK — {handed.describe()}; do NOT restart")
             if isinstance(asked, WorkerQuestion):
                 # A Worker that read its ticket and asked has started, and is
                 # blocked on a person (Q2); the question says the sandbox.

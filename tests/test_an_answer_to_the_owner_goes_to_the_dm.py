@@ -33,6 +33,7 @@ changes that path.
 
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 
@@ -332,3 +333,115 @@ class TestItSurvivesARestart:
         send(root, "lead", OUTBOX, "yes, on a1b2c3d", kind=REPLY)
         again.post_replies(call=slack)
         assert slack.in_thread(asked) == ["*lead*: yes, on a1b2c3d"]
+
+
+class TestWhatRoundOneFound:
+    """Each of these is a defect round 1 measured on the first version, and
+    each test fails if its fix is reverted."""
+
+    def test_a_dead_answer_thread_does_not_stall_everything_else(self, tmp_path):
+        """The answer root is the Owner's own message: a ts rite never
+        posted, cannot verify, and the Owner can delete.
+
+        The first version broke the posting loop on it, so nothing was
+        marked read, `_awaiting` stayed set, and every tick retried the same
+        dead thread for the rest of the window — with questions and
+        check-ins queued behind it. The Owner saw silence.
+        """
+        root, clock = _project(tmp_path), Clock(time.time())
+
+        class Refuses(Slack):
+            def __init__(self, dead):
+                super().__init__()
+                self.dead = dead
+
+            def __call__(self, method, token, params=None, payload=None):
+                args = payload or params or {}
+                if method == "chat.postMessage" and args.get("thread_ts") == self.dead:
+                    return {"ok": False, "error": "thread_not_found"}
+                return super().__call__(method, token, params, payload)
+
+        slack = Refuses("")
+        listener = _listener(root, slack, clock)
+        asked = _owner_asks(slack, clock, "is RT-14 merged?")
+        slack.dead = asked
+        _heard(listener, slack, clock)
+
+        send(root, "lead", OUTBOX, "yes, on a1b2c3d", kind=REPLY)
+        send(root, "lead", OUTBOX, "which schema", kind=QUESTION)
+        listener.post_replies(call=slack)
+
+        # The answer still reaches the Owner, in the pile that always can.
+        assert slack.notes_made() == 1
+        notes = next(
+            p for p in slack.posts if p["text"].startswith("*lead*: notes for")
+        )
+        notes_ts = f"{slack.base + slack.posts.index(notes) + 1}.0"
+        assert slack.in_thread(notes_ts) == ["*lead*: yes, on a1b2c3d"]
+        # And what was queued behind it is not held hostage.
+        assert "*lead* (needs your answer): which schema" in slack.top_level()
+
+    def test_the_answered_thread_is_read_back(self, tmp_path):
+        """Routing the answer there creates the obvious place for the Owner
+        to follow up, so it has to be a thread rite reads."""
+        root, slack, clock = _project(tmp_path), Slack(), Clock(time.time())
+        listener = _listener(root, slack, clock)
+        asked = _owner_asks(slack, clock, "is RT-14 merged?")
+        _heard(listener, slack, clock)
+        send(root, "lead", OUTBOX, "yes, on a1b2c3d", kind=REPLY)
+        listener.post_replies(call=slack)
+        assert asked in [r.ts for r in listener.roots], (
+            "rite answered in a thread it is not reading, so the Owner's "
+            "follow-up under it would reach nobody"
+        )
+
+        slack.replies[("D1", asked)] = [
+            {"user": OWNER, "text": "then deploy it", "ts": f"{float(asked) + 1}"}
+        ]
+        assert any("> then deploy it" in m for m in _heard(listener, slack, clock))
+
+    def test_rites_own_narration_is_not_an_answer(self, tmp_path):
+        """`kind` records the command, not the speaker: rite's refinement
+        narration is written with `rite reply`'s kind and answers nobody."""
+        root, slack, clock = _project(tmp_path), Slack(), Clock(time.time())
+        listener = _listener(root, slack, clock)
+        asked = _owner_asks(slack, clock, "start work on RT-20")
+        _heard(listener, slack, clock)
+        send(
+            root,
+            "lead",
+            OUTBOX,
+            "RT-9 changed after round 2 was proposed, so your accept was not recorded.",
+            kind=REPLY,
+            by_rite=True,
+        )
+        listener.post_replies(call=slack)
+        assert slack.in_thread(asked) == []
+        assert slack.notes_made() == 1
+
+    def test_an_answer_is_not_tagged_as_status(self, tmp_path):
+        root, slack, clock = _project(tmp_path), Slack(), Clock(time.time())
+        listener = _listener(root, slack, clock)
+        asked = _owner_asks(slack, clock, "is RT-14 merged?")
+        _heard(listener, slack, clock)
+        send(root, "lead", OUTBOX, "yes, on a1b2c3d", kind=REPLY)
+        listener.post_replies(call=slack)
+        [answer] = [p for p in slack.posts if p.get("thread_ts") == asked]
+        tags = json.dumps(answer.get("blocks") or [])
+        assert "Answer" in tags, tags
+        assert "Status" not in tags, (
+            "the premise of moving an answer to the DM is that it is not "
+            "ambient status, and the post still said Status"
+        )
+
+    def test_a_changed_owner_dm_is_not_answered_into(self, tmp_path):
+        """A state file written before `slack.owner_user` changed must not
+        route the next answer into the former Owner's DM."""
+        root, slack, clock = _project(tmp_path), Slack(), Clock(time.time())
+        listener = _listener(root, slack, clock)
+        asked = _owner_asks(slack, clock, "is RT-14 merged?")
+        _heard(listener, slack, clock)
+        listener.dm = "D-SOMEONE-ELSE"
+        send(root, "lead", OUTBOX, "yes, on a1b2c3d", kind=REPLY)
+        listener.post_replies(call=slack)
+        assert slack.in_thread(asked) == []

@@ -1157,18 +1157,16 @@ def render_worker_claude_md(
         if manifest.manager
         else "No Manager assigned yet."
     )
-    # F14's form, from the one helper that spells it: a Worker's handback
-    # quotes its ticket and its own commit messages, so the text goes in on
-    # stdin through a quoted heredoc and never in double quotes.
-    #
-    # ⚠ `heredoc_template`, NOT `heredoc`: this is written to a file that
-    # `rite update` regenerates and compares, and a freshly minted delimiter
-    # would differ on every comparison. See `stdin_text.heredoc_template`.
-    done_heredoc = stdin_text.heredoc_template(
-        f"rite done --worker {manifest.name} --ticket <id> --branch <branch> -",
-        "<what you did, for your Manager to read>",
+    # F14's form for a GENERATED file: the text goes in a file, named as an
+    # argument. A Worker's handback quotes its ticket and its own commit
+    # messages, so it must not be in double quotes on the command line — and
+    # a heredoc cannot go here, because this file is regenerated and
+    # compared. `stdin_text.FROM_A_FILE` carries that reasoning.
+    done_command = (
+        f"rite done --worker {manifest.name} --ticket <id> --branch <branch> \\\n"
+        f"  --summary-file <path to a file holding what you did>"
     )
-    done_rule = f"{stdin_text.RULE}\n\n{stdin_text.TEMPLATE_RULE}"
+    done_rule = stdin_text.FROM_A_FILE
     modules_lines = "\n".join(f"- `{m}/`" for m in manifest.modules)
 
     # The other half of `claude_instructions` having a writer: a key stored
@@ -1303,16 +1301,18 @@ exactly that and stop: never invent the missing piece.
 Hand it back by RUNNING this as a tool call — writing it in your answer does
 nothing, and it is the only thing that tells your Manager you have finished:
 
-{done_heredoc}
+```
+{done_command}
+```
 
 {done_rule}
 
-⚠ **Do not try to message your Manager instead.** `rite message` writes a
-Manager's inbox, where anything written is delivered as the User's own
-instruction, so a Worker is refused — and inside a sandbox the refusal
-arrives as `PermissionError: Operation not permitted`. Writing a file of
-your own somewhere and hoping it is read is not a handback either: nothing
-reads it. `rite done` is the channel.
+⚠ **Do not try to message your Manager instead.** A Manager's inbox is
+outside this project and your sandbox cannot write it, so `rite message`
+and `rite reply` are both refused from here — anything in that inbox is
+delivered as the User's own instruction, which is not yours to send.
+Writing a file of your own somewhere and hoping it is read is not a
+handback either: nothing reads it. `rite done` is the channel.
 
 This is also what stops you being reported STALLED. Until you run it, your
 silence is indistinguishable from having died mid-ticket, and the watchdog

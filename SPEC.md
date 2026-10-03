@@ -4073,6 +4073,12 @@ rite status                        # what's happening: workers, tasks, board sta
 rite doctor                        # is this healthy: tokens, deps, init state, versions
 rite heartbeat --worker <name>     # record a worker's "still alive" beat (§3.5); call
                                     #   every `heartbeat.interval_minutes`
+rite done --worker <name>          # hand finished work back to the worker's Manager.
+                                    #   The only route a sandboxed worker has to it: a
+                                    #   Manager's mailbox is outside the project and the
+                                    #   sandbox cannot write it. Also stops the worker
+                                    #   reading as stalled — its silence is expected
+                                    #   from then on (§3.5)
 rite budget                        # burn rate + week-end projection (§2.6.2). WHOLE
                                     #   MACHINE, not this project — the quota is
                                     #   account-wide (§2.6.1)
@@ -4119,7 +4125,10 @@ rite schedule set-timezone <tz>    # OPTIONAL (D-48) — unset runs on this mach
                                     #   'rite init' also asks for this in Section 6
 
 rite watchdog                      # cheap, non-LLM liveness check (§3.5). Exit 0 when
-                                    #   nothing needs judgement, 1 when something does
+                                    #   nothing needs judgement, 2 when there is work
+                                    #   waiting but nothing wrong (a blocked worker to
+                                    #   answer, finished work to integrate), 1 when
+                                    #   something may be wrong
 rite scheduler-tick                # one scheduler cycle: the watchdog check plus the
                                     #   schedule window-boundary handover (§2.7.3, D-46).
                                     #   This is what `scheduler install` wires up
@@ -5248,7 +5257,7 @@ directory it ran in — which `rite init` then refused as already initialised.
 | Command | 0 | non-zero |
 |---------|---|----------|
 | `rite doctor` | no problems found | 1 — problems found, listed above the count |
-| `rite watchdog` | nothing needs judgement, zero tokens spent | 1 — something does (§3.5) |
+| `rite watchdog` | nothing needs judgement, zero tokens spent | 2 — work waiting, nothing wrong · 1 — something may be wrong (§3.5) |
 | `rite credential check <name>` | available | 1 — not found |
 | `rite publish check` | clean | 1 stale suppressions · 2 findings · 3 **could not run** (§11) |
 | `rite pool archive` | archived, or nothing to archive | 1 — the liveness probe could not run (§2.5.10) |

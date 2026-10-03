@@ -2,13 +2,22 @@
 
 **What happened (dogfood, 2026-10-03).** A sandboxed Worker finished its
 ticket and did what its own instructions tell it to: "Tell your Manager you
-are free, in the same message that reports the work." The command for that
-is `rite message <manager>`, and from inside the sandbox it fails —
-`PermissionError: Operation not permitted` — because a Manager's mailbox
-lives outside the project (`managers.manager_dir`, DF3) and a Worker's
-sandbox does not grant it. That refusal is correct and stays: a message in a
-Manager's inbox is delivered as the Owner's instruction, so a Worker must
-not write one (`enclosure._manager_separation`).
+are free, in the same message that reports the work." There was no command
+that could do it. A Manager's mailbox lives outside the project
+(`managers.manager_dir`, DF3) and a Worker's sandbox does not grant that
+path, so every route into it is refused — and the refusal is correct and
+stays, because a message in a Manager's inbox is delivered as the Owner's
+instruction and a Worker must not write one
+(`enclosure._manager_separation`).
+
+⚠ **Which command produced which error was measured, after review caught
+this paragraph asserting it.** `rite message <manager>` catches the
+`PermissionError` and prints a refusal that explains itself (exit 1, no
+traceback). `rite reply --manager` does NOT catch it and raises
+`PermissionError: [Errno 13] Permission denied` out of `mailbox.send` — a
+traceback, which is the shape the dogfood reported, and an agent handed a
+traceback routes around it. Both are now fixed in the only way that helps:
+there is a command for the thing the Worker was told to do.
 
 So the Worker fell back to writing a file nobody reads
 (`rw/files/<TICKET>-handback.md`), the Manager never learned it had
@@ -74,6 +83,56 @@ from rite_ai.state import write_atomic
 
 HANDBACK_DIRNAME = "handback"
 
+NOT_INTEGRATED_AFTER = 12 * 3600.0
+"""How long a handback may stand before rite says nobody has taken it up.
+
+Two things at once, and it is worth saying which is which. It is useful on
+its own: finished work waiting half a day is a real condition, and before
+this nothing said so, because a handback is permanent until the Worker is
+started again. It also bounds the forgery below — a handback is suppression
+of a stall, and an unbounded suppression is one nothing ever revisits.
+
+It does NOT reintroduce the ambiguity the permanence removes: past this age
+the Worker is still reported as handed back and still not as stalled. A
+different sentence is added, not a different verdict."""
+
+
+class BadHandback(ValueError):
+    """A field that must not be written as given."""
+
+
+_FORBIDDEN = ("\n", "\r", "\x00")
+
+
+def _checked_field(value: str, what: str) -> str:
+    """A one-line field, refused rather than written if it is not.
+
+    ⚠ **A NEWLINE HERE FORGES rite's OWN HEADER.** `worker_handbacks`
+    interpolates the ticket and the branch into a note in a Manager's inbox,
+    whose first line is `telling.header` — and `telling.is_routed_work_note`'s
+    contract is that anything recognising a note recognises it by that
+    header. The Manager reading the note is a model reading all of it, so a
+    `branch` containing a newline and a bracketed line puts text that looks
+    like rite's own, or like the Owner's instruction, into the Manager's
+    instruction stream. `slack._quoted` states the rule this obeys: a typed
+    line must not be able to forge the header.
+
+    The summary is `> `-quoted per line by the reader, which is the other
+    half of the same rule and is why it is not restricted here. These two
+    are not quoted at their use site because they are short identifiers, so
+    they are constrained at the source instead — and a Worker's `--ticket`
+    and `--branch` are copied out of text somebody else wrote, which is the
+    premise `stdin_text` is built on.
+    """
+    for bad in _FORBIDDEN:
+        if bad in value:
+            raise BadHandback(
+                f"{what} must be one line: it contains {bad!r}, and a line "
+                "break there would read as rite's own header in the note "
+                "your Manager is sent"
+            )
+    return value
+
 
 @dataclass(frozen=True)
 class Handback:
@@ -114,6 +173,17 @@ class Handback:
     def age_seconds(self, now: float | None = None) -> float:
         return max(0.0, (time.time() if now is None else now) - self.timestamp)
 
+    def not_integrated(self, now: float | None = None) -> bool:
+        """Has this stood long enough that nobody is taking it up?
+
+        False for an unreadable record: its timestamp is not a time anybody
+        read, and `age_seconds` off a zero would say it had been waiting
+        since 1970.
+        """
+        if self.unreadable or not self.timestamp:
+            return False
+        return self.age_seconds(now) >= NOT_INTEGRATED_AFTER
+
 
 def _dir(root: Path) -> Path:
     return root / ".rite" / HANDBACK_DIRNAME
@@ -143,12 +213,15 @@ def write(
     half-written record would read as the unreadable case above — which is
     reported to a person, so a torn write would cost a false alarm on every
     successful handback.
+
+    Raises `BadHandback` for a ticket or branch that is not one line — see
+    `_checked_field`, which is the one place that rule is stated.
     """
     path = path_for(root, worker)
     record = {
         "worker": worker,
-        "ticket": ticket,
-        "branch": branch,
+        "ticket": _checked_field(ticket, "the ticket"),
+        "branch": _checked_field(branch, "the branch"),
         "summary": summary,
         "timestamp": time.time() if now is None else now,
     }
@@ -215,14 +288,35 @@ def read_all(root: Path, workers: list[str]) -> dict[str, Handback]:
     return found
 
 
-def clear(root: Path, worker: str) -> Handback | None:
-    """Remove `worker`'s handback, returning what was removed.
+def clear(
+    root: Path, worker: str, *, older_than: float | None = None
+) -> Handback | None:
+    """Remove `worker`'s handback, returning what was removed, or None.
 
-    Called when the Worker is started on new work: from then on its silence
-    is a question again. The caller says what it removed when nothing had
-    yet passed it on — see the module docstring on permanence.
+    Called when the Worker has been started on new work: from then on its
+    silence is a question again.
+
+    ⚠ **`older_than` is what makes this safe to call AFTER the start, which
+    is the only time it may be called at all.** Review of the first version
+    found, and measured, that clearing before the start reopened the exact
+    defect this module exists to close: `rite prepare` that fails on a dirty
+    tree, or `rite sandbox start` that refuses a non-REFINED ticket, had
+    already deleted the record, so a finished Worker was reported STALLED
+    again by a command that did nothing. The clear therefore moved after the
+    start succeeds — and once it is there, a handback the NEW Worker has
+    already written could be deleted by it. Passing the moment the start
+    began removes that: an older record is the previous task's, a newer one
+    was written by the Worker now running and is kept.
+
+    Omitting it removes whatever is there, which is for a caller that holds
+    no such moment (a test, or a person clearing by hand).
     """
     had = read(root, worker)
+    if had is None:
+        return None
+    if older_than is not None and had.timestamp >= older_than:
+        # The Worker now running wrote this. Not ours to remove.
+        return None
     try:
         path_for(root, worker).unlink()
     except (FileNotFoundError, OSError):

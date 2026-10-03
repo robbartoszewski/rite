@@ -640,10 +640,14 @@ def retry_accepted(root: Path, owner: str, board) -> list[str]:
 
 
 def _tell_user(root: Path, owner: str, text: str) -> None:
-    """A line for the User, through the Owner's outbox, for reading."""
+    """A line for the User, through the Owner's outbox, for reading.
+
+    `by_rite`: these are rite's words, not the Manager's. The Slack relay
+    needs the difference — it threads a Manager's reply under the Owner's
+    message it answers, and this answers nobody."""
     from rite_ai.managers.mailbox import OUTBOX, REPLY, send
 
-    send(root, owner, OUTBOX, text, kind=REPLY)
+    send(root, owner, OUTBOX, text, kind=REPLY, by_rite=True)
 
 
 def _park_notice(root: Path, owner: str, board, ticket: str, limits) -> None:

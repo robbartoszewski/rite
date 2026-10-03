@@ -40,6 +40,25 @@ LEDGER_FILE = "worker-handbacks.json"
 look does not tell the Manager the same completion twice."""
 
 
+LAST_PROBLEM = "_last_problem"
+"""Where the once-only problem line is kept, beside `TOLD` and not inside it.
+
+⚠ **Checked, not assumed.** The first version kept the worker entries at the
+top level alongside this key and said a worker could not be called
+`_last_problem` because `require_safe_name` refuses a leading underscore. It
+does not — `require_safe_name("_last_problem")` is accepted — so the two
+namespaces really could collide. Measured rather than reasoned, and the fix
+is the nesting below rather than a correction to the sentence."""
+
+TOLD = "told"
+"""worker -> `_identity` of the handback already passed on."""
+
+
+def _entries(data: dict) -> dict:
+    told = data.get(TOLD)
+    return told if isinstance(told, dict) else {}
+
+
 def _identity(record) -> str:
     """What makes this handback a different one from the last.
 
@@ -65,21 +84,48 @@ def _load(path: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def _store(path: Path, data: dict) -> None:
+def _store(path: Path, data: dict) -> str:
+    """Write the ledger. Returns "" on success, or why it could not be.
+
+    ⚠ **It used to swallow `OSError` and return None, which turned "told
+    once" into "told every tick".** Measured in review with the write
+    blocked: four `surface()` calls put four identical notes in the
+    Manager's inbox for one completion, and nothing said why. The module
+    docstring promises once; a promise kept by a file that may silently fail
+    to be written is not kept. `worker_questions._store` swallows the same
+    way and has the same hole — noted rather than changed here, because that
+    is its module's call to make.
+    """
     from rite_ai.state import write_atomic
 
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         write_atomic(path, json.dumps(data, indent=1, sort_keys=True) + "\n")
-    except OSError:
-        pass
+    except OSError as e:
+        return f"{path.name} could not be written: {e}"
+    return ""
+
+
+def _one_line(value: str) -> str:
+    """Worker-authored text, flattened so it cannot forge rite's header.
+
+    ⚠ **Belt AND braces, and both are deliberate.** `handback.write` refuses
+    a ticket or branch carrying a newline, which is the mechanical guard and
+    the one that matters. This is the second: a record written by an older
+    rite, or by hand into `.rite/` — which every Worker's sandbox can write
+    — never went through that refusal. `slack._quoted` states the rule both
+    serve: a typed line must not be able to forge rite's own header, because
+    the reader of this note is a model reading all of it.
+    """
+    return " ".join(str(value).split())
 
 
 def _for_the_manager(record) -> str:
     """The note rite puts in the Manager's next instruction."""
     from rite_ai.managers.telling import header
 
-    about = f" on {record.ticket}" if record.ticket else ""
+    ticket = _one_line(record.ticket)
+    about = f" on {ticket}" if ticket else ""
     if record.unreadable:
         return (
             header(f"Worker {record.worker!r} · HANDED BACK, RECORD UNREADABLE")
@@ -90,11 +136,8 @@ def _for_the_manager(record) -> str:
             "this as nothing having been said. Look at its branch and its "
             f"workspace, and at `rite status`, before deciding."
         )
-    branch = (
-        f"\nBranch, as the Worker reported it: `{record.branch}`"
-        if record.branch
-        else ""
-    )
+    reported = _one_line(record.branch)
+    branch = f"\nBranch, as the Worker reported it: `{reported}`" if reported else ""
     summary = (
         "\nWhat it says it did:\n"
         + "\n".join(f"> {line}" for line in record.summary.splitlines())
@@ -117,32 +160,69 @@ def _for_the_manager(record) -> str:
     )
 
 
-def surface(root: Path, manager: str, say) -> int:
+def surface(root: Path, manager: str, say, *, every_worker: bool = True) -> int:
     """Tell `manager`, once, about each Worker that has handed back.
+
+    `every_worker` false restricts it to the Workers that name `manager` as
+    theirs; true (the default) also includes Workers that name no Manager at
+    all, so a project where nobody is nominated still has somebody told. See
+    `_mine` for why that direction is the generous one.
 
     Returns how many were told. Never raises into the supervisor: a failure
     is said and the next look tries again, said once per reason rather than
     every tick.
     """
     try:
-        return _surface(root, manager, say)
+        return _surface(root, manager, say, every_worker=every_worker)
     except Exception as e:  # noqa: BLE001 - a watcher must not end the run
         _say_once(root, manager, say, f"could not check Workers for a handback: {e}")
         return 0
 
 
 def _say_once(root: Path, manager: str, say, line: str) -> None:
-    """Say `line` unless it is what was said last time."""
+    """Say `line` unless it is what was said last time.
+
+    For the failures OUTSIDE `_surface`'s own ledger pass — it loads the
+    ledger itself and writes its own key, so calling this in the middle of
+    that pass loses one of the two writes."""
     path = _ledger_path(root, manager)
     told = _load(path)
-    if told.get("_last_problem") == line:
+    if told.get(LAST_PROBLEM) == line:
         return
     say(line)
-    told["_last_problem"] = line
+    told[LAST_PROBLEM] = line
     _store(path, told)
 
 
-def _surface(root: Path, manager: str, say) -> int:
+def _mine(project, manager: str, every_worker: bool) -> list[str]:
+    """The Workers whose handback `manager` is the one to be told about.
+
+    ⚠ **A Worker's OWN Manager, not whoever holds `route`.** Review found
+    the first version told the routing owner about every Worker, and the
+    reason this goes to a Manager rather than to the Owner's DM is that the
+    Manager holds the board, the capacity and the integrate step — all of
+    which belong to the Manager that assigned the ticket. So `helper`'s
+    Worker finishing told `lead`, which cannot integrate it, and left
+    `helper`, which can, never told.
+
+    `every_worker` is the fallback for a project where no Worker names a
+    Manager, or where nothing identifies one Manager as the teller. It is
+    deliberately generous in that direction: review measured a configuration
+    (`manager_roles` with no single `route` holder) in which NOBODY was told
+    while the watchdog still suppressed the stall — a Worker silent, not
+    reported stalled, and nobody informed, which is strictly worse than
+    before this existed. Told twice is recoverable; told to nobody is the
+    defect.
+    """
+    named = [w.name for w in project.workers if getattr(w, "manager", "") == manager]
+    if named:
+        return named
+    if not every_worker:
+        return []
+    return [w.name for w in project.workers if not getattr(w, "manager", "")]
+
+
+def _surface(root: Path, manager: str, say, *, every_worker: bool = True) -> int:
     from rite_ai import handback
     from rite_ai.config.parse import load_project
     from rite_ai.managers.mailbox import INBOX, send
@@ -152,31 +232,48 @@ def _surface(root: Path, manager: str, say) -> int:
     if isinstance(project, list):
         return 0
     path = _ledger_path(root, manager)
-    told = _load(path)
+    # ⚠ ONE dict, loaded once and written through. The first version called
+    # `_say_once` on a failure, which re-reads the ledger and writes its own
+    # `_last_problem` key, and then wrote this stale dict back over it —
+    # dropping the mark, so the "could not be told" line was re-said every
+    # tick, which is what the once-only rule exists to stop.
+    ledger = _load(path)
+    told = _entries(ledger)
     count = 0
-    names = [w.name for w in project.workers]
+    names = _mine(project, manager, every_worker)
     found = handback.read_all(root, names)
     # A worker whose handback has been cleared is dropped from the ledger:
     # the entry records what was told about a record that no longer exists.
-    for gone in [w for w in told if w != "_last_problem" and w not in found]:
-        told.pop(gone)
-        _store(path, told)
+    gone = [w for w in told if w not in found]
+    for worker in gone:
+        told.pop(worker)
     for worker, record in sorted(found.items()):
         if told.get(worker) == _identity(record):
             continue
         try:
             send(root, manager, INBOX, _for_the_manager(record))
         except OSError as e:
-            _say_once(
-                root,
-                manager,
-                say,
+            line = (
                 f"Worker {worker!r} handed back and {manager!r} could not be "
-                f"told ({e}); it will be tried again",
+                f"told ({e}); it will be tried again"
             )
+            if ledger.get(LAST_PROBLEM) != line:
+                say(line)
+                ledger[LAST_PROBLEM] = line
             continue
         told[worker] = _identity(record)
-        _store(path, told)
         say(f"Worker {worker!r} {record.describe()}: told {manager!r}")
         count += 1
+    if gone or count or ledger.get(LAST_PROBLEM):
+        ledger[TOLD] = told
+        failed = _store(path, ledger)
+        if failed:
+            # ⚠ Said, and said as what it costs. The note HAS reached the
+            # Manager; what has not been recorded is that it did, so the
+            # next look will send it again.
+            say(
+                f"could not record that {manager!r} was told about a handback "
+                f"({failed}) — it will be told again, possibly repeatedly, "
+                "until this is fixed"
+            )
     return count

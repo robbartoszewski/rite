@@ -214,24 +214,80 @@ class TestWhoTells:
         (root / ".rite").mkdir(exist_ok=True)
         (root / ".rite" / "config.yaml").write_text(text)
 
-    def test_the_manager_holding_route_tells(self, tmp_path):
+    def _raises(self, monkeypatch) -> list:
+        """What `worker_questions.surface` was asked to do, if anything.
+
+        ⚠ **These three used to assert `is None` for "does not tell", and
+        that stopped being the same question.** A secondary Manager now gets
+        a watcher, because a Worker's HANDBACK goes to the Worker's own
+        Manager rather than to whoever holds `route` — so "has a watcher"
+        and "tells the person about a question" came apart. The tests ask
+        the second one, behaviourally, which is what they always meant.
+        """
+        asked: list = []
+        monkeypatch.setattr(
+            "rite_ai.managers.worker_questions.surface",
+            lambda root, manager, say: asked.append(manager) or 0,
+        )
+        monkeypatch.setattr(
+            "rite_ai.managers.worker_questions.relay", lambda root, manager, say: 0
+        )
+        monkeypatch.setattr(
+            "rite_ai.managers.worker_handbacks.surface",
+            lambda root, manager, say, every_worker=True: 0,
+        )
+        return asked
+
+    def test_the_manager_holding_route_tells(self, tmp_path, monkeypatch):
         from rite_ai.cli.main import _worker_question_watch
 
         self._config(tmp_path, ROLES)
-        assert callable(_worker_question_watch(tmp_path, "lead"))
-        assert _worker_question_watch(tmp_path, "helper") is None
+        asked = self._raises(monkeypatch)
+        for name in ("lead", "helper"):
+            watch = _worker_question_watch(tmp_path, name)
+            assert callable(watch)
+            watch(lambda s: None)
+        assert asked == ["lead"], (
+            "a secondary Manager raised a Worker's question to the person: "
+            "two Managers telling them the same thing is the noise that "
+            "trains people to ignore both"
+        )
 
-    def test_a_lone_manager_tells(self, tmp_path):
+    def test_a_lone_manager_tells(self, tmp_path, monkeypatch):
         from rite_ai.cli.main import _worker_question_watch
 
         self._config(tmp_path, "sandbox:\n  enabled: true\n")
-        assert callable(_worker_question_watch(tmp_path, "lead"))
+        asked = self._raises(monkeypatch)
+        _worker_question_watch(tmp_path, "lead")(lambda s: None)
+        assert asked == ["lead"]
 
-    def test_nobody_tells_when_workers_are_not_sandboxed(self, tmp_path):
+    def test_nobody_tells_a_question_when_workers_are_not_sandboxed(
+        self, tmp_path, monkeypatch
+    ):
+        """A question travels in yoloAI's exchange directory, so with no
+        sandbox there is nothing to look at. The watcher still exists, for
+        the handback half — see `test_a_handback_is_watched_without_a_sandbox`."""
         from rite_ai.cli.main import _worker_question_watch
 
         self._config(tmp_path, "sandbox:\n  enabled: false\n")
-        assert _worker_question_watch(tmp_path, "lead") is None
+        asked = self._raises(monkeypatch)
+        _worker_question_watch(tmp_path, "lead")(lambda s: None)
+        assert asked == []
+
+    def test_a_handback_is_watched_without_a_sandbox(self, tmp_path, monkeypatch):
+        """An unsandboxed Worker finishes and falls silent exactly as a
+        sandboxed one does, and nothing told its Manager either."""
+        from rite_ai.cli.main import _worker_question_watch
+
+        self._config(tmp_path, "sandbox:\n  enabled: false\n")
+        self._raises(monkeypatch)
+        looked: list = []
+        monkeypatch.setattr(
+            "rite_ai.managers.worker_handbacks.surface",
+            lambda root, manager, say, every_worker=True: looked.append(manager) or 0,
+        )
+        _worker_question_watch(tmp_path, "lead")(lambda s: None)
+        assert looked == ["lead"]
 
 
 ROLES = """\

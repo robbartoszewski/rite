@@ -339,7 +339,13 @@ def plan_cycle(
         # from the registered Worker list: a claim can be held by a name
         # nobody registered, and the first version asked "are all registered
         # claim-holding Workers dead?", which is wrong in both directions.
-        dead_holders = {s.worker for s in cycle.suspects}
+        # ⚠ A HANDED-BACK HOLDER IS NOT A DEAD ONE. It finished and is
+        # holding the claim until its work lands, which is what its
+        # instructions tell it to do — so the wall clears as soon as
+        # somebody integrates, and calling it doomed stopped the loop with
+        # DEADLOCKED ("that will not clear on its own") on a condition that
+        # clears on its own. Measured in review.
+        dead_holders = {s.worker for s in cycle.suspects if not s.handed_back}
         # PER TICKET, not a union across tickets. A ticket clears only when
         # EVERY path in its refusal is free again, so one dead holder dooms
         # it whatever the others do — while a union test let one live holder
