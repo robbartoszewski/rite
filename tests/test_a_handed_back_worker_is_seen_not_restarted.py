@@ -25,6 +25,36 @@ Then, because the Worker had stopped beating, the watchdog reported it
   it cannot hide the next stall. That is the one window where "done" and
   "hung" could otherwise be confused, and it is closed by a clear, not by
   inference.
+
+⚠ **What these tests CANNOT establish, and where it was established
+instead.** Everything below runs on the host. The claim the whole fix rests
+on — that a Worker can write `.rite/` from inside its sandbox, so this is a
+channel and not another file nobody reads — is a property of yoloAI's mount
+and the seatbelt profile, which no test in this suite starts.
+
+It was measured by hand on 2026-10-03, macOS seatbelt, yoloAI 0.11.0, with a
+project under `~/rite-handback-proof` (NOT under `/tmp`, which is granted on
+both platforms and would have proved nothing), a sandbox from `yoloai new
+--agent idle -d <root>/.rite:rw`, and this branch's own `src` on PYTHONPATH
+(the `rite` on PATH is a different install — v0.7.0a6 — and running it would
+have measured that instead):
+
+* `rite done --worker alpha --ticket KAN-7 --branch KAN-7-timeout`, run with
+  `yoloai exec` INSIDE the sandbox, exited 0 and wrote the record; the host
+  read it back with the ticket and branch intact;
+* `worker_handbacks.surface` on the host then put it in the Manager's inbox,
+  and `rite watchdog` printed "handed back … do NOT restart it" and exited 2
+  where it had printed "stalled" and exited 1;
+* **control**, and the reason the first bullet means anything: an ungranted
+  sibling directory of the same project was refused for both read and write
+  — `Operation not permitted` — so the sandbox was really enforcing;
+* **control**, reproducing the defect: the Manager's mail root, which is
+  where `rite message` writes, was refused from inside with the same
+  `Operation not permitted`. The fix does not open that door.
+
+Re-measure this, in that shape, when the Worker profile or `start_worker`'s
+mounts change. A suite that is green while `.rite/` has stopped being
+writable from inside would be green about nothing.
 """
 
 from __future__ import annotations
