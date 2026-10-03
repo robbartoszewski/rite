@@ -233,3 +233,91 @@ def test_a_stash_cannot_block_the_gate(tmp_path):
     assert report.exit_code == EXIT_CLEAN, [f.rule_id for f in report.findings]
     # And the count says the same thing the scan did.
     assert report.commits_scanned == 1
+
+
+@requires_gitleaks
+def test_a_detached_head_is_still_scanned(tmp_path):
+    """`--branches --tags --remotes` does not reach a detached HEAD, and a
+    worktree checked out at a sha is the ordinary state of several of this
+    project's own. Measured: a repo whose only commits were reachable from a
+    detached HEAD reported 0 commits and clean, over a planted token — a
+    NARROWING introduced by the commit whose purpose was to widen coverage.
+    """
+    init_repo(tmp_path)
+    write(tmp_path, "README.md", "hello\n")
+    commit_all(tmp_path, "base")
+    write(tmp_path, "creds.py", f'TOKEN = "{A_PLANTED_TOKEN}"\n')
+    commit_all(tmp_path, "add creds")
+    subprocess.run(
+        ["git", "checkout", "-q", "--detach", "HEAD"], cwd=tmp_path, check=True
+    )
+    subprocess.run(
+        ["git", "update-ref", "-d", "refs/heads/main"], cwd=tmp_path, check=False
+    )
+    subprocess.run(
+        ["git", "update-ref", "-d", "refs/heads/master"], cwd=tmp_path, check=False
+    )
+
+    report = run_gate(tmp_path)
+
+    assert report.commits_scanned == 2
+    assert report.exit_code == EXIT_FAIL
+    assert "github-pat" in {f.rule_id for f in report.findings}
+
+
+@requires_gitleaks
+def test_an_empty_repository_does_not_error(tmp_path):
+    """`HEAD` is in the ref scope only when it resolves: an unborn HEAD is a
+    hard error from git, not an empty set (`ambiguous argument 'HEAD'`,
+    exit 128), and the gate must not fail a freshly initialised project."""
+    init_repo(tmp_path)
+
+    report = run_gate(tmp_path)
+
+    assert report.errors == []
+    assert report.commits_scanned == 0
+
+
+@requires_gitleaks
+def test_a_stashed_file_cannot_block_the_gate_either(tmp_path):
+    """The stash exclusion has to cover gitleaks' CONTENT pass as well as
+    rite's own. Left to itself gitleaks walks `--all`, so a stashed file
+    holding a token gave exit 2 with a fingerprint keyed to the stash
+    commit's sha — unsuppressable, because that sha changes every time the
+    stash is rebuilt."""
+    init_repo(tmp_path)
+    write(tmp_path, "README.md", "hello\n")
+    commit_all(tmp_path, "base")
+    write(tmp_path, "secret.py", f'TOKEN = "{A_PLANTED_TOKEN}"\n')
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "stash", "push", "-q", "-u", "-m", "wip"], cwd=tmp_path, check=True
+    )
+    assert not (tmp_path / "secret.py").exists()
+
+    report = run_gate(tmp_path)
+
+    assert report.exit_code == EXIT_CLEAN, [
+        (f.rule_id, f.file) for f in report.findings
+    ]
+
+
+@requires_gitleaks
+def test_the_default_config_is_recognised_however_it_is_spelt(tmp_path):
+    """Raw string equality made `./.rite/gitleaks.toml` — the same file,
+    written the way a person writes a relative path — count as a config
+    someone chose, so a project that had chosen nothing became EXIT_ERROR.
+    The hook fails closed: that is every push refused over a leading `./`."""
+    init_repo(tmp_path)
+    write(
+        tmp_path,
+        ".rite/config.yaml",
+        "publish_gate:\n  gitleaks_config: ./.rite/gitleaks.toml\n",
+    )
+    write(tmp_path, "README.md", "hello\n")
+    commit_all(tmp_path, "base")
+
+    report = run_gate(tmp_path)
+
+    assert report.errors == []
+    assert report.exit_code == EXIT_CLEAN

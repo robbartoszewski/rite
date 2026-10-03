@@ -303,7 +303,21 @@ def _gate_root() -> Path:
     candidates: list[Path] = []
     override = os.environ.get(PROJECT_ROOT_ENV)
     if override:
-        candidates.append(Path(override).expanduser().resolve())
+        # ONLY when cwd is inside it. The gate is not asking "what project am
+        # I part of" — `_find_project_root` asks that — it is asking which
+        # TREE to scan, and the pre-push hook has already been handed a
+        # revision range belonging to the repository git is pushing from.
+        # Honouring an unrelated override there fed one repository's shas to
+        # another and the gate exited 3 with `fatal: bad object <sha>`: the
+        # SCRUM-60 push refusal again, in a new shape, and the sandbox sets
+        # this variable on every Worker.
+        named = Path(override).expanduser().resolve()
+        try:
+            inside = named == cwd.resolve() or named in cwd.resolve().parents
+        except OSError:
+            inside = False
+        if inside:
+            candidates.append(named)
     for parent in [cwd, *cwd.parents]:
         if _is_project(parent):
             candidates.append(parent)
@@ -4846,6 +4860,17 @@ def publish_pre_push() -> None:
     if not lines:
         click.echo("rite publish gate: nothing to scan")
         raise SystemExit(0)
+
+    # Said on this path as well as in `publish check`. In the `rite prepare`
+    # layout the gate root is the module repository and not the project root,
+    # so `.rite/config.yaml` and `.rite/gitleaksignore` are read from the
+    # module — and a push that goes through because the project's
+    # suppressions were not where the gate looked should at least name the
+    # tree it looked at. The remaining half of that — reading config from the
+    # project while scanning the repo — is a larger change than this one.
+    note = _gate_root_note(root)
+    if note:
+        click.echo(f"rite publish gate: {note}")
 
     worst = EXIT_CLEAN
     for rev_range in compute_pre_push_ranges(lines):

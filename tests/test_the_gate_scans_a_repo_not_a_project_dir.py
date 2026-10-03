@@ -82,10 +82,31 @@ def test_the_gate_root_is_the_repo_from_a_subdirectory_too(tmp_path, monkeypatch
     assert _gate_root().resolve() == module.resolve()
 
 
-def test_rite_project_root_is_honoured(tmp_path, monkeypatch):
+def test_rite_project_root_is_honoured_when_cwd_is_inside_it(tmp_path, monkeypatch):
     """`RITE_PROJECT_ROOT` is how a sandboxed Worker is TOLD its root rather
     than finding it, and `_gate_root` consulted it nowhere — so the gate and
     every other command could disagree about which tree they meant."""
+    outer = tmp_path / "named"
+    outer.mkdir()
+    init_repo(outer)
+    write(outer, "a.txt", "a\n")
+    commit_all(outer, "base")
+    inner = outer / "nested"
+    inner.mkdir()
+
+    monkeypatch.chdir(inner)
+    monkeypatch.setenv(PROJECT_ROOT_ENV, str(outer))
+    assert _gate_root().resolve() == outer.resolve()
+
+
+def test_an_unrelated_rite_project_root_is_not_followed(tmp_path, monkeypatch):
+    """The override names a tree, not a licence to scan a different
+    repository. The gate is asking WHICH TREE to scan, and the pre-push hook
+    has already been handed a revision range belonging to the repository git
+    is pushing from: feeding one repository's shas to another made the gate
+    exit 3 with `fatal: bad object <sha>` — the SCRUM-60 push refusal again,
+    in a new shape. The sandbox sets this variable on every Worker.
+    """
     project, module = _prepare_layout(tmp_path)
     other = tmp_path / "elsewhere"
     other.mkdir()
@@ -95,7 +116,7 @@ def test_rite_project_root_is_honoured(tmp_path, monkeypatch):
 
     monkeypatch.chdir(module)
     monkeypatch.setenv(PROJECT_ROOT_ENV, str(other))
-    assert _gate_root().resolve() == other.resolve()
+    assert _gate_root().resolve() == module.resolve()
 
 
 def test_a_project_root_that_is_a_repo_still_wins(tmp_path, monkeypatch):

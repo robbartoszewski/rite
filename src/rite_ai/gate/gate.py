@@ -7,14 +7,14 @@ plumbing this function calls.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from rite_ai.config.models import DEFAULT_GITLEAKS_CONFIG, ProjectConfig
 from rite_ai.config.parse import parse_config
 from rite_ai.gate import gitleaks_runner, pattern_scan
 from rite_ai.gate import suppression as supp_mod
 from rite_ai.gate.builtin_rules import BUILTIN_PATH_PATTERNS
-from rite_ai.gate.findings import PUBLISHABLE_REFS, Finding, rev_range_args
+from rite_ai.gate.findings import Finding, publishable_scope, rev_range_args
 from rite_ai.gate.suppression import DEFAULT_SUPPRESSION_PATH, Suppression
 
 # TWO QUESTIONS, TWO ANSWERS. `outcome` says what was found; the exit code
@@ -248,8 +248,25 @@ def _run_gate(
     if binary is not None:
         # 1. gitleaks: maintained secret-detection ruleset over full git
         #    history (or the push range). Current + historical file content.
+        # The SAME ref scope as rite's own two passes. Left to itself
+        # gitleaks walks `--all`, which reaches `refs/stash` and `refs/notes`
+        # — local by definition, on their way nowhere. Measured: a stashed
+        # file holding a token produced exit 2 with a fingerprint keyed to the
+        # stash commit's sha, so the block could not even be suppressed (the
+        # sha changes every time the stash is rebuilt), and on this project
+        # one stash stack is shared by every worktree.
+        #
+        # Narrowing a secret scan deserves suspicion, so: a stash cannot be
+        # pushed. The gate's question is whether this tree is safe to PUBLISH,
+        # and nothing in `refs/stash` is going anywhere. Everything that can
+        # be published is still covered, and now all three passes — content,
+        # commit messages, and the count that reports on them — cover exactly
+        # the same commits, which they did not before.
         history = gitleaks_runner.scan_history(
-            root, binary, config_path=user_config_path, log_opts=rev_range
+            root,
+            binary,
+            config_path=user_config_path,
+            log_opts=rev_range or " ".join(publishable_scope(root)),
         )
         if isinstance(history, gitleaks_runner.ScanError):
             errors.append(f"gitleaks history scan failed: {history.message}")
@@ -364,6 +381,18 @@ def _run_gate(
     )
 
 
+def _is_default_config(configured: str) -> bool:
+    """Is this the default `gitleaks_config`, however it is spelt?
+
+    Raw string equality decided this, so `./.rite/gitleaks.toml` — the same
+    file, written the way a person writes a relative path — counted as a
+    deliberately chosen config, and a project that had never chosen anything
+    became EXIT_ERROR. The hook fails closed, so that is every push refused
+    over a leading `./`.
+    """
+    return PurePosixPath(configured) == PurePosixPath(DEFAULT_GITLEAKS_CONFIG)
+
+
 def _resolve_ruleset(root: Path, config: ProjectConfig) -> tuple[Path | None, str, str]:
     """`(config_path, note, error)` — which gitleaks ruleset this run applies.
 
@@ -385,7 +414,7 @@ def _resolve_ruleset(root: Path, config: ProjectConfig) -> tuple[Path | None, st
     candidate = root / configured
     if candidate.exists():
         return candidate, f"gitleaks ruleset: {configured}", ""
-    if configured != DEFAULT_GITLEAKS_CONFIG:
+    if not _is_default_config(configured):
         return (
             None,
             "",
@@ -411,7 +440,7 @@ def _count_commits(root: Path, rev_range: str | None) -> int | None:
     """
     import subprocess
 
-    scope = rev_range_args(rev_range) if rev_range else list(PUBLISHABLE_REFS)
+    scope = rev_range_args(rev_range) if rev_range else publishable_scope(root)
     args = ["git", "rev-list", "--count", *scope]
     try:
         proc = subprocess.run(
@@ -685,7 +714,7 @@ def ruleset(root: Path, config: ProjectConfig) -> tuple[str, str]:
     configured = config.publish_gate.gitleaks_config
     named = root / configured
     if not named.exists():
-        if configured != DEFAULT_GITLEAKS_CONFIG:
+        if not _is_default_config(configured):
             # 🔴 SCRUM-63. Doctor said "optional" about every absent config,
             # including one someone chose — the same sentence over a healthy
             # project and over a gate enforcing rules nobody asked for. The
@@ -694,7 +723,8 @@ def ruleset(root: Path, config: ProjectConfig) -> tuple[str, str]:
             return (
                 f"publish gate rules: CANNOT VOUCH — config.yaml names "
                 f"{configured} and {named} does not exist, so the gate "
-                "refuses to run rather than fall back to gitleaks' defaults",
+                "refuses to run rather than fall back to gitleaks' "
+                f"defaults{extra}",
                 f"{named} does not exist",
             )
         return (

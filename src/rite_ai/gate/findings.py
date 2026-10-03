@@ -134,6 +134,41 @@ one stash blocks every one of them.
 PUBLISHABLE_REFS = ("--branches", "--tags", "--remotes")
 
 
+def publishable_scope(root: Path) -> list[str]:
+    """`PUBLISHABLE_REFS`, plus `HEAD` when there is one.
+
+    `HEAD` is not redundant with `--branches`: a detached HEAD is on no
+    branch, and a worktree checked out at a sha is the ordinary state of
+    several of this project's own. Measured — a repo whose only commits are
+    reachable from a detached HEAD reports 0 commits to
+    `--branches --tags --remotes`, so the scan read nothing and said clean
+    over a planted token. That is a NARROWING introduced by the commit whose
+    whole purpose was to widen coverage, which is the way this keeps going
+    wrong: every change to a scan's scope has to be measured in both
+    directions.
+
+    Conditional because an unborn HEAD is a hard error, not an empty set:
+    `git log --branches HEAD` in a repository with no commits exits 128 with
+    `ambiguous argument 'HEAD'`, and that would fail the gate on a freshly
+    initialised project.
+    """
+    scope = list(PUBLISHABLE_REFS)
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", "HEAD"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return scope
+    if proc.returncode == 0 and proc.stdout.strip():
+        scope.append("HEAD")
+    return scope
+
+
 def rev_range_args(rev_range: str | None) -> list[str]:
     """A revision range as `git log` ARGV, not as one argument.
 
@@ -195,7 +230,7 @@ def iter_commit_messages(
     # On an empty repository this is also the kinder answer: bare `git log`
     # fails with "does not have any commits yet", a ref selector exits 0 with
     # nothing.
-    scope = rev_range_args(rev_range) if rev_range else list(PUBLISHABLE_REFS)
+    scope = rev_range_args(rev_range) if rev_range else publishable_scope(root)
     args = ["git", "log", "--format=%x00%H%n%B", *scope]
     try:
         proc = subprocess.run(
