@@ -56,6 +56,22 @@ def header(tags: list[str]) -> list[str]:
     ]
 
 
+def written_pin(tag: str) -> str:
+    """The install pin `tag`'s own `rite init` wrote into the workflow.
+
+    ⚠ **Not `@<tag>`.** `rite_install_spec` pins `v<VERSION>` only for a
+    release-shaped VERSION and `main` for anything else, so every pre-release
+    (0.7.0a1 to a6, and the plain tags a7 and a8 whose VERSION still reads
+    0.7.0a6) wrote `@main`. Recorded as `@<tag>`, an alpha-built project's
+    untouched workflow matched nothing, and upgrading it to 0.7.0 left it
+    pinned to `main` and reported it as the user's edit
+    (`test_upgrade_from_a_release`, at the 0.7.0 bump). The rule is the same
+    at every tag since v0.1.0, so today's function answers for each."""
+    from rite_ai.cli.init.scaffold import rite_install_spec
+
+    return rite_install_spec(_git("show", f"{tag}:VERSION").decode().strip())
+
+
 def main() -> None:
     tags = sorted(t for t in _git("tag", "-l", "v*").decode().split() if t)
     released: dict[str, set[str]] = {}
@@ -82,10 +98,7 @@ def main() -> None:
             template = _git("show", f"{tag}:templates/ci/publish-gate.yml").decode()
         except subprocess.CalledProcessError:
             continue
-        rendered = template.replace(
-            "{{RITE_INSTALL_SPEC}}",
-            f"git+https://github.com/robbartoszewski/rite.git@{tag}",
-        )
+        rendered = template.replace("{{RITE_INSTALL_SPEC}}", written_pin(tag))
         released.setdefault("ci/publish-gate.yml", set()).add(
             hashlib.sha256(rendered.encode()).hexdigest()
         )

@@ -2,7 +2,7 @@
 
 SHA-256 of every command and agent template each tagged release shipped,
 from: v0.1.0, v0.2.0, v0.3.0, v0.4.0, v0.5.0, v0.5.1, v0.6.0, v0.7.0a1, v0.7.0a2,
-v0.7.0a3, v0.7.0a4, v0.7.0a5, v0.7.0a6, v0.7.0a7.
+v0.7.0a3, v0.7.0a4, v0.7.0a5, v0.7.0a6, v0.7.0a7, v0.7.0a8.
 """
 
 RELEASED: dict[str, frozenset[str]] = {
@@ -30,18 +30,12 @@ RELEASED: dict[str, frozenset[str]] = {
     ),
     "ci/publish-gate.yml": frozenset(
         {
-            "242744d1d2d2bed8fbcc903c0a780f261b8f18c1b4a085d77d67a76ae79effa5",
             "3d198bd353c03a0d141030f39911b2e304c76f5861bba5711b905d7ff296809d",
-            "3eb08555ceccee6f0e5eddd6c07cfd32269e233fe1a4ac431473ca0e9c5477fa",
             "3eef22664a1b491ecdc192c6eeab831d282f45ba416fdf15beb5545befa04e43",
             "5509db8ad3e4a554a94f9080193c47306f488320f829df88cf380be78534a08f",
-            "645088bd5e4779914e5488b1dfa197d356073183b7bbec6cf99fc808dd19d6d1",
-            "6a3140b95cf5ae1052ac95660044329ec475b43dcf9b258f4b30930b2f7dc8bc",
-            "71b201ee18d8f3fef660f7030550799479567ad35961d0e434327da1e7b508e1",
             "a1ccd9ce36863a9367f9593be33b13509744d7cb3589e1c87a4601dbc3250f40",
             "a87b33135cd3dd28b98ff947b01452cb2e8bb9f4b1193144c0eed1be8de99f21",
-            "a909e6f26bf5aede7f75fdcfefaacd3cbc954c12929937ce26e03de74d43f1b9",
-            "cfd0c8c9b666a22a75e60300fe9c80fe44b629dd3344dc818708b2826299ba8e",
+            "d81d38c1182bad3d9b6ba77e2bcc9adbe07b41358e6b595917a1a294057bf574",
             "e2266bd379218f9ca014740a6255120208edf64516ccc34a62999a918fe5b586",
             "ff1f67865f2fa62450cda8b6bf0be7f4531c3dd746cb537cd7a3fabb833d6b9f",
         }
