@@ -65,7 +65,10 @@ answered or its sandbox is gone.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
+
+from rite_ai.duration import format_duration
 
 LEDGER_FILE = "worker-questions.json"
 """sandbox -> the id (`asking._question_id`) of the question raised for it,
@@ -76,6 +79,15 @@ Beside it, under keys that start with `_`: `OPEN_KEY` (every id still open,
 not only the latest per sandbox), `CLOSED_KEY` (ids that were Worker
 questions and are not any more) and `RELAYED_KEY` (messages already
 carried)."""
+
+DELIVERED_KEY = "_delivered"
+"""qid -> {"worker", "at"} for an answer written into a sandbox (SCRUM-61).
+
+Kept so that "written where it is polled for" and "the Worker says it read
+it" can be told apart. An entry is removed when the ack arrives, so what is
+left is exactly the set of answers nobody has acknowledged — and past
+`read_ack.UNREAD_AFTER` that set is reported to the person who wrote them,
+because they are otherwise waiting on a Worker that may never have woken."""
 
 OPEN_KEY = "_open"
 """qid -> sandbox, for EVERY Worker question raised and not yet answered or
@@ -492,7 +504,7 @@ def _relay(root: Path, manager: str, say, messages=None) -> int:
                 f"(This answers your earlier question, {qid}, not your latest "
                 f"one, {latest}.)\n{words}"
             )
-        outcome = deliver_answer(sandbox, words, status=status)
+        outcome = deliver_answer(sandbox, words, status=status, question=qid)
         done.add(name)
         ledger[RELAYED_KEY] = sorted(done)
         _store(path, ledger)
@@ -521,6 +533,12 @@ def _relay(root: Path, manager: str, say, messages=None) -> int:
                 f"delivered: {outcome.reason}; told the User"
             )
             continue
+        # Recorded BEFORE settling, because settling is what makes the
+        # question stop being open: the delivered-but-unread set has to
+        # outlive it (SCRUM-61).
+        delivered_at = dict(ledger.get(DELIVERED_KEY) or {})
+        delivered_at[qid] = {"worker": worker or sandbox, "at": time.time()}
+        ledger[DELIVERED_KEY] = delivered_at
         settle(root, manager, qid)
         _close(ledger, qid)
         if raised.get(sandbox) == qid:
@@ -532,6 +550,98 @@ def _relay(root: Path, manager: str, say, messages=None) -> int:
         say(f"relayed the User's answer to Worker {worker or sandbox!r} ({qid})")
         carried += 1
     return carried
+
+
+def report_unread(root: Path, manager: str, say) -> int:
+    """Tell the person about each answer delivered and never acknowledged.
+
+    SCRUM-61's other half. `deliver_answer` establishes only that the answer
+    was written where the Worker polls for it, and until a Worker says it
+    read it (`rite ack`) nobody knows it arrived. Past
+    `read_ack.UNREAD_AFTER` that is worth saying: the person answered and is
+    waiting on a Worker that may never have woken up.
+
+    ⚠ **Told ONCE, through `asking`'s ledger**, which is the same once-only
+    the `Undeliverable` path above uses. A per-tick report of a standing
+    condition is the failure `scheduler._stall_records` records, and this
+    runs on the Worker watcher's cadence.
+
+    ⚠ **An ack whose record cannot be READ is not "unread".** `read_ack`
+    answers `unreadable` for that, and treating it as an absent ack would
+    tell somebody their answer never arrived on the strength of a file
+    nobody could parse. It is left for the next look, and the relay's own
+    problem line says the record could not be read.
+
+    Never raises into the supervisor: a failure is said and the next look
+    tries again.
+    """
+    try:
+        return _report_unread(root, manager, say)
+    except Exception as e:  # noqa: BLE001 - a watcher must not end the run
+        _say_once(root, manager, say, f"could not check for unread answers: {e}")
+        return 0
+
+
+def _report_unread(root: Path, manager: str, say) -> int:
+    from rite_ai import read_ack
+    from rite_ai.managers.asking import raise_to_person
+
+    root = Path(root)
+    path = _ledger_path(root, manager)
+    ledger = _load(path)
+    delivered = dict(ledger.get(DELIVERED_KEY) or {})
+    if not delivered:
+        return 0
+    now = time.time()
+    told = 0
+    changed = False
+    for qid in sorted(delivered):
+        entry = delivered[qid]
+        if not isinstance(entry, dict):
+            delivered.pop(qid)
+            changed = True
+            continue
+        worker = str(entry.get("worker") or "")
+        at = entry.get("at")
+        if not worker or not isinstance(at, int | float):
+            delivered.pop(qid)
+            changed = True
+            continue
+        acks = read_ack.read(root, worker)
+        if acks is not None and not acks.known:
+            # Cannot tell. Not reported as unread, and not dropped.
+            continue
+        if acks is not None and acks.read_at(qid) is not None:
+            # Acknowledged: the ✅ is the relay's job, and this set holds
+            # only what is still unacknowledged.
+            delivered.pop(qid)
+            changed = True
+            continue
+        if now - float(at) < read_ack.UNREAD_AFTER:
+            continue
+        waited = format_duration(now - float(at))
+        raise_to_person(
+            root,
+            manager,
+            subject=_ticket_of(root, _open_of(ledger).get(qid, "")),
+            raiser=f"worker:{worker}",
+            text=(
+                f"Your answer to {qid} reached Worker {worker!r}'s sandbox "
+                f"{waited} ago and it has not said it read it. rite wrote the "
+                "answer where the Worker polls for it; whether it was opened "
+                "is not something rite can see. Look at the Worker before "
+                "assuming it has the answer."
+            ),
+        )
+        say(
+            f"answer to {qid} is UNREAD by Worker {worker!r} after {waited}: "
+            "told the User"
+        )
+        told += 1
+    if changed or told:
+        ledger[DELIVERED_KEY] = delivered
+        _store(path, ledger)
+    return told
 
 
 def _teller(config) -> str:

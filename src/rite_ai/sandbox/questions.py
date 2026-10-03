@@ -211,6 +211,7 @@ def deliver_answer(
     text: str,
     *,
     status=None,
+    question: str = "",
 ) -> Delivered | Undeliverable:
     """Write `text` where the Worker in `sandbox` polls for its answer (S30).
 
@@ -218,6 +219,11 @@ def deliver_answer(
     agent to write `question.json` and poll `answer.json`, and this writes
     the second in the directory `yoloai files <name> path` names. No session
     is typed into and no sandbox rule is touched.
+
+    `question`, when given, is the id the Worker names back when it
+    acknowledges reading this (`rite ack`, SCRUM-61). Omitted, the answer is
+    delivered exactly as before and nothing asks for an ack — so an older
+    caller keeps working and simply gets no ✅.
 
     `status` is the `SandboxStatus` the caller already has, passed in rather
     than fetched here so this function shells out for one thing only (the
@@ -284,6 +290,19 @@ def deliver_answer(
 
     path = where / ANSWER_FILE
     payload = {"answer": text, "answered_at": time.time()}
+    if question:
+        # ⚠ **The id travels WITH the answer, because the Worker has to name
+        # it back (SCRUM-61).** rite now asks a Worker to acknowledge that it
+        # read an answer, and an ack has to say WHICH answer — one Worker is
+        # answered more than once, and an ack that named nothing would tick
+        # whichever question happened to be open. The Worker cannot look the
+        # id up: it holds no ledger and no board credential. So it is here,
+        # in the file the Worker is already reading, under a key beside the
+        # text rather than inside it, so no parsing of prose is involved.
+        payload["question"] = question
+        payload["acknowledge_with"] = (
+            f"rite ack --worker <your name> --question {question}"
+        )
     try:
         write_atomic(path, json.dumps(payload, indent=1) + "\n")
     except OSError as e:

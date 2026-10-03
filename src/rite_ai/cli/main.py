@@ -6266,6 +6266,59 @@ def done(
     _warn_if_unregistered(worker)
 
 
+@cli.command("ack")
+@click.option("--worker", "-w", required=True, help="Worker name")
+@click.option(
+    "--question",
+    "-q",
+    required=True,
+    help="The question id the answer you just read was for. rite writes it "
+    "into the answer itself, next to the text.",
+)
+def ack(worker: str, question: str) -> None:
+    """Say you have read an answer somebody sent you.
+
+    Run this the moment you read an answer rite delivered, before you act on
+    it. Until you do, the person who answered has no sign it arrived: rite
+    can say it wrote the answer where you poll for it, and nothing on this
+    machine can tell whether you opened it.
+
+    What it does: puts a check mark on their message in Slack, and stops the
+    answer being reported as UNREAD. An answer nobody acks is reported to
+    the person who wrote it, because otherwise they are waiting on a Worker
+    that may never have woken up.
+
+    \b
+    Examples:
+      rite ack --worker alpha --question q1a2b
+    """
+    from rite_ai import read_ack
+    from rite_ai.names import UnsafeName
+
+    root = _require_project_root()
+    try:
+        path = read_ack.write(root, worker, question)
+    except (UnsafeName, read_ack.BadAck) as e:
+        click.echo(f"refusing to record that: {e}", err=True)
+        raise SystemExit(1) from None
+    except OSError as e:
+        # ⚠ Said as a FAILURE. A Worker that believes it acked and did not
+        # leaves the person who answered being told their answer was never
+        # read, which is the report this command exists to clear.
+        click.echo(
+            f"could not record that '{worker}' read {question}: {e}. The "
+            "person who answered will be told it is UNREAD — say so rather "
+            "than assuming they know you got it.",
+            err=True,
+        )
+        raise SystemExit(1) from None
+    click.echo(
+        f"'{worker}' read the answer to {question} — recorded in {path}. The "
+        "person who answered is shown a check mark on their message."
+    )
+    _warn_if_unregistered(worker)
+
+
 # --- Watchdog ---
 
 
@@ -9158,7 +9211,7 @@ def _worker_question_watch(root: Path, manager: str):
     from rite_ai.config.models import ProjectConfig
     from rite_ai.config.parse import ParseError, parse_config
     from rite_ai.managers.worker_handbacks import surface as handed_back
-    from rite_ai.managers.worker_questions import relay, surface
+    from rite_ai.managers.worker_questions import relay, report_unread, surface
 
     parsed = parse_config(root / ".rite" / "config.yaml")
     config = parsed if not isinstance(parsed, ParseError) else ProjectConfig()
@@ -9191,6 +9244,10 @@ def _worker_question_watch(root: Path, manager: str):
         last["at"] = now
         if tells_the_person:
             surface(root, manager, say)
+            # An answer written into a sandbox that nobody has said they
+            # read (SCRUM-61). Throttled with `surface` and told once by
+            # `asking`'s ledger: it is a standing condition, not an event.
+            report_unread(root, manager, say)
         # A handback is read from `.rite/`, not from yoloAI, so it costs no
         # subprocess — but it shares this watcher's cadence because a Manager
         # learning it one tick later changes nothing, and two watchers on two

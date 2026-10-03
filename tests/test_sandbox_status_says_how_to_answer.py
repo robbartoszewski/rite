@@ -135,9 +135,17 @@ def test_the_command_it_names_carries_the_answer_into_the_worker(tmp_path, monke
     monkeypatch.setattr(
         sandbox_mod, "worker_sandbox_status", lambda w, r=None: SandboxStatus("idle")
     )
-    written: list[tuple[str, str]] = []
+    written: list[tuple[str, str, str]] = []
+    # `question` is the id the Worker names back when it acknowledges reading
+    # this (SCRUM-61). Captured rather than swallowed with `**_`, so this
+    # stand-in cannot drift from the real signature without saying so — and
+    # so the id reaching `deliver_answer` is a fact this test pins.
     monkeypatch.setattr(
-        q, "deliver_answer", lambda sb, words, status=None: written.append((sb, words))
+        q,
+        "deliver_answer",
+        lambda sb, words, status=None, question="": written.append(
+            (sb, words, question)
+        ),
     )
 
     sent = CliRunner().invoke(cli, ["message", "lead", "q3f9a the http one, as a flag"])
@@ -146,4 +154,4 @@ def test_the_command_it_names_carries_the_answer_into_the_worker(tmp_path, monke
     carried = wq.relay(root, "lead", said.append)
 
     assert carried == 1, said
-    assert written == [(SANDBOX, "q3f9a the http one, as a flag")]
+    assert written == [(SANDBOX, "q3f9a the http one, as a flag", "q3f9a")]

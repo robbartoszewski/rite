@@ -726,6 +726,15 @@ def _relayed(
 PICKED_UP = "eyes"
 """The reaction rite adds to a message it has picked up for the Manager."""
 
+ANSWER_READ = "white_check_mark"
+"""The reaction rite adds to an answer a Worker has said it READ (SCRUM-61).
+
+⚠ **Only on the ack, never on the write.** `deliver_answer` can say an answer
+was written where the Worker polls for it and no more — its own docstring
+refuses the stronger claim — so a tick put on delivery would tell the Owner
+something nobody established. This goes on when the Worker says it read it
+(`rite ack`), and the tick's meaning is exactly that: the Worker said so."""
+
 
 def _unescaped(text: str) -> str:
     """Slack's three message-text escapes undone, `&amp;` LAST so that a
@@ -826,6 +835,21 @@ class Listener:
     _unsaid: list[str] = field(default_factory=list)
     _notes: dict = field(default_factory=dict)
     """Today's notes root (RP1 piece 3): {"day", "channel", "ts"}."""
+    _answered: dict = field(default_factory=dict)
+    """question id -> {"channel", "ts"} of the Owner's reply that answered it
+    (SCRUM-61), so a ✅ can go on THEIR message when the Worker says it read
+    the answer.
+
+    ⚠ **Kept here, not in the message.** The mailbox is identity-free by
+    Decision 1a — `posted` exists for the same reason — and the relay that
+    carries an answer into a sandbox reads the mailbox, where the Slack `ts`
+    is long gone. This is recorded at the one moment both facts are in hand:
+    `_confirm_if_answered`, which already holds the Owner's reply and the
+    question it answered."""
+    _ticked: dict = field(default_factory=dict)
+    """question id -> when a ✅ was put on its answer, so one ack ticks once.
+    A reaction Slack already has is not an error, but asking it every tick
+    for the life of a project is a request per tick for nothing."""
     _awaiting: dict = field(default_factory=dict)
     """The Owner's DM message this Manager has been given and not yet replied
     to: {"channel", "ts", "at"} (SCRUM-56). `at` is when rite relayed it.
@@ -1201,33 +1225,101 @@ class Listener:
         it. Once per message, because each is picked up once; a reaction
         Slack already has is not an error. Never fails the relay: a missing
         `reactions:write` is said once, anything else is a problem line.
+
+        The mechanics are `_react`'s, shared with the ✅ (SCRUM-61) so the
+        already-reacted tolerance and the say-once on a missing scope cannot
+        hold in one place and not the other.
         """
-        if self._reacting == "missing":
-            return
+        self._react(channel, ts, PICKED_UP, call=call)
+
+    def tick_read_answers(self, *, call=None) -> list[str]:
+        """✅ on the Owner's reply for each answer a Worker says it READ.
+
+        Reads the acks Workers write on the host (`rite_ai.read_ack`) and
+        reacts to the message remembered in `_answered`. Returns lines for
+        the terminal, one per tick put on.
+
+        ⚠ **The tick means "the Worker said it read this".** Nothing here,
+        and nothing on this machine, observes a read — see `read_ack`. The
+        reaction is chosen to say the exchange closed, and the words
+        everywhere around it stop short of claiming rite watched it happen.
+
+        Never raises into the supervisor: a Slack outage is a result, and the
+        next tick tries again. An ack with no remembered message is NOT an
+        error either — the Owner may have answered from the terminal, where
+        there is no message to tick.
+        """
+        if self.project is None or self._reacting == "missing":
+            return []
+        from rite_ai import read_ack
+        from rite_ai.config.parse import load_project
+
+        project = load_project(self.project)
+        if isinstance(project, list):
+            return []
+        lines: list[str] = []
+        for worker in sorted(w.name for w in project.workers):
+            acks = read_ack.read(self.project, worker)
+            if acks is None:
+                continue
+            if not acks.known:
+                # Said once, not every tick: a record nobody can parse is a
+                # standing condition, and it is reported where the rest of a
+                # Worker's unreadable state is.
+                self._problem(f"cannot read {worker}'s read-acks: {acks.unreadable}")
+                continue
+            for qid in sorted(acks.read):
+                if qid in self._ticked:
+                    continue
+                where = self._answered.get(qid)
+                if not isinstance(where, dict):
+                    # Answered from the terminal, or before this ran. Marked
+                    # so it is not looked at again; there is nothing to tick.
+                    self._ticked[qid] = self.clock()
+                    continue
+                if self._react(
+                    str(where.get("channel") or ""),
+                    str(where.get("ts") or ""),
+                    ANSWER_READ,
+                    call=call,
+                ):
+                    self._ticked[qid] = self.clock()
+                    lines.append(
+                        f"slack: ✅ on the answer to {qid} — Worker {worker!r} "
+                        "says it read it"
+                    )
+            self._save()
+        return lines
+
+    def _react(self, channel: str, ts: str, name: str, *, call=None) -> bool:
+        """One reaction, or False and a problem said. The shared half of
+        `_picked_up` and `tick_read_answers`: both want the same
+        already-reacted tolerance and the same say-once on a missing scope,
+        and two copies of that would drift."""
+        if not (channel and ts) or self._reacting == "missing":
+            return False
         caller = call or _call
         try:
             got = caller(
                 "reactions.add",
                 self.token,
                 None,
-                {"channel": channel, "timestamp": ts, "name": PICKED_UP},
+                {"channel": channel, "timestamp": ts, "name": name},
             )
         except Exception as e:  # noqa: BLE001 - an outage is a result, not a crash
-            self._problem(
-                f"cannot react to a picked-up message: {type(e).__name__}: {e}"
-            )
-            return
+            self._problem(f"cannot react with :{name}:: {type(e).__name__}: {e}")
+            return False
         if got.get("ok") or got.get("error") == "already_reacted":
-            return
+            return True
         if got.get("error") == "missing_scope":
             self._reacting = "missing"
             self._unsaid.append(
-                "slack: no 👀 on the messages rite picks up — the app lacks "
-                "reactions:write. Add the scope under OAuth & Permissions for "
-                "an instant sign that a message was seen"
+                "slack: no reactions on your messages — the app lacks "
+                "reactions:write. Add the scope under OAuth & Permissions"
             )
-            return
-        self._problem(f"cannot react to a picked-up message: {refusal(got)}")
+            return False
+        self._problem(f"cannot react with :{name}:: {refusal(got)}")
+        return False
 
     def _say_the_gap(self, channel: str, messages) -> None:
         opened = self.opened.get(channel)
@@ -1326,15 +1418,35 @@ class Listener:
 
         if self.project is None:
             return
-        how, at = "", 0.0
+        how, at, said_at = "", 0.0, ""
         for m in fresh:
             if self._counts_as_the_person(str(m.get("user") or "")):
                 how, at = pending.BY_THREAD_REPLY, _ts_of(m)
+                # ⚠ The `ts` AS SLACK GAVE IT, kept as the string it is.
+                # `reactions.add` matches a message by this exact value, and
+                # a round trip through a float does not survive it: Slack's
+                # "1791055851.0" came back "1791055851.000000" and would
+                # have reacted to nothing. Caught by a test asserting the
+                # reaction's arguments rather than that one was attempted.
+                said_at = str(m.get("ts") or "")
                 break
         if not how and self._reactions != "missing":
             how, at = self._reacted(root, call=call)
         if not how:
             return
+        # ⚠ The Owner's own reply, remembered against the question it
+        # answered, so a ✅ can go on THEIR message once the Worker says it
+        # read the answer (SCRUM-61). Recorded here because this is the one
+        # place that holds both: `root.label` carries the question id
+        # `asking` wrote, and `fresh` carries the reply's `ts`. By the time
+        # the answer is relayed into the sandbox it is read from the mailbox,
+        # which keeps no Slack identity at all.
+        answered = _QUESTION_IN_LABEL.search(root.label)
+        if answered and how == pending.BY_THREAD_REPLY and said_at:
+            self._answered[answered.group(0)] = {
+                "channel": root.channel,
+                "ts": said_at,
+            }
         if pending.confirm(self.project, self.manager, root.item, how, at=at):
             self._unsaid.append(
                 f"slack: {root.label} reached the person ({how}); it is no "
@@ -1582,6 +1694,8 @@ class Listener:
                 "notes": self._notes,
                 "known": self._known,
                 "awaiting": self._awaiting,
+                "answered": dict(sorted(self._answered.items())[-POSTED_KEPT:]),
+                "ticked": dict(sorted(self._ticked.items())[-POSTED_KEPT:]),
             }
             write_atomic(path, json.dumps(state, indent=1) + "\n")
         except OSError as e:
@@ -1602,6 +1716,12 @@ class Listener:
         # Restored so a supervisor that restarts between the Owner's question
         # and the Manager's answer still puts the answer under the question.
         # The window in `_answer_root` is what stops a stale one applying.
+        # Restored so an ack that arrives after a supervisor restart still
+        # finds the message to tick, and so a tick is not repeated.
+        for key, into in (("answered", "_answered"), ("ticked", "_ticked")):
+            saved = state.get(key)
+            if isinstance(saved, dict):
+                setattr(self, into, dict(saved))
         awaiting = state.get("awaiting")
         if isinstance(awaiting, dict):
             self._awaiting = {
