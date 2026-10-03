@@ -605,6 +605,29 @@ server, so it holds for any client); what was missing was the agent knowing
 the number, which is the difference between compacting before the limit and
 meeting it. rite now says that out loud for an agent it has no mapping for,
 instead of handing it Goose's variable.
+### A Worker can say it has finished: `rite done`
+
+A Worker had no way to tell its Manager it was done. Its instructions said
+to, and the only command for it writes a Manager's inbox — which a Worker is
+refused, because anything in that inbox is delivered as the User's own
+instruction. Inside a sandbox the refusal arrived as `PermissionError:
+Operation not permitted`. So a Worker in the last dogfood finished its
+ticket, wrote a file of its own that nothing reads, and fell silent.
+
+`rite done` is the channel: it records the completion in `.rite/`, the same
+tree a Worker's heartbeat already writes from inside its sandbox, and the
+supervisor reads it on the host and puts it in the Manager's next
+instruction. No sandbox profile changed and no grant was added.
+
+The second half of that failure was worse than the first. Because the
+finished Worker had stopped beating, `rite watchdog` reported it "stalled",
+and the Manager read that and restarted a Worker that was already done.
+A Worker that has handed back is no longer reported as a stall by the
+watchdog or by `rite status` — both say it has handed back, that it is free,
+and that it must not be restarted. `rite watchdog` now exits 2 for it rather
+than 1: finished work is work waiting for someone, not a fault. Starting that
+Worker on new work clears the record, so a past handback cannot hide a real
+stall later, and the clearing says what it dropped.
 
 ### A local Manager works one subtask at a time: `rite local step`
 

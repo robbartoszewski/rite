@@ -51,6 +51,8 @@ from pathlib import Path
 from rite_ai.claims.ledger import ClaimsLedger
 from rite_ai.config.parse import load_project
 from rite_ai.duration import format_duration
+from rite_ai.handback import Handback
+from rite_ai.handback import read_all as read_handbacks
 from rite_ai.reporting.heartbeat import StallReport, detect_stalls
 from rite_ai.reporting.outbox import OutboxMessage, list_pending
 from rite_ai.state import CorruptStateError
@@ -103,6 +105,9 @@ class WatchdogResult:
     `_unwatched_workers`. Reported separately from `stalled` because the
     condition is different in kind: a stall is a worker that went quiet,
     this is a worker nothing would notice going quiet."""
+    handed_back: list[Handback] = field(default_factory=list)
+    """Workers that finished and said so (`rite done`). NOT a fault, and
+    never also in `stalled` — see `run_watchdog_check`."""
 
 
 def run_watchdog_check(root: Path) -> WatchdogResult:
@@ -126,7 +131,35 @@ def run_watchdog_check(root: Path) -> WatchdogResult:
         * 60
         * project.config.heartbeat.stall_threshold
     )
-    stalled = detect_stalls(root, workers, threshold_seconds=threshold_seconds)
+    # ⚠ **A WORKER THAT HANDED BACK IS NOT STALLED, and this is where the two
+    # stop being the same observation.** Measured in the dogfood of
+    # 2026-10-03: a Worker finished its ticket, stopped beating because it had
+    # nothing left to do, and was reported "stalled — 42m since last
+    # heartbeat". The Manager read that and restarted it. Silence after a
+    # handback is the expected state, so the handback is subtracted from the
+    # stall set rather than reported alongside it: a Worker in both lists is
+    # a Worker a reader has to adjudicate, and the dogfood shows which way
+    # that goes.
+    #
+    # Subtracted and not merely annotated, deliberately. `scheduler`'s
+    # `_stall_records` turns `stalled` into standing outbox blockers and
+    # `reporting.status` prints it as STALLED; both read the list, not the
+    # prose beside it.
+    # ⚠ An UNREADABLE handback counts here too, and that is a judgement, not
+    # an oversight. The two rules this codebase already holds pull opposite
+    # ways — "cannot tell is never stalled" (D-58, §3.4) against
+    # `not_started`'s "a missed stall is worse than a false one" — and the
+    # file existing at all is evidence the Worker reached the step where it
+    # says it is done. So it suppresses the stall and is reported as its own
+    # reason, loudly, saying that rite could not read it: a person looks,
+    # and nothing restarts a Worker on the assumption it is hung.
+    handed_back = sorted(read_handbacks(root, workers).values(), key=lambda h: h.worker)
+    done = {h.worker for h in handed_back}
+    stalled = [
+        s
+        for s in detect_stalls(root, workers, threshold_seconds=threshold_seconds)
+        if s.worker not in done
+    ]
     unwatched = _unwatched_workers(root, workers)
 
     blockers = [msg for msg in list_pending(root) if msg.kind in ATTENTION_KINDS]
@@ -155,6 +188,18 @@ def run_watchdog_check(root: Path) -> WatchdogResult:
             when = f"{format_duration(s.seconds_silent)} since last heartbeat"
         verb = "stalled" if s.known else "cannot be checked"
         reasons.append(f"worker '{s.worker}' {verb} — {when}{ticket_note}")
+    for h in handed_back:
+        # ⚠ The words "do NOT restart" are in the line on purpose. This text
+        # is what a Manager reads on its own polling cadence, and in the
+        # dogfood the Manager restarted a finished Worker because the only
+        # line about it said "stalled". Saying what the state is was not
+        # enough; the line says what not to do with it.
+        reasons.append(
+            f"worker '{h.worker}' {h.describe()} — it is FREE and NOT hung, "
+            "so do NOT restart it and do not force-release its claims. Its "
+            "silence from here on is expected. Integrate the work, or give "
+            "that worker the next ticket"
+        )
     for b in blockers:
         detail = b.payload.get("detail") or b.payload.get("reason") or ""
         reasons.append(f"{b.kind} in outbox" + (f": {detail}" if detail else ""))
@@ -198,6 +243,7 @@ def run_watchdog_check(root: Path) -> WatchdogResult:
         blocked=blocked,
         unreadable=unreadable,
         unwatched=[name for name, _ in unwatched],
+        handed_back=handed_back,
     )
 
 
