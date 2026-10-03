@@ -276,11 +276,15 @@ class TestCopiedTemplates:
             if digest not in RELEASED.get(key, frozenset()):
                 missing.append(key)
         # Rendered, not copied: what a release WROTE is the template with that
-        # release's pin in it — the same substitution the generator makes.
+        # release's pin in it — the same substitution the generator makes, and
+        # for a pre-release that pin is `@main`, not `@<tag>` (see
+        # `tools/template_history.written_pin`).
+        from rite_ai.cli.init.scaffold import rite_install_spec
+
         template = git("show", f"{tag}:templates/ci/publish-gate.yml").decode()
         rendered = template.replace(
             "{{RITE_INSTALL_SPEC}}",
-            f"git+https://github.com/robbartoszewski/rite.git@{tag}",
+            rite_install_spec(git("show", f"{tag}:VERSION").decode().strip()),
         )
         if hashlib.sha256(rendered.encode()).hexdigest() not in RELEASED.get(
             "ci/publish-gate.yml", frozenset()
