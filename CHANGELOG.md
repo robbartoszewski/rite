@@ -629,6 +629,27 @@ than 1: finished work is work waiting for someone, not a fault. Starting that
 Worker on new work clears the record, so a past handback cannot hide a real
 stall later, and the clearing says what it dropped.
 
+### A Manager's answer to the Owner goes to the DM, not the day's notes
+
+The Owner asked a Manager a question in their DM, the Manager answered, and
+the answer was posted into the day's notes thread — the one whose root line
+says "Nothing in this thread needs you". So the answer the Owner was waiting
+for went to the place they had been told they could ignore. With check-in
+windows configured it was worse: a reply filed as reading is held for the
+next check-in, so the answer could also arrive up to a day late.
+
+The cause was that "does this need the person" was being used to decide
+"is this ambient status". An answer needs nobody to act on it and is still
+not ambient. A reply a Manager writes while the Owner's own message is
+outstanding now goes into the DM, in that message's thread, and is never
+held. Everything else goes to the notes thread exactly as before.
+
+rite does not read the reply to decide this, and does not ask the model what
+it is answering: it correlates the reply with the message the Manager was
+given, inside a bounded window. The window is not closed by the first reply,
+so a Manager answering in two parts does not get its second half filed as
+notes, and a newer message from the Owner supersedes an older one.
+
 ### A local Manager works one subtask at a time: `rite local step`
 
 A Manager running on a local model is given one subtask and the slice of the

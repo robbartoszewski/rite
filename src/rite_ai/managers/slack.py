@@ -98,6 +98,23 @@ THREAD_HOURS = 24.0
 roots a day (V060_CHECKINS), so without a horizon the set grows without
 limit."""
 
+ANSWER_WINDOW_SECONDS = 30 * 60.0
+"""How long after being given the Owner's instruction a Manager's reply is
+posted under it rather than into the day's notes (SCRUM-56).
+
+**Bounded, and generous inside the bound, because the two mistakes do not
+cost the same.** A reply misfiled as notes is an answer the Owner asked for
+and never sees — the defect. A status line misfiled under their question is
+noise in a thread they already opened, and the DM's top-level scan list is
+untouched either way. So the window is wide enough to cover several of a
+Manager's cycles rather than tuned to one.
+
+⚠ **It is not cleared by the first reply**, deliberately: a Manager that
+answers in two `rite reply` calls would otherwise have its second half filed
+as notes, which is half an answer — the same failure in a smaller place. A
+newer Owner instruction supersedes it, so the window never outlives the
+question it belongs to."""
+
 HOLD_MAX_SECONDS = 24 * 3600.0
 """The longest a message for READING is held for the next check-in (RP1 piece
 3). Past it, it goes under the day's notes root instead: a project whose
@@ -798,6 +815,18 @@ class Listener:
     _unsaid: list[str] = field(default_factory=list)
     _notes: dict = field(default_factory=dict)
     """Today's notes root (RP1 piece 3): {"day", "channel", "ts"}."""
+    _awaiting: dict = field(default_factory=dict)
+    """The Owner's DM message this Manager has been given and not yet replied
+    to: {"channel", "ts", "at"} (SCRUM-56). `at` is when rite relayed it.
+
+    ⚠ **This is a CORRELATION rite can make mechanically, and it is not the
+    same claim as "this reply answers that question".** rite does not read
+    the reply and does not ask the model what it is answering — the rule this
+    file and `mailbox._needs_action` both hold is that a message is classed
+    by the command that wrote it, never by its text. What rite knows is that
+    the Owner addressed this Manager, and that the Manager then spoke inside
+    the window below. That is the claim, and `ANSWER_WINDOW_SECONDS` says why
+    it is a bounded one."""
     _reactions: str = ""
     """"" until tried; "read" when `reactions.get` works; "missing" once Slack
     said the app lacks `reactions:read`, which is said once and then only a
@@ -1413,6 +1442,25 @@ class Listener:
                 head = _header(
                     "Owner's DM", when, *normalised, *thread, "addressed", "INSTRUCTION"
                 )
+                # ⚠ Recorded HERE, in the one branch that decided this is the
+                # Owner addressing this Manager, and from the same facts the
+                # header is built from (SCRUM-56). Not in the branch above:
+                # a DM from somebody who is not the Owner is context, and a
+                # reply is not owed to it. `under` is left out on purpose —
+                # a message rite already read inside one of its own threads
+                # is answered in that thread by the code that watches it.
+                #
+                # ⚠ This is NOT the same thing as the `source` carried on the
+                # relayed text beside it (SCRUM-35, for the reaction). That
+                # travels with one message and is gone once the text is in
+                # the mailbox; this is the relay's own state, persisted, and
+                # it is what the NEXT reply is matched against.
+                self._awaiting = {
+                    "channel": channel,
+                    "ts": str(message.get("ts") or ""),
+                    "at": sent or self.clock(),
+                }
+                self._save()
                 return _relayed(
                     f"{head}\n{_quoted(text)}",
                     sent,
@@ -1509,6 +1557,7 @@ class Listener:
                 "threads": threads,
                 "notes": self._notes,
                 "known": self._known,
+                "awaiting": self._awaiting,
             }
             write_atomic(path, json.dumps(state, indent=1) + "\n")
         except OSError as e:
@@ -1525,6 +1574,16 @@ class Listener:
         if isinstance(notes, dict):
             self._notes = {
                 k: str(v) for k, v in notes.items() if k in ("day", "channel", "ts")
+            }
+        # Restored so a supervisor that restarts between the Owner's question
+        # and the Manager's answer still puts the answer under the question.
+        # The window in `_answer_root` is what stops a stale one applying.
+        awaiting = state.get("awaiting")
+        if isinstance(awaiting, dict):
+            self._awaiting = {
+                "channel": str(awaiting.get("channel") or ""),
+                "ts": str(awaiting.get("ts") or ""),
+                "at": awaiting.get("at") or 0.0,
             }
         since = state.get("since")
         if isinstance(since, dict):
@@ -1620,8 +1679,19 @@ class Listener:
             if message.path.name in posted:
                 continue
             reading = not _needs_action(message)
+            # ⚠ AN ANSWER IS NOT AMBIENT STATUS, and this is the distinction
+            # `reading` alone could not make (SCRUM-56). `_needs_action` asks
+            # "does this need the person", and an answer does not — nobody has
+            # to act on it. So every answer the Owner asked for was filed as
+            # reading, which here meant two things, both wrong: HELD until the
+            # next check-in, for up to a day, and then posted into the day's
+            # notes thread, whose own root line says "nothing in this thread
+            # needs you". The Owner asked a question in their DM and the reply
+            # went somewhere they had been told not to read.
+            answering = self._answer_root(message) if reading else None
             if (
                 reading
+                and not answering
                 and holding
                 and self.clock() - message.timestamp < HOLD_MAX_SECONDS
             ):
@@ -1639,7 +1709,10 @@ class Listener:
             # The same for its Claude login and its Cursor key.
             text = self._linked(self._outgoing(message.text), posted, call=call)
             if reading:
-                root = self._notes_root(target, call=call)
+                # Under the Owner's own message when this answers one, else
+                # today's notes. Both are threads, so the DM's top level —
+                # the scan list — is unchanged either way.
+                root = answering or self._notes_root(target, call=call)
                 if root is None:
                     break
                 if not self._post_in_thread(message, text, root, posted, lines, call):
@@ -1873,6 +1946,34 @@ class Listener:
             f"slack: posted {message.path.name} → {sent.channel} in the thread of {ts}"
         )
         return True
+
+    def _answer_root(self, message):
+        """`(channel, ts)` of the Owner's message this reply answers, or None.
+
+        None means "nothing says this is an answer", which is the day's notes
+        — the right place for a Manager that is reporting rather than
+        replying. See `_awaiting` for what this does and does not claim.
+        """
+        awaiting = self._awaiting
+        channel = str(awaiting.get("channel") or "")
+        ts = str(awaiting.get("ts") or "")
+        if not (channel and ts):
+            return None
+        try:
+            at = float(awaiting.get("at") or 0.0)
+        except (TypeError, ValueError):
+            return None
+        if not at:
+            return None
+        # Written BEFORE the Owner's message reached the Manager: it cannot
+        # be a reply to it. The ordering matters because the relay files an
+        # inbox message by when it was SENT in Slack (`_Relayed.sent_at`),
+        # which can be well behind the moment rite heard it.
+        if message.timestamp < at:
+            return None
+        if self.clock() - at >= ANSWER_WINDOW_SECONDS:
+            return None
+        return (channel, ts)
 
     def _notes_root(self, target: str, *, call=None):
         """Today's top-level notes post, made on first use; (channel, ts), or
