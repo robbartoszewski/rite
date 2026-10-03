@@ -265,8 +265,44 @@ stall this module is built to avoid.
 """
 
 
-def settings_path(root: Path) -> Path:
-    """Where rite writes the settings document it passes to the engine."""
+def settings_path(root: Path, manager: str, home: Path | None = None) -> Path:
+    """Where rite writes the settings document it passes to the engine.
+
+    ⚠ **NOT UNDER `.rite/user/`, WHICH EVERY MANAGER CAN WRITE**, for the
+    reason `enclosure.profile_path` gives about the boundary file, and it is
+    the same reason: *a boundary must not be writable by anything it bounds,
+    or by a peer.* This file IS a boundary — it is the allowlist `--settings`
+    names, the whole of what a `-p` Manager may do. It lived in `.rite/user/`,
+    inside the project tree the profile grants writable, and measured
+    2026-09-30 from inside a Manager's own profile: overwriting it succeeded.
+
+    ⚠ **What that is and is not.** rite rewrites this file before every
+    launch, so a plant does not survive to the next cycle on its own. What was
+    open is the shape the `.sb` file was moved for: a PEER Manager, or a
+    background process of this one, replacing the file between rite's write and
+    the engine's read. That race was measured at 19 of 20 for the boundary
+    file; it has NOT been measured for this one, and the fix is the same either
+    way — put it where nothing inside a boundary can write it.
+
+    It now lives beside the boundary file in this Manager's own credential
+    directory, under no path any Manager's profile grants. Per Manager rather
+    than per project, as the boundary file is: the content is the same for
+    every Manager in a root, and one writable copy shared between them is the
+    peer half of the problem.
+    """
+    from rite_ai.managers import enclosure, github_access
+
+    return (
+        github_access._credential_dir(root, manager, home)  # noqa: PLC2701
+        / enclosure.BOUNDARY_DIRNAME
+        / SETTINGS_FILENAME
+    )
+
+
+def _legacy_settings_path(root: Path) -> Path:
+    """Where builds before the move wrote it, removed when the new one is
+    written — so nothing mistakes a stale copy for the list in force, which
+    is why `enclosure.write_profile` removes its own legacy file too."""
     return user_dir(root) / SETTINGS_FILENAME
 
 
@@ -283,7 +319,12 @@ def settings_document(allow: tuple[str, ...] = DEFAULT_ALLOW) -> dict:
     return {"permissions": {"allow": list(allow + _running_rite_rules())}}
 
 
-def write_settings(root: Path, allow: tuple[str, ...] = DEFAULT_ALLOW) -> Path:
+def write_settings(
+    root: Path,
+    manager: str,
+    allow: tuple[str, ...] = DEFAULT_ALLOW,
+    home: Path | None = None,
+) -> Path:
     """Write the settings file, overwriting whatever was there.
 
     ⚠ **Overwriting is the point.** A write-once-if-absent file would leave
@@ -293,8 +334,9 @@ def write_settings(root: Path, allow: tuple[str, ...] = DEFAULT_ALLOW) -> Path:
     defect `rite doctor` spends its life on. A user's own changes belong in
     `.claude/settings.json`, which this never touches.
     """
-    path = settings_path(root)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path = settings_path(root, manager, home)
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    _legacy_settings_path(root).unlink(missing_ok=True)
     # Written whole rather than merged: a partial write that still parses is
     # a settings file the engine will SILENTLY IGNORE under `-p` (measured:
     # `claude --help` says files that fail validation are ignored with no
@@ -382,7 +424,20 @@ def _leading_executable(command: str) -> str:
     return ""
 
 
-def refusal(command: str, root: Path) -> str:
+def named_settings_path(root: Path, manager: str) -> str:
+    """What to CALL the settings file in a message.
+
+    ⚠ Since the file moved out of `.rite/user/` it is per Manager, so a
+    caller without a Manager name cannot name the file. Naming one built from
+    an empty name would print a path that does not exist, which is worse than
+    describing it — so a nameless caller gets the description.
+    """
+    if not manager:
+        return "rite's own allowlist, in this Manager's credential directory"
+    return str(settings_path(root, manager))
+
+
+def refusal(command: str, root: Path, manager: str) -> str:
     """C21: what to tell a user when a command was not permitted.
 
     ⚠ **A refusal a user cannot act on is the same defect as a silent one.**
@@ -425,8 +480,8 @@ def refusal(command: str, root: Path) -> str:
         f'To permit it, add this line to the "allow" list in '
         f"{Path('.claude') / 'settings.json'} in this project:\n"
         f"    {line}\n"
-        f"rite's own list is at {settings_path(root)} and is rewritten every "
-        f"run, so edit the project file rather than that one."
+        f"rite's own list is at {named_settings_path(root, manager)} and is "
+        f"rewritten every run, so edit the project file rather than that one."
     )
 
 

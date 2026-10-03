@@ -377,13 +377,18 @@ def compose_policy(root: Path, manager: str, home: Path | None = None) -> dict:
 
     writable.append(manager_dir(root, manager))
     writable.append(engine_tmp(root, manager))
-    # ⚠ **`/tmp` AND `/var/tmp` ARE NOT GRANTED, WHICH DIVERGES FROM SEATBELT
-    # ON PURPOSE.** The seatbelt profile grants them and then denies the inbox
-    # AFTER, which wins because seatbelt takes the last match — measured: a
-    # project under `/tmp` on macOS still refuses another Manager's inbox.
-    # Landlock has no deny rule and unions its grants, so a wholesale `/tmp`
-    # grant cannot be carved and it OVERRODE the MM-2 enumeration entirely:
-    # measured, every inbox was writable for a project under `/tmp`.
+    # ⚠ **`/tmp` AND `/var/tmp` ARE NOT GRANTED.** They were, and a wholesale
+    # grant cannot be carved on Landlock, which has no deny rule and unions
+    # its grants: it OVERRODE the MM-2 enumeration entirely, and measured,
+    # every inbox was writable for a project under `/tmp`.
+    #
+    # ⚠ **This used to say it DIVERGES FROM SEATBELT on purpose, and it no
+    # longer does.** macOS granted both wholesale and denied the inbox after,
+    # which wins there because seatbelt takes the last match. SB8 removed the
+    # macOS grant too (`enclosure.compose`), for the reason that outlives the
+    # inbox: rite's own worktrees live under the temp root, so the grant
+    # handed one Manager another project's tree. The two platforms agree here
+    # now, and a claim of divergence would be the stale kind.
     #
     # So Linux is narrower than macOS here. The engine keeps its own writable
     # temp space — `engine_tmp` above, which `TMPDIR` points at — so a tool
@@ -635,11 +640,12 @@ def limitations() -> tuple[str, ...]:
         "tmux control socket is that shape, so the escape macOS closed by "
         "denying the socket's path is OPEN here. This is a known hole, not an "
         "unexamined one",
-        "/tmp and /var/tmp are NOT granted, unlike the macOS profile: "
-        "Landlock cannot carve a hole in a wholesale grant, and granting them "
-        "made every Manager's inbox writable for a project living under them. "
-        "A tool that hardcodes /tmp rather than honouring TMPDIR will fail "
-        "here where it works on macOS",
+        "/tmp and /var/tmp are NOT granted — and since SB8 macOS does not "
+        "grant its temp roots either, so this is no longer a difference "
+        "between the platforms. Landlock cannot carve a hole in a wholesale "
+        "grant, and granting them made every Manager's inbox writable for a "
+        "project living under them. A tool that hardcodes /tmp rather than "
+        "honouring TMPDIR will fail here",
         "the network is NOT confined: a Manager can reach anything this machine can",
         "a Manager can run `rite`, which does whatever you can do to this "
         "project — the boundary bounds the filesystem, not that",

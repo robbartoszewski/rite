@@ -28,7 +28,7 @@ from rite_ai.managers import (
     user_dir,
 )
 from rite_ai.managers.enclosure import engine_tmp, write_profile
-from rite_ai.managers.permissions import settings_path, write_settings
+from rite_ai.managers.permissions import _legacy_settings_path, write_settings
 
 
 @pytest.mark.parametrize("name", ["permissions", "Permissions", "PERMISSIONS"])
@@ -45,10 +45,16 @@ def test_ordinary_names_are_not_refused():
 
 
 def test_the_collision_was_real_before_this(tmp_path):
-    """What C30 measured: the two paths were one."""
+    """What C30 measured: the two paths were one.
+
+    ⚠ Against `_legacy_settings_path`, because the settings file has since
+    moved out of `.rite/user/` entirely (SB10). The refusal is kept: an
+    older build wrote it here, and a checkout that has not yet run a build
+    that removes it still has the file a Manager of that name would
+    collide with."""
     assert user_dir(tmp_path) / _per_manager_user_entries("permissions")[
         0
-    ] == settings_path(tmp_path)
+    ] == _legacy_settings_path(tmp_path)
 
 
 def test_the_record_path_refuses_it_too(tmp_path):
@@ -75,7 +81,7 @@ def test_every_fixed_entry_rite_writes_into_user_dir_is_registered(tmp_path):
     fails on any entry that is neither that Manager's nor registered."""
     root = tmp_path
     (root / ".rite").mkdir()
-    write_settings(root)
+    write_settings(root, "lead")
     write_profile(root, "lead", home=tmp_path / "home")
     engine_tmp(root, "lead").mkdir(parents=True, exist_ok=True)
     record_instance(root, ManagerInstance(name="lead", pid=1))

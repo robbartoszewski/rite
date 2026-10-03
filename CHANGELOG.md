@@ -2,6 +2,48 @@
 
 ## Unreleased
 
+### A sandboxed Manager can no longer read your clipboard
+
+A Manager's sandbox let it reach any macOS system service, and one of those
+hands out the clipboard: `pbpaste` inside the boundary printed whatever you
+had last copied. A clipboard is where a token or a password sits for the
+seconds between copying it and pasting it. The boundary now names the system
+services a Manager may reach — one, today — and refuses the rest, and the
+list rite prints of what the sandbox does and does not do says so.
+
+Nothing a Manager does changes: every command one runs was measured to exit
+exactly as it did before. Checked at the same time, and worth saying because
+it was the thing this work set out to check: your **keychain** was already
+unreachable from a Manager's sandbox, and stays so.
+
+### A sandboxed Manager can no longer reach /tmp
+
+A Manager's sandbox granted the shared temporary directories whole. rite's
+own worktrees and scratch directories live there, so a Manager could read and
+write another project's files — the one thing the boundary exists to prevent.
+The list rite prints of what the sandbox does and does not do had been saying
+so; it now says the opposite, because they are no longer granted.
+
+Engines are unaffected: each Manager's engine already gets a temporary
+directory of its own inside the boundary, and `TMPDIR` points at it. What
+breaks is a tool that writes to `/tmp` by name instead of honouring `TMPDIR`
+— it now fails on macOS as it already did on Linux, with a permission error
+rather than silently reaching outside.
+
+### A Manager can no longer rewrite the list of what it is allowed to do
+
+rite writes the permission allowlist it hands the engine into a file, and
+that file sat inside the project directory — which a Manager's sandbox grants
+it write access to. So the list of what a Manager may do was writable by the
+Manager it applied to, and by any other Manager sharing the project. It now
+lives beside the sandbox profile, in a per-Manager directory that no sandbox
+can write.
+
+rite rewrites the file before every run, so this was not a setting that could
+be planted and left; it was a window between rite writing the file and the
+engine reading it. The same window was measured on the sandbox profile itself
+and closed the same way.
+
 ### A Manager recovers a stalled Worker by itself (SCRUM-38)
 
 A Worker whose session runs out or dies used to leave the Manager only able to

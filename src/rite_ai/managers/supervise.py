@@ -71,8 +71,8 @@ from rite_ai.managers.permissions import (
     allowed,
     announcement,
     launch_arguments,
+    named_settings_path,
     refusal,
-    settings_path,
     write_settings,
 )
 from rite_ai.managers.progress import Footprint, footprint
@@ -686,14 +686,15 @@ def _say_refusals(
                     else "either the engine refuses this form of the command "
                     "despite the rule, or "
                 )
-                + f"it did not apply {settings_path(root)} (under `-p` a "
+                + f"it did not apply {named_settings_path(root, manager)} "
+                "(under `-p` a "
                 "settings file that fails validation is ignored without a "
                 "message). If other allowlisted commands ran in that session, "
                 "it is the first. Otherwise check that file parses, and "
                 f"`permissions.deny` in {Path('.claude') / 'settings.json'}."
             )
         else:
-            say(refusal(command, root))
+            say(refusal(command, root, manager))
     if manager:
         told: set[str] = set()
         for denial in found:
@@ -1684,7 +1685,7 @@ def _supervise(
         permission = ""
         say(cursor_login.announcement(manager))
     else:
-        permission = launch_arguments(write_settings(root))
+        permission = launch_arguments(write_settings(root, manager))
         say(announcement(manager))
 
     # ⚠ **Said every run, and deliberately not folded into the permission
