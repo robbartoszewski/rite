@@ -26,6 +26,14 @@ that looks right and then does nothing: a local model needs a context window
 (its server's default is often 4,096 tokens, which silently cuts the start of
 every prompt), and `goose` is the only agent whose window rite can pin today.
 
+**A subtask no longer loses a try when the machine was not ready.** rite counts
+how many times a subtask has been attempted, and it was counting runs where
+nothing ran at all: an endpoint that was down, a model that is not installed, a
+sandbox that had just been stopped, or another Worker holding one of the files.
+Those are now not attempts, so a subtask nobody has actually tried is not
+retired as a failing one. A run that genuinely timed out still counts — it had
+twenty minutes and may have changed something.
+
 If you give two local Workers different models, rite now tells you: they will
 evict each other from the graphics card for the whole run — roughly three
 times slower than two Workers sharing one model. It does not stop you, since
