@@ -9234,8 +9234,13 @@ def _local_tier_tickets(board, manager: str) -> tuple[list[str], str]:
         ident = getattr(ticket, "id", "")
         if not ident:
             continue
-        answer = refinement_status.status(board, ident)
-        if getattr(answer, "state", "") == refinement_status.REFINED:
+        # `Status.refined` rather than comparing the state here: the predicate
+        # owns what "refined" means, and there are five states (NOT REFINED,
+        # REFINED, STALE, CONFLICT, UNREADABLE) of which only one is work. A
+        # comparison written out here would be a second definition to keep in
+        # step, and STALE — a record that no longer matches its ticket — is
+        # exactly the one a looser test would let through.
+        if refinement_status.status(board, ident).refined:
             refined.append(ident)
     return refined, ""
 
