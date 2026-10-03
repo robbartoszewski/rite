@@ -109,7 +109,16 @@ class WatchdogResult:
     """Workers that finished and said so (`rite done`). NOT a fault, and
     never also in `stalled` — see `run_watchdog_check`."""
     handed_back_reasons: list[str] = field(default_factory=list)
-    """Exactly the entries of `reasons` that are about `handed_back`.
+    """The entries of `reasons` about a handback that needs nothing yet.
+
+    ⚠ **NOT every handback reason.** A handback past `NOT_INTEGRATED_AFTER`
+    is left out of this list on purpose, so the scheduler does NOT filter it
+    out of the tick: finished work nobody has taken up for half a day is a
+    standing condition somebody must act on, and it is treated exactly as a
+    stall is — said every cycle until it stops being true. The terminating
+    check caught the first version putting it in here, where the one reader
+    that would have carried it unattended subtracted it again, so the
+    escalation existed only for a hand-run `rite watchdog`.
 
     Carried rather than recomputed or matched by substring. The scheduler
     has to tell them apart from the rest to keep a standing condition out of
@@ -213,14 +222,16 @@ def run_watchdog_check(root: Path) -> WatchdogResult:
         # suppressed (the file existing is evidence the Worker reached the
         # step where it says it is done), and that is all that is claimed.
         if not h.done:
-            handback_reasons.append(
+            # Not added to `handback_reasons` either: a record nobody can
+            # parse is a fault, and the scheduler must carry it to whoever
+            # reads the log unattended rather than filtering it as routine.
+            reasons.append(
                 f"worker '{h.worker}' {h.describe()} — so rite cannot say "
                 "whether it finished. It is NOT being reported as stalled, "
                 "because the record exists; do not restart it on the "
                 "assumption it is hung, and do not treat this as nothing "
                 "having been said. Read the file, and look at its branch"
             )
-            reasons.append(handback_reasons[-1])
             continue
         waited = (
             f" It has been waiting {format_duration(h.age_seconds())} and "
@@ -228,13 +239,15 @@ def run_watchdog_check(root: Path) -> WatchdogResult:
             if h.not_integrated()
             else ""
         )
-        handback_reasons.append(
+        line = (
             f"worker '{h.worker}' {h.describe()} — it is FREE and NOT hung, "
             "so do NOT restart it and do not force-release its claims. Its "
             f"silence from here on is expected.{waited} Integrate the work, "
             "or give that worker the next ticket"
         )
-        reasons.append(handback_reasons[-1])
+        reasons.append(line)
+        if not h.not_integrated():
+            handback_reasons.append(line)
     for b in blockers:
         detail = b.payload.get("detail") or b.payload.get("reason") or ""
         reasons.append(f"{b.kind} in outbox" + (f": {detail}" if detail else ""))

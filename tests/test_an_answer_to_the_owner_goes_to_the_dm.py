@@ -445,3 +445,57 @@ class TestWhatRoundOneFound:
         send(root, "lead", OUTBOX, "yes, on a1b2c3d", kind=REPLY)
         listener.post_replies(call=slack)
         assert slack.in_thread(asked) == []
+
+
+class TestWhatTheTerminatingCheckFound:
+    def test_a_two_part_answer_does_not_watch_the_thread_twice(self, tmp_path):
+        """⚠ `remember` appended unconditionally, which was harmless while
+        every caller posted a fresh message — and stopped being harmless
+        when the Owner's own message became a root an answer is remembered
+        under, because a two-part answer remembers the same ts twice.
+
+        Measured by the terminating check: two roots for one message, the
+        Owner's follow-up relayed into the Manager's inbox TWICE as an
+        INSTRUCTION, and on restart the duplicate (whose `last` is reset to
+        the message ts) winning the `channel:ts` key in the saved state, so
+        the cursor rewinds and every earlier reply is re-delivered.
+        """
+        root, slack, clock = _project(tmp_path), Slack(), Clock(time.time())
+        listener = _listener(root, slack, clock)
+        asked = _owner_asks(slack, clock, "status?")
+        _heard(listener, slack, clock)
+        send(root, "lead", OUTBOX, "RT-14 merged", kind=REPLY)
+        send(root, "lead", OUTBOX, "RT-15 in review", kind=REPLY)
+        listener.post_replies(call=slack)
+
+        assert [r.ts for r in listener.roots].count(asked) == 1, [
+            r.ts for r in listener.roots
+        ]
+
+        slack.replies[("D1", asked)] = [
+            {"user": OWNER, "text": "then deploy it", "ts": f"{float(asked) + 1}"}
+        ]
+        heard = _heard(listener, slack, clock)
+        assert sum("> then deploy it" in m for m in heard) == 1, heard
+
+    def test_rite_reply_says_why_it_could_not_send(self, tmp_path, monkeypatch):
+        """The Manager's one channel to the person answered a refused write
+        with a `PermissionError` out of `mailbox.send`."""
+        from click.testing import CliRunner
+
+        from rite_ai.cli.main import cli
+
+        root = _project(tmp_path)
+        monkeypatch.setenv("RITE_PROJECT_ROOT", str(root))
+
+        def refuse(*args, **kwargs):
+            raise PermissionError(13, "Permission denied")
+
+        monkeypatch.setattr("rite_ai.managers.mailbox.send", refuse)
+        result = CliRunner().invoke(
+            cli, ["reply", "--manager", "lead", "-"], input="done\n"
+        )
+        assert result.exit_code == 1
+        assert "could not queue this reply" in result.output
+        assert "has NOT heard this" in result.output
+        assert "Traceback" not in result.output

@@ -618,6 +618,17 @@ def add_worker(
 
     worker_dir.mkdir(parents=True)
 
+    # ⚠ A handback left by a PREVIOUS Worker of this name is not this one's.
+    # `remove_worker` deliberately leaves `.rite/` bookkeeping behind (see
+    # its docstring on two mechanisms disagreeing about one directory), and
+    # the remedy the "predates `rite done`" warning prints is remove-then-add
+    # — so without this, the new Worker reads as already finished and its
+    # stall stays suppressed until its first successful start. Cleared where
+    # a fresh Worker is established, not where an old one is destroyed.
+    from rite_ai import handback
+
+    handback.clear(root, name)
+
     cloned: list[str] = []
     failed: list[tuple[str, str]] = []
     for m in modules:

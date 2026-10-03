@@ -55,8 +55,22 @@ TOLD = "told"
 
 
 def _entries(data: dict) -> dict:
+    """The worker entries, from either shape this ledger has had.
+
+    The first version kept them at the top level beside `_last_problem`;
+    they moved under `TOLD` when that collision turned out to be real. A
+    ledger in the old shape is read rather than ignored — ignoring it told
+    every outstanding completion to the Manager a second time on upgrade,
+    which the terminating check measured — and it is rewritten in the new
+    shape by the next `_store`, so the old keys do not accumulate."""
     told = data.get(TOLD)
-    return told if isinstance(told, dict) else {}
+    if isinstance(told, dict):
+        return dict(told)
+    return {
+        k: v
+        for k, v in data.items()
+        if k != LAST_PROBLEM and k != TOLD and isinstance(v, str)
+    }
 
 
 def _identity(record) -> str:
@@ -215,11 +229,17 @@ def _mine(project, manager: str, every_worker: bool) -> list[str]:
     defect.
     """
     named = [w.name for w in project.workers if getattr(w, "manager", "") == manager]
-    if named:
-        return named
     if not every_worker:
-        return []
-    return [w.name for w in project.workers if not getattr(w, "manager", "")]
+        return named
+    # ⚠ **ADDED, not an alternative to `named`.** The first repair returned
+    # early when this Manager had Workers of its own, so on a project where
+    # the routing owner owns any Worker, an unassigned one reached NOBODY —
+    # which is the very case this function was rewritten to close. Measured
+    # on two Workers (`lead` owns w1, w2 names no Manager): w2's handback was
+    # told to neither Manager while the watchdog went on suppressing its
+    # stall. Told twice is recoverable; told to nobody is the defect.
+    unassigned = [w.name for w in project.workers if not getattr(w, "manager", "")]
+    return named + unassigned
 
 
 def _surface(root: Path, manager: str, say, *, every_worker: bool = True) -> int:
@@ -262,9 +282,13 @@ def _surface(root: Path, manager: str, say, *, every_worker: bool = True) -> int
                 ledger[LAST_PROBLEM] = line
             continue
         told[worker] = _identity(record)
+        # A problem that has stopped standing is not a record worth keeping:
+        # left set, a failure that recurred after recovering was said only
+        # the first time, for the life of the ledger.
+        ledger.pop(LAST_PROBLEM, None)
         say(f"Worker {worker!r} {record.describe()}: told {manager!r}")
         count += 1
-    if gone or count or ledger.get(LAST_PROBLEM):
+    if gone or count or ledger.get(LAST_PROBLEM) or TOLD not in ledger:
         ledger[TOLD] = told
         failed = _store(path, ledger)
         if failed:

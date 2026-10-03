@@ -13,11 +13,12 @@ instruction and a Worker must not write one
 ⚠ **Which command produced which error was measured, after review caught
 this paragraph asserting it.** `rite message <manager>` catches the
 `PermissionError` and prints a refusal that explains itself (exit 1, no
-traceback). `rite reply --manager` does NOT catch it and raises
+traceback). `rite reply --manager` did NOT catch it, and raised
 `PermissionError: [Errno 13] Permission denied` out of `mailbox.send` — a
 traceback, which is the shape the dogfood reported, and an agent handed a
-traceback routes around it. Both are now fixed in the only way that helps:
-there is a command for the thing the Worker was told to do.
+traceback routes around it. It catches it now (see `rite reply`), said
+rather than raised. Neither of those is the fix for THIS, though: the fix is
+that there is a command for the thing the Worker was told to do.
 
 So the Worker fell back to writing a file nobody reads
 (`rw/files/<TICKET>-handback.md`), the Manager never learned it had
@@ -90,7 +91,12 @@ Two things at once, and it is worth saying which is which. It is useful on
 its own: finished work waiting half a day is a real condition, and before
 this nothing said so, because a handback is permanent until the Worker is
 started again. It also bounds the forgery below — a handback is suppression
-of a stall, and an unbounded suppression is one nothing ever revisits.
+of a stall, and an unbounded suppression is one nothing ever revisits. ⚠ That
+second claim is only true because the escalated reason is deliberately NOT
+filtered out of the scheduler's tick (`watchdog.handed_back_reasons`): the
+terminating check found the first version putting it there, where the one
+reader that carries anything unattended subtracted it again, so the bound
+existed only for somebody running `rite watchdog` by hand.
 
 It does NOT reintroduce the ambiguity the permanence removes: past this age
 the Worker is still reported as handed back and still not as stalled. A
@@ -132,6 +138,28 @@ def _checked_field(value: str, what: str) -> str:
                 "your Manager is sent"
             )
     return value
+
+
+def _flattened(value: object) -> str:
+    """A one-line field as READ, whatever is on disk.
+
+    ⚠ **HERE, not at a use site, and the terminating check is why.** `write`
+    refuses a newline (`_checked_field`), which covers every handback `rite
+    done` makes — and covers nothing written by hand into
+    `.rite/handback/<worker>.json`, which every Worker's sandbox can do. The
+    first repair flattened these in the one reader review had demonstrated,
+    the Manager's inbox note, and left `Handback.describe()` — "the sentence
+    every view prints about this handback" — interpolating them raw. Measured
+    on that version: a hand-written `branch` carrying a newline and a
+    bracketed line made `rite watchdog` and `rite status` print what looks
+    like rite's own note, which is the Manager's instruction stream.
+
+    Fixing the formatter would have left the next formatter, so the value is
+    safe from the moment it is read. `summary` is not flattened because every
+    reader quotes it `> ` per line, which is the other half of the same rule
+    (`slack._quoted`).
+    """
+    return " ".join(str(value or "").split())
 
 
 @dataclass(frozen=True)
@@ -265,8 +293,8 @@ def read(root: Path, worker: str) -> Handback | None:
         )
     return Handback(
         worker=worker,
-        ticket=str(data.get("ticket") or ""),
-        branch=str(data.get("branch") or ""),
+        ticket=_flattened(data.get("ticket")),
+        branch=_flattened(data.get("branch")),
         summary=str(data.get("summary") or ""),
         timestamp=float(stamp),
     )

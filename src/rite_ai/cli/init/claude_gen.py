@@ -564,8 +564,10 @@ keep waking a human about it (SPEC.md §9.8).
 ## A Worker that has handed back has NOT stalled
 
 A Worker signals that it has finished by running `rite done`, which is the
-only way it can tell you: a Worker cannot write your inbox, and from inside
-a sandbox the attempt is refused outright. `rite status` and `rite watchdog`
+only way it can tell you it has finished: a Worker cannot write your inbox,
+and from inside a sandbox the attempt is refused outright. (What it is
+stuck ON reaches you by another route — `rite handover write --blocker`,
+which the watchdog reports as BLOCKED.) `rite status` and `rite watchdog`
 then report it as **handed back**, not stalled, and say not to restart it.
 
 ⚠ **Do not restart a Worker that has handed back, and do not force-release

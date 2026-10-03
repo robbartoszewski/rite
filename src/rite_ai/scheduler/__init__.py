@@ -149,10 +149,19 @@ def _write_last_worker_count(state_path: Path, count: int) -> None:
 
 
 STALL_KEY_PREFIX = "stall:"
-HANDBACK_KEY_PREFIX = "handback:"
-"""A handed-back worker's standing record. Its own prefix rather than
-`stall:`, because the two are different conditions and a reader filtering
-the outbox for stalls must not find completions in it."""
+# ⚠ **THERE IS NO HANDBACK BLOCKER, and the terminating check is why.**
+# A standing outbox record looked right by analogy with `stall:` — and it
+# wrote kind `"blocker"`, which is in `watchdog.ATTENTION_KINDS`, so the next
+# check read it back as a SECOND reason about the same Worker and `rite
+# watchdog` exited 1 ("something may be WRONG") instead of 2. Measured on the
+# real CLI: exit 2 before the first tick, exit 1 after it, which is the steady
+# state at a 5-minute cadence — and exit 1 is the reading the dogfood Manager
+# acted on by restarting a finished Worker.
+#
+# It was also redundant. `.rite/handback/<worker>.json` IS the durable
+# standing record; the outbox held a copy of it whose only effect was to be
+# double-counted. What the tick needed was not a second record but to stop
+# re-saying the first one, which is what the reason filter below does.
 
 # The shape this module wrote before blockers carried a key. Recognised
 # so an upgrade can retract the pile a running scheduler already made.
@@ -206,50 +215,12 @@ def _stall_records(result: WatchdogResult) -> list[tuple[str, str]]:
     return records
 
 
-def _handback_records(result: WatchdogResult) -> list[tuple[str, str]]:
-    """One `(key, detail)` per handed-back worker, for the outbox.
-
-    ⚠ **A handback is a STANDING condition, and that is why it is here.**
-    The first version left it out, and the result was measured: a handback
-    stands until the Worker is next started, which can be days, so the
-    reason flowed to the tick's message list on every tick — at a 5-minute
-    cadence, hundreds of identical lines in `scheduler.log` over a weekend,
-    and a project that never reports a quiet cycle again. That is the
-    failure `_stall_records` above exists to stop, reached by a different
-    route: not in `stalled`, so not reconciled.
-
-    The detail names WHEN the handback was recorded, never how long ago —
-    the same rule and for the same reason: a key that moves is a key the
-    dedup cannot match.
-    """
-    records = []
-    for h in result.handed_back:
-        ticket_note = f" (ticket {h.ticket})" if h.ticket else ""
-        if not h.done:
-            said = "handed back, record UNREADABLE"
-        else:
-            when = datetime.fromtimestamp(h.timestamp, tz=UTC)
-            said = f"handed back, recorded {when.isoformat(timespec='seconds')}"
-        records.append(
-            (
-                f"{HANDBACK_KEY_PREFIX}{h.worker}",
-                f"watchdog: worker '{h.worker}' {said}{ticket_note} — "
-                "ready to integrate; do NOT restart it",
-            )
-        )
-    return records
-
-
 def _stall_key_of(msg) -> str | None:
-    """The standing worker condition this pending blocker records, or None.
-
-    Both prefixes, because `_reconcile_stall_blockers` is what keeps the
-    outbox matching reality and a handback that was reconciled in by one
-    name must be reconciled out by the same one."""
+    """The stall this pending blocker records, or None if it is not one."""
     if msg.kind != "blocker":
         return None
     key = msg.payload.get("key") or ""
-    if key.startswith(STALL_KEY_PREFIX) or key.startswith(HANDBACK_KEY_PREFIX):
+    if key.startswith(STALL_KEY_PREFIX):
         return key
     match = _LEGACY_STALL_RE.match(msg.payload.get("detail") or "")
     return f"{STALL_KEY_PREFIX}{match.group(1)}" if match else None
@@ -381,8 +352,7 @@ def _run_tick_locked(root: Path) -> TickResult:
         # that does not move, which the elapsed-seconds detail did; see
         # `_stall_records`.
         standing, retracted = _reconcile_stall_blockers(
-            root,
-            _stall_records(watchdog_result) + _handback_records(watchdog_result),
+            root, _stall_records(watchdog_result)
         )
         # The watchdog reads the outbox back, so every blocker this tick
         # holds comes round as a reason of its own. Report each stall
@@ -395,14 +365,19 @@ def _run_tick_locked(root: Path) -> TickResult:
         # ⚠ **A handback is reconciled into the outbox above and then kept
         # OUT of this tick's lines, which is the opposite of how a stall is
         # treated, deliberately.** A stall is a fault nobody has fixed, so
-        # saying it again every cycle is the point. A handback is finished
-        # work: the Manager is told through its own inbox
-        # (`managers.worker_handbacks`), the standing record is in the
-        # outbox, and it lasts until the Worker is started again — which can
-        # be days. Reported per tick it was measured at hundreds of
-        # identical log lines over a weekend and a project that never
-        # reports a quiet cycle again, which is how a log teaches its reader
-        # to skip it.
+        # saying it again every cycle is the point. A fresh handback is
+        # finished work and needs nothing yet: the Manager is told through
+        # its own inbox (`managers.worker_handbacks`), the durable record is
+        # `.rite/handback/<worker>.json`, and it stands until the Worker is
+        # started again — which can be days. Said per tick, at a 5-minute
+        # cadence, that is ~576 identical lines over a weekend (arithmetic,
+        # not an observation) and a project that never reports a quiet cycle
+        # again, which is how a log teaches its reader to skip it.
+        #
+        # ⚠ `handed_back_reasons` holds only the ones needing nothing. A
+        # handback past `NOT_INTEGRATED_AFTER`, and one whose record cannot
+        # be read, are both absent from it on purpose and are carried here
+        # exactly as a stall is.
         echoes.update(watchdog_result.handed_back_reasons)
         reasons = [r for r in watchdog_result.reasons if r not in echoes]
         messages.extend(f"watchdog: {reason}" for reason in reasons)

@@ -880,8 +880,21 @@ class Listener:
 
     def remember(self, channel: str, ts: str, label: str) -> None:
         """Read the thread under a message rite posted. Newest kept; the
-        oldest beyond `THREADS_MAX` are dropped."""
+        oldest beyond `THREADS_MAX` are dropped.
+
+        ⚠ **One `Root` per `(channel, ts)`, the guard `watch` already had.**
+        This appended unconditionally, which was harmless while every caller
+        posted a fresh message — and stopped being harmless when the Owner's
+        own message became a root an ANSWER is remembered under, because a
+        two-part answer remembers the same ts twice. Measured by the
+        terminating check: two roots for one message, the Owner's follow-up
+        relayed into the Manager's inbox TWICE as an INSTRUCTION, and on
+        restart the duplicate's `last` (reset to the message ts) winning the
+        `channel:ts` key in `_save`, rewinding the cursor so every earlier
+        reply in that thread is re-delivered as a fresh instruction."""
         if not channel or not ts:
+            return
+        if any(r.channel == channel and r.ts == ts for r in self.roots):
             return
         self.roots.append(Root(channel, ts, label, last=ts))
         self._bound_roots()

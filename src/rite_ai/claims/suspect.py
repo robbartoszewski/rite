@@ -81,6 +81,17 @@ class Suspect:
     """Why the holder's heartbeat could not be read, when it could not be.
     Set means this row is a report of UNCERTAINTY rather than of abandonment,
     and the two must not read alike."""
+    handback_unreadable: bool = False
+    """A handback record exists for the holder and could not be read.
+
+    ⚠ **A THIRD state, added by the terminating check.** The first repair
+    gated on a READABLE record, so for a corrupt
+    `.rite/handback/<worker>.json` this module went back to inferring
+    abandonment from silence — and printed the pre-written force-release for
+    a claim that is guarding unlanded work, while the watchdog was saying
+    "do not restart it on the assumption it is hung" about the same Worker.
+    The same shape `unreadable` already has for a heartbeat: cannot tell is
+    its own answer, and its remedy fixes the file."""
     handed_back: bool = False
     """The holder finished and said so (`rite done`), and is holding this
     claim ON PURPOSE until the work lands.
@@ -100,6 +111,13 @@ class Suspect:
         return self.silent_for == float("inf")
 
     def describe(self) -> str:
+        if self.handback_unreadable:
+            return (
+                f"{', '.join(self.paths)} held by {self.worker} for "
+                f"{_age(self.claim_age)} — it wrote a handback rite CANNOT "
+                "READ, so whether it finished cannot be told. Do not release "
+                "this on the assumption the holder died"
+            )
         if self.handed_back:
             return (
                 f"{', '.join(self.paths)} held by {self.worker} for "
@@ -130,6 +148,11 @@ class Suspect:
 
     @property
     def remedy(self) -> str:
+        if self.handback_unreadable:
+            return (
+                f"read .rite/handback/{self.worker}.json and repair or remove "
+                "it, then look again"
+            )
         if self.handed_back:
             # ⚠ NEVER a force-release. Releasing a finished Worker's claim
             # lets another Worker change the paths its work is sitting on,
@@ -199,15 +222,20 @@ def suspect_claims(
         # first and this second would be deciding abandonment from silence
         # the Worker already explained.
         done = read_handback(root, claim.worker)
-        if done is not None and done.done:
+        if done is not None:
             found.append(
                 Suspect(
                     worker=claim.worker,
                     paths=tuple(claim.paths),
                     claim_age=age,
-                    silent_for=0.0,
+                    # ⚠ `inf`, as `unreadable` uses, NOT a fabricated 0.0.
+                    # The terminating check called the 0.0 a field that lies:
+                    # nobody measured this holder's silence, because its own
+                    # record is what decided the row.
+                    silent_for=float("inf"),
                     registered=claim.worker in known,
-                    handed_back=True,
+                    handed_back=done.done,
+                    handback_unreadable=not done.done,
                 )
             )
             continue

@@ -6178,10 +6178,13 @@ def done(
     """Hand a Worker's finished work back to its Manager.
 
     Run this when a ticket is done. It is the only way a Worker can tell
-    its Manager anything: a Manager's mailbox is outside the project and a
-    Worker's sandbox cannot write it, so `rite message` and `rite reply`
-    are both refused from in there. This records the completion where the
-    supervisor reads it on the host, and the supervisor passes it on.
+    its Manager it has FINISHED: a Manager's inbox is outside the project
+    and a Worker's sandbox cannot write it, so `rite message` is refused
+    from in there. This records the completion where the supervisor reads it
+    on the host, and the supervisor passes it on.
+
+    It is not the only channel out. `rite handover write --blocker` records
+    something you are stuck on, which the watchdog reports as BLOCKED.
 
     It also stops the Worker reading as stalled. Once this is recorded, the
     Worker's silence is expected rather than a question: `rite status` and
@@ -8620,13 +8623,22 @@ def sandbox_status(worker: str) -> None:
             f"  read it in full: {where}\n"
             f"  to answer: {answer}"
         )
+    elif handed is not None and not handed.done:
+        # ⚠ The unreadable case says only what was established, exactly as
+        # `rite watchdog` does. The terminating check found this branch
+        # reproducing, in the same commit that fixed it, the defect of
+        # appending "free", "not hung" and "Integrate the work" to a record
+        # rite had just said it could not read.
+        click.echo(
+            f"{handed.describe()} (sandbox {seen.status}) — so whether it "
+            "finished cannot be told. Do NOT restart it on the assumption "
+            "it is hung; read the file and look at its branch."
+        )
     elif handed is not None:
         # ⚠ NOT "idle" for a Worker that has handed back either, for the
         # same reason as the question above: yoloAI's word is about the
         # agent process, and an agent that finished and exited is idle only
-        # in that sense. This is the command the handback note and `rite
-        # status` both tell the reader to run, so it is the one place that
-        # must not contradict them.
+        # in that sense.
         click.echo(
             f"{handed.describe()} (sandbox {seen.status}) — free, and not "
             "hung: do NOT restart it. Integrate the work, or give it the "
@@ -10684,7 +10696,7 @@ def reply(text: str, manager: str) -> None:
     try:
         send(root, speaking, OUTBOX, text, kind=REPLY)
     except OSError as e:
-        # ⚠ Said, not raised. `rite message` has caught this since 0.7.0a6
+        # ⚠ Said, not raised. `rite message` has caught this since v0.6.0
         # and this did not, so the one channel a Manager has to the person
         # answered a refusal with a traceback out of `mailbox.send` — and an
         # agent handed a traceback routes around it rather than reporting

@@ -639,14 +639,15 @@ work lands. `rite loop` counted that held claim as a dead holder and could
 stop with DEADLOCKED on a wall that clears the moment somebody integrates.
 
 A handback that has stood for half a day says so — finished work nobody has
-taken up is worth hearing about once, and `rite scheduler-tick` records it
-as one standing condition rather than repeating it every cycle.
+taken up is worth hearing about, and that one escalates to the scheduler's
+log the way a stall does, while a fresh handback stays out of it: the
+Manager has already been told in its own inbox.
 
 ### `rite reply` says why it could not send, instead of a traceback
 
 The one channel a Manager has to the person answered a refused write with a
 `PermissionError` out of its own internals. `rite message` has printed a
-sentence for this since 0.7.0a6; this now does too, and says that nothing
+sentence for this since v0.6.0; this now does too, and says that nothing
 was sent — so a Manager cannot go on as though the person had heard it.
 
 ### A Manager's answer to the Owner goes to the DM, not the day's notes
