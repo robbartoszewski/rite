@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.82 · **Date:** 2026-10-03
+**Version:** 0.24.83 · **Date:** 2026-10-03
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -4949,8 +4949,22 @@ reissue a credential that was fine. One probe serves both, so they cannot
 drift.
 
 **And doctor may post, where setup may not (0.24.72).** Under `--network`,
-doctor posts one message to the broadcast channel: whether a channel delivers
-is not answerable by configuration, and the person running doctor asked.
+doctor posts one message to the STATUS channel (the broadcast channel until
+0.24.83): whether a channel delivers is not answerable by configuration, and
+the person running doctor asked. ⚠ **Without `--network` doctor posts
+nothing, anywhere (RS3, 0.24.83).** `slack.probe` used to post "rite doctor:
+checking that rite can reach this conversation." to the Owner's DM and the
+broadcast channel on every run, which Robert called a test artefact in a
+production conversation. It now reads the app's scopes from the
+`x-oauth-scopes` header of `auth.test` (documented by Slack, not measured
+here; `_call` keeps the header under its own name), reads the DM and the
+broadcast channel under the ids the Owner's relay remembered
+(`slack.remembered_targets`, READ only, since a running `rite start` owns
+that file), or opens the DM with `conversations.open` where `im:write`
+allows. Whatever it cannot settle without a post is "not checked", said and
+not counted (S28): the scopes when Slack did not report them, both
+conversations before the first `rite start`, and the status channel, which is
+output only.
 `rite credential set slack` never posts (§10.5) — someone setting rite up is
 not announcing it, and a setup command that posts spams a workspace every time
 it is re-run.
@@ -8396,6 +8410,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.83 — `rite doctor` checks Slack without posting (RS3, re-ported).** §9.8's doctor-may-post paragraph. A plain `rite doctor` posts nothing: `slack.probe` reads the scopes from the `auth.test` header, reads the DM and the broadcast channel under the relay's remembered ids (or opens the DM with `im:write`), and reports what it cannot settle without a post as "not checked" (`Probe.ok` is None), said and never counted. `--network` posts its one delivery line to the status channel instead of the broadcast channel. RS3 was first built on an RS1 that was later redone (f2b4b77, archived); this is a re-port onto the redone RS1's `known` state, adapted to S28 (RS3's original counted unreadable scopes as a problem and posted a check line to the status channel on every run). Tests: `tests/test_doctor_checks_slack_without_posting.py`. The headline test, run against main before this change, fails on `chat.postMessage` to the Owner's user id and to `#all-rite`; seven mutations (posting to the DM restored, unreported scopes passed, not-checked counted, the remembered ids dropped, another Owner's DM used, `--network` back to the broadcast channel, `_call` dropping the header) each go red.
 
 **Changes in 0.24.82 — rite acknowledges what it picks up, and links what it refers back to (SCRUM-35, SCRUM-47).** New §9.16.5a. 👀 on each addressed message the relay picks up (needs `reactions:write`, said once when missing; the guide's scope list and `DEDICATED_APP` now name it). A question id rite already posted becomes a Slack permalink where a later post names it; the outbox keeps the bare id. The stopped summary and the undeliverable-answer notice name the question id. Tests: `tests/test_slack_acknowledges_and_links_back.py`; four controls (the reaction removed, the missing-scope guard removed, the linking removed, the own-header skip removed) each go red. Folded in from the SCRUM-22 review: the "message from before the refusal" test now sends the same text, so it fails only on ordering, and a near-identical retry is pinned as still told.
 

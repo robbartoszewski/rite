@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### `rite doctor` no longer posts in your Slack DM (RS3)
+
+**`rite doctor` checks Slack without posting anything.** It used to put
+"rite doctor: checking that rite can reach this conversation." in your DM and
+the broadcast channel every time it ran. Now it reads the app's scopes from
+what Slack reports, and reads your DM and the broadcast channel under the ids
+rite learned at its first `rite start`. Before that first start it says "not
+checked" for them instead of posting to find out, and that is not counted as
+a problem. `rite doctor --network`, which asks for a real delivery, now posts
+its one line to the status channel rather than the broadcast channel.
+
 ### A Manager recovers a stalled Worker by itself (SCRUM-38)
 
 A Worker whose session runs out or dies used to leave the Manager only able to
