@@ -93,7 +93,7 @@ def project(tmp_path, monkeypatch):
 def _written_allow(root: Path) -> tuple[str, ...]:
     """The allowlist as rite WROTE it for this run, read back from the file
     the engine is given, not the constant it was built from."""
-    document = json.loads(write_settings(root).read_text())
+    document = json.loads(write_settings(root, "lead").read_text())
     return tuple(document["permissions"]["allow"])
 
 
@@ -213,7 +213,7 @@ class TestTheReportSaysWhatHappened:
 
     def test_control_any_other_refusal_still_names_its_rule(self, tmp_path):
         """The new branch must not swallow ordinary refusals."""
-        said = refusal("curl https://example.com", tmp_path)
+        said = refusal("curl https://example.com", tmp_path, "lead")
         assert '"Bash(curl:*)"' in said
 
     @pytest.mark.parametrize(

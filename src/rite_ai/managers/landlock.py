@@ -431,6 +431,20 @@ def compose_policy(root: Path, manager: str, home: Path | None = None) -> dict:
         if one.is_file() and not one.is_symlink():
             readable.append(one)
 
+    # rite's own allowlist, read-only by exact path (SB10). The engine reads it
+    # from `--settings` INSIDE the boundary — the same child-read the seatbelt
+    # profile grants — so without this a Linux Manager starts with its allowlist
+    # silently ignored, which looks like a Manager that does nothing. The move
+    # took it out of the Manager-WRITABLE `.rite/user/`, not out of the engine's
+    # reach: no writable grant names it, and `boundary/` is not granted as a
+    # tree, so the Manager still cannot write it. `write_settings` runs before
+    # the ruleset is built (as `claude_login.prepare` does), so the file exists.
+    from rite_ai.managers.permissions import settings_path as _settings_path
+
+    allowlist_file = _settings_path(root, manager, where)
+    if allowlist_file.is_file() and not allowlist_file.is_symlink():
+        readable.append(allowlist_file)
+
     if claude_dir.is_dir() and not claude_dir.is_symlink():
         # ⚠ **GRANTED AS A TREE, and the login is therefore writable here
         # although seatbelt denies it.** Measured on Ubuntu 2026-09-26: with

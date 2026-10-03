@@ -824,6 +824,7 @@ class TestTheClipboardTheUnfilteredRuleHandedOver:
             for profile in (shipped, unfiltered)
         )
 
+    @on_macos
     def test_pbpaste_is_refused_and_was_not_before(self, project):
         """⚠ **stdout is never asserted on and never reported.** This runs
         on the operator's real machine, and the whole point of the finding
@@ -850,6 +851,7 @@ class TestTheClipboardTheUnfilteredRuleHandedOver:
             "would mean the class had been granted again somewhere above"
         )
 
+    @on_macos
     def test_what_the_narrowing_cost_a_manager(self, project):
         """The one name that came back, pinned to the behaviour that is its
         whole reason: without it `confstr(_CS_DARWIN_USER_TEMP_DIR)` fails
@@ -905,6 +907,7 @@ class TestTheTempRootTheProfileUsedToGrant:
         finally:
             shutil.rmtree(other, ignore_errors=True)
 
+    @on_macos
     def test_another_project_under_the_temp_root_is_unreachable(
         self, project, another_project_under_tmp
     ):
@@ -919,12 +922,14 @@ class TestTheTempRootTheProfileUsedToGrant:
             "the wholesale temp grant is back"
         )
 
+    @on_macos
     def test_it_cannot_write_there_either(self, project, another_project_under_tmp):
         planted = another_project_under_tmp / "planted.txt"
         narrowed, with_the_grant = self._both(project, f"touch {planted}")
         assert with_the_grant == 0, "the control could not write there either"
         assert narrowed != 0, "a Manager can still write under /private/tmp"
 
+    @on_macos
     def test_the_engine_still_has_a_temp_directory_of_its_own(self, project):
         """What the grant was believed to be for. Goose PANICS without
         somewhere to write, so removing the grant without this would take
@@ -969,6 +974,7 @@ class TestNoManagerCanRewriteItsOwnAllowlist:
         assert ".rite" not in path.parts
         assert project not in path.parents
 
+    @on_macos
     def test_a_manager_cannot_write_its_own_allowlist(self, project):
         profile = write_profile(project, "lead")
         path = write_settings(project, "lead")
@@ -976,6 +982,23 @@ class TestNoManagerCanRewriteItsOwnAllowlist:
 
         assert _under(profile, f"echo x > {shlex.quote(str(path))}") != 0
 
+    @on_macos
+    def test_the_engine_can_read_its_own_allowlist(self, project):
+        """🔴 The OTHER half, and the one whose absence shipped a break: the
+        engine reads `--settings` from INSIDE the profile (it is the
+        sandbox-exec CHILD), so the file must be READABLE there. The move took
+        it out of the Manager-WRITABLE `.rite/user/`, not out of the engine's
+        reach — without the read grant the engine starts with its allowlist
+        silently ignored (`-p` drops a file it cannot read) and the Manager
+        runs nothing while looking merely idle. Paired with the write test
+        above, this is the real invariant: read YES, write NO."""
+        profile = write_profile(project, "lead")
+        path = write_settings(project, "lead")
+        assert path.exists(), "the fixture was not written"
+
+        assert _under(profile, f"cat {shlex.quote(str(path))}") == 0
+
+    @on_macos
     def test_nor_can_a_peer_manager(self, project):
         """§5.4.8's P1 for the file that carries the permission decision."""
         write_profile(project, "lead")
@@ -984,6 +1007,7 @@ class TestNoManagerCanRewriteItsOwnAllowlist:
 
         assert _under(mine, f"echo x > {shlex.quote(str(theirs))}") != 0
 
+    @on_macos
     def test_the_place_it_used_to_live_is_still_writable(self, project):
         """⚠ **The control.** `.rite/user/` is inside the granted project
         tree and still is — so this test would have passed before the move

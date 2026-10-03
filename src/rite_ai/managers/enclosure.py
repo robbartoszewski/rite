@@ -546,6 +546,13 @@ def compose(
     """
     where = Path(home) if home is not None else Path(os.path.expanduser("~"))
     project = Path(root).resolve()
+    # rite's own allowlist: the engine reads it from `--settings` INSIDE this
+    # profile (it is the sandbox-exec CHILD), so the file MUST be readable here
+    # — SB10 moved it out of the Manager-WRITABLE `.rite/user/`, not out of the
+    # engine's reach. Read-only, and this literal is the only grant for it.
+    from rite_ai.managers.permissions import settings_path as _settings_path
+
+    allowlist_file = _settings_path(root, manager, home)
     sockets = tmux_tmpdir or os.environ.get("TMUX_TMPDIR") or "/private/tmp"
     # ⚠ The engine gets its OWN temp directory, and the system one is not
     # granted. Goose writes `.tmpXXXX` in the per-user temp root while
@@ -667,6 +674,22 @@ def compose(
         # `(allow network*)`, and this Manager's own agent and credential
         # directory are allowed back after it (C6/C26, `github_access`).
         *github_access.profile_lines(root, manager, home),
+        "",
+        "; ⚠ rite's own permission allowlist — READABLE here, writable nowhere",
+        "; this profile grants (SB10). The engine reads it from `--settings` as",
+        "; the sandbox-exec CHILD, so without this read grant the engine starts",
+        "; with its allowlist SILENTLY ignored (`-p` drops a file it cannot",
+        "; read) — a Manager that then runs nothing and looks merely idle. A",
+        "; read grant, not a write one: the Manager it bounds still cannot",
+        "; rewrite it, which is the whole of SB10. Exactly this file, not its",
+        "; directory, so the boundary `.sb` beside it stays unreadable too.",
+        "; ⚠ DEAD LAST, after every deny, BECAUSE the per-Manager credential",
+        "; directory can sit under a subpath another rule denies — the",
+        "; credential-store parent (`github_access.profile_lines`), when both",
+        "; share a root. Seatbelt takes the last match, so a read grant placed",
+        "; before those denies is silently overridden; here it wins. Write is",
+        "; not granted, so the deny it sits after still refuses every write.",
+        f"(allow file-read* (literal {_quote(str(allowlist_file))}))",
     ]
     return "\n".join(lines)
 
