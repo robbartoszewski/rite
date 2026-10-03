@@ -368,7 +368,14 @@ def _approach_for(root: Path, manager: str, subtask, spec_slice: str, placement=
     unit has nothing to gain from loading a second set of weights beside the one
     it is about to implement with.
     """
-    if placement is not None and placement.approach is not None:
+    if placement is not None:
+        # ⚠ A placed turn gets the PLACEMENT's Level 2 or none at all — never
+        # the Manager's, which runs on the host in the operator's project root.
+        # Falling through would have put the thing this just fixed back behind
+        # a `None`, and a placement built without an approach (a test's, or a
+        # future caller's) is exactly where that would happen silently.
+        if placement.approach is None:
+            return "", ""
         result = placement.approach(subtask, spec_slice)
         if result.ok:
             return result.steps, ""
