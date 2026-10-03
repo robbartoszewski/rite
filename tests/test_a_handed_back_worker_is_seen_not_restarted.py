@@ -896,3 +896,54 @@ class TestWhatTheTerminatingCheckFound:
         # Rewrite it in the pre-fix shape: entries at the top level.
         path.write_text(json.dumps(new[wh.TOLD]))
         assert wh.surface(root, OWNER, lambda s: None) == 0
+
+
+class TestAgainstTheRealRecoveryPath:
+    """⚠ **SCRUM-58's mechanism now EXISTS, and did not when this branch
+    started.** At the branch point nothing in rite restarted a Worker — the
+    dogfood restart was a Manager acting on `rite watchdog`'s wording, which
+    is what the stall-subtraction fixes. While this branch was in review,
+    `main` landed SCRUM-38: `managers.recovery` plans and performs a restart
+    unattended, `yoloai restart --resume`, at the Manager's cycle boundary.
+
+    That is the thing SCRUM-58 is about, so it is tested against it directly
+    rather than against the report a human reads. It is covered because
+    `recovery._watchdog_stalls` returns `run_watchdog_check(root).stalled`,
+    the list this branch subtracts handed-back Workers from — which is the
+    reason the register gives for subtracting from the LIST rather than
+    annotating the prose beside it, now with a third consumer proving it.
+    """
+
+    def test_a_handed_back_worker_is_not_planned_for_restart(self, project):
+        from rite_ai.managers import recovery
+
+        root = project
+        _stale_beat(root)
+        handback.write(root, WORKER, ticket="KAN-7")
+        assert recovery._watchdog_stalls(root) == [], (
+            "the unattended recovery would have restarted a Worker that had "
+            "already finished and said so"
+        )
+
+    def test_control_a_really_stalled_worker_still_is(self, project):
+        """Without this the test above passes on a recovery that can never
+        see any stall at all."""
+        from rite_ai.managers import recovery
+
+        root = project
+        _stale_beat(root)
+        assert [s.worker for s in recovery._watchdog_stalls(root)] == [WORKER]
+
+    def test_an_unreadable_handback_is_not_planned_for_restart_either(self, project):
+        root = project
+        _stale_beat(root)
+        path = root / ".rite" / "handback" / f"{WORKER}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{truncated")
+        assert recovery_stalls(root) == []
+
+
+def recovery_stalls(root):
+    from rite_ai.managers import recovery
+
+    return recovery._watchdog_stalls(root)

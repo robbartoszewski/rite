@@ -261,18 +261,26 @@ class TestWhoTells:
         _worker_question_watch(tmp_path, "lead")(lambda s: None)
         assert asked == ["lead"]
 
-    def test_nobody_tells_a_question_when_workers_are_not_sandboxed(
-        self, tmp_path, monkeypatch
-    ):
+    def test_no_question_is_raised_when_workers_are_not_sandboxed(self, tmp_path):
         """A question travels in yoloAI's exchange directory, so with no
-        sandbox there is nothing to look at. The watcher still exists, for
-        the handback half — see `test_a_handback_is_watched_without_a_sandbox`."""
-        from rite_ai.cli.main import _worker_question_watch
+        sandbox there is nothing to look at.
+
+        ⚠ **Asserted as the BEHAVIOUR, not as the call site.** This used to
+        check that the watcher did not call `surface` — and the gate lives
+        inside `surface` itself (`sandbox.enabled`), which is the right
+        place for it, so a test that mocks `surface` cannot see the gate and
+        was really pinning one particular wiring. It broke the moment the
+        wiring changed, while the behaviour it named had not. The watcher
+        still exists without a sandbox, for the handback half — see
+        `test_a_handback_is_watched_without_a_sandbox`.
+        """
+        from rite_ai.managers import worker_questions
 
         self._config(tmp_path, "sandbox:\n  enabled: false\n")
-        asked = self._raises(monkeypatch)
-        _worker_question_watch(tmp_path, "lead")(lambda s: None)
-        assert asked == []
+        said = []
+        assert worker_questions.surface(tmp_path, "lead", said.append) == 0
+        assert said == []
+        assert mailbox.read(tmp_path, "lead", mailbox.OUTBOX) == []
 
     def test_a_handback_is_watched_without_a_sandbox(self, tmp_path, monkeypatch):
         """An unsandboxed Worker finishes and falls silent exactly as a
