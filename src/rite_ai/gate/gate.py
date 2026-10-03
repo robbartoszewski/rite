@@ -137,6 +137,7 @@ def run_gate(
     root: Path,
     rev_range: str | None = None,
     config: ProjectConfig | None = None,
+    config_root: Path | None = None,
 ) -> GateReport:
     """Run the full publish gate, and never raise.
 
@@ -157,7 +158,9 @@ def run_gate(
     exceptions.
     """
     try:
-        return _run_gate(root, rev_range=rev_range, config=config)
+        return _run_gate(
+            root, rev_range=rev_range, config=config, config_root=config_root
+        )
     except Exception as exc:  # noqa: BLE001 - see the docstring
         return GateReport(
             errors=[
@@ -171,6 +174,7 @@ def _run_gate(
     root: Path,
     rev_range: str | None = None,
     config: ProjectConfig | None = None,
+    config_root: Path | None = None,
 ) -> GateReport:
     """The gate itself. Call `run_gate`, which cannot raise.
 
@@ -187,6 +191,14 @@ def _run_gate(
     built-in path rules — those are never optional (SPEC §11.3).
     """
     errors: list[str] = []
+
+    # WHERE THE RULES LIVE, which is not always the tree being scanned. A
+    # `rite prepare` project keeps its `.rite/` at the project root with the
+    # repositories beneath it, so resolving both through one path either
+    # scans a directory git cannot answer about (🔴 SCRUM-60) or silently
+    # drops every suppression the project declared. Defaults to `root`,
+    # which is every other layout and every existing caller.
+    config_root = root if config_root is None else config_root
 
     binary = gitleaks_runner.find_gitleaks_binary()
     if binary is None:
@@ -207,7 +219,7 @@ def _run_gate(
         )
 
     if config is None:
-        loaded = parse_config(root / ".rite" / "config.yaml")
+        loaded = parse_config(config_root / ".rite" / "config.yaml")
         if not isinstance(loaded, ProjectConfig):
             return GateReport(
                 errors=errors + [f"invalid .rite/config.yaml: {loaded.message}"]
@@ -221,7 +233,9 @@ def _run_gate(
         # with no mention of the first.
         return GateReport(errors=errors + [tracked.message])
 
-    user_config_path, ruleset_note, ruleset_error = _resolve_ruleset(root, config)
+    user_config_path, ruleset_note, ruleset_error = _resolve_ruleset(
+        config_root, config
+    )
     if ruleset_error:
         errors.append(ruleset_error)
 
@@ -245,7 +259,13 @@ def _run_gate(
 
     all_findings: list[Finding] = []
 
-    if binary is not None:
+    # `ruleset_error` and not just `binary`: the error says the gate "will
+    # not quietly fall back to gitleaks' default rules", and then running
+    # them anyway printed findings produced by exactly those rules under
+    # exactly that sentence. The exit code was never wrong — it is
+    # EXIT_ERROR either way — but a message contradicted by the output
+    # beneath it teaches people to skim both.
+    if binary is not None and not ruleset_error:
         # 1. gitleaks: maintained secret-detection ruleset over full git
         #    history (or the push range). Current + historical file content.
         # The SAME ref scope as rite's own two passes. Left to itself
@@ -326,7 +346,7 @@ def _run_gate(
         # this does not re-raise decisions someone already made; when it does
         # not parse, everything found is shown unfiltered rather than hidden.
         partial, suppressed, entries = _suppress_best_effort(
-            root, _dedupe(all_findings)
+            config_root, _dedupe(all_findings)
         )
         return GateReport(
             errors=errors,
@@ -341,7 +361,7 @@ def _run_gate(
 
     merged = _dedupe(all_findings)
 
-    suppression_path = root / DEFAULT_SUPPRESSION_PATH
+    suppression_path = config_root / DEFAULT_SUPPRESSION_PATH
     try:
         suppressions = supp_mod.parse(suppression_path)
     except Exception as exc:  # noqa: BLE001 - `parse` reads bytes it did not write
@@ -594,8 +614,14 @@ def _commit_clause(report: GateReport) -> str:
     the history scan worked is the obvious mistake, and it was made.
     """
     n = report.commits_scanned
-    if n is None:
-        return " (commit count unavailable)"
+    if report.errors or n is None:
+        # A count printed above "gate: ERROR" is the SCRUM-63 defect
+        # inverted: the number was honest about the commits git listed and
+        # said nothing about the scan that did not run over them. With
+        # gitleaks off PATH this read "scanned 2 tracked file(s) and 2
+        # commit(s) of history" directly above a report that had scanned
+        # for no secrets at all.
+        return ""
     if n == 0:
         return (
             " and 0 commit(s) — NO history was in range, so nothing below is "

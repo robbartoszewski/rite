@@ -26,7 +26,12 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from rite_ai.cli.main import PROJECT_ROOT_ENV, _gate_root, cli
+from rite_ai.cli.main import (
+    PROJECT_ROOT_ENV,
+    _gate_config_root,
+    _gate_root,
+    cli,
+)
 from rite_ai.gate import gitleaks_runner
 from tests.gate_helpers import commit_all, init_repo, write
 
@@ -192,13 +197,19 @@ def test_the_pre_push_hook_path_scans_the_module_repo_too(tmp_path, monkeypatch)
     assert result.exit_code == 2
 
 
-def test_a_project_root_inside_a_larger_repo_is_not_escalated(tmp_path, monkeypatch):
-    """The gate must not climb OUT of a project to the repository containing
-    it. Requiring the gate root to BE a repository toplevel did exactly that:
-    it scanned the outer tree and read the outer `.rite/`, so the project's
-    own suppressions vanished and every finding they covered came back
-    blocking. `git ls-files` works perfectly well in a subdirectory; being
-    inside a repository is the property that matters, not being its root.
+def test_a_project_root_inside_a_larger_repo_keeps_its_own_rules(tmp_path, monkeypatch):
+    """Scanned at the repository, ruled by the project — the two questions
+    that were one variable.
+
+    Scanning the project SUBDIRECTORY was the obvious way to keep its rules
+    and it is quietly wrong: `git ls-files` run there emits subdirectory-
+    relative paths while gitleaks and `files_touched_by` emit repository-
+    relative ones, so a finding in a file the push ADDS was demoted to
+    "already in the repository, NOT from this push — not blocking".
+
+    Scanning the repository and reading rules from the repository is wrong
+    the other way: the project's suppressions vanish, and each one comes
+    back as a blocking finding that already has a reason written for it.
     """
     outer = tmp_path / "big"
     outer.mkdir()
@@ -215,7 +226,46 @@ def test_a_project_root_inside_a_larger_repo_is_not_escalated(tmp_path, monkeypa
 
     monkeypatch.chdir(project)
     monkeypatch.delenv(PROJECT_ROOT_ENV, raising=False)
-    assert _gate_root().resolve() == project.resolve()
+    assert _gate_root().resolve() == outer.resolve()
+    assert _gate_config_root().resolve() == project.resolve()
+
+
+@requires_gitleaks
+def test_the_prepare_layout_uses_the_projects_own_suppressions(tmp_path, monkeypatch):
+    """The half of SCRUM-60 that is not about crashing. The gate scans the
+    module repository, and `.rite/gitleaksignore` lives at the PROJECT root
+    above it — so resolving both through the scanned tree would lose every
+    suppression the project declared and block on findings someone had
+    already signed off.
+    """
+    project, module = _prepare_layout(tmp_path)
+    write(module, "creds.py", f'TOKEN = "{A_PLANTED_TOKEN}"\n')
+    commit_all(module, "add creds")
+
+    monkeypatch.chdir(module)
+    monkeypatch.delenv(PROJECT_ROOT_ENV, raising=False)
+    assert _gate_root().resolve() == module.resolve()
+    assert _gate_config_root().resolve() == project.resolve()
+
+    # Unsuppressed: it blocks, and prints the fingerprint to suppress with.
+    first = CliRunner().invoke(cli, ["publish", "check"])
+    assert first.exit_code == 2
+    fingerprint = next(
+        line.split("fingerprint:")[1].strip()
+        for line in first.output.splitlines()
+        if "fingerprint:" in line
+    )
+
+    # Signed off at the PROJECT root, which is not the tree being scanned.
+    (project / ".rite" / "gitleaksignore").write_text(
+        f"{fingerprint}  # a planted test token, not a real credential\n"
+    )
+    second = CliRunner().invoke(cli, ["publish", "check"])
+
+    assert second.exit_code == 0, second.output
+    # And it says so: the tree scanned and the tree the rules came from are
+    # different directories, which is the fact worth disclosing.
+    assert f"rules and suppressions from {project}" in second.output
 
 
 @requires_gitleaks
