@@ -4,9 +4,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from rite_ai.config.managers import (
+    CLAUDE,
     CLAUDE_DECOMPOSER_DEFAULT,
     DecomposerConfig,
     ManagerRole,
+    is_local_engine,
 )
 
 
@@ -598,18 +600,50 @@ class WorkerManifest:
     follow_module_docs: list[str] = field(default_factory=list)
     # Level 2 (DECOMPOSER_DESIGN 1.7, RL-61): the model this Worker plans its
     # own APPROACH with, separate from the Claude model it implements with.
-    # Empty means the type default — Opus, since a Worker is Claude today
+    # Empty means the type default, which depends on this Worker's engine
     # (`worker_decomposition_model`).
     decomposer: DecomposerConfig = field(default_factory=DecomposerConfig)
+    # ── The engine a Worker runs (OL3) ───────────────────────────────────────
+    # The same five keys a Manager declares, obeying the same rule
+    # (`managers.engine_shape_problem`): a `local:<class>` Worker must say
+    # endpoint, model and agent, because the class is a label and not a
+    # configuration. They are per-WORKER rather than inherited from the Manager
+    # so that one Manager can run a Claude Worker beside an Ollama one, which
+    # is the v0.7.0 goal; a fleet that wants them all the same says the same
+    # thing in each manifest.
+    engine: str = CLAUDE
+    endpoint: str = ""
+    model: str = ""
+    agent: str = ""
+    context_window: int = 0
+    """Tokens this Worker's model is served with, pinned into the model rite
+    runs. 0 is undeclared, and undeclared REFUSES to start a local Worker for
+    the reason `ManagerRole.context_window` gives: Ollama's own default is
+    server-wide, cannot be read without loading the model, and "could not
+    tell" read as "enough" is how a unit ran out of context mid-cycle."""
+
+    @property
+    def is_local(self) -> bool:
+        return is_local_engine(self.engine)
 
 
 def worker_decomposition_model(worker: WorkerManifest) -> str:
     """The model a Worker plans its own approach with (Level 2, RL-61).
 
-    Its own `decomposer.model` when set, else Opus — a Worker is a Claude
-    sandbox today (`sandbox/__init__.py` builds `--agent claude` as a literal),
-    so the type default is the Claude one."""
-    return worker.decomposer.model or CLAUDE_DECOMPOSER_DEFAULT
+    Its own `decomposer.model` when set, else this Worker's TYPE default, which
+    is the same split `decomposition_model_for` makes for a Manager: a local
+    Worker plans with its own model (one GPU, nothing to gain from loading a
+    second), a Claude one plans with Opus and implements with its Claude model.
+
+    ⚠ Until OL3 this returned Opus unconditionally, which was right while a
+    Worker was always a Claude sandbox and became wrong the moment one could
+    declare `engine: local:small` — an Ollama Worker would have been told to
+    plan with a model its endpoint has never heard of."""
+    if worker.decomposer.model:
+        return worker.decomposer.model
+    if worker.is_local:
+        return worker.model
+    return CLAUDE_DECOMPOSER_DEFAULT
 
 
 @dataclass

@@ -141,7 +141,7 @@ class ManagerRole:
 
     @property
     def is_local(self) -> bool:
-        return bool(_LOCAL.match(self.engine))
+        return is_local_engine(self.engine)
 
     @property
     def local_class(self) -> str:
@@ -186,8 +186,64 @@ def decomposition_model_for(role: ManagerRole) -> str:
     return CLAUDE_DECOMPOSER_DEFAULT
 
 
+def model_identity(model: str) -> str:
+    """The model two units SHARE, ignoring rite's own window pin (RL-6).
+
+    ⚠ **`rite-ctx32768-qwen3-32b` and `qwen3:32b` are the same model.** rite
+    derives a pinned-window copy of a model and runs that
+    (`local.context_window.derived_name`), so the same weights appear under two
+    names, and a check comparing names would read them as two engines. They are
+    not: the derived model is the base model with a bigger window.
+
+    Compared in the DERIVED name's own normalised space, because the derivation
+    is lossy the other way — `qwen3:32b` becomes `qwen3-32b`, and `-` cannot be
+    turned back into `:` without guessing which it was.
+    """
+    import re
+
+    base = model.strip().lower()
+    pinned = re.match(r"^rite-ctx\d+-(.+)$", base)
+    if pinned:
+        base = pinned.group(1)
+    return re.sub(r"[^a-z0-9._-]+", "-", base).strip("-")
+
+
+def engine_identity(role: ManagerRole) -> tuple[str, str]:
+    """What makes two Managers the same engine for RL-6's independence check.
+
+    ⚠ **The loophole this closes.** The check was `r.engine != decomposer.engine`
+    — a comparison of CLASS LABELS. `local:large` and `local:small` are two
+    strings and may be one model, so a project could satisfy plan review with a
+    reviewer that shares every blind spot of the plan's author, which is the one
+    thing plan review exists to prevent. Robert ruled the fix in on 2026-10-02,
+    config-breaking accepted.
+
+    **The model, not the endpoint.** What shares a blind spot is the weights. Two
+    local Managers both running `qwen3.8:latest` are not independent because they
+    are served on different ports.
+
+    **Claude stays model-independent**, so two `claude` Managers remain
+    non-independent exactly as before — that was already the behaviour and
+    nothing here is an argument for changing it.
+    """
+    if role.is_local:
+        return ("local", model_identity(role.model))
+    return (role.engine, "")
+
+
+def is_local_engine(engine: str) -> bool:
+    """Whether `engine` is a `local:<class>` one — the single spelling of the
+    BOOLEAN test. A Worker asks this too now (OL3), and `local:` matched by a
+    second regex somewhere else is how the two would come to disagree.
+
+    `ManagerRole.local_class` still matches directly, because it needs the
+    capture group rather than the answer; that is the one remaining use and it
+    is not a copy of this."""
+    return bool(_LOCAL.match(engine))
+
+
 def _engine_error(engine: str) -> str:
-    if engine in (CLAUDE, HUMAN) or _LOCAL.match(engine):
+    if engine in (CLAUDE, HUMAN) or is_local_engine(engine):
         return ""
     return (
         f"engine {engine!r} is not one rite knows — use 'claude', 'human', or "
@@ -214,9 +270,9 @@ def _entry_error(raw: dict, name: str) -> str:
     for key in _ENTRY_KEYS - {"context_window", "decomposer"}:
         if key in raw and not isinstance(raw[key], (str, list)):
             return f"manager {name or '?'}: {key} must be text"
-    window_problem = _window_error(raw, name)
-    if window_problem:
-        return window_problem
+    bad_window = window_problem(raw, f"manager {name}")
+    if bad_window:
+        return bad_window
     preset = raw.get("preset", "")
     if preset and preset not in PRESETS:
         return (
@@ -234,39 +290,13 @@ def _entry_error(raw: dict, name: str) -> str:
                 f"manager {name}: {duty!r} is not a duty rite enforces — "
                 f"{', '.join(DUTIES)}"
             )
-    engine = raw.get("engine", CLAUDE)
-    bad = _engine_error(engine)
-    if bad:
-        return f"manager {name}: {bad}"
-    local = bool(_LOCAL.match(engine))
-    missing = [k for k in _LOCAL_ONLY if local and not raw.get(k)]
-    if missing:
-        return (
-            f"manager {name}: a {engine} engine must also say "
-            f"{', '.join(missing)} — the class is a label, not a configuration"
-        )
-    claude = engine == CLAUDE
-    stray = [
-        k
-        for k in _LOCAL_ONLY
-        if not local and raw.get(k) and not (claude and k == "model")
-    ]
-    if claude and raw.get("model"):
-        problem = claude_model_problem(str(raw["model"]))
-        if problem:
-            return f"manager {name}: model {raw['model']!r} {problem}"
-    if stray:
-        return (
-            f"manager {name}: {', '.join(stray)} means nothing on a "
-            f"{engine!r} engine — only 'local:<class>' runs a model rite drives"
-        )
-    decomposer_problem = _decomposer_error(raw, name, engine)
-    if decomposer_problem:
-        return decomposer_problem
+    shape = engine_shape_problem(raw, f"manager {name}")
+    if shape:
+        return shape
     return ""
 
 
-def _decomposer_error(raw: dict, name: str, engine: str) -> str:
+def _decomposer_error(raw: dict, subject: str, engine: str) -> str:
     """Why this entry's `decomposer:` cannot be read, or "" (RL-61).
 
     The ONE Level-2 key. A mapping with just `model`: a Claude unit's model is
@@ -278,21 +308,19 @@ def _decomposer_error(raw: dict, name: str, engine: str) -> str:
     body = raw["decomposer"]
     if not isinstance(body, dict):
         return (
-            f"manager {name}: decomposer must be a mapping with a 'model', e.g. "
+            f"{subject}: decomposer must be a mapping with a 'model', e.g. "
             "'decomposer: {model: opus}'"
         )
     unknown = sorted(set(body) - {"model"})
     if unknown:
-        return (
-            f"manager {name}: decomposer knows only 'model', not {', '.join(unknown)}"
-        )
+        return f"{subject}: decomposer knows only 'model', not {', '.join(unknown)}"
     model = body.get("model", "")
     if not isinstance(model, str) or not model.strip():
-        return f"manager {name}: decomposer.model must be a non-empty model name"
+        return f"{subject}: decomposer.model must be a non-empty model name"
     if engine == CLAUDE:
         problem = claude_model_problem(model)
         if problem:
-            return f"manager {name}: decomposer.model {model!r} {problem}"
+            return f"{subject}: decomposer.model {model!r} {problem}"
     return ""
 
 
@@ -302,28 +330,75 @@ def claude_model_problem(model: str) -> str:
         return ""
     return (
         "is not a Claude model name (an alias such as 'sonnet', or an id such "
-        "as 'claude-opus-5-5'). A local model goes on a 'local:<class>' "
-        "Manager with its endpoint"
+        "as 'claude-opus-5-5'). A local model goes on a 'local:<class>' unit "
+        "with its endpoint"
     )
 
 
-def _window_error(raw: dict, name: str) -> str:
+def engine_shape_problem(raw: dict, subject: str) -> str:
+    """Why this unit's engine and its engine-only keys cannot be read, or "".
+
+    ⚠ **Shared by a Manager and a Worker on purpose (OL3).** A Worker gained
+    `engine`/`endpoint`/`model`/`agent`/`context_window` so a project can run
+    an Ollama Worker beside a Claude one under one Manager, and the rule those
+    keys obey must not come to differ by which file they were written in: a
+    second copy of "a local engine must say all three" is a second copy that
+    drifts. `subject` is the whole prefix a message starts with — `"manager
+    lead"` or `"worker w1"` — so only the noun changes.
+
+    The window is deliberately NOT checked here. `_entry_error` checks it
+    early, before `preset` and `duties`, and folding it in would reorder which
+    problem a half-wrong entry reports first. Callers run `window_problem`
+    themselves, in whatever order suits them.
+    """
+    engine = raw.get("engine", CLAUDE)
+    bad = _engine_error(engine)
+    if bad:
+        return f"{subject}: {bad}"
+    local = is_local_engine(engine)
+    missing = [k for k in _LOCAL_ONLY if local and not raw.get(k)]
+    if missing:
+        return (
+            f"{subject}: a {engine} engine must also say "
+            f"{', '.join(missing)} — the class is a label, not a configuration"
+        )
+    claude = engine == CLAUDE
+    stray = [
+        k
+        for k in _LOCAL_ONLY
+        if not local and raw.get(k) and not (claude and k == "model")
+    ]
+    if claude and raw.get("model"):
+        problem = claude_model_problem(str(raw["model"]))
+        if problem:
+            return f"{subject}: model {raw['model']!r} {problem}"
+    if stray:
+        return (
+            f"{subject}: {', '.join(stray)} means nothing on a "
+            f"{engine!r} engine — only 'local:<class>' runs a model rite drives"
+        )
+    return _decomposer_error(raw, subject, engine)
+
+
+def window_problem(raw: dict, subject: str) -> str:
+    """Why this unit's `context_window` cannot be read, or "". Public because a
+    Worker declares one too (OL3) and must refuse it on the same terms."""
     if "context_window" not in raw:
         return ""
     window = raw["context_window"]
     engine = str(raw.get("engine", CLAUDE))
-    if not _LOCAL.match(engine):
+    if not is_local_engine(engine):
         return (
-            f"manager {name}: context_window means nothing on a {engine!r} "
+            f"{subject}: context_window means nothing on a {engine!r} "
             "engine — only 'local:<class>' runs a model whose window rite sets"
         )
     if isinstance(window, bool) or not isinstance(window, int):
-        return f"manager {name}: context_window must be a whole number of tokens"
+        return f"{subject}: context_window must be a whole number of tokens"
     from rite_ai.local.engine_probe import MINIMUM_CONTEXT_WINDOW
 
     if window < MINIMUM_CONTEXT_WINDOW:
         return (
-            f"manager {name}: context_window {window} is below "
+            f"{subject}: context_window {window} is below "
             f"{MINIMUM_CONTEXT_WINDOW}, the smallest measured to work — an "
             "agent's own system prompt and tool schemas do not fit below it"
         )
@@ -662,31 +737,64 @@ def configuration_problems(
     decomposers = [r for r in roles if DECOMPOSE in held[r.name]]
     reviewers = [r for r in roles if PLAN_REVIEW in held[r.name]]
     for decomposer in decomposers:
+        mine = engine_identity(decomposer)
         independent = [
             r
             for r in reviewers
-            if r.name != decomposer.name and r.engine != decomposer.engine
+            if r.name != decomposer.name and engine_identity(r) != mine
         ]
         if not independent:
             # RL-6: the decomposer reviewing its own plan's output shares every
             # blind spot of the plan, so a wrong slicing passes every check it
-            # wrote. A different engine is what makes the gate a gate.
+            # wrote. A different MODEL is what makes the gate a gate — the class
+            # label is not, which is the loophole `engine_identity` closes.
             problems.append(
                 f"manager {decomposer.name} decomposes, and no other manager on "
-                "a different engine holds plan-review — its decompositions would "
-                "be approved by the engine that wrote them, which is the one "
-                "thing plan review exists to prevent"
+                "a different model holds plan-review — its decompositions would "
+                "be approved by the model that wrote them, which is the one "
+                "thing plan review exists to prevent. Two 'local:' classes "
+                "serving the same model are the same model, however they are "
+                "labelled"
             )
 
-    for role in roles:
-        if INTEGRATE in held[role.name] and role.is_local:
-            # RL-11: the harness is rite's own code, and SPEC §5.1.1 forbids
-            # rite's code a push. A local integrate holder cannot do the job.
-            problems.append(
-                f"manager {role.name} holds integrate on a {role.engine} engine. "
-                "Local engines commit to a local branch and stop; pushing and "
-                "opening the PR needs a claude engine or a person"
-            )
+    # ⚠ **A local `integrate` holder is NOT refused any more** (Robert,
+    # 2026-10-02, OL8). RL-11 refused it because "SPEC §5.1.1 forbids rite's
+    # code a push; the harness is rite's code" — written 2026-09-19, while PB1
+    # gave `rite deliver` a push on 2026-09-29 (`4242d48`), which §5.1.1 now
+    # states and `tests/test_blast_radius.py` allows by name (`ALLOWED_GIT`).
+    # The premise expired ten days before anyone looked at it.
+    #
+    # **No engine pushes by itself, and that is still true.** The holder — on
+    # any engine — posts the same two-value request a Claude Manager posts
+    # (`publishing/requests.py`: it "cannot even commit, so it ASKS"), and rite
+    # validates it and performs the push on the host (`publishing/deliver.py`:
+    # "done here by rite, not by a model"). Both files are engine-agnostic;
+    # neither contains an engine check. §5.1.1's bounds therefore apply
+    # unchanged, because they live in the file that does the pushing: draft
+    # only, a repository the operator owns, its default branch, the publish
+    # gate passed on exactly those commits, never `--force`.
+    #
+    # ⚠ **Deliberately NOT the other route.** A sandboxed Manager's own
+    # repo-scoped token can push (C6/C26). That path IS gated wherever rite's
+    # `pre-push` hook was installed — SCRUM-9 (`82bbcf6`, 2026-10-01) chains it
+    # behind a redirected `core.hooksPath` and refuses rather than installing
+    # half a chain — so "a global hooksPath stops git reading it" is no longer a
+    # fact about rite and is not the reason here.
+    #
+    # The reason is that the hook path depends on an INSTALL having happened,
+    # while the request path gates **by construction in rite's own code**,
+    # independent of git config and of whether any hook exists. That holds even
+    # where the chain is installed, which is why it is the route.
+    #
+    # RL-11's SECOND reason is untouched and is what the request path satisfies:
+    # the terminating check belongs before anything leaves the machine.
+    #
+    # What the harness cannot check is whether the work is finished — §5.1.1
+    # bounds the damage of a wrong verdict, never its quality. That is why
+    # plan-review independence (RL-6, just above) compares the MODEL rather than
+    # the engine label: a verdict is worth acting on only if its reviewer was
+    # genuinely another model. Analysis:
+    # `docs/design/OL_WHY_A_LOCAL_MANAGER_CANNOT_PUSH.md`.
 
     eligible = [
         r for r in roles if r.engine != HUMAN and {DECIDE, BOARD, ROUTE} <= held[r.name]

@@ -319,10 +319,12 @@ class GooseProposer:
     whole of stdout — the candidate plan is the output, not a tail of it. The
     bytes are never trusted here; `parse` is the boundary (DD-2.2).
 
-    ⚠ This shares `local/step.py`'s window gap (DD-4.5): it does not pin the
-    window it launches against. That is a listed follow-up, not this change — a
-    smaller window degrades a plan's quality, which validation and plan review
-    still catch, rather than letting an unapproved plan run.
+    ⚠ **The DD-4.5 window gap is closed here** (OL6): `context_limit` is placed
+    when the caller passes one. It used to say "it does not pin the window it
+    launches against", which at Ollama's unconfigured 4,096 default meant a plan
+    authored in a window too small to hold the question (RL-T0 section 0). A
+    caller that passes nothing still gets the old behaviour, so this is a lever
+    rather than a change of default.
     """
 
     model: str
@@ -330,18 +332,45 @@ class GooseProposer:
     binary: str = "goose"
     mode: str = "auto"
     launch: object | None = None
+    instruction_dir: str = ""
+    """Where the prompt file is CREATED. Empty is the system temp root, right on
+    the host and wrong in a sandbox — the same asymmetry, and the same measured
+    reason, as `GooseAgent.instruction_dir` (OL5): a host tempfile IS readable
+    from inside a Worker, so it works while leaving the prompt readable by every
+    other sandbox on the machine."""
+    path_root: str = ""
+    """`GOOSE_PATH_ROOT`. Empty for a host turn; required inside a sandbox, where
+    `~/.local` is granted READ and not WRITE and Goose panics before it reaches
+    the model (OL1)."""
+    context_limit: int = 0
+    """⚠ Closes DD-4.5 for this path. The docstring above used to say this
+    proposer "does not pin the window it launches against", and at Ollama's
+    unconfigured 4,096 default an agent's own system prompt does not fit
+    (RL-T0 section 0) — so a plan was authored in a window too small to hold the
+    question. 0 keeps the old behaviour for a caller that has no window to pass."""
 
     def propose(self, prompt: str, workspace: str) -> Proposal:
         from rite_ai.local.goose_agent import _infrastructure_fault, goose_environment
 
         with tempfile.NamedTemporaryFile(
-            "w", suffix=".txt", prefix="rite-decompose-", delete=False
+            "w",
+            suffix=".txt",
+            prefix="rite-decompose-",
+            delete=False,
+            dir=self.instruction_dir or None,
         ) as handle_file:
             handle_file.write(prompt)
             instruction_path = handle_file.name
         argv = [self.binary, "run", "-n", "rite-decompose", "-i", instruction_path]
         environment = dict(os.environ)
-        environment.update(goose_environment(self.endpoint, self.model))
+        environment.update(
+            goose_environment(
+                self.endpoint,
+                self.model,
+                context_limit=self.context_limit,
+                path_root=self.path_root,
+            )
+        )
         environment["GOOSE_MODE"] = self.mode
         try:
             completed = self._launch(argv, workspace, environment)

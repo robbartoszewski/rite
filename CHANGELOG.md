@@ -27,6 +27,45 @@ preview). It destroys only a
 `rite-selftest-*` sandbox whose creating process is gone AND that holds no
 unapplied work; it never touches a project's Worker, a probe with a live
 creator, or anything holding changes.
+### An Ollama fleet works end to end
+
+**Workers can run a local model.** A Worker declares `engine`, `endpoint`,
+`model`, `agent` and `context_window` in its `worker.yml`, on the same terms a
+Manager does, so one Manager can run a Claude Worker beside an Ollama one. A
+local Worker's sandbox reaches this machine's Ollama daemon and rite runs each
+turn inside it; it receives no Claude login, because it has no use for one.
+
+**An all-Ollama fleet can finish its own work.** A Manager running a local
+model may hold the `integrate` duty. It does not push: it asks rite to deliver,
+exactly as a Claude Manager does, and rite pushes past its own publish gate —
+a draft pull request, on a repository you own, against its default branch,
+never force-pushed.
+
+**`rite local approve REVIEWER TICKET`** approves a decomposition, replacing
+what was a hand-edited file. The reviewer must hold plan-review, must not have
+written the plan, and must run a different model from it — two `local:` classes
+serving one model now count as the same model wherever rite checks
+independence, including `rite doctor`. ⚠ **This can refuse a project that
+passed before:** a fleet whose only plan-review holder runs the same model as
+its decomposer had no independent reviewer, and is now told so.
+
+**A unit plans its own approach before it edits.** Given an approved subtask,
+it writes its own steps first, using its decomposition model, and may not
+change the subtask's paths, check or citations while doing so.
+
+**The local tier runs hands-off.** A Manager started with `rite start` now
+drives its own tickets from decomposition through approval and each subtask to
+delivery, one step per cycle, bounded by your schedule exactly as its Workers
+are.
+
+### Fixed: `rite start` with no bound crashed in v0.7.0a7
+
+`rite start lead` with no `--sessions` and `--minutes`, the way the section
+below says to run it, printed its banner and then died with `TypeError: '<='
+not supported between instances of 'NoneType' and 'int'`, so no Manager
+started. It now starts. A project with no ticket backend crashed the same way
+on its setup session; that session now gets one session, supervised for up to
+60 minutes, when you give no bound.
 
 ### A Manager runs until you stop it (SCRUM-20)
 

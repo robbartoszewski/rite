@@ -129,7 +129,13 @@ def test_a_worker_defaults_to_opus_and_can_name_its_own():
 
 
 def test_a_worker_decomposer_model_must_be_a_claude_name():
-    # A Worker is a Claude sandbox today, so its decomposition model is Claude's.
+    # Still refused on a CLAUDE Worker — it would reach `claude --model`. Since
+    # OL3 the message comes from the shared validator, so it is subject-prefixed
+    # ("worker w3: decomposer.model ...") rather than spelled as a YAML path.
     bad = _worker("worker:\n  name: w3\n  decomposer:\n    model: qwen3.8:latest\n")
     assert isinstance(bad, ParseError)
-    assert "worker.decomposer.model" in bad.message
+    assert "worker w3" in bad.message
+    assert "decomposer.model" in bad.message
+    assert "qwen3.8:latest" in bad.message
+    # And it must not send someone editing worker.yml off to a Manager.
+    assert "Manager" not in bad.message

@@ -1545,6 +1545,18 @@ def _supervise(
     router: object = None,
     waiting: object = None,
     chores: object = None,
+    # L-6: advance the LOCAL tier by one stage this cycle, or None.
+    #
+    # ⚠ A per-cycle callable, NOT a loop of its own. Everything this engine
+    # already guarantees then applies to the local tier without being restated:
+    # the schedule's slots and a closed window waiting for `next_open`,
+    # reply-only and edit-only counting as idle, the spin guard, the event and
+    # heartbeat wake, and the concurrency bound. A second always-live loop would
+    # hold none of them.
+    #
+    # `None` for a Claude Manager, the way `engine_ready` is: there is no local
+    # pipeline to drive, and "no check" must not become "a check that passes".
+    local_tier: object = None,
     poll: float = POLL_SECONDS,
     now: object = None,
     watch: object = None,
@@ -2521,6 +2533,14 @@ def _supervise(
                 # same reason: it talks to the board, which the two-second
                 # poll must not wait on.
                 chores(say)
+            if callable(local_tier):
+                # L-6: the local pipeline advances by one stage here, at the
+                # same boundary and for the same reason — it reads the board and
+                # may run one inference turn, neither of which the poll may
+                # wait on. One stage per cycle, so the engine's own accounting
+                # (idle detection, the spin guard, the ceiling) stays in units
+                # it understands.
+                local_tier(say)
             if callable(refine):
                 # TR2: the rounds the Owner asked for this turn go out, with
                 # the board, at the same boundary and for the same reason.

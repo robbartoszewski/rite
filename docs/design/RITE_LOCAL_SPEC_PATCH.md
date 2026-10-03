@@ -367,9 +367,19 @@ Append to D-21's rationale:
 > reports and releases. Inference runs on the host behind an OpenAI-compatible
 > endpoint; tool execution stays sandboxed.
 >
-> **Local engines never push** (§5.1.1): they commit to a local branch and stop.
-> Pushing and opening the PR is the `integrate` duty, which puts the terminating
-> check before anything leaves the machine.
+> **No engine runs `git push` itself.** Pushing and opening the PR is the
+> `integrate` duty, and its holder — on any engine — posts a request that rite's
+> harness validates and acts on, which puts the terminating check before anything
+> leaves the machine.
+
+⚠ **Edited 2026-10-02 (Robert).** This paragraph said *"Local engines never push
+(§5.1.1): they commit to a local branch and stop"*, which was RL-11 and is
+superseded: any engine may hold `integrate`. It is corrected HERE, in the
+proposed patch, because leaving it would have written the expired rule into SPEC
+the next time this patch was applied. **§5.1.1 itself needs no change** — it
+never carried a local-engine clause, and its existing exception already describes
+a push performed by rite as the consequence of checks that passed. See
+`OL_WHY_A_LOCAL_MANAGER_CANNOT_PUSH.md`.
 
 ---
 
@@ -384,7 +394,7 @@ Append to D-21's rationale:
 >
 > **Strategies choose among safe behaviours. None can turn a gate off.** Plan
 > review, mechanical verify, recomposition verify, the fail-closed rules of
-> §5.1.1 and "local engines never push" are properties, not strategies.
+> §5.1.1 and "no engine pushes by itself" are properties, not strategies.
 >
 > #### 2.9.1. Subjects, profiles and resolution
 >

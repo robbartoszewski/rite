@@ -39,6 +39,11 @@ KNOWN = {
     ("reporting/status.py", "collect_board_state", "list_tickets"): (
         "reporting only: gives nothing to anyone"
     ),
+    ("cli/main.py", "_local_tier_tickets", "list_tickets"): (
+        "GATED (L-6): the local tier drives only REFINED tickets, asked of "
+        "`refinement.status` one read per ticket; an unrefined one is the "
+        "Owner's to refine (TR2) and is skipped"
+    ),
     ("cli/main.py", "board_list", "list_tickets"): (
         "`rite board list`: reporting only"
     ),

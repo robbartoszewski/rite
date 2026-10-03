@@ -327,21 +327,25 @@ def start(
     engine: str = "",
     command: str = "",
     prompt: str = "",
-    max_sessions: int = 0,
-    window_seconds: float = 0.0,
+    max_sessions: int | None = 0,
+    window_seconds: float | None = 0.0,
     pane_env: dict[str, str] | None = None,
 ) -> StartResult:
     """Start one Manager session, or refuse and say why.
 
-    `max_sessions` is mandatory at the caller (D-68) and is a COUNT of
-    session starts, not spend — §2.6.1 says rite cannot read the quota and
-    D-38 forbids the path from measurement back to control (D-69).
+    `max_sessions` is a COUNT of session starts, not spend — §2.6.1 says rite
+    cannot read the quota and D-38 forbids the path from measurement back to
+    control (D-69). ⚠ **None, with `window_seconds` None, is a run with no
+    bound (D-115)**, which `supervise` passes down unchanged: there is no
+    ceiling to check, and the record says so. 🔴 This compared None with 0
+    and raised, so in v0.7.0a7 every `rite start <manager>` with no bound
+    died after its banner (`test_a_perpetual_run_starts_for_real`).
     """
     problem = name_problem(manager, kind="manager name", must_be_a_tmux_target=True)
     if problem:
         return StartResult(False, f"refusing to start: {problem}")
 
-    if max_sessions <= 0:
+    if max_sessions is not None and max_sessions <= 0:
         return StartResult(
             False,
             f"refusing to start: a ceiling of {max_sessions} permits no "

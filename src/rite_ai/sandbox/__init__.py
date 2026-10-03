@@ -1294,7 +1294,7 @@ def start_worker(
 
 
 def _compose_launch_env(
-    root: Path, env: dict[str, str] | None, clean_home: bool
+    root: Path, env: dict[str, str] | None, clean_home: bool, local: bool = False
 ) -> tuple[dict[str, str], list[str], list[str], list[str]] | str:
     """`(yoloai_env, env_args, login_note, git_notes)`, or a refusal string.
 
@@ -1305,6 +1305,12 @@ def _compose_launch_env(
     says `--env` is "not persisted; re-supply on each restart", so a restart
     that rebuilt these differently would hand a recovered Worker a different
     environment than it started with.
+
+    `local` withholds the Claude login from a local-tier Worker (OL4): its
+    model answers on loopback and needs no login, and a sandbox's environment
+    was measured readable from other sandboxes (SB12). The login note is
+    engine-specific for the same reason (OL5) — a local Worker has no Claude
+    login by design, so the "run claude setup-token" advice is wrong for it.
     """
     delivered = dict(env or {})
     github = sorted(k for k in delivered if k in _GITHUB_TOKEN_ENV)
@@ -1327,17 +1333,20 @@ def _compose_launch_env(
     if clean_home:
         yoloai_env["HOME"] = str(worker_home())
     claude_login = delivered.pop(CLAUDE_TOKEN_ENV_VAR, None)
-    if claude_login:
+    # ⚠ Withheld from a LOCAL Worker (OL4). Popped above either way, so it never
+    # reaches `--env` by another road.
+    if claude_login and not local:
         yoloai_env[CLAUDE_TOKEN_ENV_VAR] = claude_login
-    login_note = (
-        []
-        if yoloai_env.get(CLAUDE_TOKEN_ENV_VAR) or yoloai_env.get("ANTHROPIC_API_KEY")
-        else [
+    if local:
+        login_note = []
+    elif yoloai_env.get(CLAUDE_TOKEN_ENV_VAR) or yoloai_env.get("ANTHROPIC_API_KEY"):
+        login_note = []
+    else:
+        login_note = [
             "  no Claude login for the sandbox, so the session will start and "
             "do nothing — run `claude setup-token`, then `rite credential set "
             "claude`, and start the Worker again"
         ]
-    )
     # The project root, named rather than found. rite walks up from cwd for
     # `.rite/`, and inside the sandbox most of that walk is unreadable.
     delivered.setdefault("RITE_PROJECT_ROOT", str(root))
@@ -1354,6 +1363,119 @@ def _compose_launch_env(
     for key in sorted(delivered):
         env_args += ["--env", f"{key}={delivered[key]}"]
     return yoloai_env, env_args, login_note, git_notes
+
+
+def sandbox_state_dir(name: str, binary: str = "") -> Path | None:
+    """The sandbox's own writable layer, or None when it cannot be found.
+
+    ⚠ **Asked of yoloAI rather than constructed.** `yoloai files <name> path`
+    prints the host path of the sandbox's exchange directory — a documented
+    command whose whole purpose is to hand a caller a path into the sandbox —
+    and the layer is its parent. An earlier version of this derived the same
+    place from `sandbox info --json`'s `config_path`, which works and is
+    incidental: that field exists to name a config file, not to describe the
+    layout. One documented accessor, in one function, so a layout change is a
+    one-line fix rather than a hunt.
+
+    **What it is for.** A local Worker's Goose needs somewhere writable for its
+    config, its session sqlite and its logs, and measured (OL1) it has nowhere
+    under the home: `~/.local` is granted READ and not WRITE inside a Worker.
+    This layer is writable, per-sandbox, destroyed with the sandbox, and was
+    measured ISOLATED — `ol2-w1` could neither read `ol2-w2`'s work nor write
+    into its layer.
+
+    ⚠ Not the workspace, and not the temp root. The workspace would put Goose's
+    state in `yoloai diff` and in the tree the committer inspects, which is the
+    objection `GooseAgent.run` already makes about its instruction file; the
+    temp root is granted to every sandbox here, so one Worker's session store —
+    its conversation — would be readable by another, the leak
+    `managers.enclosure.engine_tmp` measured for a Manager.
+    """
+    resolved = binary or shutil.which("yoloai")
+    if not resolved:
+        return None
+    try:
+        proc = subprocess.run(
+            [resolved, "files", name, "path"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=30,
+            stdin=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    printed = (proc.stdout or "").strip().splitlines()
+    if not printed:
+        return None
+    exchange = Path(printed[-1].strip())
+    return exchange.parent if exchange.name else None
+
+
+def goose_path_root(name: str, binary: str = "") -> str:
+    """`GOOSE_PATH_ROOT` for this Worker's sandbox, or "" when unknown.
+
+    Under a `rite/` directory inside the layer rather than beside yoloAI's own
+    `files/`, `home/`, `logs/` and `cache/`: rite's files go in rite's own
+    namespace, so a future yoloAI directory called `goose` cannot collide with
+    this one.
+
+    "" is returned rather than a guess, and the caller must treat it as a
+    refusal to start the turn: a Goose with no writable root does not fail
+    halfway, it panics before reaching the model (OL1), and a root pointing
+    somewhere wrong would be worse than no root at all.
+    """
+    layer = sandbox_state_dir(name, binary)
+    return str(layer / "rite" / "goose") if layer is not None else ""
+
+
+LOCAL_WORKER_AGENT = "idle"
+"""The yoloAI agent a LOCAL Worker's sandbox runs, and why it is not the
+engine's own name (OL5, the ruled pattern D-CU-2).
+
+⚠ **`--agent` takes a CLOSED list** — `yoloai system agents` offers aider,
+claude, codex, gemini, idle, opencode, shell, test. **Goose is not on it**, and
+"generalise `--agent`" cannot mean passing a name yoloAI does not have. The
+ruled shape instead: take an `idle` container — a no-op that keeps the sandbox
+running with no agent of its own — and let rite drive each turn from the host
+with `yoloai exec`, which is the same pattern the Cursor work settled on.
+
+That also keeps RL-13 intact. rite still borrows an existing agent's tool loop;
+it is simply Goose started per turn inside the sandbox, rather than an agent
+yoloAI supervises.
+"""
+
+
+def worker_manifest(root: Path, worker: str) -> object | None:
+    """This Worker's manifest, or None when there is no readable one.
+
+    Resolved from `root` and the name rather than passed in: `start_worker`
+    takes a Worker NAME, its one caller holds a `ProjectConfig` (which carries
+    no manifests — they are per-Worker files), and threading one through would
+    change a signature for something this can read in a line.
+
+    ⚠ **None means "could not tell", never "a Claude Worker".** A manifest that
+    is missing or will not parse is answered by the caller, which starts a
+    Claude Worker exactly as it did before OL3 — the pre-existing behaviour, not
+    a default chosen here. A parse error is already reported by `rite doctor`
+    and by `load_project`; failing a start on it would make an unrelated typo in
+    one Worker's file stop another's.
+    """
+    from rite_ai.config.parse import ParseError, parse_worker
+
+    path = root / "workers" / worker / "worker.yml"
+    if not path.exists():
+        return None
+    parsed = parse_worker(path)
+    return None if isinstance(parsed, ParseError) else parsed
+
+
+def yoloai_agent_for(manifest: object | None) -> str:
+    """Which yoloAI agent runs this Worker's sandbox (OL5)."""
+    return LOCAL_WORKER_AGENT if getattr(manifest, "is_local", False) else "claude"
+
 
 
 def _start_worker_unlocked(
@@ -1494,7 +1616,11 @@ def _start_worker_unlocked(
     args = [binary]
     if clean_home:
         args += ["--data-dir", str(Path.home() / ".yoloai")]
-    args += ["new", "--backend", config.backend, "--agent", "claude"]
+    # The agent, derived (OL5). This was the literal `"claude"`, which is what
+    # made a Worker Claude-only no matter what its manifest said.
+    manifest = worker_manifest(root, worker)
+    local = bool(getattr(manifest, "is_local", False))
+    args += ["new", "--backend", config.backend, "--agent", yoloai_agent_for(manifest)]
     if allow_dirty:
         # yoloAI refuses a workdir with uncommitted changes unless told
         # otherwise, and a Worker part-way through a task is exactly that.
@@ -1507,7 +1633,7 @@ def _start_worker_unlocked(
     # Worker push, open a pull request anywhere, or merge, forbidden only by
     # its instructions. Refused here whatever the caller passed, so no
     # future caller can hand one over by accident.
-    composed = _compose_launch_env(root, env, clean_home)
+    composed = _compose_launch_env(root, env, clean_home, local)
     if isinstance(composed, str):
         return SandboxResult(False, f"not starting '{worker}': {composed}")
     yoloai_env, env_args, login_note, git_notes = composed
@@ -2269,7 +2395,11 @@ def restart_worker(
         )
     name = existing_sandbox_name(worker, root)
     clean_home = config.backend == "seatbelt"
-    composed = _compose_launch_env(Path(root), env, clean_home)
+    # A local Worker's Claude login is withheld on restart too (OL4), the same
+    # as on start — `_compose_launch_env` does it, given `local`.
+    manifest = worker_manifest(Path(root), worker)
+    local = bool(getattr(manifest, "is_local", False))
+    composed = _compose_launch_env(Path(root), env, clean_home, local)
     if isinstance(composed, str):
         return SandboxResult(False, f"not restarting '{worker}': {composed}")
     yoloai_env, env_args, _login_note, _git_notes = composed
