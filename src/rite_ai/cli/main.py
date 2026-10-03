@@ -3956,6 +3956,42 @@ def _undeclared_in(error: str, config, candidate: str = "") -> list[str]:
     help="Answer the question about the modules' own CLAUDE.md / AGENTS.md / "
     "CONTRIBUTING.md without being asked. Unset means ask.",
 )
+# ── The engine this Worker runs (OL3, SCRUM-55) ──────────────────────────────
+# `worker.yml` has carried these five keys since OL3 and `_write_worker_manifest`
+# has written them, but nothing could SET them — so a GPU Worker meant
+# hand-editing a manifest, which §8.5 counts as a UX defect and not a shortcut.
+@click.option(
+    "--engine",
+    default="",
+    help="The engine this Worker runs: 'claude' (the default), or "
+    "'local:<class>' for a model rite drives through an endpoint — the class "
+    "is a label such as 'large' or 'small'. A local engine must also give "
+    "--endpoint, --model, --agent and --context-window.",
+)
+@click.option(
+    "--endpoint",
+    default="",
+    help="Where a local Worker's model answers, e.g. http://localhost:11434.",
+)
+@click.option(
+    "--model",
+    default="",
+    help="The model a local Worker runs, as its endpoint names it.",
+)
+@click.option(
+    "--agent",
+    default="",
+    help="The agent that drives a local Worker's turn. 'goose' today: it is "
+    "the only one whose context window rite can enforce (S35).",
+)
+@click.option(
+    "--context-window",
+    type=int,
+    default=0,
+    help="Tokens a local Worker's model is served with. Mandatory for a local "
+    "engine: the server's default cannot be read before the model loads, and a "
+    "prompt over it is cut from the front with no error.",
+)
 def add_worker_cmd(
     name: str,
     manager: str,
@@ -3963,6 +3999,11 @@ def add_worker_cmd(
     instructions: str,
     scoped_token: bool,
     follow_module_docs: bool | None,
+    engine: str,
+    endpoint: str,
+    model: str,
+    agent: str,
+    context_window: int,
 ) -> None:
     """Create a new worker workspace.
 
@@ -3977,6 +4018,8 @@ def add_worker_cmd(
       rite add worker beta --modules backend,shared
       rite add worker gamma --instructions "Ship nothing without a migration plan."
       rite add worker delta --scoped-token
+      rite add worker gpu1 --engine local:small --endpoint http://localhost:11434 \
+        --model qwen3.8:latest --agent goose --context-window 32768
     """
     from rite_ai.workspace import add_worker
 
@@ -4019,6 +4062,11 @@ def add_worker_cmd(
         module_subset=module_subset,
         instructions=instructions,
         follow_docs=follow,
+        engine=engine,
+        endpoint=endpoint,
+        model=model,
+        agent=agent,
+        context_window=context_window,
     )
     if not result.ok:
         click.echo(result.message, err=True)
@@ -4038,6 +4086,14 @@ def add_worker_cmd(
             "report to it.",
             err=True,
         )
+    if result.worker is not None and result.worker.is_local:
+        click.echo(
+            f"  runs {result.worker.model} at {result.worker.endpoint} "
+            f"via {result.worker.agent}, pinned to "
+            f"{result.worker.context_window} tokens"
+        )
+        for line in _one_model_per_fleet_note(root, result.worker):
+            click.echo(line, err=True)
     if result.cloned_modules:
         click.echo(f"  cloned: {', '.join(result.cloned_modules)}")
     for module_name, why in result.failed_modules:
@@ -4065,6 +4121,50 @@ def add_worker_cmd(
             err=True,
         )
         raise SystemExit(1)
+
+
+def _one_model_per_fleet_note(root, added) -> list[str]:
+    """Why this fleet will now thrash its GPU, as a NOTE — never a refusal.
+
+    ⚠ **Said, and not enforced, deliberately.** Two local Workers on ONE model
+    share a single resident copy; on different models the daemon evicts back and
+    forth for the whole run (OL2 measured 1.1x/1.8x against 2.3x/3.6x). So this
+    is THROUGHPUT, and `local/loop.py` names where the lever is: "the
+    share-one-model rule is the schedule's job, not this module's", and rite
+    gains no budget or quota concept from it. A guard here would be rite
+    inventing a resource model it has decided not to have, and it would refuse
+    configurations that are perfectly correct — a second model the operator
+    means to run at a different hour is not a mistake.
+
+    But silence is not the alternative to a guard. The cost is invisible until a
+    run is slow for no reason anyone can see, and the moment someone can act on
+    it cheaply is the moment they declare the second Worker.
+    """
+    from rite_ai.config.parse import load_project
+
+    project = load_project(Path(root))
+    if isinstance(project, list):
+        return []
+    others = sorted(
+        {
+            w.model
+            for w in project.workers
+            if w.is_local
+            and w.name != added.name
+            and w.model
+            and w.model != added.model
+        }
+    )
+    if not others:
+        return []
+    return [
+        f"  note: this project's other local Worker(s) run {', '.join(others)}. "
+        f"Two local Workers on different models evict each other from VRAM for "
+        f"the whole run (OL2: 2.3x/3.6x slower against 1.1x/1.8x when they "
+        f"share one). rite does not refuse it — sharing is the schedule's job "
+        f"(`rite schedule`), not a guard — but give them one model, or slots "
+        f"that do not overlap."
+    ]
 
 
 # GitHub's own label for each permission rite knows how to name, so the
