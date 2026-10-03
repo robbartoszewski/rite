@@ -8658,7 +8658,10 @@ def _other_sandbox_note(entry, asked) -> str:
 
 WORKER_QUESTION_EVERY = 30.0
 """How often the Owner's supervisor looks at its Workers for a question: a
-`yoloai` call per Worker, so not at the poll rate."""
+`yoloai` call per Worker, so not at the poll rate. ⚠ Only the LOOK
+(`surface`). Relaying an answer is not throttled (SCRUM-52): it is file work
+until an answer matches, and a throttled relay lost answers to the cycle
+that took them first."""
 
 
 def _worker_question_watch(root: Path, manager: str):
@@ -8684,17 +8687,26 @@ def _worker_question_watch(root: Path, manager: str):
     last = {"at": None}
 
     def watch(say) -> None:
-        now = time.monotonic()
-        if last["at"] is not None and now - last["at"] < WORKER_QUESTION_EVERY:
-            return
-        last["at"] = now
         # ⚠ RELAY FIRST, then surface (S30). An answer that has arrived
         # settles its question, so relaying first means `surface` does not
         # re-raise a question in the same tick that answered it. The other
         # order tells the person about a question rite is about to resolve.
+        # 🔴 And the relay runs at EVERY call, not every 30 s (SCRUM-52).
         relay(root, manager, say)
+        now = time.monotonic()
+        if last["at"] is not None and now - last["at"] < WORKER_QUESTION_EVERY:
+            return
+        last["at"] = now
         surface(root, manager, say)
 
+    def taken(say, messages) -> None:
+        """🔴 SCRUM-52: what the cycle boundary has just TAKEN from the inbox.
+        Taken mail is gone from the inbox, so the relay is handed it directly:
+        a reply that woke this cycle reaches the Worker's `answer.json`, not
+        only the Manager's prompt."""
+        relay(root, manager, say, messages=messages)
+
+    watch.taken = taken
     return watch
 
 

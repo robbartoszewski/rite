@@ -2278,6 +2278,14 @@ def _supervise(
                 # in THIS cycle's instruction, not the one after.
                 router(say)
             waiting_for_it = take_mail(root, manager, INBOX)
+            if waiting_for_it and callable(getattr(watch, "taken", None)):
+                # 🔴 SCRUM-52: the answer to a Worker's question is the
+                # Owner's mail AND the Worker's. Taken here, it is no longer
+                # in the inbox the relay reads, so the relay is handed exactly
+                # what was taken, before the Manager sees any of it. Without
+                # this, a reply that woke this cycle reached the Manager's
+                # prompt and never the Worker.
+                watch.taken(say, waiting_for_it)
             if waiting_for_it:
                 say(f"delivering {len(waiting_for_it)} message(s) to {manager!r}")
                 # ⚠ TR9: `take_mail` has just deleted them, and a chore must
