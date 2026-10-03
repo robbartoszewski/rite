@@ -139,7 +139,11 @@ def test_a_perpetual_supervise_starts_its_first_session_for_real(monkeypatch):
             root,
             manager,
             engine=str(engine),
-            prompt="sleep 2",
+            # Longer than `session.start`'s settle window (SETTLE_TRIES x
+            # SETTLE_PAUSE, plus a tmux call each), or a slow runner reads
+            # the session as having exited at once: measured on the macOS
+            # runner with `sleep 2`.
+            prompt="sleep 10",
             verdict=lambda r: ready,
             note=[].append,
             poll=0.2,
