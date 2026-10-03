@@ -161,7 +161,24 @@ def iter_commit_messages(
     somehow did, the cost is a message attributed to the wrong commit,
     never a message dropped.
     """
-    args = ["git", "log", "--format=%x00%H%n%B", *rev_range_args(rev_range)]
+    # `--all` when no range is given, because that is what the OTHER half of
+    # the history scan covers. 🔴 SCRUM-63: gitleaks' own `detect` walks every
+    # ref (measured on 8.30.1 — a repo with one commit on HEAD and one on an
+    # unmerged branch reports "2 commits scanned"), while this ran bare
+    # `git log` and saw only HEAD's ancestry. So `rite publish check` — the
+    # audit that means "safe for the whole history to become public" — scanned
+    # unmerged branches for secrets in file CONTENT and not for secrets in
+    # their commit MESSAGES. Measured: a GitHub PAT in the commit message of a
+    # branch not reachable from HEAD, reported clean.
+    #
+    # Only when no range is given. A range is the pre-push hook naming exactly
+    # what it is about to publish, and widening that would scan refs the push
+    # does not touch — the thing `_split_off_pre_existing` exists to stop.
+    #
+    # On an empty repository this is also the kinder answer: bare `git log`
+    # fails with "does not have any commits yet", `--all` exits 0 with nothing.
+    scope = rev_range_args(rev_range) if rev_range else ["--all"]
+    args = ["git", "log", "--format=%x00%H%n%B", *scope]
     try:
         proc = subprocess.run(
             args,

@@ -144,3 +144,60 @@ def test_a_missing_chosen_gitleaks_config_is_a_hard_error(tmp_path):
 
     assert report.exit_code == EXIT_ERROR
     assert any(".rite/strict.toml" in e for e in report.errors)
+
+
+@requires_gitleaks
+def test_a_full_audit_covers_commit_messages_on_every_ref(tmp_path):
+    """🔴 SCRUM-63. `rite publish check` means "safe for the whole history to
+    become public". gitleaks' own `detect` walks every ref, but the
+    commit-message relay ran a bare `git log` and saw HEAD's ancestry only —
+    so an unmerged branch was audited for secrets in file content and not for
+    secrets in its commit messages. Measured and reported clean.
+    """
+    init_repo(tmp_path)
+    write(tmp_path, "README.md", "hello\n")
+    commit_all(tmp_path, "base")
+    subprocess.run(["git", "checkout", "-q", "-b", "side"], cwd=tmp_path, check=True)
+    write(tmp_path, "b.txt", "b\n")
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", f"deploy key {A_PLANTED_TOKEN}"],
+        cwd=tmp_path,
+        check=True,
+    )
+    # Back to a branch the secret-bearing commit is NOT reachable from.
+    subprocess.run(["git", "checkout", "-q", "-"], cwd=tmp_path, check=True)
+
+    report = run_gate(tmp_path)
+
+    assert report.errors == []
+    assert report.exit_code == EXIT_FAIL
+    assert any("github-pat" == f.rule_id for f in report.findings)
+
+
+@requires_gitleaks
+def test_a_range_scan_stays_inside_its_range(tmp_path):
+    """The other side of that widening: a `rev_range` is the pre-push hook
+    naming exactly what it is about to publish, and it must NOT grow to refs
+    the push does not touch."""
+    init_repo(tmp_path)
+    write(tmp_path, "README.md", "hello\n")
+    commit_all(tmp_path, "base")
+    subprocess.run(["git", "branch", "-M", "main"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "checkout", "-q", "-b", "side"], cwd=tmp_path, check=True)
+    write(tmp_path, "b.txt", "b\n")
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", f"deploy key {A_PLANTED_TOKEN}"],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(["git", "checkout", "-q", "main"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "checkout", "-q", "-b", "work"], cwd=tmp_path, check=True)
+    write(tmp_path, "feature.txt", "feature\n")
+    commit_all(tmp_path, "an innocent commit")
+
+    report = run_gate(tmp_path, rev_range="main..work")
+
+    assert report.errors == []
+    assert report.exit_code == EXIT_CLEAN, [f.rule_id for f in report.findings]
