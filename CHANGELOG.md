@@ -27,10 +27,18 @@ the sections directly under this one.
   Worker's sandbox, no Manager text run as shell, every Worker commit credited,
   a stalled Worker recovered by itself, and leaked self-test sandboxes cleaned
   up.
+- **A tighter Manager sandbox.** It reaches one named macOS system service
+  instead of all of them (so not your clipboard), no longer gets `/tmp`
+  whole, and can no longer rewrite its own permission allowlist (SB5, SB8,
+  SB10).
+- **Local units get standing instructions.** Goose reads `AGENTS.md`, not
+  `CLAUDE.md`, so a local Manager or Worker now gets both, from the same
+  generated text (SCRUM-49).
 - **Setup and diagnosis.** `rite init` finishes what it starts and offers a
   Manager, `rite credential set` guides each credential, and `rite doctor
-  --network` checks what only a live call can. Credentials, the publish gate
-  and the status channel all say what is true.
+  --network` checks what only a live call can, while plain `rite doctor` no
+  longer posts in your Slack DM to check it (RS3). Credentials, the publish
+  gate and the status channel all say what is true.
 
 **What changes for you coming from 0.6.0** (each is explained in its section):
 
@@ -54,8 +62,9 @@ the sections directly under this one.
   planned for 0.9.0.
 - The scenario gate.
 - Cursor: the config refuses `engine: cursor`.
-- The Manager-sandbox items SB5 (mach-lookup), SB8 (the macOS temp grant) and
-  SB10 (a Manager-writable allowlist). These are still open.
+- Confining a Manager's outbound network. SB5, SB8 and SB10 narrowed the
+  Manager sandbox's files and system services, but the network is not
+  confined (the egress track, later).
 
 ⚠ **A Worker's sandbox is escapable in the yoloAI that ships today** (dogfood
 #35, under 0.7.0a1 below). The fix belongs in yoloAI and has been measured
@@ -124,6 +133,16 @@ rite rewrites the file before every run, so this was not a setting that could
 be planted and left; it was a window between rite writing the file and the
 engine reading it. The same window was measured on the sandbox profile itself
 and closed the same way.
+
+### A local Manager or Worker now gets its standing instructions (SCRUM-49)
+
+Goose does not read `CLAUDE.md`, and rite wrote nothing else. So every local
+Manager and Worker ran with no standing project instructions at all: none of
+the modules' own docs and none of the duty and claim conventions, only each
+cycle's prompt. rite now also writes `AGENTS.md`, which Goose reads, beside
+`CLAUDE.md` for local units, from the same generated text. Claude units are
+unchanged. An existing project receives it through `rite update
+--files-only`.
 
 ### `rite doctor` no longer posts in your Slack DM (RS3)
 
