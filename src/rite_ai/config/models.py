@@ -169,10 +169,21 @@ class HeartbeatConfig:
     stall_threshold: int = 3
 
 
+DEFAULT_GITLEAKS_CONFIG = ".rite/gitleaks.toml"
+"""The `publish_gate.gitleaks_config` a project gets without asking.
+
+ONE spelling. There were three — here, in `parse.py`'s `.get()` default, and
+in the gate's own comparison — and the gate now treats "configured but
+absent" as a hard error for any path that is NOT this one. A drift between
+the copies would therefore turn every default project into EXIT_ERROR, and
+the pre-push hook fails closed, so it would refuse every push everywhere.
+"""
+
+
 @dataclass
 class PublishGateConfig:
     scan_patterns: list[ScanPattern] = field(default_factory=list)
-    gitleaks_config: str = ".rite/gitleaks.toml"
+    gitleaks_config: str = DEFAULT_GITLEAKS_CONFIG
 
 
 @dataclass

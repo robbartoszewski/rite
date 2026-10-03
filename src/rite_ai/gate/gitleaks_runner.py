@@ -41,6 +41,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from rite_ai.gate.findings import (
+    COMMIT_MESSAGE_FILE,
     Finding,
     content_digest,
     iter_commit_messages,
@@ -297,7 +298,7 @@ def scan_commit_messages(
                 Finding(
                     rule_id=base.rule_id,
                     description=base.description,
-                    file="<commit message>",
+                    file=COMMIT_MESSAGE_FILE,
                     line=_line_within_commit(offsets, base.line),
                     commit=sha,
                     match_preview=base.match_preview,

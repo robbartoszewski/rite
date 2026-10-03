@@ -117,6 +117,64 @@ def redact(secret: str, keep: int = 4) -> str:
     return f"{secret[:keep]}{'*' * (len(secret) - keep * 2)}{secret[-keep:]}"
 
 
+COMMIT_MESSAGE_FILE = "<commit message>"
+"""The `file` both commit-message scanners report, since a commit message is
+not a file. Named, because `_split_off_pre_existing` has to recognise it:
+matching it against a touched-FILE set can only ever fail."""
+
+PUBLISHABLE_REFS = ("--branches", "--tags", "--remotes")
+"""Every ref a push could carry — NOT `--all`.
+
+`--all` adds `refs/stash`, which is local by definition: a stash cannot be
+pushed. Measured — a `git stash push -m "wip <token>"` failed the gate over
+text in no commit and no branch, and the block could not be cleared, because
+a suppression fingerprint embeds the stash commit's sha and that sha changes
+every time the stash is rebuilt. A block nobody can clear is a gate people
+turn off, and one stash stack is shared by every worktree of a repository.
+
+`refs/notes` go too, and the honest reason is narrower: notes are not
+carried by a branch push and are not pushed without asking. They CAN be
+pushed deliberately (`git push origin refs/notes/*`), so this is a scope
+limit rather than an impossibility — a secret written into a git note and
+then explicitly pushed is out of scope for this gate.
+"""
+
+
+def publishable_scope(root: Path) -> list[str]:
+    """`PUBLISHABLE_REFS`, plus `HEAD` when there is one.
+
+    `HEAD` is not redundant with `--branches`: a detached HEAD is on no
+    branch, and a worktree checked out at a sha is the ordinary state of
+    several of this project's own. Measured — a repo whose only commits are
+    reachable from a detached HEAD reports 0 commits to
+    `--branches --tags --remotes`, so the scan read nothing and said clean
+    over a planted token. That is a NARROWING introduced by the commit whose
+    whole purpose was to widen coverage, which is the way this keeps going
+    wrong: every change to a scan's scope has to be measured in both
+    directions.
+
+    Conditional because an unborn HEAD is a hard error, not an empty set:
+    `git log --branches HEAD` in a repository with no commits exits 128 with
+    `ambiguous argument 'HEAD'`, and that would fail the gate on a freshly
+    initialised project.
+    """
+    scope = list(PUBLISHABLE_REFS)
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", "HEAD"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return scope
+    if proc.returncode == 0 and proc.stdout.strip():
+        scope.append("HEAD")
+    return scope
+
+
 def rev_range_args(rev_range: str | None) -> list[str]:
     """A revision range as `git log` ARGV, not as one argument.
 
@@ -161,7 +219,25 @@ def iter_commit_messages(
     somehow did, the cost is a message attributed to the wrong commit,
     never a message dropped.
     """
-    args = ["git", "log", "--format=%x00%H%n%B", *rev_range_args(rev_range)]
+    # Every publishable ref when no range is given, because that is what the
+    # OTHER half of the history scan covers. 🔴 SCRUM-63: gitleaks' own
+    # `detect` walks every ref (measured on 8.30.1 — a repo with one commit on
+    # HEAD and one on an unmerged branch reports "2 commits scanned"), while
+    # this ran bare `git log` and saw only HEAD's ancestry. So the audit — the
+    # audit that means "safe for the whole history to become public" — scanned
+    # unmerged branches for secrets in file CONTENT and not for secrets in
+    # their commit MESSAGES. Measured: a GitHub PAT in the commit message of a
+    # branch not reachable from HEAD, reported clean.
+    #
+    # Only when no range is given. A range is the pre-push hook naming exactly
+    # what it is about to publish, and widening that would scan refs the push
+    # does not touch — the thing `_split_off_pre_existing` exists to stop.
+    #
+    # On an empty repository this is also the kinder answer: bare `git log`
+    # fails with "does not have any commits yet", a ref selector exits 0 with
+    # nothing.
+    scope = rev_range_args(rev_range) if rev_range else publishable_scope(root)
+    args = ["git", "log", "--format=%x00%H%n%B", *scope]
     try:
         proc = subprocess.run(
             args,

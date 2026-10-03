@@ -48,7 +48,15 @@ def test_push_lands_the_work_on_the_modules_branch(tmp_path):
         got = p.deliver()
     assert got.ok, got
     assert _origin_main(p) == shas[-1]
-    assert gate.call_args.kwargs == {"rev_range": f"main..{TICKET}"}
+    # Exactly the commits being sent, and the PROJECT's rules over the
+    # module repository — `root` holds `.rite/`, `project` is the repo
+    # beneath it, and one path for both either scans a tree git cannot
+    # answer about (SCRUM-60) or drops the project's suppressions.
+    assert gate.call_args.kwargs == {
+        "rev_range": f"main..{TICKET}",
+        "config_root": p.root,
+    }
+    assert gate.call_args.args[0] != p.root
     assert "pushed to main" in got.outcomes[0].note()
 
 

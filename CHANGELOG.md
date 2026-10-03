@@ -40,6 +40,57 @@ times slower than two Workers sharing one model. It does not stop you, since
 running them at different hours is perfectly reasonable; use `rite schedule`
 to keep them apart, or give them the same model.
 
+### The publish gate works when your project root is not the repository (SCRUM-60)
+
+`rite prepare` lays a project out as a plain directory holding `.rite/`, with
+each module's repository as a subdirectory beneath it. The gate took that
+directory as the tree to scan, git said `not a git repository`, and both
+`rite publish check` and the `pre-push` hook failed. The hook fails closed, so
+that was **every push from such a project refused**, and `rite deliver` could
+never push a branch or open a pull request for one.
+
+The gate now scans the repository you are in, and reads its rules and
+suppressions (`.rite/config.yaml`, `gitleaks.toml`, `gitleaksignore`) from the
+rite project above it — two questions that used to share one answer. Run it
+from inside a module; at a project root that is not itself a repository the
+gate says so and points at the modules, rather than repeating git's
+`not a git repository`.
+
+If your project lives in a *subdirectory* of a bigger repository, the gate now
+scans the whole repository rather than that subdirectory. Existing
+`.rite/gitleaksignore` entries were written against subdirectory-relative
+paths and will not match — re-add them from the fingerprints the gate prints.
+It fails loudly rather than quietly, so nothing is cleared that was not before.
+
+### The pre-push hook blocks a secret in a commit message
+
+It did not. A commit message is not a file, so the check that separates "this
+push added it" from "this was already here" could never match one — and every
+commit-message finding was filed as pre-existing and waved through. `rite
+publish check` reported the same secret as blocking. The hook now blocks it.
+
+### The gate says what it scanned (SCRUM-63)
+
+A run reported `commits_scanned=0` beside `clean` on every project, which read
+as a secret scanner that checks nothing. It was not — a secret committed and
+later deleted is caught from history, and there is now a test that plants one
+and proves it. But two things it said were not trustworthy:
+
+- **`commits_scanned` was never computed.** It is now, and `rite publish
+  check` prints it. A range containing no commits — a pre-push of a branch
+  already on the remote — says so instead of reporting a bare `clean` that
+  reads as a verdict on history nothing walked.
+- **A `gitleaks_config` that does not exist fell back to gitleaks' defaults
+  in silence.** If you never chose one, that is still what happens, and the
+  report now names the ruleset it used. If you *did* name a config file and
+  it is missing, the gate refuses to run rather than quietly enforce weaker
+  rules and call the result clean.
+- **A full audit now reads commit messages on every branch.** gitleaks scans
+  file content across every ref; rite's commit-message scan only followed the
+  branch you were on. A secret in the commit message of an unmerged branch was
+  reported clean. Stashes and notes are excluded from both — they are local and
+  never published, and a stashed line used to be unsuppressable. (A secret
+  written into a git *note* and then pushed deliberately is out of scope.)
 
 ### Your answer to a Worker's question reaches the Worker (SCRUM-52)
 

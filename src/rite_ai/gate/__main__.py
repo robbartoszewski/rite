@@ -28,9 +28,25 @@ def _find_root(start: Path) -> Path:
     return start
 
 
+def _roots() -> tuple[Path, Path]:
+    """`(scan_root, config_root)` — the same split the `rite` CLI makes.
+
+    This module had only the first, so in a `rite prepare` layout it ran
+    with whatever `parse_config` returns for a file that is not there: a
+    default `ProjectConfig`, no error, every declared scan pattern dropped
+    and every suppression ignored. That is not a cosmetic divergence —
+    `GATE_INVOCATIONS` lists this spelling and rite's own CI workflow uses
+    it, so it is the gate on the layer local configuration cannot switch
+    off.
+    """
+    from rite_ai.cli.main import _gate_config_root, _gate_root
+
+    return _gate_root(), _gate_config_root()
+
+
 def _cmd_check(argv: list[str]) -> int:
-    root = _find_root(Path.cwd())
-    report = run_gate(root)
+    root, config_root = _roots()
+    report = run_gate(root, config_root=config_root)
     print(format_report(report))
     return report.exit_code
 
@@ -46,7 +62,7 @@ def _cmd_pre_push(argv: list[str]) -> int:
     `compute_pre_push_ranges` this does."""
     from rite_ai.gate.hook import compute_pre_push_ranges
 
-    root = _find_root(Path.cwd())
+    root, config_root = _roots()
     lines = sys.stdin.read().splitlines()
 
     if not lines:
@@ -58,7 +74,7 @@ def _cmd_pre_push(argv: list[str]) -> int:
 
     worst = 0
     for rev_range in compute_pre_push_ranges(lines):
-        report = run_gate(root, rev_range=rev_range)
+        report = run_gate(root, rev_range=rev_range, config_root=config_root)
         print(f"rite publish gate — {rev_range}")
         print(format_report(report))
         worst = max(worst, report.exit_code)

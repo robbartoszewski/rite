@@ -221,41 +221,134 @@ def _tracked_runtime_state(root: Path) -> list[str]:
     ]
 
 
-def _gate_root() -> Path:
-    """Where the publish gate scans.
+def _git_toplevel(path: Path) -> Path | None:
+    """The toplevel of the git repository containing `path`, or None.
 
-    The gate is a REPOSITORY operation — it lists tracked files and walks
-    history — so its root is the git worktree, not the rite project. Those
-    are usually the same directory and are not always: rite's own repo has a
-    `.rite/` holding the gate's suppressions and the review checklist, and is
-    not a rite project (no `PROJECT_MARKERS`). Resolving the gate through the
-    project marker alone would fall back to cwd there, so running
-    `rite publish check` from a subdirectory would scan that subdirectory and
-    silently miss `.rite/gitleaksignore` — a gate that reports clean about
-    the wrong tree.
-
-    Project root wins when there is one, so a scanned project still uses its
-    own config; otherwise the git toplevel; cwd only if neither answers.
+    Resolved, so a caller can compare it to a candidate directory and learn
+    whether that directory IS a repository root rather than merely a
+    directory sitting inside one. On macOS `/tmp` is a symlink to
+    `/private/tmp` and git answers with the resolved form, so an unresolved
+    comparison says "not a repo" about a repo.
     """
     import subprocess
 
-    cwd = Path.cwd()
-    for parent in [cwd, *cwd.parents]:
-        if _is_project(parent):
-            return parent
     try:
         proc = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
+            ["git", "-C", str(path), "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
             errors="replace",
             timeout=30,
         )
     except (OSError, subprocess.SubprocessError):
-        return cwd
-    if proc.returncode == 0 and proc.stdout.strip():
-        return Path(proc.stdout.strip())
-    return cwd
+        return None
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return None
+    try:
+        return Path(proc.stdout.strip()).resolve()
+    except OSError:
+        return None
+
+
+def _gate_root() -> Path:
+    """The tree the publish gate SCANS: the git repository toplevel.
+
+    Not the rite project root, and not cwd. The gate's three path sources
+    only agree at a toplevel, and that is not a preference — it is the only
+    place the report is coherent:
+
+      * `git ls-files` run in a subdirectory emits paths relative to THAT
+        subdirectory;
+      * gitleaks walks the whole repository and reports paths relative to
+        the REPOSITORY root;
+      * `files_touched_by`, which decides whether a finding is blamed on
+        this push or excused as already published, is repository-relative
+        too.
+
+    Rooted anywhere but the toplevel those disagree, and the disagreement is
+    not loud. Measured in a project living in a subdirectory of a larger
+    repository: a finding in a file the push ADDS was demoted to "already in
+    the repository, NOT from this push — not blocking", because the path
+    gitleaks reported was not the path the touched-file set contained. A
+    gate that reassures you about a secret you are adding is worse than no
+    gate, and that is the same sentence this module already carries over
+    `-z` in `files_touched_by`.
+
+    🔴 SCRUM-60 is what happens at the other extreme. `rite prepare` lays a
+    project out as a non-repo directory holding its `.rite/` with the module
+    repositories as subdirectories (`~/projects/yoloAI/.rite/`, repo at
+    `~/projects/yoloAI/yoloai`). Preferring the project marker handed the
+    gate a directory git knows nothing about, so `rite publish check` and
+    the `pre-push` hook both died on `'git ls-files' failed: fatal: not a
+    git repository`. The hook fails closed: that is EVERY push from the
+    layout refused, and `rite deliver` unable to push a branch or open a
+    pull request for one.
+
+    The project's own config and suppressions are NOT lost by scanning the
+    repository — they are read from `_gate_config_root`, which is a separate
+    question and was the thing conflated with this one.
+    """
+    toplevel = _git_toplevel(Path.cwd())
+    return toplevel if toplevel is not None else Path.cwd()
+
+
+def _gate_config_root() -> Path:
+    """Where the gate reads `.rite/config.yaml`, `gitleaks.toml` and
+    `gitleaksignore` from — the rite PROJECT, which is a different question
+    from which tree to scan and was for a long time the same variable.
+
+    Conflating them is a trap in both directions. Resolve both through the
+    project marker and the gate scans a directory git cannot answer about
+    (SCRUM-60). Resolve both through the repository and a project laid out
+    beneath a repo loses every suppression it declared — each one then comes
+    back as a blocking finding with a reason already written for it, which
+    is how a gate gets switched off.
+
+    Falls back to the scanned tree when there is no project, which is rite's
+    own repository: it tracks `.rite/gitleaksignore` and
+    `.rite/review-checklist.md` for the gate and is not a rite project.
+
+    The NEAREST marker wins over `RITE_PROJECT_ROOT`, which is deliberately
+    the opposite order from `_find_project_root`, and the difference is the
+    difference between the two questions. `_find_project_root` is asking
+    which project a session BELONGS to, and the override exists there
+    because walking up from a module that is itself a rite project found the
+    inner one and gave every Worker a private claims ledger. This is asking
+    whose rules govern the tree in front of us — and for a clone that
+    carries its own `.rite/`, those are its own. Taking the override first
+    applied an outer project's suppressions to an inner repository, where
+    the fingerprints cannot match anyway, while ignoring the ones that
+    could; with commit-message findings now unconditionally blocking, that
+    is a block the Worker has no file to clear it in. The override still
+    answers when there is no marker to find, which is the sandboxed case it
+    was added for.
+    """
+    cwd = Path.cwd()
+    for parent in [cwd, *cwd.parents]:
+        if _is_project(parent):
+            return parent
+    override = os.environ.get(PROJECT_ROOT_ENV)
+    if override:
+        return Path(override).expanduser().resolve()
+    return _gate_root()
+
+
+def _gate_root_note(root: Path, config_root: Path) -> str:
+    """Which tree was scanned, and where its rules came from — said whenever
+    those are not the same directory.
+
+    An earlier version compared the scanned root against cwd, and git runs
+    `pre-push` with cwd already AT the repository root, so in the one layout
+    this all exists for the note never appeared. The fact worth disclosing
+    was never "you are somewhere else"; it is that the rules being applied
+    live somewhere other than the tree being scanned.
+    """
+    try:
+        if root.resolve() == config_root.resolve():
+            return ""
+    except OSError:
+        return ""
+    return f"scanning {root}, with rules and suppressions from {config_root}"
 
 
 def _has_project_in_scope() -> bool:
@@ -1098,14 +1191,26 @@ def _doctor_report(problems: list[str], *, network: bool = False) -> None:
     # disarmable layer and not this one — the same asymmetry that let the hook
     # defect exist, since nobody asked the question.
     #
-    # Project root only, and said so: `rite init` writes the workflow there
-    # alone, because the gate reads its scan patterns and suppressions from
-    # `.rite/`, which lives there. A bare "active" would otherwise read as
-    # "every repo is covered".
+    # Asked about the REPOSITORY, which is where `.github/workflows/` can
+    # live and where `rite publish install-ci` writes. Doctor asked about
+    # the project root instead, and once the gate's own root became the
+    # repository the two stopped agreeing: install-ci reported installing a
+    # workflow while doctor went on saying there was none and telling the
+    # reader to run install-ci — a loop that never clears. Falls back to
+    # the project root when cwd is not in a repository, so the sentence
+    # below is still about something.
     from rite_ai.gate.ci import ci_workflow_status
 
+    # Anchored to the PROJECT, not to wherever doctor was typed. Deriving
+    # it from cwd made `rite doctor` answer about whichever repository the
+    # operator happened to be standing in while labelling it "(project
+    # root)" — a different answer from the same machine depending on the
+    # directory, which is the defect this check was added to catch in the
+    # first place. `install-ci` writes at the repository, so this asks the
+    # repository the project lives in.
+    ci_root = _git_toplevel(root) or root
     with _doctor_check("publish gate CI", problems):
-        ci_gate = ci_workflow_status(root)
+        ci_gate = ci_workflow_status(ci_root)
         if ci_gate.state != "not_a_repo":
             if ci_gate.active:
                 click.echo(
@@ -1122,7 +1227,7 @@ def _doctor_report(problems: list[str], *, network: bool = False) -> None:
 
         _gate_cfg = _parse_gate_config(rite_dir / "config.yaml")
         if not isinstance(_gate_cfg, ParseErrorType):
-            line, problem = ruleset(root, _gate_cfg)
+            line, problem = ruleset(root, _gate_cfg, scan_root=_gate_root())
             click.echo(line)
             if problem:
                 problems.append(f"publish gate: {problem}")
@@ -4650,13 +4755,32 @@ def publish_check(rev_range: str | None, strict: bool) -> None:
       rite publish check --rev-range origin/main..HEAD
     """
     from rite_ai.gate import run_gate
-    from rite_ai.gate.gate import _partial_lines
+    from rite_ai.gate.gate import _partial_lines, scanned_line
 
     root = _gate_root()
+    config_root = _gate_config_root()
     from rite_ai.gate import suppression
     from rite_ai.gate.suppression import stale_hint
 
-    report = run_gate(root, rev_range=rev_range)
+    report = run_gate(root, rev_range=rev_range, config_root=config_root)
+
+    # WHAT WAS SCANNED, BEFORE THE VERDICT — this command builds its own
+    # output and never calls `format_report`, so everything that report
+    # learned to say reached `python -m rite_ai.gate` and the hook and not
+    # the command a human actually types. 🔴 SCRUM-63 was filed off THIS
+    # command printing a bare `gate: clean`, and a fix only the other
+    # formatter carried would have left the reported symptom exactly as it
+    # was.
+    note = _gate_root_note(root, config_root)
+    if note:
+        click.echo(note)
+    # Only over a run that completed. Coverage printed above "gate: ERROR"
+    # describes what git listed, not what was scanned, and reads as the
+    # opposite.
+    if not report.errors:
+        click.echo(scanned_line(report))
+        if report.ruleset_note:
+            click.echo(report.ruleset_note)
 
     for finding in report.findings:
         click.echo(
@@ -4746,15 +4870,23 @@ def publish_pre_push() -> None:
     from rite_ai.gate.hook import compute_pre_push_ranges
 
     root = _gate_root()
+    config_root = _gate_config_root()
     lines = sys.stdin.read().splitlines()
 
     if not lines:
         click.echo("rite publish gate: nothing to scan")
         raise SystemExit(0)
 
+    # Said on this path as well as in `publish check`: in the `rite prepare`
+    # layout the tree being scanned and the tree the rules come from are
+    # different directories, and that is worth stating before a verdict.
+    note = _gate_root_note(root, config_root)
+    if note:
+        click.echo(f"rite publish gate: {note}")
+
     worst = EXIT_CLEAN
     for rev_range in compute_pre_push_ranges(lines):
-        report = run_gate(root, rev_range=rev_range)
+        report = run_gate(root, rev_range=rev_range, config_root=config_root)
         click.echo(f"rite publish gate — {rev_range}")
         click.echo(format_report(report))
         worst = max(worst, report.exit_code)

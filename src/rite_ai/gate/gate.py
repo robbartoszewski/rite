@@ -7,14 +7,19 @@ plumbing this function calls.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
-from rite_ai.config.models import ProjectConfig
+from rite_ai.config.models import DEFAULT_GITLEAKS_CONFIG, ProjectConfig
 from rite_ai.config.parse import parse_config
 from rite_ai.gate import gitleaks_runner, pattern_scan
 from rite_ai.gate import suppression as supp_mod
 from rite_ai.gate.builtin_rules import BUILTIN_PATH_PATTERNS
-from rite_ai.gate.findings import Finding
+from rite_ai.gate.findings import (
+    COMMIT_MESSAGE_FILE,
+    Finding,
+    publishable_scope,
+    rev_range_args,
+)
 from rite_ai.gate.suppression import DEFAULT_SUPPRESSION_PATH, Suppression
 
 # TWO QUESTIONS, TWO ANSWERS. `outcome` says what was found; the exit code
@@ -57,7 +62,26 @@ class GateReport:
     # beside `files_scanned`, because "scanned 1 file(s)" about a file
     # nothing could read is the gate's worst possible sentence.
     unreadable_files: list[str] = field(default_factory=list)
-    commits_scanned: int = 0
+    # How many commits the history scan actually walked. 🔴 SCRUM-63: this
+    # field existed, was never once assigned, and was read as evidence that
+    # the history scan was hollow — a gate reporting `commits_scanned=0`
+    # beside "clean" for every run. The scan was real; the number was a
+    # default nobody had wired. An observable the gate publishes and never
+    # computes is worse than no observable, because it is believed.
+    #
+    # `None` when it could not be counted, which is NOT zero: zero is the
+    # real and legitimate answer for a push whose range is already published.
+    commits_scanned: int | None = None
+    # Which gitleaks ruleset this run applied, in one clause. Always said —
+    # see `_resolve_ruleset`.
+    ruleset_note: str = ""
+    # Where a suppression has to be WRITTEN, when that is not the tree being
+    # scanned. `HOW_TO_SUPPRESS` names a rootless `.rite/gitleaksignore`, and
+    # the hook and `python -m rite_ai.gate` print it through `format_report`,
+    # which had no way to know the two roots differed — so in a split-root
+    # layout the reader writes the entry into the repository they are
+    # standing in and the gate goes on ignoring it.
+    config_root_note: str = ""
     errors: list[str] = field(default_factory=list)
     # What the sources that COULD run found, when another source could not.
     # Reported so a blocked run is still worth something, and deliberately
@@ -125,6 +149,7 @@ def run_gate(
     root: Path,
     rev_range: str | None = None,
     config: ProjectConfig | None = None,
+    config_root: Path | None = None,
 ) -> GateReport:
     """Run the full publish gate, and never raise.
 
@@ -145,7 +170,9 @@ def run_gate(
     exceptions.
     """
     try:
-        return _run_gate(root, rev_range=rev_range, config=config)
+        return _run_gate(
+            root, rev_range=rev_range, config=config, config_root=config_root
+        )
     except Exception as exc:  # noqa: BLE001 - see the docstring
         return GateReport(
             errors=[
@@ -159,6 +186,7 @@ def _run_gate(
     root: Path,
     rev_range: str | None = None,
     config: ProjectConfig | None = None,
+    config_root: Path | None = None,
 ) -> GateReport:
     """The gate itself. Call `run_gate`, which cannot raise.
 
@@ -175,6 +203,23 @@ def _run_gate(
     built-in path rules — those are never optional (SPEC §11.3).
     """
     errors: list[str] = []
+
+    # WHERE THE RULES LIVE, which is not always the tree being scanned. A
+    # `rite prepare` project keeps its `.rite/` at the project root with the
+    # repositories beneath it, so resolving both through one path either
+    # scans a directory git cannot answer about (🔴 SCRUM-60) or silently
+    # drops every suppression the project declared. Defaults to `root`,
+    # which is every other layout and every existing caller.
+    config_root = root if config_root is None else config_root
+    try:
+        split_roots = root.resolve() != config_root.resolve()
+    except OSError:
+        split_roots = False
+    config_root_note = (
+        f"rules and suppressions read from {config_root} (not {root})"
+        if split_roots
+        else ""
+    )
 
     binary = gitleaks_runner.find_gitleaks_binary()
     if binary is None:
@@ -195,7 +240,7 @@ def _run_gate(
         )
 
     if config is None:
-        loaded = parse_config(root / ".rite" / "config.yaml")
+        loaded = parse_config(config_root / ".rite" / "config.yaml")
         if not isinstance(loaded, ProjectConfig):
             return GateReport(
                 errors=errors + [f"invalid .rite/config.yaml: {loaded.message}"]
@@ -204,15 +249,34 @@ def _run_gate(
 
     tracked = pattern_scan.list_tracked_files(root)
     if isinstance(tracked, pattern_scan.ScanError):
+        if not _looks_like_a_repo(root):
+            # 🔴 SCRUM-60's other half. The gate cannot scan a directory
+            # that is not a repository and should not pretend otherwise —
+            # but `'git ls-files' failed: fatal: not a git repository` is
+            # git talking to git, and it leaves the reader of a `rite`
+            # command with nowhere to go. In the `rite prepare` layout this
+            # is exactly what `rite publish check` says at the project root,
+            # where the repositories are one level down.
+            return GateReport(
+                errors=errors
+                + [
+                    f"{root} is not a git repository, and the publish gate "
+                    "scans repositories — it lists tracked files and walks "
+                    "history. If this is a rite project root, the "
+                    "repositories are the modules beneath it: run the gate "
+                    "inside one of them."
+                ]
+            )
         # `errors +` and not `[...]`: a missing gitleaks is recorded above,
         # and dropping it here left the user reading about the second problem
         # with no mention of the first.
         return GateReport(errors=errors + [tracked.message])
 
-    user_config_path: Path | None = None
-    candidate = root / config.publish_gate.gitleaks_config
-    if candidate.exists():
-        user_config_path = candidate
+    user_config_path, ruleset_note, ruleset_error = _resolve_ruleset(
+        config_root, config
+    )
+    if ruleset_error:
+        errors.append(ruleset_error)
 
     # 🔴 SCRUM-17. gitleaks applies a `.gitleaksignore` at the root of what
     # it scans by itself, and nothing turns that off: measured on 8.30.1, it
@@ -230,13 +294,38 @@ def _run_gate(
             "and the format), then remove .gitleaksignore."
         )
 
+    commits_scanned = _count_commits(root, rev_range)
+
     all_findings: list[Finding] = []
 
-    if binary is not None:
+    # `ruleset_error` and not just `binary`: the error says the gate "will
+    # not quietly fall back to gitleaks' default rules", and then running
+    # them anyway printed findings produced by exactly those rules under
+    # exactly that sentence. The exit code was never wrong — it is
+    # EXIT_ERROR either way — but a message contradicted by the output
+    # beneath it teaches people to skim both.
+    if binary is not None and not ruleset_error:
         # 1. gitleaks: maintained secret-detection ruleset over full git
         #    history (or the push range). Current + historical file content.
+        # The SAME ref scope as rite's own two passes. Left to itself
+        # gitleaks walks `--all`, which reaches `refs/stash` and `refs/notes`
+        # — local by definition, on their way nowhere. Measured: a stashed
+        # file holding a token produced exit 2 with a fingerprint keyed to the
+        # stash commit's sha, so the block could not even be suppressed (the
+        # sha changes every time the stash is rebuilt), and on this project
+        # one stash stack is shared by every worktree.
+        #
+        # Narrowing a secret scan deserves suspicion, so: a stash cannot be
+        # pushed. The gate's question is whether this tree is safe to PUBLISH,
+        # and nothing in `refs/stash` is going anywhere. Everything that can
+        # be published is still covered, and now all three passes — content,
+        # commit messages, and the count that reports on them — cover exactly
+        # the same commits, which they did not before.
         history = gitleaks_runner.scan_history(
-            root, binary, config_path=user_config_path, log_opts=rev_range
+            root,
+            binary,
+            config_path=user_config_path,
+            log_opts=rev_range or " ".join(publishable_scope(root)),
         )
         if isinstance(history, gitleaks_runner.ScanError):
             errors.append(f"gitleaks history scan failed: {history.message}")
@@ -296,12 +385,15 @@ def _run_gate(
         # this does not re-raise decisions someone already made; when it does
         # not parse, everything found is shown unfiltered rather than hidden.
         partial, suppressed, entries = _suppress_best_effort(
-            root, _dedupe(all_findings)
+            config_root, _dedupe(all_findings)
         )
         return GateReport(
             errors=errors,
             files_scanned=len(tracked),
             unreadable_files=unreadable,
+            commits_scanned=commits_scanned,
+            ruleset_note=ruleset_note,
+            config_root_note=config_root_note,
             partial_findings=partial,
             suppressed=suppressed,
             suppressions=entries,
@@ -309,7 +401,7 @@ def _run_gate(
 
     merged = _dedupe(all_findings)
 
-    suppression_path = root / DEFAULT_SUPPRESSION_PATH
+    suppression_path = config_root / DEFAULT_SUPPRESSION_PATH
     try:
         suppressions = supp_mod.parse(suppression_path)
     except Exception as exc:  # noqa: BLE001 - `parse` reads bytes it did not write
@@ -326,6 +418,9 @@ def _run_gate(
             errors=[suppressions.message],
             files_scanned=len(tracked),
             unreadable_files=unreadable,
+            commits_scanned=commits_scanned,
+            ruleset_note=ruleset_note,
+            config_root_note=config_root_note,
             partial_findings=merged,
         )
 
@@ -342,7 +437,110 @@ def _run_gate(
         suppressions=suppressions,
         files_scanned=len(tracked),
         unreadable_files=unreadable,
+        commits_scanned=commits_scanned,
+        ruleset_note=ruleset_note,
+        config_root_note=config_root_note,
     )
+
+
+def _looks_like_a_repo(root: Path) -> bool:
+    """Is `root` inside a git repository at all? Used only to choose which
+    error to print, never to decide whether to scan."""
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--git-dir"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return True
+    return proc.returncode == 0
+
+
+def _is_default_config(configured: str) -> bool:
+    """Is this the default `gitleaks_config`, however it is spelt?
+
+    Raw string equality decided this, so `./.rite/gitleaks.toml` — the same
+    file, written the way a person writes a relative path — counted as a
+    deliberately chosen config, and a project that had never chosen anything
+    became EXIT_ERROR. The hook fails closed, so that is every push refused
+    over a leading `./`.
+    """
+    return PurePosixPath(configured) == PurePosixPath(DEFAULT_GITLEAKS_CONFIG)
+
+
+def _resolve_ruleset(root: Path, config: ProjectConfig) -> tuple[Path | None, str, str]:
+    """`(config_path, note, error)` — which gitleaks ruleset this run applies.
+
+    🔴 SCRUM-63. This was three lines with no third element: a configured
+    `gitleaks_config` that does not exist set the path to None, gitleaks ran
+    on its built-in defaults, and nothing anywhere said so. For the DEFAULT
+    path that is correct and harmless — the defaults are a real ruleset, and
+    a scan with them demonstrably catches planted secrets. For a path someone
+    chose it is the hole: they point the gate at the rules they want enforced,
+    the file is missing or misspelt, and the gate quietly enforces weaker ones
+    and reports clean. Rules that vanish without a word are not rules.
+
+    So: a missing NON-default config is EXIT_ERROR, and the default ruleset
+    is never applied silently — `note` is returned on every path and the
+    report prints it, so "clean" always arrives next to what it was clean
+    against.
+    """
+    configured = config.publish_gate.gitleaks_config
+    candidate = root / configured
+    if candidate.exists():
+        return candidate, f"gitleaks ruleset: {configured}", ""
+    if not _is_default_config(configured):
+        return (
+            None,
+            "",
+            f"publish_gate.gitleaks_config names {configured}, and "
+            f"{candidate} does not exist. The gate will not quietly fall back "
+            "to gitleaks' default rules when it was pointed at different "
+            "ones — create that file, or remove the setting to use the "
+            "defaults deliberately.",
+        )
+    return None, "gitleaks ruleset: gitleaks' defaults (no " + configured + ")", ""
+
+
+def _count_commits(root: Path, rev_range: str | None) -> int | None:
+    """How many commits the history scan has in scope. None if git cannot say.
+
+    🔴 SCRUM-63. Zero is a real answer and the one that matters: a pre-push
+    range of `<sha> --not --remotes` for a branch already on the remote
+    contains no commits, so the history scan walks nothing and the gate still
+    prints "clean". That is not wrong — nothing new is being published — but
+    unqualified it reads as "history was scanned and is clean", which is how
+    a run that looked at no commits came to be offered as proof the scanner
+    works. The count is reported so the sentence cannot be misread.
+
+    It counts commits IN SCOPE, which slightly overstates what the CONTENT
+    scan reads: gitleaks walks `git log -p`, which emits no diff for a merge
+    commit, so a secret introduced only in a conflict resolution falls inside
+    this number and outside that scan. The commit-MESSAGE passes do read
+    merges. Said here rather than quietly corrected, because the number's
+    whole purpose is to be the thing you can check.
+    """
+    import subprocess
+
+    scope = rev_range_args(rev_range) if rev_range else publishable_scope(root)
+    args = ["git", "rev-list", "--count", *scope]
+    try:
+        proc = subprocess.run(
+            args, cwd=root, capture_output=True, text=True, errors="replace", timeout=60
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        return int(proc.stdout.strip())
+    except ValueError:
+        return None
 
 
 def _dedupe(findings: list[Finding]) -> list[Finding]:
@@ -420,8 +618,28 @@ def _split_off_pre_existing(
     touched = pattern_scan.files_touched_by(root, rev_range)
     if isinstance(touched, pattern_scan.ScanError):
         return blocking, []
-    still_blocking = [f for f in blocking if not f.file or f.file in touched]
-    pre_existing = [f for f in blocking if f.file and f.file not in touched]
+
+    def _from_this_push(f: Finding) -> bool:
+        if not f.file:
+            return True
+        if f.file == COMMIT_MESSAGE_FILE:
+            # 🔴 A commit message is not a file, and matching it against a
+            # touched-FILE set can only ever fail — so EVERY commit-message
+            # finding was demoted, and the pre-push hook exited 0 over a
+            # token in the message of the very commit being pushed.
+            # Measured: `rite publish check` exit 2, the hook exit 0, the
+            # push allowed, under the words "already in the repository, NOT
+            # from this push".
+            #
+            # It is from this push by construction: both message scanners
+            # are given the same `rev_range`, so in hook mode every message
+            # finding came out of a commit the push would publish. There is
+            # no demotion to make.
+            return True
+        return f.file in touched
+
+    still_blocking = [f for f in blocking if _from_this_push(f)]
+    pre_existing = [f for f in blocking if not _from_this_push(f)]
     return still_blocking, pre_existing
 
 
@@ -462,6 +680,43 @@ def _partial_lines(report: GateReport, limit: int = 10) -> list[str]:
     return lines
 
 
+def scanned_line(report: GateReport) -> str:
+    """The one sentence every caller says about coverage: "scanned N tracked
+    file(s) and M commit(s) …".
+
+    Shared because `rite publish check` builds its own output and does not
+    call `format_report`, which is how 🔴 SCRUM-63's fix nearly landed in a
+    formatter the reported command never runs."""
+    scanned = report.files_scanned - len(report.unreadable_files)
+    return f"scanned {scanned} tracked file(s)" + _commit_clause(report)
+
+
+def _commit_clause(report: GateReport) -> str:
+    """What the HISTORY half of the scan covered, said beside the file half.
+
+    🔴 SCRUM-63. "scanned N tracked file(s) … clean" described the working
+    tree and said nothing about commits, so a run over an empty revision
+    range — every pre-push of an already-published branch — produced a
+    confident "clean" that had walked no history at all. Reading it as proof
+    the history scan worked is the obvious mistake, and it was made.
+    """
+    n = report.commits_scanned
+    if report.errors or n is None:
+        # A count printed above "gate: ERROR" is the SCRUM-63 defect
+        # inverted: the number was honest about the commits git listed and
+        # said nothing about the scan that did not run over them. With
+        # gitleaks off PATH this read "scanned 2 tracked file(s) and 2
+        # commit(s) of history" directly above a report that had scanned
+        # for no secrets at all.
+        return ""
+    if n == 0:
+        return (
+            " and 0 commit(s) — NO history was in range, so nothing below is "
+            "a statement about this repository's commit history"
+        )
+    return f" and {n} commit(s) of history"
+
+
 def format_report(report: GateReport) -> str:
     """Human-readable summary — used by both the standalone `__main__` CLI
     and (once wired) the `rite publish check` command."""
@@ -470,11 +725,16 @@ def format_report(report: GateReport) -> str:
         lines.append("ERROR — the gate could not complete:")
         for e in report.errors:
             lines.append(f"  {e}")
+        if report.config_root_note:
+            lines.append(report.config_root_note)
         lines.extend(_partial_lines(report))
         return "\n".join(lines)
 
-    scanned = report.files_scanned - len(report.unreadable_files)
-    lines.append(f"scanned {scanned} tracked file(s)")
+    lines.append(scanned_line(report))
+    if report.ruleset_note:
+        lines.append(report.ruleset_note)
+    if report.config_root_note:
+        lines.append(report.config_root_note)
     if report.unreadable_files:
         # NOT a warning buried below the verdict. A gate that could not read
         # a file has not cleared it, and the number that used to be printed
@@ -545,7 +805,9 @@ def format_report(report: GateReport) -> str:
     return "\n".join(lines)
 
 
-def ruleset(root: Path, config: ProjectConfig) -> tuple[str, str]:
+def ruleset(
+    root: Path, config: ProjectConfig, scan_root: Path | None = None
+) -> tuple[str, str]:
     """`(line, problem)`: which rules the gate applies here, for `rite doctor`.
 
     🔴 SCRUM-17. Doctor called the gate "active" and said nothing of WHAT it
@@ -560,7 +822,12 @@ def ruleset(root: Path, config: ProjectConfig) -> tuple[str, str]:
     extra = (
         f", plus {declared} pattern(s) from config.yaml" if declared else ""
     ) + f", plus rite's {len(BUILTIN_PATH_PATTERNS)} built-in path rules"
-    stray = root / ".gitleaksignore"
+    # gitleaks applies a `.gitleaksignore` at the root of what it SCANS, so
+    # this question belongs to the scanned tree and the `gitleaks_config`
+    # question below belongs to the project. They were both asked of one
+    # path: a stray file in the module repository then failed every push
+    # closed while doctor reported the rules healthy.
+    stray = (scan_root or root) / ".gitleaksignore"
     if stray.exists():
         return (
             f"publish gate rules: CANNOT VOUCH — {stray} exists, and gitleaks "
@@ -568,12 +835,25 @@ def ruleset(root: Path, config: ProjectConfig) -> tuple[str, str]:
             "its entries to .rite/gitleaksignore with reasons, then remove it",
             f"{stray} would hide findings without a reason",
         )
-    named = root / config.publish_gate.gitleaks_config
+    configured = config.publish_gate.gitleaks_config
+    named = root / configured
     if not named.exists():
+        if not _is_default_config(configured):
+            # 🔴 SCRUM-63. Doctor said "optional" about every absent config,
+            # including one someone chose — the same sentence over a healthy
+            # project and over a gate enforcing rules nobody asked for. The
+            # gate now refuses that case outright, and doctor has to agree
+            # with it or one of the two instruments is lying.
+            return (
+                f"publish gate rules: CANNOT VOUCH — config.yaml names "
+                f"{configured} and {named} does not exist, so the gate "
+                "refuses to run rather than fall back to gitleaks' "
+                f"defaults{extra}",
+                f"{named} does not exist",
+            )
         return (
             "publish gate rules: gitleaks' default ruleset, passed by rite "
-            f"explicitly (no {config.publish_gate.gitleaks_config}, which is "
-            f"optional){extra}",
+            f"explicitly (no {configured}, which is optional){extra}",
             "",
         )
     try:

@@ -307,7 +307,12 @@ def _publish(
     # 🔴 The floor the model cannot talk past: nothing leaves unless rite's
     # publish gate passed on exactly the commits being sent. "Could not
     # check" (EXIT_ERROR: a scanner missing) is not a pass.
-    report = run_gate(project, rev_range=f"{module.branch}..{branch}")
+    # Scanned at the module repository, with the PROJECT's rules: `root` is
+    # where `.rite/` lives and `project` is the repository beneath it, and
+    # passing one path for both either scans a tree git cannot answer about
+    # (🔴 SCRUM-60) or drops every suppression the project declared.
+    rng = f"{module.branch}..{branch}"
+    report = run_gate(project, rev_range=rng, config_root=root)
     if report.exit_code != EXIT_CLEAN:
         return no(
             f"the publish gate did not pass (exit {report.exit_code})",
