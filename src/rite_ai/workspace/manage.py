@@ -828,7 +828,23 @@ def _write_worker_manifest(worker_dir: Path, manifest: WorkerManifest) -> None:
 
     Omitted when empty rather than written as `claude_instructions: ''`: a
     Worker with nothing extra to say gets the file §8.4 documents, not an
-    empty key inviting someone to wonder what it does."""
+    empty key inviting someone to wonder what it does.
+
+    ⚠ **`decomposer` is the one field still not written** (RL-61), so a
+    hand-set Level-2 model would not survive a rewrite. Named here rather than
+    left for someone to discover, since the paragraph above is exactly that
+    defect: "read by `parse_worker` and written by nothing".
+
+    The five engine keys (OL3) ARE written, each omitted at its default. They
+    have no `add_worker` flag yet, so a local Worker is declared by editing this
+    file — which makes silent deletion on rewrite the live risk rather than a
+    theoretical one. There is only one caller today and it creates the file;
+    writing them means adding a second caller cannot quietly drop an engine.
+    `context_window` must be omitted at 0 and not written as `0`: a `0` on a
+    `claude` engine is REFUSED on the next parse, so writing it unconditionally
+    would make this function produce files it cannot read back."""
+    from rite_ai.config.managers import CLAUDE
+
     data = {
         "worker": {
             "name": manifest.name,
@@ -840,6 +856,14 @@ def _write_worker_manifest(worker_dir: Path, manifest: WorkerManifest) -> None:
         data["worker"]["claude_instructions"] = manifest.claude_instructions
     if manifest.follow_module_docs:
         data["worker"]["follow_module_docs"] = list(manifest.follow_module_docs)
+    if manifest.engine and manifest.engine != CLAUDE:
+        data["worker"]["engine"] = manifest.engine
+    for key in ("endpoint", "model", "agent"):
+        value = getattr(manifest, key)
+        if value:
+            data["worker"][key] = value
+    if manifest.context_window:
+        data["worker"]["context_window"] = manifest.context_window
     write_atomic(
         worker_dir / "worker.yml",
         yaml.safe_dump(data, sort_keys=False, default_flow_style=False),
