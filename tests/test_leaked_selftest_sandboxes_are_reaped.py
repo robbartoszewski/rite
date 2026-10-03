@@ -199,3 +199,46 @@ def test_a_reap_that_raises_does_not_break_the_tick(tmp_path, monkeypatch):
     result = run_tick(_project(tmp_path))
     assert result.ok  # the tick's real job (the watchdog) still ran
     assert any("reap skipped" in m for m in result.messages)
+
+
+def test_a_listing_entry_missing_has_changes_is_kept(monkeypatch):
+    # The fail-safe default, pinned: `list_rite_sandboxes` reads a MISSING
+    # `has_changes` as "yes" (holds work) so a renamed/absent field can never
+    # make the reaper destroy something. Flipping that default to "no" turns
+    # this red — exactly the unpinned fail-safe the review flagged.
+    import json
+    import subprocess
+
+    import rite_ai.sandbox as sb
+
+    name = f"rite-selftest-{DEAD}-abadcafe"
+    listing = {
+        "sandboxes": [
+            {
+                # NOTE: no "has_changes" key — the whole point of this test.
+                "status": "idle",
+                "agent": "idle",
+                "environment": {"name": name, "dirs": []},
+            }
+        ]
+    }
+
+    def fake_run(args, **kwargs):
+        assert "ls" in args  # the `yoloai ls --active --json` call
+        return subprocess.CompletedProcess(
+            args, 0, stdout=json.dumps(listing), stderr=""
+        )
+
+    monkeypatch.setattr(sb, "_yoloai_binary", lambda: "yoloai")
+    monkeypatch.setattr(sb.subprocess, "run", fake_run)
+
+    destroyed: list[str] = []
+    # Real lister (exercises the has_changes default); creator is dead.
+    result = sb.reap_dead_selftest_sandboxes(
+        is_alive=lambda pid: False,
+        destroy=lambda n: destroyed.append(n) or True,
+        self_pid=1,
+    )
+    assert destroyed == [], "a probe with an unknown has_changes was destroyed"
+    assert result.reaped == ()
+    assert any(name == kept and "unapplied" in why for kept, why in result.kept)
