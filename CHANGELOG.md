@@ -1,6 +1,28 @@
 # Changelog
 
-## Unreleased
+## 0.7.0 (2026-10-04)
+
+**0.7.0 in one paragraph.** A Manager runs until you stop it, recovers a
+stalled Worker by itself, and can give a ticket to a Worker running a local
+model on your own GPU alongside Claude Workers. A Worker can now tell its
+Manager it has finished — there was no command for that before, and a Worker
+that finished fell silent and was reported as stalled. Your answer to a
+Worker's question reaches the Worker, and you can see it did: rite puts 👀 on
+your message when it picks it up, and a ✅ when the Worker says it read the
+answer. A Manager's answer to you arrives in your DM, under the message you
+asked in, rather than in the day's notes. The publish gate runs from a
+project whose root is not a repository, and says what it scanned.
+
+**Platforms.** Everything here runs on macOS. The Linux suite runs in Docker
+against a matched baseline; the sandboxed Worker paths are exercised on macOS
+seatbelt.
+
+⚠ **What is NOT in it.** A GPU Worker's turn inside a sandbox is gated on a
+yoloAI profile fix (DF16) and is deferred to 0.7.1: the local tier runs a
+subtask from a Worker's workspace, and the live sandboxed turn is not claimed
+here. The dogfood that produced these fixes has not been re-run against this
+build.
+
 
 ### A check mark means the Worker read your answer: `rite ack`
 

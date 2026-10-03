@@ -122,7 +122,16 @@ Open a worker session in `workers/alpha/` and tell it which ticket to work —
 "work ABC-12". Its `CLAUDE.md` walks it through the rest: `rite prepare` to
 sync its clones, `rite claim` on the paths before touching them, your
 project's own test and lint commands, `/review` (reviewer agents against a
-checklist), a PR, and `rite release` after the merge. Several worker sessions
+checklist), a PR, `rite done` to hand the finished work back to its Manager,
+and `rite release` after the merge.
+
+`rite done` is how a worker says it has finished. It matters more than it
+sounds: a worker cannot write a Manager's inbox — anything there is delivered
+as your own instruction — and from inside a sandbox there is no route to it at
+all. Without that command a worker that finished simply went quiet, and going
+quiet is indistinguishable from having died mid-ticket, so it was reported as
+stalled and restarted. A worker that has handed back is reported as free, and
+not restarted. Several worker sessions
 can run at once: if one claims a path that overlaps a path another holds, rite
 refuses the claim, and each worker's instructions say not to touch paths
 another worker holds.
@@ -173,7 +182,11 @@ don't need to attach. After the prepare summary, start prints the sandbox's
 name and a `yoloai attach <name>` command for watching the session or typing
 to it (detach with `Ctrl-b d`). A question the Worker asks reaches you in
 Slack, and your reply in that thread is carried back to it, so you need not
-attach to answer. That session's first screen shows the credentials
+attach to answer. rite puts 👀 on your message the moment it picks it up, and
+a ✅ on it when the Worker says it read the answer — which means the Worker
+said so, not that rite watched it read it; nothing on the host can see that.
+An answer nobody acknowledges is reported back to you as unread rather than
+left to look delivered. That session's first screen shows the credentials
 passed in, in plain text, so don't share or record it; `rite sandbox pane`
 shows it with them redacted.
 
@@ -228,6 +241,7 @@ rite add worker alpha        # a checkout of its own, under workers/alpha/
 rite prepare --worker alpha                            # sync that checkout
 rite claim backend/src --worker alpha --ticket ABC-12   # before touching anything
 rite heartbeat --worker alpha --ticket ABC-12           # "still alive"
+rite done --worker alpha --ticket ABC-12                # finished: hand it back
 rite release --worker alpha                            # after the PR merges
 
 rite status                  # what is happening now
@@ -349,11 +363,12 @@ What follows is what is genuinely not built, checked against the code.
 - **The loop works the queue.** `rite loop` watches it and says why it is
   stopped — it prints the Worker it would start and does not start one.
   Two ways to close that. Dispatching mechanical subtasks to local models is
-  still unwired — but only the half that would run one: nothing outside
-  `rite_ai/local/` calls the runner or the harness, and there is no command
-  that executes a subtask on a local model. The rest is wired and reachable:
-  assignment routes duties through the local duty router, and `rite doctor`
-  probes a configured `local:<class>` endpoint rather than assuming it.
+  wired as of 0.7.0: `rite local decompose`, `rite local approve` and `rite
+  local step` run one, assignment routes duties through the local duty
+  router, and `rite doctor` probes a configured `local:<class>` endpoint
+  rather than assuming it. A plan has to be approved before anything runs
+  from it, and rite does not write plans — you write the decomposition and
+  approve it.
   Dispatching Claude sessions
   **unattended** remains forbidden by SPEC §9.12, on purpose, because it
   spends your quota while nobody is watching. *Attended* dispatch arrived in
@@ -491,11 +506,20 @@ gets. See the guide.
 
 **A Manager runs on Claude Code, or on Goose for a local model.**
 `CLAUDE.md` and `.claude/agents/` are first-class here rather than behind a
-provider abstraction. A local model tier for Workers (`local:<class>`) is
-designed, parsed by the config and probed by `rite doctor`; what is missing
-is the half that runs a subtask on one. Other tools are added one at a
-time rather than behind a general abstraction: a Cursor adapter is planned
-for 0.7.0.
+provider abstraction. The local model tier for Workers (`local:<class>`) runs
+a subtask on your own GPU as of 0.7.0: `rite local step` gives a Worker one
+subtask and the slice of the spec it cites, runs the subtask's verify itself,
+and commits the result itself — a model's claim that it finished is kept as a
+note and never decides anything.
+
+⚠ **What is deferred to 0.7.1:** that turn taken *inside a sandbox*. It runs
+from a Worker's workspace today. The sandboxed version is gated on a yoloAI
+profile fix (a Worker sandbox is escapable through a tmux server started
+outside it; the fix is upstream, and a written patch is not a fix).
+
+Other tools are added one at a time rather than behind a general
+abstraction. A Cursor adapter is **not** in 0.7.0: `engine: cursor` is
+refused by the config, which names the three it does know.
 
 **Workers are interchangeable, so there is no capability routing.** Every
 worker holds the same project-scoped credentials, so assignment picks
