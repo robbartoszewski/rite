@@ -109,7 +109,18 @@ def install_claude_config(
     """
     preserved = preserve_foreign_claude_md(project_root)
     claude_md = generate_claude_md(role, brief, modules, config, project_root)
-    (project_root / "CLAUDE.md").write_text(claude_md)
+    # ONE body, written to every file this project's engines read (SCRUM-49).
+    # A project with a local Manager also gets `AGENTS.md` at the root: a local
+    # Manager runs in the checkout and Goose reads that name, not `CLAUDE.md`.
+    from rite_ai.instruction_files import (
+        instruction_files,
+        project_runs_a_local_engine,
+    )
+
+    for path in instruction_files(
+        project_root, local=project_runs_a_local_engine(config)
+    ):
+        path.write_text(claude_md)
 
     agents_dir = project_root / ".claude" / "agents"
     commands_dir = project_root / ".claude" / "commands"

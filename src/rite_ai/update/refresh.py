@@ -78,12 +78,18 @@ SUPERSEDED_HEADINGS: dict[str, tuple[str, ...]] = {
 # eating someone's design notes.
 REFRESHABLE = (
     "CLAUDE.md",
+    # SCRUM-49: the same generated body, under the name Goose reads. Added here
+    # as well as at the writers, because this allowlist is what `_write` checks
+    # — without it `rite update` raises RefusedWrite on any project with a local
+    # Manager, which is how the gap was found rather than shipped.
+    "AGENTS.md",
     ".claude/agents/*",
     ".claude/commands/*",
     ".rite/review-checklist.md",
     ".github/workflows/publish-gate.yml",
     ".gitignore",
     "workers/*/CLAUDE.md",
+    "workers/*/AGENTS.md",
     "workers/*/.claude/agents/*",
     "workers/*/.claude/commands/*",
 )
@@ -490,11 +496,19 @@ def refresh_project(
     results: list[FileResult] = []
 
     generated = generate_claude_md(brief.role, brief, modules, config, root)
-    results.append(
-        _refresh_claude_md(
-            root, root / "CLAUDE.md", generated, GENERATED_MARKER, take, apply
-        )
+    # SCRUM-49: the same body to every file the project's engines read. This is
+    # also what installs `AGENTS.md` into a project that predates the change —
+    # `_refresh_claude_md` treats a missing generated file as a gap and delivers
+    # it, and leaves an unmarked one somebody else wrote untouched.
+    from rite_ai.instruction_files import (
+        instruction_files,
+        project_runs_a_local_engine,
     )
+
+    for path in instruction_files(root, local=project_runs_a_local_engine(config)):
+        results.append(
+            _refresh_claude_md(root, path, generated, GENERATED_MARKER, take, apply)
+        )
     files = FileResult(".claude/")
     for fname in _AGENT_FILES:
         ch = refresh_template(
@@ -570,16 +584,17 @@ def refresh_project(
             wgen = render_worker_claude_md(
                 manifest, config.spec, _module_commands_section(root, mods)
             )
-            results.append(
-                _refresh_claude_md(
-                    root,
-                    worker_dir / "CLAUDE.md",
-                    wgen,
-                    WORKER_GENERATED_MARKER,
-                    take,
-                    apply,
+            for wpath in instruction_files(worker_dir, local=manifest.is_local):
+                results.append(
+                    _refresh_claude_md(
+                        root,
+                        wpath,
+                        wgen,
+                        WORKER_GENERATED_MARKER,
+                        take,
+                        apply,
+                    )
                 )
-            )
         wfiles = FileResult(f"{rel}/.claude/")
         for fname in _AGENT_FILES:
             ch = refresh_template(

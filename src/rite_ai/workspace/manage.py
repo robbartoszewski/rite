@@ -1029,10 +1029,15 @@ def _write_worker_claude_config(
     claude_dir.mkdir(exist_ok=True)
     _install_worker_review_convention(claude_dir)
 
-    write_atomic(
-        worker_dir / "CLAUDE.md",
-        render_worker_claude_md(manifest, spec, module_commands),
-    )
+    # ONE body, written to every file this Worker's engine reads (SCRUM-49).
+    # A local Worker also gets `AGENTS.md`, because Goose reads that and not
+    # `CLAUDE.md`; a Claude Worker is unchanged. Generated once on purpose —
+    # `instruction_files` owns the filenames so SCRUM-48 flips one place.
+    from rite_ai.instruction_files import instruction_files
+
+    body = render_worker_claude_md(manifest, spec, module_commands)
+    for path in instruction_files(worker_dir, local=manifest.is_local):
+        write_atomic(path, body)
 
 
 def render_worker_claude_md(
