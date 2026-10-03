@@ -73,6 +73,7 @@ def exec_argv(
     argv: list[str],
     environment: dict[str, str] | None = None,
     binary: str = "yoloai",
+    subdir: str = "",
 ) -> list[str]:
     """`argv`, wrapped so it runs inside `sandbox`.
 
@@ -84,6 +85,26 @@ def exec_argv(
     The environment is placed with `env`, because `yoloai exec` takes no
     `--env`. Only `FORWARDED` keys travel, and a secret-shaped name refuses
     rather than riding on argv.
+
+    `subdir` is where the turn runs, RELATIVE to the sandbox's copy of the
+    workdir — and relative is the whole point. ⚠ `yoloai exec` has no `--cwd`
+    (measured on 0.11.0: its flags are the global ones and nothing else), and
+    it starts in the copy's root. A Worker's workdir is `workers/<name>/` while
+    its modules are clones INSIDE it, so a turn left in the root would run the
+    model against the directory above the repository it is meant to edit.
+
+    ⚠ **Placed with `env -C`, and NOT with `sh -c 'cd … && …'`.** `runners.py`
+    makes "no shell" a property of this tier — a verify is `shlex.split` so a
+    decomposer cannot smuggle a second command — and a launcher that reached
+    for a shell would take that property away from the half of the tier that
+    runs a MODEL's turn. Measured inside a real seatbelt sandbox: macOS's own
+    `env` honours `-C`, so the flag needs no coreutils and no shell. `env` is
+    already how the environment is placed here, so this adds a flag to a
+    process that was being run anyway rather than a process.
+
+    A relative `subdir` is also what makes it safe to pass at all: an absolute
+    HOST path is the mistake `exec_launcher`'s docstring warns about, and this
+    cannot express one.
     """
     placed: list[str] = []
     for key in FORWARDED:
@@ -107,7 +128,18 @@ def exec_argv(
                 f"only {', '.join(FORWARDED)}, and will not put a secret on a "
                 "command line"
             )
-    tail = ["env", *placed, *argv] if placed else list(argv)
+    if subdir.startswith("/"):
+        # Refused rather than resolved: an absolute path here is a HOST path,
+        # and `exec_launcher` already measured what that costs — it either
+        # fails or, if the path happens to exist on the host, runs the turn
+        # against the operator's real tree.
+        raise ValueError(
+            f"subdir {subdir!r} is absolute; a sandboxed turn's working "
+            "directory is relative to the sandbox's own copy of the workdir, "
+            "and a host path either fails inside or escapes the sandbox"
+        )
+    where = ["-C", subdir] if subdir else []
+    tail = ["env", *where, *placed, *argv] if (placed or where) else list(argv)
     return [binary, "exec", sandbox, "--", *tail]
 
 
@@ -137,7 +169,7 @@ def instruction_dir_for(sandbox: str, binary: str = "") -> str:
     return str(layer / "files") if layer is not None else ""
 
 
-def exec_launcher(sandbox: str, binary: str = "", timeout: int = 0):
+def exec_launcher(sandbox: str, binary: str = "", timeout: int = 0, subdir: str = ""):
     """A `GooseAgent.launch` that runs the turn inside `sandbox`.
 
     ⚠ **`workspace` is deliberately ignored.** It is a HOST path, and the
@@ -147,6 +179,22 @@ def exec_launcher(sandbox: str, binary: str = "", timeout: int = 0):
     run in, so passing a host `cwd` would either fail or — worse, if the path
     happens to exist on the host — run the turn OUTSIDE the sandbox against the
     operator's real tree.
+
+    ⚠ **Which is why `subdir` is the one that is honoured.** The host path is
+    ignored and a RELATIVE path is taken instead, because the two are not the
+    same question: the caller knows which module clone inside the copy the
+    turn belongs in, and `subdir` is the only way to say it that cannot name a
+    host path. `worker_step` passes the module's directory name.
+
+    ⚠ **The caller must give `GooseAgent` `inherit_environment=False`.** This
+    launcher refuses to put a secret-shaped variable on argv, and
+    `GooseAgent.run` builds `dict(os.environ)` — correct on the host, fatal
+    here. Measured: with `GITHUB_TOKEN` merely PRESENT in the operator's shell,
+    a sandboxed turn came back `could not start goose: SecretOnArgv` and was
+    recorded as a failed ATTEMPT, which is also RL-47 broken (a turn that never
+    happened spent the subtask). The fix belongs on the agent, which is the
+    thing that knows it is sandboxed; this note is here because the two have to
+    be set together and nothing in the type system says so.
     """
     resolved = binary or shutil.which("yoloai") or "yoloai"
 
@@ -154,7 +202,9 @@ def exec_launcher(sandbox: str, binary: str = "", timeout: int = 0):
         from rite_ai.local.goose_agent import RUN_TIMEOUT_SECONDS
 
         return subprocess.run(
-            exec_argv(sandbox, list(argv), dict(environment or {}), resolved),
+            exec_argv(
+                sandbox, list(argv), dict(environment or {}), resolved, subdir=subdir
+            ),
             capture_output=True,
             text=True,
             errors="replace",

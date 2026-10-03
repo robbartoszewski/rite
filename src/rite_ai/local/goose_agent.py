@@ -183,6 +183,31 @@ class GooseAgent:
     probe: Callable | None = None
     launch: Callable | None = None
     env: dict = field(default_factory=dict)
+    inherit_environment: bool = True
+    """Whether the turn's environment starts from the HOST's.
+
+    ⚠ **True is right on the host and FATAL in a sandbox, which is why this
+    exists.** `goose` on the host needs the operator's `PATH`, `HOME` and the
+    rest to run at all, so the host turn inherits. A sandboxed turn is launched
+    by `in_sandbox.exec_launcher`, which forwards a CLOSED set of keys and
+    REFUSES — by design, SB12 — to put a secret-shaped variable on argv, where
+    every other sandbox on the machine could read it.
+
+    Put together, inheriting meant a sandboxed turn died on the operator's own
+    shell. Measured on this machine: with `GITHUB_TOKEN` merely present in the
+    environment, the turn returned `could not start goose: SecretOnArgv:
+    GITHUB_TOKEN was passed to a sandboxed turn` — and `AgentReport` has no way
+    to say "I could not run at all" for a launch failure, so it was recorded as
+    a failed ATTEMPT against the subtask. RL-47 says only work counts; a turn
+    refused by rite's own leak guard is not work. ⚠ And it would have fired on
+    EVERY yoloAI-launched session, whose launch line exports every token the
+    operator holds — so the sandboxed path would have been dead on the machine
+    it was built for while looking like a model that could not edit a file.
+
+    False builds the environment from nothing but Goose's own keys and `env`.
+    Nothing is lost: the launcher forwards only `FORWARDED` anyway, so what the
+    host environment contributed to a sandboxed turn was never more than the
+    chance of refusing it."""
     instruction_dir: str = ""
     """Where the instruction file is CREATED. Empty means the system temp root,
     which is right on the host and wrong in a sandbox (OL5).
@@ -240,7 +265,10 @@ class GooseAgent:
             instruction_path = handle_file.name
 
         argv = [self.binary, "run", "-n", handle, "-i", instruction_path]
-        environment = dict(os.environ)
+        # ⚠ `dict(os.environ)` ONLY when inheriting. See `inherit_environment`:
+        # a sandboxed turn that starts from the host environment is refused by
+        # its own launcher over a variable it never wanted.
+        environment = dict(os.environ) if self.inherit_environment else {}
         environment.update(goose_environment(self.endpoint, self.model))
         environment["GOOSE_MODE"] = self.mode
         environment.update(self.env)

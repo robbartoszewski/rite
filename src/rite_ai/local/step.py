@@ -73,6 +73,11 @@ class Step:
     branch: str = ""
     commit: str = ""
     claim_disagreed: bool = False
+    worker: str = ""
+    """Which Worker ran it, when one did. Empty means this ran at MANAGER tier,
+    on the host, which is what happened before SCRUM-54 and still happens when
+    no Worker is assigned to the ticket."""
+    sandbox: str = ""
     verify_output: str = ""
     lines: list[str] = field(default_factory=list)
     problem: str = ""
@@ -152,11 +157,18 @@ def take_one_step(
     verifier=None,
     committer=None,
     claims=None,
+    placement=None,
 ) -> Step:
     """Run the next planned subtask of `ticket`, or say why nothing ran.
 
     Every dependency is injectable and every default is the production one, so
     a test substitutes the agent without substituting the path.
+
+    `placement` is where the subtask runs (SCRUM-54), and it is injectable for
+    the same reason the agent is: the sandboxed path's workspace, branch and
+    claim identity all come from it, so a test that could only substitute the
+    agent could not reach them. Left unset — and with no agent passed either —
+    it is resolved from the project, which is the production path.
     """
     root = Path(root)
     step = Step(ticket=ticket)
@@ -207,11 +219,47 @@ def take_one_step(
         step.problem = f"{ticket} {subtask.id}: {slice_problem}"
         return step
 
+    # WHERE this subtask runs (SCRUM-54). A local Worker assigned to the ticket
+    # runs it inside its own sandbox, against that sandbox's copy of its
+    # checkout; with no such Worker this is empty and everything below is the
+    # Manager-tier path exactly as it was.
+    #
+    # ⚠ Asked BEFORE the agent is defaulted, and the agent is defaulted FROM it.
+    # A placement whose agent was overwritten by `_agent_for`'s host-run Goose
+    # would run the turn on the operator's own tree while every other part of
+    # this call — the workspace, the branch, the verify — pointed at a sandbox.
+    if placement is None and agent is None:
+        from rite_ai.local.worker_step import placement_for
+
+        placement = placement_for(root, manager, ticket)
+    if placement is not None and placement.problem:
+        step.problem = f"{ticket} {subtask.id}: {placement.problem}"
+        return step
+    placed = bool(placement and placement.sandboxed)
+    if placed:
+        step.worker = placement.worker
+        step.sandbox = placement.sandbox
+
     if agent is None:
-        agent, agent_problem = _agent_for(root, manager)
-        if agent_problem:
-            step.problem = agent_problem
+        if placed and placement.agent is not None:
+            agent = placement.agent
+        elif placed:
+            step.problem = (
+                f"{ticket} {subtask.id}: {placement.worker} was placed in "
+                f"sandbox {placement.sandbox} but no agent was built for it"
+            )
             return step
+        else:
+            agent, agent_problem = _agent_for(root, manager)
+            if agent_problem:
+                step.problem = agent_problem
+                return step
+
+    # ⚠ The workspace is the SANDBOX's copy for a placed turn, and it has to be
+    # all three of these together: the agent edits the copy, so a verify in the
+    # host root would test a tree the model never touched, and a commit there
+    # would put the work where `deliver` does not look for it.
+    workspace = placement.workspace if placed else str(root)
 
     if verifier is None:
         from rite_ai.local.runners import SubprocessVerifier
@@ -250,19 +298,35 @@ def take_one_step(
     outcome = run_subtask(
         state=state,
         manager=manager,
-        worker=manager,
+        # ⚠ The CLAIM is taken in the Worker's name for a placed turn, not the
+        # Manager's. Two Workers of one Manager working two tickets would
+        # otherwise both claim as that Manager, and the claims ledger — whose
+        # one job is exclusion — would read their overlapping scopes as one
+        # holder re-claiming its own paths and let both through.
+        worker=placement.worker if placed else manager,
         plan=plan,
         subtask=subtask,
         spec_slice=spec_slice,
-        workspace=str(root),
+        workspace=workspace,
         agent=agent,
         verifier=verifier,
         committer=committer,
         claims=claims,
         approach=approach,
+        # The ticket for a placed turn: `deliver` collects `refs/heads/<ticket>`
+        # from the sandbox and nothing else. See `run_subtask`'s own note.
+        branch=placement.branch if placed else "",
     )
     step.ran = True
     _record(state, plan, subtask, outcome, read.version, step)
+    if placed:
+        # ⚠ AFTER `_record`, which ASSIGNS `step.lines` from the outcome — the
+        # same trap `_approach_for`'s note below describes, and appending before
+        # it would silently drop the line.
+        step.lines.append(
+            f"ran inside {placement.worker}'s sandbox {placement.sandbox}, "
+            f"in {placement.subdir}/, committed to {outcome.branch}"
+        )
     if approach_note:
         # ⚠ AFTER `_record`, which assigns `step.lines` from the outcome — a note
         # appended before it was silently dropped, which is how a Level-2 failure
