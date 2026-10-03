@@ -139,7 +139,7 @@ def test_the_author_may_not_approve_its_own_plan(tmp_path):
     """DD-3.5, at the other door into APPROVED."""
     root = _project(tmp_path)
     # give the author plan-review too, so only DD-3.5 can stop it
-    cfg = (root / ".rite" / "config.yaml")
+    cfg = root / ".rite" / "config.yaml"
     cfg.write_text(
         cfg.read_text().replace(
             "duties: [decompose]", "duties: [decompose, plan-review]"

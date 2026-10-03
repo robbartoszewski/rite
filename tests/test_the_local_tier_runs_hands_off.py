@@ -53,8 +53,7 @@ def _project(tmp_path: Path, *, author="qwen3:8b", reviewer="qwen3:32b", solo=Fa
             "    duties: [plan-review, decide, board, route, integrate]\n"
         )
     (rite / "config.yaml").write_text(
-        "ticket_backend:\n  type: none\n"
-        "coordination:\n  manager_roles:\n" + roles
+        "ticket_backend:\n  type: none\ncoordination:\n  manager_roles:\n" + roles
     )
     _spec_units(tmp_path, "5.1", "5.2")
     return tmp_path
@@ -72,12 +71,20 @@ def _spec_units(root: Path, *ids: str) -> None:
 def _subtasks(status=dec.PLANNED):
     return (
         dec.Subtask(
-            id="s1", intent="first", scope=("a.txt",), verify="pytest -q",
-            cites=("5.1",), status=status,
+            id="s1",
+            intent="first",
+            scope=("a.txt",),
+            verify="pytest -q",
+            cites=("5.1",),
+            status=status,
         ),
         dec.Subtask(
-            id="s2", intent="second", scope=("b.txt",), verify="pytest -q",
-            cites=("5.2",), status=status,
+            id="s2",
+            intent="second",
+            scope=("b.txt",),
+            verify="pytest -q",
+            cites=("5.2",),
+            status=status,
         ),
     )
 
@@ -138,8 +145,11 @@ class _Driver:
         dec.write(
             _state(self.root),
             dec.Decomposition(
-                ticket=plan.ticket, subtasks=done, decomposed_by=plan.decomposed_by,
-                approval=plan.approval, approved_by=plan.approved_by,
+                ticket=plan.ticket,
+                subtasks=done,
+                decomposed_by=plan.decomposed_by,
+                approval=plan.approval,
+                approved_by=plan.approved_by,
             ),
             read.version,
         )
@@ -198,8 +208,12 @@ def test_one_stage_per_pass_and_never_two(tmp_path):
 
 def test_when_every_subtask_is_accepted_it_asks_rite_to_deliver(tmp_path):
     root = _project(tmp_path)
-    _write_plan(root, subtasks=_subtasks(dec.ACCEPTED), approval=dec.APPROVED,
-                approved_by="lead")
+    _write_plan(
+        root,
+        subtasks=_subtasks(dec.ACCEPTED),
+        approval=dec.APPROVED,
+        approved_by="lead",
+    )
     asked = {}
 
     def ask(root_, manager, ticket):
@@ -218,8 +232,12 @@ def test_the_delivery_goes_through_the_request_path(tmp_path):
     from rite_ai.publishing import requests
 
     root = _project(tmp_path)
-    _write_plan(root, subtasks=_subtasks(dec.ACCEPTED), approval=dec.APPROVED,
-                approved_by="lead")
+    _write_plan(
+        root,
+        subtasks=_subtasks(dec.ACCEPTED),
+        approval=dec.APPROVED,
+        approved_by="lead",
+    )
     # A Worker of this Manager, recorded as working the ticket.
     worker_dir = root / "workers" / "alpha"
     worker_dir.mkdir(parents=True)
@@ -231,7 +249,9 @@ def test_the_delivery_goes_through_the_request_path(tmp_path):
 
     (root / ".rite" / "modules.yaml").write_text("modules: {}\n")
     record.write(
-        root, "alpha", TICKET,
+        root,
+        "alpha",
+        TICKET,
         parse_config(root / ".rite" / "config.yaml"),
         parse_modules(root / ".rite" / "modules.yaml"),
     )
@@ -248,8 +268,12 @@ def test_a_delivery_is_not_asked_for_twice(tmp_path):
     from rite_ai.publishing import requests
 
     root = _project(tmp_path)
-    _write_plan(root, subtasks=_subtasks(dec.ACCEPTED), approval=dec.APPROVED,
-                approved_by="lead")
+    _write_plan(
+        root,
+        subtasks=_subtasks(dec.ACCEPTED),
+        approval=dec.APPROVED,
+        approved_by="lead",
+    )
     where = requests.requests_dir(root, "planner")
     where.mkdir(parents=True, exist_ok=True)
     (where / f"{TICKET}.json").write_text("{}")
@@ -320,10 +344,20 @@ def test_an_unresolvable_cite_stops_approval(tmp_path):
     _write_plan(
         root,
         subtasks=(
-            dec.Subtask(id="s1", intent="a", scope=("a.txt",), verify="pytest -q",
-                        cites=("9.9",)),
-            dec.Subtask(id="s2", intent="b", scope=("b.txt",), verify="pytest -q",
-                        cites=("5.2",)),
+            dec.Subtask(
+                id="s1",
+                intent="a",
+                scope=("a.txt",),
+                verify="pytest -q",
+                cites=("9.9",),
+            ),
+            dec.Subtask(
+                id="s2",
+                intent="b",
+                scope=("b.txt",),
+                verify="pytest -q",
+                cites=("5.2",),
+            ),
         ),
     )
     blocked = advance_ticket(root, "planner", TICKET)

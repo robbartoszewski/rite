@@ -246,7 +246,10 @@ def test_the_proposer_can_pin_its_window():
         return MagicMock(returncode=0, stdout="1. go", stderr="")
 
     GooseProposer(
-        model="m", endpoint="http://e", launch=launch, context_limit=32768,
+        model="m",
+        endpoint="http://e",
+        launch=launch,
+        context_limit=32768,
         path_root="/sbx/rite/goose",
     ).propose("prompt", "/tmp")
     assert seen["GOOSE_CONTEXT_LIMIT"] == "32768"

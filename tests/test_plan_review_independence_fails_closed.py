@@ -107,9 +107,7 @@ def test_an_unnamed_author_is_still_fine_for_other_stages():
 
 def test_the_author_may_never_review_its_own_plan():
     author = _role("planner", "local:small", "qwen3:8b")
-    assert not _independent(
-        Candidate(role=author), _plan_review("planner"), [author]
-    )
+    assert not _independent(Candidate(role=author), _plan_review("planner"), [author])
 
 
 def test_other_stages_need_only_a_different_manager():

@@ -46,8 +46,13 @@ def _problems(entries):
 def test_a_local_manager_may_hold_integrate():
     problems = _problems(
         [
-            {"name": "gpu", "engine": "local:large", "model": "qwen3:32b",
-             "duties": ["integrate", "decide", "board", "route"], **GPU},
+            {
+                "name": "gpu",
+                "engine": "local:large",
+                "model": "qwen3:32b",
+                "duties": ["integrate", "decide", "board", "route"],
+                **GPU,
+            },
         ]
     )
     assert not any("integrate" in p for p in problems), problems
@@ -58,10 +63,20 @@ def test_an_all_local_fleet_with_every_duty_configures():
     # without a Claude Manager anywhere in the fleet.
     problems = _problems(
         [
-            {"name": "lead", "engine": "local:large", "model": "qwen3:32b",
-             "duties": ["decide", "board", "route", "integrate", "plan-review"], **GPU},
-            {"name": "planner", "engine": "local:small", "model": "qwen3:8b",
-             "duties": ["decompose", "step-review", "execute"], **GPU},
+            {
+                "name": "lead",
+                "engine": "local:large",
+                "model": "qwen3:32b",
+                "duties": ["decide", "board", "route", "integrate", "plan-review"],
+                **GPU,
+            },
+            {
+                "name": "planner",
+                "engine": "local:small",
+                "model": "qwen3:8b",
+                "duties": ["decompose", "step-review", "execute"],
+                **GPU,
+            },
         ]
     )
     assert problems == [], problems
@@ -73,10 +88,20 @@ def test_an_all_local_fleet_with_every_duty_configures():
 def test_a_same_model_reviewer_cannot_be_the_independent_one():
     problems = _problems(
         [
-            {"name": "lead", "engine": "local:large", "model": "qwen3.8:latest",
-             "duties": ["decide", "board", "route", "plan-review", "integrate"], **GPU},
-            {"name": "planner", "engine": "local:small", "model": "qwen3.8:latest",
-             "duties": ["decompose"], **GPU},
+            {
+                "name": "lead",
+                "engine": "local:large",
+                "model": "qwen3.8:latest",
+                "duties": ["decide", "board", "route", "plan-review", "integrate"],
+                **GPU,
+            },
+            {
+                "name": "planner",
+                "engine": "local:small",
+                "model": "qwen3.8:latest",
+                "duties": ["decompose"],
+                **GPU,
+            },
         ]
     )
     assert any("different model" in p for p in problems), problems
@@ -86,11 +111,20 @@ def test_rites_own_window_pin_does_not_launder_the_same_model():
     # `rite-ctx32768-qwen3.8-latest` IS `qwen3.8:latest` with a bigger window.
     problems = _problems(
         [
-            {"name": "lead", "engine": "local:large",
-             "model": "rite-ctx32768-qwen3.8-latest",
-             "duties": ["decide", "board", "route", "plan-review", "integrate"], **GPU},
-            {"name": "planner", "engine": "local:small", "model": "qwen3.8:latest",
-             "duties": ["decompose"], **GPU},
+            {
+                "name": "lead",
+                "engine": "local:large",
+                "model": "rite-ctx32768-qwen3.8-latest",
+                "duties": ["decide", "board", "route", "plan-review", "integrate"],
+                **GPU,
+            },
+            {
+                "name": "planner",
+                "engine": "local:small",
+                "model": "qwen3.8:latest",
+                "duties": ["decompose"],
+                **GPU,
+            },
         ]
     )
     assert any("different model" in p for p in problems), problems

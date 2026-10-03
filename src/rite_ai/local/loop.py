@@ -209,8 +209,10 @@ def advance_ticket(
         result = step(root, manager, ticket)
         if getattr(result, "problem", ""):
             return Advance(ticket, blocked=f"no subtask ran: {result.problem}")
-        verdict = "accepted" if getattr(result, "accepted", False) else getattr(
-            result, "status", "ran"
+        verdict = (
+            "accepted"
+            if getattr(result, "accepted", False)
+            else getattr(result, "status", "ran")
         )
         return Advance(
             ticket,

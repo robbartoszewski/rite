@@ -105,10 +105,20 @@ def _problems(entries):
 def test_same_model_under_two_labels_is_refused():
     problems = _problems(
         [
-            {"name": "big", "engine": "local:large", "model": "qwen3.8:latest",
-             "duties": ["decompose"], **LOCAL},
-            {"name": "small", "engine": "local:small", "model": "qwen3.8:latest",
-             "duties": ["plan-review"], **LOCAL},
+            {
+                "name": "big",
+                "engine": "local:large",
+                "model": "qwen3.8:latest",
+                "duties": ["decompose"],
+                **LOCAL,
+            },
+            {
+                "name": "small",
+                "engine": "local:small",
+                "model": "qwen3.8:latest",
+                "duties": ["plan-review"],
+                **LOCAL,
+            },
         ]
     )
     assert any("different model" in p for p in problems), problems
@@ -117,10 +127,20 @@ def test_same_model_under_two_labels_is_refused():
 def test_different_models_under_two_labels_pass_the_independence_check():
     problems = _problems(
         [
-            {"name": "big", "engine": "local:large", "model": "qwen3:32b",
-             "duties": ["decompose"], **LOCAL},
-            {"name": "small", "engine": "local:small", "model": "qwen3:8b",
-             "duties": ["plan-review"], **LOCAL},
+            {
+                "name": "big",
+                "engine": "local:large",
+                "model": "qwen3:32b",
+                "duties": ["decompose"],
+                **LOCAL,
+            },
+            {
+                "name": "small",
+                "engine": "local:small",
+                "model": "qwen3:8b",
+                "duties": ["plan-review"],
+                **LOCAL,
+            },
         ]
     )
     assert not any("different model" in p for p in problems), problems
@@ -129,8 +149,13 @@ def test_different_models_under_two_labels_pass_the_independence_check():
 def test_a_claude_reviewer_still_satisfies_a_local_decomposer():
     problems = _problems(
         [
-            {"name": "gpu", "engine": "local:small", "model": "qwen3:8b",
-             "duties": ["decompose"], **LOCAL},
+            {
+                "name": "gpu",
+                "engine": "local:small",
+                "model": "qwen3:8b",
+                "duties": ["decompose"],
+                **LOCAL,
+            },
             {"name": "lead", "engine": "claude", "duties": ["plan-review"]},
         ]
     )

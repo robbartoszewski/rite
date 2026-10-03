@@ -313,9 +313,7 @@ def _decomposer_error(raw: dict, subject: str, engine: str) -> str:
         )
     unknown = sorted(set(body) - {"model"})
     if unknown:
-        return (
-            f"{subject}: decomposer knows only 'model', not {', '.join(unknown)}"
-        )
+        return f"{subject}: decomposer knows only 'model', not {', '.join(unknown)}"
     model = body.get("model", "")
     if not isinstance(model, str) or not model.strip():
         return f"{subject}: decomposer.model must be a non-empty model name"

@@ -132,9 +132,7 @@ def approve_plan(
     # and this is the last point before its subtasks may run.
     from rite_ai.local.plan_validation import candidate_problems
 
-    holders = {
-        r.name for r in roles if "decompose" in effective_duties(r, len(roles))
-    }
+    holders = {r.name for r in roles if "decompose" in effective_duties(r, len(roles))}
     problems = candidate_problems(
         dec.Decomposition(
             ticket=plan.ticket,
