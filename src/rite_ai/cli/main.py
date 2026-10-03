@@ -4013,13 +4013,15 @@ def add_worker_cmd(
     terminal prompt. Without it, Workers share the credentials the project
     already holds.
 
+    \b
     Examples:
       rite add worker alpha
       rite add worker beta --modules backend,shared
       rite add worker gamma --instructions "Ship nothing without a migration plan."
       rite add worker delta --scoped-token
-      rite add worker gpu1 --engine local:small --endpoint http://localhost:11434 \
-        --model qwen3.8:latest --agent goose --context-window 32768
+      rite add worker gpu1 --engine local:small --agent goose \\
+        --endpoint http://localhost:11434 --model qwen3.8:latest \\
+        --context-window 32768
     """
     from rite_ai.workspace import add_worker
 
