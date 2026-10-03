@@ -2510,6 +2510,13 @@ def _supervise(
                     # out while it is still working, not only at the end.
                     for line in getattr(slack, "post_replies", list)():
                         say(line)
+                    # ✅ for an answer a Worker says it read (SCRUM-61). Here
+                    # as well as in `_relay_tick`, whose docstring is that the
+                    # two make the same calls in the same order — a tick that
+                    # only landed on the no-engine path would appear or not
+                    # depending on whether a session happened to be running.
+                    for line in getattr(slack, "tick_read_answers", list)():
+                        say(line)
                     for line in getattr(slack, "news", list)():
                         say(line)
                 # ⚠ C6/C26: the token is re-minted BEFORE it lapses, from
@@ -2831,6 +2838,13 @@ def _relay_tick(root: Path, manager: str, router, slack, say) -> None:
         for heard in slack.poll():
             send(root, manager, INBOX, heard, sent_at=getattr(heard, "sent_at", None))
         for line in getattr(slack, "post_replies", list)():
+            say(line)
+        # ✅ for each answer a Worker says it read (SCRUM-61). After
+        # `post_replies`, because a tick is about an exchange that is already
+        # finished and nothing waits on it; `getattr` for the same reason the
+        # two above use it — a test's stand-in relay need not grow a method
+        # to keep working.
+        for line in getattr(slack, "tick_read_answers", list)():
             say(line)
         for line in getattr(slack, "news", list)():
             say(line)

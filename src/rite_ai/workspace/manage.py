@@ -625,9 +625,10 @@ def add_worker(
     # — so without this, the new Worker reads as already finished and its
     # stall stays suppressed until its first successful start. Cleared where
     # a fresh Worker is established, not where an old one is destroyed.
-    from rite_ai import handback
+    from rite_ai import handback, read_ack
 
     handback.clear(root, name)
+    read_ack.clear(root, name)
 
     cloned: list[str] = []
     failed: list[tuple[str, str]] = []
@@ -1334,6 +1335,24 @@ Then stop. Do not start another ticket on your own: your Manager holds the
 board and the capacity, and two Workers picking their own next ticket is how
 the same path gets claimed twice. If nothing comes back, say you are stopping
 because you were not given more, rather than going quiet.
+
+## When an answer comes back
+
+If you asked a question and an answer arrives, say that you read it, before
+you act on it:
+
+```
+rite ack --worker {manifest.name} --question <id>
+```
+
+The id is in the answer itself, under `question`, and the exact command is
+there too under `acknowledge_with`.
+
+**Why this is not optional.** rite can tell the person it wrote their answer
+where you poll for it. It cannot tell whether you opened it — nothing on the
+host can see that. So until you run this, somebody is waiting with no sign
+their answer arrived, and after a couple of hours rite tells them it is
+UNREAD and to go and look at you. One command closes that.
 
 ## What you must not do
 

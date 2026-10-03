@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+### A check mark means the Worker read your answer: `rite ack`
+
+When you answered a Worker's question, rite settled the question and told you
+nothing. The only message you ever got was a failure. So your screen looked
+the same whether the Worker read your answer in ten seconds or never woke up
+to read it — and what rite actually knew was narrower than that silence
+implied: it had written the answer into the file the Worker polls, which is
+not the same as the Worker having opened it.
+
+A Worker now says it read an answer (`rite ack`), through the same channel
+`rite done` uses, because it still cannot message out. That ack, and only
+that, puts a ✅ on your own message — beside the 👀 you already get when rite
+picks it up. The question id travels in the answer itself, so the Worker can
+name which answer it read; one Worker is answered more than once, and an ack
+that named nothing would tick the wrong question.
+
+⚠ **The check mark means "the Worker said it read this."** It does not mean
+rite watched it read it. Nothing on the host can see that: the file is read
+by a process inside the sandbox, and no poll or timestamp reports that it was
+opened. The tick is a stronger claim than "written where it is polled for",
+and it is still a claim.
+
+And no ack is not silence. An answer nobody has acknowledged for a couple of
+hours is reported back to you, once, saying it is unread and to go and look at
+the Worker — rather than leaving you to assume it landed. An ack record rite
+cannot read is neither an ack nor an absent one, and is not reported as
+either.
+
 ### A Worker can say it has finished: `rite done`
 
 A Worker had no way to tell its Manager it was done. Its instructions said
