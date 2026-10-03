@@ -29,6 +29,8 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from rite_ai.managers import supervise
 from rite_ai.managers.mailbox import OUTBOX, QUESTION, REPLY, read, send
 from rite_ai.managers.transcripts import project_transcript_dir, refusals
@@ -263,11 +265,33 @@ class TestTheSameMessageArrived:
     def test_a_message_from_before_the_refusal_is_not_its_retry(
         self, tmp_path, monkeypatch
     ):
+        """The SAME text and kind as a real retry, so only the order decides:
+        with different words this would pass on the text alone."""
         root = _project(tmp_path)
         talk = Conversation(tmp_path, monkeypatch)
-        send(root, "lead", OUTBOX, "an earlier status")
+        send(root, "lead", OUTBOX, BODY, kind=REPLY)
         t0 = time.time() + 60  # the refusal comes AFTER that message
         talk.call(DOUBLED, at=t0, denied=True)
+
+        _session(root, since=t0 - 60)
+
+        assert len(_notices(root)) == 1
+
+    @pytest.mark.parametrize(
+        "near",
+        [BODY + " Also: beta is idle.", BODY[:-1], BODY + " ", BODY.lower()],
+        ids=["longer", "shorter", "trailing-space", "case"],
+    )
+    def test_a_near_identical_text_is_not_the_same_message(
+        self, tmp_path, monkeypatch, near
+    ):
+        """Pins `m.text == body`: containment, prefix, stripping or folding
+        case would each take one of these for the refused message."""
+        root = _project(tmp_path)
+        talk = Conversation(tmp_path, monkeypatch)
+        t0 = time.time() - 120
+        talk.call(DOUBLED, at=t0, denied=True)
+        send(root, "lead", OUTBOX, near, kind=REPLY)
 
         _session(root, since=t0 - 60)
 

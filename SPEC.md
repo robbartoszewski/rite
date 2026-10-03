@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.81 · **Date:** 2026-10-02
+**Version:** 0.24.82 · **Date:** 2026-10-03
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -7322,6 +7322,31 @@ observes that nobody is polling. The status check narrows that window and is
 why a missing status is refused rather than assumed. The claim is "written
 where it is polled for", never "read".
 
+#### 9.16.5a. Picked up, and linked back (SCRUM-35, SCRUM-47)
+
+**👀 on what is picked up.** The moment the relay reads a message ADDRESSED to
+the Manager (the Owner's DM, an `@rite` mention, the Owner's reply in a
+refinement thread), it adds the `eyes` reaction to it (`reactions.add`, one
+call per message read; `already_reacted` counts as done). Context gets none:
+an eyes on a bystander's line would say rite is acting on it. It needs
+`reactions:write`, which the scopes in §9.16.2 did not include; without it
+the first refusal is said once (`missing_scope`) and no further reaction is
+tried. A reaction that fails never holds back delivery. No ✅ on delivery:
+the reply is the acknowledgement.
+
+**A back-reference is a link.** A question `asking` raises carries an id
+(`q3f9a`) in its header. The relay records that id with the post's channel
+and ts. When a later message rite posts names the id, the id reaches Slack as
+`<permalink|q3f9a>` (`chat.getPermalink`, no extra scope, cached per post); an
+id rite never posted, or one Slack will not link, stays as written. The
+header's own id is not linked (`asking.own_question_id` reads only that
+header's shape). The OUTBOX keeps the bare id, because `rite replies` reads it
+in a terminal. The Manager-stopped summary now names each waiting Worker's
+question id (`worker_questions.raised_id`), and so does the "did NOT reach
+Worker" notice, so both link to the question. Pending check-in lines quote
+each item's first line and are linked the same way; a Manager's own `ask`
+carries no id and stays prose.
+
 #### 9.16.6. Several projects in one workspace: one Slack app per project (D-101)
 
 **Decided 2026-09-25 (Robert).** Companies run several projects in one Slack
@@ -8371,6 +8396,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.82 — rite acknowledges what it picks up, and links what it refers back to (SCRUM-35, SCRUM-47).** New §9.16.5a. 👀 on each addressed message the relay picks up (needs `reactions:write`, said once when missing; the guide's scope list and `DEDICATED_APP` now name it). A question id rite already posted becomes a Slack permalink where a later post names it; the outbox keeps the bare id. The stopped summary and the undeliverable-answer notice name the question id. Tests: `tests/test_slack_acknowledges_and_links_back.py`; four controls (the reaction removed, the missing-scope guard removed, the linking removed, the own-header skip removed) each go red. Folded in from the SCRUM-22 review: the "message from before the refusal" test now sends the same text, so it fails only on ordering, and a near-identical retry is pinned as still told.
 
 **Changes in 0.24.81 — a Manager with no bound runs until you stop it (SCRUM-20, perpetual; SCRUM-36).** §9.14.5 is rewritten and gains *A run with no bound runs until stopped*; new decision D-115. Robert, 2026-10-02: vanilla `rite start lead` runs until Ctrl-C, and what bounds it is concurrency, not a rate: one Manager session at a time, and Workers up to the schedule window's count. The bounds that were mandatory (D-68, D-69, D-82) become optional: both together bound a run as before, one alone is refused. In a perpetual run: every wait has no deadline (`wait_deadline`), so waiting on the User, on a route, on a quiet board (`_idle_board_wake`) or after an idle session no longer ends it; a `closed` window waits (`_closed_wake`, `_closed_line` naming `next_open`); and the spin gate stops a loop whose passes neither start a session nor wait (`SPIN_PASSES_BEFORE_STOPPING`, 3). The salvaged per-cycle ceiling (20 sessions and an hour per cycle, a new cycle after one poll) bounded nothing, measured at 357 working sessions per virtual hour, and is removed. Queue-not-discard, for all runs: `SandboxResult.full`, `EXIT_NO_SLOT` (75) from `rite sandbox start`, `broker.NO_SLOT`, and `_honour_worker_requests` putting the request back, telling the Manager once, and retrying at the top of the loop when a wait wakes for a freed slot (`_with_a_freed_slot`, `broker.slot_free`); each retry is decided afresh. SCRUM-36: the broker's capacity count is `count_active_sandboxes(root, …)`, this project's, not `list_rite_sandboxes()`, the machine's. ⚠ **Ctrl-C is the graceful stop**; `rite manager stop` still kills the session and is recorded as DIED. Event-driven: a Manager session runs only on an event (inbox mail, from `rite message`/`rite connect`, Slack, an answer to `rite ask`, Workers, the Owner or other Managers; or a board change, project change, freed slot or opening window), plus a heartbeat after an hour with no session (`HEARTBEAT_SECONDS`, 3600, a note in the inbox, counted from the last session, never in a closed schedule window), and every wait follows the engine's exit, so none is live while idle. What counts as progress: a claim, route, Worker request or delivery (`COORDINATION`, `_session_was_idle`); a reply-only or project-edit-only session is idle. No heavy implementation: the lead implements nothing, and a secondary may do only chores, ticket breakdowns and similar trivial work via branch and PR (`ROUTED_TICKET_WORK` reworded). Tests: `test_a_manager_with_no_bound_runs_until_stopped.py`, `test_a_full_slot_queues_the_worker.py`, `test_the_broker_counts_this_projects_workers.py`.
 

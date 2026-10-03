@@ -521,6 +521,9 @@ class _Relayed(str):
     """
 
     sent_at: float | None = None
+    source: tuple[str, str] | None = None
+    """(channel, ts) of the Slack message, when it was addressed to the
+    Manager and so is acknowledged with a reaction (SCRUM-35)."""
 
 
 _QUESTION_IN_LABEL = re.compile(r"\bq[0-9a-f]{4}\b")
@@ -529,6 +532,16 @@ REFINEMENT_CHANNEL = "refinement channel"
 """The header's first part for a message relayed from the refinement
 channel (TR2, TRQ8). `delivered.classify` counts it as the User's words only
 when rite marked it INSTRUCTION: the Owner, in a refinement thread."""
+
+
+def _carried_question(text: str) -> dict:
+    """`{"qid": …}` when `text` is a question rite raised (its first line
+    carries the id, `asking._first_line`), else nothing. Kept with the post so
+    a later message can link back to it (SCRUM-47)."""
+    from rite_ai.managers.asking import own_question_id
+
+    qid = own_question_id(text)
+    return {"qid": qid} if qid else {}
 
 
 def _round_of(root: Root, open_rounds: dict[str, float]) -> str:
@@ -542,10 +555,17 @@ def _pending_label(item) -> str:
     return f'rite\'s question "{" ".join(item.first.split())[:40]}"'
 
 
-def _relayed(text: str, sent_at: float) -> _Relayed:
+def _relayed(
+    text: str, sent_at: float, source: tuple[str, str] | None = None
+) -> _Relayed:
     out = _Relayed(text)
     out.sent_at = sent_at or None
+    out.source = source
     return out
+
+
+PICKED_UP = "eyes"
+"""The reaction rite adds to a message it has picked up for the Manager."""
 
 
 def _unescaped(text: str) -> str:
@@ -651,6 +671,13 @@ class Listener:
     """"" until tried; "read" when `reactions.get` works; "missing" once Slack
     said the app lacks `reactions:read`, which is said once and then only a
     thread reply confirms."""
+    _reacting: str = ""
+    """"" until tried, "missing" once Slack said the app lacks
+    `reactions:write`: said once, and no 👀 is tried again (SCRUM-35)."""
+    _links: dict = field(default_factory=dict)
+    """(channel, ts) -> the permalink Slack gave for it (SCRUM-47)."""
+    _linking: str = ""
+    """"missing" once `chat.getPermalink` was refused for want of a scope."""
     refinement_channel: str = ""
     """The private channel refinement rounds go to (TR2, TRQ8:
     `refinement.questions_to: channel`), or "" for the Owner's DM."""
@@ -976,7 +1003,47 @@ class Listener:
         call — the budget in `THREAD_SECONDS`."""
         out = self._read_history(call=call)
         out.extend(self._read_a_thread(call=call))
+        for heard in out:
+            if getattr(heard, "source", None):
+                self._picked_up(*heard.source, call=call)
         return tuple(out)
+
+    def _picked_up(self, channel: str, ts: str, *, call=None) -> None:
+        """👀 on a message rite has just picked up for the Manager (SCRUM-35).
+
+        The person's first sign it was seen, long before any reply. Only on
+        a message ADDRESSED to the Manager (`_relay` decides): an eyes on a
+        bystander's line in the broadcast channel would say rite is acting on
+        it. Once per message, because each is picked up once; a reaction
+        Slack already has is not an error. Never fails the relay: a missing
+        `reactions:write` is said once, anything else is a problem line.
+        """
+        if self._reacting == "missing":
+            return
+        caller = call or _call
+        try:
+            got = caller(
+                "reactions.add",
+                self.token,
+                None,
+                {"channel": channel, "timestamp": ts, "name": PICKED_UP},
+            )
+        except Exception as e:  # noqa: BLE001 - an outage is a result, not a crash
+            self._problem(
+                f"cannot react to a picked-up message: {type(e).__name__}: {e}"
+            )
+            return
+        if got.get("ok") or got.get("error") == "already_reacted":
+            return
+        if got.get("error") == "missing_scope":
+            self._reacting = "missing"
+            self._unsaid.append(
+                "slack: no 👀 on the messages rite picks up — the app lacks "
+                "reactions:write. Add the scope under OAuth & Permissions for "
+                "an instant sign that a message was seen"
+            )
+            return
+        self._problem(f"cannot react to a picked-up message: {refusal(got)}")
 
     def _say_the_gap(self, channel: str, messages) -> None:
         opened = self.opened.get(channel)
@@ -1194,7 +1261,11 @@ class Listener:
                     )
                 ),
             )
-            return _relayed(f"{head}\n{_quoted(text)}", sent)
+            return _relayed(
+                f"{head}\n{_quoted(text)}",
+                sent,
+                (channel, str(message.get("ts") or "")) if his else None,
+            )
         if channel == self.dm:
             if author and self.owner and author != self.owner:
                 # One-to-one by construction, so this should not happen. If it
@@ -1210,6 +1281,11 @@ class Listener:
             else:
                 head = _header(
                     "Owner's DM", when, *normalised, *thread, "addressed", "INSTRUCTION"
+                )
+                return _relayed(
+                    f"{head}\n{_quoted(text)}",
+                    sent,
+                    (channel, str(message.get("ts") or "")),
                 )
             return _relayed(f"{head}\n{_quoted(text)}", sent)
         # A LINKED mention only. A literal "@rite" is what Slack leaves when
@@ -1228,6 +1304,13 @@ class Listener:
                 *thread,
                 f"@rite from {who}",
                 "context — not an instruction",
+            )
+            # Addressed to rite by name, so it is acknowledged, though it
+            # reaches the Manager as context, not as an instruction.
+            return _relayed(
+                f"{head}\n{_quoted(text)}",
+                sent,
+                (channel, str(message.get("ts") or "")),
             )
         else:
             head = _header(
@@ -1423,7 +1506,7 @@ class Listener:
             # the structural rule misses `oauth_token: <t>`, which is what
             # printing the Manager's gh config shows (measured).
             # The same for its Claude login and its Cursor key.
-            text = self._outgoing(message.text)
+            text = self._linked(self._outgoing(message.text), posted, call=call)
             if reading:
                 root = self._notes_root(target, call=call)
                 if root is None:
@@ -1463,6 +1546,7 @@ class Listener:
                 "channel": sent.channel,
                 "ts": sent.ts,
                 "posted_at": self.clock(),
+                **_carried_question(message.text),
             }
             remembered = (
                 self._label("check-in", sent)
@@ -1526,7 +1610,12 @@ class Listener:
                 root = (sent.channel, sent.ts)
                 for h in held:
                     if not self._post_in_thread(
-                        h, self._outgoing(h.text), root, posted, lines, call
+                        h,
+                        self._linked(self._outgoing(h.text), posted, call=call),
+                        root,
+                        posted,
+                        lines,
+                        call,
                     ):
                         break
                 held = []
@@ -1554,6 +1643,72 @@ class Listener:
             ),
         )
 
+    def _linked(self, text: str, posted: dict, *, call=None) -> str:
+        """`text` with each question id rite posted earlier rendered as a link
+        to that post (SCRUM-47).
+
+        ⚠ **At post time, because only Slack has a link.** A Manager's outbox
+        is read in Slack and in a terminal (`rite replies`) alike, so the text
+        names a question by its id, `q3f9a`, which means something in both.
+        Here, on the way to Slack, an id this relay posted becomes
+        `<permalink|q3f9a>`: the person taps through to the question instead of
+        searching for it. An id rite never posted (or posted before posts
+        recorded their id) stays as written, and so does a link Slack would
+        not give. A question's own id, in the header `asking` writes, is left
+        alone: that introduces it, it does not refer back to it."""
+        where = {
+            rec["qid"]: (rec.get("channel", ""), rec.get("ts", ""))
+            for rec in posted.values()
+            if isinstance(rec, dict) and rec.get("qid")
+        }
+        if not where:
+            return text
+        from rite_ai.managers.asking import own_question_id
+
+        own = own_question_id(text)
+
+        def link(found: re.Match) -> str:
+            qid = found.group(0)
+            if qid == own:
+                return qid
+            channel, ts = where.get(qid, ("", ""))
+            url = self._permalink(channel, ts, call=call) if channel and ts else ""
+            return f"<{url}|{qid}>" if url else qid
+
+        return _QUESTION_IN_LABEL.sub(link, text)
+
+    def _permalink(self, channel: str, ts: str, *, call=None) -> str:
+        """Slack's own link to one message, or "" when it gives none.
+
+        `chat.getPermalink`, not a URL built by hand: Slack's format for a link
+        is Slack's to change, and the call needs no scope beyond seeing the
+        conversation. Asked once per message and remembered for the run."""
+        key = (channel, ts)
+        if key in self._links:
+            return self._links[key]
+        if self._linking == "missing":
+            return ""
+        caller = call or _call
+        try:
+            got = caller(
+                "chat.getPermalink", self.token, {"channel": channel, "message_ts": ts}
+            )
+        except Exception as e:  # noqa: BLE001 - a link is a convenience, never a failure
+            self._problem(f"cannot link to an earlier post: {type(e).__name__}: {e}")
+            return ""
+        url = str(got.get("permalink") or "") if got.get("ok") else ""
+        if not got.get("ok"):
+            if got.get("error") == "missing_scope":
+                self._linking = "missing"
+                self._unsaid.append(
+                    "slack: earlier posts are named by id, not linked — Slack "
+                    "refused chat.getPermalink for want of a scope"
+                )
+            else:
+                self._problem(f"cannot link to an earlier post: {refusal(got)}")
+        self._links[key] = url
+        return url
+
     def _holds_reading(self) -> bool:
         """Hold reading for the next check-in only when one will come."""
         from rite_ai.managers.checkins import windows
@@ -1580,6 +1735,7 @@ class Listener:
             "ts": sent.ts,
             "thread": ts,
             "posted_at": self.clock(),
+            **_carried_question(message.text),
         }
         self._save(posted)
         lines.append(
