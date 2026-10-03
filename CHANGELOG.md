@@ -1,6 +1,66 @@
 # Changelog
 
-## Unreleased
+## 0.7.0 (2026-10-03) — a single machine, feature-complete
+
+The first release since 0.6.0. It gathers everything from 0.7.0a1 to 0.7.0a6,
+which each have their own section below with the detail, plus what was tagged
+as 0.7.0a7 and 0.7.0a8 (plain tags with no section of their own), described in
+the sections directly under this one.
+
+**What is new since 0.6.0, in one place:**
+
+- **A Manager runs until you stop it.** `rite start lead` needs no
+  `--sessions` and `--minutes`. It waits, spending nothing, and starts a
+  session only for an event (your message, Slack, a Worker's or another
+  Manager's mail, new work, a freed Worker slot, the schedule opening), plus a
+  heartbeat once an hour, never in a closed window.
+- **Ticket refinement.** A Worker starts only on a ticket whose definition of
+  done you agreed, refined with you in Slack or at the terminal.
+- **Publishing.** `rite deliver` brings a finished ticket home: a commit, a
+  push, a pull request opened only as a draft on your own repository, an
+  optional squash, and an opt-in `auto_merge` gated on a green check.
+- **Local models.** Managers and Workers can run on a local model through
+  Goose and Ollama. A local Manager decomposes a ticket into subtasks that a
+  different model reviews, and works them one step at a time (`rite local
+  decompose`, `approve`, `step`). An all-Ollama fleet works end to end.
+- **Worker safety.** No GitHub token and none of your own Claude settings in a
+  Worker's sandbox, no Manager text run as shell, every Worker commit credited,
+  a stalled Worker recovered by itself, and leaked self-test sandboxes cleaned
+  up.
+- **Setup and diagnosis.** `rite init` finishes what it starts and offers a
+  Manager, `rite credential set` guides each credential, and `rite doctor
+  --network` checks what only a live call can. Credentials, the publish gate
+  and the status channel all say what is true.
+
+**What changes for you coming from 0.6.0** (each is explained in its section):
+
+- Workers no longer merge: `rite deliver` does it.
+- A Manager's text goes on stdin: `rite reply`, `rite ask` and `rite route`
+  take `-`.
+- Workers start only on a ticket with an agreed definition of done.
+- A Manager's own state has left the project. The first `rite start` moves it,
+  once, and refuses while another Manager is running.
+- `rite reply` refuses a question, and `rite ask` is for anything that needs
+  you.
+- Starts and stops go to a status channel, not your DM.
+
+**Upgrading does not update a project's files.** `rite update --files-only
+--dry-run` shows what would change in an existing project, and `rite update
+--files-only` applies it.
+
+**What is NOT in 0.7.0:**
+
+- Several Managers sharing a project correctly (MM1, MM2, MM3, MM6). This is
+  planned for 0.9.0.
+- The scenario gate.
+- Cursor: the config refuses `engine: cursor`.
+- The Manager-sandbox items SB5 (mach-lookup), SB8 (the macOS temp grant) and
+  SB10 (a Manager-writable allowlist). These are still open.
+
+⚠ **A Worker's sandbox is escapable in the yoloAI that ships today** (dogfood
+#35, under 0.7.0a1 below). The fix belongs in yoloAI and has been measured
+only in a locally patched build. Until yoloAI releases it, run Workers with
+that build first on `PATH`, or treat every Worker as able to act as you.
 
 ### Your answer to a Worker's question reaches the Worker (SCRUM-52)
 

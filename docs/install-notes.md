@@ -32,7 +32,7 @@ much you verify first:
   still pulls an unverified payload.
 - **Option 3** is the only one where you read the whole thing first. It is
   169 lines of `sh` and it is the honest answer if you would flag
-  `curl | sh` in someone else's project. Its `git checkout v0.6.0` is the
+  `curl | sh` in someone else's project. Its `git checkout v0.7.0` is the
   same movable pointer as option 1, so if the distinction matters to you,
   check out the **commit SHA** published in the release notes instead — that
   cannot be repointed.
@@ -55,9 +55,15 @@ and it is checkable — grep the source. What rite *does* reach out to, so the
 list is a list and not a gesture: the ticket board you configure; URLs you
 hand it (`rite kb add`, a config preset given to `rite init`); `git
 fetch`/`git clone` against your own module remotes during `rite prepare`;
-`gh api` when provisioning a sandbox token; and GitHub when *you* run `rite
-update`, which upgrades the tool from the tag it was installed from — not
-PyPI, where rite is not published (see below). The installer itself
+`gh api` when provisioning a sandbox token; GitHub when `rite deliver`
+pushes a Worker's branch and opens its draft pull request, and when a
+Manager's GitHub App token is minted (`rite doctor --network` mints one and
+revokes it); Slack, when you configure it, for the relay, the status channel
+and reactions; the model endpoint you configure for a local Manager or Worker
+(Ollama, usually on `localhost`); and GitHub when *you* run `rite update`,
+which upgrades the tool from the tag it was installed from — not PyPI, where
+rite is not published (see below). So `rite update` does not move you to a
+new release: to upgrade, run the installer from the new release's URL. The installer itself
 obviously fetches over the network — that is what installing is.
 
 **If `rite --version` prints anything other than `rite, version …`**, an
@@ -75,18 +81,18 @@ Three ways, same result. Pick by how much you want to read first:
 
 ```bash
 # 1. one-liner
-curl -fsSL https://raw.githubusercontent.com/robbartoszewski/rite/v0.6.0/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/robbartoszewski/rite/v0.7.0/install.sh | sh
 
 # 2. download, check, then run (in a scratch directory, not your project:
 #    `rite init` ignores rite's own installer, but it is not your project's)
 cd "$(mktemp -d)"
-curl -fsSLO https://raw.githubusercontent.com/robbartoszewski/rite/v0.6.0/install.sh
-shasum -a 256 install.sh          # compare against the v0.6.0 release notes
+curl -fsSLO https://raw.githubusercontent.com/robbartoszewski/rite/v0.7.0/install.sh
+shasum -a 256 install.sh          # compare against the v0.7.0 release notes
 sh install.sh
 
 # 3. clone and read everything
 git clone https://github.com/robbartoszewski/rite.git
-cd rite && git checkout v0.6.0
+cd rite && git checkout v0.7.0
 less install.sh                   # 169 lines of sh
 uv tool install .                 # or: pipx install .
 ```
