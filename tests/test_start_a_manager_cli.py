@@ -245,3 +245,38 @@ def test_the_setup_prompt_NAMES_the_projects_own_repo_and_refuses_it(tmp_path):
     # this rule must say it outranks instructions, or the model chooses.
     assert "this rule outranks instructions" in prompt
     assert "real issue" in prompt, "the reason is stated, not just the rule"
+
+
+class TestASetupStartWithNoBound:
+    """🔴 a7 hotfix: a project with no ticket backend starts a ONE-session
+    setup run. With no bound given that was `max_sessions=1` and no window,
+    which the real `supervise` refuses by raising (both bounds or neither,
+    D-115). The fake here enforces that rule, which is how it was missed."""
+
+    def test_it_gets_both_bounds(self, project, supervised, monkeypatch):
+        import rite_ai.cli.main as main_mod
+
+        monkeypatch.setattr(
+            main_mod, "_board_for_manager", lambda root: (None, "absent", "", None)
+        )
+        result = CliRunner().invoke(cli, ["start", "planner"])
+        assert result.exit_code == 0, result.output
+        assert supervised, "supervise was never reached"
+        call = supervised[0]
+        assert call["max_sessions"] == 1
+        assert call["window_seconds"] == pytest.approx(main_mod.SETUP_MINUTES * 60)
+        assert "supervised for up to 60 minute(s)" in result.output
+
+    def test_control_a_bounded_setup_keeps_the_given_window(
+        self, project, supervised, monkeypatch
+    ):
+        import rite_ai.cli.main as main_mod
+
+        monkeypatch.setattr(
+            main_mod, "_board_for_manager", lambda root: (None, "absent", "", None)
+        )
+        CliRunner().invoke(
+            cli, ["start", "planner", "--sessions", "3", "--minutes", "5"]
+        )
+        assert supervised[0]["max_sessions"] == 1
+        assert supervised[0]["window_seconds"] == pytest.approx(300.0)
